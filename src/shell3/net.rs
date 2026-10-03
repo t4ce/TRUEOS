@@ -79,10 +79,15 @@ enum WorkerEvent {
 }
 
 static COMMANDS: spin::Once<&'static NetQueue<NetCommand>> = spin::Once::new();
-static WORKER_QUEUES: spin::Mutex<Vec<(u32, &'static NetQueue<WorkerEvent>)>> = spin::Mutex::new(Vec::new());
+static WORKER_QUEUES: spin::Mutex<Vec<(u32, &'static NetQueue<WorkerEvent>)>> =
+    spin::Mutex::new(Vec::new());
 
 fn queue_for(slot: u32) -> Option<&'static NetQueue<WorkerEvent>> {
-    WORKER_QUEUES.lock().iter().find(|(s, _)| *s == slot).map(|(_, queue)| *queue)
+    WORKER_QUEUES
+        .lock()
+        .iter()
+        .find(|(s, _)| *s == slot)
+        .map(|(_, queue)| *queue)
 }
 
 /// Lives in shell_worker_task, alongside the UI shells on this AP.
@@ -96,14 +101,24 @@ impl WorkerTerminals {
     pub fn new(slot: u32) -> Self {
         let events = NetQueue::new_leaked("shell3-ap-events", 256);
         WORKER_QUEUES.lock().push((slot, events));
-        Self { slot, events, connections: Vec::new() }
+        Self {
+            slot,
+            events,
+            connections: Vec::new(),
+        }
     }
 
-    pub fn is_empty(&self) -> bool { self.connections.is_empty() }
-    pub fn has_events(&self) -> bool { !self.events.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.connections.is_empty()
+    }
+    pub fn has_events(&self) -> bool {
+        !self.events.is_empty()
+    }
 
     pub fn poll(&mut self) {
-        let Some(commands) = COMMANDS.get() else { return };
+        let Some(commands) = COMMANDS.get() else {
+            return;
+        };
         for event in self.events.drain(64) {
             match event {
                 WorkerEvent::Accepted(handle) => {
@@ -111,14 +126,21 @@ impl WorkerTerminals {
                     self.connections.push(Connection::new(handle, shell));
                 }
                 WorkerEvent::Socket(NetEvent::TcpData { handle, data }) => {
-                    if let Some(connection) = self.connections.iter_mut().find(|c| c.handle == handle)
+                    if let Some(connection) =
+                        self.connections.iter_mut().find(|c| c.handle == handle)
                         && let Some(tty) = connection.terminal.as_mut()
-                    { tty.input(&data); }
+                    {
+                        tty.input(&data);
+                    }
                 }
                 WorkerEvent::Socket(NetEvent::TcpSent { handle, len }) => {
-                    if let Some(connection) = self.connections.iter_mut().find(|c| c.handle == handle) {
+                    if let Some(connection) =
+                        self.connections.iter_mut().find(|c| c.handle == handle)
+                    {
                         connection.in_flight = connection.in_flight.saturating_sub(len);
-                        if connection.in_flight == 0 && !connection.finishing { connection.deadline = None; }
+                        if connection.in_flight == 0 && !connection.finishing {
+                            connection.deadline = None;
+                        }
                     }
                 }
                 WorkerEvent::Socket(NetEvent::Closed { handle }) => {
@@ -128,10 +150,13 @@ impl WorkerTerminals {
             }
         }
         for connection in &mut self.connections {
-            if let Some(tty) = connection.terminal.as_mut() { tty.reconcile_matrix_selection(); }
+            if let Some(tty) = connection.terminal.as_mut() {
+                tty.reconcile_matrix_selection();
+            }
         }
         let now = Instant::now();
-        self.connections.retain_mut(|connection| connection.flush(commands, now));
+        self.connections
+            .retain_mut(|connection| connection.flush(commands, now));
     }
 }
 
@@ -152,20 +177,30 @@ pub async fn terminal_task() {
 
     loop {
         if let Some(handle) = rejected {
-            if commands.push(NetCommand::Close { handle }).is_ok() { rejected = None; }
+            if commands.push(NetCommand::Close { handle }).is_ok() {
+                rejected = None;
+            }
         }
         if let Some((slot, event)) = deferred.take() {
             if let Some(queue) = queue_for(slot) {
-                if let Err(event) = queue.try_push(event) { deferred = Some((slot, event)); }
-                else { super::service::notify_work(); }
+                if let Err(event) = queue.try_push(event) {
+                    deferred = Some((slot, event));
+                } else {
+                    super::service::notify_work();
+                }
             }
         }
         // Retain a full event rather than losing input/close acknowledgements
         // under backpressure. Drain one at a time until that event is admitted.
         while deferred.is_none() && rejected.is_none() {
-            let Some(event) = events.drain(1).pop() else { break };
+            let Some(event) = events.drain(1).pop() else {
+                break;
+            };
             match event {
-                NetEvent::Opened { handle, kind: SocketKind::Tcp } => {
+                NetEvent::Opened {
+                    handle,
+                    kind: SocketKind::Tcp,
+                } => {
                     listener = Some(handle);
                     opening = false;
                     crate::log_info!(target: "service";
@@ -185,7 +220,9 @@ pub async fn terminal_task() {
                                     // Established is informational; early data must follow
                                     // Accepted in FIFO order on the same permanent owner.
                                     if matches!(event, NetEvent::TcpData { .. }) {
-                                        if let Err(event) = queue.try_push(WorkerEvent::Socket(event)) {
+                                        if let Err(event) =
+                                            queue.try_push(WorkerEvent::Socket(event))
+                                        {
                                             deferred = Some((slot, event));
                                         }
                                     }
@@ -199,11 +236,17 @@ pub async fn terminal_task() {
                         Err(_) => rejected = Some(handle),
                     }
                 }
-                NetEvent::TcpData { handle, .. } | NetEvent::TcpSent { handle, .. } | NetEvent::Closed { handle } => {
-                    if listener == Some(handle) { listener = None; }
+                NetEvent::TcpData { handle, .. }
+                | NetEvent::TcpSent { handle, .. }
+                | NetEvent::Closed { handle } => {
+                    if listener == Some(handle) {
+                        listener = None;
+                    }
                     if let Some(index) = routes.iter().position(|(h, _)| *h == handle) {
                         let slot = routes[index].1;
-                        if matches!(event, NetEvent::Closed { .. }) { routes.remove(index); }
+                        if matches!(event, NetEvent::Closed { .. }) {
+                            routes.remove(index);
+                        }
                         if let Some(queue) = queue_for(slot) {
                             if let Err(event) = queue.try_push(WorkerEvent::Socket(event)) {
                                 deferred = Some((slot, event));
@@ -225,10 +268,17 @@ pub async fn terminal_task() {
                 _ => {}
             }
         }
-        if listener.is_none() && !opening && routes.len() < MAX_CONNECTIONS
-            && !WORKER_QUEUES.lock().is_empty() && Instant::now() >= retry_at
+        if listener.is_none()
+            && !opening
+            && routes.len() < MAX_CONNECTIONS
+            && !WORKER_QUEUES.lock().is_empty()
+            && Instant::now() >= retry_at
         {
-            opening = commands.push(NetCommand::OpenTcpListen { port: SHELL3_TCP_PORT }).is_ok();
+            opening = commands
+                .push(NetCommand::OpenTcpListen {
+                    port: SHELL3_TCP_PORT,
+                })
+                .is_ok();
         }
         Timer::after(Duration::from_millis(10)).await;
     }

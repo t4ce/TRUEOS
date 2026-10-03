@@ -136,15 +136,19 @@ impl CpuTaskPool {
             let worker_job = job.clone();
             let worker_result = result.clone();
             let worker_waker = waker.clone();
-            match self.try_dispatch(label, Box::new(move |context| {
-                let job = worker_job.lock().take().expect("admitted compute job");
-                let output = job(context);
-                *worker_result.lock() = Some(output);
-                worker_waker.wake();
-            })) {
+            match self.try_dispatch(
+                label,
+                Box::new(move |context| {
+                    let job = worker_job.lock().take().expect("admitted compute job");
+                    let output = job(context);
+                    *worker_result.lock() = Some(output);
+                    worker_waker.wake();
+                }),
+            ) {
                 Ok(_) => break,
                 Err(CpuTaskDispatchError::NoWorkerAvailable)
-                    if self.snapshot().worker.eligible == 0 => {
+                    if self.snapshot().worker.eligible == 0 =>
+                {
                     return Err(CpuTaskDispatchError::NoWorkerAvailable);
                 }
                 Err(_) => {
@@ -158,7 +162,8 @@ impl CpuTaskPool {
                 Some(output) => Poll::Ready(output),
                 None => Poll::Pending,
             }
-        }).await)
+        })
+        .await)
     }
 
     pub fn snapshot(&self) -> CpuTaskPoolSnapshot {

@@ -1,5 +1,5 @@
-use alloc::{string::String, vec::Vec};
 use alloc::collections::VecDeque;
+use alloc::{string::String, vec::Vec};
 use spin::Mutex;
 
 use trueos_executor::Spawner;
@@ -18,34 +18,53 @@ pub(crate) fn enqueue_from_blueprint(vm_id: u8, path: String) -> Result<(), ()> 
         return Err(());
     }
     let mut queue = BLUEPRINT_VIDEO_QUEUE.lock();
-    if queue.len() >= 16 { return Err(()); }
+    if queue.len() >= 16 {
+        return Err(());
+    }
     queue.push_back((vm_id, path));
     Ok(())
 }
 
 pub(crate) fn enqueue_qualified_from_blueprint(vm_id: u8, path: String) -> Result<(), ()> {
-    let Some(rest) = path.strip_prefix("trueosfs:disc") else { return Err(()); };
-    let Some((raw, file)) = rest.split_once('/') else { return Err(()); };
-    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit())
-        || raw.parse::<u32>().is_err() || file.is_empty() || path.as_bytes().contains(&0) {
+    let Some(rest) = path.strip_prefix("trueosfs:disc") else {
+        return Err(());
+    };
+    let Some((raw, file)) = rest.split_once('/') else {
+        return Err(());
+    };
+    if raw.is_empty()
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+        || raw.parse::<u32>().is_err()
+        || file.is_empty()
+        || path.as_bytes().contains(&0)
+    {
         return Err(());
     }
     let mut queue = BLUEPRINT_VIDEO_QUEUE.lock();
-    if queue.len() >= 16 { return Err(()); }
+    if queue.len() >= 16 {
+        return Err(());
+    }
     queue.push_back((vm_id, path));
     Ok(())
 }
 
 pub(crate) fn poll_blueprint_open(spawner: &Spawner) -> bool {
-    let Some((vm_id, path)) = BLUEPRINT_VIDEO_QUEUE.lock().pop_front() else { return false; };
-    let Some(origin) = crate::hv::blueprint_console_target(vm_id) else { return true; };
+    let Some((vm_id, path)) = BLUEPRINT_VIDEO_QUEUE.lock().pop_front() else {
+        return false;
+    };
+    let Some(origin) = crate::hv::blueprint_console_target(vm_id) else {
+        return true;
+    };
     let Some(session) = VidUi4Session::reserve() else {
         crate::hv::blueprint_control_shell_line(vm_id, "PLY FAILED · all video slots occupied");
         return true;
     };
     let target = switch_matrix_target_slot(&origin, VID_SLOTS[session.id.slot]);
     set_matrix_target_active(&target, true);
-    let command = VidCommand { source: VidSource::TrueosFs(path), loop_playback: true };
+    let command = VidCommand {
+        source: VidSource::TrueosFs(path),
+        loop_playback: true,
+    };
     match vid_task(target.clone(), command, session) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {

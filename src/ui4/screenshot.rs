@@ -218,11 +218,14 @@ pub(crate) fn request_wd_postblend_capture(
     target: crate::shell2::MatrixTarget,
 ) -> Result<(), &'static str> {
     let mut targets = SHOT_TARGETS.lock();
-    crate::intel::media::wd_xyuv8888::request_screenshot()
-        .map_err(|error| match error {
-            crate::intel::media::wd_xyuv8888::ScreenshotRequestError::Busy => "WD screenshot slot is busy",
-            crate::intel::media::wd_xyuv8888::ScreenshotRequestError::Quarantined => "WD screenshot copy is quarantined until reboot",
-        })?;
+    crate::intel::media::wd_xyuv8888::request_screenshot().map_err(|error| match error {
+        crate::intel::media::wd_xyuv8888::ScreenshotRequestError::Busy => {
+            "WD screenshot slot is busy"
+        }
+        crate::intel::media::wd_xyuv8888::ScreenshotRequestError::Quarantined => {
+            "WD screenshot copy is quarantined until reboot"
+        }
+    })?;
     targets.push_back(target);
     Ok(())
 }
@@ -286,7 +289,8 @@ async fn drive_manual_wd_capture_if_needed() {
                         captured =
                             crate::intel::media::wd_xyuv8888::try_refresh_requested_screenshot(
                                 surface,
-                            ).await;
+                            )
+                            .await;
                         if captured {
                             crate::log_info!(target: "ui4/screenshot";
                                 "ui4/screenshot: raw WD frame acquired route=idle standalone-wd-one-frame wd_sequence={} vdbox=0 udp=0\n",

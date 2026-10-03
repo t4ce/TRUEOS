@@ -1349,7 +1349,8 @@ pub async fn begin_write_file_stream_with_metadata<D: BlockIo>(
     data_len: u64,
     metadata: FileWriteMetadata,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
-    begin_write_file_stream_with_metadata_inner(dev, params, name, data_len, metadata, false, false).await
+    begin_write_file_stream_with_metadata_inner(dev, params, name, data_len, metadata, false, false)
+        .await
 }
 
 /// Begin a typed file write after the caller validated the destination (absent
@@ -1364,7 +1365,8 @@ pub async fn begin_write_file_stream_prevalidated<D: BlockIo>(
     data_len: u64,
     metadata: FileWriteMetadata,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
-    begin_write_file_stream_with_metadata_inner(dev, params, name, data_len, metadata, false, true).await
+    begin_write_file_stream_with_metadata_inner(dev, params, name, data_len, metadata, false, true)
+        .await
 }
 
 /// Internal restoration path.  A nonzero type unknown to this build is never
@@ -2430,7 +2432,8 @@ pub async fn read_file_at_record<D: BlockIo>(
 
     let len = usize::try_from(record.data_len).map_err(|_| FsError::InvalidParam)?;
     let mut out = Vec::new();
-    out.try_reserve_exact(len).map_err(|_| FsError::OutOfMemory)?;
+    out.try_reserve_exact(len)
+        .map_err(|_| FsError::OutOfMemory)?;
     out.resize(len, 0);
     read_exact_bytes(dev, record.data_lba, 0, &mut out).await?;
 
@@ -4046,11 +4049,17 @@ mod tests {
                 disk.reset_reads();
                 for member in 0..25 {
                     let name = alloc::format!("out/file_{history}_{member}");
-                    let mut stream = begin_write_file_stream_prevalidated(
-                        &disk, &params, &name, 5, metadata,
-                    ).await.unwrap().unwrap();
-                    write_file_stream_chunk(&disk, &mut stream, b"hello").await.unwrap();
-                    finish_write_file_stream(&disk, &params, stream).await.unwrap();
+                    let mut stream =
+                        begin_write_file_stream_prevalidated(&disk, &params, &name, 5, metadata)
+                            .await
+                            .unwrap()
+                            .unwrap();
+                    write_file_stream_chunk(&disk, &mut stream, b"hello")
+                        .await
+                        .unwrap();
+                    finish_write_file_stream(&disk, &params, stream)
+                        .await
+                        .unwrap();
                 }
                 let reads = disk.read_count();
                 assert!(reads <= 50, "25 writes read {reads} blocks");
@@ -4060,22 +4069,36 @@ mod tests {
                 baseline = Some(reads);
                 for member in 0..25 {
                     let name = alloc::format!("out/file_{history}_{member}");
-                    assert_eq!(read_file(&disk, &params, &name).await.unwrap(), Some(b"hello".to_vec()));
+                    assert_eq!(
+                        read_file(&disk, &params, &name).await.unwrap(),
+                        Some(b"hello".to_vec())
+                    );
                 }
             }
             for invalid in ["", "/out/file", "out/../file", "out//file"] {
                 disk.reset_reads();
-                assert!(begin_write_file_stream_prevalidated(
-                    &disk, &params, invalid, 0, metadata,
-                ).await.unwrap().is_none());
+                assert!(
+                    begin_write_file_stream_prevalidated(&disk, &params, invalid, 0, metadata,)
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
                 assert_eq!(disk.read_count(), 0);
             }
-            assert_eq!(begin_write_file_stream_with_metadata(
-                &disk, &params, "missing/file", 0, metadata,
-            ).await.unwrap().is_none(), true);
-            assert_eq!(begin_write_file_stream_with_metadata(
-                &disk, &params, "out", 0, metadata,
-            ).await.unwrap().is_none(), true);
+            assert_eq!(
+                begin_write_file_stream_with_metadata(&disk, &params, "missing/file", 0, metadata,)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                true
+            );
+            assert_eq!(
+                begin_write_file_stream_with_metadata(&disk, &params, "out", 0, metadata,)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                true
+            );
         });
     }
 

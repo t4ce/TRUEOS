@@ -336,7 +336,9 @@ async fn prepare_scanout(job: PrepareJob) {
                     if let Some(surface) = xyuv8888 {
                         if crate::intel::media::wd_xyuv8888::try_refresh_requested_screenshot(
                             surface,
-                        ).await {
+                        )
+                        .await
+                        {
                             crate::log_info!(target: "ui4/screenshot";
                                 "ui4/screenshot: raw WD frame acquired route=live-rdp borrow=next-completed-frame wd_sequence={} encode_flow=await-owned-bcs-snapshot\n",
                                 surface.sequence(),

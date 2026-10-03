@@ -6,9 +6,7 @@
 //! module deliberately contains no CPU colour conversion, VEBOX hop, or
 //! UI4/compositor dependency.
 
-use core::{
-    sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
-};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 pub(crate) const WD_WIDTH: usize = super::avc_encode_probe::FRAME_WIDTH;
 pub(crate) const WD_HEIGHT: usize = super::avc_encode_probe::FRAME_HEIGHT;
@@ -134,18 +132,29 @@ pub(crate) struct SnapshotCopyStats {
 }
 
 static SNAPSHOT_STATS: spin::Mutex<SnapshotCopyStats> = spin::Mutex::new(SnapshotCopyStats {
-    copies: 0, failures: 0, bytes: 0, prepare_us: 0, admission_us: 0,
-    submit_us: 0, retire_us: 0, acquire_us: 0, request_to_ready_us: 0,
+    copies: 0,
+    failures: 0,
+    bytes: 0,
+    prepare_us: 0,
+    admission_us: 0,
+    submit_us: 0,
+    retire_us: 0,
+    acquire_us: 0,
+    request_to_ready_us: 0,
 });
 static SCREENSHOT: spin::Mutex<Option<OwnedScreenshot>> = spin::Mutex::new(None);
 static SCREENSHOT_STATE: AtomicU8 = AtomicU8::new(ScreenshotState::Idle as u8);
 static SCREENSHOT_DISABLED: AtomicBool = AtomicBool::new(false);
 static SCREENSHOT_REQUESTED_NS: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn snapshot_copy_stats() -> SnapshotCopyStats { *SNAPSHOT_STATS.lock() }
+pub(crate) fn snapshot_copy_stats() -> SnapshotCopyStats {
+    *SNAPSHOT_STATS.lock()
+}
 
 /// Cancellation before or during an await is a failed request, never Ready.
-struct ScreenshotAttempt { ready: bool }
+struct ScreenshotAttempt {
+    ready: bool,
+}
 impl Drop for ScreenshotAttempt {
     fn drop(&mut self) {
         if !self.ready {
@@ -171,10 +180,14 @@ pub(crate) fn request_screenshot() -> Result<(), ScreenshotRequestError> {
     if SCREENSHOT_DISABLED.load(Ordering::Acquire) {
         return Err(ScreenshotRequestError::Quarantined);
     }
-    SCREENSHOT_STATE.compare_exchange(
-        ScreenshotState::Idle as u8, ScreenshotState::Reserving as u8,
-        Ordering::AcqRel, Ordering::Acquire,
-    ).map_err(|_| ScreenshotRequestError::Busy)?;
+    SCREENSHOT_STATE
+        .compare_exchange(
+            ScreenshotState::Idle as u8,
+            ScreenshotState::Reserving as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map_err(|_| ScreenshotRequestError::Busy)?;
     SCREENSHOT_REQUESTED_NS.store(crate::chronos::monotonic_nanos(), Ordering::Relaxed);
     SCREENSHOT_STATE.store(ScreenshotState::Requested as u8, Ordering::Release);
     Ok(())
@@ -241,60 +254,95 @@ pub(crate) fn release_manual_screenshot_capture() {
 }
 
 pub(crate) fn cancel_requested_screenshot() {
-    if SCREENSHOT_STATE.compare_exchange(
-        ScreenshotState::Requested as u8, ScreenshotState::Failed as u8,
-        Ordering::AcqRel, Ordering::Acquire,
-    ).is_ok() {
+    if SCREENSHOT_STATE
+        .compare_exchange(
+            ScreenshotState::Requested as u8,
+            ScreenshotState::Failed as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
+    {
         SNAPSHOT_STATS.lock().failures += 1;
     }
 }
 
 pub(crate) fn take_failed_screenshot() -> bool {
-    SCREENSHOT_STATE.compare_exchange(
-        ScreenshotState::Failed as u8, ScreenshotState::Idle as u8,
-        Ordering::AcqRel, Ordering::Acquire,
-    ).is_ok()
+    SCREENSHOT_STATE
+        .compare_exchange(
+            ScreenshotState::Failed as u8,
+            ScreenshotState::Idle as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
 }
 
 /// Copy one explicitly requested frame into an owned DMA allocation. Both WD
 /// owners await this operation before encoding, rearming, or releasing WD.
 /// No request means no allocation, submission, or wait.
 pub(crate) async fn try_refresh_requested_screenshot(source: WdXyuv8888DmaSurface) -> bool {
-    use crate::intel::{GucBcs0CopyCompletion as Completion, GucBcs0CopySubmitError as SubmitError};
+    use crate::intel::{
+        GucBcs0CopyCompletion as Completion, GucBcs0CopySubmitError as SubmitError,
+    };
     use trueos_time::{Duration, Timer};
 
-    if SCREENSHOT_STATE.compare_exchange(
-        ScreenshotState::Requested as u8, ScreenshotState::Writing as u8,
-        Ordering::AcqRel, Ordering::Acquire,
-    ).is_err() { return false; }
+    if SCREENSHOT_STATE
+        .compare_exchange(
+            ScreenshotState::Requested as u8,
+            ScreenshotState::Writing as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return false;
+    }
     let mut attempt = ScreenshotAttempt { ready: false };
     let started = crate::chronos::monotonic_nanos();
-    let Ok(mut source_lease) = crate::intel::pin_ui4_wd_frame_for_copy(source.phys, source.sequence) else {
+    let Ok(mut source_lease) =
+        crate::intel::pin_ui4_wd_frame_for_copy(source.phys, source.sequence)
+    else {
         return false;
     };
-    let Some((phys, cpu)) = crate::dma::alloc_with_max(
-        WD_XYUV8888_BYTES, crate::intel::WARM_ALIGN, Some(1u64 << 39),
-    ) else { return false; };
-    let mut destination = OwnedScreenshot { phys, cpu, sequence: source.sequence, in_flight: false };
+    let Some((phys, cpu)) =
+        crate::dma::alloc_with_max(WD_XYUV8888_BYTES, crate::intel::WARM_ALIGN, Some(1u64 << 39))
+    else {
+        return false;
+    };
+    let mut destination = OwnedScreenshot {
+        phys,
+        cpu,
+        sequence: source.sequence,
+        in_flight: false,
+    };
     // Recycled CPU backing may contain dirty lines. Write back/invalidate them
     // before BCS writes; never flush old dirty data over a completed DMA copy.
     crate::intel::dma_flush(cpu, WD_XYUV8888_BYTES);
     let prepared = crate::chronos::monotonic_nanos();
     let surface = |phys, gpu| crate::intel::GucBcs0RgbaSurface {
-        phys, gpu, bytes: WD_XYUV8888_BYTES,
-        width: WD_WIDTH as u32, height: WD_HEIGHT as u32,
+        phys,
+        gpu,
+        bytes: WD_XYUV8888_BYTES,
+        width: WD_WIDTH as u32,
+        height: WD_HEIGHT as u32,
         pitch_bytes: WD_XYUV8888_PITCH as u32,
     };
     let copy = crate::intel::GucBcs0RgbaCopy {
         source: surface(source.phys, SNAPSHOT_SOURCE_GPU),
-        source_x: 0, source_y: 0, destination_x: 0, destination_y: 0,
-        width: WD_WIDTH as u32, height: WD_HEIGHT as u32,
+        source_x: 0,
+        source_y: 0,
+        destination_x: 0,
+        destination_y: 0,
+        width: WD_WIDTH as u32,
+        height: WD_HEIGHT as u32,
     };
     let mut submit_us = 0;
     let submission = loop {
         let submit_started = crate::chronos::monotonic_nanos();
         let queued = crate::r::services::vcpy_service::queue_uncached_copies(
-            surface(phys, SNAPSHOT_DESTINATION_GPU), &[copy],
+            surface(phys, SNAPSHOT_DESTINATION_GPU),
+            &[copy],
         );
         submit_us += crate::chronos::monotonic_nanos().saturating_sub(submit_started) / 1_000;
         match queued {
@@ -303,8 +351,10 @@ pub(crate) async fn try_refresh_requested_screenshot(source: WdXyuv8888DmaSurfac
                 source_lease.mark_submitted();
                 break submission;
             }
-            Err(SubmitError::Busy) if crate::chronos::monotonic_nanos().saturating_sub(prepared)
-                < SNAPSHOT_ADMISSION_TIMEOUT_NS => {
+            Err(SubmitError::Busy)
+                if crate::chronos::monotonic_nanos().saturating_sub(prepared)
+                    < SNAPSHOT_ADMISSION_TIMEOUT_NS =>
+            {
                 Timer::after(Duration::from_millis(1)).await;
             }
             Err(error) => {
@@ -343,7 +393,8 @@ pub(crate) async fn try_refresh_requested_screenshot(source: WdXyuv8888DmaSurfac
         stats.submit_us = submit_us;
         stats.retire_us = retired.saturating_sub(submitted) / 1_000;
         stats.acquire_us = acquired.saturating_sub(retired) / 1_000;
-        stats.request_to_ready_us = acquired.saturating_sub(SCREENSHOT_REQUESTED_NS.load(Ordering::Acquire)) / 1_000;
+        stats.request_to_ready_us =
+            acquired.saturating_sub(SCREENSHOT_REQUESTED_NS.load(Ordering::Acquire)) / 1_000;
         *stats
     };
     *SCREENSHOT.lock() = Some(destination);
@@ -358,10 +409,17 @@ pub(crate) async fn try_refresh_requested_screenshot(source: WdXyuv8888DmaSurfac
 
 /// Consume and free one owned XYUV8888 snapshot after the reader returns.
 pub(crate) fn with_screenshot<R>(read: impl FnOnce(u64, &[u8]) -> R) -> Option<R> {
-    if SCREENSHOT_STATE.compare_exchange(
-        ScreenshotState::Ready as u8, ScreenshotState::Reading as u8,
-        Ordering::AcqRel, Ordering::Acquire,
-    ).is_err() { return None; }
+    if SCREENSHOT_STATE
+        .compare_exchange(
+            ScreenshotState::Ready as u8,
+            ScreenshotState::Reading as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return None;
+    }
     let snapshot = SCREENSHOT.lock().take();
     let result = snapshot.as_ref().map(|snapshot| unsafe {
         read(snapshot.sequence, core::slice::from_raw_parts(snapshot.cpu, WD_XYUV8888_BYTES))

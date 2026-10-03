@@ -20,10 +20,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     match (args.next(), args.next(), args.next()) {
         (Some(cmd), action, None) if cmd.eq_ignore_ascii_case("frush") => {
             let action = action.unwrap_or("start");
-            return crate::shell2::cmds::font::try_parse(
-                io,
-                action,
-            );
+            return crate::shell2::cmds::font::try_parse(io, action);
         }
         (Some(cmd), None, None) if cmd.eq_ignore_ascii_case("status") => print_status(io),
         (Some(cmd), Some("vue"), None) if cmd.eq_ignore_ascii_case("capture") => {

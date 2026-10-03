@@ -92,13 +92,9 @@ pub(super) fn launch_alias(name: &str, slot: &str) -> Result<(), alloc::string::
 fn launch_archive(archive: alloc::string::String, slot: &str) -> Result<(), alloc::string::String> {
     let bytes = crate::app_db::get(&archive)?
         .ok_or_else(|| alloc::string::String::from("apps: archive not found"))?;
-    let target = crate::shell2::matrix_target_for_slot_name(
-        crate::shell2::OUTPUT_SYSTEM_MASK,
-        slot,
-    );
-    crate::shell2::cmds::run::enqueue_blueprint_bytes(
-        target, archive, bytes, Vec::new(),
-    )
+    let target =
+        crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, slot);
+    crate::shell2::cmds::run::enqueue_blueprint_bytes(target, archive, bytes, Vec::new())
 }
 
 /// Read app names through the current app.db API, using the archive basename
@@ -206,7 +202,9 @@ pub(super) fn reserve_shell_on_executor(slot: u32) -> Result<(), super::Shell3Er
         warn_instance_limit();
         return Err(super::Shell3Error::InstanceLimit);
     }
-    let expected = ownership.preferred_slot().ok_or(super::Shell3Error::NoExecutor)?;
+    let expected = ownership
+        .preferred_slot()
+        .ok_or(super::Shell3Error::NoExecutor)?;
     if expected != slot {
         return Err(super::Shell3Error::WrongExecutor {
             expected,
@@ -230,7 +228,8 @@ fn warn_instance_limit() {
 }
 
 fn advance_round_robin(ownership: &mut ShellOwnership, slot: u32) {
-    ownership.initial_assignments = (ownership.initial_assignments + 1).min(ownership.worker_slots.len() * 3);
+    ownership.initial_assignments =
+        (ownership.initial_assignments + 1).min(ownership.worker_slots.len() * 3);
     if let Some(index) = ownership.worker_slots.iter().position(|s| *s == slot) {
         ownership.next_round_robin = (index + 1) % ownership.worker_slots.len();
     }
@@ -240,11 +239,15 @@ fn advance_round_robin(ownership: &mut ShellOwnership, slot: u32) {
 /// The model is constructed later by the selected AP, never by the listener.
 pub(super) fn reserve_terminal_slot() -> Result<u32, super::Shell3Error> {
     let mut ownership = SHELL_OWNERSHIP.lock();
-    if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>() >= super::MAX_SHELL3_INSTANCES {
+    if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
+        >= super::MAX_SHELL3_INSTANCES
+    {
         warn_instance_limit();
         return Err(super::Shell3Error::InstanceLimit);
     }
-    let slot = ownership.preferred_slot().ok_or(super::Shell3Error::NoExecutor)?;
+    let slot = ownership
+        .preferred_slot()
+        .ok_or(super::Shell3Error::NoExecutor)?;
     ownership.shells_by_slot[slot as usize] += 1;
     ownership.live_shells += 1;
     advance_round_robin(&mut ownership, slot);
@@ -278,8 +281,12 @@ pub fn start<S: Send>(
     for (worker_id, (slot, _core_kind, spawner)) in spawners.into_iter().enumerate() {
         {
             let ownership = SHELL_OWNERSHIP.lock();
-            if ownership.worker_slots.len() >= target { break; }
-            if ownership.worker_slots.contains(&slot) { continue; }
+            if ownership.worker_slots.len() >= target {
+                break;
+            }
+            if ownership.worker_slots.contains(&slot) {
+                continue;
+            }
         }
         let token = task(worker_id, slot)?;
         spawner.spawn(token);
@@ -436,14 +443,20 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
 
     loop {
         terminals.poll();
-        for shell in &mut owned_shells.shells { shell.reconcile_matrix_selection(); }
+        for shell in &mut owned_shells.shells {
+            shell.reconcile_matrix_selection();
+        }
         while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
             let aka_names = crate::r::restart::startup_alias_names();
             let appdb_names = appdb_names_snapshot().1;
             let startup_time = super::TitleTime::current();
             match owned_shells.create_shell_reserved(
-                &startup_time, aka_names, appdb_names, Vec::new(),
-                super::Default_COLUMNS, super::Default_ROWS,
+                &startup_time,
+                aka_names,
+                appdb_names,
+                Vec::new(),
+                super::Default_COLUMNS,
+                super::Default_ROWS,
             ) {
                 Ok(index) => {
                     if let Some(shell) = owned_shells.get_mut(index)
@@ -482,15 +495,21 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
         // even when two workers drain successive UI4 batches concurrently.
         {
             let mut keyboard_events = SHELL3_KEYBOARD_EVENTS.lock();
-            for event in crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE) {
+            for event in
+                crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE)
+            {
                 match event {
-                    crate::ui4::Ui4InputEvent::Keyboard(event) =>
-                    {
-                        if keyboard_events.len() < 256 { keyboard_events.push_back(event); }
+                    crate::ui4::Ui4InputEvent::Keyboard(event) => {
+                        if keyboard_events.len() < 256 {
+                            keyboard_events.push_back(event);
+                        }
                     }
                     crate::ui4::Ui4InputEvent::Resize(event) => {
                         let mut events = SHELL3_RESIZE_EVENTS.lock();
-                        if let Some(index) = events.iter().position(|queued| queued.window == event.window) {
+                        if let Some(index) = events
+                            .iter()
+                            .position(|queued| queued.window == event.window)
+                        {
                             let _ = events.swap_remove_front(index);
                         }
                         let _ = events.push_back(event);
@@ -536,7 +555,8 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                 let mut events = SHELL3_RESIZE_EVENTS.lock();
                 let index = events.iter().position(|event| {
                     (0..owned_shells.len()).any(|index| {
-                        owned_shells.get(index)
+                        owned_shells
+                            .get(index)
                             .is_some_and(|shell| shell.show_handles_window(event.window))
                     })
                 });
@@ -559,7 +579,9 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
 
         for index in 0..owned_shells.len() {
             if let Some(shell) = owned_shells.get_mut(index)
-                && (shell.presentation_pending() || shell.font_scale_needed() || shell.matrix_output_needed())
+                && (shell.presentation_pending()
+                    || shell.font_scale_needed()
+                    || shell.matrix_output_needed())
                 && let Err(error) = shell.present().await
             {
                 crate::log_warn!(target: "service";

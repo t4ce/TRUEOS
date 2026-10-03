@@ -18,7 +18,7 @@ fn dma_flush(_: *mut u8, _: usize) {}
 mod blt {
 '''
     source += '\n'.join(extract.constant(BLT, name) for name in (
-        'DIRECT_BLT_BATCH_BYTES', 'DIRECT_BLT_RESULT_BYTES', 'BCS0_GGTT_BASE', 'BCS0_GGTT_LIMIT',
+        'DIRECT_BLT_BATCH_BYTES', 'DIRECT_BLT_RESULT_BYTES', 'GUC_BLT_UI4_MAX_COPIES', 'BCS0_GGTT_BASE', 'BCS0_GGTT_LIMIT',
         'DIRECT_BLT_PPGTT_PT_COUNT', 'DIRECT_BLT_PPGTT_LIMIT_BYTES', 'DIRECT_BLT_PPGTT_BYTES',
         'DIRECT_BLT_GPU_VA_RESULT_BASE', 'XY_FAST_COPY_BLT_CMD',
         'XY_FAST_COPY_COLOR_DEPTH_32', 'MI_FLUSH_DW',
@@ -60,7 +60,7 @@ fn surface(phys: u64) -> GucBcs0RgbaSurface {
 }
 #[test]
 fn first_rung_contains_entry_store_flush_arbitration_and_end() {
-    let mut batch = vec![0u32; 1024];
+    let mut batch = vec![0u32; DIRECT_BLT_BATCH_BYTES / 4];
     let mut result = vec![0u32; 1024];
     let mut state: DirectBltState = unsafe { core::mem::zeroed() };
     state.batch_virt = batch.as_mut_ptr().cast();
@@ -76,7 +76,7 @@ fn first_rung_contains_entry_store_flush_arbitration_and_end() {
 }
 #[test]
 fn linear_rgba_packet_keeps_reserved_bits_zero_and_orders_completion() {
-    let mut batch = vec![0u32; 1024];
+    let mut batch = vec![0u32; DIRECT_BLT_BATCH_BYTES / 4];
     let mut result = vec![0u32; 1024];
     let mut state: DirectBltState = unsafe { core::mem::zeroed() };
     state.batch_virt = batch.as_mut_ptr().cast();
@@ -92,7 +92,7 @@ fn linear_rgba_packet_keeps_reserved_bits_zero_and_orders_completion() {
 }
 #[test]
 fn legacy_rgba_copies_use_byte_pitches_nonzero_origins_and_ordered_retirement() {
-    let mut batch = vec![0u32; 1024];
+    let mut batch = vec![0u32; DIRECT_BLT_BATCH_BYTES / 4];
     let mut result = vec![0u32; 1024];
     let mut state: DirectBltState = unsafe { core::mem::zeroed() };
     state.batch_virt = batch.as_mut_ptr().cast();
@@ -112,8 +112,42 @@ fn legacy_rgba_copies_use_byte_pitches_nonzero_origins_and_ordered_retirement() 
     assert!(!guc_blt_valid_legacy_copy(tall, GucBcs0RgbaCopy { destination_y: 32757, ..copy }));
 }
 #[test]
+fn full_gameboy_width_fits_both_copy_backends_and_retires_after_last_column() {
+    let src = GucBcs0RgbaSurface { width: 160, height: 144, pitch_bytes: 640,
+        bytes: 92160, ..surface(0x100000) };
+    let dst = GucBcs0RgbaSurface { phys: 0x200000, gpu: 0x200000, ..src };
+    let copies: Vec<_> = (0..160).map(|x| GucBcs0RgbaCopy { source: src,
+        source_x: x, source_y: 0, destination_x: x, destination_y: 0,
+        width: 1, height: 144 }).collect();
+    assert_eq!(GUC_BLT_UI4_MAX_COPIES, 160);
+    for legacy in [false, true] {
+        let words = DIRECT_BLT_BATCH_BYTES / 4;
+        let mut batch = vec![0xdeadbeefu32; words + 2];
+        let mut result = vec![0u32; DIRECT_BLT_RESULT_BYTES / 4];
+        let mut state: DirectBltState = unsafe { core::mem::zeroed() };
+        state.batch_virt = batch.as_mut_ptr().cast();
+        state.result_virt = result.as_mut_ptr().cast();
+        assert_eq!(guc_blt_encode_copy_batch(state, dst, &copies, 0xBC500160, legacy),
+            Some((160, 92160)));
+        for x in 0..160usize {
+            let offset = 12 + x * 10;
+            assert_eq!(batch[offset], if legacy { 0x54F00008 } else { 0x50800008 });
+            assert_eq!(batch[offset + 2], x as u32);
+            assert_eq!(batch[offset + 3], (144 << 16) | (x as u32 + 1));
+            assert_eq!(batch[offset + 6], x as u32);
+        }
+        let end = 12 + 160 * 10;
+        assert_eq!(&batch[end..end + 8], &[0x13004003, 0x01AD0004, 0,
+            0xBC500160, 0, 0x02800000, 0x05000000, 0]);
+        assert_eq!(&batch[words..], &[0xdeadbeef, 0xdeadbeef]);
+        let mut oversized = copies.clone();
+        oversized.push(copies[0]);
+        assert_eq!(guc_blt_encode_copy_batch(state, dst, &oversized, 1, legacy), None);
+    }
+}
+#[test]
 fn legacy_mono_has_colors_word_rows_aligned_source_slots_and_retirement() {
-    let mut batch = vec![0u32; 1024];
+    let mut batch = vec![0u32; DIRECT_BLT_BATCH_BYTES / 4];
     let mut result = vec![0u32; 1024];
     let mut masks = vec![0u8; 4096];
     let mut state: DirectBltState = unsafe { core::mem::zeroed() };
@@ -141,7 +175,7 @@ fn legacy_mono_has_colors_word_rows_aligned_source_slots_and_retirement() {
 }
 #[test]
 fn fast_color_has_32bpp_pitch_minus_one_and_ordered_retirement() {
-    let mut batch = vec![0u32; 1024];
+    let mut batch = vec![0u32; DIRECT_BLT_BATCH_BYTES / 4];
     let mut result = vec![0u32; 1024];
     let mut state: DirectBltState = unsafe { core::mem::zeroed() };
     state.batch_virt = batch.as_mut_ptr().cast();
@@ -194,7 +228,7 @@ fn disjoint_physical_storage_cannot_alias_gpu_addresses_or_controls() {
 }
 #[test]
 fn padded_rows_and_nonzero_origins_preserve_rectangle_geometry() {
-    let mut batch = vec![0u32; 1024];
+    let mut batch = vec![0u32; DIRECT_BLT_BATCH_BYTES / 4];
     let mut result = vec![0u32; 1024];
     let mut state: DirectBltState = unsafe { core::mem::zeroed() };
     state.batch_virt = batch.as_mut_ptr().cast();

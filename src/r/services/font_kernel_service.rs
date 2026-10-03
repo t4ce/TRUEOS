@@ -2430,18 +2430,22 @@ fn process_frame_stamp(
             color_rgba,
         };
         let mut outcome = super::vcpy_service::fill_rgba8_complete(
-            destination, color_rgba, super::vcpy_service::RgbaFillConsumer::Font,
+            destination,
+            color_rgba,
+            super::vcpy_service::RgbaFillConsumer::Font,
         );
         // Admission rejection has not touched the canvas. The consolidated
         // SOLID compositor preserves availability without a dedicated fill shader.
         if outcome == crate::intel::gpgpu::GpgpuSubmissionOutcome::Unavailable {
             let fallback = crate::intel::gpgpu::fill_solid_rects_rgba8_scanout_result(
-                destination, core::slice::from_ref(&clear),
+                destination,
+                core::slice::from_ref(&clear),
             );
             outcome = fallback.outcome;
             clear_submits = fallback.stats.submits;
         } else {
-            clear_submits = usize::from(outcome == crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete);
+            clear_submits =
+                usize::from(outcome == crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete);
         }
         let elapsed_ms = Instant::now().as_millis().saturating_sub(clear_started_ms);
         clear_us = crate::chronos::monotonic_nanos().saturating_sub(clear_started_ns) / 1_000;

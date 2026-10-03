@@ -45,9 +45,9 @@ const _: () = {
 mod mirror_map_dp_engine;
 pub(crate) use self::mirror_map_dp_engine::{
     MirrorMapMode, WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame,
-    begin_ui4_wd_xyuv8888_capture, poll_ui4_wd_xyuv8888_capture, set_mirror_map_mode,
-    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture, ui4_wd_xyuv8888_capture_status,
-    pin_ui4_wd_frame_for_copy,
+    begin_ui4_wd_xyuv8888_capture, pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture,
+    set_mirror_map_mode, start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
+    ui4_wd_xyuv8888_capture_status,
 };
 
 macro_rules! intel_display_focus_log {
@@ -5229,19 +5229,18 @@ pub(crate) fn queue_ui4_static_primary_composition_bcs0(
     if copies.is_empty() {
         return Err(Ui4AsyncCompositionError::Unavailable);
     }
-    let blit =
-        crate::r::services::vcpy_service::queue_rgba_copies(destination, &copies).map_err(
-            |error| match error {
-                crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
-                crate::intel::GucBcs0CopySubmitError::Unavailable => {
-                    Ui4AsyncCompositionError::Unavailable
-                }
-                crate::intel::GucBcs0CopySubmitError::InvalidRequest
-                | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
-                    Ui4AsyncCompositionError::Failed
-                }
-            },
-        )?;
+    let blit = crate::r::services::vcpy_service::queue_rgba_copies(destination, &copies).map_err(
+        |error| match error {
+            crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
+            crate::intel::GucBcs0CopySubmitError::Unavailable => {
+                Ui4AsyncCompositionError::Unavailable
+            }
+            crate::intel::GucBcs0CopySubmitError::InvalidRequest
+            | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
+                Ui4AsyncCompositionError::Failed
+            }
+        },
+    )?;
     Ok(Ui4AsyncComposition {
         work: Some(Ui4AsyncCompositionWork::GucBcs(blit)),
         target: Ui4AsyncCompositionTarget::Primary {
@@ -5526,19 +5525,18 @@ pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
     };
-    let blit =
-        crate::r::services::vcpy_service::queue_rgba_copies(destination, &copies).map_err(
-            |error| match error {
-                crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
-                crate::intel::GucBcs0CopySubmitError::Unavailable => {
-                    Ui4AsyncCompositionError::Unavailable
-                }
-                crate::intel::GucBcs0CopySubmitError::InvalidRequest
-                | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
-                    Ui4AsyncCompositionError::Failed
-                }
-            },
-        )?;
+    let blit = crate::r::services::vcpy_service::queue_rgba_copies(destination, &copies).map_err(
+        |error| match error {
+            crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
+            crate::intel::GucBcs0CopySubmitError::Unavailable => {
+                Ui4AsyncCompositionError::Unavailable
+            }
+            crate::intel::GucBcs0CopySubmitError::InvalidRequest
+            | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
+                Ui4AsyncCompositionError::Failed
+            }
+        },
+    )?;
     mark_overlay_surface_content_initialized(surface);
     Ok(Ui4AsyncComposition {
         work: Some(Ui4AsyncCompositionWork::GucBcs(blit)),

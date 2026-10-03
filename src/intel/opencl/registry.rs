@@ -139,7 +139,6 @@ const UI4_COMPOSE_LAYER_DESC_FIELDS: &[DescriptorField<'_>] = &[
 const UI4_COMPOSE_LAYER_DESC: DescriptorLayout<'_> =
     DescriptorLayout::new("Ui4ComposeLayerDesc", 12, Some(32), UI4_COMPOSE_LAYER_DESC_FIELDS);
 
-
 macro_rules! ro_buf {
     ($index:expr, $name:expr, $ty:expr, $binding:expr, $payload:expr) => {
         KernelCallArg::buffer($index, $name, $ty, KernelArgAccess::ReadOnly, $binding, $payload)
@@ -196,7 +195,6 @@ const COPY_RECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     launch: KernelLaunchContract::nd_range_2d(Some(2)),
     consumers: BOOT_UPLOAD_CONSUMERS,
 };
-
 
 const DESTINATION_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
     rw_buf!(0, "dst_rgba", "__global uint*", 0, 8),

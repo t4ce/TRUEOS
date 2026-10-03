@@ -2,8 +2,7 @@
 
 use super::{
     ActivePreview, CloudBrushState, DesiredPreview, GpgpuPreviewMetrics, GpgpuPreviewPreset,
-    PREVIEW_HEIGHT, PREVIEW_OWNER, PREVIEW_WIDTH, PREVIEW_Z,
-    abandon_preview_initialization,
+    PREVIEW_HEIGHT, PREVIEW_OWNER, PREVIEW_WIDTH, PREVIEW_Z, abandon_preview_initialization,
 };
 use crate::ui4::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,

@@ -6545,9 +6545,15 @@ pub(crate) fn finish_sprite_rgba8_upload(
     }
     // Inspect alpha once at upload, never during pan/copy submission.
     upload.owned.opaque = (0..upload.owned.surface.height as usize).all(|y| {
-        let row = unsafe { core::slice::from_raw_parts(
-            upload.owned.virt.add(y * upload.owned.surface.pitch_bytes as usize),
-            upload.owned.surface.width as usize * 4) };
+        let row = unsafe {
+            core::slice::from_raw_parts(
+                upload
+                    .owned
+                    .virt
+                    .add(y * upload.owned.surface.pitch_bytes as usize),
+                upload.owned.surface.width as usize * 4,
+            )
+        };
         row.chunks_exact(4).all(|pixel| pixel[3] == 255)
     });
     crate::intel::dma_flush(upload.owned.virt, upload.owned.bytes);
@@ -7204,24 +7210,34 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
 
     // A single opaque crop which overwrites the whole lease is a blit, with
     // no clear, sampling, alpha arithmetic or EU dispatch required.
-    if !render_overlay && let [quad] = upload.quads.as_slice()
-        && let Some((_, BlueprintSpriteSource::Uploaded(source))) = surface.sprites.iter()
-            .find(|(id, _)| *id == quad.sprite_id)
+    if !render_overlay
+        && let [quad] = upload.quads.as_slice()
+        && let Some((_, BlueprintSpriteSource::Uploaded(source))) =
+            surface.sprites.iter().find(|(id, _)| *id == quad.sprite_id)
         && source.opaque
-        && let AlphaRectConversion::Exact(rect) = alpha_rect_descriptor(*quad, source.surface, destination)
+        && let AlphaRectConversion::Exact(rect) =
+            alpha_rect_descriptor(*quad, source.surface, destination)
         && rect.flags == ALPHA_BLEND_WORKLIST_FLAG_COPY
         && rect.dst_xy == 0
         && rect.size == (destination.width | (destination.height << 16))
     {
         let src = source.surface;
         let bcs_surface = |s: GpgpuRgba8Surface| crate::intel::GucBcs0RgbaSurface {
-            phys: s.phys, gpu: s.gpu, bytes: s.bytes, width: s.width,
-            height: s.height, pitch_bytes: s.pitch_bytes,
+            phys: s.phys,
+            gpu: s.gpu,
+            bytes: s.bytes,
+            width: s.width,
+            height: s.height,
+            pitch_bytes: s.pitch_bytes,
         };
         let copy = crate::intel::GucBcs0RgbaCopy {
-            source: bcs_surface(src), source_x: rect.src_xy & 0xffff,
-            source_y: rect.src_xy >> 16, destination_x: 0, destination_y: 0,
-            width: destination.width, height: destination.height,
+            source: bcs_surface(src),
+            source_x: rect.src_xy & 0xffff,
+            source_y: rect.src_xy >> 16,
+            destination_x: 0,
+            destination_y: 0,
+            width: destination.width,
+            height: destination.height,
         };
         match crate::intel::queue_guc_bcs0_rgba_copies(bcs_surface(destination), &[copy]) {
             Ok(submission) => {
@@ -7242,16 +7258,34 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                         Ui4SpriteSceneCompletion::Failed => break,
                         Ui4SpriteSceneCompletion::Pending => {}
                     }
-                    if crate::chronos::monotonic_nanos().saturating_sub(started) >= UI4_SPRITE_BATCH_TIMEOUT_NS { break; }
+                    if crate::chronos::monotonic_nanos().saturating_sub(started)
+                        >= UI4_SPRITE_BATCH_TIMEOUT_NS
+                    {
+                        break;
+                    }
                     core::hint::spin_loop();
                 }
-                quarantine_blueprint_sprite_submission(surface, owner, window_id, lease, 0, 1,
-                    "bcs0-copy-retirement-incomplete");
+                quarantine_blueprint_sprite_submission(
+                    surface,
+                    owner,
+                    window_id,
+                    lease,
+                    0,
+                    1,
+                    "bcs0-copy-retirement-incomplete",
+                );
                 return ERROR_UI4;
             }
             Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
-                quarantine_blueprint_sprite_submission(surface, owner, window_id, lease, 0, 1,
-                    "bcs0-copy-submit-uncertain");
+                quarantine_blueprint_sprite_submission(
+                    surface,
+                    owner,
+                    window_id,
+                    lease,
+                    0,
+                    1,
+                    "bcs0-copy-submit-uncertain",
+                );
                 return ERROR_UI4;
             }
             // No blit was accepted. The existing shader path can still render.

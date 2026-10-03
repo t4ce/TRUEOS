@@ -401,7 +401,11 @@ mod tests {
 
     #[test]
     fn resident_resources_can_cross_the_legacy_dma_ceiling() {
-        for (phys, bytes) in [(0xffff_f000, 8192), (0x1_0000_0000, 14_745_600), (0x2_0000_0000, 256 * 511 * 4)] {
+        for (phys, bytes) in [
+            (0xffff_f000, 8192),
+            (0x1_0000_0000, 14_745_600),
+            (0x2_0000_0000, 256 * 511 * 4),
+        ] {
             assert!(gen12_ppgtt_phys_range_encodable(phys, bytes));
             assert_eq!((phys | PTE_PRESENT_RW_PAT0_WB) & ENTRY_ADDR_MASK, phys);
         }

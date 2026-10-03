@@ -2,10 +2,7 @@
 
 use super::x86_runtime as runtime;
 use v::bp_abi::{
-    TrueosX86DebugRegistersV1,
-    TrueosX86ExtendedStateV1,
-    TrueosX86ExitV1,
-    TrueosX86RegistersV1,
+    TrueosX86DebugRegistersV1, TrueosX86ExitV1, TrueosX86ExtendedStateV1, TrueosX86RegistersV1,
 };
 
 fn status(result: Result<(), i32>) -> i32 {

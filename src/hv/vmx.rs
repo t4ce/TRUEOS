@@ -779,8 +779,7 @@ pub fn synthesize_host_gdt_tss() -> HvSyntheticHostState {
 }
 
 pub fn vmlaunch_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
-    let guest_state = guest_extended_state_ptr(vm_id)
-        .expect("unsupported VM extended-state owner");
+    let guest_state = guest_extended_state_ptr(vm_id).expect("unsupported VM extended-state owner");
     unsafe { vmlaunch_once_wrapper_impl(out, guest_state) }
 }
 
@@ -1240,7 +1239,7 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
 
 #[cfg(test)]
 mod extended_state_tests {
-    use super::{clean_guest_extended_state, VmxExtendedState, VMX_EXTENDED_STATE_BYTES};
+    use super::{VMX_EXTENDED_STATE_BYTES, VmxExtendedState, clean_guest_extended_state};
 
     #[test]
     fn extended_state_layout_and_clean_architectural_defaults_are_stable() {

@@ -1398,30 +1398,30 @@ async fn file_in_with_metadata_async(
     let indexed = validate_indexed_file_target(disk.id(), name, legacy_blob)?;
     let begun = if indexed {
         trueos_fs::begin_write_file_stream_prevalidated(
-        &io,
-        &params,
-        name,
-        bytes.len() as u64,
-        trueos_fs::FileWriteMetadata {
-            content_type,
-            record_key,
-        },
-        ).await
+            &io,
+            &params,
+            name,
+            bytes.len() as u64,
+            trueos_fs::FileWriteMetadata {
+                content_type,
+                record_key,
+            },
+        )
+        .await
     } else {
         trueos_fs::begin_write_file_stream_with_metadata(
-        &io,
-        &params,
-        name,
-        bytes.len() as u64,
-        trueos_fs::FileWriteMetadata {
-            content_type,
-            record_key,
-        },
-        ).await
+            &io,
+            &params,
+            name,
+            bytes.len() as u64,
+            trueos_fs::FileWriteMetadata {
+                content_type,
+                record_key,
+            },
+        )
+        .await
     };
-    let Some(mut stream) = begun
-    .map_err(map_engine_err)?
-    else {
+    let Some(mut stream) = begun.map_err(map_engine_err)? else {
         return Ok(false);
     };
     trueos_fs::write_file_stream_chunk(&io, &mut stream, bytes)
@@ -1608,30 +1608,30 @@ async fn file_write_begin_with_metadata_async(
     let indexed = validate_indexed_file_target(disk.id(), name, legacy_blob)?;
     let begun = if indexed {
         trueos_fs::begin_write_file_stream_prevalidated(
-        &io,
-        &params,
-        name,
-        total_len,
-        trueos_fs::FileWriteMetadata {
-            content_type,
-            record_key,
-        },
-        ).await
+            &io,
+            &params,
+            name,
+            total_len,
+            trueos_fs::FileWriteMetadata {
+                content_type,
+                record_key,
+            },
+        )
+        .await
     } else {
         trueos_fs::begin_write_file_stream_with_metadata(
-        &io,
-        &params,
-        name,
-        total_len,
-        trueos_fs::FileWriteMetadata {
-            content_type,
-            record_key,
-        },
-        ).await
+            &io,
+            &params,
+            name,
+            total_len,
+            trueos_fs::FileWriteMetadata {
+                content_type,
+                record_key,
+            },
+        )
+        .await
     };
-    let Some(stream) = begun
-    .map_err(map_engine_err)?
-    else {
+    let Some(stream) = begun.map_err(map_engine_err)? else {
         crate::log!(
             "trueosfs: file-write-begin failed stage=engine disk={} err=no-space\n",
             disk.id().raw()
@@ -2040,23 +2040,30 @@ fn validate_indexed_file_target(
     legacy_blob: bool,
 ) -> Result<bool, block::Error> {
     let roots = ROOTS.lock();
-    let Some(index) = roots.iter().find(|mount| mount.disk_id == disk_id)
-        .and_then(|mount| mount.index.as_ref()) else {
+    let Some(index) = roots
+        .iter()
+        .find(|mount| mount.disk_id == disk_id)
+        .and_then(|mount| mount.index.as_ref())
+    else {
         return Ok(false);
     };
     if let Some(entry) = index.get(path.as_bytes()) {
         if entry.kind == trueos_fs::LogKind::Directory {
             return Err(block::Error::InvalidParam);
         }
-        if legacy_blob && entry.kind == trueos_fs::LogKind::Put
-            && entry.content_type != ContentTypeId::BLOB {
+        if legacy_blob
+            && entry.kind == trueos_fs::LogKind::Put
+            && entry.content_type != ContentTypeId::BLOB
+        {
             record_type_reject(ContentIdentityRejectReason::LegacyDowngrade);
             return Err(block::Error::InvalidParam);
         }
     }
     if let Some((parent, _)) = path.rsplit_once('/')
-        && !index.get(parent.as_bytes())
-            .is_some_and(|entry| entry.kind == trueos_fs::LogKind::Directory) {
+        && !index
+            .get(parent.as_bytes())
+            .is_some_and(|entry| entry.kind == trueos_fs::LogKind::Directory)
+    {
         return Err(block::Error::InvalidParam);
     }
     Ok(true)
@@ -2566,7 +2573,9 @@ pub async fn list_dir_async(
 // Content selection has its own explicit result budget and must not inherit
 // the small interactive directory-listing cap.
 async fn list_dir_with_limit_async(
-    disk: block::DeviceHandle, dir: &str, entry_cap: usize,
+    disk: block::DeviceHandle,
+    dir: &str,
+    entry_cap: usize,
 ) -> Result<Option<DirListing>, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
@@ -4033,16 +4042,24 @@ pub async fn select_files_async(
 ) -> Result<trueos_fs::selection::FileSelection, block::Error> {
     let base = folder.trim_matches('/');
     let full_path = |relative: String| {
-        if relative.is_empty() { String::from(base) }
-        else if base.is_empty() { relative }
-        else { alloc::format!("{base}/{relative}") }
+        if relative.is_empty() {
+            String::from(base)
+        } else if base.is_empty() {
+            relative
+        } else {
+            alloc::format!("{base}/{relative}")
+        }
     };
-    trueos_fs::selection::select_files(content_type, max_depth,
+    trueos_fs::selection::select_files(
+        content_type,
+        max_depth,
         |relative| {
             let path = full_path(relative);
             async move {
-                let listing = list_dir_with_limit_async(disk, &path, trueos_fs::selection::ENTRY_CAP)
-                    .await?.ok_or(block::Error::InvalidParam)?;
+                let listing =
+                    list_dir_with_limit_async(disk, &path, trueos_fs::selection::ENTRY_CAP)
+                        .await?
+                        .ok_or(block::Error::InvalidParam)?;
                 Ok((listing.entries, listing.truncated))
             }
         },
@@ -4050,15 +4067,19 @@ pub async fn select_files_async(
             let path = full_path(relative);
             async move {
                 let mut prefix = [0u8; 4096];
-                let len = file_read_range_async(disk, &path, 0, &mut prefix).await?
+                let len = file_read_range_async(disk, &path, 0, &mut prefix)
+                    .await?
                     .ok_or(block::Error::InvalidParam)?;
                 // A prefix cannot prove whole-file UTF-8 validity. Only use
                 // explicit signature matchers here, never the UTF-8 fallback.
-                Ok(infer::get(&prefix[..len]).map(|kind| kind.content_type_id())
+                Ok(infer::get(&prefix[..len])
+                    .map(|kind| kind.content_type_id())
                     .filter(|id| *id != ContentTypeId::NONE))
             }
         },
-    ).await.map_err(|error| match error {
+    )
+    .await
+    .map_err(|error| match error {
         trueos_fs::selection::SelectionError::Io(error) => error,
         _ => block::Error::InvalidParam,
     })

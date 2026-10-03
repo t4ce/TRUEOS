@@ -208,7 +208,8 @@ fn dispatch_sh3(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
     match crate::shell3::service::request_shell3() {
         Ok(slot) => super::print_shell_line(
             io,
-            alloc::format!("sh3: Shell3 queued on AP slot {slot}; Escape closes its UI4 frame").as_str(),
+            alloc::format!("sh3: Shell3 queued on AP slot {slot}; Escape closes its UI4 frame")
+                .as_str(),
         ),
         Err(crate::shell3::Shell3Error::NoExecutor) => {
             super::print_shell_line(io, "sh3: no Shell3 AP executor is available")
@@ -384,7 +385,9 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_PINK_RGB),
         advertised: true,
         handler: dispatch_backup,
-        tool_description: Some("Open the backup Blueprint for network or local whole-disk backup and confirmed restore; backup stop cancels."),
+        tool_description: Some(
+            "Open the backup Blueprint for network or local whole-disk backup and confirmed restore; backup stop cancels.",
+        ),
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
@@ -448,7 +451,9 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_rec,
-        tool_description: Some("Record HDA microphone audio to a PCM WAV in trueosfs:/recordings. rec <1-10> records for minutes; rec records until stopped. rec stop or §rec§ stops and saves."),
+        tool_description: Some(
+            "Record HDA microphone audio to a PCM WAV in trueosfs:/recordings. rec <1-10> records for minutes; rec records until stopped. rec stop or §rec§ stops and saves.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_REC),
     },
     BuiltinShell2CmdEntry {
@@ -573,7 +578,9 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GRAY_RGB),
         advertised: true,
         handler: dispatch_sh3,
-        tool_description: Some("Launch a Shell3 instance on its assigned AP with a UI4 frame; Escape closes it."),
+        tool_description: Some(
+            "Launch a Shell3 instance on its assigned AP with a UI4 frame; Escape closes it.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_SH3),
     },
     BuiltinShell2CmdEntry {
@@ -637,7 +644,15 @@ mod tests {
 
     #[test]
     fn admin_blueprints_keep_their_host_dispatch_when_in_appdb() {
-        for submitted in ["os", "OS", " os ", "os help", "backup", "BACKUP", "backup stop"] {
+        for submitted in [
+            "os",
+            "OS",
+            " os ",
+            "os help",
+            "backup",
+            "BACKUP",
+            "backup stop",
+        ] {
             assert!(requires_host_admin_dispatch(submitted), "{submitted}");
         }
         for submitted in ["shell", "surf", "osmium", "backup-copy", "中国"] {

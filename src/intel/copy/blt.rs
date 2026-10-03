@@ -64,7 +64,7 @@ const MI_ARB_CHECK: u32 = 0x05 << 23;
 
 const DIRECT_BLT_RING_BYTES: usize = 4096;
 const DIRECT_BLT_CONTEXT_BYTES: usize = 22 * 4096;
-const DIRECT_BLT_BATCH_BYTES: usize = 4096;
+const DIRECT_BLT_BATCH_BYTES: usize = 8192;
 const DIRECT_BLT_RESULT_BYTES: usize = 4096;
 const DIRECT_BLT_COPY_BYTES: usize = 4096;
 // Match the direct-RCS address envelope so BCS can consume the same stable,
@@ -88,7 +88,12 @@ const DIRECT_BLT_GPU_VA_DST_BASE: u64 = BCS0_GGTT_BASE + 0x7_0000;
 const _: () = assert!(DIRECT_BLT_GPU_VA_DST_BASE + DIRECT_BLT_COPY_BYTES as u64 <= BCS0_GGTT_LIMIT);
 const _: () = assert!(BCS0_GGTT_LIMIT <= super::gpgpu::DIRECT_RCS_GPU_VA_RING_BASE);
 const BOOT_BCS_LEGACY_PROBE: bool = false;
-const GUC_BLT_UI4_MAX_COPIES: usize = 64;
+const GUC_BLT_UI4_MAX_COPIES: usize = 160;
+// Entry/TLB flush (12 DWORDs), 10 DWORDs per copy, completion/end (8 DWORDs).
+const _: () = assert!((12 + GUC_BLT_UI4_MAX_COPIES * 10 + 8) * 4 <= DIRECT_BLT_BATCH_BYTES);
+const _: () = assert!(
+    DIRECT_BLT_GPU_VA_BATCH_BASE + DIRECT_BLT_BATCH_BYTES as u64 <= DIRECT_BLT_GPU_VA_RESULT_BASE
+);
 const GUC_BLT_UI4_TIMEOUT_MS: u64 = 250;
 const GUC_BLT_PROBE_TIMEOUT_MS: u64 = 2_000;
 const DIRECT_BLT_SMOKE_MARKER: u32 = 0xC0DE_BC50;
@@ -735,7 +740,11 @@ pub(crate) fn queue_guc_bcs0_legacy_rgba_copies(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
-    if copies.is_empty() || copies.iter().any(|&copy| !guc_blt_valid_legacy_copy(destination, copy)) {
+    if copies.is_empty()
+        || copies
+            .iter()
+            .any(|&copy| !guc_blt_valid_legacy_copy(destination, copy))
+    {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
     queue_guc_bcs0_batch(destination, copies, false, GucBcs0BatchKind::LegacyCopy)
@@ -768,8 +777,11 @@ pub(crate) fn queue_guc_bcs0_mono_glyphs(
     destination: GucBcs0RgbaSurface,
     glyphs: &[GucBcs0MonoGlyph],
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
-    if glyphs.is_empty() || glyphs.len() > GUC_BCS0_MONO_MAX_GLYPHS
-        || glyphs.iter().any(|glyph| !guc_blt_valid_mono_glyph(destination, glyph))
+    if glyphs.is_empty()
+        || glyphs.len() > GUC_BCS0_MONO_MAX_GLYPHS
+        || glyphs
+            .iter()
+            .any(|glyph| !guc_blt_valid_mono_glyph(destination, glyph))
     {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
@@ -823,9 +835,7 @@ fn queue_guc_bcs0_batch(
     let Some(state) = direct_blt_state_once() else {
         return Err(GucBcs0CopySubmitError::Unavailable);
     };
-    if !guc_blt_valid_surface(destination)
-        || copies.len() > GUC_BLT_UI4_MAX_COPIES
-    {
+    if !guc_blt_valid_surface(destination) || copies.len() > GUC_BLT_UI4_MAX_COPIES {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
     if GUC_BLT_UI4.lock().pending.is_some()
@@ -855,12 +865,23 @@ fn queue_guc_bcs0_batch(
             .max(1);
         let marker = 0xBC50_0000 | (sequence & 0xFFFF);
         let (copy_count, copied_bytes) = match kind {
-            GucBcs0BatchKind::FastFill(color) => guc_blt_encode_ui4_fill_batch(state, destination, color, marker)?,
-            GucBcs0BatchKind::FastCopy => guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?,
-            GucBcs0BatchKind::LegacyCopy => guc_blt_encode_legacy_copy_batch(state, destination, copies, marker)?,
+            GucBcs0BatchKind::FastFill(color) => {
+                guc_blt_encode_ui4_fill_batch(state, destination, color, marker)?
+            }
+            GucBcs0BatchKind::FastCopy => {
+                guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?
+            }
+            GucBcs0BatchKind::LegacyCopy => {
+                guc_blt_encode_legacy_copy_batch(state, destination, copies, marker)?
+            }
             GucBcs0BatchKind::LegacyMono(glyphs) => {
-                if !direct_blt_map_ppgtt_region(state, DIRECT_BLT_GPU_VA_SRC_BASE,
-                    state.src_phys, DIRECT_BLT_COPY_BYTES, super::GEN8_PAGE_PRESENT | (1 << 1)) {
+                if !direct_blt_map_ppgtt_region(
+                    state,
+                    DIRECT_BLT_GPU_VA_SRC_BASE,
+                    state.src_phys,
+                    DIRECT_BLT_COPY_BYTES,
+                    super::GEN8_PAGE_PRESENT | (1 << 1),
+                ) {
                     return None;
                 }
                 super::dma_flush(state.ppgtt_virt, DIRECT_BLT_PPGTT_BYTES);
@@ -969,14 +990,23 @@ pub(crate) fn poll_guc_bcs0_rgba_copies(
         let save_status = guc_blt_context_save_status(state);
         let activity = activity_snapshot();
         let _ = super::guc_submission::fault_snapshot(); // Drain pending G2H events.
-        let context = super::guc_submission::context_status().into_iter().find(|context| {
-            context.engine == crate::gpu::physical::PhysicalEngineId::BCS0
-                && context.hwlrca_lo & !0xFFF == DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32
-        });
+        let context = super::guc_submission::context_status()
+            .into_iter()
+            .find(|context| {
+                context.engine == crate::gpu::physical::PhysicalEngineId::BCS0
+                    && context.hwlrca_lo & !0xFFF == DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32
+            });
         *GUC_BLT_LAST_TIMEOUT.lock() = Some(GucBcs0Timeout {
-            observed, expected: runtime.expected_marker, activity, context,
-            ring_cookie: unsafe { core::ptr::read_volatile(state.result_virt.add(8).cast::<u32>()) },
-            batch_cookie: unsafe { core::ptr::read_volatile(state.result_virt.add(16).cast::<u32>()) },
+            observed,
+            expected: runtime.expected_marker,
+            activity,
+            context,
+            ring_cookie: unsafe {
+                core::ptr::read_volatile(state.result_virt.add(8).cast::<u32>())
+            },
+            batch_cookie: unsafe {
+                core::ptr::read_volatile(state.result_virt.add(16).cast::<u32>())
+            },
         });
         crate::log_error!(target: "gfx";
             "intel/blt: ui4-bcs0 pre-quarantine activity={:?} context={:?}\n",
@@ -1042,8 +1072,7 @@ fn guc_blt_quarantine(reason: &'static str) -> crate::gpu::vgpu::KernelClientIso
     if !first {
         return crate::gpu::vgpu::KernelClientIsolation::default();
     }
-    let isolation =
-        crate::gpu::vgpu::isolate_kernel_context(crate::gpu::vgpu::KernelClient::Vcpy);
+    let isolation = crate::gpu::vgpu::isolate_kernel_context(crate::gpu::vgpu::KernelClient::Vcpy);
     crate::log_error!(target: "gfx";
         "intel/blt: guc-bcs0 quarantine reason={} client={} device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0 backing_retained=1 direct-engine-reset=0\n",
         reason,
@@ -1237,7 +1266,9 @@ fn direct_blt_state_once() -> Option<DirectBltState> {
 /// Runtime compatibility gate. BCS0 consumers may only observe the immutable
 /// boot result; they never install or repair a global control mapping.
 fn direct_blt_map_state(dev: super::Dev, state: DirectBltState) -> bool {
-    if DIRECT_BLT_GGTT_MAPPING.get().copied() != Some(true) { return false; }
+    if DIRECT_BLT_GGTT_MAPPING.get().copied() != Some(true) {
+        return false;
+    }
     for (gpu, phys, bytes) in [
         (DIRECT_BLT_GPU_VA_RING_BASE, state.ring_phys, DIRECT_BLT_RING_BYTES),
         (DIRECT_BLT_GPU_VA_CONTEXT_BASE, state.context_phys, DIRECT_BLT_CONTEXT_BYTES),
@@ -1360,7 +1391,9 @@ fn boot_bcs0_legacy_probe(dev: super::Dev, state: DirectBltState) -> bool {
     for _ in 0..DIRECT_BLT_SMOKE_POLL_ITERS {
         super::dma_flush(state.result_virt, 64);
         marker = unsafe { core::ptr::read_volatile(state.result_virt.cast::<u32>()) };
-        if marker == DIRECT_BLT_SMOKE_MARKER { break; }
+        if marker == DIRECT_BLT_SMOKE_MARKER {
+            break;
+        }
         core::hint::spin_loop();
     }
     let entered = unsafe { core::ptr::read_volatile(state.result_virt.add(8).cast::<u32>()) };
@@ -1390,14 +1423,27 @@ fn boot_bcs0_legacy_probe(dev: super::Dev, state: DirectBltState) -> bool {
 
 fn boot_bcs0_legacy_ring_words() -> [u32; 20] {
     [
-        MI_STORE_DATA_IMM_GGTT_DW1, (DIRECT_BLT_GPU_VA_RESULT_BASE + 8) as u32, 0, BCS_RING_COOKIE,
+        MI_STORE_DATA_IMM_GGTT_DW1,
+        (DIRECT_BLT_GPU_VA_RESULT_BASE + 8) as u32,
+        0,
+        BCS_RING_COOKIE,
         // XY_SRC_COPY_BLT: linear 32bpp, RGB+alpha enabled, ROP SRCCOPY (CC).
         (2 << 29) | (0x53 << 22) | (3 << 20) | 8,
-        (3 << 24) | (0xCC << 16) | 16, 0, (1 << 16) | 1,
-        DIRECT_BLT_GPU_VA_DST_BASE as u32, 0, 0, 16, DIRECT_BLT_GPU_VA_SRC_BASE as u32, 0,
+        (3 << 24) | (0xCC << 16) | 16,
+        0,
+        (1 << 16) | 1,
+        DIRECT_BLT_GPU_VA_DST_BASE as u32,
+        0,
+        0,
+        16,
+        DIRECT_BLT_GPU_VA_SRC_BASE as u32,
+        0,
         MI_FLUSH_DW | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
         DIRECT_BLT_GPU_VA_RESULT_BASE as u32 | MI_FLUSH_DW_DEST_GGTT,
-        0, DIRECT_BLT_SMOKE_MARKER, 0, MI_ARB_CHECK,
+        0,
+        DIRECT_BLT_SMOKE_MARKER,
+        0,
+        MI_ARB_CHECK,
     ]
 }
 
@@ -1430,14 +1476,18 @@ fn init_guc_bcs0_engine_for_boot(dev: super::Dev) -> bool {
         }
     }
     super::mmio_write(dev, BCS0_RING_BASE + RING_HWS_PGA, DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32);
-    super::mmio_write(dev, BCS0_RING_BASE + RING_MODE_GEN7,
-        GEN11_GFX_DISABLE_LEGACY_MODE | (GEN11_GFX_DISABLE_LEGACY_MODE << 16));
+    super::mmio_write(
+        dev,
+        BCS0_RING_BASE + RING_MODE_GEN7,
+        GEN11_GFX_DISABLE_LEGACY_MODE | (GEN11_GFX_DISABLE_LEGACY_MODE << 16),
+    );
     super::mmio_write(dev, BCS0_RING_BASE + RING_MI_MODE, STOP_RING << 16);
     let mi_after = super::mmio_read(dev, BCS0_RING_BASE + RING_MI_MODE);
     let mode_after = super::mmio_read(dev, BCS0_RING_BASE + RING_MODE_GEN7);
     let hws = super::mmio_read(dev, BCS0_RING_BASE + RING_HWS_PGA);
     let accepted = mode_after & GEN11_GFX_DISABLE_LEGACY_MODE != 0
-        && mi_after & STOP_RING == 0 && hws == DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32;
+        && mi_after & STOP_RING == 0
+        && hws == DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32;
     crate::log_warn!(target: "gfx";
         "intel/blt: boot-init accepted={} mode=0x{:08X}->0x{:08X} mi_mode=0x{:08X}->0x{:08X} hws=0x{:08X} owner=boot next=guc\n",
         accepted as u8, mode_before, mode_after, mi_before, mi_after, hws);
@@ -1670,7 +1720,11 @@ fn guc_blt_map_ui4_surfaces(
             copy.source.gpu,
             copy.source.phys,
             copy.source.bytes,
-            if uncached_sources { pte_present_rw_scanout_uc } else { pte_present_rw_wb },
+            if uncached_sources {
+                pte_present_rw_scanout_uc
+            } else {
+                pte_present_rw_wb
+            },
         ) {
             return false;
         }
@@ -1704,6 +1758,9 @@ fn guc_blt_encode_copy_batch(
     marker: u32,
     legacy: bool,
 ) -> Option<(usize, u64)> {
+    if copies.len() > GUC_BLT_UI4_MAX_COPIES {
+        return None;
+    }
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
             state.batch_virt.cast::<u32>(),
@@ -1715,8 +1772,10 @@ fn guc_blt_encode_copy_batch(
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_BLT_RESULT_BYTES);
     }
     batch[..4].copy_from_slice(&[
-        MI_STORE_DATA_IMM_GGTT_DW1, (DIRECT_BLT_GPU_VA_RESULT_BASE + 16) as u32,
-        0, BCS_BATCH_COOKIE,
+        MI_STORE_DATA_IMM_GGTT_DW1,
+        (DIRECT_BLT_GPU_VA_RESULT_BASE + 16) as u32,
+        0,
+        BCS_BATCH_COOKIE,
     ]);
     // Gridpaper allocations recycle VAs. Flush stale BCS translations before
     // surface access; the GGTT command buffer itself is immutable in address.
@@ -1726,7 +1785,9 @@ fn guc_blt_encode_copy_batch(
         MI_ARB_CHECK | (1 << 8) | 1,
         MI_FLUSH_DW | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE | MI_FLUSH_DW_TLB_INVALIDATE,
         (DIRECT_BLT_GPU_VA_RESULT_BASE + 24) as u32 | MI_FLUSH_DW_DEST_GGTT,
-        0, 0, 0,
+        0,
+        0,
+        0,
         MI_ARB_CHECK | (1 << 8),
         MI_NOOP,
     ]);
@@ -1751,11 +1812,12 @@ fn guc_blt_encode_copy_batch(
         } else {
             XY_FAST_COPY_BLT_CMD
         };
-        batch[cursor + 1] = destination.pitch_bytes | if legacy {
-            (3 << 24) | (0xCC << 16)
-        } else {
-            XY_FAST_COPY_COLOR_DEPTH_32
-        };
+        batch[cursor + 1] = destination.pitch_bytes
+            | if legacy {
+                (3 << 24) | (0xCC << 16)
+            } else {
+                XY_FAST_COPY_COLOR_DEPTH_32
+            };
         batch[cursor + 2] = copy.destination_x | (copy.destination_y << 16);
         batch[cursor + 3] = destination_right | (destination_bottom << 16);
         batch[cursor + 4] = destination.gpu as u32;
@@ -1797,9 +1859,13 @@ fn guc_blt_valid_mono_glyph(destination: GucBcs0RgbaSurface, glyph: &GucBcs0Mono
         && destination.pitch_bytes <= i16::MAX as u32
         && (1..=16).contains(&glyph.width)
         && (1..=32).contains(&glyph.height)
-        && glyph.x.checked_add(glyph.width)
+        && glyph
+            .x
+            .checked_add(glyph.width)
             .is_some_and(|right| right <= destination.width && right <= i16::MAX as u32)
-        && glyph.y.checked_add(glyph.height)
+        && glyph
+            .y
+            .checked_add(glyph.height)
             .is_some_and(|bottom| bottom <= destination.height && bottom <= i16::MAX as u32)
 }
 
@@ -1809,8 +1875,11 @@ fn guc_blt_encode_mono_batch(
     glyphs: &[GucBcs0MonoGlyph],
     marker: u32,
 ) -> Option<(usize, u64)> {
-    if glyphs.is_empty() || glyphs.len() > GUC_BCS0_MONO_MAX_GLYPHS
-        || glyphs.iter().any(|glyph| !guc_blt_valid_mono_glyph(destination, glyph))
+    if glyphs.is_empty()
+        || glyphs.len() > GUC_BCS0_MONO_MAX_GLYPHS
+        || glyphs
+            .iter()
+            .any(|glyph| !guc_blt_valid_mono_glyph(destination, glyph))
     {
         return None;
     }
@@ -1820,7 +1889,9 @@ fn guc_blt_encode_mono_batch(
         core::slice::from_raw_parts_mut(state.batch_virt.cast::<u32>(), DIRECT_BLT_BATCH_BYTES / 4)
     };
     let end = 12 + glyphs.len() * 10;
-    if end + 8 > batch.len() { return None; }
+    if end + 8 > batch.len() {
+        return None;
+    }
     batch.copy_within(12..20, end);
     let mut bytes = 0u64;
     for (index, glyph) in glyphs.iter().enumerate() {
@@ -1836,9 +1907,12 @@ fn guc_blt_encode_mono_batch(
             (3 << 24) | (0xCC << 16) | destination.pitch_bytes,
             glyph.x | (glyph.y << 16),
             (glyph.x + glyph.width) | ((glyph.y + glyph.height) << 16),
-            destination.gpu as u32, (destination.gpu >> 32) as u32,
-            source as u32, (source >> 32) as u32,
-            glyph.background, glyph.foreground,
+            destination.gpu as u32,
+            (destination.gpu >> 32) as u32,
+            source as u32,
+            (source >> 32) as u32,
+            glyph.background,
+            glyph.foreground,
         ]);
         bytes += u64::from(glyph.width) * u64::from(glyph.height) * 4;
     }
@@ -1874,9 +1948,15 @@ fn guc_blt_encode_ui4_fill_batch(
     batch[12..23].copy_from_slice(&[
         (2 << 29) | (0x44 << 22) | (2 << 19) | 9,
         destination.pitch_bytes - 1,
-        0, destination.width | (destination.height << 16),
-        destination.gpu as u32, (destination.gpu >> 32) as u32,
-        0, color, 0, 0, 0,
+        0,
+        destination.width | (destination.height << 16),
+        destination.gpu as u32,
+        (destination.gpu >> 32) as u32,
+        0,
+        color,
+        0,
+        0,
+        0,
     ]);
     super::dma_flush(state.batch_virt, 31 * 4);
     Some((1, u64::from(destination.width) * u64::from(destination.height) * 4))
@@ -1885,7 +1965,10 @@ fn guc_blt_encode_ui4_fill_batch(
 fn guc_blt_gpu_ranges_overlap(left: GucBcs0RgbaSurface, right: GucBcs0RgbaSurface) -> bool {
     // Bases are page aligned; rounding the ends also rejects partial-page aliases.
     let end = |surface: GucBcs0RgbaSurface| {
-        surface.gpu.checked_add(surface.bytes as u64)?.checked_add(4095)
+        surface
+            .gpu
+            .checked_add(surface.bytes as u64)?
+            .checked_add(4095)
             .map(|value| value & !4095)
     };
     match (end(left), end(right)) {
@@ -2037,10 +2120,16 @@ fn guc_blt_append_ring_batch_start(state: DirectBltState, tail_bytes: usize) -> 
     unsafe {
         let dwords = state.ring_virt.cast::<u32>();
         core::ptr::write_volatile(dwords.add(start), MI_STORE_DATA_IMM_GGTT_DW1);
-        core::ptr::write_volatile(dwords.add(start + 1), (DIRECT_BLT_GPU_VA_RESULT_BASE + 8) as u32);
+        core::ptr::write_volatile(
+            dwords.add(start + 1),
+            (DIRECT_BLT_GPU_VA_RESULT_BASE + 8) as u32,
+        );
         core::ptr::write_volatile(dwords.add(start + 2), 0);
         core::ptr::write_volatile(dwords.add(start + 3), BCS_RING_COOKIE);
-        core::ptr::write_volatile(dwords.add(start + 4), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GGTT);
+        core::ptr::write_volatile(
+            dwords.add(start + 4),
+            MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GGTT,
+        );
         core::ptr::write_volatile(dwords.add(start + 5), DIRECT_BLT_GPU_VA_BATCH_BASE as u32);
         core::ptr::write_volatile(
             dwords.add(start + 6),

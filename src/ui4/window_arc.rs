@@ -31,8 +31,7 @@ pub(crate) const fn contains(width: u32, height: u32, arc: u16, x: u32, y: u32) 
     } else {
         py.saturating_sub(bottom)
     };
-    (dx as u128 * dx as u128 + dy as u128 * dy as u128)
-        <= radius as u128 * radius as u128
+    (dx as u128 * dx as u128 + dy as u128 * dy as u128) <= radius as u128 * radius as u128
 }
 
 #[cfg(test)]

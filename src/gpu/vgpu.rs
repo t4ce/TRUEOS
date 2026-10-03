@@ -173,9 +173,11 @@ impl KernelClient {
     const fn queue_class(self) -> QueueClass {
         match self {
             Self::Render | Self::Render1 | Self::Render2 => QueueClass::Render,
-            Self::GpgpuSystem | Self::GpgpuFont | Self::GpgpuExecution | Self::GpgpuCodec | Self::Lfm25 => {
-                QueueClass::Compute
-            }
+            Self::GpgpuSystem
+            | Self::GpgpuFont
+            | Self::GpgpuExecution
+            | Self::GpgpuCodec
+            | Self::Lfm25 => QueueClass::Compute,
             Self::Ui4Compositor => QueueClass::Compute,
             Self::Vcpy => QueueClass::Copy,
         }
@@ -304,10 +306,7 @@ mod kernel_client_priority_tests {
 
     #[test]
     fn copy_service_remains_normal_priority() {
-        assert_eq!(
-            KernelClient::Vcpy.physical_priority(),
-            PhysicalContextPriority::KernelNormal,
-        );
+        assert_eq!(KernelClient::Vcpy.physical_priority(), PhysicalContextPriority::KernelNormal,);
     }
 }
 
@@ -2770,7 +2769,11 @@ pub(crate) fn create_render_pipeline(
     if shader.epoch != device.epoch {
         return Err(VgpuError::InvalidHandle);
     }
-    if shader.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64 && (vertex_stride != 64 || position_offset != 0) { return Err(VgpuError::Unsupported); }
+    if shader.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
+        && (vertex_stride != 64 || position_offset != 0)
+    {
+        return Err(VgpuError::Unsupported);
+    }
     if shader.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
         && position_offset.saturating_add(20) > vertex_stride
     {
@@ -2971,9 +2974,15 @@ fn record_fixed_draw_times(phases: [u64; 5], total_ns: u64) {
     let report = {
         let mut totals = FIXED_DRAW_TIMES.lock();
         totals.0 += 1;
-        for (sum, value) in totals.1.iter_mut().zip(phases) { *sum = sum.saturating_add(value); }
+        for (sum, value) in totals.1.iter_mut().zip(phases) {
+            *sum = sum.saturating_add(value);
+        }
         totals.2 = totals.2.max(total_ns);
-        if totals.0 >= 128 { Some(core::mem::replace(&mut *totals, (0, [0; 5], 0))) } else { None }
+        if totals.0 >= 128 {
+            Some(core::mem::replace(&mut *totals, (0, [0; 5], 0)))
+        } else {
+            None
+        }
     };
     if let Some((samples, t, maximum)) = report {
         crate::log_important!(target: "vgpu";
@@ -3000,8 +3009,15 @@ pub(crate) fn submit_ui4_indexed_draw(
         );
         VgpuError::Unsupported
     };
-    if !v::vgpu::indexed_draw_flags_valid(draw.depth_flags | if draw.load_color { v::vgpu::INDEXED_DRAW_LOAD_COLOR } else { 0 })
-        || !ui4_single_indexed_topology_valid(draw.topology, draw.index_count) || draw.base_vertex != 0
+    if !v::vgpu::indexed_draw_flags_valid(
+        draw.depth_flags
+            | if draw.load_color {
+                v::vgpu::INDEXED_DRAW_LOAD_COLOR
+            } else {
+                0
+            },
+    ) || !ui4_single_indexed_topology_valid(draw.topology, draw.index_count)
+        || draw.base_vertex != 0
     {
         return Err(unsupported("draw-contract"));
     }
@@ -3040,15 +3056,22 @@ pub(crate) fn submit_ui4_indexed_draw(
             return Err(VgpuError::InvalidHandle);
         }
         let fixed = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64;
-        if fixed && (geometry_clear || draw.vertex_offset != v::vgpu::WC3_FIXED_STATE_BYTES) { return Err(unsupported("fixed-layout")); }
-        let textured = fixed || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
+        if fixed && (geometry_clear || draw.vertex_offset != v::vgpu::WC3_FIXED_STATE_BYTES) {
+            return Err(unsupported("fixed-layout"));
+        }
+        let textured =
+            fixed || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
         if draw.retain_texture
-            && textured && !geometry_clear
+            && textured
+            && !geometry_clear
             && lookup_buffer(device, draw.sampled_texture)?.usage != BUFFER_USAGE_MAP_WRITE
         {
             return Err(unsupported("retained-texture-usage"));
         }
-        if textured && !geometry_clear && draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT) {
+        if textured
+            && !geometry_clear
+            && draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT)
+        {
             return Err(unsupported("sampler-contract"));
         }
         let vertex_stride = pipeline.vertex_stride as usize;
@@ -3080,12 +3103,17 @@ pub(crate) fn submit_ui4_indexed_draw(
         };
         let copied = (|| {
             let depth = if draw.depth_flags & v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH != 0 {
-                let existing = device.drawable_depths.iter().position(|(id, _)| *id == window_id);
+                let existing = device
+                    .drawable_depths
+                    .iter()
+                    .position(|(id, _)| *id == window_id);
                 if let Some(index) = existing {
                     if !device.drawable_depths[index].1.matches(width, height) {
                         // New/resized attachments are initialized by the GPU before use.
                         let old = &device.drawable_depths[index].1;
-                        if Arc::strong_count(old) != 1 { return Err(VgpuError::Busy); }
+                        if Arc::strong_count(old) != 1 {
+                            return Err(VgpuError::Busy);
+                        }
                         if !crate::intel::render::release_drawable_depth(old) {
                             device.lost = true;
                             device.picasso_carrier_quarantined = true;
@@ -3095,11 +3123,18 @@ pub(crate) fn submit_ui4_indexed_draw(
                         device.drawable_depths.swap_remove(index);
                     }
                 }
-                if let Some((_, depth)) = device.drawable_depths.iter().find(|(id, _)| *id == window_id) {
+                if let Some((_, depth)) = device
+                    .drawable_depths
+                    .iter()
+                    .find(|(id, _)| *id == window_id)
+                {
                     Some(Arc::clone(depth))
                 } else {
-                    let bytes = crate::intel::render::drawable_depth_bytes(width, height).ok_or_else(|| unsupported("depth-extent"))?;
-                    if device.drawable_depths.len() >= 16 || device.memory_used.saturating_add(bytes) > device.quota.memory_bytes {
+                    let bytes = crate::intel::render::drawable_depth_bytes(width, height)
+                        .ok_or_else(|| unsupported("depth-extent"))?;
+                    if device.drawable_depths.len() >= 16
+                        || device.memory_used.saturating_add(bytes) > device.quota.memory_bytes
+                    {
                         crate::log_warn!(target: "vgpu";
                             "vgpu-indexed: quota-exceeded resource=depth used={} request={} quota={} target={}x{}\n",
                             device.memory_used, bytes, device.quota.memory_bytes, width, height);
@@ -3118,7 +3153,9 @@ pub(crate) fn submit_ui4_indexed_draw(
                     device.drawable_depths.push((window_id, Arc::clone(&depth)));
                     Some(depth)
                 }
-            } else { None };
+            } else {
+                None
+            };
 
             let index_record = lookup_buffer(device, draw.index_buffer)?;
             if index_record.usage & BUFFER_USAGE_INDEX == 0 {
@@ -3155,7 +3192,8 @@ pub(crate) fn submit_ui4_indexed_draw(
                 .iter()
                 .copied()
                 .max()
-                .ok_or_else(|| unsupported("empty-indices"))? as usize
+                .ok_or_else(|| unsupported("empty-indices"))?
+                as usize
                 + 1;
             let vertex_record = lookup_buffer(device, draw.vertex_buffer)?;
             if vertex_record.usage & BUFFER_USAGE_VERTEX == 0 {
@@ -3183,7 +3221,13 @@ pub(crate) fn submit_ui4_indexed_draw(
             let mut vertices = Vec::with_capacity(vertex_count);
             for vertex in 0..vertex_count {
                 let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
-                let attribute_bytes = if fixed { 64 } else if textured { 20 } else { 12 };
+                let attribute_bytes = if fixed {
+                    64
+                } else if textured {
+                    20
+                } else {
+                    12
+                };
                 let raw =
                     unsafe { core::slice::from_raw_parts(vertex_virt.add(start), attribute_bytes) };
                 let mut attributes = [0.0; 16];
@@ -3193,10 +3237,14 @@ pub(crate) fn submit_ui4_indexed_draw(
                 vertices.push(attributes);
             }
             let fixed_state = if fixed {
-                let raw = unsafe { core::slice::from_raw_parts(vertex_virt, v::vgpu::WC3_FIXED_STATE_BYTES) };
+                let raw = unsafe {
+                    core::slice::from_raw_parts(vertex_virt, v::vgpu::WC3_FIXED_STATE_BYTES)
+                };
                 crate::intel::dma_flush(vertex_virt, raw.len());
                 let mut state = [0f32; 384];
-                for (out, bytes) in state.iter_mut().zip(raw.chunks_exact(4)) { *out = f32::from_le_bytes(bytes.try_into().unwrap()); }
+                for (out, bytes) in state.iter_mut().zip(raw.chunks_exact(4)) {
+                    *out = f32::from_le_bytes(bytes.try_into().unwrap());
+                }
                 if !fixed_gl_state_valid(&state, width, height) {
                     crate::log_warn!(target: "vgpu"; "vgpu-indexed: fixed-state scissor={:?} target={}x{}\n", &state[116..120], width, height);
                     return Err(unsupported("fixed-state"));
@@ -3206,7 +3254,9 @@ pub(crate) fn submit_ui4_indexed_draw(
                     return Err(unsupported("fixed-texture"));
                 }
                 Some(state)
-            } else { None };
+            } else {
+                None
+            };
             let texture = if textured && !geometry_clear {
                 let shape = [
                     draw.texture_width,
@@ -3249,7 +3299,9 @@ pub(crate) fn submit_ui4_indexed_draw(
                     }
                     let texture_virt = match texture_record.backing {
                         BufferBacking::Dma { virt, .. } => virt,
-                        BufferBacking::GuestPages { .. } => return Err(unsupported("texture-backing")),
+                        BufferBacking::GuestPages { .. } => {
+                            return Err(unsupported("texture-backing"));
+                        }
                     };
                     crate::intel::dma_flush(unsafe { texture_virt.add(0) }, texture_bytes);
                     let texture_bytes =
@@ -3294,7 +3346,10 @@ pub(crate) fn submit_ui4_indexed_draw(
             }
         };
         if fixed_state.is_none() {
-            let legacy = vertices.iter().map(|v| [v[0],v[1],v[2],v[3],v[4]]).collect::<Vec<_>>();
+            let legacy = vertices
+                .iter()
+                .map(|v| [v[0], v[1], v[2], v[3], v[4]])
+                .collect::<Vec<_>>();
             canonicalize_ui4_single_indexed_winding(&legacy, &mut indices, draw.topology);
         }
         (
@@ -3327,7 +3382,10 @@ pub(crate) fn submit_ui4_indexed_draw(
         crate::intel::render::create_resident_fixed_gl_mesh(&vertices, &indices, state)
     } else if sampled_texture.is_some() && !geometry_clear {
         crate::intel::render::create_resident_textured_indexed_mesh(
-            &vertices.iter().map(|v| [v[0],v[1],v[2],v[3],v[4]]).collect::<Vec<_>>(),
+            &vertices
+                .iter()
+                .map(|v| [v[0], v[1], v[2], v[3], v[4]])
+                .collect::<Vec<_>>(),
             &indices,
             draw.topology,
         )
@@ -3351,14 +3409,32 @@ pub(crate) fn submit_ui4_indexed_draw(
         depth_flags: None,
         mesh: &mesh,
         rgba: if geometry_clear {
-            if draw.load_color { [0; 4] } else { draw.clear_rgba8_srgb.to_le_bytes() }
-        } else { SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes() },
-        sampled_texture: if geometry_clear { None } else { sampled_texture.as_deref() },
+            if draw.load_color {
+                [0; 4]
+            } else {
+                draw.clear_rgba8_srgb.to_le_bytes()
+            }
+        } else {
+            SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes()
+        },
+        sampled_texture: if geometry_clear {
+            None
+        } else {
+            sampled_texture.as_deref()
+        },
         fragment_contract: if let Some(state) = fixed_state.as_ref() {
             crate::intel::render::ResidentSceneFragmentContract::FixedGl([
-                state[116] as u32, state[117] as u32, state[118] as u32, state[119] as u32,
-                state[114] as u32, state[352] as u32, state[353] as u32, state[354] as u32,
-                state[356] as u32, state[357] as u32])
+                state[116] as u32,
+                state[117] as u32,
+                state[118] as u32,
+                state[119] as u32,
+                state[114] as u32,
+                state[352] as u32,
+                state[353] as u32,
+                state[354] as u32,
+                state[356] as u32,
+                state[357] as u32,
+            ])
         } else if sampled_texture.is_some() && !geometry_clear {
             crate::intel::render::ResidentSceneFragmentContract::ClipPosition3UvTexture
         } else {
@@ -3394,7 +3470,10 @@ pub(crate) fn submit_ui4_indexed_draw(
         crate::intel::render::render_drawable_depth_scene(
             core::slice::from_ref(&scene_draw),
             (!draw.load_color).then_some(draw.clear_rgba8_srgb.to_le_bytes()),
-            destination, drawable_depth.as_deref(), draw.depth_flags, diagnostic_logs,
+            destination,
+            drawable_depth.as_deref(),
+            draw.depth_flags,
+            diagnostic_logs,
         )
     } else if draw.load_color {
         crate::intel::render::render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
@@ -3488,7 +3567,9 @@ pub(crate) fn submit_ui4_indexed_draw(
 
     // The renderer initializes a fresh attachment on the GPU, including when
     // the first operation is a draw. Publish initialization only after its fence.
-    if let Some(depth) = drawable_depth.as_deref() { depth.mark_initialized(); }
+    if let Some(depth) = drawable_depth.as_deref() {
+        depth.mark_initialized();
+    }
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
@@ -3527,13 +3608,18 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     if fixed_state.is_some() {
         let end = crate::chronos::monotonic_nanos();
-        record_fixed_draw_times([
-            timing_prepared.saturating_sub(timing_start),
-            timing_mesh.saturating_sub(timing_prepared),
-            timing_rendered.saturating_sub(timing_mesh),
-            end.saturating_sub(timing_rendered),
-            rendered.as_ref().map_or(0, |r| r.gpu_poll_us.saturating_mul(1000)),
-        ], end.saturating_sub(timing_start));
+        record_fixed_draw_times(
+            [
+                timing_prepared.saturating_sub(timing_start),
+                timing_mesh.saturating_sub(timing_prepared),
+                timing_rendered.saturating_sub(timing_mesh),
+                end.saturating_sub(timing_rendered),
+                rendered
+                    .as_ref()
+                    .map_or(0, |r| r.gpu_poll_us.saturating_mul(1000)),
+            ],
+            end.saturating_sub(timing_start),
+        );
     }
     crate::log_info!(target: "vgpu";
         "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} topology={:?} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
@@ -6595,7 +6681,9 @@ pub(crate) fn run_broker_self_test() -> BrokerSelfTestReport {
             };
         report.cross_principal_rejected =
             buffer_info(b, dev_a, buffer) == Err(VgpuError::PermissionDenied);
-        let oversized = quota_for_device(a, requested).memory_bytes.saturating_add(PAGE_BYTES);
+        let oversized = quota_for_device(a, requested)
+            .memory_bytes
+            .saturating_add(PAGE_BYTES);
         report.quota_rejected =
             create_buffer(a, dev_a, oversized, 0x1) == Err(VgpuError::QuotaExceeded);
         let _ = destroy_buffer(a, dev_a, buffer);
@@ -6695,8 +6783,7 @@ const fn quota_for(principal: Principal) -> Quota {
 }
 
 const fn quota_for_device(principal: Principal, capabilities: Capabilities) -> Quota {
-    if matches!(principal, Principal::HullGuest(_))
-        && capabilities.contains(Capabilities::PRESENT)
+    if matches!(principal, Principal::HullGuest(_)) && capabilities.contains(Capabilities::PRESENT)
     {
         Quota::GUEST_PRESENT
     } else {
@@ -6706,12 +6793,18 @@ const fn quota_for_device(principal: Principal, capabilities: Capabilities) -> Q
 
 const _: () = {
     assert!(Quota::GUEST.memory_bytes == 32 * 1024 * 1024);
-    assert!(quota_for_device(Principal::HullGuest(0), Capabilities::CLIENT_BASE).memory_bytes
-        == 32 * 1024 * 1024);
-    assert!(quota_for_device(
-        Principal::HullGuest(0),
-        Capabilities::CLIENT_BASE.union(Capabilities::PRESENT),
-    ).memory_bytes == 128 * 1024 * 1024);
+    assert!(
+        quota_for_device(Principal::HullGuest(0), Capabilities::CLIENT_BASE).memory_bytes
+            == 32 * 1024 * 1024
+    );
+    assert!(
+        quota_for_device(
+            Principal::HullGuest(0),
+            Capabilities::CLIENT_BASE.union(Capabilities::PRESENT),
+        )
+        .memory_bytes
+            == 128 * 1024 * 1024
+    );
     assert!(Quota::GUEST.buffers == 256);
 };
 
@@ -6911,7 +7004,9 @@ fn destroy_device_resources(
     }
     device.retained_textures.clear();
     for (_, depth) in &device.drawable_depths {
-        if Arc::strong_count(depth) != 1 { return Err(VgpuError::Busy); }
+        if Arc::strong_count(depth) != 1 {
+            return Err(VgpuError::Busy);
+        }
     }
     while let Some((_, depth)) = device.drawable_depths.last() {
         if !crate::intel::render::release_drawable_depth(depth) {
@@ -7537,18 +7632,27 @@ pub(crate) fn acquire_retained_texture_write(
 }
 
 fn fixed_gl_state_valid(state: &[f32; 384], width: u32, height: u32) -> bool {
-    let rect = &state[29*4..30*4];
-    let discrete = |value: f32, limit: u32| value >= 0.0 && value <= limit as f32 && (value as u32) as f32 == value;
-    let blend_factor = |value: f32| discrete(value, 0x18) && matches!(value as u32, 0x01..=0x08 | 0x11..=0x15 | 0x17..=0x18);
+    let rect = &state[29 * 4..30 * 4];
+    let discrete = |value: f32, limit: u32| {
+        value >= 0.0 && value <= limit as f32 && (value as u32) as f32 == value
+    };
+    let blend_factor = |value: f32| {
+        discrete(value, 0x18) && matches!(value as u32, 0x01..=0x08 | 0x11..=0x15 | 0x17..=0x18)
+    };
     state.iter().all(|v| v.is_finite())
         && rect.iter().all(|v| *v >= 0.0 && (*v as u32) as f32 == *v)
-        && rect[0] < rect[2] && rect[1] < rect[3]
-        && rect[2] <= width as f32 && rect[3] <= height as f32
-        && discrete(state[125], 1) && discrete(state[126], 7)
+        && rect[0] < rect[2]
+        && rect[1] < rect[3]
+        && rect[2] <= width as f32
+        && rect[3] <= height as f32
+        && discrete(state[125], 1)
+        && discrete(state[126], 7)
         && (0.0..=1.0).contains(&state[127])
         && discrete(state[352], 1)
-        && blend_factor(state[353]) && blend_factor(state[354])
-        && blend_factor(state[356]) && blend_factor(state[357])
+        && blend_factor(state[353])
+        && blend_factor(state[354])
+        && blend_factor(state[356])
+        && blend_factor(state[357])
 }
 
 #[cfg(test)]
@@ -7556,44 +7660,104 @@ mod fixed_gl_state_tests {
     use super::fixed_gl_state_valid;
     #[test]
     fn rejects_invalid_gpu_scissors_and_nonfinite_shader_state() {
-        let mut state = [0f32;384]; state[116..120].copy_from_slice(&[10.,20.,640.,480.]);
-        state[353..355].copy_from_slice(&[1.,17.]); state[356..358].copy_from_slice(&[1.,17.]);
-        assert!(fixed_gl_state_valid(&state,640,480));
-        for (index,value) in [(116,-1.),(117,0.5),(118,641.),(119,481.),(116,640.),(0,f32::NAN),(320,f32::INFINITY)] {
-            let mut bad=state; bad[index]=value;
-            assert!(!fixed_gl_state_valid(&bad,640,480));
+        let mut state = [0f32; 384];
+        state[116..120].copy_from_slice(&[10., 20., 640., 480.]);
+        state[353..355].copy_from_slice(&[1., 17.]);
+        state[356..358].copy_from_slice(&[1., 17.]);
+        assert!(fixed_gl_state_valid(&state, 640, 480));
+        for (index, value) in [
+            (116, -1.),
+            (117, 0.5),
+            (118, 641.),
+            (119, 481.),
+            (116, 640.),
+            (0, f32::NAN),
+            (320, f32::INFINITY),
+        ] {
+            let mut bad = state;
+            bad[index] = value;
+            assert!(!fixed_gl_state_valid(&bad, 640, 480));
         }
-        for (index,value) in [(125,2.),(126,8.),(127,-0.1),(127,1.1),(352,2.),(353,0.),(354,16.),(356,22.)] {
-            let mut bad=state;bad[index]=value;assert!(!fixed_gl_state_valid(&bad,640,480));
+        for (index, value) in [
+            (125, 2.),
+            (126, 8.),
+            (127, -0.1),
+            (127, 1.1),
+            (352, 2.),
+            (353, 0.),
+            (354, 16.),
+            (356, 22.),
+        ] {
+            let mut bad = state;
+            bad[index] = value;
+            assert!(!fixed_gl_state_valid(&bad, 640, 480));
         }
-        assert!(!fixed_gl_state_valid(&state,0,0));
+        assert!(!fixed_gl_state_valid(&state, 0, 0));
     }
 }
 
 fn fixed_gl_texture_state_valid(state: &[f32; 384], width: u32, height: u32) -> bool {
-    if state[102..104].iter().any(|v| *v < 0.0 || *v > 2.0 || (*v as u32) as f32 != *v) { return false; }
-    if state[100] == 0.0 { return width == 1 && height == 1; }
+    if state[102..104]
+        .iter()
+        .any(|v| *v < 0.0 || *v > 2.0 || (*v as u32) as f32 != *v)
+    {
+        return false;
+    }
+    if state[100] == 0.0 {
+        return width == 1 && height == 1;
+    }
     let [w, h, mode, mag] = [state[120], state[121], state[122], state[123]];
-    if [w,h,mode,mag,state[124]].iter().any(|v| !v.is_finite() || *v < 0.0 || (*v as u32) as f32 != *v)
-        || w < 1.0 || h < 1.0 || w > 16384.0 || h > 16384.0 || mode > 5.0 || mag > 1.0 { return false; }
-    let (w,h)=(w as u32,h as u32);
-    let levels=if mode >= 2.0 {32-w.max(h).leading_zeros()} else {1};
-    state[124] == (levels-1) as f32 && width == w
-        && height == (0..levels).map(|i| (h>>i).max(1)).sum::<u32>()
+    if [w, h, mode, mag, state[124]]
+        .iter()
+        .any(|v| !v.is_finite() || *v < 0.0 || (*v as u32) as f32 != *v)
+        || w < 1.0
+        || h < 1.0
+        || w > 16384.0
+        || h > 16384.0
+        || mode > 5.0
+        || mag > 1.0
+    {
+        return false;
+    }
+    let (w, h) = (w as u32, h as u32);
+    let levels = if mode >= 2.0 {
+        32 - w.max(h).leading_zeros()
+    } else {
+        1
+    };
+    state[124] == (levels - 1) as f32
+        && width == w
+        && height == (0..levels).map(|i| (h >> i).max(1)).sum::<u32>()
 }
 #[cfg(test)]
 mod fixed_gl_texture_state_tests {
     use super::fixed_gl_texture_state_valid;
     #[test]
     fn mip_shader_levels_are_bounded_by_real_uploaded_atlas() {
-        let mut s=[0.;384];s[100]=1.;s[120..125].copy_from_slice(&[8.,2.,3.,1.,3.]);
-        assert!(fixed_gl_texture_state_valid(&s,8,5));
-        assert!(!fixed_gl_texture_state_valid(&s,8,2));
-        for (i,v) in [(120,0.),(121,32768.),(122,6.),(123,2.),(124,100000.),(124,f32::NAN)] {
-            let mut bad=s;bad[i]=v;assert!(!fixed_gl_texture_state_valid(&bad,8,5));
+        let mut s = [0.; 384];
+        s[100] = 1.;
+        s[120..125].copy_from_slice(&[8., 2., 3., 1., 3.]);
+        assert!(fixed_gl_texture_state_valid(&s, 8, 5));
+        assert!(!fixed_gl_texture_state_valid(&s, 8, 2));
+        for (i, v) in [
+            (120, 0.),
+            (121, 32768.),
+            (122, 6.),
+            (123, 2.),
+            (124, 100000.),
+            (124, f32::NAN),
+        ] {
+            let mut bad = s;
+            bad[i] = v;
+            assert!(!fixed_gl_texture_state_valid(&bad, 8, 5));
         }
-        s[122]=1.;s[124]=0.;assert!(fixed_gl_texture_state_valid(&s,8,2));
-        s[102]=1.;s[103]=2.;assert!(fixed_gl_texture_state_valid(&s,8,2));
-        s[103]=3.;assert!(!fixed_gl_texture_state_valid(&s,8,2));
+        s[122] = 1.;
+        s[124] = 0.;
+        assert!(fixed_gl_texture_state_valid(&s, 8, 2));
+        s[102] = 1.;
+        s[103] = 2.;
+        assert!(fixed_gl_texture_state_valid(&s, 8, 2));
+        s[103] = 3.;
+        assert!(!fixed_gl_texture_state_valid(&s, 8, 2));
     }
 }

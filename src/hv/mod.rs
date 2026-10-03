@@ -249,7 +249,11 @@ pub(crate) fn active_eptp_for_vm(vm_id: u8) -> Result<u64, &'static str> {
         .get(vm_id as usize)
         .ok_or("active eptp vm id")?
         .load(Ordering::Acquire);
-    if eptp == 0 { Err("active eptp unavailable") } else { Ok(eptp) }
+    if eptp == 0 {
+        Err("active eptp unavailable")
+    } else {
+        Ok(eptp)
+    }
 }
 
 fn clear_active_eptp_for_vm(vm_id: u8) {
@@ -2028,7 +2032,6 @@ pub fn start_wc3_probe(vm_id: u8, spawner: &Spawner) -> Result<(), StartError> {
     let _ = spawner;
     start_with_mode(vm_id, VmBootMode::Wc3Probe, None, None, false)
 }
-
 
 pub fn start_blueprint_app_vm(
     vm_id: u8,
@@ -6357,8 +6360,14 @@ async fn vmx_launch_once_with_ept_vpid(
     if !crate::hv::vmcall::prepare_for_vm(vm_id, reset_vmcall_transport) {
         return Err("vmcall comm page");
     }
-    let preemption_timer_enabled =
-        setup_vmcs_host_and_controls(vm_id, Some(vpid), eptp, lineage_record, boot_mode_for_vm(vm_id), None)?;
+    let preemption_timer_enabled = setup_vmcs_host_and_controls(
+        vm_id,
+        Some(vpid),
+        eptp,
+        lineage_record,
+        boot_mode_for_vm(vm_id),
+        None,
+    )?;
     let preemption_timer_ticks = preemption_timer_enabled.then(|| {
         let (ticks, rate_shift) =
             vmx_preemption_timer_ticks(crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS);
@@ -6988,12 +6997,14 @@ fn setup_vmcs_host_and_controls(
         PIN_BASED_VMX_PREEMPTION_TIMER | PIN_BASED_EXTERNAL_INTERRUPT_EXITING,
     );
     let requested_proc2 = PROC2_BASED_ENABLE_EPT
-        | if vpid.is_some() { PROC2_BASED_ENABLE_VPID } else { 0 }
+        | if vpid.is_some() {
+            PROC2_BASED_ENABLE_VPID
+        } else {
+            0
+        }
         | PROC2_BASED_ENABLE_VMFUNC;
-    let proc2 = crate::hv::vmx::adjust_vmx_ctrl(
-        crate::hv::vmx::IA32_VMX_PROCBASED_CTLS2,
-        requested_proc2,
-    );
+    let proc2 =
+        crate::hv::vmx::adjust_vmx_ctrl(crate::hv::vmx::IA32_VMX_PROCBASED_CTLS2, requested_proc2);
     let requested_exit = crate::hv::vmx::adjust_vmx_ctrl(
         exit_msr,
         EXIT_CTL_HOST_ADDR_SPACE_SIZE | EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT,
@@ -7026,7 +7037,11 @@ fn setup_vmcs_host_and_controls(
     let proc = crate::hv::vmx::adjust_vmx_ctrl(
         proc_msr,
         PROC_BASED_HLT_EXITING
-            | if pause_exiting_requested { PROC_BASED_PAUSE_EXITING } else { 0 }
+            | if pause_exiting_requested {
+                PROC_BASED_PAUSE_EXITING
+            } else {
+                0
+            }
             | PROC_BASED_ACTIVATE_SECONDARY
             | PROC_BASED_USE_TSC_OFFSETTING,
     );
@@ -7282,9 +7297,20 @@ fn setup_vmcs_host_and_controls(
 
             if let Some(input) = protected32 {
                 setup_vmcs_protected32_guest(
-                    input, host_cr0, host_cr4, tr_sel, tr_base, gdtr.base.as_u64(), gdtr.limit,
-                    idtr.base.as_u64(), idtr.limit,
-                    gs_base, sysenter_cs, sysenter_esp, sysenter_eip, pat,
+                    input,
+                    host_cr0,
+                    host_cr4,
+                    tr_sel,
+                    tr_base,
+                    gdtr.base.as_u64(),
+                    gdtr.limit,
+                    idtr.base.as_u64(),
+                    idtr.limit,
+                    gs_base,
+                    sysenter_cs,
+                    sysenter_esp,
+                    sysenter_eip,
+                    pat,
                 )?;
                 return Ok(preemption_timer_enabled);
             }
@@ -7494,9 +7520,20 @@ fn setup_vmcs_host_and_controls(
 
     if let Some(input) = protected32 {
         setup_vmcs_protected32_guest(
-            input, host_cr0, host_cr4, tr_sel, tr_base, gdtr.base.as_u64(), gdtr.limit,
-            idtr.base.as_u64(), idtr.limit, gs_base,
-            sysenter_cs, sysenter_esp, sysenter_eip, pat,
+            input,
+            host_cr0,
+            host_cr4,
+            tr_sel,
+            tr_base,
+            gdtr.base.as_u64(),
+            gdtr.limit,
+            idtr.base.as_u64(),
+            idtr.limit,
+            gs_base,
+            sysenter_cs,
+            sysenter_esp,
+            sysenter_eip,
+            pat,
         )?;
         return Ok(preemption_timer_enabled);
     }
@@ -7658,8 +7695,14 @@ fn setup_vmcs_protected32_guest(
     vmwrite(VMCS_GUEST_INTERRUPTIBILITY, 0)?;
     vmwrite(VMCS_GUEST_PENDING_DBG, 0)?;
     vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, 0)?;
-    for field in [VMCS_GUEST_CS_LIMIT, VMCS_GUEST_SS_LIMIT, VMCS_GUEST_DS_LIMIT,
-        VMCS_GUEST_ES_LIMIT, VMCS_GUEST_FS_LIMIT, VMCS_GUEST_GS_LIMIT] {
+    for field in [
+        VMCS_GUEST_CS_LIMIT,
+        VMCS_GUEST_SS_LIMIT,
+        VMCS_GUEST_DS_LIMIT,
+        VMCS_GUEST_ES_LIMIT,
+        VMCS_GUEST_FS_LIMIT,
+        VMCS_GUEST_GS_LIMIT,
+    ] {
         vmwrite(field, 0xffff_ffff)?;
     }
     vmwrite(VMCS_GUEST_TR_LIMIT, 0xffff)?;
@@ -7667,22 +7710,38 @@ fn setup_vmcs_protected32_guest(
     vmwrite(VMCS_GUEST_GDTR_LIMIT, gdtr_limit as u64)?;
     vmwrite(VMCS_GUEST_IDTR_LIMIT, idtr_limit as u64)?;
     vmwrite(VMCS_GUEST_CS_SELECTOR, 0x08)?;
-    for field in [VMCS_GUEST_SS_SELECTOR, VMCS_GUEST_DS_SELECTOR, VMCS_GUEST_ES_SELECTOR] {
+    for field in [
+        VMCS_GUEST_SS_SELECTOR,
+        VMCS_GUEST_DS_SELECTOR,
+        VMCS_GUEST_ES_SELECTOR,
+    ] {
         vmwrite(field, 0x10)?;
     }
     vmwrite(VMCS_GUEST_FS_SELECTOR, 0x18)?;
     vmwrite(VMCS_GUEST_GS_SELECTOR, 0)?;
     vmwrite(VMCS_GUEST_TR_SELECTOR, tr_sel as u64)?;
     vmwrite(VMCS_GUEST_LDTR_SELECTOR, 0)?;
-    for field in [VMCS_GUEST_CS_BASE, VMCS_GUEST_SS_BASE, VMCS_GUEST_DS_BASE,
-        VMCS_GUEST_ES_BASE, VMCS_GUEST_LDTR_BASE] { vmwrite(field, 0)?; }
+    for field in [
+        VMCS_GUEST_CS_BASE,
+        VMCS_GUEST_SS_BASE,
+        VMCS_GUEST_DS_BASE,
+        VMCS_GUEST_ES_BASE,
+        VMCS_GUEST_LDTR_BASE,
+    ] {
+        vmwrite(field, 0)?;
+    }
     vmwrite(VMCS_GUEST_FS_BASE, input.fs_base as u64)?;
     vmwrite(VMCS_GUEST_GS_BASE, gs_base)?;
     vmwrite(VMCS_GUEST_TR_BASE, tr_base)?;
     vmwrite(VMCS_GUEST_GDTR_BASE, gdtr_base)?;
     vmwrite(VMCS_GUEST_IDTR_BASE, idtr_base)?;
     vmwrite(VMCS_GUEST_CS_AR, 0xC09B)?;
-    for field in [VMCS_GUEST_SS_AR, VMCS_GUEST_DS_AR, VMCS_GUEST_ES_AR, VMCS_GUEST_FS_AR] {
+    for field in [
+        VMCS_GUEST_SS_AR,
+        VMCS_GUEST_DS_AR,
+        VMCS_GUEST_ES_AR,
+        VMCS_GUEST_FS_AR,
+    ] {
         vmwrite(field, 0xC093)?;
     }
     vmwrite(VMCS_GUEST_GS_AR, 0x10000)?;
@@ -7862,9 +7921,8 @@ pub(crate) fn run_transient_protected32(
         vmwrite(field, value)?;
     }
     if preemption_timer_enabled {
-        let (ticks, _) = vmx_preemption_timer_ticks(
-            crate::allcaps::hv::VMX_WC3_TRANSIENT_PREEMPTION_QUANTUM_MS,
-        );
+        let (ticks, _) =
+            vmx_preemption_timer_ticks(crate::allcaps::hv::VMX_WC3_TRANSIENT_PREEMPTION_QUANTUM_MS);
         vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, ticks as u64)?;
     }
     // The Hull needs external-interrupt exits for lifecycle control.  A
@@ -7872,15 +7930,9 @@ pub(crate) fn run_transient_protected32(
     // otherwise exit before its first instruction.  Its preemption timer is
     // the bounded, carrier-local return path.
     let pin = vmread(VMCS_CTRL_PIN_BASED).ok_or("transient pin controls")?;
-    vmwrite(
-        VMCS_CTRL_PIN_BASED,
-        pin & !PIN_BASED_EXTERNAL_INTERRUPT_EXITING,
-    )?;
+    vmwrite(VMCS_CTRL_PIN_BASED, pin & !PIN_BASED_EXTERNAL_INTERRUPT_EXITING)?;
     let exit_controls = vmread(VMCS_CTRL_EXIT).ok_or("transient exit controls")?;
-    vmwrite(
-        VMCS_CTRL_EXIT,
-        exit_controls & !EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT,
-    )?;
+    vmwrite(VMCS_CTRL_EXIT, exit_controls & !EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT)?;
     crate::hv::vmx::set_guest_registers(registers);
     // VMX saves/restores only DR7 through the VMCS. DR0–DR3 and DR6 are live
     // carrier state, so make the transient context own them explicitly.
@@ -7917,8 +7969,15 @@ pub(crate) fn run_transient_protected32(
     if !crate::hv::vmx::vmclear(vmcs_pa) {
         return Err("transient vmclear");
     }
-    wc3::exec_timing::record(owner, timing_start, timing_enter, timing_leave,
-        wc3::exec_timing::cycles(), exit.launch.exit_reason as u64, exit.launch.guest_rip);
+    wc3::exec_timing::record(
+        owner,
+        timing_start,
+        timing_enter,
+        timing_leave,
+        wc3::exec_timing::cycles(),
+        exit.launch.exit_reason as u64,
+        exit.launch.guest_rip,
+    );
     Ok(exit)
 }
 
@@ -7926,11 +7985,7 @@ pub(crate) fn run_transient_protected32(
 /// rereading a scratch VMCS after it may have been disturbed or recycled.
 #[cfg(feature = "wc3")]
 fn transient_exception_capture(launch: &LaunchResult) -> (u64, u64, u64) {
-    (
-        launch.interruption_info,
-        launch.interruption_error_code,
-        launch.guest_cr2,
-    )
+    (launch.interruption_info, launch.interruption_error_code, launch.guest_cr2)
 }
 
 /// A debug exception intercepted by VMX has not been delivered to the guest,
@@ -7947,8 +8002,7 @@ fn merge_transient_debug_exception(
     let valid = interruption_info & (1 << 31) != 0;
     let vector = interruption_info & 0xff;
     if valid && vector == 1 {
-        debug_registers.dr6 |=
-            (launch.exit_qualification as u32) & DR6_DEBUG_CONDITION_MASK;
+        debug_registers.dr6 |= (launch.exit_qualification as u32) & DR6_DEBUG_CONDITION_MASK;
     }
 }
 

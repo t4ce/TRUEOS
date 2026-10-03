@@ -910,7 +910,9 @@ fn readiness_friendly_label(flag: u32, fallback: &'static str) -> &'static str {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
     loop {
-        if super::vid::poll_blueprint_open(&spawner) { continue; }
+        if super::vid::poll_blueprint_open(&spawner) {
+            continue;
+        }
         if let Some(request) = BLUEPRINT_IMG_OPEN_QUEUE.lock().pop_front() {
             let Some(target) = crate::hv::blueprint_console_target(request.origin_vm) else {
                 crate::log_warn!(

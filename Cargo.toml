@@ -17,7 +17,6 @@ members = [
     "crates/trueos-executor/embassy-time",
     "crates/trueos-executor/trueos-executor-macros",
     "crates/trueos-fs",
-    "crates/trueos-gboi",
     "crates/trueos-helio-artifact",
     "crates/trueos-helio-runtime",
     "crates/trueos-io",

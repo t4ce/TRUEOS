@@ -2,8 +2,8 @@ use alloc::format;
 
 use trueos_executor::Spawner;
 
-use super::super::{print_shell_line, ShellBackend2};
 use super::super::shell2_cmd::ParseOutcome;
+use super::super::{ShellBackend2, print_shell_line};
 
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "vcpy status|fillcheck|monocheck");
@@ -18,38 +18,65 @@ pub(crate) fn try_parse(
     match (args.next(), args.next()) {
         (Some(action), None) if action.eq_ignore_ascii_case("monocheck") => {
             match crate::r::services::vcpy_service::mono_check() {
-                Ok(()) => print_shell_line(io, "vcpy: monocheck passed glyphs=2 pixels=132 guards=380 command=xy-mono-src-copy-blt colors=foreground+background fallback=0"),
-                Err(reason) => print_shell_line(io, format!("vcpy: monocheck failed reason={reason}").as_str()),
+                Ok(()) => print_shell_line(
+                    io,
+                    "vcpy: monocheck passed glyphs=2 pixels=132 guards=380 command=xy-mono-src-copy-blt colors=foreground+background fallback=0",
+                ),
+                Err(reason) => {
+                    print_shell_line(io, format!("vcpy: monocheck failed reason={reason}").as_str())
+                }
             }
         }
         (Some(action), None) if action.eq_ignore_ascii_case("fillcheck") => {
             match crate::r::services::vcpy_service::fill_check() {
-                Ok(()) => print_shell_line(io, "vcpy: fillcheck passed fills=2 pixels_per_fill=51 right_and_bottom_guards=77 colors=80402010,00000000 fallback=0"),
-                Err(reason) => print_shell_line(io, format!("vcpy: fillcheck failed reason={reason}").as_str()),
+                Ok(()) => print_shell_line(
+                    io,
+                    "vcpy: fillcheck passed fills=2 pixels_per_fill=51 right_and_bottom_guards=77 colors=80402010,00000000 fallback=0",
+                ),
+                Err(reason) => {
+                    print_shell_line(io, format!("vcpy: fillcheck failed reason={reason}").as_str())
+                }
             }
         }
         (Some(action), None) if action.eq_ignore_ascii_case("status") => {
             let status = crate::r::services::vcpy_service::status();
-            print_shell_line(io, format!(
-                "vcpy: consumer=gridpaper copies={} bytes={} fallbacks={} failures={}",
-                status.consumer_copies, status.consumer_bytes,
-                status.consumer_fallbacks, status.consumer_failures,
-            ).as_str());
-            print_shell_line(io, format!(
-                "vcpy: consumer=resident-scene copies={} bytes={} fallbacks={} failures={}",
-                status.scene_copies, status.scene_bytes,
-                status.scene_fallbacks, status.scene_failures,
-            ).as_str());
+            print_shell_line(
+                io,
+                format!(
+                    "vcpy: consumer=gridpaper copies={} bytes={} fallbacks={} failures={}",
+                    status.consumer_copies,
+                    status.consumer_bytes,
+                    status.consumer_fallbacks,
+                    status.consumer_failures,
+                )
+                .as_str(),
+            );
+            print_shell_line(
+                io,
+                format!(
+                    "vcpy: consumer=resident-scene copies={} bytes={} fallbacks={} failures={}",
+                    status.scene_copies,
+                    status.scene_bytes,
+                    status.scene_fallbacks,
+                    status.scene_failures,
+                )
+                .as_str(),
+            );
             for (name, consumer) in [
                 ("font-clear", crate::r::services::vcpy_service::RgbaFillConsumer::Font),
                 ("gridpaper-clear", crate::r::services::vcpy_service::RgbaFillConsumer::Gridpaper),
                 ("ui4-base", crate::r::services::vcpy_service::RgbaFillConsumer::Ui4),
             ] {
-                let [fills, bytes, fallbacks, failures] = crate::r::services::vcpy_service::fill_stats(consumer);
-                print_shell_line(io, format!(
-                    "vcpy: consumer={} fills={} bytes={} fallbacks={} failures={}",
-                    name, fills, bytes, fallbacks, failures,
-                ).as_str());
+                let [fills, bytes, fallbacks, failures] =
+                    crate::r::services::vcpy_service::fill_stats(consumer);
+                print_shell_line(
+                    io,
+                    format!(
+                        "vcpy: consumer={} fills={} bytes={} fallbacks={} failures={}",
+                        name, fills, bytes, fallbacks, failures,
+                    )
+                    .as_str(),
+                );
             }
             let snapshot = crate::intel::media::wd_xyuv8888::snapshot_copy_stats();
             print_shell_line(io, format!(
@@ -60,10 +87,14 @@ pub(crate) fn try_parse(
             ).as_str());
             if let Some(failure) = crate::intel::guc_bcs0_last_timeout() {
                 let activity = failure.activity;
-                print_shell_line(io, format!(
-                    "vcpy: breadcrumbs ring=0x{:08X}/0xBC505247 batch=0x{:08X}/0xBC504242",
-                    failure.ring_cookie, failure.batch_cookie,
-                ).as_str());
+                print_shell_line(
+                    io,
+                    format!(
+                        "vcpy: breadcrumbs ring=0x{:08X}/0xBC505247 batch=0x{:08X}/0xBC504242",
+                        failure.ring_cookie, failure.batch_cookie,
+                    )
+                    .as_str(),
+                );
                 print_shell_line(io, format!(
                     "vcpy: pre-quarantine marker=0x{:08X}/0x{:08X} saved_head={} published_tail={} head=0x{:X} tail=0x{:X} start=0x{:X} ctl=0x{:X} acthd=0x{:X} ipeir=0x{:X} ipehr=0x{:X} eir=0x{:X}",
                     failure.observed, failure.expected, activity.guc_saved_head,

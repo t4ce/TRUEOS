@@ -272,8 +272,7 @@ pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123; // arg0 window,ar
 pub const OP_BP_LUMEN_TOOL_RESULT_SUBMIT: u32 = 0x151; // arg0 turn,payload tail then tool-role result -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150; // arg0 window,arg1 Ui4FrameEscapeKeyAction -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_OPACITY: u32 = 0x15D; // arg0 window,arg1 opacity:u8 -> rc
-pub const OP_BP_UI4_SCENE_FRAME_SET_ARC: u32 =
-    trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_ARC; // arg0 window,arg1 arc-per-mille -> rc
+pub const OP_BP_UI4_SCENE_FRAME_SET_ARC: u32 = trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_ARC; // arg0 window,arg1 arc-per-mille -> rc
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 =
     trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR;
 pub const OP_BP_UI4_SCENE_FONT_METRICS_V1: u32 = 0x219;
@@ -1638,13 +1637,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1 => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
             let batch = request_payload(vm_id, req_len)
-                .filter(|payload| payload.len() == core::mem::size_of::<v::vgpu::PreparedRasterBatchV1>())
+                .filter(|payload| {
+                    payload.len() == core::mem::size_of::<v::vgpu::PreparedRasterBatchV1>()
+                })
                 .map(|payload| unsafe {
-                    core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::PreparedRasterBatchV1>())
+                    core::ptr::read_unaligned(
+                        payload.as_ptr().cast::<v::vgpu::PreparedRasterBatchV1>(),
+                    )
                 });
             let result = batch.ok_or(-22).and_then(|batch| {
                 crate::r::io::vgpu_cabi::broker_ui4_prepared_raster_batch_v1(
-                    principal, arg0, arg1, batch)
+                    principal, arg0, arg1, batch,
+                )
             });
             match result {
                 Ok(point) => write_record_response(vm_id, seq, 0, &point),
@@ -2769,11 +2773,20 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let pixels = f32::from_le_bytes(payload[..4].try_into().unwrap());
-            let mut record = crate::ui4::blueprint_text::font_api::TrueosUi4FontMetricsV1::default();
+            let mut record =
+                crate::ui4::blueprint_text::font_api::TrueosUi4FontMetricsV1::default();
             let rc = crate::ui4::blueprint_text::font_api::metrics(
-                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, arg1 as u32, pixels, &mut record);
-            if rc == 0 { write_record_response(vm_id, seq, 0, &record); }
-            else { write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0); }
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as u32,
+                pixels,
+                &mut record,
+            );
+            if rc == 0 {
+                write_record_response(vm_id, seq, 0, &record);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1 => {
@@ -2896,14 +2909,20 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
-            let word = |i: usize| u32::from_le_bytes(payload[i..i+4].try_into().unwrap());
+            let word = |i: usize| u32::from_le_bytes(payload[i..i + 4].try_into().unwrap());
             let image = v::bp_abi::TrueosUi4CursorImageV1 {
-                id: word(0), width: word(4), height: word(8),
-                hotspot_x: word(12), hotspot_y: word(16),
+                id: word(0),
+                width: word(4),
+                height: word(8),
+                hotspot_x: word(12),
+                hotspot_y: word(16),
             };
             let rc = unsafe {
                 crate::ui4::blueprint_text::trueos_cabi_ui4_scene_register_cursor_image_v1(
-                    arg0 as u32, &image, payload[20..].as_ptr(), payload.len() - 20,
+                    arg0 as u32,
+                    &image,
+                    payload[20..].as_ptr(),
+                    payload.len() - 20,
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
@@ -2915,7 +2934,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             }
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_select_cursor_image_v1(
-                arg0 as u32, arg1 as u32,
+                arg0 as u32,
+                arg1 as u32,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
@@ -3418,7 +3438,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_VID_OPEN_V2 => {
             let rc = request_payload(vm_id, req_len)
                 .and_then(|bytes| core::str::from_utf8(bytes).ok())
-                .map(|path| crate::shell2::cmds::vid::enqueue_qualified_from_blueprint(vm_id, alloc::string::String::from(path)))
+                .map(|path| {
+                    crate::shell2::cmds::vid::enqueue_qualified_from_blueprint(
+                        vm_id,
+                        alloc::string::String::from(path),
+                    )
+                })
                 .map(|result| if result.is_ok() { 0i64 } else { -11 })
                 .unwrap_or(-1);
             write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
@@ -3427,7 +3452,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_VID_OPEN_V1 => {
             let rc = request_payload(vm_id, req_len)
                 .and_then(|bytes| core::str::from_utf8(bytes).ok())
-                .map(|path| crate::shell2::cmds::vid::enqueue_from_blueprint(vm_id, alloc::string::String::from(path)))
+                .map(|path| {
+                    crate::shell2::cmds::vid::enqueue_from_blueprint(
+                        vm_id,
+                        alloc::string::String::from(path),
+                    )
+                })
                 .map(|result| if result.is_ok() { 0i64 } else { -11 })
                 .unwrap_or(-1);
             write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
@@ -5374,8 +5404,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     crate::r::io::async_fs_cabi::start_typed_list_dir(owner, path)
                 }
                 trueos_vm::vmcall::OP_BP_ASYNC_FS_SELECT_FILES_START_V1 => {
-                    if arg0 > u32::MAX as u64 { crate::r::io::cabi::FS_ERR_BAD_PARAM }
-                    else { crate::r::io::async_fs_cabi::start_select_files(owner, path, arg0 as u32, arg1) }
+                    if arg0 > u32::MAX as u64 {
+                        crate::r::io::cabi::FS_ERR_BAD_PARAM
+                    } else {
+                        crate::r::io::async_fs_cabi::start_select_files(
+                            owner,
+                            path,
+                            arg0 as u32,
+                            arg1,
+                        )
+                    }
                 }
                 OP_BP_ASYNC_FS_RECORD_KEY_START => {
                     crate::r::io::async_fs_cabi::start_record_key(owner, path)

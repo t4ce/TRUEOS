@@ -1783,9 +1783,11 @@ mod terminal_metrics;
 pub use terminal_metrics::FontMetricsV1;
 
 /// Metadata only; glyph production continues through the native font service.
-pub(crate) fn terminal_font_metrics(name: &'static str, font_id: u32, pixels: f32)
-    -> Result<FontMetricsV1, &'static str>
-{
+pub(crate) fn terminal_font_metrics(
+    name: &'static str,
+    font_id: u32,
+    pixels: f32,
+) -> Result<FontMetricsV1, &'static str> {
     ensure_font_available(name).map_err(|_| "font-warm-failed")?;
     let record = registered_font(name).ok_or("font-not-registered")?;
     terminal_metrics::from_bytes(record.bytes.as_slice(), font_id, pixels)

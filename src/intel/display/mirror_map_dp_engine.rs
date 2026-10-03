@@ -262,8 +262,12 @@ pub(crate) struct WdCopyLease {
 }
 
 impl WdCopyLease {
-    pub(crate) fn mark_submitted(&mut self) { self.submitted = true; }
-    pub(crate) fn mark_retired(&mut self) { self.submitted = false; }
+    pub(crate) fn mark_submitted(&mut self) {
+        self.submitted = true;
+    }
+    pub(crate) fn mark_retired(&mut self) {
+        self.submitted = false;
+    }
 }
 
 impl Drop for WdCopyLease {

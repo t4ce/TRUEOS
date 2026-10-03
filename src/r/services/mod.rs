@@ -15,5 +15,5 @@ pub(crate) mod microfont_log_service;
 pub mod mouse_motion_service;
 pub(crate) mod oceancache;
 pub mod spawn_service;
-pub mod video_service;
 pub mod vcpy_service;
+pub mod video_service;

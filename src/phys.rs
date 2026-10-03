@@ -345,7 +345,9 @@ pub fn pmm_range_stats(min_phys: u64, max_phys: Option<u64>) -> Option<PmmStats>
     let guard = PMM.lock();
     let state = guard.as_ref()?;
     let lengths = state.regions.iter().map(|region| {
-        region.end.min(max_phys.unwrap_or(u64::MAX))
+        region
+            .end
+            .min(max_phys.unwrap_or(u64::MAX))
             .saturating_sub(region.start.max(min_phys))
     });
     Some(PmmStats {

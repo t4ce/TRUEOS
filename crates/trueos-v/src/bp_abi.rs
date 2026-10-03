@@ -948,7 +948,10 @@ unsafe extern "C" {
     ) -> i32;
     /// Metrics from the resolved registered face; flags bit 0 means monospace.
     pub fn trueos_cabi_ui4_scene_font_metrics_v1(
-        window: u32, font: u32, pixels: f32, out: *mut TrueosUi4FontMetricsV1,
+        window: u32,
+        font: u32,
+        pixels: f32,
+        out: *mut TrueosUi4FontMetricsV1,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_font_sprite_request_v1(
         window_id: u32,
@@ -1099,7 +1102,12 @@ unsafe extern "C" {
     pub fn trueos_cabi_async_fs_record_key_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_list_dir_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_typed_list_dir_start(path_ptr: *const u8, path_len: usize) -> i32;
-    pub fn trueos_cabi_async_fs_select_files_start_v1(path_ptr: *const u8, path_len: usize, content_type: u32, max_depth: u32) -> i32;
+    pub fn trueos_cabi_async_fs_select_files_start_v1(
+        path_ptr: *const u8,
+        path_len: usize,
+        content_type: u32,
+        max_depth: u32,
+    ) -> i32;
     pub fn trueos_cabi_async_fs_list_mounts_start() -> i32;
     pub fn trueos_cabi_async_fs_remove_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_rename_start(

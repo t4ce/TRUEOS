@@ -1,8 +1,8 @@
-mod names;
 mod metafmtstr;
-mod update;
-mod tty;
+mod names;
 pub mod net;
+mod tty;
+mod update;
 
 pub mod service;
 #[path = "show/show.rs"]
@@ -12,8 +12,13 @@ pub use metafmtstr::MetaFmtStr;
 pub use show::{Backend as ShowBackend, Show};
 pub use update::{SegmentUpdate, UpdateBatch, UpdateCallback};
 
+use alloc::{
+    collections::VecDeque,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use names::{ADM_NAMES, CMD_GROUPS, HV_GROUPS};
-use alloc::{string::{String, ToString}, collections::VecDeque, vec, vec::Vec};
 use spin::Once;
 
 pub const MAX_SHELL3_INSTANCES: usize = 256;
@@ -145,10 +150,22 @@ fn matrix_slots() -> &'static spin::Mutex<MatrixSlotsState> {
 fn matrix_slots_meta(ids: &[String], active: Option<&str>) -> Vec<MetaFmtStr> {
     let mut runs = Vec::with_capacity(ids.len().saturating_mul(3).saturating_add(1));
     let active = active.filter(|active| ids.iter().any(|id| id == active));
-    let default_color = if active.is_none() { RgbaColor::Pink } else { RgbaColor::White };
-    runs.push(MetaFmtStr::new(OPERATOR.to_string()).color(default_color).bold());
+    let default_color = if active.is_none() {
+        RgbaColor::Pink
+    } else {
+        RgbaColor::White
+    };
+    runs.push(
+        MetaFmtStr::new(OPERATOR.to_string())
+            .color(default_color)
+            .bold(),
+    );
     for id in ids {
-        let color = if active == Some(id.as_str()) { RgbaColor::Pink } else { RgbaColor::White };
+        let color = if active == Some(id.as_str()) {
+            RgbaColor::Pink
+        } else {
+            RgbaColor::White
+        };
         runs.push(MetaFmtStr::new(" ").color(RgbaColor::White));
         runs.push(MetaFmtStr::new(OPERATOR.to_string()).color(color).bold());
         runs.push(MetaFmtStr::new(id.clone()).color(color));
@@ -195,7 +212,9 @@ impl MatrixSlots {
                 slots.lifetimes.push((id.clone(), lifetime));
             }
         }
-        slots.echoes.retain(|(id, _)| id.as_ref().is_none_or(|id| ids.contains(id)));
+        slots
+            .echoes
+            .retain(|(id, _)| id.as_ref().is_none_or(|id| ids.contains(id)));
         slots.ids = ids;
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
@@ -223,7 +242,9 @@ impl MatrixSlots {
     fn drop_slot(name: Option<&str>) -> bool {
         let mut slots = matrix_slots().lock();
         if let Some(name) = name {
-            if !slots.ids.iter().any(|id| id == name) { return false; }
+            if !slots.ids.iter().any(|id| id == name) {
+                return false;
+            }
             slots.ids.retain(|id| id != name);
             slots.lifetimes.retain(|(id, _)| id != name);
         }
@@ -238,13 +259,26 @@ impl MatrixSlots {
     /// Slot selection remains per instance; transcripts are shared Matrix data.
     fn echo(active: Option<&str>, lifetime: Option<u64>, text: String) {
         let mut slots = matrix_slots().lock();
-        let active = active.filter(|id| slots.lifetimes.iter().any(|(name, current)| name == id && Some(*current) == lifetime)).map(str::to_string);
-        let index = slots.echoes.iter().position(|(id, _)| *id == active).unwrap_or_else(|| {
-            slots.echoes.push((active, VecDeque::new()));
-            slots.echoes.len() - 1
-        });
+        let active = active
+            .filter(|id| {
+                slots
+                    .lifetimes
+                    .iter()
+                    .any(|(name, current)| name == id && Some(*current) == lifetime)
+            })
+            .map(str::to_string);
+        let index = slots
+            .echoes
+            .iter()
+            .position(|(id, _)| *id == active)
+            .unwrap_or_else(|| {
+                slots.echoes.push((active, VecDeque::new()));
+                slots.echoes.len() - 1
+            });
         let lines = &mut slots.echoes[index].1;
-        if lines.len() == 256 { lines.pop_back(); }
+        if lines.len() == 256 {
+            lines.pop_back();
+        }
         lines.push_front(text);
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
@@ -259,16 +293,29 @@ impl MatrixSlots {
     fn echo_snapshot(active: Option<&str>) -> (u64, Vec<String>) {
         let slots = matrix_slots().lock();
         let active = active.filter(|id| slots.ids.iter().any(|name| name == id));
-        let lines = slots.echoes.iter().find(|(id, _)| id.as_deref() == active)
-            .map(|(_, lines)| lines.iter().cloned().collect()).unwrap_or_default();
+        let lines = slots
+            .echoes
+            .iter()
+            .find(|(id, _)| id.as_deref() == active)
+            .map(|(_, lines)| lines.iter().cloned().collect())
+            .unwrap_or_default();
         (slots.generation, lines)
     }
 
     fn view_echo_snapshot(active: Option<&str>, lifetime: Option<u64>) -> (u64, Vec<String>) {
         let slots = matrix_slots().lock();
-        let active = active.filter(|id| slots.lifetimes.iter().any(|(name, current)| name == id && Some(*current) == lifetime));
-        let lines = slots.echoes.iter().find(|(id, _)| id.as_deref() == active)
-            .map(|(_, lines)| lines.iter().cloned().collect()).unwrap_or_default();
+        let active = active.filter(|id| {
+            slots
+                .lifetimes
+                .iter()
+                .any(|(name, current)| name == id && Some(*current) == lifetime)
+        });
+        let lines = slots
+            .echoes
+            .iter()
+            .find(|(id, _)| id.as_deref() == active)
+            .map(|(_, lines)| lines.iter().cloned().collect())
+            .unwrap_or_default();
         (slots.generation, lines)
     }
 
@@ -426,8 +473,13 @@ impl Shell3 {
     pub(super) fn new_terminal_reserved(slot: u32) -> Self {
         debug_assert_eq!(crate::percpu::current_slot() as u32, slot);
         let mut shell = Self::new_inner(
-            &TitleTime::current(), crate::r::restart::startup_alias_names(),
-            service::appdb_names_snapshot().1, Vec::new(), Default_COLUMNS, Default_ROWS, slot,
+            &TitleTime::current(),
+            crate::r::restart::startup_alias_names(),
+            service::appdb_names_snapshot().1,
+            Vec::new(),
+            Default_COLUMNS,
+            Default_ROWS,
+            slot,
         );
         shell.set_show_backend(ShowBackend::Network);
         shell
@@ -445,7 +497,13 @@ impl Shell3 {
         service::reserve_shell_on_executor(executor_slot)?;
 
         Ok(Self::new_inner(
-            time, aka_names, appdb_names, update_callbacks, columns, rows, executor_slot,
+            time,
+            aka_names,
+            appdb_names,
+            update_callbacks,
+            columns,
+            rows,
+            executor_slot,
         ))
     }
 
@@ -460,10 +518,19 @@ impl Shell3 {
     ) -> Result<Self, Shell3Error> {
         let actual = crate::percpu::current_slot() as u32;
         if actual != executor_slot {
-            return Err(Shell3Error::WrongExecutor { expected: executor_slot, actual });
+            return Err(Shell3Error::WrongExecutor {
+                expected: executor_slot,
+                actual,
+            });
         }
         Ok(Self::new_inner(
-            time, aka_names, appdb_names, update_callbacks, columns, rows, executor_slot,
+            time,
+            aka_names,
+            appdb_names,
+            update_callbacks,
+            columns,
+            rows,
+            executor_slot,
         ))
     }
 
@@ -476,7 +543,6 @@ impl Shell3 {
         rows: usize,
         executor_slot: u32,
     ) -> Self {
-
         let prompt = PromptState::new();
         let prompt_left = prompt.render();
         let time = time.to_string();
@@ -499,7 +565,8 @@ impl Shell3 {
                 (&rows_state.promt.left, &rows_state.promt.right),
             ],
             columns,
-        ).with_matrix(&matrix_lines, matrix_generation);
+        )
+        .with_matrix(&matrix_lines, matrix_generation);
 
         Self {
             executor_slot,
@@ -546,11 +613,17 @@ impl Shell3 {
         }
         if self.font_scale_needed() {
             let scale = service::microfont_scale();
-            let (width, height) = self.show.set_font_scale(scale, self.columns, self.rows_count)?;
-            self.set((width / (microfont::FWIDTH as u32 * scale)) as usize,
-                (height / (microfont::FHEIGHT as u32 * scale)) as usize);
+            let (width, height) = self
+                .show
+                .set_font_scale(scale, self.columns, self.rows_count)?;
+            self.set(
+                (width / (microfont::FWIDTH as u32 * scale)) as usize,
+                (height / (microfont::FHEIGHT as u32 * scale)) as usize,
+            );
             self.pending_presentation = None;
-            if self.show.resize_needed() { self.resize_ui4_to_current().await?; }
+            if self.show.resize_needed() {
+                self.resize_ui4_to_current().await?;
+            }
             crate::log_info!(target: "service";
                 "sh3srv: microfont scale={}x slot={} extent={}x{} grid={}x{}\n",
                 scale, self.executor_slot, width, height, self.columns, self.rows_count,
@@ -599,7 +672,9 @@ impl Shell3 {
         if actual_slot != self.executor_slot {
             return Err("shell3-show-wrong-executor");
         }
-        let (width, height) = self.show.resize_target_extent()
+        let (width, height) = self
+            .show
+            .resize_target_extent()
             .ok_or("shell3-show-resize-state")?;
         self.set(
             (width / (microfont::FWIDTH as u32 * self.show.font_scale())) as usize,
@@ -677,7 +752,11 @@ impl Shell3 {
         };
 
         self.active_matrix_slot = Some(name.clone());
-        self.active_matrix_lifetime = slots.lifetimes.iter().find(|(id, _)| id == name).map(|(_, lifetime)| *lifetime);
+        self.active_matrix_lifetime = slots
+            .lifetimes
+            .iter()
+            .find(|(id, _)| id == name)
+            .map(|(_, lifetime)| *lifetime);
         self.matrix_selection_dirty = true;
         drop(slots);
         service::notify_work();
@@ -691,7 +770,11 @@ impl Shell3 {
         }
 
         self.active_matrix_slot = Some(name.to_string());
-        self.active_matrix_lifetime = slots.lifetimes.iter().find(|(id, _)| id == name).map(|(_, lifetime)| *lifetime);
+        self.active_matrix_lifetime = slots
+            .lifetimes
+            .iter()
+            .find(|(id, _)| id == name)
+            .map(|(_, lifetime)| *lifetime);
         self.matrix_selection_dirty = true;
         drop(slots);
         service::notify_work();
@@ -699,14 +782,24 @@ impl Shell3 {
     }
 
     pub fn active_matrix_slot_index(&self) -> usize {
-        let Some(active) = self.active_matrix_slot_name() else { return 0; };
-        matrix_slots().lock().ids.iter().position(|id| *id == active)
-            .map(|index| index + 1).unwrap_or(0)
+        let Some(active) = self.active_matrix_slot_name() else {
+            return 0;
+        };
+        matrix_slots()
+            .lock()
+            .ids
+            .iter()
+            .position(|id| *id == active)
+            .map(|index| index + 1)
+            .unwrap_or(0)
     }
 
     pub fn active_matrix_slot_name(&self) -> Option<String> {
         let active = self.active_matrix_slot.as_deref()?;
-        matrix_slots().lock().lifetimes.iter()
+        matrix_slots()
+            .lock()
+            .lifetimes
+            .iter()
             .find(|(id, lifetime)| id == active && Some(*lifetime) == self.active_matrix_lifetime)
             .map(|(id, _)| id.clone())
     }
@@ -721,24 +814,33 @@ impl Shell3 {
     /// Enter is reserved for operator submission; other prompt text is inert.
     fn submit_operator_prompt(&mut self) -> bool {
         let input = self.prompt.text.clone();
-        if !self.parse_operator(&input) { return false; }
+        if !self.parse_operator(&input) {
+            return false;
+        }
         self.set_prompt("");
         true
     }
 
     /// UI editing with immediate exact-name echo and AppDB/AKA launch.
-    pub(super) fn handle_keyboard(&mut self, event: &crate::r::keyboard::TrueosKeyboardOutputEvent) -> bool {
+    pub(super) fn handle_keyboard(
+        &mut self,
+        event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+    ) -> bool {
         use crate::r::keyboard::*;
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
             match event.key_code {
                 KEYBOARD_KEY_ENTER => return self.submit_operator_prompt(),
                 KEYBOARD_KEY_TAB => return self.set_mode(self.get_mode() % 3 + 1),
                 KEYBOARD_KEY_BACKSPACE => {
-                    if self.prompt.cursor == 0 { return false; }
+                    if self.prompt.cursor == 0 {
+                        return false;
+                    }
                     let index = self.prompt.cursor - 1;
                     let byte = self.prompt.text.char_indices().nth(index).unwrap().0;
                     self.prompt.text.remove(byte);
-                    if index < self.prompt.colors.len() { self.prompt.colors.remove(index); }
+                    if index < self.prompt.colors.len() {
+                        self.prompt.colors.remove(index);
+                    }
                     self.prompt.cursor = index;
                     self.refresh_prompt_strip();
                     return true;
@@ -746,13 +848,30 @@ impl Shell3 {
                 _ => return false,
             }
         }
-        if event.kind != KEYBOARD_OUTPUT_KIND_TEXT { return false; }
-        let Some(ch) = char::from_u32(event.codepoint).filter(|ch| !ch.is_control()) else { return false; };
-        let right_len = self.rows.promt.right.iter().map(|run| run.text.chars().count()).sum::<usize>();
+        if event.kind != KEYBOARD_OUTPUT_KIND_TEXT {
+            return false;
+        }
+        let Some(ch) = char::from_u32(event.codepoint).filter(|ch| !ch.is_control()) else {
+            return false;
+        };
+        let right_len = self
+            .rows
+            .promt
+            .right
+            .iter()
+            .map(|run| run.text.chars().count())
+            .sum::<usize>();
         // Keep all typed glyphs and the cursor visible beside the right strip.
-        if self.prompt.char_len() + 1 >= self.columns.saturating_sub(right_len) { return false; }
-        let byte = self.prompt.text.char_indices().nth(self.prompt.cursor)
-            .map(|(byte, _)| byte).unwrap_or(self.prompt.text.len());
+        if self.prompt.char_len() + 1 >= self.columns.saturating_sub(right_len) {
+            return false;
+        }
+        let byte = self
+            .prompt
+            .text
+            .char_indices()
+            .nth(self.prompt.cursor)
+            .map(|(byte, _)| byte)
+            .unwrap_or(self.prompt.text.len());
         self.prompt.text.insert(byte, ch);
         self.prompt.colors.resize(self.prompt.char_len() - 1, None);
         self.prompt.colors.insert(self.prompt.cursor, None);
@@ -763,9 +882,15 @@ impl Shell3 {
     }
 
     fn echo_recognized_prompt(&mut self) {
-        if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) { return; }
+        if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) {
+            return;
+        }
         let text = core::mem::take(&mut self.prompt.text);
-        MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, text.clone());
+        MatrixSlots::echo(
+            self.active_matrix_slot.as_deref(),
+            self.active_matrix_lifetime,
+            text.clone(),
+        );
         if self.mode == Mode::CMD {
             let slot = self.active_matrix_slot.as_deref().unwrap_or("");
             let result = if self.appdb_names.iter().any(|name| name == &text) {
@@ -776,7 +901,11 @@ impl Shell3 {
                 Ok(())
             };
             if let Err(error) = result {
-                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error);
+                MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    error,
+                );
             }
         }
         self.prompt.colors.clear();
@@ -784,7 +913,8 @@ impl Shell3 {
     }
 
     pub(super) fn matrix_output_needed(&self) -> bool {
-        self.matrix_selection_dirty || matrix_slots().lock().generation != self.update_baseline.matrix_generation()
+        self.matrix_selection_dirty
+            || matrix_slots().lock().generation != self.update_baseline.matrix_generation()
     }
 
     pub fn set_prompt(&mut self, text: &str) {
@@ -818,12 +948,23 @@ impl Shell3 {
         let mut colors = self.prompt.colors.clone();
         colors.resize(self.prompt.char_len(), None);
         colors.insert(self.prompt.cursor, None);
-        self.rows.promt.left = self.prompt.render().chars().zip(colors)
-            .map(|(ch, color)| MetaFmtStr { text: ch.to_string(), color, bold: false }).collect();
+        self.rows.promt.left = self
+            .prompt
+            .render()
+            .chars()
+            .zip(colors)
+            .map(|(ch, color)| MetaFmtStr {
+                text: ch.to_string(),
+                color,
+                bold: false,
+            })
+            .collect();
     }
 
     pub fn set_strip(&mut self, row: SpecialRows, side: StripSide, text: &str) -> bool {
-        if matches!(row, SpecialRows::MatrixRow(_)) { return false; }
+        if matches!(row, SpecialRows::MatrixRow(_)) {
+            return false;
+        }
         if side == StripSide::Left {
             match row {
                 SpecialRows::TitleRow => {
@@ -847,15 +988,25 @@ impl Shell3 {
 
     /// Set styled text without flattening its MetaFmt colors. Bold is retained
     /// in the runs but deliberately has no raster effect yet.
-    pub fn set_strip_formatted(&mut self, row: SpecialRows, side: StripSide, runs: Vec<MetaFmtStr>) -> bool {
-        if matches!(row, SpecialRows::MatrixRow(_)) { return false; }
+    pub fn set_strip_formatted(
+        &mut self,
+        row: SpecialRows,
+        side: StripSide,
+        runs: Vec<MetaFmtStr>,
+    ) -> bool {
+        if matches!(row, SpecialRows::MatrixRow(_)) {
+            return false;
+        }
         if side == StripSide::Left && row == SpecialRows::StatusRow {
             return false;
         }
         if side == StripSide::Left && row == SpecialRows::PromtRow {
             let text: String = runs.iter().map(|run| run.text.as_str()).collect();
             self.set_prompt(&text);
-            self.prompt.colors = runs.iter().flat_map(|run| run.text.chars().map(|_| run.color)).collect();
+            self.prompt.colors = runs
+                .iter()
+                .flat_map(|run| run.text.chars().map(|_| run.color))
+                .collect();
             self.refresh_prompt_strip();
             return true;
         }
@@ -869,7 +1020,18 @@ impl Shell3 {
 
     pub fn get_strip(&self, row: SpecialRows, side: StripSide) -> String {
         if let SpecialRows::MatrixRow(index) = row {
-            return if side == StripSide::Left { MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime).1.get(index).cloned().unwrap_or_default() } else { String::new() };
+            return if side == StripSide::Left {
+                MatrixSlots::view_echo_snapshot(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                )
+                .1
+                .get(index)
+                .cloned()
+                .unwrap_or_default()
+            } else {
+                String::new()
+            };
         }
         if row == SpecialRows::StatusRow && side == StripSide::Left {
             return current_matrix_slots_text();
@@ -897,14 +1059,20 @@ impl Shell3 {
 
     pub fn render_strips(&self, row: SpecialRows) -> String {
         let strips = self.row_for_render(row);
-        update::fit_meta_strips(&strips.left, &strips.right, self.columns).iter().map(|cell| cell.0).collect()
+        update::fit_meta_strips(&strips.left, &strips.right, self.columns)
+            .iter()
+            .map(|cell| cell.0)
+            .collect()
     }
 
     fn capture_update_snapshot(&self) -> update::Snapshot {
         let title = self.row_for_render(SpecialRows::TitleRow);
         let status = self.row_for_render(SpecialRows::StatusRow);
         let promt = self.row_for_render(SpecialRows::PromtRow);
-        let (matrix_generation, matrix_lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
+        let (matrix_generation, matrix_lines) = MatrixSlots::view_echo_snapshot(
+            self.active_matrix_slot.as_deref(),
+            self.active_matrix_lifetime,
+        );
 
         update::Snapshot::new(
             (self.columns, self.rows_count),
@@ -915,7 +1083,8 @@ impl Shell3 {
                 (&promt.left, &promt.right),
             ],
             self.columns,
-        ).with_matrix(&matrix_lines, matrix_generation)
+        )
+        .with_matrix(&matrix_lines, matrix_generation)
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
@@ -952,7 +1121,9 @@ impl Shell3 {
 
     /// Operator contract: §, §id, §id§, and §§, submitted explicitly.
     pub fn parse_operator(&mut self, input: &str) -> bool {
-        let Some(rest) = input.strip_prefix(OPERATOR) else { return false; };
+        let Some(rest) = input.strip_prefix(OPERATOR) else {
+            return false;
+        };
         if rest.is_empty() {
             return self.select_matrix_slot_index(0);
         }
@@ -965,11 +1136,17 @@ impl Shell3 {
             None => (rest, false),
         };
         // Slot ids are a single token; embedded operators are not patterns.
-        if name.is_empty() || name.chars().any(|ch| ch == OPERATOR || ch.is_whitespace() || ch.is_control()) {
+        if name.is_empty()
+            || name
+                .chars()
+                .any(|ch| ch == OPERATOR || ch.is_whitespace() || ch.is_control())
+        {
             return false;
         }
         if dropping {
-            if !MatrixSlots::drop_slot(Some(name)) { return false; }
+            if !MatrixSlots::drop_slot(Some(name)) {
+                return false;
+            }
             self.reconcile_matrix_selection();
             return true;
         }
@@ -1014,9 +1191,13 @@ pub fn newShell3(
 fn mode_title_meta(mode: Mode, aka_names: &[String], appdb_names: &[String]) -> Vec<MetaFmtStr> {
     let mut runs = Vec::new();
     let mut append_group = |group: &names::NameGroup, dynamic: Option<&[String]>| {
-        if !runs.is_empty() { runs.push(MetaFmtStr::new(" ")); }
+        if !runs.is_empty() {
+            runs.push(MetaFmtStr::new(" "));
+        }
         runs.push(MetaFmtStr::new(names::GROUP_OPEN.to_string()));
-        if !group.name.is_empty() { runs.push(MetaFmtStr::new(group.name)); }
+        if !group.name.is_empty() {
+            runs.push(MetaFmtStr::new(group.name));
+        }
         for (index, entry) in group.names.iter().enumerate() {
             if !group.name.is_empty() || index != 0 {
                 runs.push(MetaFmtStr::new(" "));
@@ -1024,21 +1205,34 @@ fn mode_title_meta(mode: Mode, aka_names: &[String], appdb_names: &[String]) -> 
             runs.push(MetaFmtStr::new(entry.name).color(entry.color));
         }
         if let Some(entries) = dynamic {
-            for entry in entries { runs.push(MetaFmtStr::new(" ")); runs.push(MetaFmtStr::new(entry)); }
+            for entry in entries {
+                runs.push(MetaFmtStr::new(" "));
+                runs.push(MetaFmtStr::new(entry));
+            }
         }
         runs.push(MetaFmtStr::new(names::GROUP_CLOSE.to_string()));
     };
     match mode {
-        Mode::HV => { for group in &HV_GROUPS { append_group(group, None); } }
+        Mode::HV => {
+            for group in &HV_GROUPS {
+                append_group(group, None);
+            }
+        }
         Mode::CMD => {
             for group in &CMD_GROUPS {
-                let dynamic = match group.name { "Aka" => Some(aka_names), "AppDB" => Some(appdb_names), _ => None };
+                let dynamic = match group.name {
+                    "Aka" => Some(aka_names),
+                    "AppDB" => Some(appdb_names),
+                    _ => None,
+                };
                 append_group(group, dynamic);
             }
         }
         Mode::ADM => {
             for entry in &ADM_NAMES {
-                if !runs.is_empty() { runs.push(MetaFmtStr::new(" ")); }
+                if !runs.is_empty() {
+                    runs.push(MetaFmtStr::new(" "));
+                }
                 runs.push(MetaFmtStr::new(entry.name).color(entry.color));
             }
         }

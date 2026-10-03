@@ -3639,10 +3639,15 @@ fn rebuild_static_font_base(
         color_rgba: 0,
     };
     let outcome = super::vcpy_service::fill_rgba8_complete(
-        destination, 0, super::vcpy_service::RgbaFillConsumer::Gridpaper,
+        destination,
+        0,
+        super::vcpy_service::RgbaFillConsumer::Gridpaper,
     );
     let clear_result = if outcome == GpgpuSubmissionOutcome::Unavailable {
-        crate::intel::gpgpu::fill_solid_rects_rgba8_result(destination, core::slice::from_ref(&clear))
+        crate::intel::gpgpu::fill_solid_rects_rgba8_result(
+            destination,
+            core::slice::from_ref(&clear),
+        )
     } else {
         crate::intel::gpgpu::GpgpuWorklistSubmitResult {
             outcome,
@@ -3835,10 +3840,14 @@ fn render_compute_page_frame(
             GpgpuSubmissionOutcome::Unavailable => {
                 // Ensure the next attempt still performs the release.
                 page.invalidate_static_base();
-                return Err(GridPaperComputeFailure::Unavailable("gridpaper-base-release-unavailable"));
+                return Err(GridPaperComputeFailure::Unavailable(
+                    "gridpaper-base-release-unavailable",
+                ));
             }
             GpgpuSubmissionOutcome::SubmittedIncomplete => {
-                return Err(GridPaperComputeFailure::SubmittedIncomplete("gridpaper-base-release-incomplete"));
+                return Err(GridPaperComputeFailure::SubmittedIncomplete(
+                    "gridpaper-base-release-incomplete",
+                ));
             }
         }
     }
@@ -3848,8 +3857,11 @@ fn render_compute_page_frame(
             // No BCS submission occurred. Keep the reference path for busy or
             // unsupported requests, including rectangles requiring clipping.
             if !crate::intel::gpgpu::copy_rect_rgba8_complete_mode(
-                static_base, static_base.bounds(), destination,
-                crate::intel::gpgpu::GpgpuPoint::new(0, 0), true,
+                static_base,
+                static_base.bounds(),
+                destination,
+                crate::intel::gpgpu::GpgpuPoint::new(0, 0),
+                true,
             ) {
                 return Err(GridPaperComputeFailure::SubmittedIncomplete(
                     "gridpaper-static-base-copy-incomplete",

@@ -13,8 +13,8 @@ use core::slice;
 use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
-use crate::r::static_map::FixedKeyMap;
 use crate::r::allocation_registry::AllocationRegistry;
+use crate::r::static_map::FixedKeyMap;
 
 pub(crate) static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 // `environ` is a data import, not a function. Keep an addressable `char **`

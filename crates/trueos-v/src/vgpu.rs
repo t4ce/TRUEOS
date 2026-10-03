@@ -220,21 +220,32 @@ pub const INDEXED_DRAW_GEOMETRY_CLEAR: u32 = 1 << 5;
 pub const INDEXED_DRAW_DEPTH_COMPARE_SHIFT: u32 = 8;
 pub const INDEXED_DRAW_DEPTH_COMPARE_MASK: u32 = 7 << INDEXED_DRAW_DEPTH_COMPARE_SHIFT;
 pub const INDEXED_DRAW_FLAGS_ALL: u32 = INDEXED_DRAW_LOAD_COLOR
-    | INDEXED_DRAW_DRAWABLE_DEPTH | INDEXED_DRAW_DEPTH_TEST
-    | INDEXED_DRAW_DEPTH_WRITE | INDEXED_DRAW_CLEAR_DEPTH | INDEXED_DRAW_DEPTH_COMPARE_MASK
+    | INDEXED_DRAW_DRAWABLE_DEPTH
+    | INDEXED_DRAW_DEPTH_TEST
+    | INDEXED_DRAW_DEPTH_WRITE
+    | INDEXED_DRAW_CLEAR_DEPTH
+    | INDEXED_DRAW_DEPTH_COMPARE_MASK
     | INDEXED_DRAW_GEOMETRY_CLEAR;
 
 pub const fn indexed_draw_flags_valid(flags: u32) -> bool {
     flags & !INDEXED_DRAW_FLAGS_ALL == 0
-        && (flags & !(INDEXED_DRAW_LOAD_COLOR | INDEXED_DRAW_DRAWABLE_DEPTH | INDEXED_DRAW_GEOMETRY_CLEAR) == 0
+        && (flags
+            & !(INDEXED_DRAW_LOAD_COLOR
+                | INDEXED_DRAW_DRAWABLE_DEPTH
+                | INDEXED_DRAW_GEOMETRY_CLEAR)
+            == 0
             || flags & INDEXED_DRAW_DRAWABLE_DEPTH != 0)
         && (flags & INDEXED_DRAW_DEPTH_WRITE == 0 || flags & INDEXED_DRAW_DEPTH_TEST != 0)
         && (flags & INDEXED_DRAW_GEOMETRY_CLEAR == 0
-            || (flags & (INDEXED_DRAW_DEPTH_TEST | INDEXED_DRAW_DEPTH_WRITE | INDEXED_DRAW_DEPTH_COMPARE_MASK) == 0
-                && (flags & INDEXED_DRAW_DRAWABLE_DEPTH == 0 || flags & INDEXED_DRAW_CLEAR_DEPTH != 0)
+            || (flags
+                & (INDEXED_DRAW_DEPTH_TEST
+                    | INDEXED_DRAW_DEPTH_WRITE
+                    | INDEXED_DRAW_DEPTH_COMPARE_MASK)
+                == 0
+                && (flags & INDEXED_DRAW_DRAWABLE_DEPTH == 0
+                    || flags & INDEXED_DRAW_CLEAR_DEPTH != 0)
                 && (flags & INDEXED_DRAW_LOAD_COLOR == 0 || flags & INDEXED_DRAW_CLEAR_DEPTH != 0)))
 }
-
 
 pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
 /// The mixed-topology V2 batch maps directly to the resident renderer's
@@ -278,9 +289,15 @@ pub struct PreparedRasterBatchV1 {
 
 impl Default for PreparedRasterBatchV1 {
     fn default() -> Self {
-        Self { surface: 0, pipeline: 0, vertex_buffer: 0, index_buffer: 0,
-            draw_count: 0, reserved: 0,
-            draws: [PreparedRasterDrawV1::default(); MAX_PREPARED_RASTER_DRAWS] }
+        Self {
+            surface: 0,
+            pipeline: 0,
+            vertex_buffer: 0,
+            index_buffer: 0,
+            draw_count: 0,
+            reserved: 0,
+            draws: [PreparedRasterDrawV1::default(); MAX_PREPARED_RASTER_DRAWS],
+        }
     }
 }
 /// Largest integer point width accepted through `IndexedBatchDrawV2::reserved`.
@@ -1017,8 +1034,11 @@ impl Device {
         index_buffer: Buffer,
         mut batch: PreparedRasterBatchV1,
     ) -> Result<TimelinePoint, i32> {
-        if queue.device != self || surface.device != self || batch.draw_count == 0
-            || batch.draw_count as usize > MAX_PREPARED_RASTER_SUBMIT_DRAWS {
+        if queue.device != self
+            || surface.device != self
+            || batch.draw_count == 0
+            || batch.draw_count as usize > MAX_PREPARED_RASTER_SUBMIT_DRAWS
+        {
             return Err(ERR_BAD_HANDLE);
         }
         let mut surface = surface;
@@ -1029,7 +1049,11 @@ impl Device {
         let mut point = TimelinePoint::default();
         rc_result(unsafe {
             vcabi::trueos_cabi_vgpu_ui4_prepared_raster_batch_v1(
-                self.0, queue.handle, &batch, &mut point)
+                self.0,
+                queue.handle,
+                &batch,
+                &mut point,
+            )
         })?;
         surface.live = false;
         Ok(point)

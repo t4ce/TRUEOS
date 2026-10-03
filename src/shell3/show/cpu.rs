@@ -3,8 +3,8 @@
 use alloc::vec;
 
 use crate::ui4::{
-    FrameRgbaView, acquire_frame_buffer, cancel_frame_buffer,
-    publish_frame_buffer, writable_rgba_view,
+    FrameRgbaView, acquire_frame_buffer, cancel_frame_buffer, publish_frame_buffer,
+    writable_rgba_view,
 };
 
 use super::{Ui4Surface, rendered_lines};
@@ -34,14 +34,19 @@ pub(super) fn present(
     surface.frame_contents[index] = None;
     surface.clear_buffers[index] = true;
     if clearing {
-        let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
-        for pixel in pixels.chunks_exact_mut(4) { pixel.copy_from_slice(&super::BACKGROUND.rgba()); }
+        let pixels =
+            unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&super::BACKGROUND.rgba());
+        }
     }
     if paint_segments(view, &segments, surface.scale).is_err() {
         let _ = cancel_frame_buffer(lease);
         return Err("shell3-show-cpu-glyph-paint");
     }
-    if clearing { crate::intel::dma_cache_flush_range(view.virt, view.byte_len); }
+    if clearing {
+        crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
+    }
     if publish_frame_buffer(lease).is_err() {
         let _ = cancel_frame_buffer(lease);
         return Err("shell3-show-cpu-frame-publish");
@@ -67,7 +72,11 @@ pub(super) fn paint_segments(
     Ok(())
 }
 
-fn paint_segment(view: FrameRgbaView, segment: &super::super::SegmentUpdate, scale: u32) -> Result<(), ()> {
+fn paint_segment(
+    view: FrameRgbaView,
+    segment: &super::super::SegmentUpdate,
+    scale: u32,
+) -> Result<(), ()> {
     let row = match segment.row {
         super::super::SpecialRows::TitleRow => 0usize,
         super::super::SpecialRows::StatusRow => 1,
@@ -91,22 +100,38 @@ fn paint_segment(view: FrameRgbaView, segment: &super::super::SegmentUpdate, sca
     for py in y..y + height {
         let row_offset = py.checked_mul(view.pitch as usize).ok_or(())?;
         for px in x..x + width {
-            let offset = row_offset.checked_add(px.checked_mul(4).ok_or(())?).ok_or(())?;
-            pixels.get_mut(offset..offset + 4).ok_or(())?.copy_from_slice(&background);
+            let offset = row_offset
+                .checked_add(px.checked_mul(4).ok_or(())?)
+                .ok_or(())?;
+            pixels
+                .get_mut(offset..offset + 4)
+                .ok_or(())?
+                .copy_from_slice(&background);
         }
     }
 
     let mask_width = width.div_ceil(scale);
     let mask_height = height.div_ceil(scale);
     let mut glyphs = vec![0u8; mask_width.checked_mul(mask_height).ok_or(())?];
-    microfont::stamp_text(&mut glyphs, mask_width, mask_height, 0, 0, &segment.text, 1u8).map_err(|_| ())?;
+    microfont::stamp_text(&mut glyphs, mask_width, mask_height, 0, 0, &segment.text, 1u8)
+        .map_err(|_| ())?;
     for py in 0..height {
         for px in 0..width {
-            if glyphs[(py / scale) * mask_width + px / scale] == 0 { continue; }
+            if glyphs[(py / scale) * mask_width + px / scale] == 0 {
+                continue;
+            }
             let offset = (y + py) * view.pitch as usize + (x + px) * 4;
-            let foreground = segment.colors.get(px / glyph_width).copied().flatten()
-                .unwrap_or(super::FOREGROUND).rgba();
-            pixels.get_mut(offset..offset + 4).ok_or(())?.copy_from_slice(&foreground);
+            let foreground = segment
+                .colors
+                .get(px / glyph_width)
+                .copied()
+                .flatten()
+                .unwrap_or(super::FOREGROUND)
+                .rgba();
+            pixels
+                .get_mut(offset..offset + 4)
+                .ok_or(())?
+                .copy_from_slice(&foreground);
         }
     }
     crate::intel::dma_cache_flush_range(

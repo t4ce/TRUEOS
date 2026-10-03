@@ -78,13 +78,22 @@ impl Show {
         }
     }
 
-    pub(crate) const fn font_scale(&self) -> u32 { self.font_scale }
+    pub(crate) const fn font_scale(&self) -> u32 {
+        self.font_scale
+    }
 
-    pub(crate) fn set_font_scale(&mut self, scale: u32, columns: usize, rows: usize)
-        -> Result<(u32, u32), &'static str>
-    {
-        let (width, height) = self.surface.as_ref().map(|s| (s.width, s.height))
-            .map(Ok).unwrap_or_else(|| show_extent(columns, rows, self.font_scale))?;
+    pub(crate) fn set_font_scale(
+        &mut self,
+        scale: u32,
+        columns: usize,
+        rows: usize,
+    ) -> Result<(u32, u32), &'static str> {
+        let (width, height) = self
+            .surface
+            .as_ref()
+            .map(|s| (s.width, s.height))
+            .map(Ok)
+            .unwrap_or_else(|| show_extent(columns, rows, self.font_scale))?;
         let extent = (
             width.max(super::MIN_COLUMNS as u32 * microfont::FWIDTH as u32 * scale),
             height.max(super::MIN_ROWS as u32 * microfont::FHEIGHT as u32 * scale),
@@ -142,7 +151,10 @@ impl Show {
         Some((placement.width, placement.height))
     }
 
-    pub(crate) async fn resize_to_current(&mut self, lines: &[&[(char, Option<RgbaColor>)]]) -> Result<(), &'static str> {
+    pub(crate) async fn resize_to_current(
+        &mut self,
+        lines: &[&[(char, Option<RgbaColor>)]],
+    ) -> Result<(), &'static str> {
         if self.poisoned {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
@@ -261,8 +273,13 @@ impl Show {
             self.surface = Some(create_surface(width, height, self.backend)?);
             self.surface.as_mut().unwrap().scale = self.font_scale;
         }
-        if !recreate_surface && batch.segments.is_empty()
-            && self.surface.as_ref().is_some_and(|surface| !surface.clear_buffers.iter().any(|clear| *clear)) {
+        if !recreate_surface
+            && batch.segments.is_empty()
+            && self
+                .surface
+                .as_ref()
+                .is_some_and(|surface| !surface.clear_buffers.iter().any(|clear| *clear))
+        {
             return Ok(());
         }
         let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
@@ -312,8 +329,10 @@ impl Drop for Show {
 fn show_extent(columns: usize, rows: usize, scale: u32) -> Result<(u32, u32), &'static str> {
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or("shell3-show-scanout-unavailable")?;
-    let min_width = (super::MIN_COLUMNS as u32).saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
-    let min_height = (super::MIN_ROWS as u32).saturating_mul((microfont::FHEIGHT as u32).saturating_mul(scale));
+    let min_width = (super::MIN_COLUMNS as u32)
+        .saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
+    let min_height =
+        (super::MIN_ROWS as u32).saturating_mul((microfont::FHEIGHT as u32).saturating_mul(scale));
     if screen_width < min_width || screen_height < min_height {
         return Err("shell3-show-invalid-extent");
     }
@@ -395,7 +414,9 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
     })
 }
 
-pub(super) fn rendered_lines(lines: &[&[(char, Option<RgbaColor>)]]) -> alloc::vec::Vec<RenderedLine> {
+pub(super) fn rendered_lines(
+    lines: &[&[(char, Option<RgbaColor>)]],
+) -> alloc::vec::Vec<RenderedLine> {
     lines.iter().map(|line| line.to_vec()).collect()
 }
 
@@ -405,27 +426,34 @@ fn damage_for_segments(
     height: u32,
     scale: u32,
 ) -> Option<DamageRect> {
-    segments.iter().filter_map(|segment| {
-        let row = match segment.row {
-            super::SpecialRows::TitleRow => 0,
-            super::SpecialRows::StatusRow => 1,
-            super::SpecialRows::PromtRow => 2,
-            super::SpecialRows::MatrixRow(index) => index + 3,
-        };
-        let x = u32::try_from(segment.offset).ok()?.saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
-        let y = (row as u32).saturating_mul((microfont::FHEIGHT as u32).saturating_mul(scale));
-        let columns = segment.remove.max(segment.text.chars().count());
-        let patch_width = u32::try_from(columns).ok()?.saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
-        if patch_width == 0 || x >= width || y >= height {
-            return None;
-        }
-        Some(DamageRect::new(
-            x,
-            y,
-            patch_width.min(width - x),
-            ((microfont::FHEIGHT as u32).saturating_mul(scale)).min(height - y),
-        ))
-    }).reduce(DamageRect::union)
+    segments
+        .iter()
+        .filter_map(|segment| {
+            let row = match segment.row {
+                super::SpecialRows::TitleRow => 0,
+                super::SpecialRows::StatusRow => 1,
+                super::SpecialRows::PromtRow => 2,
+                super::SpecialRows::MatrixRow(index) => index + 3,
+            };
+            let x = u32::try_from(segment.offset)
+                .ok()?
+                .saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
+            let y = (row as u32).saturating_mul((microfont::FHEIGHT as u32).saturating_mul(scale));
+            let columns = segment.remove.max(segment.text.chars().count());
+            let patch_width = u32::try_from(columns)
+                .ok()?
+                .saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
+            if patch_width == 0 || x >= width || y >= height {
+                return None;
+            }
+            Some(DamageRect::new(
+                x,
+                y,
+                patch_width.min(width - x),
+                ((microfont::FHEIGHT as u32).saturating_mul(scale)).min(height - y),
+            ))
+        })
+        .reduce(DamageRect::union)
 }
 
 fn create_surface_frames(

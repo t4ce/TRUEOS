@@ -26,11 +26,11 @@ pub(crate) mod types;
 mod uc_fw;
 
 pub(crate) use self::blt::{
-    GucBcs0CopyCompletion, GucBcs0CopySubmission, GucBcs0CopySubmitError, GucBcs0RgbaCopy,
-    GucBcs0RgbaSurface, poll_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_fill, queue_guc_bcs0_marker,
-    submit_guc_bcs0_fast_copy_probe_now, guc_bcs0_last_timeout, queue_guc_bcs0_uncached_copies,
-    queue_guc_bcs0_legacy_rgba_copies,
-    GucBcs0MonoGlyph, GUC_BCS0_MONO_MAX_GLYPHS, queue_guc_bcs0_mono_glyphs,
+    GUC_BCS0_MONO_MAX_GLYPHS, GucBcs0CopyCompletion, GucBcs0CopySubmission, GucBcs0CopySubmitError,
+    GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaSurface, guc_bcs0_last_timeout,
+    poll_guc_bcs0_rgba_copies, queue_guc_bcs0_legacy_rgba_copies, queue_guc_bcs0_marker,
+    queue_guc_bcs0_mono_glyphs, queue_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_fill,
+    queue_guc_bcs0_uncached_copies, submit_guc_bcs0_fast_copy_probe_now,
 };
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;
 pub(crate) use self::media::hw_pic;
@@ -739,8 +739,8 @@ pub(crate) use self::display::{
     RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll,
     Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
     WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame, begin_ui4_wd_xyuv8888_capture,
-    poll_ui4_wd_xyuv8888_capture, set_mirror_map_mode, start_ui4_wd_xyuv8888_capture,
-    stop_ui4_wd_xyuv8888_capture, ui4_wd_xyuv8888_capture_status, pin_ui4_wd_frame_for_copy,
+    pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture, set_mirror_map_mode,
+    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture, ui4_wd_xyuv8888_capture_status,
 };
 
 pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {

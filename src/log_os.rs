@@ -231,9 +231,7 @@ pub(crate) mod flags {
     pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
         if BLUEPRINT_HV_DEBUG_PROFILE_ENABLED {
             return match area {
-                LogArea::Hv | LogArea::Blueprint => {
-                    LogLevelPolicy::up(LogLevelFilter::Trace)
-                }
+                LogArea::Hv | LogArea::Blueprint => LogLevelPolicy::up(LogLevelFilter::Trace),
                 LogArea::Gfx | LogArea::Gpgpu | LogArea::Render => {
                     LogLevelPolicy::up(LogLevelFilter::Warn)
                 }

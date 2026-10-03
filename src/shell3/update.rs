@@ -51,9 +51,11 @@ impl Snapshot {
             size,
             layout_generation,
             matrix_generation: 0,
-            rows: strips.map(|(left, right)| VisibleRow {
-                rendered: fit_meta_strips(left, right, columns),
-            }).into(),
+            rows: strips
+                .map(|(left, right)| VisibleRow {
+                    rendered: fit_meta_strips(left, right, columns),
+                })
+                .into(),
         }
     }
 
@@ -63,12 +65,16 @@ impl Snapshot {
         let first = lines.len().saturating_sub(count);
         for index in 0..count {
             let text = lines.get(first + index).map(String::as_str).unwrap_or("");
-            self.rows.push(VisibleRow { rendered: fit_meta_strips(&[MetaFmtStr::new(text)], &[], self.size.0) });
+            self.rows.push(VisibleRow {
+                rendered: fit_meta_strips(&[MetaFmtStr::new(text)], &[], self.size.0),
+            });
         }
         self
     }
 
-    pub(super) fn matrix_generation(&self) -> u64 { self.matrix_generation }
+    pub(super) fn matrix_generation(&self) -> u64 {
+        self.matrix_generation
+    }
 
     pub(super) fn size(&self) -> (usize, usize) {
         self.size
@@ -101,8 +107,16 @@ pub(super) fn build_updates(
         if let Some(update) = diff_visible_segment(
             row,
             StripSide::Left,
-            baseline.rows.get(index).map(|row| row.rendered.as_slice()).unwrap_or(&[]),
-            current.rows.get(index).map(|row| row.rendered.as_slice()).unwrap_or(&[]),
+            baseline
+                .rows
+                .get(index)
+                .map(|row| row.rendered.as_slice())
+                .unwrap_or(&[]),
+            current
+                .rows
+                .get(index)
+                .map(|row| row.rendered.as_slice())
+                .unwrap_or(&[]),
         ) {
             segments.push(update);
         }
@@ -138,10 +152,17 @@ pub(super) fn diff_rendered_lines(
             // Emit only occupied spans, never a blit per padded blank cell.
             let mut start = 0;
             while start < line.len() {
-                if line[start].0 == ' ' { start += 1; continue; }
+                if line[start].0 == ' ' {
+                    start += 1;
+                    continue;
+                }
                 let mut end = start + 1;
-                while end < line.len() && line[end].0 != ' ' { end += 1; }
-                if let Some(mut update) = diff_visible_segment(row, StripSide::Left, &[], &line[start..end]) {
+                while end < line.len() && line[end].0 != ' ' {
+                    end += 1;
+                }
+                if let Some(mut update) =
+                    diff_visible_segment(row, StripSide::Left, &[], &line[start..end])
+                {
                     update.offset = start;
                     updates.push(update);
                 }
@@ -149,7 +170,10 @@ pub(super) fn diff_rendered_lines(
             }
         } else {
             // Existing pixels must still be erased when text/rows disappear.
-            let old = previous.and_then(|lines| lines.get(index)).map(Vec::as_slice).unwrap_or(&[]);
+            let old = previous
+                .and_then(|lines| lines.get(index))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             if let Some(update) = diff_visible_segment(row, StripSide::Left, old, line) {
                 updates.push(update);
             }
@@ -158,9 +182,15 @@ pub(super) fn diff_rendered_lines(
     updates
 }
 
-pub(super) fn fit_meta_strips(left: &[MetaFmtStr], right: &[MetaFmtStr], columns: usize) -> RenderedLine {
+pub(super) fn fit_meta_strips(
+    left: &[MetaFmtStr],
+    right: &[MetaFmtStr],
+    columns: usize,
+) -> RenderedLine {
     let cells = |runs: &[MetaFmtStr]| -> RenderedLine {
-        runs.iter().flat_map(|run| run.text.chars().map(|ch| (ch, run.color))).collect()
+        runs.iter()
+            .flat_map(|run| run.text.chars().map(|ch| (ch, run.color)))
+            .collect()
     };
     let mut left = cells(left);
     let mut right = cells(right);
@@ -233,7 +263,13 @@ fn diff_visible_segment(
         side,
         offset: prefix,
         remove: old_end - prefix,
-        text: new_glyphs[prefix..new_end].iter().map(|cell| cell.0).collect(),
-        colors: new_glyphs[prefix..new_end].iter().map(|cell| cell.1).collect(),
+        text: new_glyphs[prefix..new_end]
+            .iter()
+            .map(|cell| cell.0)
+            .collect(),
+        colors: new_glyphs[prefix..new_end]
+            .iter()
+            .map(|cell| cell.1)
+            .collect(),
     })
 }

@@ -394,7 +394,8 @@ fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
     if !crate::workers::all_topology_spawners_registered() {
         return SpawnAttempt::Skipped;
     }
-    let worker_spawners = crate::workers::pick_background_spawners_with_slots(crate::r::codec::CODEC_WORKER_CAP);
+    let worker_spawners =
+        crate::workers::pick_background_spawners_with_slots(crate::r::codec::CODEC_WORKER_CAP);
     if worker_spawners.is_empty() {
         return SpawnAttempt::Skipped;
     }
@@ -1564,8 +1565,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("net-shell-listener", 0, &NET_SHELL_STARTED, spawn_net_shell),
     TaskSpec::enabled(
-        "shell3-tcp", crate::r::readiness::NET_ANY_CONFIGURED,
-        &SHELL3_TCP_STARTED, spawn_shell3_tcp,
+        "shell3-tcp",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &SHELL3_TCP_STARTED,
+        spawn_shell3_tcp,
     ),
     // The current Gridpaper Blueprint still submits snapshots to this
     // consumer, which owns the corresponding UI4 presentation.

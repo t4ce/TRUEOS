@@ -2471,10 +2471,7 @@ fn mark_idle(serial: u64, reason: &'static str) {
     control.status.last_error = reason;
 }
 
-fn mark_duration_complete(
-    serial: u64,
-    metrics: GpgpuPreviewMetrics,
-) {
+fn mark_duration_complete(serial: u64, metrics: GpgpuPreviewMetrics) {
     let mut control = PREVIEW_CONTROL.lock();
     if control.desired.serial == serial {
         control.desired.running = false;
@@ -2490,11 +2487,7 @@ fn mark_duration_complete(
     control.status.last_error = "duration-complete";
 }
 
-fn mark_runtime_fault(
-    serial: u64,
-    metrics: GpgpuPreviewMetrics,
-    reason: &'static str,
-) {
+fn mark_runtime_fault(serial: u64, metrics: GpgpuPreviewMetrics, reason: &'static str) {
     let mut control = PREVIEW_CONTROL.lock();
     if control.desired.serial == serial {
         control.desired.running = false;

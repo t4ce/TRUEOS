@@ -44,8 +44,8 @@ pub(crate) mod net;
 pub(crate) mod os;
 pub(crate) mod qjs;
 pub(crate) mod ram;
-pub(crate) mod rec;
 pub(crate) mod rapl;
+pub(crate) mod rec;
 pub(crate) mod run;
 pub(crate) mod shell;
 pub(crate) mod smp;
@@ -67,8 +67,8 @@ pub(crate) mod tlb_smbios;
 #[cfg(feature = "trueos_ttstt")]
 pub(crate) mod ttstt;
 pub(crate) mod update;
-pub(crate) mod vgpu;
 pub(crate) mod vcpy;
+pub(crate) mod vgpu;
 pub(crate) mod vid;
 #[cfg(feature = "wc3")]
 pub(crate) mod wc3;
