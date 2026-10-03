@@ -9,6 +9,7 @@ pub struct MetaFmtStr {
     pub text: String,
     pub color: Option<RgbaColor>,
     pub bold: bool,
+    pub underline: bool,
 }
 
 impl MetaFmtStr {
@@ -17,6 +18,7 @@ impl MetaFmtStr {
             text: text.into(),
             color: None,
             bold: false,
+            underline: false,
         }
     }
 
@@ -27,6 +29,11 @@ impl MetaFmtStr {
 
     pub fn bold(mut self) -> Self {
         self.bold = true;
+        self
+    }
+
+    pub fn underline(mut self) -> Self {
+        self.underline = true;
         self
     }
 }

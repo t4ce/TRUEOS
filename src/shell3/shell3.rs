@@ -2,6 +2,7 @@ mod metafmtstr;
 mod names;
 pub mod net;
 mod tty;
+mod status;
 pub(crate) mod tui;
 mod update;
 
@@ -49,13 +50,14 @@ pub enum RgbaColor {
     Green = 0x34A853FF,
     Orange = 0xFB8C00FF,
     BlackTransparent = 0x00000080,
+    Underlined { foreground: [u8;4] },
     Terminal { foreground: [u8;4], background: [u8;4], underline: bool },
 }
 
 impl RgbaColor {
     pub const fn rgba(self) -> [u8; 4] {
         let value: u32 = match self {
-            Self::Terminal {foreground, ..} => return foreground,
+            Self::Terminal {foreground, ..} | Self::Underlined {foreground} => return foreground,
             Self::Gray => 0x808080FF,
             Self::White => 0xFFFFFFFF,
             Self::Pink => 0xFF69B4FF,
@@ -75,7 +77,7 @@ impl RgbaColor {
         match self { Self::Terminal {background, ..} => Some(background), _ => None }
     }
     pub const fn underline(self) -> bool {
-        matches!(self, Self::Terminal {underline: true, ..})
+        matches!(self, Self::Terminal {underline: true, ..} | Self::Underlined {..})
     }
 
 }
@@ -471,6 +473,7 @@ impl PromptState {
 }
 
 pub struct Shell3 {
+    status_hover: Option<status::Target>,
     tui_frontend: u64,
     executor_slot: u32,
     columns: usize,
@@ -580,6 +583,7 @@ impl Shell3 {
         let rows_count = rows.max(MIN_ROWS);
         let mut rows_state = SpecialRowsState::new(&time, &prompt_left);
         rows_state.title.right = mode_title_meta(Mode::HV, &aka_names, &appdb_names);
+        rows_state.status.right = status::alias_runs(&aka_names);
 
         let status_left = {
             let slots = matrix_slots().lock();
@@ -599,6 +603,7 @@ impl Shell3 {
         .with_matrix(&matrix_lines, matrix_generation);
 
         Self {
+            status_hover: None,
             tui_frontend: tui::new_frontend(),
             executor_slot,
             columns,
@@ -924,6 +929,34 @@ impl Shell3 {
         true
     }
 
+    fn launch_named_app(&mut self, text: &str, is_alias: bool) {
+        let slot = self.active_matrix_slot.as_deref().unwrap_or("");
+        let result = if !is_alias {
+            service::launch_appdb(text, slot, self.tui_frontend())
+        } else {
+            service::launch_alias(text, slot, self.tui_frontend())
+        };
+        match result {
+            Ok(app) => {
+                let lifetime = MatrixSlots::ensure_named(&app.slot);
+                self.active_matrix_slot = Some(app.slot.clone());
+                self.active_matrix_lifetime = Some(lifetime);
+                self.matrix_selection_dirty = true;
+                let mut slots = matrix_slots().lock();
+                slots.vmx_apps.retain(|existing| existing.slot != app.slot);
+                slots.vmx_apps.push(app);
+                slots.generation = slots.generation.wrapping_add(1);
+                drop(slots);
+                service::notify_work();
+            }
+            Err(error) => MatrixSlots::echo(
+                self.active_matrix_slot.as_deref(),
+                self.active_matrix_lifetime,
+                error,
+            ),
+        }
+    }
+
     fn echo_recognized_prompt(&mut self) {
         if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) {
             return;
@@ -943,31 +976,7 @@ impl Shell3 {
         } else if text == "esc" && self.active_vmx_app().is_some() {
             self.select_matrix_slot_index(0);
         } else if is_app || is_alias {
-            let slot = self.active_matrix_slot.as_deref().unwrap_or("");
-            let result = if is_app {
-                service::launch_appdb(&text, slot, self.tui_frontend())
-            } else {
-                service::launch_alias(&text, slot, self.tui_frontend())
-            };
-            match result {
-                Ok(app) => {
-                    let lifetime = MatrixSlots::ensure_named(&app.slot);
-                    self.active_matrix_slot = Some(app.slot.clone());
-                    self.active_matrix_lifetime = Some(lifetime);
-                    self.matrix_selection_dirty = true;
-                    let mut slots = matrix_slots().lock();
-                    slots.vmx_apps.retain(|existing| existing.slot != app.slot);
-                    slots.vmx_apps.push(app);
-                    slots.generation = slots.generation.wrapping_add(1);
-                    drop(slots);
-                    service::notify_work();
-                }
-                Err(error) => MatrixSlots::echo(
-                    self.active_matrix_slot.as_deref(),
-                    self.active_matrix_lifetime,
-                    error,
-                ),
-            }
+            self.launch_named_app(&text, is_alias);
         } else {
             MatrixSlots::echo(
                 self.active_matrix_slot.as_deref(),
@@ -1026,6 +1035,7 @@ impl Shell3 {
                 text: ch.to_string(),
                 color,
                 bold: false,
+                underline: false,
             })
             .collect();
     }
@@ -1128,7 +1138,7 @@ impl Shell3 {
         if row == SpecialRows::StatusRow {
             let active = self.active_matrix_slot_name();
             let slots = matrix_slots().lock();
-            strips.left = matrix_slots_meta(&slots.ids, active.as_deref());
+            strips = status::runs(&slots.ids, active.as_deref(), &self.aka_names, self.status_hover.as_ref());
         }
         strips
     }
@@ -1291,7 +1301,7 @@ pub fn newShell3(
 }
 
 /// The mode legend and exact-name recognizer use the same three registries.
-fn mode_title_meta(mode: Mode, aka_names: &[String], appdb_names: &[String]) -> Vec<MetaFmtStr> {
+fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) -> Vec<MetaFmtStr> {
     let mut runs = Vec::new();
     let mut append_group = |group: &names::NameGroup, dynamic: Option<&[String]>| {
         if !runs.is_empty() {
@@ -1323,8 +1333,8 @@ fn mode_title_meta(mode: Mode, aka_names: &[String], appdb_names: &[String]) -> 
         }
         Mode::CMD => {
             for group in &CMD_GROUPS {
+                if group.name == "Aka" { continue; }
                 let dynamic = match group.name {
-                    "Aka" => Some(aka_names),
                     "AppDB" => Some(appdb_names),
                     _ => None,
                 };

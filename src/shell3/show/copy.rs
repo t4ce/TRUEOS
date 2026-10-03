@@ -155,7 +155,7 @@ fn glyphs_for_update(
         }
         let character = characters.next().unwrap_or(' ');
         let atlas = microfont::glyph_byte(character);
-        let bits = microfont::glyph_pixels(character);
+        let bits = microfont::glyph_cell_pixels(character);
         let mut mask = [0u8; 64];
         let width = (microfont::FWIDTH as u32 * scale).min(view.width - x);
         let height = (microfont::FHEIGHT as u32 * scale).min(view.height - y);
@@ -169,7 +169,10 @@ fn glyphs_for_update(
                 let bit = sy * microfont::FWIDTH + sx.saturating_sub(bias);
                 let underline = update.colors.get(column).copied().flatten()
                     .is_some_and(super::super::RgbaColor::underline) && sy == microfont::FHEIGHT - 1;
-                if (sx >= bias && bit < 64 && bits & (1 << (63 - bit)) != 0) || underline {
+                let cell_bits = microfont::FWIDTH * microfont::FHEIGHT;
+                let ink = sx >= bias && bit < cell_bits
+                    && bits & (1 << (cell_bits - 1 - bit)) != 0;
+                if ink || underline {
                     mask[py * 2 + px / 8] |= 0x80 >> (px % 8);
                 }
             }

@@ -89,7 +89,7 @@ mod show {
                     let mut expanded = pixels.clone();
                     let view = FrameRgbaView { virt: pixels.as_mut_ptr(), byte_len: pixels.len(),
                         width, height, pitch: 512, phys: 4096, gpu: 4096 };
-                    let colors = (0..text.chars().count()).map(|i| Some(match i%3 {0=>crate::RgbaColor::Pink,1=>crate::RgbaColor::Green,_=>crate::RgbaColor::Terminal {foreground:[255,160,90,255],background:[20,45,60,255],underline:true}})).collect();
+                    let colors = (0..text.chars().count()).map(|i| Some(match i%4 {0=>crate::RgbaColor::Pink,1=>crate::RgbaColor::Green,2=>crate::RgbaColor::Underlined {foreground:crate::RgbaColor::Pink.rgba()},_=>crate::RgbaColor::Terminal {foreground:[255,160,90,255],background:[20,45,60,255],underline:true}})).collect();
                     let update = crate::SegmentUpdate { row, side: crate::StripSide::Left,
                         offset: 1, remove: 8, text: text.into(), colors };
                     super::cpu::paint_segment(view, &update, scale).unwrap();
@@ -147,6 +147,11 @@ fn metadata_survives_layout_and_color_only_changes_redraw() {
     assert_eq!(patches[0].colors, [Some(RgbaColor::Pink);2]);
     let no_bold = [MetaFmtStr::new("§A").color(RgbaColor::Green)];
     assert_eq!(update::fit_meta_strips(&green, &right, 6), update::fit_meta_strips(&no_bold, &right, 6));
+    let hover = [MetaFmtStr::new("§A").color(RgbaColor::Green).underline()];
+    let line=update::fit_meta_strips(&hover,&right,6);
+    assert_eq!(line[0].1.unwrap().rgba(),RgbaColor::Green.rgba());
+    assert!(line[0].1.unwrap().underline());assert_eq!(line[0].1.unwrap().background(),None);
+    assert!(!line[5].1.unwrap().underline());
 }
 #[test]
 fn overflowing_strips_keep_their_own_colors_and_neutral_separator() {

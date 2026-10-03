@@ -89,13 +89,15 @@ impl Rows {fn row(&self,row:SpecialRows)->&Row {match row {SpecialRows::TitleRow
 #[derive(Clone)] struct RowStrips {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
 impl RowStrips {fn new(left:&str,right:&str)->Self {Self {left:vec![MetaFmtStr::new(left)],right:vec![MetaFmtStr::new(right)]}}}
 
-struct Shell3 {tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
+struct Shell3 {status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
 impl Shell3 {
-fn new(columns:usize)->Self {Self {tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
+fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
+    for name in ('launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += '}\n'
+    source += f'#[path="{ROOT}/src/shell3/status.rs"] mod status;\n'
+    source += 'mod update {use alloc::vec::Vec;\n' + extract.item('src/shell3/update.rs', 'fit_strips') + '}\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')
     source += re.search(r'^impl ShellOwnership \{.*?^}', service, re.M | re.S).group()
     source += extract.item('src/shell3/service.rs', 'advance_round_robin')
@@ -160,7 +162,7 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
         assert!(key(&mut a,2,2,'\\t')); assert_eq!(a.mode,mode);
         assert_eq!(a.rows.title.left[0].text,"TrueOS § 12:34");
         let legend:String=a.rows.title.right.iter().map(|run|run.text.as_str()).collect();
-        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"[Aka] [Media img shot vid film cam rec] [AppDB]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
+        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"[Media img shot vid film cam rec] [AppDB]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
     }
     assert_eq!(b.mode,Mode::HV); assert_eq!(b.prompt.text,"y");
     assert!(!key(&mut a,2,3,'\\r')); assert!(!key(&mut a,1,0,'\\n'));
@@ -237,7 +239,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     s.set_appdb_names(&["Demo".into()]);
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
     s.set_mode(2);
-    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Aka hello] [Media img shot vid film cam rec] [AppDB Demo]");
+    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Media img shot vid film cam rec] [AppDB Demo]");
     for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render(),"#");s.select_matrix_slot_index(0);}
     assert_eq!(MatrixSlots::echo_lines(None),vec!["img"]);
     s.set_mode(3); let admin=s.rows.title.right.clone();
@@ -245,6 +247,35 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     s.set_appdb_names(&["Other".into()]);assert_eq!(s.rows.title.right,admin);
     s.set_mode(2);assert!(s.rows.title.right.iter().any(|run|run.text=="Other"));
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
+}
+#[test] fn status_links_hover_navigate_and_launch_without_changing_prompt() {
+    MatrixSlots::set(&["id","123"]);
+    service::LAUNCHES.lock().unwrap().clear();
+    let mut s=Shell3::new(40);s.aka_names=vec!["héllo".into()];s.set_prompt("draft");
+    assert_eq!(s.get_strip(SpecialRows::StatusRow,StripSide::Right),"[Aka héllo]");
+    assert!(s.handle_status_pointer(Some(3),false));
+    let status=s.row_for_render(SpecialRows::StatusRow);
+    assert!(status.left[2].underline && status.left[3].underline);
+    assert!(!status.left[0].underline);assert!(!status.right.iter().any(|run|run.underline));
+    s.handle_status_pointer(Some(3),true);assert_eq!(s.active_matrix_slot_name(),Some("id".into()));
+    s.handle_status_pointer(Some(0),true);assert_eq!(s.active_matrix_slot_name(),None);
+    assert!(s.handle_status_pointer(Some(35),false));
+    assert!(s.row_for_render(SpecialRows::StatusRow).right[2].underline);
+    s.handle_status_pointer(Some(35),true);
+    assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("alias:héllo".into(),"".into())]);
+    assert_eq!(s.active_matrix_slot_name(),Some("td0".into()));assert_eq!(s.prompt.text,"draft");
+    assert!(s.handle_status_pointer(None,false));
+    assert!(!s.row_for_render(SpecialRows::StatusRow).right.iter().any(|run|run.underline));
+}
+#[test] fn status_targets_follow_right_alignment_and_clipping() {
+    let ids=vec!["abcdef".into()];let aliases=vec!["héllo".into(),"other".into()];
+    assert_eq!(status::hit(&ids,&aliases,40,29),Some(status::Target::Alias("héllo".into())));
+    assert_eq!(status::hit(&ids,&aliases,40,33),None); // space between aliases
+    assert_eq!(status::hit(&ids,&aliases,10,4),None); // clipped-strip separator
+    assert_eq!(status::hit(&ids,&aliases,10,9),None); // alias is entirely clipped
+    assert_eq!(status::hit(&ids,&aliases,12,11),Some(status::Target::Alias("héllo".into())));
+    assert_eq!(status::hit(&ids,&aliases,10,10),None);
+    assert_eq!(status::hit(&ids,&aliases,0,0),None);
 }
 '''
     source += '''

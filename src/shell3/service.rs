@@ -578,9 +578,21 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                 index.and_then(|index| events.remove(index))
             };
             let Some(event) = event else {break};
-            for shell in &owned_shells.shells {
+            for shell in &mut owned_shells.shells {
                 if shell.show_handles_window(event.window) {
-                    super::tui::pointer(shell.tui_frontend, shell.active_matrix_slot_name().as_deref(), &event, shell.show.font_scale());
+                    if super::tui::active(shell.tui_frontend, shell.active_matrix_slot_name().as_deref()) {
+                        super::tui::pointer(shell.tui_frontend, shell.active_matrix_slot_name().as_deref(), &event, shell.show.font_scale());
+                    } else {
+                        let scale = shell.show.font_scale() as usize;
+                        let column = (event.local_x >= 0 && event.local_y >= 0
+                            && event.local_y as usize / (microfont::FHEIGHT * scale) == 1)
+                            .then_some(event.local_x.max(0) as usize / (microfont::FWIDTH * scale));
+                        if shell.handle_status_pointer(column, event.buttons_pressed & 1 != 0) {
+                            if let Err(error) = shell.present().await {
+                                crate::log_warn!(target: "service"; "shell3 pointer present failed on executor_slot={}: {}", expected_slot, error);
+                            }
+                        }
+                    }
                 }
             }
         }

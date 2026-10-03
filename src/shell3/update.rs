@@ -200,13 +200,35 @@ pub(super) fn fit_meta_strips(
 ) -> RenderedLine {
     let cells = |runs: &[MetaFmtStr]| -> RenderedLine {
         runs.iter()
-            .flat_map(|run| run.text.chars().map(|ch| (ch, run.color)))
+            .flat_map(|run| {
+                run.text.chars().map(|ch| {
+                    (
+                        ch,
+                        if run.underline {
+                            Some(RgbaColor::Underlined {
+                                foreground: run.color.unwrap_or(RgbaColor::White).rgba(),
+                            })
+                        } else {
+                            run.color
+                        },
+                    )
+                })
+            })
             .collect()
     };
-    let mut left = cells(left);
-    let mut right = cells(right);
+    fit_strips(cells(left), cells(right), columns, (' ', None), (super::SpecialSeperator, None))
+}
+
+/// Rendering and pointer targets must use exactly the same clipping and alignment.
+pub(super) fn fit_strips<T: Clone>(
+    mut left: Vec<T>,
+    mut right: Vec<T>,
+    columns: usize,
+    blank: T,
+    separator: T,
+) -> Vec<T> {
     if left.len() + right.len() <= columns {
-        left.resize(columns - right.len(), (' ', None));
+        left.resize(columns - right.len(), blank);
     } else if left.is_empty() {
         right.truncate(columns);
     } else if right.is_empty() {
@@ -225,7 +247,7 @@ pub(super) fn fit_meta_strips(
         };
         left.truncate(l);
         right.truncate(r);
-        left.push((super::SpecialSeperator, None));
+        left.push(separator);
     }
     left.extend(right);
     left
