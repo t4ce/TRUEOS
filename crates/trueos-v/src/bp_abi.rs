@@ -1012,6 +1012,18 @@ unsafe extern "C" {
     pub fn trueos_cabi_poll_once();
     pub fn trueos_cabi_sleep_ms(ms: u64);
     pub fn trueos_cabi_thread_current_id() -> usize;
+    /// Create an independent stackful thread; zero reports successful admission.
+    /// The returned handle must be consumed once by join or detach.
+    pub fn trueos_cabi_thread_spawn(
+        stack: usize,
+        start: unsafe extern "C" fn(*mut core::ffi::c_void) -> *mut core::ffi::c_void,
+        arg: *mut core::ffi::c_void,
+        out: *mut usize,
+    ) -> i32;
+    pub fn trueos_cabi_thread_join(handle: usize) -> i32;
+    pub fn trueos_cabi_thread_detach(handle: usize) -> i32;
+    pub fn trueos_cabi_thread_available_parallelism() -> usize;
+    pub fn trueos_cabi_thread_set_name(name: *const core::ffi::c_char) -> i32;
     pub fn trueos_cabi_wls_current_slot() -> u32;
     pub fn trueos_time_monotonic_nanos() -> u64;
     pub fn trueos_time_unix_seconds() -> u64;

@@ -4,7 +4,7 @@
 //! It intentionally names OS-shaped services in Rust terms instead of exposing
 //! POSIX symbols. `core` supplies atomics and memory rules; TRUEOS supplies the
 //! execution environment that `std` would normally assume: time, topology,
-//! sleep/yield, and eventually wait-aware synchronization.
+//! sleep/yield, and wait-aware synchronization.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -165,6 +165,9 @@ pub extern "Rust" fn trueos_tokio_platform_poll_once() {
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_platform_sleep_ms(ms: u64) {
+    if crate::r::threads::sleep(ms) {
+        return;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         crate::hv::vmcall::guest_sleep_ms(ms);
         return;

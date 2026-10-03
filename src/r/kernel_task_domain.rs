@@ -60,6 +60,13 @@ static DOMAIN_BY_CPU: [AtomicU32; SLOT_LIMIT] =
     [const { AtomicU32::new(KernelTaskDomain::Unknown as u32) }; SLOT_LIMIT];
 static VM_TAG_BY_CPU: [AtomicU8; SLOT_LIMIT] = [const { AtomicU8::new(NO_VM_TAG) }; SLOT_LIMIT];
 
+/// Exchange the complete domain while suspending/resuming a stackful thread.
+/// Guard state on its suspended stack must be restored before it runs again.
+pub(crate) fn replace_context((domain, vm): (u32, u8)) -> (u32, u8) {
+    let slot = current_slot().expect("thread carrier has a registered CPU slot");
+    (DOMAIN_BY_CPU[slot].swap(domain, Ordering::AcqRel), VM_TAG_BY_CPU[slot].swap(vm, Ordering::AcqRel))
+}
+
 #[inline]
 fn current_slot() -> Option<usize> {
     let slot = crate::percpu::current_slot_via_cpuid();

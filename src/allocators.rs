@@ -1036,6 +1036,18 @@ pub fn with_hv_guest_alloc_domain<T>(vm_id: u8, f: impl FnOnce() -> T) -> Option
     Some(out)
 }
 
+/// Preserve allocation guards carried on a suspended standard-thread stack.
+/// The parent executor must regain its own realm before polling other work.
+pub(crate) fn replace_thread_context(values: [u32; 4]) -> [u32; 4] {
+    let slot = cpuid_slot().expect("thread carrier has a registered allocator slot");
+    [
+        HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU[slot].swap(values[0], Ordering::AcqRel),
+        HOST_ALLOC_DOMAIN_STRONG_DEPTH_BY_CPU[slot].swap(values[1], Ordering::AcqRel),
+        HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU[slot].swap(values[2], Ordering::AcqRel),
+        HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU[slot].swap(values[3], Ordering::AcqRel),
+    ]
+}
+
 pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;

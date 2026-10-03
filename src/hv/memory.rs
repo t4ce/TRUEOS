@@ -887,6 +887,14 @@ fn patch_guest_hull_rw_dynamic_state(vm_id: u8, arena_virt: usize, guest_start: 
             "hv: vm{} reporting: hull rw shared blueprint-process-state guest=0x{:016X} bytes={}",
             vm_id, guest_addr, len
         ));
+        // The state slot shares the host's backing, but its publication byte
+        // is in Hull-private BSS. A fresh template must observe the canonical
+        // initialized slot instead of clearing it on the first libc call.
+        if let Some((ready_addr, ready)) =
+            crate::std_abi_shim::blueprint_process_state_ready_flag(vm_id)
+        {
+            patch_guest_hull_rw_u8(arena_virt, guest_start, bytes, ready_addr, ready);
+        }
     }
     #[cfg(feature = "wc3")]
     if let Some((guest_addr, len)) = crate::hv::wc3::shared_x86_runtime_state_span(vm_id) {

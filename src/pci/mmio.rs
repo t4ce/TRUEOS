@@ -10,7 +10,7 @@ use x86_64::{
     registers::control::Cr3,
     structures::paging::{
         FrameAllocator, OffsetPageTable, Page, PageSize, PageTable, PageTableFlags, PhysFrame,
-        Size4KiB,
+        Size4KiB, Translate,
         mapper::{MapToError, Mapper},
     },
 };
@@ -180,6 +180,133 @@ pub fn map_ram_region_at(
     }
 
     NonNull::new(virt_base as *mut u8).ok_or(MapError::InvalidPointer)
+}
+
+/// Map an exclusively reserved stack window, leaving the page immediately
+/// below and above it absent. Unlike firmware aliases, no existing mapping
+/// may be accepted. Failed mappings roll back every installed leaf page.
+///
+/// The caller exclusively reserves this window until `unmap_guarded_stack`.
+/// After the final reference into the stack expires, unmap it before returning
+/// its physical memory. Without remote TLB shootdown, this virtual window must
+/// never be reused, since safe shared stack references may populate other
+/// CPUs' TLBs.
+pub(crate) unsafe fn map_guarded_stack(
+    virt_base: u64,
+    phys_base: u64,
+    size: usize,
+) -> Result<NonNull<u8>, MapError> {
+    let (low_guard, high_guard) = guarded_stack_geometry(virt_base, phys_base, size)?;
+    let hhdm = limine::hhdm_offset().ok_or(MapError::NoHhdm)?;
+    let _guard = PAGING_LOCK.lock();
+    let mut mapper = unsafe { active_mapper(VirtAddr::new(hhdm))? };
+    for addr in (low_guard..=high_guard).step_by(PAGE_SIZE as usize) {
+        if mapper.translate_addr(VirtAddr::new(addr)).is_some() {
+            return Err(MapError::AddressConflict);
+        }
+    }
+
+    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
+    let table_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+    let mut allocator = PageTableAllocator;
+    for delta in (0..size).step_by(PAGE_SIZE as usize) {
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(virt_base + delta as u64));
+        let frame = PhysFrame::containing_address(PhysAddr::new(phys_base + delta as u64));
+        let mapped = unsafe {
+            mapper.map_to_with_table_flags(page, frame, flags, table_flags, &mut allocator)
+        };
+        match mapped {
+            Ok(flush) => flush.flush(),
+            Err(error) => {
+                for previous in (0..delta).step_by(PAGE_SIZE as usize) {
+                    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(
+                        virt_base + previous as u64,
+                    ));
+                    let (frame, _, flush) = mapper
+                        .unmap(page)
+                        .expect("owned stack rollback mapping vanished");
+                    assert_eq!(frame.start_address().as_u64(), phys_base + previous as u64);
+                    flush.flush();
+                }
+                return Err(match error {
+                    MapToError::FrameAllocationFailed => MapError::FrameAllocationFailed,
+                    MapToError::PageAlreadyMapped(_) | MapToError::ParentEntryHugePage => {
+                        MapError::AddressConflict
+                    }
+                });
+            }
+        }
+    }
+    NonNull::new(virt_base as *mut u8).ok_or(MapError::InvalidPointer)
+}
+
+/// Retire a guarded stack alias on its execution carrier. Verify ownership of
+/// every physical leaf before changing anything; invalidate each local TLB
+/// entry before the caller releases PMM backing. Other carriers may have read
+/// shared stack references, so callers must not reuse the virtual window until
+/// they provide remote TLB invalidation. Empty page-table frames are retained.
+pub(crate) unsafe fn unmap_guarded_stack(
+    virt_base: u64,
+    phys_base: u64,
+    size: usize,
+) -> Result<(), MapError> {
+    let (low_guard, high_guard) = guarded_stack_geometry(virt_base, phys_base, size)?;
+    let hhdm = limine::hhdm_offset().ok_or(MapError::NoHhdm)?;
+    let _guard = PAGING_LOCK.lock();
+    let mut mapper = unsafe { active_mapper(VirtAddr::new(hhdm))? };
+    if mapper.translate_addr(VirtAddr::new(low_guard)).is_some()
+        || mapper.translate_addr(VirtAddr::new(high_guard)).is_some()
+    {
+        return Err(MapError::AddressConflict);
+    }
+    for delta in (0..size).step_by(PAGE_SIZE as usize) {
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(virt_base + delta as u64));
+        let frame = mapper
+            .translate_page(page)
+            .map_err(|_| MapError::AddressConflict)?;
+        if frame.start_address().as_u64() != phys_base + delta as u64 {
+            return Err(MapError::AddressConflict);
+        }
+    }
+    for delta in (0..size).step_by(PAGE_SIZE as usize) {
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(virt_base + delta as u64));
+        let (_, _, flush) = mapper
+            .unmap(page)
+            .expect("owned stack mapping vanished during unmap");
+        flush.flush();
+    }
+    Ok(())
+}
+
+fn guarded_stack_geometry(
+    virt_base: u64,
+    phys_base: u64,
+    size: usize,
+) -> Result<(u64, u64), MapError> {
+    if size == 0
+        || !size.is_multiple_of(PAGE_SIZE as usize)
+        || !virt_base.is_multiple_of(PAGE_SIZE)
+        || !phys_base.is_multiple_of(PAGE_SIZE)
+    {
+        return Err(MapError::InvalidArgs);
+    }
+    let low = virt_base
+        .checked_sub(PAGE_SIZE)
+        .ok_or(MapError::InvalidArgs)?;
+    let high = virt_base
+        .checked_add(size as u64)
+        .ok_or(MapError::InvalidArgs)?;
+    let last = high
+        .checked_add(PAGE_SIZE - 1)
+        .ok_or(MapError::InvalidArgs)?;
+    if !(low >= 0xFFFF_8000_0000_0000 && last >= low)
+        || phys_base
+            .checked_add(size as u64)
+            .is_none_or(|end| end > (1 << 52))
+    {
+        return Err(MapError::InvalidArgs);
+    }
+    Ok((low, high))
 }
 
 /// Identity-map ordinary RAM at its physical address in the active kernel

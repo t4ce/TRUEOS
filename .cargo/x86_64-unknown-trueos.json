@@ -12,6 +12,7 @@
   "no-default-libraries": true,
   "panic-strategy": "abort",
   "disable-redzone": true,
+  "stack-probes": { "kind": "inline" },
   "relocation-model": "static",
   "code-model": "kernel",
   "tls-model": "local-exec",

@@ -285,6 +285,14 @@ pub fn current_blueprint_thread_id() -> Option<u32> {
     }
 }
 
+pub(crate) fn replace_thread_context((worker, thread): (u64, u32)) -> (u64, u32) {
+    let slot = cpu_slot_now() as usize;
+    (
+        CURRENT_WORKER_TOKEN_BY_CPU[slot].swap(worker, Ordering::AcqRel),
+        CURRENT_BLUEPRINT_THREAD_ID_BY_CPU[slot].swap(thread, Ordering::AcqRel),
+    )
+}
+
 pub fn with_current_blueprint_thread_id<R>(thread_id: usize, f: impl FnOnce() -> R) -> R {
     let cpu_slot = cpu_slot_now();
     if cpu_slot == NO_CPU_SLOT {

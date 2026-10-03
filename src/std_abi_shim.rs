@@ -16,7 +16,33 @@ use spin::Mutex;
 use crate::r::allocation_registry::AllocationRegistry;
 use crate::r::static_map::FixedKeyMap;
 
-pub(crate) static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
+pub(crate) struct ProcessErrno;
+
+pub(crate) static TRUEOS_ERRNO: ProcessErrno = ProcessErrno;
+
+impl ProcessErrno {
+    fn current(&self) -> &'static AtomicI32 {
+        crate::r::threads::current_errno().unwrap_or_else(|| {
+            // Legacy native lanes and the Hull coordinator have separate
+            // physical execution slots. Logical std threads use their pinned
+            // errno cell above even when several share one carrier.
+            &process_state().errno
+                [crate::percpu::current_slot().min(crate::percpu::CPU_SLOT_LIMIT - 1)]
+        })
+    }
+
+    pub(crate) fn store(&self, value: i32, ordering: Ordering) {
+        self.current().store(value, ordering);
+    }
+
+    pub(crate) fn load(&self, ordering: Ordering) -> i32 {
+        self.current().load(ordering)
+    }
+
+    fn as_ptr(&self) -> *mut i32 {
+        self.current().as_ptr()
+    }
+}
 // `environ` is a data import, not a function. Keep an addressable `char **`
 // cell whose value points at a permanently empty, null-terminated vector.
 static mut TRUEOS_EMPTY_ENVIRON: [*mut c_char; 1] = [ptr::null_mut()];
@@ -47,6 +73,7 @@ const C_ALLOCATION_CAPACITY: usize = 65536;
 const PTHREAD_KEY_CAPACITY: usize = 128;
 const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
 const PTHREAD_THREAD_CAPACITY: usize = 64;
+const PTHREAD_JOIN_WAIT_KEY_TAG: u64 = 0x5448_5244_0000_0000;
 const SIGNAL_ACTION_CAPACITY: usize = 256;
 // Guest Hull BSS and host-carrier BSS intentionally have independent thread
 // counters. Tag carrier-issued opaque pthread handles inside the u32 range so
@@ -282,6 +309,18 @@ struct PthreadTlsSlot {
     key: usize,
 }
 
+#[derive(Clone, Copy)]
+struct PthreadKeyState {
+    key: usize,
+    destructor: usize,
+}
+
+#[derive(Clone, Copy)]
+struct PthreadTlsValue {
+    slot: PthreadTlsSlot,
+    value: usize,
+}
+
 // The Blueprint target uses the x86_64 Linux pthread ABI: pthread_mutex_t is
 // 40 bytes and pthread_cond_t is 48 bytes, both 8-byte aligned. Keep the
 // synchronization state in those ABI objects instead of in a Hull-global
@@ -299,6 +338,7 @@ struct PthreadMutexStorage {
 #[repr(C)]
 struct PthreadCondStorage {
     generation: AtomicU64,
+    clock: AtomicI32,
 }
 
 const PTHREAD_MUTEX_ABI_BYTES: usize = 40;
@@ -308,11 +348,15 @@ const TRUEOS_PTHREAD_MUTEX_NORMAL: c_int = 0;
 const TRUEOS_PTHREAD_MUTEX_RECURSIVE: c_int = 1;
 const TRUEOS_PTHREAD_MUTEX_ERRORCHECK: c_int = 2;
 const PTHREAD_COND_ABI_BYTES: usize = 48;
+const TRUEOS_CLOCK_REALTIME: c_int = 0;
+const TRUEOS_CLOCK_MONOTONIC: c_int = 1;
+const PTHREAD_DESTRUCTOR_ITERATIONS: usize = 4;
 const _: () = assert!(core::mem::size_of::<PthreadMutexStorage>() <= PTHREAD_MUTEX_ABI_BYTES);
 const _: () = assert!(core::mem::size_of::<PthreadCondStorage>() <= PTHREAD_COND_ABI_BYTES);
 
 struct PthreadThreadState {
     completion: Arc<crate::wait::CompletionCell<usize>>,
+    joining: bool,
 }
 
 #[derive(Default)]
@@ -427,8 +471,10 @@ enum SocketFd {
 /// VM's pages can be mapped into its otherwise-private Hull RW image.
 #[repr(C, align(4096))]
 struct ProcessSharedState {
-    pthread_keys: Mutex<FixedKeyMap<usize, usize, PTHREAD_KEY_CAPACITY>>,
-    pthread_tls_values: Mutex<FixedKeyMap<PthreadTlsSlot, usize, PTHREAD_TLS_VALUE_CAPACITY>>,
+    errno: [AtomicI32; crate::percpu::CPU_SLOT_LIMIT],
+    pthread_keys: Mutex<FixedKeyMap<usize, PthreadKeyState, PTHREAD_KEY_CAPACITY>>,
+    pthread_tls_values:
+        Mutex<FixedKeyMap<PthreadTlsSlot, PthreadTlsValue, PTHREAD_TLS_VALUE_CAPACITY>>,
     pthread_threads: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>>,
     signal_actions: Mutex<FixedKeyMap<SignalActionKey, TrueosSigAction, SIGNAL_ACTION_CAPACITY>>,
     next_pthread_key: AtomicUsize,
@@ -444,6 +490,7 @@ struct ProcessSharedState {
 impl ProcessSharedState {
     const fn new() -> Self {
         Self {
+            errno: [const { AtomicI32::new(0) }; crate::percpu::CPU_SLOT_LIMIT],
             pthread_keys: Mutex::new(FixedKeyMap::new()),
             pthread_tls_values: Mutex::new(FixedKeyMap::new()),
             pthread_threads: Mutex::new(FixedKeyMap::new()),
@@ -552,7 +599,8 @@ fn blueprint_process_state(vm_id: u8) -> Option<&'static ProcessSharedState> {
 }
 
 fn process_state() -> &'static ProcessSharedState {
-    crate::hv::current_guest_execution_context_vm_id()
+    crate::r::threads::current_vm_id()
+        .or_else(crate::hv::current_guest_execution_context_vm_id)
         .and_then(blueprint_process_state)
         .unwrap_or(&HOST_PROCESS_STATE)
 }
@@ -567,6 +615,12 @@ pub(crate) fn blueprint_process_state_span(vm_id: u8) -> Option<(u64, usize)> {
         return None;
     };
     Some(((state as *const _) as u64, core::mem::size_of_val(state)))
+}
+
+pub(crate) fn blueprint_process_state_ready_flag(vm_id: u8) -> Option<(u64, u8)> {
+    blueprint_process_state(vm_id)?;
+    let flag = BLUEPRINT_PROCESS_STATE_INIT.get(vm_id as usize)?;
+    Some((flag as *const AtomicU8 as u64, PROCESS_STATE_READY))
 }
 
 pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
@@ -585,6 +639,9 @@ pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
         return;
     };
     let state = unsafe { &*slot };
+    for errno in &state.errno {
+        errno.store(0, Ordering::Release);
+    }
     state.pthread_keys.lock().clear();
     state.pthread_tls_values.lock().clear();
     state.pthread_threads.lock().clear();
@@ -612,7 +669,9 @@ fn initialize_i32_sequence(counter: &AtomicI32, first: i32) {
 struct ProcessPthreadKeys;
 
 impl ProcessPthreadKeys {
-    fn lock(&self) -> spin::MutexGuard<'static, FixedKeyMap<usize, usize, PTHREAD_KEY_CAPACITY>> {
+    fn lock(
+        &self,
+    ) -> spin::MutexGuard<'static, FixedKeyMap<usize, PthreadKeyState, PTHREAD_KEY_CAPACITY>> {
         process_state().pthread_keys.lock()
     }
 }
@@ -622,8 +681,10 @@ struct ProcessPthreadTlsValues;
 impl ProcessPthreadTlsValues {
     fn lock(
         &self,
-    ) -> spin::MutexGuard<'static, FixedKeyMap<PthreadTlsSlot, usize, PTHREAD_TLS_VALUE_CAPACITY>>
-    {
+    ) -> spin::MutexGuard<
+        'static,
+        FixedKeyMap<PthreadTlsSlot, PthreadTlsValue, PTHREAD_TLS_VALUE_CAPACITY>,
+    > {
         process_state().pthread_tls_values.lock()
     }
 }
@@ -976,6 +1037,14 @@ fn pthread_key(ptr: *mut c_void) -> Option<usize> {
 }
 
 fn pthread_current_id() -> usize {
+    if let Some(thread_id) = crate::r::threads::current_id() {
+        return match crate::r::threads::current_vm_id() {
+            Some(vm_id) => 0x4_0000_0000usize
+                .saturating_add((vm_id as usize) << 32)
+                .saturating_add(thread_id),
+            None => 0x5_0000_0000usize.saturating_add(thread_id),
+        };
+    }
     if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
         return 0x2_0000usize.saturating_add(vm_id as usize);
     }
@@ -1074,6 +1143,27 @@ fn pthread_next_thread_id() -> usize {
     }
 }
 
+fn pthread_join_wait_key(thread: usize) -> u64 {
+    PTHREAD_JOIN_WAIT_KEY_TAG | thread as u64
+}
+
+fn pthread_join_completion(
+    thread: usize,
+    completion: &crate::wait::CompletionCell<usize>,
+) -> usize {
+    let key = pthread_join_wait_key(thread);
+    loop {
+        // Hull callers must cross VMX into a platform wait, while carried
+        // logical threads suspend their stack. Observe before testing the
+        // completion so an exit racing the wait cannot lose its wake.
+        let observed = crate::r::platform::trueos_tokio_platform_wait_observe(key);
+        if let Some(result) = completion.try_take() {
+            return result;
+        }
+        crate::r::platform::trueos_tokio_platform_wait_after(key, observed, u64::MAX);
+    }
+}
+
 fn pthread_mutex_unlock_key(key: usize) -> c_int {
     pthread_sync_trace("mutex.unlock", key);
     let owner = pthread_current_id();
@@ -1163,7 +1253,7 @@ fn pthread_mutex_lock_state(
                 crate::percpu::current_slot()
             );
         }
-        core::hint::spin_loop();
+        crate::wait::spin_step();
     }
 }
 
@@ -1290,13 +1380,340 @@ fn pthread_cond_generation(state: &PthreadCondStorage) -> u64 {
     state.generation.load(Ordering::Acquire)
 }
 
-fn pthread_cond_notify_key(key: usize) -> c_int {
+fn pthread_cond_notify_key(key: usize, broadcast: bool) -> c_int {
     let Some(state) = pthread_cond_storage(key) else {
         return TRUEOS_EINVAL;
     };
     let state = unsafe { state.as_ref() };
     state.generation.fetch_add(1, Ordering::Release);
+    if broadcast {
+        crate::r::platform::trueos_tokio_platform_wake_all(key as u64);
+    } else {
+        crate::r::platform::trueos_tokio_platform_wake_one(key as u64);
+    }
     0
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PthreadTimespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+fn pthread_clock_nanos(clock: c_int) -> u128 {
+    // Match the clock_gettime ABI, including the subsecond part of realtime.
+    let ticks = embassy_time_driver::now();
+    let hz = u128::from(embassy_time_driver::TICK_HZ.max(1));
+    let elapsed = u128::from(ticks).saturating_mul(1_000_000_000) / hz;
+    if clock == TRUEOS_CLOCK_REALTIME {
+        u128::from(trueos_cabi_boot_timestamp_secs()) * 1_000_000_000 + elapsed
+    } else {
+        elapsed
+    }
+}
+
+fn pthread_deadline_millis(abstime: PthreadTimespec, now_nanos: u128) -> Result<u64, c_int> {
+    if !(0..1_000_000_000).contains(&abstime.tv_nsec) {
+        return Err(TRUEOS_EINVAL);
+    }
+    if abstime.tv_sec < 0 {
+        return Ok(0);
+    }
+    let deadline = abstime.tv_sec as u128 * 1_000_000_000 + abstime.tv_nsec as u128;
+    let remaining = deadline.saturating_sub(now_nanos);
+    Ok(remaining.div_ceil(1_000_000).min(u128::from(u64::MAX - 1)) as u64)
+}
+
+fn pthread_cond_wait_key(
+    cond_key: usize,
+    mutex_key: usize,
+    abstime: Option<PthreadTimespec>,
+) -> c_int {
+    let Some(state) = pthread_cond_storage(cond_key) else {
+        return TRUEOS_EINVAL;
+    };
+    let state = unsafe { state.as_ref() };
+    let clock = state.clock.load(Ordering::Relaxed);
+    if !matches!(clock, TRUEOS_CLOCK_REALTIME | TRUEOS_CLOCK_MONOTONIC) {
+        return TRUEOS_EINVAL;
+    }
+    if let Some(abstime) = abstime
+        && pthread_deadline_millis(abstime, 0).is_err()
+    {
+        return TRUEOS_EINVAL;
+    }
+
+    // Take both observations before releasing the predicate's mutex. A signal
+    // between unlock and the wait then advances the generation instead of
+    // being lost. POSIX permits spurious wakes; callers recheck their predicate.
+    let mut observed = crate::r::platform::trueos_tokio_platform_wait_observe(cond_key as u64);
+    let generation = pthread_cond_generation(state);
+    let unlock = pthread_mutex_unlock_key(mutex_key);
+    if unlock != 0 {
+        return unlock;
+    }
+    let result = loop {
+        if pthread_cond_generation(state) != generation {
+            break 0;
+        }
+        let timeout_ms = match abstime {
+            Some(deadline) => {
+                let remaining =
+                    pthread_deadline_millis(deadline, pthread_clock_nanos(clock)).unwrap_or(0);
+                if remaining == 0 {
+                    break TRUEOS_ETIMEDOUT;
+                }
+                remaining
+            }
+            None => u64::MAX,
+        };
+        crate::r::platform::trueos_tokio_platform_wait_after(cond_key as u64, observed, timeout_ms);
+        observed = crate::r::platform::trueos_tokio_platform_wait_observe(cond_key as u64);
+    };
+    let relock = pthread_mutex_lock_key(mutex_key);
+    if relock == 0 { result } else { relock }
+}
+
+fn pthread_run_tls_destructors(owner: usize) {
+    for _ in 0..PTHREAD_DESTRUCTOR_ITERATIONS {
+        let keys = PTHREAD_KEYS.lock().values().copied().collect::<Vec<_>>();
+        let mut ran_destructor = false;
+        for key in keys {
+            let slot = PthreadTlsSlot {
+                owner,
+                key: key.key,
+            };
+            // Remove before calling the destructor, which may install another
+            // value for a subsequent round. Never call user code under a lock.
+            let value = PTHREAD_TLS_VALUES.lock().remove(slot);
+            if let Some(value) = value
+                && value.value != 0
+                && key.destructor != 0
+            {
+                let destructor: unsafe extern "C" fn(*mut c_void) =
+                    unsafe { core::mem::transmute(key.destructor) };
+                unsafe { destructor(value.value as *mut c_void) };
+                ran_destructor = true;
+            }
+        }
+        if !ran_destructor {
+            break;
+        }
+    }
+    let mut values = PTHREAD_TLS_VALUES.lock();
+    let slots = values
+        .values()
+        .filter(|value| value.slot.owner == owner)
+        .map(|value| value.slot)
+        .collect::<Vec<_>>();
+    for slot in slots {
+        values.remove(slot);
+    }
+}
+
+#[cfg(test)]
+mod pthread_thread_semantics_tests {
+    extern crate std;
+    use super::*;
+
+    static SERIAL: Mutex<()> = Mutex::new(());
+    static DTOR_RUNS: AtomicUsize = AtomicUsize::new(0);
+    const OWNER: usize = 701;
+    const KEY: usize = 31;
+
+    unsafe extern "C" fn reinstall(value: *mut c_void) {
+        let round = DTOR_RUNS.fetch_add(1, Ordering::Relaxed) + 1;
+        let slot = PthreadTlsSlot {
+            owner: OWNER,
+            key: KEY,
+        };
+        assert!(PTHREAD_TLS_VALUES.lock().get(slot).is_none());
+        if round < value as usize {
+            assert!(
+                PTHREAD_TLS_VALUES
+                    .lock()
+                    .insert(
+                        slot,
+                        PthreadTlsValue {
+                            slot,
+                            value: value as usize,
+                        }
+                    )
+                    .is_ok()
+            );
+        }
+    }
+
+    fn prepare_tls(rounds: usize) {
+        PTHREAD_KEYS.lock().clear();
+        PTHREAD_TLS_VALUES.lock().clear();
+        DTOR_RUNS.store(0, Ordering::Relaxed);
+        assert!(
+            PTHREAD_KEYS
+                .lock()
+                .insert(
+                    KEY,
+                    PthreadKeyState {
+                        key: KEY,
+                        destructor: reinstall as *const () as usize,
+                    }
+                )
+                .is_ok()
+        );
+        let slot = PthreadTlsSlot {
+            owner: OWNER,
+            key: KEY,
+        };
+        assert!(
+            PTHREAD_TLS_VALUES
+                .lock()
+                .insert(
+                    slot,
+                    PthreadTlsValue {
+                        slot,
+                        value: rounds,
+                    }
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn tls_destructor_may_reinstall_after_its_value_is_cleared() {
+        let _serial = SERIAL.lock();
+        prepare_tls(3);
+        pthread_run_tls_destructors(OWNER);
+        assert_eq!(DTOR_RUNS.load(Ordering::Relaxed), 3);
+        assert_eq!(PTHREAD_TLS_VALUES.lock().values().count(), 0);
+    }
+
+    #[test]
+    fn tls_destructor_reinstall_is_bounded_and_other_threads_survive() {
+        let _serial = SERIAL.lock();
+        prepare_tls(99);
+        let other = PthreadTlsSlot {
+            owner: OWNER + 1,
+            key: KEY,
+        };
+        assert!(
+            PTHREAD_TLS_VALUES
+                .lock()
+                .insert(
+                    other,
+                    PthreadTlsValue {
+                        slot: other,
+                        value: 17,
+                    }
+                )
+                .is_ok()
+        );
+        pthread_run_tls_destructors(OWNER);
+        assert_eq!(DTOR_RUNS.load(Ordering::Relaxed), PTHREAD_DESTRUCTOR_ITERATIONS);
+        assert_eq!(PTHREAD_TLS_VALUES.lock().values().count(), 1);
+        assert_eq!(PTHREAD_TLS_VALUES.lock().get(other).unwrap().value, 17);
+    }
+
+    #[test]
+    fn absolute_deadline_expires_and_rounds_submilliseconds_up() {
+        let deadline = PthreadTimespec {
+            tv_sec: 5,
+            tv_nsec: 1,
+        };
+        assert_eq!(pthread_deadline_millis(deadline, 5_000_000_000), Ok(1));
+        assert_eq!(pthread_deadline_millis(deadline, 5_000_000_001), Ok(0));
+        assert_eq!(pthread_deadline_millis(deadline, 6_000_000_000), Ok(0));
+        assert_eq!(
+            pthread_deadline_millis(
+                PthreadTimespec {
+                    tv_sec: -1,
+                    tv_nsec: 0
+                },
+                0
+            ),
+            Ok(0)
+        );
+    }
+
+    #[test]
+    fn invalid_deadlines_are_rejected_and_huge_deadlines_stay_finite() {
+        for tv_nsec in [-1, 1_000_000_000] {
+            assert_eq!(
+                pthread_deadline_millis(PthreadTimespec { tv_sec: 1, tv_nsec }, 0),
+                Err(TRUEOS_EINVAL)
+            );
+        }
+        assert!(
+            pthread_deadline_millis(
+                PthreadTimespec {
+                    tv_sec: i64::MAX,
+                    tv_nsec: 999_999_999
+                },
+                0
+            )
+            .unwrap()
+                < u64::MAX
+        );
+    }
+
+    #[test]
+    fn condvar_timeout_uses_elapsed_time_and_reacquires_the_mutex() {
+        let _serial = SERIAL.lock();
+        let mutex = PthreadMutexStorage {
+            owner: AtomicUsize::new(0),
+            depth: AtomicUsize::new(0),
+            kind: AtomicI32::new(TRUEOS_PTHREAD_MUTEX_NORMAL),
+        };
+        let cond = PthreadCondStorage {
+            generation: AtomicU64::new(0),
+            clock: AtomicI32::new(TRUEOS_CLOCK_MONOTONIC),
+        };
+        let mutex_key = &mutex as *const _ as usize;
+        let cond_key = &cond as *const _ as usize;
+        assert_eq!(pthread_mutex_lock_key(mutex_key), 0);
+        let deadline = pthread_clock_nanos(TRUEOS_CLOCK_MONOTONIC) + 5_000_000;
+        let abstime = PthreadTimespec {
+            tv_sec: (deadline / 1_000_000_000) as i64,
+            tv_nsec: (deadline % 1_000_000_000) as i64,
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(pthread_cond_wait_key(cond_key, mutex_key, Some(abstime)), TRUEOS_ETIMEDOUT);
+        assert!(started.elapsed() >= std::time::Duration::from_millis(4));
+        assert_eq!(mutex.owner.load(Ordering::Acquire), pthread_current_id());
+        assert_eq!(pthread_mutex_unlock_key(mutex_key), 0);
+    }
+
+    #[test]
+    fn condvar_signal_after_unlock_is_observed_before_relocking() {
+        let _serial = SERIAL.lock();
+        let objects = Arc::new((
+            PthreadCondStorage {
+                generation: AtomicU64::new(0),
+                clock: AtomicI32::new(TRUEOS_CLOCK_MONOTONIC),
+            },
+            PthreadMutexStorage {
+                owner: AtomicUsize::new(0),
+                depth: AtomicUsize::new(0),
+                kind: AtomicI32::new(TRUEOS_PTHREAD_MUTEX_NORMAL),
+            },
+        ));
+        let mutex_key = &objects.1 as *const _ as usize;
+        let cond_key = &objects.0 as *const _ as usize;
+        assert_eq!(pthread_mutex_lock_key(mutex_key), 0);
+        let notifier_objects = objects.clone();
+        let notifier = std::thread::spawn(move || {
+            let mutex_key = &notifier_objects.1 as *const _ as usize;
+            let cond_key = &notifier_objects.0 as *const _ as usize;
+            assert_eq!(pthread_mutex_lock_key(mutex_key), 0);
+            assert_eq!(pthread_cond_notify_key(cond_key, false), 0);
+            assert_eq!(pthread_mutex_unlock_key(mutex_key), 0);
+        });
+        assert_eq!(pthread_cond_wait_key(cond_key, mutex_key, None), 0);
+        assert_eq!(mutex_key, &objects.1 as *const _ as usize);
+        assert_eq!(objects.1.owner.load(Ordering::Acquire), pthread_current_id());
+        assert_eq!(pthread_mutex_unlock_key(mutex_key), 0);
+        notifier.join().unwrap();
+    }
 }
 
 fn c_allocation_layout(size: usize, align: usize) -> Option<Layout> {
@@ -2423,9 +2840,7 @@ pub unsafe extern "C" fn __stack_chk_fail() -> ! {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn errno_location() -> *mut c_int {
-    (&TRUEOS_ERRNO as *const AtomicI32)
-        .cast_mut()
-        .cast::<c_int>()
+    TRUEOS_ERRNO.as_ptr()
 }
 
 #[unsafe(no_mangle)]
@@ -2837,7 +3252,25 @@ fn is_leap_year(year: i64) -> bool {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nanosleep(_req: *const c_void, _rem: *mut c_void) -> c_int {
+pub unsafe extern "C" fn nanosleep(req: *const c_void, rem: *mut c_void) -> c_int {
+    let Some(duration) = abi_read_struct(req.cast::<PthreadTimespec>()) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    if duration.tv_sec < 0 || !(0..1_000_000_000).contains(&duration.tv_nsec) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let mut millis =
+        duration.tv_sec as u128 * 1000 + (duration.tv_nsec as u128).div_ceil(1_000_000);
+    while millis != 0 {
+        let chunk = millis.min(u128::from(u64::MAX)) as u64;
+        crate::r::io::fs_cabi::trueos_cabi_sleep_ms(chunk);
+        millis -= u128::from(chunk);
+    }
+    if !rem.is_null() {
+        copy_to_abi_out(rem.cast::<u8>(), &[0; core::mem::size_of::<PthreadTimespec>()]);
+    }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
 }
@@ -5535,6 +5968,7 @@ pub unsafe extern "C" fn sysconf(name: c_int) -> isize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sched_yield() -> c_int {
+    crate::r::io::fs_cabi::trueos_cabi_poll_once();
     0
 }
 
@@ -5863,7 +6297,7 @@ pub unsafe extern "C" fn linkat(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_key_create(key: *mut u32, _destructor: *const c_void) -> c_int {
+pub unsafe extern "C" fn pthread_key_create(key: *mut u32, destructor: *const c_void) -> c_int {
     if key.is_null() {
         return TRUEOS_EINVAL;
     }
@@ -5873,7 +6307,17 @@ pub unsafe extern "C" fn pthread_key_create(key: *mut u32, _destructor: *const c
     if next > u32::MAX as usize {
         return TRUEOS_EAGAIN;
     }
-    if PTHREAD_KEYS.lock().insert(next, 0).is_err() {
+    if PTHREAD_KEYS
+        .lock()
+        .insert(
+            next,
+            PthreadKeyState {
+                key: next,
+                destructor: destructor as usize,
+            },
+        )
+        .is_err()
+    {
         return TRUEOS_EAGAIN;
     }
     let bytes = (next as u32).to_ne_bytes();
@@ -5889,8 +6333,15 @@ pub unsafe extern "C" fn pthread_key_create(key: *mut u32, _destructor: *const c
 pub unsafe extern "C" fn pthread_key_delete(key: u32) -> c_int {
     let key = key as usize;
     let _ = PTHREAD_KEYS.lock().remove(key);
-    let slot = pthread_tls_slot(key);
-    let _ = PTHREAD_TLS_VALUES.lock().remove(slot);
+    let mut values = PTHREAD_TLS_VALUES.lock();
+    let slots = values
+        .values()
+        .filter(|value| value.slot.key == key)
+        .map(|value| value.slot)
+        .collect::<Vec<_>>();
+    for slot in slots {
+        values.remove(slot);
+    }
     0
 }
 
@@ -5922,8 +6373,11 @@ pub unsafe extern "C" fn pthread_setspecific(key: u32, value: *const c_void) -> 
         let _ = values.remove(slot);
         return 0;
     }
-    values.insert(slot, value).map(|_| ()).unwrap_or(());
-    if values.get(slot).copied() == Some(value) {
+    values
+        .insert(slot, PthreadTlsValue { slot, value })
+        .map(|_| ())
+        .unwrap_or(());
+    if values.get(slot).is_some_and(|stored| stored.value == value) {
         0
     } else {
         TRUEOS_EAGAIN
@@ -5937,7 +6391,10 @@ pub unsafe extern "C" fn pthread_getspecific(key: u32) -> *mut c_void {
         return ptr::null_mut();
     }
     let slot = pthread_tls_slot(key);
-    PTHREAD_TLS_VALUES.lock().get(slot).copied().unwrap_or(0) as *mut c_void
+    PTHREAD_TLS_VALUES
+        .lock()
+        .get(slot)
+        .map_or(0, |stored| stored.value) as *mut c_void
 }
 
 #[unsafe(no_mangle)]
@@ -6053,7 +6510,7 @@ pub unsafe extern "C" fn pthread_mutex_unlock(mutex: *mut c_void) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_cond_init(cond: *mut c_void, _attr: *const c_void) -> c_int {
+pub unsafe extern "C" fn pthread_cond_init(cond: *mut c_void, attr: *const c_void) -> c_int {
     let Some(key) = pthread_key(cond) else {
         return TRUEOS_EINVAL;
     };
@@ -6061,27 +6518,46 @@ pub unsafe extern "C" fn pthread_cond_init(cond: *mut c_void, _attr: *const c_vo
     let Some(state) = pthread_cond_storage(key) else {
         return TRUEOS_EINVAL;
     };
+    let clock = if attr.is_null() {
+        TRUEOS_CLOCK_REALTIME
+    } else {
+        let Some(clock) = abi_read_struct(attr.cast::<c_int>()) else {
+            return TRUEOS_EINVAL;
+        };
+        clock
+    };
+    if !matches!(clock, TRUEOS_CLOCK_REALTIME | TRUEOS_CLOCK_MONOTONIC) {
+        return TRUEOS_EINVAL;
+    }
     unsafe {
         state.as_ptr().write(PthreadCondStorage {
             generation: AtomicU64::new(0),
+            clock: AtomicI32::new(clock),
         });
     }
     0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_condattr_init(_attr: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_condattr_init(attr: *mut c_void) -> c_int {
+    unsafe { pthread_condattr_setclock(attr, TRUEOS_CLOCK_REALTIME) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_condattr_setclock(_attr: *mut c_void, _clock: c_int) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_condattr_setclock(attr: *mut c_void, clock: c_int) -> c_int {
+    if !matches!(clock, TRUEOS_CLOCK_REALTIME | TRUEOS_CLOCK_MONOTONIC) {
+        return TRUEOS_EINVAL;
+    }
+    if copy_to_abi_out(attr.cast::<u8>(), &clock.to_ne_bytes()) {
+        0
+    } else {
+        TRUEOS_EINVAL
+    }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_condattr_destroy(_attr: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_condattr_destroy(attr: *mut c_void) -> c_int {
+    if attr.is_null() { TRUEOS_EINVAL } else { 0 }
 }
 
 #[unsafe(no_mangle)]
@@ -6109,28 +6585,14 @@ pub unsafe extern "C" fn pthread_cond_wait(cond: *mut c_void, mutex: *mut c_void
     pthread_sync_trace("cond.wait", cond_key);
     pthread_sync_trace("cond.wait.mutex", mutex_key);
 
-    let Some(cond_state) = pthread_cond_storage(cond_key) else {
-        return TRUEOS_EINVAL;
-    };
-    let cond_state = unsafe { cond_state.as_ref() };
-    let generation = pthread_cond_generation(cond_state);
-    let unlock_rc = pthread_mutex_unlock_key(mutex_key);
-    if unlock_rc != 0 {
-        return unlock_rc;
-    }
-
-    while pthread_cond_generation(cond_state) == generation {
-        core::hint::spin_loop();
-    }
-
-    pthread_mutex_lock_key(mutex_key)
+    pthread_cond_wait_key(cond_key, mutex_key, None)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_cond_timedwait(
     cond: *mut c_void,
     mutex: *mut c_void,
-    _abstime: *const c_void,
+    abstime: *const c_void,
 ) -> c_int {
     let Some(cond_key) = pthread_key(cond) else {
         return TRUEOS_EINVAL;
@@ -6142,25 +6604,10 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
     pthread_sync_trace("cond.timedwait", cond_key);
     pthread_sync_trace("cond.timedwait.mutex", mutex_key);
 
-    let Some(cond_state) = pthread_cond_storage(cond_key) else {
+    let Some(abstime) = abi_read_struct(abstime.cast::<PthreadTimespec>()) else {
         return TRUEOS_EINVAL;
     };
-    let cond_state = unsafe { cond_state.as_ref() };
-    let generation = pthread_cond_generation(cond_state);
-    let unlock_rc = pthread_mutex_unlock_key(mutex_key);
-    if unlock_rc != 0 {
-        return unlock_rc;
-    }
-
-    for _ in 0..4096 {
-        if pthread_cond_generation(cond_state) != generation {
-            return pthread_mutex_lock_key(mutex_key);
-        }
-        core::hint::spin_loop();
-    }
-
-    let _ = pthread_mutex_lock_key(mutex_key);
-    TRUEOS_ETIMEDOUT
+    pthread_cond_wait_key(cond_key, mutex_key, Some(abstime))
 }
 
 #[unsafe(no_mangle)]
@@ -6169,7 +6616,7 @@ pub unsafe extern "C" fn pthread_cond_signal(cond: *mut c_void) -> c_int {
         return TRUEOS_EINVAL;
     };
     pthread_sync_trace("cond.signal", key);
-    pthread_cond_notify_key(key)
+    pthread_cond_notify_key(key, false)
 }
 
 #[unsafe(no_mangle)]
@@ -6178,7 +6625,7 @@ pub unsafe extern "C" fn pthread_cond_broadcast(cond: *mut c_void) -> c_int {
         return TRUEOS_EINVAL;
     };
     pthread_sync_trace("cond.broadcast", key);
-    pthread_cond_notify_key(key)
+    pthread_cond_notify_key(key, true)
 }
 
 #[unsafe(no_mangle)]
@@ -6192,20 +6639,31 @@ pub unsafe extern "C" fn pthread_setname_np(thread: usize, name: *const c_char) 
     let Some(name) = abi_cstr_to_string(name, LINUX_PTHREAD_NAME_BYTES_WITH_NUL) else {
         return TRUEOS_EINVAL;
     };
-    if thread == pthread_current_id() {
+    if thread == pthread_current_id() || crate::r::threads::current_id() == Some(thread) {
         crate::r::blocking::set_current_service_lane_pthread_name(name.as_str());
     }
     0
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_attr_init(_attr: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_attr_init(attr: *mut c_void) -> c_int {
+    if copy_to_abi_out(attr.cast::<u8>(), &0usize.to_ne_bytes()) {
+        0
+    } else {
+        TRUEOS_EINVAL
+    }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_attr_setstacksize(_attr: *mut c_void, _stacksize: usize) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_attr_setstacksize(attr: *mut c_void, stacksize: usize) -> c_int {
+    if stacksize < 16 * 1024 {
+        return TRUEOS_EINVAL;
+    }
+    if copy_to_abi_out(attr.cast::<u8>(), &stacksize.to_ne_bytes()) {
+        0
+    } else {
+        TRUEOS_EINVAL
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -6216,11 +6674,37 @@ pub unsafe extern "C" fn pthread_attr_destroy(_attr: *mut c_void) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_create(
     thread: *mut usize,
-    _attr: *const c_void,
+    attr: *const c_void,
     start_routine: *const c_void,
     arg: *mut c_void,
 ) -> c_int {
-    if thread.is_null() || start_routine.is_null() {
+    if start_routine.is_null() {
+        return TRUEOS_EINVAL;
+    }
+    let stack = if attr.is_null() {
+        0
+    } else {
+        let Some(stack) = abi_read_struct(attr.cast::<usize>()) else {
+            return TRUEOS_EINVAL;
+        };
+        stack
+    };
+    let entry = unsafe {
+        core::mem::transmute::<*const c_void, unsafe extern "C" fn(*mut c_void) -> *mut c_void>(
+            start_routine,
+        )
+    };
+    unsafe { trueos_cabi_thread_spawn(stack, entry, arg, thread) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_thread_spawn(
+    stack: usize,
+    entry: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+    arg: *mut c_void,
+    thread: *mut usize,
+) -> c_int {
+    if thread.is_null() {
         return TRUEOS_EINVAL;
     }
 
@@ -6228,6 +6712,7 @@ pub unsafe extern "C" fn pthread_create(
     let completion = Arc::new(crate::wait::CompletionCell::new());
     let state = PthreadThreadState {
         completion: completion.clone(),
+        joining: false,
     };
 
     if PTHREAD_THREADS.lock().insert(thread_id, state).is_err() {
@@ -6241,38 +6726,47 @@ pub unsafe extern "C" fn pthread_create(
     };
     out.copy_from_slice(&id_bytes);
 
-    let start = start_routine as usize;
     let arg = arg as usize;
     let job = Box::new(move || {
-        let start: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
-            unsafe { core::mem::transmute(start) };
-        let result = crate::wls::with_current_blueprint_thread_id(thread_id, || {
-            (unsafe { start(arg as *mut c_void) }) as usize
-        });
+        let result = (unsafe { entry(arg as *mut c_void) }) as usize;
+        pthread_run_tls_destructors(pthread_current_id());
         let _ = completion.complete(result);
+        crate::r::platform::trueos_tokio_platform_wake_all(pthread_join_wait_key(thread_id));
     });
 
-    let rc = crate::r::blocking::trueos_service_lane_submit_job(job);
+    let vm_id = crate::r::threads::current_vm_id()
+        .or_else(crate::hv::current_guest_execution_context_vm_id);
+    let rc = match crate::r::threads::spawn(stack, job, vm_id, thread_id) {
+        Ok(()) => 0,
+        Err(error) => error,
+    };
     pthread_create_trace(thread_id, rc);
     if rc == 0 {
         0
     } else {
         let _ = PTHREAD_THREADS.lock().remove(thread_id);
-        TRUEOS_EAGAIN
+        rc
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_join(thread: usize, retval: *mut *mut c_void) -> c_int {
+    if crate::r::threads::current_id() == Some(thread) {
+        return TRUEOS_EDEADLK;
+    }
     let completion = {
-        let table = PTHREAD_THREADS.lock();
-        let Some(state) = table.get(thread) else {
+        let mut table = PTHREAD_THREADS.lock();
+        let Some(state) = table.get_mut(thread) else {
             return TRUEOS_ESRCH;
         };
+        if state.joining {
+            return TRUEOS_EINVAL;
+        }
+        state.joining = true;
         state.completion.clone()
     };
 
-    let result = completion.join_blocking_parked();
+    let result = pthread_join_completion(thread, &completion);
     let _ = PTHREAD_THREADS.lock().remove(thread);
 
     if !retval.is_null() {
@@ -6289,6 +6783,9 @@ pub unsafe extern "C" fn pthread_join(thread: usize, retval: *mut *mut c_void) -
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_detach(thread: usize) -> c_int {
     let mut table = PTHREAD_THREADS.lock();
+    if table.get(thread).is_some_and(|state| state.joining) {
+        return TRUEOS_EINVAL;
+    }
     let Some(_state) = table.remove(thread) else {
         return TRUEOS_ESRCH;
     };
@@ -6296,5 +6793,29 @@ pub unsafe extern "C" fn pthread_detach(thread: usize) -> c_int {
     // the registry entry here is true detach: execution continues without a
     // join resource. This also avoids asking the host carrier to remove an
     // entry from the guest-private Hull table when the thread later exits.
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_thread_join(thread: usize) -> c_int {
+    unsafe { pthread_join(thread, ptr::null_mut()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_thread_detach(thread: usize) -> c_int {
+    unsafe { pthread_detach(thread) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_thread_available_parallelism() -> usize {
+    crate::r::platform::trueos_platform_cpu_count().max(1)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_thread_set_name(name: *const c_char) -> c_int {
+    let Some(name) = abi_cstr_to_string(name, 4096) else {
+        return TRUEOS_EINVAL;
+    };
+    crate::r::blocking::set_current_service_lane_pthread_name(name.as_str());
     0
 }

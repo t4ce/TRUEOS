@@ -97,6 +97,7 @@ pub const OP_BP_PLATFORM_WAIT_OBSERVE: u32 = 0x202;
 pub const OP_BP_PLATFORM_WAIT_AFTER: u32 = 0x203;
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204;
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207;
+pub const OP_BP_THREAD_SUBMIT: u32 = 0x217;
 pub const OP_BP_GUEST_COMPUTE_SUBMIT: u32 = 0x215;
 pub const OP_BP_GUEST_COMPUTE_CAPACITY: u32 = 0x216;
 /// `arg0=owned frame`, `arg1=0xRRGGBB`; primary display's shared opaque backdrop.

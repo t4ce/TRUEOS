@@ -321,6 +321,7 @@ pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32], optional payload kind:u32 len:u64
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
+pub const OP_BP_THREAD_SUBMIT: u32 = 0x217; // raw closure + payload stack bytes/thread identity
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204; // no args -> advisory available native workers
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207; // no args -> closed native-job admission
 pub const OP_BP_GUEST_COMPUTE_SUBMIT: u32 = 0x215; // arg0/arg1 boxed strict-P compute job raw parts
@@ -3623,6 +3624,21 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_THREAD_SUBMIT => {
+            let rc = match request_payload(vm_id, req_len) {
+                Some(bytes) if bytes.len() == 16 => unsafe {
+                    crate::r::threads::submit_guest_from_raw(
+                        vm_id,
+                        u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize,
+                        u64::from_le_bytes(bytes[8..].try_into().unwrap()) as usize,
+                        arg0 as usize, arg1 as usize,
+                    )
+                },
+                _ => 22,
+            };
+            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_GUEST_COMPUTE_SUBMIT => {

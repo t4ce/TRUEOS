@@ -1,76 +1,110 @@
 // Reference source for `library/std/src/sys/thread/trueos.rs`.
 //
-// TRUEOS is a concurrent target, but POSIX/OS thread lifecycle is not a native
-// execution primitive. Keep `target_has_threads` truthful for atomics and
-// memory concurrency while making `std::thread::spawn` fail explicitly.
+// TRUEOS std threads are stackful logical threads scheduled on platform
+// carriers. Each owns its stack, execution identity and keyed TLS namespace;
+// blocking a logical thread must leave its carrier available to other threads.
 
-use crate::ffi::CStr;
+use crate::ffi::{CStr, c_char, c_int, c_void};
 use crate::io;
+use crate::mem::ManuallyDrop;
 use crate::num::NonZero;
+use crate::ptr;
 use crate::thread::ThreadInit;
 use crate::time::Duration;
 
 unsafe extern "C" {
+    // A successful spawn owns `arg`, starts `entry` exactly once, and writes a
+    // nonzero handle. On failure `entry` is never called and `arg` stays owned
+    // by the caller. Errors are positive platform errno values.
+    fn trueos_cabi_thread_spawn(
+        stack: usize,
+        entry: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+        arg: *mut c_void,
+        out: *mut usize,
+    ) -> c_int;
+    // Join includes entry return, keyed TLS destructors and execution cleanup.
+    fn trueos_cabi_thread_join(handle: usize) -> c_int;
+    fn trueos_cabi_thread_detach(handle: usize) -> c_int;
+    fn trueos_cabi_thread_available_parallelism() -> usize;
+    fn trueos_cabi_thread_current_id() -> usize;
+    fn trueos_cabi_thread_set_name(name: *const c_char) -> c_int;
     fn trueos_cabi_poll_once();
     fn trueos_cabi_sleep_ms(ms: u64);
 }
 
-/// Native std thread handle.
-///
-/// This is deliberately uninhabited: TRUEOS does not manufacture a native
-/// std/OS thread object. `Thread::new` always returns `UNSUPPORTED_PLATFORM`.
-pub struct Thread(!);
-
-// Keep the common ThreadInit entry point referenced on this unsupported
-// lifecycle target, just as std's generic unsupported backend does.
-#[expect(dead_code)]
-fn dummy_init_call(init: Box<ThreadInit>) {
-    drop(init.init());
+/// An opaque, process-owned TRUEOS logical thread handle.
+pub struct Thread {
+    handle: usize,
 }
 
-pub const DEFAULT_MIN_STACK_SIZE: usize = 64 * 1024;
+pub const DEFAULT_MIN_STACK_SIZE: usize = 2 * 1024 * 1024;
 
 impl Thread {
-    // SAFETY: see `std::thread::Builder::spawn_unchecked` for the caller's
-    // requirements. TRUEOS never consumes `init` because no native thread is
-    // created.
-    pub unsafe fn new(_stack: usize, _init: Box<ThreadInit>) -> io::Result<Thread> {
-        Err(io::Error::UNSUPPORTED_PLATFORM)
+    // SAFETY: see `std::thread::Builder::spawn_unchecked` for requirements on
+    // the lifetime of references captured by the entry closure.
+    pub unsafe fn new(stack: usize, init: Box<ThreadInit>) -> io::Result<Thread> {
+        let data = Box::into_raw(init);
+        let mut handle = 0;
+        let ret =
+            unsafe { trueos_cabi_thread_spawn(stack, thread_start, data.cast(), &mut handle) };
+        if ret != 0 {
+            // The platform did not accept the entry point and cannot access
+            // `data` after an unsuccessful spawn.
+            unsafe { drop(Box::from_raw(data)) };
+            return Err(io::Error::from_raw_os_error(ret));
+        }
+        assert_ne!(handle, 0, "TRUEOS returned an invalid thread handle");
+        Ok(Thread { handle })
     }
 
     pub fn join(self) {
-        self.0
+        // Joining consumes the platform handle; do not detach it again when
+        // the Rust wrapper leaves scope.
+        let handle = ManuallyDrop::new(self).handle;
+        let ret = unsafe { trueos_cabi_thread_join(handle) };
+        assert_eq!(ret, 0, "failed to join TRUEOS thread: {}", io::Error::from_raw_os_error(ret));
     }
 }
 
-/// Do not infer TRUEOS worker/carrier capacity from `std::thread`.
-///
-/// Native parallel capacity belongs to the TRUEOS execution layer, not the
-/// standard library's OS-thread model. Callers that want a fallback commonly
-/// map this error to one logical execution lane.
+unsafe extern "C" fn thread_start(data: *mut c_void) -> *mut c_void {
+    // `ThreadInit::init` must run before allocations or user code on the new
+    // logical thread. The platform has already installed its execution/TLS
+    // identity. Its exit path runs TLS destructors after this entry returns.
+    let init = unsafe { Box::from_raw(data.cast::<ThreadInit>()) };
+    let rust_start = init.init();
+    rust_start();
+    ptr::null_mut()
+}
+
+impl Drop for Thread {
+    fn drop(&mut self) {
+        let ret = unsafe { trueos_cabi_thread_detach(self.handle) };
+        debug_assert_eq!(ret, 0, "failed to detach TRUEOS thread");
+    }
+}
+
+/// Number of carriers on which this process can run its logical threads.
 pub fn available_parallelism() -> io::Result<NonZero<usize>> {
-    Err(io::Error::UNKNOWN_THREAD_COUNT)
+    NonZero::new(unsafe { trueos_cabi_thread_available_parallelism() })
+        .ok_or(io::Error::UNKNOWN_THREAD_COUNT)
 }
 
-/// TRUEOS has logical execution identities, but no native std/OS-thread ID.
+/// TRUEOS exposes a stable execution identity for every logical thread.
 pub fn current_os_id() -> Option<u64> {
-    None
+    NonZero::new(unsafe { trueos_cabi_thread_current_id() }).map(|id| id.get() as u64)
 }
 
-/// There is no native std thread to name.
-pub fn set_name(_name: &CStr) {}
+pub fn set_name(name: &CStr) {
+    unsafe { trueos_cabi_thread_set_name(name.as_ptr()) };
+}
 
-/// Best-effort synchronous yield for code expressed through `std::thread`.
-///
-/// This does not create or switch an OS thread. It gives the TRUEOS runtime a
-/// chance to make platform progress on the current execution lane.
+/// Yield the current logical thread and make platform progress.
 pub fn yield_now() {
     unsafe { trueos_cabi_poll_once() }
 }
 
-/// Synchronous sleep remains meaningful even though native thread creation is
-/// unsupported. Round up to milliseconds so the call never returns earlier
-/// solely because the TRUEOS CABI has millisecond granularity.
+/// Round up to milliseconds so the call never returns earlier solely because
+/// the TRUEOS CABI has millisecond granularity.
 pub fn sleep(dur: Duration) {
     sleep_with(dur, |chunk| unsafe { trueos_cabi_sleep_ms(chunk) });
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Install the reference TRUEOS `std::thread` sys backend into rust-src.
 
-This is intentionally a narrow source adaptation. TRUEOS remains a concurrent
-Rust target (`target_has_threads` must not be falsified), but Rust std selects a
-TRUEOS-specific thread backend before the generic Unix/pthread backend.
+TRUEOS remains a concurrent Rust target (`target_has_threads` must not be
+falsified). Rust std selects its stackful lifecycle backend and process/thread
+keyed TLS instead of the earlier unsupported lifecycle and WLS-slot TLS.
 """
 
 from __future__ import annotations
@@ -23,6 +23,12 @@ TRUEOS_SELECTOR = '''    target_os = "trueos" => {
         };
     }
 '''
+TRUEOS_TLS_SELECTOR = '''    target_os = "trueos" => {
+        mod os;
+        pub use os::{Storage, thread_local_inner, value_align};
+        pub(crate) use os::{LocalPointer, local_pointer};
+    }
+'''
 
 # Exact canonical revisions previously installed by this integration. When the
 # reference changes, retain the reviewed previous digest here so packing can
@@ -30,6 +36,8 @@ TRUEOS_SELECTOR = '''    target_os = "trueos" => {
 KNOWN_BACKEND_SHA256 = frozenset({
     # Initial PR #37 integration, before extracting/testing sleep_with.
     "ba0041a1e49ecbc166c6ba02abd769eb1f47632a7acd5112c5ee2fdbf6bdcdba",
+    # Reviewed unsupported lifecycle backend with duration rounding tests.
+    "e6b682b491fbd3dd44928525f79500d1fbe3a67c954caa52dca5f3d868581a15",
 })
 
 
@@ -52,6 +60,47 @@ def replace_once(source: str, before: str, after: str, path: Path) -> str:
     if source.count(before) != 1:
         raise SystemExit(f"{path}: expected exactly one source anchor: {before!r}")
     return source.replace(before, after, 1)
+
+
+def keyed_tls_selector(source: str, path: Path) -> str:
+    """Select OS-keyed TLS, also upgrading the legacy no_threads selector."""
+    cfg_anchor = "cfg_select! {\n"
+    if source.count(TRUEOS_TLS_SELECTOR) > 1:
+        raise SystemExit(f"{path}: duplicate TRUEOS TLS selector")
+    if 'target_os = "trueos" => {' in source and TRUEOS_TLS_SELECTOR not in source:
+        raise SystemExit(f"{path}: conflicting TRUEOS TLS selector")
+    if source.count(cfg_anchor) < 1:
+        raise SystemExit(f"{path}: missing TLS selector anchor")
+    selector_start = source.index(cfg_anchor) + len(cfg_anchor)
+    try:
+        selector_end = source.index("    target_thread_local => {", selector_start)
+    except ValueError:
+        raise SystemExit(f"{path}: missing native TLS selector anchor") from None
+    prefix = source[selector_start:selector_end]
+    if "mod no_threads;" not in prefix or "pub use no_threads::" not in prefix:
+        raise SystemExit(f"{path}: unrecognized no_threads TLS selector")
+    old_entry = '        target_os = "trueos",\n'
+    if prefix.count(old_entry) > 1:
+        raise SystemExit(f"{path}: duplicate legacy TRUEOS TLS selector")
+    prefix = prefix.replace(old_entry, "")
+    if TRUEOS_TLS_SELECTOR not in prefix:
+        prefix = TRUEOS_TLS_SELECTOR + prefix
+    elif not prefix.startswith(TRUEOS_TLS_SELECTOR):
+        raise SystemExit(f"{path}: TRUEOS TLS must be selected before no_threads")
+    return source[:selector_start] + prefix + source[selector_end:]
+
+
+def strict_thread_initialization(source: str, path: Path) -> str:
+    """Remove the legacy TRUEOS permission to overwrite a carrier's TLS handle."""
+    old = '#[cfg(any(target_os = "trueos", target_os = "zkvm"))]'
+    inverse = '#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]'
+    if old not in source and inverse not in source:
+        return source
+    if source.count(old) != 1 or source.count(inverse) != 1:
+        raise SystemExit(f"{path}: unrecognized legacy TRUEOS current-thread hooks")
+    source = source.replace(old, '#[cfg(target_os = "zkvm")]', 1)
+    source = source.replace(inverse, '#[cfg(not(target_os = "zkvm"))]', 1)
+    return source.replace("// TRUEOS carrier lanes may host", "// Legacy zkvm carrier lanes may host", 1)
 
 
 def installation(root: Path) -> dict[Path, str]:
@@ -92,7 +141,12 @@ def installation(root: Path) -> dict[Path, str]:
     unix = unix_path.read_text(encoding="utf-8")
     unix = replace_once(unix, "pub mod thread;", '#[cfg(not(target_os = "trueos"))]\npub mod thread;', unix_path)
     unix = replace_once(unix, "    pub use super::thread::JoinHandleExt;", '    #[cfg(not(target_os = "trueos"))]\n    pub use super::thread::JoinHandleExt;', unix_path)
-    return {backend_path: reference, selector_path: selector, unix_path: unix}
+    tls_path = root / "library/std/src/sys/thread_local/mod.rs"
+    tls = keyed_tls_selector(tls_path.read_text(encoding="utf-8"), tls_path)
+    current_path = root / "library/std/src/thread/current.rs"
+    current = strict_thread_initialization(current_path.read_text(encoding="utf-8"), current_path)
+    return {backend_path: reference, selector_path: selector, unix_path: unix,
+            tls_path: tls, current_path: current}
 
 
 def install(root: Path, check: bool = False) -> None:
@@ -116,7 +170,7 @@ def install(root: Path, check: bool = False) -> None:
             temporary.unlink(missing_ok=True)
 
     print(f"trueos-rust-std-thread: backend={root / 'library/std/src/sys/thread/trueos.rs'}")
-    print("trueos-rust-std-thread: lifecycle=unsupported sleep=true yield=true")
+    print("trueos-rust-std-thread: lifecycle=stackful sleep=true yield=true tls=keyed")
 
 
 def main() -> None:

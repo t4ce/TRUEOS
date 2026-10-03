@@ -1855,6 +1855,10 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
         return Some(vm_id);
     }
 
+    if crate::r::threads::current_id().is_some() {
+        return crate::r::threads::current_vm_id();
+    }
+
     let slot = crate::percpu::current_slot();
     if let Some(tagged) = CURRENT_GUEST_BROKER_VM_ID_BY_CPU
         .get(slot)
