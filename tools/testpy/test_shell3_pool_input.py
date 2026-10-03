@@ -154,7 +154,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["online"]);
     type_text(&mut b,"pause"); assert_eq!(MatrixSlots::echo_lines(Some("123")),vec!["pause"]);
     assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["online"]);
-    a.set_mode(3); type_text(&mut a,"net"); assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["online","net"]);
+    a.set_mode(3); type_text(&mut a,"net"); assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["net","online"]);
     // A valid name in another mode is still unknown here.
     type_text(&mut a,"online"); assert_eq!(a.prompt.text,"online");
     assert!(MatrixSlots::echo_lines(None).is_empty());
@@ -194,7 +194,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     s.set_mode(2);
     assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Aka hello] [Media img shot vid film cam rec] [AppDB Demo]");
     for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render(),"#");}
-    assert_eq!(MatrixSlots::echo_lines(None),vec!["hello","img","Demo"]);
+    assert_eq!(MatrixSlots::echo_lines(None),vec!["Demo","img","hello"]);
     s.set_mode(3); let admin=s.rows.title.right.clone();
     assert_eq!(admin[0].color,Some(RgbaColor::Pink));assert_eq!(admin[2].color,Some(RgbaColor::Pink));
     s.set_appdb_names(&["Other".into()]);assert_eq!(s.rows.title.right,admin);

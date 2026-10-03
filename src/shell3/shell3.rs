@@ -234,7 +234,7 @@ impl MatrixSlots {
         true
     }
 
-    /// Echo text into a named Matrix slot (None is the bare § slot).
+    /// Prepend text into a named Matrix slot (None is the bare § slot).
     /// Slot selection remains per instance; transcripts are shared Matrix data.
     fn echo(active: Option<&str>, lifetime: Option<u64>, text: String) {
         let mut slots = matrix_slots().lock();
@@ -244,8 +244,8 @@ impl MatrixSlots {
             slots.echoes.len() - 1
         });
         let lines = &mut slots.echoes[index].1;
-        if lines.len() == 256 { lines.pop_front(); }
-        lines.push_back(text);
+        if lines.len() == 256 { lines.pop_back(); }
+        lines.push_front(text);
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
         service::notify_work();
