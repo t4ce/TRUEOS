@@ -3834,6 +3834,22 @@ pub unsafe extern "C" fn listen(socket_id: c_int, _backlog: c_int) -> c_int {
         );
         return -1;
     }
+
+    // Mio resolves a port-zero bind synchronously. Cache that actual address
+    // so getsockname and a subsequent connect use the allocated listener port.
+    let mut bound = crate::mio_compat::TrueosMioSocketAddr::default();
+    let rc = unsafe {
+        crate::mio_compat::trueos_mio_socket_local_addr(backend, &mut bound)
+    };
+    if rc != 0 {
+        let _ = unsafe { crate::mio_compat::trueos_mio_socket_close(backend) };
+        return posix_mio_i32(rc);
+    }
+    let Some(local) = socket_v4_from_mio(bound) else {
+        let _ = unsafe { crate::mio_compat::trueos_mio_socket_close(backend) };
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
     let _ = crate::r::net::socket_cabi::trueos_cabi_socket_tcp_close(pending_backend);
     let mut sockets = SOCKET_FDS.lock();
     let _ = sockets.insert(socket_id, SocketFd::MioListener { backend, local });

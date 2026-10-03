@@ -191,8 +191,11 @@ def main():
         def check_running():
             if process.poll() is not None:
                 raise RuntimeError(f"QEMU exited {process.returncode}; see qemu.log")
+            observed = serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
+            status, detail = probe_result(observed)
+            if status == "FAIL":
+                raise RuntimeError(detail)
             if time.monotonic() >= deadline:
-                observed = serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
                 raise TimeoutError("Boot/probe deadline expired; latest probe evidence: " +
                                    (" | ".join(probe_tail(observed)) or "no tokio_mrt output"))
 

@@ -50,6 +50,9 @@ cooperative: CPU-bound code must reach a scheduling or waiting operation to
 give other work on its carrier a turn.
 The Hull main stack yields through VMCALL on synchronous contention; it must
 never enter the host executor or access its GS-backed per-CPU state directly.
+The separate critical-section spin path never suspends or polls an executor.
+It also skips timer polling in the Hull, whose private timer state may retain
+host waker addresses.
 
 Before each resume, the scheduler installs the thread's VM/allocation domain,
 WLS identity and errno state. Suspension restores the parent carrier's state
