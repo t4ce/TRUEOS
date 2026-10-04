@@ -65,6 +65,7 @@ def probe_result(text, probe="tokio_mrt"):
                 "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=async-yield",
                 "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=worldgen-sites",
                 "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=worldgen-map",
+                "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=worldgen-lod",
             ):
                 if record not in text:
                     return "FAIL", "PASS lacks execution progress evidence: " + record
