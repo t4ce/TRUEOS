@@ -2285,6 +2285,24 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_exit_reason(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_blueprint_stop_control_v1(operation: u32) -> i32 {
+    // Registration belongs to the Hull cleanup owner. Native guest threads
+    // can observe the request, but cannot transfer ownership of cleanup.
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, result) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_STOP_CONTROL_V1, operation as u64, 0,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK { result as i32 } else { -1 };
+    }
+    if operation == 1 {
+        if let Some(vm_id) = crate::r::threads::current_vm_id() {
+            return crate::hv::blueprint_stop_control(vm_id, operation);
+        }
+    }
+    -1
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_lifecycle_poll(
     out: *mut v::bp_abi::TrueosLifecyclePreparePause,
 ) -> i32 {

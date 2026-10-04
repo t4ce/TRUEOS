@@ -1672,6 +1672,10 @@ unsafe extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
+    /// Cooperative stop: operation 0 registers the sole cleanup owner;
+    /// operation 1 returns 0 (running), 1 (stop requested), or -1 (invalid).
+    /// Finish cleanup through trueos_cabi_blueprint_shutdown.
+    pub fn trueos_cabi_blueprint_stop_control_v1(operation: u32) -> i32;
     pub fn trueos_cabi_lifecycle_poll(out: *mut TrueosLifecyclePreparePause) -> i32;
     pub fn trueos_cabi_lifecycle_ready(operation: u64, checkpoint_version: u64) -> i32;
     pub fn trueos_cabi_lifecycle_ready_with_checkpoint(

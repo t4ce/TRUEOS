@@ -3,6 +3,7 @@ pub mod blueprint;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
 pub mod control_kick;
+mod cooperative_stop;
 pub(crate) mod execution_policy;
 pub mod guest_run;
 pub mod guest_work;
@@ -87,6 +88,7 @@ struct TrueosVmId {
     running: AtomicBool,
     starting: AtomicBool,
     stop_req: AtomicBool,
+    cooperative_stop: cooperative_stop::CooperativeStop,
     preserve_req: AtomicBool,
     preserve_exit: AtomicBool,
     clean_exit: AtomicBool,
@@ -110,6 +112,7 @@ impl TrueosVmId {
             running: AtomicBool::new(false),
             starting: AtomicBool::new(false),
             stop_req: AtomicBool::new(false),
+            cooperative_stop: cooperative_stop::CooperativeStop::new(),
             preserve_req: AtomicBool::new(false),
             preserve_exit: AtomicBool::new(false),
             clean_exit: AtomicBool::new(false),
@@ -2229,6 +2232,7 @@ fn start_with_mode(
         ));
     }
 
+    vm.cooperative_stop.reset();
     vm.stop_req.store(false, Ordering::Release);
     vm.marker_seen.store(false, Ordering::Release);
     if let Some(mode) = VM_BOOT_MODES.get(vm_id as usize) {
@@ -2354,16 +2358,37 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
     };
 
     if vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire) {
-        crate::r::blocking::close_guest_jobs(vm_id);
-        clear_blueprint_lifecycle_capability(vm_id);
+        let cooperative = vm.cooperative_stop.request();
+        if !cooperative {
+            crate::r::blocking::close_guest_jobs(vm_id);
+            clear_blueprint_lifecycle_capability(vm_id);
+        }
         vm.stop_req.store(true, Ordering::Release);
-        hvlogf(format_args!("hv: vm{} lifecycle: stop requested", vm_id));
+        crate::log_os::blueprint_important_line(format_args!(
+            "hv: vm{} lifecycle: stop requested cooperative={} native_jobs={} cleanup=guest-before-drain\n",
+            vm_id, cooperative as u8, crate::r::blocking::guest_jobs_in_flight(vm_id)
+        ));
         nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Stop, "stop");
         Ok(true)
     } else {
         hvwarnf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
         Ok(false)
     }
+}
+
+/// Control registration/polling is scoped to the current VM incarnation.
+pub(crate) fn blueprint_stop_control(vm_id: u8, operation: u32) -> i32 {
+    let Some(vm) = vm_slot(vm_id) else { return -1; };
+    if !vm.running.load(Ordering::Acquire) { return -1; }
+    match operation {
+        0 => if vm.cooperative_stop.register() { 0 } else { -1 },
+        1 => vm.cooperative_stop.requested() as i32,
+        _ => -1,
+    }
+}
+
+fn immediate_stop_requested(vm: &TrueosVmId) -> bool {
+    vm.stop_req.load(Ordering::Acquire) && !vm.cooperative_stop.registered()
 }
 
 /// Destroy an offline retained VM and its warm checkpoint. Named persistent
@@ -6075,7 +6100,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // outstanding reservation here is an invariant failure, never permission
     // to replace live executable/heap state with a new generation.
     assert!(crate::r::blocking::open_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
-    if vm.stop_req.load(Ordering::Acquire) || vm.preserve_req.load(Ordering::Acquire) {
+    if immediate_stop_requested(vm) || vm.preserve_req.load(Ordering::Acquire) {
         crate::r::blocking::close_guest_jobs(vm_id);
     }
     let launch_result = vmx_launch_once_with_ept(
@@ -6434,7 +6459,7 @@ async fn vmx_launch_once_with_ept_vpid(
     'vmexit: loop {
         crate::smp::poll();
         if vm
-            .map(|vm| vm.stop_req.load(Ordering::Acquire))
+            .map(immediate_stop_requested)
             .unwrap_or(false)
         {
             hvlogf(format_args!(
@@ -6702,7 +6727,7 @@ async fn vmx_launch_once_with_ept_vpid(
                             set_current_vm_id(vm_id);
                             crate::smp::poll();
                             if vm
-                                .map(|vm| vm.stop_req.load(Ordering::Acquire))
+                                .map(immediate_stop_requested)
                                 .unwrap_or(false)
                             {
                                 hvlogf(format_args!(
@@ -6720,7 +6745,7 @@ async fn vmx_launch_once_with_ept_vpid(
                             set_current_vm_id(vm_id);
                             crate::smp::poll();
                             if vm
-                                .map(|vm| vm.stop_req.load(Ordering::Acquire))
+                                .map(immediate_stop_requested)
                                 .unwrap_or(false)
                             {
                                 hvlogf(format_args!(
@@ -6844,7 +6869,7 @@ async fn vmx_launch_once_with_ept_vpid(
             break;
         }
         if vm
-            .map(|vm| vm.stop_req.load(Ordering::Acquire))
+            .map(immediate_stop_requested)
             .unwrap_or(false)
         {
             hvlogf(format_args!(

@@ -322,6 +322,7 @@ pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_da
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
 pub const OP_BP_THREAD_SUBMIT: u32 = 0x217; // raw closure + payload stack bytes/thread identity
+pub const OP_BP_STOP_CONTROL_V1: u32 = 0x21A; // arg0 register(0)/poll(1) -> rc/requested
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204; // no args -> advisory available native workers
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207; // no args -> closed native-job admission
 pub const OP_BP_GUEST_COMPUTE_SUBMIT: u32 = 0x215; // arg0/arg1 boxed strict-P compute job raw parts
@@ -822,6 +823,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     DispatchOutcome::Resume
                 }
             }
+        }
+        OP_BP_STOP_CONTROL_V1 => {
+            let rc = crate::hv::blueprint_stop_control(vm_id, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0);
+            DispatchOutcome::Resume
         }
         OP_BP_LIFECYCLE_POLL => {
             #[repr(C)]
