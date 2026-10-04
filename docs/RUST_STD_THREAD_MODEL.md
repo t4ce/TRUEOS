@@ -303,3 +303,36 @@ before that fallback. The existing packed server in
 its native `vmx_env` view shows `/apps/velosrv/userdata`. Startup then stops at
 the missing Veloren asset directory in the empty test filesystem. This verifies
 the userdata environment bridge, not complete server startup.
+
+The Veloren Tokio executor probe on 2026-10-04 found another boundary that the
+basic lifecycle probe had not exercised. A native Blueprint worker allocated
+while holding the guest heap lock; the allocator's diagnostic frame walk
+followed guest RBP data to `0xffffffff00000008` and page-faulted inside
+`read_return_address`. CPU 2 halted in the fault handler and CPU 0 subsequently
+spun on that allocator lock. The fault and debugger capture are retained in
+`bld/veloren-tokio/qemu-ecs-stack`. Guest code does not guarantee the kernel's
+frame-pointer convention. The frame-walk exclusion now recognizes both Hull
+main-stack execution and native continuations with `threads::current_vm_id()`.
+
+With this fix, `bld/veloren-tokio/qemu-ecs-fixed/result.json` records PASS for
+the actual vendored Specs/Tokio executor: runtimes with one and two workers,
+64 dependency-ordered ECS ticks, 4,096 borrowed element updates, nested joins,
+and 64 descendant scopes. It uses the server's shared-runtime executor and has
+no Rayon scheduler. Host integration tests additionally check panic cleanup
+and completion of borrowed jobs after runtime shutdown. These are scheduler
+and platform checks; a complete game/client session is separate evidence.
+
+To run both platform and ECS checks with an ISO containing both probes:
+
+```sh
+python3 tools/qemu/verify-tokio-platform.py \
+  --iso bld/veloren-tokio/trueos.iso \
+  --output bld/veloren-tokio/qemu-next --veloren-executor
+```
+
+The runner also reads QEMU debugcon output, where kernel page faults appear,
+and returns Shell2 to Default before selecting the second probe. Optional
+`--gdb-port <port>` exposes only that private instance on loopback for debugging.
+The combined run in `bld/veloren-tokio/qemu-combined-fixed/result.json` passed
+both probes in 16.775 seconds, including complete runtime shutdown/recreation
+and TLS cleanup followed by the ECS probe in the same OS instance.

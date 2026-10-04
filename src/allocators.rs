@@ -70,7 +70,14 @@ pub struct AllocTrace {
 
 #[inline]
 unsafe fn read_return_address(depth: usize) -> usize {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+    // Blueprint code does not promise the kernel's frame-pointer convention.
+    // This includes native std-thread continuations on their guarded stacks,
+    // where the Hull main-stack check alone no longer identifies guest code.
+    // Walking across either guest boundary can dereference arbitrary RBP data
+    // while the allocator lock is held and halt the carrier permanently.
+    if crate::hv::current_hull_guest_context_vm_id().is_some()
+        || crate::r::threads::current_vm_id().is_some()
+    {
         let _ = depth;
         return 0;
     }

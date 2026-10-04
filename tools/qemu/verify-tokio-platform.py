@@ -25,10 +25,10 @@ def plain(text):
     return ANSI.sub("", text)
 
 
-def probe_tail(text, limit=4):
+def probe_tail(text, limit=4, probe="tokio_mrt"):
     """Extract bounded records before ANSI repaint removes line boundaries."""
     records = []
-    for match in re.finditer(r"tokio_mrt:[^\r\n\x1b]{0,200}", text):
+    for match in re.finditer(rf"{re.escape(probe)}:[^\r\n\x1b]{{0,200}}", text):
         record = plain(match.group(0)).strip()
         # Repaints repeatedly include the same retained transcript. Preserve
         # its most recent distinct records rather than whole screen redraws.
@@ -39,18 +39,27 @@ def probe_tail(text, limit=4):
     return records
 
 
-def probe_result(text):
+def probe_result(text, probe="tokio_mrt"):
     """A PASS cannot hide an earlier probe failure or the reported worker panic."""
     text = plain(text)
-    failure = re.search(r"tokio_mrt: FAIL[^\r\n]{0,200}", text)
+    failure = re.search(rf"{re.escape(probe)}: FAIL[^\r\n]{{0,200}}", text)
     if failure:
         return "FAIL", failure.group(0)
     fault = re.search(r"hv: vm\d+ fault-exc[^\r\n]{0,180}", text)
     if fault:
         return "FAIL", fault.group(0)
-    for marker in ("OS can't spawn worker thread", "thread '<unnamed>'", "panicked at"):
+    for marker in ("OS can't spawn worker thread", "thread '<unnamed>'", "panicked at",
+                   "=== #PF Page Fault ===", "=== #GP General Protection Fault ==="):
         if marker in text:
             return "FAIL", marker
+    if probe == "veloren_executor":
+        marker = "veloren_executor: PASS workers=1,2 ecs_ticks=64 borrowed=4096 scopes=64"
+        if marker in text:
+            for workers in (1, 2):
+                if f"veloren_executor: wave workers={workers} ticks=32 borrowed=64 scopes=32" not in text:
+                    return "FAIL", f"PASS lacks workers={workers} ECS evidence"
+            return "PASS", marker
+        return None, None
     if PASS in text:
         required = (
             "tokio_mrt: std joined=2 detached=1 tls_destructors=3",
@@ -137,9 +146,14 @@ def main():
     parser.add_argument("--iso", type=Path, required=True, help="Already built ISO containing tokio_mrt")
     parser.add_argument("--output", type=Path, required=True, help="Fresh evidence directory (must not exist)")
     parser.add_argument("--timeout", type=float, default=90, help="Total boot and probe deadline, at most 90 seconds")
+    parser.add_argument("--gdb-port", type=int, help="Expose this private QEMU instance to loopback GDB for diagnostics")
+    parser.add_argument("--probe", choices=("tokio_mrt", "veloren_executor"), default="tokio_mrt", help="Embedded probe to run")
+    parser.add_argument("--veloren-executor", action="store_true", help="Also run the vendored Veloren Tokio executor probe")
     args = parser.parse_args()
     if not 0 < args.timeout <= 90:
         parser.error("--timeout must be greater than zero and at most 90 seconds")
+    if args.gdb_port is not None and not 0 < args.gdb_port <= 65535:
+        parser.error("--gdb-port must be between 1 and 65535")
     args.iso = args.iso.resolve()
     if not args.iso.is_file():
         parser.error(f"ISO does not exist: {args.iso}")
@@ -168,12 +182,13 @@ def main():
                                 f"hostfwd=tcp:127.0.0.1:{ports[1]}-:22"))
     env.setdefault("QEMU_DISPLAY", "egl-headless")
     result = {"status": "FAIL", "iso": str(args.iso), "timeout_seconds": args.timeout,
-              "shell2": {"guest_port": 4245, "host_port": ports[0], "command": "tokio_mrt"},
+              "shell2": {"guest_port": 4245, "host_port": ports[0], "command": args.probe},
               "shell3": {"guest_port": 22, "host_port": ports[1], "observed": False}}
     started = time.monotonic()
     deadline = started + args.timeout
     process = None
     shell = None
+    active_probe = args.probe
     qmp = None
     with tempfile.TemporaryDirectory(prefix="trueos-tokio-qmp-") as socket_dir, \
             (args.output / "qemu.log").open("w") as host_log, \
@@ -181,6 +196,8 @@ def main():
         qmp_path = str(Path(socket_dir) / "qmp.sock")
         command = [str(ROOT / "tools/qemu/run.sh"), "iso", "-snapshot", "-qmp",
                    f"unix:{qmp_path},server=on,wait=off"]
+        if args.gdb_port:
+            command.extend(["-gdb", f"tcp:127.0.0.1:{args.gdb_port}"])
         (args.output / "run.json").write_text(json.dumps({
             "command": command, "iso": str(args.iso), "firmware": firmware,
             "iso_size": args.iso.stat().st_size, "iso_mtime_ns": args.iso.stat().st_mtime_ns,
@@ -192,13 +209,15 @@ def main():
         def check_running():
             if process.poll() is not None:
                 raise RuntimeError(f"QEMU exited {process.returncode}; see qemu.log")
-            observed = serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
-            status, detail = probe_result(observed)
+            observed = (serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
+                        + (args.output / "qemu.log").read_text(errors="replace"))
+            status, detail = probe_result(observed, active_probe)
             if status == "FAIL":
                 raise RuntimeError(detail)
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= deadline and status != "PASS":
                 raise TimeoutError("Boot/probe deadline expired; latest probe evidence: " +
-                                   (" | ".join(probe_tail(observed)) or "no tokio_mrt output"))
+                                   (" | ".join(probe_tail(observed, probe=active_probe))
+                                    or f"no {active_probe} output"))
 
         def drain(sock, log, seconds):
             end = min(deadline, time.monotonic() + seconds)
@@ -264,12 +283,12 @@ def main():
             # launches the embedded AppDB entry without an online lookup.
             shell.sendall("§\r".encode())
             drain(shell, shell_log, .3)
-            shell.sendall(b"tokio_mrt\r")
+            shell.sendall((args.probe + "\r").encode())
             result["shell2"]["mode"] = "Default (selected with §)"
             while True:
                 check_running()
                 observed = serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
-                status, detail = probe_result(observed)
+                status, detail = probe_result(observed, args.probe)
                 if status:
                     result["status"] = status
                     result["detail"] = detail
@@ -277,6 +296,23 @@ def main():
                         raise RuntimeError(detail)
                     break
                 drain(shell, shell_log, .1)
+            if args.veloren_executor:
+                # A Blueprint's entry loop retains its terminal route after
+                # main returns. Select Default before launching another app.
+                shell.sendall("§\r".encode())
+                drain(shell, shell_log, .3)
+                active_probe = "veloren_executor"
+                shell.sendall(b"veloren_executor\r")
+                while True:
+                    check_running()
+                    observed = serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
+                    status, detail = probe_result(observed, "veloren_executor")
+                    if status == "FAIL":
+                        raise RuntimeError(detail)
+                    if status == "PASS":
+                        result["veloren_executor"] = detail
+                        break
+                    drain(shell, shell_log, .1)
             result["qmp_final_status"] = qmp.command("query-status")
         except Exception as error:
             result["status"] = "FAIL"
@@ -290,7 +326,8 @@ def main():
             shell_path.write_bytes(shell_log)
             (args.output / "shell3.log").write_bytes(shell3_log)
             result["probe_tail"] = probe_tail(
-                serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
+                serial_path.read_text(errors="replace") + shell_log.decode(errors="replace"),
+                probe=active_probe,
             )
             if shell:
                 shell.close()

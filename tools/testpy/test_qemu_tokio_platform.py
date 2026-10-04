@@ -36,6 +36,17 @@ class ProbeEvidenceTests(unittest.TestCase):
     def test_original_worker_panic_cannot_pass(self):
         self.assertEqual(verify.probe_result("OS can't spawn worker thread\n" + EVIDENCE)[0], "FAIL")
 
+    def test_kernel_allocator_fault_cannot_pass(self):
+        status, detail = verify.probe_result("=== #PF Page Fault ===\nCR2=0xffffffff00000008\n" + EVIDENCE)
+        self.assertEqual(status, "FAIL")
+        self.assertIn("#PF", detail)
+
+    def test_veloren_requires_both_worker_counts(self):
+        summary = "veloren_executor: PASS workers=1,2 ecs_ticks=64 borrowed=4096 scopes=64"
+        self.assertEqual(verify.probe_result(summary, "veloren_executor")[0], "FAIL")
+        waves = "\n".join(f"veloren_executor: wave workers={n} ticks=32 borrowed=64 scopes=32" for n in (1, 2))
+        self.assertEqual(verify.probe_result(waves + "\n" + summary, "veloren_executor")[0], "PASS")
+
     def test_hypervisor_exception_fails_without_waiting_for_probe_timeout(self):
         status, detail = verify.probe_result(
             "tokio_mrt: start std-and-multi-thread\n"
