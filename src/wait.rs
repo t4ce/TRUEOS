@@ -2,6 +2,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
@@ -33,7 +34,9 @@ pub fn register_waker_list(list: &mut Vec<Waker>, waker: &Waker) -> bool {
     if list.iter().any(|existing| existing.will_wake(waker)) {
         return false;
     }
-    list.push(waker.clone());
+    // Kernel queues outlive the caller's Blueprint realm. Native guest
+    // continuations can reach this helper with guest allocation forced.
+    crate::allocators::with_host_alloc_domain_strong(|| list.push(waker.clone()));
     true
 }
 
@@ -451,18 +454,22 @@ static JOBS_WAIT: WaitQueue = WaitQueue::new();
 const PLATFORM_WAIT_HOST_SCOPE: u16 = 0;
 pub(crate) const BLUEPRINT_IO_WAIT_KEY: u64 = 0x4250_494f_0000_0001;
 
-static PLATFORM_WAIT_QUEUES: Mutex<BTreeMap<(u16, u64), &'static WaitQueue>> =
+static PLATFORM_WAIT_QUEUES: Mutex<BTreeMap<(u16, u64), Arc<WaitQueue>>> =
     Mutex::new(BTreeMap::new());
 
-fn platform_wait_queue(scope: u16, key: u64) -> &'static WaitQueue {
+fn platform_wait_queue(scope: u16, key: u64) -> Arc<WaitQueue> {
     let scoped_key = (scope, key);
-    if let Some(queue) = PLATFORM_WAIT_QUEUES.lock().get(&scoped_key).copied() {
+    if let Some(queue) = PLATFORM_WAIT_QUEUES.lock().get(&scoped_key).cloned() {
         return queue;
     }
 
-    let queue = Box::leak(Box::new(WaitQueue::new()));
-    let mut queues = PLATFORM_WAIT_QUEUES.lock();
-    *queues.entry(scoped_key).or_insert(queue)
+    // Both the registry's BTree nodes and queue storage belong to the host.
+    // An Arc also protects snapshots collected by a concurrent network wake
+    // while teardown removes this VM's registry entries.
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut queues = PLATFORM_WAIT_QUEUES.lock();
+        queues.entry(scoped_key).or_insert_with(|| Arc::new(WaitQueue::new())).clone()
+    })
 }
 
 #[inline]
@@ -480,7 +487,7 @@ pub fn platform_wait_observe(key: u64) -> u32 {
 #[inline]
 pub fn platform_wait_after(key: u64, observed: u32, timeout_ms: u64) -> bool {
     platform_wait_after_parked(
-        platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key),
+        &platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key),
         observed,
         timeout_ms,
     )
@@ -563,7 +570,7 @@ pub fn platform_wait_observe_for_vm(vm_id: u8, key: u64) -> u32 {
 #[inline]
 pub fn platform_wait_after_for_vm(vm_id: u8, key: u64, observed: u32, timeout_ms: u64) -> bool {
     platform_wait_after_parked(
-        platform_wait_queue(platform_wait_vm_scope(vm_id), key),
+        &platform_wait_queue(platform_wait_vm_scope(vm_id), key),
         observed,
         timeout_ms,
     )
@@ -599,13 +606,13 @@ pub fn platform_wake_all_for_vm(vm_id: u8, key: u64) -> usize {
 /// Lifecycle control uses this when the Hull may be outside VMX in a platform wait.
 pub fn platform_wake_vm_scope(vm_id: u8) -> usize {
     let scope = platform_wait_vm_scope(vm_id);
-    let queues = {
+    let queues = crate::allocators::with_host_alloc_domain_strong(|| {
         let queues = PLATFORM_WAIT_QUEUES.lock();
         queues
             .iter()
-            .filter_map(|(&(queue_scope, _), queue)| (queue_scope == scope).then_some(*queue))
+            .filter_map(|(&(queue_scope, _), queue)| (queue_scope == scope).then(|| queue.clone()))
             .collect::<Vec<_>>()
-    };
+    });
     let count = queues.len();
     for queue in queues {
         queue.notify_all();
@@ -616,16 +623,16 @@ pub fn platform_wake_vm_scope(vm_id: u8) -> usize {
 /// Wake only existing Blueprint I/O queues. Network producers use this as a
 /// coarse readiness edge; userspace poll/Mio re-probes exact descriptors.
 pub fn platform_wake_all_blueprint_io_waiters() -> usize {
-    let queues = {
+    let queues = crate::allocators::with_host_alloc_domain_strong(|| {
         let queues = PLATFORM_WAIT_QUEUES.lock();
         queues
             .iter()
             .filter_map(|(&(scope, key), queue)| {
                 (scope != PLATFORM_WAIT_HOST_SCOPE && key == BLUEPRINT_IO_WAIT_KEY)
-                    .then_some(*queue)
+                    .then(|| queue.clone())
             })
             .collect::<Vec<_>>()
-    };
+    });
     let mut woke = 0usize;
     for queue in queues {
         woke = woke.saturating_add(queue.notify_all());
@@ -633,9 +640,50 @@ pub fn platform_wake_all_blueprint_io_waiters() -> usize {
     woke
 }
 
+/// Call only after the Hull and all native guest jobs have finished. Existing
+/// wake snapshots retain their own Arc, so removal cannot invalidate a scan.
+/// Warm pause/preserve continuations keep their existing queue generations.
+pub(crate) fn retire_platform_vm_waits(vm_id: u8) -> usize {
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let scope = platform_wait_vm_scope(vm_id);
+        let mut queues = PLATFORM_WAIT_QUEUES.lock();
+        let before = queues.len();
+        queues.retain(|&(queue_scope, _), _| queue_scope != scope);
+        before - queues.len()
+    })
+}
+
 #[inline]
 pub fn platform_wake_blueprint_io_for_vm(vm_id: u8) -> usize {
     platform_wake_all_for_vm(vm_id, BLUEPRINT_IO_WAIT_KEY)
+}
+
+#[cfg(test)]
+mod platform_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn retirement_preserves_wake_snapshots_and_other_scopes() {
+        const KEY: u64 = 0x7265_7469_7265_0001;
+        let old = platform_wait_queue(platform_wait_vm_scope(210), KEY);
+        let weak = Arc::downgrade(&old);
+        let host = platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, KEY);
+        let other = platform_wait_queue(platform_wait_vm_scope(211), KEY);
+        let snapshot = old.clone();
+        old.notify_all();
+        assert_eq!(retire_platform_vm_waits(210), 1);
+        snapshot.notify_all(); // racing network wake still owns valid storage
+        let fresh = platform_wait_queue(platform_wait_vm_scope(210), KEY);
+        assert!(!Arc::ptr_eq(&old, &fresh));
+        assert_eq!(fresh.observe(), 0);
+        assert!(Arc::ptr_eq(&host, &platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, KEY)));
+        assert!(Arc::ptr_eq(&other, &platform_wait_queue(platform_wait_vm_scope(211), KEY)));
+        drop(snapshot);
+        drop(old);
+        assert!(weak.upgrade().is_none());
+        retire_platform_vm_waits(210);
+        retire_platform_vm_waits(211);
+    }
 }
 
 struct LocalJobQueue {

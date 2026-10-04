@@ -30,6 +30,8 @@ def main():
                             wait_source.index("/// Single spin step")]
     wait_items = wait_source[wait_source.index("pub struct WaitQueue {"):
                             wait_source.index("type JobFuture =")]
+    platform_items = wait_source[wait_source.index("const PLATFORM_WAIT_HOST_SCOPE:"):
+                                wait_source.index("struct LocalJobQueue {")]
 
     support = '''#![allow(dead_code, unused_imports)]
 extern crate alloc;
@@ -74,7 +76,7 @@ mod trueos_time {
 }
 mod wait {
     use super::{Mutex, trueos_time};
-    use alloc::{vec::Vec, boxed::Box};
+    use alloc::{vec::Vec, boxed::Box, collections::BTreeMap, sync::Arc};
     use core::future::Future;
     use core::pin::Pin;
     use core::sync::atomic::{AtomicU32, Ordering};
@@ -89,7 +91,7 @@ mod wait {
     }
     fn spin_step_no_exec() { spin_step(); }
 '''
-    support += registers + wait_items + "\n}\n"
+    support += registers + wait_items + platform_items + "\n}\n"
     support += '''mod r {
     pub mod blocking {
         pub type BlockingJobFn = alloc::boxed::Box<dyn FnOnce() + Send + 'static>;

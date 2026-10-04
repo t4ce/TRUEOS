@@ -128,6 +128,21 @@ kernel ABI and newly packed server must be installed together; an older ISO
 cannot resolve the new import. These probes establish healthy cooperative
 shutdown, not recovery of a server already trapped in the old drain path.
 
+Repeated teardown also exposed a kernel wait-registry ownership bug. GDB
+captured the BSP panicking inside BTree iteration during
+`platform_wake_all_blueprint_io_waiters`, while the next launch waited on the
+network service. Global keyed wait queues, their registry nodes, and waker
+buffers had been allocated under a native guest's forced allocation domain;
+destroying that realm invalidated host registry storage. These allocations now
+use the strong host domain. Registry entries hold `Arc<WaitQueue>` so network
+wake snapshots remain valid while final teardown removes a VM's entries.
+Ordinary stop retires the scope after native jobs and process cleanup finish;
+warm pause/preserve retains existing generations. The fixed run in
+`bld/veloren-tokio/qemu-stop-wait-ownership/result.json` stopped two distinct
+host-issued instances in VM slot 0 with one command each, zero native jobs,
+and ten wait queues retired per stop. The probe requires each instance's own
+READY/DONE records so Matrix transcript repaints cannot satisfy a relaunch.
+
 ## Rust std selection
 
 Rust normally selects `library/std/src/sys/thread/unix.rs` for a Unix-family

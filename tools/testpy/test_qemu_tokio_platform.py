@@ -96,6 +96,29 @@ class ProbeEvidenceTests(unittest.TestCase):
         for old, new in (("native_jobs=0", "native_jobs=1"), ("tls_destructors=4", "tls_destructors=3")):
             self.assertEqual(verify.probe_result(evidence.replace(old, new), "tokio_stop"), (None, None))
 
+    def test_stop_ready_ignores_repaint_from_previous_instance(self):
+        old = "00000000-0000-4000-8000-000000000001"
+        new = "00000000-0000-4000-8000-000000000002"
+        ready = "tokio_stop: READY workers=2 std=1 cleanup_owner=1 instance="
+        self.assertIsNone(verify.next_stop_instance(ready + old, {old}))
+        self.assertEqual(verify.next_stop_instance(ready + old + "\n" + ready + new, {old}), new)
+
+    def test_stop_relaunch_requires_fresh_done_and_serial_teardown(self):
+        old = "00000000-0000-4000-8000-000000000001"
+        new = "00000000-0000-4000-8000-000000000002"
+        offline = "hv: vm0 lifecycle: offline native_jobs=0 carrier=released"
+        evidence = "\n".join((
+            "hv: vm0 lifecycle: stop requested cooperative=1",
+            "tokio_stop: observed host-stop",
+            "tokio_stop: PASS started=3 stopped=3 tls_destructors=4 cpu=joined std=joined cleanup_blocking=42",
+            offline,
+            f"tokio_stop: DONE instance={old}",
+        ))
+        self.assertEqual(verify.stop_wave_result(evidence, offline, new), (None, None, None))
+        evidence += f"\ntokio_stop: DONE instance={new}"
+        self.assertEqual(verify.stop_wave_result(evidence, "", new), (None, None, None))
+        self.assertEqual(verify.stop_wave_result(evidence, offline, new)[::2], ("PASS", 0))
+
     def test_repaint_without_newlines_has_compact_distinct_probe_tail(self):
         frame = ("\x1b[2J" + "TRUE OS " * 2000 + "\x1b[12;1H" +
                  "tokio_mrt: start std-and-multi-thread" + "\x1b[13;1H" +

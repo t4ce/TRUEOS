@@ -95,6 +95,25 @@ def private_ports():
             sock.close()
 
 
+def next_stop_instance(text, seen):
+    """A retained Matrix repaint must never stop a not-yet-ready relaunch."""
+    for ready in re.finditer(r"tokio_stop: READY workers=2 std=1 cleanup_owner=1 instance=([0-9a-f-]{36})", plain(text)):
+        if ready.group(1) not in seen:
+            return ready.group(1)
+    return None
+
+
+def stop_wave_result(text, serial_text, instance):
+    """Require this guest's completion and this launch's host drain evidence."""
+    status, detail = probe_result(text, "tokio_stop")
+    if status == "FAIL":
+        return status, detail, None
+    vm = re.search(r"hv: vm(\d+) lifecycle: offline native_jobs=0 carrier=released", plain(serial_text))
+    if status == "PASS" and instance and vm and f"tokio_stop: DONE instance={instance}" in plain(text):
+        return status, detail, int(vm.group(1))
+    return None, None, None
+
+
 class Qmp:
     def __init__(self, path, transcript):
         self.sock = socket.socket(socket.AF_UNIX)
@@ -237,6 +256,8 @@ def main():
                     if not data:
                         raise EOFError("Guest terminal closed")
                     log.extend(data)
+                    if log is shell_log:
+                        shell_path.write_bytes(log)
                     if b"\x1b[18t" in log[-len(data)-8:]:
                         sock.sendall(b"\x1b[8;40;140t")
                 except socket.timeout:
@@ -298,33 +319,34 @@ def main():
             result["shell2"]["mode"] = "Default (selected with §)"
             if args.probe == "tokio_stop":
                 result["stop_waves"] = []
+                instances = set()
                 for wave in range(2):
                     if wave:
-                        # AppDB routes a relaunch back to its named Matrix
-                        # slot. Clear that retained transcript before waiting
-                        # for the next incarnation's READY (otherwise an old
-                        # repaint can send stop before the new guest starts).
-                        shell.sendall("§ts\r".encode())
-                        drain(shell, shell_log, .3)
-                        shell.sendall("§§\r".encode())
+                        shell.sendall("§\r".encode())
                         drain(shell, shell_log, .3)
                         serial_begin = serial_path.stat().st_size
                         shell_begin = len(shell_log)
                         shell.sendall(b"tokio_stop\r")
                     sent_stop = False
+                    instance = None
+                    stop_sends = 0
                     while True:
                         check_running()
-                        observed = (serial_path.read_bytes()[serial_begin:].decode(errors="replace")
+                        serial_observed = serial_path.read_bytes()[serial_begin:].decode(errors="replace")
+                        observed = (serial_observed
                                     + shell_log[shell_begin:].decode(errors="replace"))
-                        if not sent_stop and "tokio_stop: READY workers=2 std=1 cleanup_owner=1" in plain(observed):
-                            shell.sendall(b"vmx_stop\r")
-                            sent_stop = True
-                        status, detail = probe_result(observed, "tokio_stop")
+                        if not sent_stop:
+                            instance = next_stop_instance(observed, instances)
+                            if instance:
+                                instances.add(instance)
+                                shell.sendall(b"vmx_stop\r")
+                                sent_stop = True
+                                stop_sends += 1
+                        status, detail, vm = stop_wave_result(observed, serial_observed, instance)
                         if status == "FAIL":
                             raise RuntimeError(detail)
                         if status == "PASS":
-                            vm = re.search(r"hv: vm(\d+) lifecycle: offline native_jobs=0 carrier=released", plain(observed))
-                            result["stop_waves"].append({"wave": wave, "vmid": int(vm.group(1)), "detail": detail})
+                            result["stop_waves"].append({"wave": wave, "vmid": vm, "instance": instance, "stop_sends": stop_sends, "detail": detail})
                             break
                         drain(shell, shell_log, .1)
                 if result["stop_waves"][0]["vmid"] != result["stop_waves"][1]["vmid"]:

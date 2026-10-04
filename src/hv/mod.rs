@@ -6303,6 +6303,13 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
             cleanup.matrix_unbind_marker(),
         ));
     }
+    let wait_queues_retired = if !vm.pause_latched.load(Ordering::Acquire)
+        && !vm.preserve_exit.load(Ordering::Acquire)
+    {
+        crate::wait::retire_platform_vm_waits(vm_id)
+    } else {
+        0
+    };
     vm.starting.store(false, Ordering::Release);
     vm.stop_req.store(false, Ordering::Release);
     vm.preserve_req.store(false, Ordering::Release);
@@ -6315,11 +6322,12 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // Publish the VM slot as reusable only after its carrier lease is free.
     // This prevents F2/start from queueing a second Hull behind teardown on
     // the same AP while reporting the first VM as already offline.
+    let native_jobs = crate::r::blocking::guest_jobs_in_flight(vm_id);
     lane_lease.release_now();
     vm.running.store(false, Ordering::Release);
     crate::log_os::blueprint_important_line(format_args!(
-        "hv: vm{} lifecycle: offline native_jobs={} carrier=released\n",
-        vm_id, crate::r::blocking::guest_jobs_in_flight(vm_id)
+        "hv: vm{} lifecycle: offline native_jobs={} carrier=released wait_queues_retired={}\n",
+        vm_id, native_jobs, wait_queues_retired
     ));
 }
 
