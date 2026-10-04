@@ -300,9 +300,13 @@ def main():
                 result["stop_waves"] = []
                 for wave in range(2):
                     if wave:
-                        # A fresh Matrix transcript cannot replay the first
-                        # incarnation's PASS while testing slot reuse.
-                        shell.sendall("§stop-reuse\r".encode())
+                        # AppDB routes a relaunch back to its named Matrix
+                        # slot. Clear that retained transcript before waiting
+                        # for the next incarnation's READY (otherwise an old
+                        # repaint can send stop before the new guest starts).
+                        shell.sendall("§ts\r".encode())
+                        drain(shell, shell_log, .3)
+                        shell.sendall("§§\r".encode())
                         drain(shell, shell_log, .3)
                         serial_begin = serial_path.stat().st_size
                         shell_begin = len(shell_log)

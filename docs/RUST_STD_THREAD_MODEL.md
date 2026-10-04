@@ -75,6 +75,59 @@ or unrelated work. The VM reservation keeps the referenced guest leaf tables
 and main-stack backing alive. Retirement frees the owned carrier tables only
 after switching away from them; 256 admitted tasks bound this storage to 3 MiB.
 
+## Cooperative VM stop for persistent runtimes
+
+A persistent Tokio runtime needs its Hull owner to run Rust cleanup before the
+host drains guest jobs. Previously `vmx_stop`/Apps `stop` could stop the Hull
+first, leaving Tokio workers parked in the runtime that the Hull could no
+longer drop. The request latched, but native-job draining kept the VM in
+`stop-pending` indefinitely. The Veloren capture showed five retained jobs.
+
+Process-shaped apps opt in with `trueos::shutdown::ShutdownGuard::register()`
+before creating their runtime, logging guards, or other process resources.
+This uses additive `trueos_cabi_blueprint_stop_control_v1` and VMCALL `0x21A`:
+operation 0 registers the sole Hull cleanup owner, and operation 1 polls the
+VM-scoped request from either the Hull or its native threads. Registration and
+stop race through one atomic state; registration after an immediate stop is
+rejected. Repeated stop requests preserve the selected behavior.
+
+For a registered app, stop retains Hull execution and native-job admission.
+Poll `shutdown::requested()` at safe application boundaries, leave the main
+loop, flush persistence and logging, join application threads, and drop the
+Tokio runtime. Admission remains available during this phase because cleanup
+can lazily create blocking workers. Declare the shutdown guard before these
+resources so it drops last. Its drop acknowledges cleanup using the existing
+Blueprint shutdown boundary. The host then closes admission, drains all native
+job reservations (including final destruction), releases process/realm state
+and the carrier, and publishes the slot offline. Other apps retain their
+existing stop behavior. An unresponsive or crashed native job still retains
+its storage; this protocol does not forcibly unwind arbitrary Rust stacks.
+
+Veloren registers the guard before its shared runtime and checks requests
+between ticks. Its ECS/slow-job pool holds a runtime handle rather than runtime
+ownership, allowing the main owner to cancel async tasks and join workers even
+when background jobs retain the pool.
+
+`probes/tokio_stop` exercises two Tokio workers, a native std thread, a CPU job
+retaining its pool, native-worker request polling, and creation of a blocking
+worker after the stop request. Each stop requires all three Tokio workers and
+four thread TLS destructors to finish, followed by host evidence of zero native
+jobs and carrier release. The runner relaunches and stops the same VM slot:
+
+```sh
+TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH=1 cargo bp --probes tokio_stop # Blueprint repo
+python3 tools/qemu/verify-tokio-platform.py \
+  --iso <ISO embedding tokio_stop> --output <new-evidence-directory> \
+  --probe tokio_stop
+```
+
+The run in `bld/veloren-tokio/qemu-cooperative-stop-cleared/result.json` passed
+both stops with VM slot 0. Host tests additionally cover registration races,
+SDK cleanup ordering, and rejection of duplicate/late registration. The new
+kernel ABI and newly packed server must be installed together; an older ISO
+cannot resolve the new import. These probes establish healthy cooperative
+shutdown, not recovery of a server already trapped in the old drain path.
+
 ## Rust std selection
 
 Rust normally selects `library/std/src/sys/thread/unix.rs` for a Unix-family
