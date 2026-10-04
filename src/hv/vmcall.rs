@@ -825,6 +825,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
         }
         OP_BP_STOP_CONTROL_V1 => {
+            if arg0 > 1 || arg1 != 0 || req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
             let rc = crate::hv::blueprint_stop_control(vm_id, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0);
             DispatchOutcome::Resume

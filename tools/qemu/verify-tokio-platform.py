@@ -60,6 +60,15 @@ def probe_result(text, probe="tokio_mrt"):
                     return "FAIL", f"PASS lacks workers={workers} ECS evidence"
             return "PASS", marker
         return None, None
+    if probe == "tokio_stop":
+        marker = "tokio_stop: PASS started=3 stopped=3 tls_destructors=4 cpu=joined std=joined cleanup_blocking=42"
+        if marker in text:
+            required = ("tokio_stop: observed host-stop",
+                        "lifecycle: stop requested cooperative=1",
+                        "lifecycle: offline native_jobs=0 carrier=released")
+            if all(record in text for record in required):
+                return "PASS", marker
+        return None, None
     if PASS in text:
         required = (
             "tokio_mrt: std joined=2 detached=1 tls_destructors=3",
@@ -147,7 +156,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="Fresh evidence directory (must not exist)")
     parser.add_argument("--timeout", type=float, default=90, help="Total boot and probe deadline, at most 90 seconds")
     parser.add_argument("--gdb-port", type=int, help="Expose this private QEMU instance to loopback GDB for diagnostics")
-    parser.add_argument("--probe", choices=("tokio_mrt", "veloren_executor"), default="tokio_mrt", help="Embedded probe to run")
+    parser.add_argument("--probe", choices=("tokio_mrt", "veloren_executor", "tokio_stop"), default="tokio_mrt", help="Embedded probe to run (tokio_stop checks stop and VM-slot reuse)")
     parser.add_argument("--veloren-executor", action="store_true", help="Also run the vendored Veloren Tokio executor probe")
     args = parser.parse_args()
     if not 0 < args.timeout <= 90:
@@ -283,9 +292,44 @@ def main():
             # launches the embedded AppDB entry without an online lookup.
             shell.sendall("§\r".encode())
             drain(shell, shell_log, .3)
+            serial_begin = serial_path.stat().st_size
+            shell_begin = len(shell_log)
             shell.sendall((args.probe + "\r").encode())
             result["shell2"]["mode"] = "Default (selected with §)"
+            if args.probe == "tokio_stop":
+                result["stop_waves"] = []
+                for wave in range(2):
+                    if wave:
+                        # A fresh Matrix transcript cannot replay the first
+                        # incarnation's PASS while testing slot reuse.
+                        shell.sendall("§stop-reuse\r".encode())
+                        drain(shell, shell_log, .3)
+                        serial_begin = serial_path.stat().st_size
+                        shell_begin = len(shell_log)
+                        shell.sendall(b"tokio_stop\r")
+                    sent_stop = False
+                    while True:
+                        check_running()
+                        observed = (serial_path.read_bytes()[serial_begin:].decode(errors="replace")
+                                    + shell_log[shell_begin:].decode(errors="replace"))
+                        if not sent_stop and "tokio_stop: READY workers=2 std=1 cleanup_owner=1" in plain(observed):
+                            shell.sendall(b"vmx_stop\r")
+                            sent_stop = True
+                        status, detail = probe_result(observed, "tokio_stop")
+                        if status == "FAIL":
+                            raise RuntimeError(detail)
+                        if status == "PASS":
+                            vm = re.search(r"hv: vm(\d+) lifecycle: offline native_jobs=0 carrier=released", plain(observed))
+                            result["stop_waves"].append({"wave": wave, "vmid": int(vm.group(1)), "detail": detail})
+                            break
+                        drain(shell, shell_log, .1)
+                if result["stop_waves"][0]["vmid"] != result["stop_waves"][1]["vmid"]:
+                    raise RuntimeError("Stop probe did not reuse the same VM slot")
+                result["status"] = "PASS"
+                result["detail"] = "tokio_stop: PASS graceful_stop=2 same_vm_slot=1 native_jobs=0"
             while True:
+                if args.probe == "tokio_stop":
+                    break
                 check_running()
                 observed = serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
                 status, detail = probe_result(observed, args.probe)

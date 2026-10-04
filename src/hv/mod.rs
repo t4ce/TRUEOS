@@ -6317,6 +6317,10 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // the same AP while reporting the first VM as already offline.
     lane_lease.release_now();
     vm.running.store(false, Ordering::Release);
+    crate::log_os::blueprint_important_line(format_args!(
+        "hv: vm{} lifecycle: offline native_jobs={} carrier=released\n",
+        vm_id, crate::r::blocking::guest_jobs_in_flight(vm_id)
+    ));
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
