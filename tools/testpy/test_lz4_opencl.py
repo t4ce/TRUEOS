@@ -10,7 +10,7 @@ from pathlib import Path
 import struct
 import time
 
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 
 def main():
     cl=c.CDLL('libOpenCL.so.1')

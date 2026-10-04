@@ -3,7 +3,11 @@ const LZ4_BINDING: usize = 1088;
 const LZ4_SURFACES: usize = 1152;
 const LZ4_PAYLOAD: usize = 1536;
 const LZ4_POST_MARKER: u32 = 0x4C5A3401;
+// PIPE_CONTROL post-sync writes a QWord; use an 8-byte-aligned pair of
+// DWORD slots rather than the old slot 1, which the encoder rejects.
+const LZ4_POST_MARKER_SLOT: usize = 2;
 const _: () = {
+    assert!(LZ4_POST_MARKER_SLOT & 1 == 0);
     let c = LZ4_BLOCKS_ADLS_CPP_ABI_CONTRACT;
     assert!(matches!(c.validate(), Ok(())));
     assert!(c.simd_width == 16 && c.scratch_bytes == 0 && c.slm_bytes == 0);
@@ -146,7 +150,7 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
         batch,
         &mut cursor,
         state.gpu_va.result,
-        1,
+        LZ4_POST_MARKER_SLOT,
         LZ4_POST_MARKER,
     );
     if !ok || cursor * core::mem::size_of::<u32>() > LZ4_IDD {

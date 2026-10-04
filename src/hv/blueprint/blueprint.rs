@@ -1771,6 +1771,15 @@ pub(crate) fn build_process_env(
     vars.insert(String::from("BAT_CONFIG_DIR"), String::from("/config/bat"));
     vars.insert(String::from("BAT_CACHE_PATH"), String::from("/cache/bat"));
     let archive_stem = safe_archive_stem(archive);
+    if archive_stem == "velosrv" {
+        // Veloren uses this override for logs, settings and saves before its
+        // executable-relative fallback. Use the actual per-instance home even
+        // when a launch grants broader FS scope; no new capability is needed.
+        vars.insert(
+            String::from("VELOREN_USERDATA"),
+            alloc::format!("{}/userdata", app_home.trim_end_matches('/')),
+        );
+    }
     if archive_stem == "bat" {
         vars.insert(
             String::from("BAT_OPTS"),

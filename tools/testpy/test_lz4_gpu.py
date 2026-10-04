@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 def main():
     shader = (ROOT / 'crates/trueos-shader/gpgpu/kernels/lz4_blocks.clcpp').read_text()

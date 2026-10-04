@@ -295,3 +295,11 @@ filesystem setup and import resolution. It stopped in userdata-directory
 initialization because `std::env::current_exe()` returned `Unsupported`
 (errno 38). Executable-path discovery remains a separate compatibility boundary;
 this run does not establish complete velosrv startup.
+
+On 2026-10-04, the `velosrv` launch environment supplies
+`VELOREN_USERDATA=<VM HOME>/userdata`, selecting its existing app-scoped storage
+before that fallback. The existing packed server in
+`bld/thread-acceptance/qemu-velosrv-env-2` gets past the executable-path panic;
+its native `vmx_env` view shows `/apps/velosrv/userdata`. Startup then stops at
+the missing Veloren asset directory in the empty test filesystem. This verifies
+the userdata environment bridge, not complete server startup.

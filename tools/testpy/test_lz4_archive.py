@@ -52,10 +52,16 @@ crc32fast = "1.5.0"
 ''')
         (folder / 'src/main.rs').write_text(f'''
 extern crate alloc;
+#[macro_export] macro_rules! log_info {{ ($($args:tt)*) => {{}}; }}
+#[macro_export] macro_rules! log_warn {{ ($($args:tt)*) => {{}}; }}
 #[path="{ROOT / 'src/z7.rs'}"] mod z7;
 mod intel {{ pub mod gpgpu {{
-    pub fn lz4_gpu_available() -> bool {{ false }}
-    pub async fn lz4_gpu_blocks(_: &[(&[u8],usize)], _: bool) -> Result<Vec<Vec<u8>>,()> {{ panic!("host CPU test entered GPU") }}
+    #[derive(Debug)] pub enum Lz4GpuError {{ Unavailable, Submission }}
+    std::thread_local! {{ pub static MODE: std::cell::Cell<u8> = const {{ std::cell::Cell::new(0) }}; }}
+    pub fn lz4_gpu_available() -> bool {{ MODE.get() != 0 }}
+    pub async fn lz4_gpu_blocks(_: &[(&[u8],usize)], _: bool) -> Result<Vec<Vec<u8>>,Lz4GpuError> {{
+        Err(if MODE.get() == 2 {{ Lz4GpuError::Submission }} else {{ Lz4GpuError::Unavailable }})
+    }}
 }} }}
 mod r {{
     pub mod codec {{
@@ -66,12 +72,18 @@ mod r {{
     #[path="{ROOT / 'src/r/lz4.rs'}"] pub mod lz4;
     #[path="{ROOT / 'src/r/tar.rs'}"] pub mod tar;
 }}
+fn block_on<T>(future: impl std::future::Future<Output=T>) -> T {{
+    let mut future=std::pin::pin!(future);
+    let mut context=std::task::Context::from_waker(std::task::Waker::noop());
+    match future.as_mut().poll(&mut context) {{ std::task::Poll::Ready(value)=>value, _=>panic!("mock pool must finish synchronously") }}
+}}
 fn main() {{
     let args:Vec<_>=std::env::args().collect();
     let source=std::fs::read(&args[2]).unwrap();
     match args[1].as_str() {{
         "asset-check" => {{
-            let tar=r::lz4::decompress_frame_cpu(&source,80*1024*1024).unwrap();
+            intel::gpgpu::MODE.set(1);
+            let tar=block_on(r::lz4::decompress_frame(source,80*1024*1024)).unwrap();
             let entries=r::tar::unpack(&tar,4096,32*1024*1024,64*1024*1024).unwrap();
             assert_eq!(entries.len(),2977);
             for entry in &entries {{
@@ -93,6 +105,17 @@ fn main() {{
         }}
         _ => panic!(),
     }}
+}}
+#[test] fn gpu_unavailable_uses_cpu_but_submission_errors_do_not() {{
+    let data:Vec<_>=(0..150000).map(|i|(i*31) as u8).collect();
+    intel::gpgpu::MODE.set(1);
+    let frame=block_on(r::lz4::compress_frame(data.clone())).unwrap();
+    assert_eq!(block_on(r::lz4::decompress_frame(frame.clone(),data.len())).unwrap(),data);
+    let encoded=block_on(r::lz4::blocks(vec![(data[..4096].to_vec(),8192)],true)).unwrap();
+    assert_eq!(block_on(r::lz4::blocks(vec![(encoded[0].clone(),4096)],false)).unwrap()[0],data[..4096]);
+    intel::gpgpu::MODE.set(2);
+    assert_eq!(block_on(r::lz4::decompress_frame(frame,data.len())),Err(r::lz4::Error::Gpu));
+    assert_eq!(block_on(r::lz4::compress_frame(data)),Err(r::lz4::Error::Gpu));
 }}
 #[test] fn bounded_and_corrupt_frames() {{
     for data in [vec![],vec![0;100000],(0..100000).map(|n|(n*31) as u8).collect()] {{

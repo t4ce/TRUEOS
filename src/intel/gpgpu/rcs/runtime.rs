@@ -442,10 +442,13 @@ pub(crate) struct DirectRcsControlGgttPrewarmReport {
     pub(crate) execution: bool,
     pub(crate) lfm25: bool,
     pub(crate) ui4_compositor: bool,
+    pub(crate) codec: bool,
 }
 
 impl DirectRcsControlGgttPrewarmReport {
     pub(crate) const fn accepted(self) -> bool {
+        // Codec is optional: its isolated failure selects the CPU service,
+        // without denying the display/execution clients their boot contract.
         self.system_service
             && self.font
             && self.execution
@@ -507,6 +510,8 @@ pub(crate) fn prewarm_direct_rcs_controls_ggtt(
             UI4_COMPOSITOR_RCS_GPU_VA,
             ui4_compositor_rcs_state_once(dev),
         ),
+        codec: LZ4_BLOCKS_ARTIFACT.target_policy.supports(dev.device_id, dev.revision_id)
+            && prewarm_direct_rcs_control_ggtt(dev, CODEC_RCS_GPU_VA, codec_rcs_state_once()),
     }
 }
 

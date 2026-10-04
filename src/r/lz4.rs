@@ -193,6 +193,7 @@ pub fn decompress_frame_cpu(input: &[u8], max_output: usize) -> Result<Vec<u8>, 
         }
     }
     verify(&frame, &out)?;
+    crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=cpu input_bytes={} output_bytes={} blocks={}\n", input.len(), out.len(), frame.blocks.len());
     Ok(out)
 }
 
@@ -223,9 +224,16 @@ pub async fn blocks(input: Vec<(Vec<u8>, usize)>, encode: bool) -> Result<Vec<Ve
             .iter()
             .map(|(bytes, cap)| (bytes.as_slice(), *cap))
             .collect();
-        return crate::intel::gpgpu::lz4_gpu_blocks(&borrowed, encode)
-            .await
-            .map_err(|_| Error::Gpu);
+        match crate::intel::gpgpu::lz4_gpu_blocks(&borrowed, encode).await {
+            Ok(output) => return Ok(output),
+            Err(crate::intel::gpgpu::Lz4GpuError::Unavailable) => {
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=fallback operation=blocks reason=gpu-unavailable backend=cpu\n");
+            }
+            Err(error) => {
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=gpu-failed operation=blocks error={:?}\n", error);
+                return Err(Error::Gpu);
+            }
+        }
     }
     super::codec::CODEC_COMPUTE
         .run("codec/lz4-blocks", move |_| {
@@ -268,9 +276,21 @@ pub async fn compress_frame(input: Vec<u8>) -> Result<Vec<u8>, Error> {
             .chunks(ENCODE_BLOCK_BYTES)
             .map(|block| (block, block.len() + block.len() / 255 + 16))
             .collect();
-        let encoded = crate::intel::gpgpu::lz4_gpu_blocks(&blocks, true)
-            .await
-            .map_err(|_| Error::Gpu)?;
+        let encoded = match crate::intel::gpgpu::lz4_gpu_blocks(&blocks, true).await {
+            Ok(output) => output,
+            Err(crate::intel::gpgpu::Lz4GpuError::Unavailable) => {
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=fallback operation=encode reason=gpu-unavailable backend=cpu\n");
+                drop(out);
+                return super::codec::CODEC_COMPUTE
+                    .run("codec/lz4-encode", move |_| compress_frame_cpu(&input))
+                    .await
+                    .map_err(|_| Error::Worker);
+            }
+            Err(error) => {
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=gpu-failed operation=encode error={:?}\n", error);
+                return Err(Error::Gpu);
+            }
+        };
         for ((source, _), compressed) in blocks.iter().zip(encoded.iter()) {
             append_block(&mut out, source, compressed);
         }
@@ -296,9 +316,21 @@ pub async fn decompress_frame(input: Vec<u8>, max_output: usize) -> Result<Vec<u
             .filter(|block| !block.raw)
             .map(|block| (&input[block.range.clone()], capacity))
             .collect();
-        let decoded = crate::intel::gpgpu::lz4_gpu_blocks(&compressed, false)
-            .await
-            .map_err(|_| Error::Gpu)?;
+        let decoded = match crate::intel::gpgpu::lz4_gpu_blocks(&compressed, false).await {
+            Ok(output) => output,
+            Err(crate::intel::gpgpu::Lz4GpuError::Unavailable) => {
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=fallback operation=decode reason=gpu-unavailable backend=cpu\n");
+                drop(out);
+                return super::codec::CODEC_COMPUTE
+                    .run("codec/lz4-decode", move |_| decompress_frame_cpu(&input, max_output))
+                    .await
+                    .map_err(|_| Error::Worker)?;
+            }
+            Err(error) => {
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=gpu-failed operation=decode error={:?}\n", error);
+                return Err(Error::Gpu);
+            }
+        };
         let mut decoded = decoded.into_iter();
         for block in batch {
             let owned;
@@ -315,5 +347,6 @@ pub async fn decompress_frame(input: Vec<u8>, max_output: usize) -> Result<Vec<u
         }
     }
     verify(&frame, &out)?;
+    crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=gpu input_bytes={} output_bytes={} blocks={}\n", input.len(), out.len(), frame.blocks.len());
     Ok(out)
 }

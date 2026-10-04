@@ -44,6 +44,7 @@ static CODEC_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
 static CODEC_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
     Mutex::new(DirectRcsSubmitRuntime::new());
 static LZ4_RESOURCES: Mutex<Option<Lz4Resources>> = Mutex::new(None);
+static CODEC_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static LZ4_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
@@ -85,13 +86,30 @@ pub(crate) fn lz4_gpu_available() -> bool {
             .target_policy
             .supports(dev.device_id, dev.revision_id)
     }) && !CODEC_RCS_CONTEXT_QUARANTINED.load(Ordering::Acquire)
+        && CODEC_RCS_GGTT_MAPPING.get().copied() == Some(true)
+}
+
+fn codec_rcs_state_once() -> Option<DirectRcsState> {
+    let mut state_slot = CODEC_RCS_STATE.lock();
+    if CODEC_RCS_CONTEXT_QUARANTINED.load(Ordering::Acquire) {
+        return None;
+    }
+    if let Some(state) = *state_slot {
+        return Some(state);
+    }
+    let state = allocate_direct_rcs_state(CODEC_RCS_GPU_VA)?;
+    *state_slot = Some(state);
+    Some(state)
 }
 
 fn lz4_resources(dev: super::Dev) -> Result<Lz4Resources, Lz4GpuError> {
     if let Some(resources) = *LZ4_RESOURCES.lock() {
         return Ok(resources);
     }
-    let state = allocate_direct_rcs_state(CODEC_RCS_GPU_VA).ok_or(Lz4GpuError::Unavailable)?;
+    // Reuse the exact backing installed by the boot GGTT owner. Allocating a
+    // new ring here would leave the immutable control mappings pointing at a
+    // different generation even if the readiness check passed.
+    let state = codec_rcs_state_once().ok_or(Lz4GpuError::Unavailable)?;
     let upload = upload_ppgtt_resident_artifact(dev, LZ4_BLOCKS_ARTIFACT, LZ4_KERNEL_GPU)
         .ok_or(Lz4GpuError::Unavailable)?;
     let (phys, arena) = crate::dma::alloc(LZ4_ARENA_BYTES, 4096).ok_or(Lz4GpuError::Unavailable)?;
@@ -115,6 +133,7 @@ fn lz4_resources(dev: super::Dev) -> Result<Lz4Resources, Lz4GpuError> {
         arena,
     };
     *LZ4_RESOURCES.lock() = Some(resources);
+    crate::log_info!(target: "gpgpu"; "intel/gpgpu: lz4-resources ready=1 control_mapping=boot-owned ring_phys=0x{:X} ppgtt_phys=0x{:X} arena_bytes={}\n", state.ring_phys, state.ppgtt_phys, LZ4_ARENA_BYTES);
     Ok(resources)
 }
 
@@ -196,9 +215,12 @@ pub(crate) async fn lz4_gpu_blocks(
     }
     super::dma_flush(resources.arena, input_bytes);
     super::dma_flush(unsafe { resources.arena.add(LZ4_DESC_OFFSET) }, blocks.len() * 24);
-    if !direct_rcs_forcewake(dev)
-        || !encode_lz4_batch(resources, blocks.len() as u32, u32::from(!encode))
-    {
+    if !direct_rcs_forcewake(dev) {
+        crate::log_warn!(target: "gpgpu"; "intel/gpgpu: lz4-failed phase=gt-ready blocks={} encode={}\n", blocks.len(), encode);
+        return Err(Lz4GpuError::Submission);
+    }
+    if !encode_lz4_batch(resources, blocks.len() as u32, u32::from(!encode)) {
+        crate::log_warn!(target: "gpgpu"; "intel/gpgpu: lz4-failed phase=batch-encode blocks={} encode={}\n", blocks.len(), encode);
         return Err(Lz4GpuError::Submission);
     }
     let started = direct_rcs_now_tick();
@@ -223,7 +245,7 @@ pub(crate) async fn lz4_gpu_blocks(
         }
     }
     loop {
-        let observed = direct_rcs_read_result_slot(resources.state, 1);
+        let observed = direct_rcs_read_result_slot(resources.state, LZ4_POST_MARKER_SLOT);
         if direct_rcs_retirement_proof_on_lane(
             resources.state,
             DirectRcsLane::Codec,
@@ -254,6 +276,7 @@ pub(crate) async fn lz4_gpu_blocks(
         let length = unsafe { core::ptr::read_volatile(descriptor.add(4)) } as usize;
         let status = unsafe { core::ptr::read_volatile(descriptor.add(5)) };
         if status != 0 || length > capacity {
+            crate::log_warn!(target: "gpgpu"; "intel/gpgpu: lz4-failed phase=block-result index={} blocks={} encode={} status={} length={} capacity={} input_bytes={} marker=0x{:X}\n", index, blocks.len(), encode, status, length, capacity, blocks[index].0.len(), direct_rcs_read_result_slot(resources.state, LZ4_POST_MARKER_SLOT));
             return Err(Lz4GpuError::InvalidInput);
         }
         output.push(
