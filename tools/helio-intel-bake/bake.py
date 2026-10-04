@@ -722,7 +722,7 @@ def vulkan_compile_flags() -> list[str]:
     # checkout and does not depend on host packages or sibling working trees.
     # The remaining roots stay as fallbacks for machines provisioned earlier.
     include_roots = [
-        TRUEOS / "vendor/vulkan-headers/include",
+        TRUEOS / "tools/vulkan-headers/include",
         Path("/usr/include"),
         TRUEOS.parent / "bak/reference/mesa/include",
         TRUEOS.parent / "blender-default-cube-toggle/lib/linux_x64/vulkan/include",

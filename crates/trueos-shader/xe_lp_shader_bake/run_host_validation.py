@@ -144,7 +144,7 @@ def pkg_config_libs() -> list[str]:
     # run this capture.  libvulkan.so.1 is deliberate: systems which only ship
     # the runtime loader do not provide the unversioned libvulkan.so linker
     # symlink used by -lvulkan.
-    vendored_headers = ROOT / "vendor" / "vulkan-headers" / "include"
+    vendored_headers = ROOT / "tools" / "vulkan-headers" / "include"
     if vendored_headers.joinpath("vulkan", "vulkan.h").is_file():
         return [f"-I{vendored_headers}", "-l:libvulkan.so.1"]
     return ["-lvulkan"]

@@ -1,8 +1,10 @@
-# Vulkan headers (vendored)
+# Vulkan headers (vendored host tooling)
 
 Khronos Vulkan API headers, vendored so that `tools/helio-intel-bake/bake.py`
 can compile its pipeline dumper from a clean checkout without depending on a
-host `libvulkan-dev` package or on a sibling working tree.
+host `libvulkan-dev` package or on a sibling working tree. These headers live
+under `tools/` because they support host-side baking and validation; the
+TRUEOS kernel does not build against them.
 
 This directory exists because the previous header location was outside every
 git repository. It was recovered from a backup rather than from source control.
@@ -30,7 +32,7 @@ Verified with:
 ```sh
 cc crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c \
    -o /tmp/dump_headertest \
-   -I vendor/vulkan-headers/include -l:libvulkan.so.1
+   -I tools/vulkan-headers/include -l:libvulkan.so.1
 ```
 
 ## Version and license
@@ -53,7 +55,7 @@ on Debian/Ubuntu). That is a host requirement and is deliberately not vendored.
 
 `vulkan_compile_flags()` in `tools/helio-intel-bake/bake.py` searches, in order:
 
-1. `vendor/vulkan-headers/include` (this directory)
+1. `tools/vulkan-headers/include` (this directory)
 2. `/usr/include`
 3. `../bak/reference/mesa/include`
 4. `../blender-default-cube-toggle/lib/linux_x64/vulkan/include`
