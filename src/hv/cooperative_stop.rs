@@ -8,10 +8,16 @@ const REQUESTED: u8 = 2;
 
 pub(crate) struct CooperativeStop(AtomicU8);
 impl CooperativeStop {
-    pub(crate) const fn new() -> Self { Self(AtomicU8::new(0)) }
-    pub(crate) fn reset(&self) { self.0.store(0, Ordering::Release); }
+    pub(crate) const fn new() -> Self {
+        Self(AtomicU8::new(0))
+    }
+    pub(crate) fn reset(&self) {
+        self.0.store(0, Ordering::Release);
+    }
     pub(crate) fn register(&self) -> bool {
-        self.0.compare_exchange(0, REGISTERED, Ordering::AcqRel, Ordering::Acquire).is_ok()
+        self.0
+            .compare_exchange(0, REGISTERED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
     /// True means the guest must retain execution and admission for cleanup.
     pub(crate) fn request(&self) -> bool {

@@ -223,7 +223,7 @@ def main():
             status, detail = probe_result(observed, active_probe)
             if status == "FAIL":
                 raise RuntimeError(detail)
-            if time.monotonic() >= deadline and status != "PASS":
+            if time.monotonic() >= deadline:
                 raise TimeoutError("Boot/probe deadline expired; latest probe evidence: " +
                                    (" | ".join(probe_tail(observed, probe=active_probe))
                                     or f"no {active_probe} output"))

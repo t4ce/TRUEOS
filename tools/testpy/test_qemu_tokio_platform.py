@@ -74,6 +74,28 @@ class ProbeEvidenceTests(unittest.TestCase):
     def test_incomplete_probe_keeps_waiting(self):
         self.assertEqual(verify.probe_result("tokio_mrt: start std-and-multi-thread"), (None, None))
 
+    def test_stop_requires_worker_cleanup_and_actual_host_teardown(self):
+        records = (
+            "hv: vm0 lifecycle: stop requested cooperative=1 native_jobs=3 cleanup=guest-before-drain",
+            "tokio_stop: observed host-stop",
+            "tokio_stop: PASS started=3 stopped=3 tls_destructors=4 cpu=joined std=joined cleanup_blocking=42",
+            "hv: vm0 lifecycle: offline native_jobs=0 carrier=released",
+        )
+        self.assertEqual(verify.probe_result("\n".join(records), "tokio_stop")[0], "PASS")
+        for missing in range(len(records)):
+            evidence = "\n".join(record for i, record in enumerate(records) if i != missing)
+            self.assertEqual(verify.probe_result(evidence, "tokio_stop"), (None, None))
+
+    def test_stop_cannot_pass_with_live_guest_jobs_or_missing_tls_destructors(self):
+        evidence = "\n".join((
+            "hv: vm0 lifecycle: stop requested cooperative=1",
+            "tokio_stop: observed host-stop",
+            "tokio_stop: PASS started=3 stopped=3 tls_destructors=4 cpu=joined std=joined cleanup_blocking=42",
+            "hv: vm0 lifecycle: offline native_jobs=0 carrier=released",
+        ))
+        for old, new in (("native_jobs=0", "native_jobs=1"), ("tls_destructors=4", "tls_destructors=3")):
+            self.assertEqual(verify.probe_result(evidence.replace(old, new), "tokio_stop"), (None, None))
+
     def test_repaint_without_newlines_has_compact_distinct_probe_tail(self):
         frame = ("\x1b[2J" + "TRUE OS " * 2000 + "\x1b[12;1H" +
                  "tokio_mrt: start std-and-multi-thread" + "\x1b[13;1H" +
