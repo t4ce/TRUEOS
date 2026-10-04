@@ -1859,6 +1859,9 @@ pub(crate) fn begin_blueprint_frame(
     clear_rgba: u32,
     cpu_clear: bool,
 ) -> i32 {
+    // Guest vmcalls enter here directly, bypassing the C-ABI wrappers. Reclaim
+    // old immutable generations before admission on every producer path.
+    reap_retired_frames();
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
@@ -1909,7 +1912,8 @@ pub(crate) fn begin_blueprint_frame(
             }) {
                 Ok(frame) => frame,
                 Err(error) => {
-                    crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh allocation failed owner={:?} window={} old_frame={} error={:?} action=retain-surflive-front\n", owner, window_id, surface.frame.raw(), error);
+                    let usage = super::ui4_live_resource_usage();
+                    crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh allocation failed owner={:?} window={} old_frame={} error={:?} active_frames={} retired_pending={} action=retain-surflive-front\n", owner, window_id, surface.frame.raw(), error, usage.active_frames, RETIRED_FRAMES.lock().len());
                     return ERROR_UI4;
                 }
             };
@@ -8455,9 +8459,23 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
 }
 
 fn reap_retired_frames() {
-    RETIRED_FRAMES
-        .lock()
-        .retain(|frame| matches!(destroy_frame(*frame), Err(FramePoolError::Busy)));
+    let mut retired = RETIRED_FRAMES.lock();
+    let before = retired.len();
+    retired.retain(|frame| matches!(destroy_frame(*frame), Err(FramePoolError::Busy)));
+    let pending = retired.len();
+    let reclaimed = before - pending;
+    drop(retired);
+    if reclaimed != 0 {
+        // Important survives the normal Global/Warn filter. Sample successful
+        // reclamation rather than enabling all UI4 submission/drag traces.
+        static RECLAIM_EVENTS: AtomicU32 = AtomicU32::new(0);
+        let event = RECLAIM_EVENTS.fetch_add(1, Ordering::Relaxed) + 1;
+        if event <= 4 || event % 64 == 0 {
+            crate::log_important!(target: "ui4/blueprint-frame";
+                "frame retirement reaped event={} reclaimed={} pending={} admission=shared-begin\n",
+                event, reclaimed, pending);
+        }
+    }
 }
 
 #[cfg(test)]
