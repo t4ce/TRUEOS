@@ -47,6 +47,11 @@ pub(crate) mod flags {
     /// See log_os.tgl_gpu_diag_profile.txt for the exact matrix and limitations.
     pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = true;
 
+    /// Archive action investigation: admit user-action breadcrumbs and codec
+    /// phases even when another diagnostic profile suppresses these areas.
+    /// No mouse-motion, per-frame, or per-status-poll trace is enabled.
+    pub(crate) const ARCHIVE_DIAG_PROFILE_ENABLED: bool = true;
+
     /// Blueprint/hypervisor bring-up profile. Keep the semantic Blueprint and
     /// HV lanes fully visible while suppressing display, render, and GPU
     /// chatter that obscures Blueprint loading and VM lifecycle transitions.
@@ -229,6 +234,11 @@ pub(crate) mod flags {
     ///
     /// Keep all area/profile choices here: both sinks consult this same policy.
     pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
+        if ARCHIVE_DIAG_PROFILE_ENABLED
+            && matches!(area, LogArea::Apps | LogArea::Storage)
+        {
+            return LogLevelPolicy::up(LogLevelFilter::Info);
+        }
         if BLUEPRINT_HV_DEBUG_PROFILE_ENABLED {
             return match area {
                 LogArea::Hv | LogArea::Blueprint => LogLevelPolicy::up(LogLevelFilter::Trace),
@@ -742,6 +752,13 @@ pub fn log_once_with_target(
 
 pub fn init_global_dispatch() {
     log_os_core::install_global_log_dispatch(&TRUEOS_LOG_ROUTER);
+    if flags::ARCHIVE_DIAG_PROFILE_ENABLED {
+        log_with_area_level(
+            flags::LogArea::Boot,
+            LogLevel::Important,
+            format_args!("log-profile=archive-diag-v1 apps/storage=Up(Info) override=other-profiles markers=termdir/archive,archive-api,codec/archive\n"),
+        );
+    }
     crate::log_font_warm_diag!("phase=profile version=1 first=2 every=128 clip_budget=320\n");
     if flags::TGL_GPU_DIAG_PROFILE_ENABLED {
         log_with_area_level(

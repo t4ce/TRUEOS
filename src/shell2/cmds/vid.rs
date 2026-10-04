@@ -26,6 +26,25 @@ pub(crate) fn enqueue_from_blueprint(vm_id: u8, path: String) -> Result<(), ()> 
 }
 
 pub(crate) fn enqueue_qualified_from_blueprint(vm_id: u8, path: String) -> Result<(), ()> {
+    if path.starts_with("https://") {
+        if path.len() > 8192
+            || path
+                .bytes()
+                .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+        {
+            return Err(());
+        }
+        let authority = path[8..].split(['/', '?', '#']).next().unwrap_or("");
+        if authority.is_empty() || authority.contains('@') {
+            return Err(());
+        }
+        let mut queue = BLUEPRINT_VIDEO_QUEUE.lock();
+        if queue.len() >= 16 {
+            return Err(());
+        }
+        queue.push_back((vm_id, path));
+        return Ok(());
+    }
     let Some(rest) = path.strip_prefix("trueosfs:disc") else {
         return Err(());
     };
@@ -61,9 +80,14 @@ pub(crate) fn poll_blueprint_open(spawner: &Spawner) -> bool {
     };
     let target = switch_matrix_target_slot(&origin, VID_SLOTS[session.id.slot]);
     set_matrix_target_active(&target, true);
+    let loop_playback = !path.starts_with("https://");
     let command = VidCommand {
-        source: VidSource::TrueosFs(path),
-        loop_playback: true,
+        source: if path.starts_with("https://") {
+            VidSource::MediaUrl(path)
+        } else {
+            VidSource::TrueosFs(path)
+        },
+        loop_playback,
     };
     match vid_task(target.clone(), command, session) {
         Ok(token) => spawner.spawn(token),
@@ -83,6 +107,7 @@ struct VidCommand {
 enum VidSource {
     TrueosFs(String),
     Online,
+    MediaUrl(String),
 }
 
 impl VidSource {
@@ -90,6 +115,7 @@ impl VidSource {
         match self {
             Self::TrueosFs(_) => "trueosfs",
             Self::Online => "online-mp4",
+            Self::MediaUrl(_) => "website-mp4",
         }
     }
 
@@ -97,6 +123,7 @@ impl VidSource {
         match self {
             Self::TrueosFs(path) => path.as_str(),
             Self::Online => "fixed-online-avc1-mp4",
+            Self::MediaUrl(_) => "resolved-website-media",
         }
     }
 }
@@ -334,7 +361,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand, ui4_session: VidUi4
                 return;
             }
         },
-        VidSource::Online => None,
+        VidSource::Online | VidSource::MediaUrl(_) => None,
     };
     let (frame_width, frame_height) = prepared_fs
         .as_ref()
@@ -406,6 +433,13 @@ async fn vid_task(target: MatrixTarget, command: VidCommand, ui4_session: VidUi4
                     Ok(_) => Err("TRUEOSFS video resolution changed between loop laps"),
                     Err(err) => Err(err),
                 }
+            }
+            VidSource::MediaUrl(url) => {
+                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback(
+                    ui4_session.id,
+                    url,
+                )
+                .await
             }
             VidSource::Online => {
                 crate::intel::media::hw_vid::run_online_ui4_framed_video_playback(ui4_session.id)

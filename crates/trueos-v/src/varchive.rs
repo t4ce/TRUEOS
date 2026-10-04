@@ -25,6 +25,7 @@ struct Operation {
 
 impl Operation {
     fn from_start(value: i32) -> Result<Self, i32> {
+        let _ = crate::vsys::log_record(3, "apps", &alloc::format!("archive-api: phase=start-return value={value}"));
         if value <= 0 {
             Err(if value == 0 { ERR_BAD_PARAM } else { value })
         } else {
@@ -41,7 +42,10 @@ impl Operation {
                     Poll::Pending
                 }
                 1 => Poll::Ready(Ok(())),
-                error => Poll::Ready(Err(error)),
+                error => {
+                    let _ = crate::vsys::log_record(3, "apps", &alloc::format!("archive-api: phase=status-error operation={} code={error}", self.id));
+                    Poll::Ready(Err(error))
+                }
             }
         })
         .await?;
@@ -49,6 +53,7 @@ impl Operation {
         let mut raw = TrueosArchiveReport::default();
         let status =
             unsafe { vcabi::trueos_cabi_archive_report(self.id, core::ptr::addr_of_mut!(raw)) };
+        let _ = crate::vsys::log_record(3, "apps", &alloc::format!("archive-api: phase=report operation={} status={status} files={} input_bytes={} output_bytes={}", self.id, raw.file_count, raw.input_bytes, raw.output_bytes));
         if status != 0 {
             return Err(status);
         }
@@ -75,8 +80,8 @@ impl Drop for Operation {
 }
 
 /// Pack a TRUEOSFS file or directory into a deterministic archive.
-/// A destination ending in `.lz4` selects POSIX tar in a standard LZ4 frame
-/// (use `.tar.lz4`); other destinations retain the 7z encoding. LZ4 uses the
+/// A destination ending in `.lz4` or `.mz4` selects POSIX tar in a standard
+/// LZ4 frame (use `.tar.lz4` or `.tar.mz4`); other destinations retain the 7z encoding. LZ4 uses the
 /// kernel GPU block service when available, otherwise the bounded CPU pool.
 ///
 /// The future resolves only after the archive has been written successfully.

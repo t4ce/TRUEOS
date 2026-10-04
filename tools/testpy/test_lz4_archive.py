@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
@@ -70,6 +70,15 @@ fn main() {{
     let args:Vec<_>=std::env::args().collect();
     let source=std::fs::read(&args[2]).unwrap();
     match args[1].as_str() {{
+        "asset-check" => {{
+            let tar=r::lz4::decompress_frame_cpu(&source,80*1024*1024).unwrap();
+            let entries=r::tar::unpack(&tar,4096,32*1024*1024,64*1024*1024).unwrap();
+            assert_eq!(entries.len(),2977);
+            for entry in &entries {{
+                assert_eq!(entry.bytes,std::fs::read(std::path::Path::new(&args[3]).join(&entry.name)).unwrap(),"asset mismatch: {{}}",entry.name);
+            }}
+            println!("Production decoder verified {{}} asset files / {{}} bytes",entries.len(),entries.iter().map(|entry|entry.bytes.len()).sum::<usize>());
+        }}
         "encode" => std::fs::write(&args[3],r::lz4::compress_frame_cpu(&source)).unwrap(),
         "decode" => std::fs::write(&args[3],r::lz4::decompress_frame_cpu(&source,8*1024*1024).unwrap()).unwrap(),
         "unpack" => {{
@@ -134,5 +143,7 @@ fn main() {{
                 assert tf.extractfile(member).read()==bytes([i])*100000
         encoded=folder/'archive.tar.lz4';run('encode',repacked,encoded)
         with tarfile.open(fileobj=io.BytesIO(decompress(encoded.read_bytes()))) as tf: assert len(tf.getmembers())==25
+        if os.environ.get('TRUEOS_LZ4_ASSET_ARCHIVE'):
+            run('asset-check',Path(os.environ['TRUEOS_LZ4_ASSET_ARCHIVE']),Path(os.environ['TRUEOS_LZ4_ASSET_SOURCE']))
         print('LZ4 frames interoperate with liblz4; tar/PAX interoperates with tarfile; 25 files / 2.5 MB checked')
 if __name__=='__main__': main()

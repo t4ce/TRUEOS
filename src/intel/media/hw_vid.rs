@@ -544,6 +544,27 @@ pub(crate) async fn run_online_ui4_framed_video_playback(
     }
 }
 
+/// Browser-resolved HTTPS media uses the same bounded download/demux/decode path
+/// as the fixed online demo. Resolution and page JavaScript stay in the browser.
+pub(crate) async fn run_resolved_ui4_framed_video_playback(
+    session: crate::ui4::VideoPlaybackSession,
+    url: &str,
+) -> Result<H264PlaybackReport, &'static str> {
+    let report = run_media_url_playback(
+        session,
+        url,
+        H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true),
+        "website-ui4-video",
+        "website-ui4-video",
+    )
+    .await?;
+    if report.presented == 0 {
+        Err("website video produced no decodable frames")
+    } else {
+        Ok(report)
+    }
+}
+
 async fn run_media_url_playback(
     session: crate::ui4::VideoPlaybackSession,
     url: &str,

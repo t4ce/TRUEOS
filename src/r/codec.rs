@@ -19,7 +19,8 @@ const REQUEST_CAP: usize = 32;
 const OPERATION_CAP: usize = 64;
 
 const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_SOURCE_FILE_BYTES: usize = 16 * 1024 * 1024;
+// Map assets can exceed 16 MiB; retain the independent 64 MiB total budget.
+const MAX_SOURCE_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SOURCE_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4_096;
 const MAX_ARCHIVE_DICTIONARY_BYTES: usize = 16 * 1024 * 1024;
@@ -43,7 +44,7 @@ impl ArchiveFormat {
         if path
             .rsplit('.')
             .next()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("lz4"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lz4") || ext.eq_ignore_ascii_case("mz4"))
         {
             Self::TarLz4
         } else {
@@ -208,6 +209,10 @@ fn enqueue_operation(
         state: OperationState::Queued,
     });
     requests.push_back(request(id));
+    let queued = requests.len();
+    drop(operations);
+    drop(requests);
+    crate::log_info!(target: "storage"; "codec/archive: phase=queued owner={} operation={} queue_depth={}\n", owner, id, queued);
     Ok(id)
 }
 
@@ -724,6 +729,7 @@ fn validate_entry_set(entries: &[crate::z7::SevenZEntry]) -> Result<Vec<String>,
 
 async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecReport, CodecError> {
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
+    crate::log_info!(target: "storage"; "codec/archive: phase=read-begin source={:?} destination={:?} root={:?}\n", archive_path, output_path, disk);
     let info = crate::r::fs::trueosfs::file_info_async(disk, archive_path)
         .await?
         .ok_or(CodecError::NotFound)?;
@@ -737,11 +743,14 @@ async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecR
         return Err(CodecError::LimitExceeded);
     }
     let input_bytes = archive.len() as u64;
+    crate::log_info!(target: "storage"; "codec/archive: phase=read-complete source={:?} input_bytes={} lz4_magic={}\n", archive_path, input_bytes, archive.starts_with(&super::lz4::MAGIC));
     let decode_started = codec_now_ms();
     let entries = if archive.starts_with(&super::lz4::MAGIC) {
+        crate::log_info!(target: "storage"; "codec/archive: phase=lz4-begin source={:?} gpu_available={} cpu_fallback=on-unavailable\n", archive_path, crate::intel::gpgpu::lz4_gpu_available());
         let tar = super::lz4::decompress_frame(archive, MAX_TAR_BYTES)
             .await
             .map_err(CodecError::Lz4)?;
+        crate::log_info!(target: "storage"; "codec/archive: phase=tar-begin source={:?} tar_bytes={}\n", archive_path, tar.len());
         CODEC_COMPUTE
             .run("archive/tar-unpack", move |_| {
                 super::tar::unpack(
@@ -770,6 +779,7 @@ async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecR
     };
     crate::log_important!(target: "storage"; "codec: phase=decode elapsed_ms={} input_bytes={} files={}\n", codec_now_ms().saturating_sub(decode_started), input_bytes, entries.len());
     let restore_started = codec_now_ms();
+    crate::log_info!(target: "storage"; "codec/archive: phase=preflight-begin destination={:?} files={}\n", output_path, entries.len());
     let validated = validate_entry_set(entries.as_slice())?;
     let restore_dispositions = match restored_content_types(entries.as_slice()) {
         Ok(dispositions) => dispositions,
@@ -817,13 +827,20 @@ async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecR
     if !crate::r::fs::trueosfs::dir_create_all_async(disk, output_path).await? {
         return Err(CodecError::WriteFailed);
     }
+    crate::log_info!(target: "storage"; "codec/archive: phase=restore-begin destination={:?} files={}\n", output_path, entries.len());
 
     let mut output_bytes = 0u64;
-    for ((entry, destination), disposition) in entries
+    for (index, ((entry, destination), disposition)) in entries
         .iter()
         .zip(destinations.iter())
         .zip(restore_dispositions.iter().copied())
+        .enumerate()
     {
+        // First member and sparse checkpoints locate a blocked filesystem call
+        // without emitting thousands of per-file records for large assets.
+        if index == 0 || index % 128 == 0 {
+            crate::log_info!(target: "storage"; "codec/archive: phase=restore-progress files_done={} files_total={} output_bytes={} next={:?}\n", index, entries.len(), output_bytes, destination);
+        }
         if let Some(parent) = parent_path(destination.as_str())
             && !crate::r::fs::trueosfs::dir_create_all_async(disk, parent).await?
         {
@@ -875,8 +892,11 @@ async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecR
 async fn execute_request(request: CodecRequest) {
     let (owner, id) = request.operation_key();
     if !mark_operation_running(owner, id) {
+        crate::log_warn!(target: "storage"; "codec/archive: phase=run-rejected owner={} operation={}\n", owner, id);
         return;
     }
+    let started = codec_now_ms();
+    crate::log_info!(target: "storage"; "codec/archive: phase=running owner={} operation={}\n", owner, id);
     let result = match request {
         CodecRequest::PackPath {
             source_path,
@@ -894,13 +914,17 @@ async fn execute_request(request: CodecRequest) {
             ..
         } => unpack_path_job(archive_path.as_str(), output_path.as_str()).await,
     };
+    match &result {
+        Ok(report) => crate::log_info!(target: "storage"; "codec/archive: phase=complete owner={} operation={} elapsed_ms={} files={} input_bytes={} output_bytes={}\n", owner, id, codec_now_ms().saturating_sub(started), report.file_count, report.input_bytes, report.output_bytes),
+        Err(error) => crate::log_warn!(target: "storage"; "codec/archive: phase=failed owner={} operation={} elapsed_ms={} error={}\n", owner, id, codec_now_ms().saturating_sub(started), error),
+    }
     complete_operation(owner, id, result);
 }
 
 #[trueos_executor::task(pool_size = CODEC_WORKER_CAP)]
 pub async fn codec_worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
     crate::log_info!(
-        target: "service";
+        target: "storage";
         "codec: worker={} online archive=7z,tar.lz4 pool={} worker_slot={} core_kind={}\n",
         worker_id,
         CODEC_WORKER_CAP,

@@ -66,9 +66,13 @@ pub(crate) fn start_pack_many(owner: u32, sources: Vec<String>, archive: String)
 }
 
 pub(crate) fn start_unpack(owner: u32, archive: String, destination: String) -> i32 {
+    crate::log_info!(target: "storage"; "codec/archive: phase=cabi-unpack owner={} source={:?} destination={:?}\n", owner, archive, destination);
     match crate::r::codec::enqueue_archive_unpack(owner, archive, destination) {
         Ok(id) => id as i32,
-        Err(error) => map_error(&error),
+        Err(error) => {
+            crate::log_warn!(target: "storage"; "codec/archive: phase=enqueue-failed owner={} error={} code={}\n", owner, error, map_error(&error));
+            map_error(&error)
+        }
     }
 }
 

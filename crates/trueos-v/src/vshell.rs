@@ -652,6 +652,21 @@ pub fn play_video_qualified(path: &str) -> Result<(), i32> {
     if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
+/// Queue a browser-resolved HTTPS AVC MP4 in Shell2's bounded video player.
+/// The existing qualified-source ABI also accepts HTTPS media URLs.
+pub fn play_video_url(url: &str) -> Result<(), i32> {
+    if !url.starts_with("https://")
+        || url.len() > 8192
+        || url
+            .bytes()
+            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+    {
+        return Err(-1);
+    }
+    let rc = unsafe { vcabi::trueos_cabi_vid_open_v2(url.as_ptr(), url.len()) };
+    if rc == 0 { Ok(()) } else { Err(rc) }
+}
+
 pub const KONSOLE_FRAME_TERMINAL_HANDOFF: u32 = 1 << 31;
 
 #[inline]
