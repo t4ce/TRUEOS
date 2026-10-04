@@ -51,6 +51,7 @@ class ProbeEvidenceTests(unittest.TestCase):
             "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=parallel-jobs",
             "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=async-yield",
             "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=worldgen-sites",
+            "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=worldgen-map",
         )
         evidence = waves + "\n" + summary + "\n" + "\n".join(progress)
         self.assertEqual(verify.probe_result(evidence, "veloren_executor")[0], "PASS")
