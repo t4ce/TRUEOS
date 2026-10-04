@@ -355,6 +355,7 @@ fn to_kernel_cmd(cmd: api::Command) -> Result<NetCommand, ()> {
         },
         api::Command::OpenUdp { port } => NetCommand::OpenUdp { port },
         api::Command::OpenTcpListen { port } => NetCommand::OpenTcpListen { port },
+        api::Command::OpenTcpListenAt { local } => NetCommand::OpenTcpListenAt { local },
         api::Command::OpenTcpConnect { remote } => NetCommand::OpenTcpConnect {
             remote: to_kernel_endpoint(remote),
         },

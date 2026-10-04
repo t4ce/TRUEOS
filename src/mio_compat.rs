@@ -554,6 +554,31 @@ impl MioCompat {
         port
     }
 
+    fn tcp_listener_address_in_use(&self, local: CompatAddr) -> bool {
+        self.sockets.iter().any(|socket| {
+            if socket.kind != MioSocketKind::TcpListener || socket.closed {
+                return false;
+            }
+            match (socket.local, local) {
+                (
+                    Some(CompatAddr::V4 {
+                        addr: bound,
+                        port: bound_port,
+                    }),
+                    CompatAddr::V4 { addr, port },
+                ) => bound_port == port && (bound == addr || bound == [0; 4] || addr == [0; 4]),
+                (
+                    Some(CompatAddr::V6 {
+                        addr: bound,
+                        port: bound_port,
+                    }),
+                    CompatAddr::V6 { addr, port },
+                ) => bound_port == port && (bound == addr || bound == [0; 16] || addr == [0; 16]),
+                _ => false,
+            }
+        })
+    }
+
     fn tcp_listener_port_in_use(&self, port: u16) -> bool {
         self.sockets.iter().any(|socket| {
             socket.kind == MioSocketKind::TcpListener
@@ -659,7 +684,19 @@ impl MioCompat {
             socket_id,
             kind: api::SocketKind::Tcp,
         });
-        if let Err(status) = self.submit(api::Command::OpenTcpListen { port }) {
+        let Some(local) = self.socket(socket_id).and_then(|socket| socket.local) else {
+            self.drop_pending_open(socket_id);
+            return Err(STATUS_INVALID_INPUT);
+        };
+        let local = match local {
+            CompatAddr::V4 { addr, .. } => {
+                core::net::SocketAddr::new(core::net::Ipv4Addr::from(addr).into(), port)
+            }
+            CompatAddr::V6 { addr, .. } => {
+                core::net::SocketAddr::new(core::net::Ipv6Addr::from(addr).into(), port)
+            }
+        };
+        if let Err(status) = self.submit(api::Command::OpenTcpListenAt { local }) {
             self.drop_pending_open(socket_id);
             return Err(status);
         }
@@ -1142,7 +1179,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
                     };
                     port
                 } else {
-                    if compat.tcp_listener_port_in_use(port) {
+                    if compat.tcp_listener_address_in_use(local) {
                         return STATUS_IO;
                     }
                     port
@@ -1156,7 +1193,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
                     };
                     port
                 } else {
-                    if compat.tcp_listener_port_in_use(port) {
+                    if compat.tcp_listener_address_in_use(local) {
                         return STATUS_IO;
                     }
                     port

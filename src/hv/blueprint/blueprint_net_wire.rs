@@ -12,6 +12,7 @@ const TAG_ICMP_ECHO: u8 = 9;
 const TAG_ICMP_ECHO_V6: u8 = 10;
 const TAG_OPEN_TUN: u8 = 11;
 const TAG_SEND_IP_PACKET: u8 = 12;
+const TAG_OPEN_TCP_LISTEN_AT: u8 = 13;
 
 const TAG_OPENED: u8 = 1;
 const TAG_CLOSED: u8 = 2;
@@ -184,6 +185,22 @@ pub(crate) fn encode_command(command: api::Command, out: &mut [u8]) -> Result<us
             w.byte(TAG_OPEN_TCP_LISTEN)?;
             w.u16(port)?;
         }
+        api::Command::OpenTcpListenAt { local } => {
+            w.byte(TAG_OPEN_TCP_LISTEN_AT)?;
+            match local {
+                core::net::SocketAddr::V4(local) => {
+                    w.byte(4)?;
+                    w.bytes(&local.ip().octets())?;
+                }
+                core::net::SocketAddr::V6(local) => {
+                    w.byte(6)?;
+                    w.bytes(&local.ip().octets())?;
+                    w.u32(local.flowinfo())?;
+                    w.u32(local.scope_id())?;
+                }
+            }
+            w.u16(local.port())?;
+        }
         api::Command::OpenTcpConnect { remote } => {
             w.byte(TAG_OPEN_TCP_CONNECT)?;
             w.bytes(&remote.addr)?;
@@ -258,6 +275,27 @@ pub(crate) fn decode_command(input: &[u8]) -> Result<api::Command, WireError> {
         },
         TAG_OPEN_UDP => api::Command::OpenUdp { port: r.u16()? },
         TAG_OPEN_TCP_LISTEN => api::Command::OpenTcpListen { port: r.u16()? },
+        TAG_OPEN_TCP_LISTEN_AT => {
+            let local = match r.byte()? {
+                4 => {
+                    let ip = core::net::Ipv4Addr::from(r.array::<4>()?);
+                    core::net::SocketAddr::new(ip.into(), r.u16()?)
+                }
+                6 => {
+                    let ip = core::net::Ipv6Addr::from(r.array::<16>()?);
+                    let flowinfo = r.u32()?;
+                    let scope_id = r.u32()?;
+                    core::net::SocketAddr::V6(core::net::SocketAddrV6::new(
+                        ip,
+                        r.u16()?,
+                        flowinfo,
+                        scope_id,
+                    ))
+                }
+                _ => return Err(WireError::InvalidKind),
+            };
+            api::Command::OpenTcpListenAt { local }
+        }
         TAG_OPEN_TCP_CONNECT => api::Command::OpenTcpConnect {
             remote: api::EndpointV4 {
                 addr: r.array()?,

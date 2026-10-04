@@ -135,6 +135,11 @@ pub enum Command {
     OpenTcpListen {
         port: u16,
     },
+    /// Listen on a family-specific address. Unspecified IPs are wildcards
+    /// within their own family; the legacy port-only command remains dual-stack.
+    OpenTcpListenAt {
+        local: core::net::SocketAddr,
+    },
     OpenTcpConnect {
         remote: EndpointV4,
     },

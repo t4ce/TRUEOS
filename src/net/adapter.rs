@@ -636,6 +636,9 @@ pub enum NetCommand {
     OpenTcpListen {
         port: u16,
     },
+    OpenTcpListenAt {
+        local: core::net::SocketAddr,
+    },
     OpenTcpConnect {
         remote: NetEndpoint,
     },
@@ -2573,6 +2576,15 @@ impl NetService {
     }
 
     fn open_tcp(&mut self, owner: &'static str, port: u16) -> Result<NetHandle, &'static str> {
+        self.open_tcp_listener(owner, port.into())
+    }
+
+    fn open_tcp_listener(
+        &mut self,
+        owner: &'static str,
+        local: smoltcp::wire::IpListenEndpoint,
+    ) -> Result<NetHandle, &'static str> {
+        let port = local.port;
         self.require_link_up()?;
         if self.records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
@@ -2581,7 +2593,7 @@ impl NetService {
         let rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
         let tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
         let mut socket = tcp::Socket::new(rx, tx);
-        socket.listen(port).map_err(|_| "listen failed")?;
+        socket.listen(local).map_err(|_| "listen failed")?;
         socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
         // This listener backs an interactive terminal. Avoid waiting for an
         // outstanding segment or delayed ACK before returning keystrokes and
@@ -2632,6 +2644,15 @@ impl NetService {
                     && rec.tcp_remote_v4.is_none()
                     && rec.tcp_remote_v6.is_none()
                     && self.sockets.get::<tcp::Socket>(rec.socket).is_listening()
+                    && self
+                        .sockets
+                        .get::<tcp::Socket>(rec.socket)
+                        .listen_endpoint()
+                        .addr
+                        .is_none_or(|addr| {
+                            addr == IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr))
+                                || addr == IpAddress::Ipv4(Ipv4Address::UNSPECIFIED)
+                        })
             })
             .ok_or("connect failed")?;
 
@@ -4035,6 +4056,27 @@ impl NetService {
                     let _ = push_event(owner, NetEvent::Error { msg });
                 }
             },
+            NetCommand::OpenTcpListenAt { local } => {
+                match if matches!(local, core::net::SocketAddr::V6(addr) if addr.scope_id() != 0 || addr.flowinfo() != 0)
+                {
+                    Err("unsupported listen address")
+                } else {
+                    self.open_tcp_listener(owner, local.into())
+                } {
+                    Ok(handle) => {
+                        let _ = push_event(
+                            owner,
+                            NetEvent::Opened {
+                                handle,
+                                kind: SocketKind::Tcp,
+                            },
+                        );
+                    }
+                    Err(msg) => {
+                        let _ = push_event(owner, NetEvent::Error { msg });
+                    }
+                }
+            }
             NetCommand::OpenTcpConnect { remote } => {
                 // Connections to this interface itself must not depend on NIC
                 // hairpin forwarding. Use the same in-kernel path as localhost.

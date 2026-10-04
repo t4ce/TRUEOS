@@ -1534,7 +1534,10 @@ impl<'a> Socket<'a> {
         } else {
             // We're listening, reject packets not matching the listen endpoint.
             let addr_ok = match self.listen_endpoint.addr {
-                Some(addr) => ip_repr.dst_addr() == addr,
+                // A typed unspecified address is a wildcard only for that IP
+                // family. None preserves the legacy dual-stack wildcard.
+                Some(addr) => ip_repr.dst_addr() == addr
+                    || (addr.is_unspecified() && addr.version() == ip_repr.dst_addr().version()),
                 None => true,
             };
             addr_ok && repr.dst_port != 0 && repr.dst_port == self.listen_endpoint.port
