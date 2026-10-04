@@ -68,6 +68,7 @@ fn parse(bytes: &[u8], max_output: usize) -> Result<Frame, Error> {
         pos += 8;
         let size = usize::try_from(size).map_err(|_| Error::Limit)?;
         if size > max_output {
+            crate::log_warn!(target: "storage"; "codec/lz4: phase=limit kind=content-size actual={} maximum={}\n", size, max_output);
             return Err(Error::Limit);
         }
         Some(size)
@@ -90,6 +91,7 @@ fn parse(bytes: &[u8], max_output: usize) -> Result<Frame, Error> {
             return Err(Error::Invalid);
         }
         if blocks.len() == MAX_BLOCKS {
+            crate::log_warn!(target: "storage"; "codec/lz4: phase=limit kind=block-count maximum={}\n", MAX_BLOCKS);
             return Err(Error::Limit);
         }
         let end = pos.checked_add(size).ok_or(Error::Limit)?;
@@ -174,6 +176,7 @@ pub fn decompress_frame_cpu(input: &[u8], max_output: usize) -> Result<Vec<u8>, 
         let available = max_output.saturating_sub(out.len()).min(frame.max_block);
         if block.raw {
             if data.len() > available {
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=limit kind=decoded-bytes output={} next={} maximum={}\n", out.len(), data.len(), max_output);
                 return Err(Error::Limit);
             }
             out.extend_from_slice(data);
@@ -341,6 +344,7 @@ pub async fn decompress_frame(input: Vec<u8>, max_output: usize) -> Result<Vec<u
                 &owned
             };
             if bytes.len() > max_output.saturating_sub(out.len()) {
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=limit kind=decoded-bytes output={} next={} maximum={}\n", out.len(), bytes.len(), max_output);
                 return Err(Error::Limit);
             }
             out.extend_from_slice(bytes);

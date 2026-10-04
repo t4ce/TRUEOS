@@ -21,6 +21,7 @@ pub struct TrueosArchiveReport {
     pub input_bytes: u64,
     pub output_bytes: u64,
     pub file_count: u32,
+    /// Progress percentage (0–100); use archive_status to determine completion.
     pub reserved: u32,
 }
 

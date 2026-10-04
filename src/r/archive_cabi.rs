@@ -18,6 +18,7 @@ pub struct TrueosArchiveReport {
     pub input_bytes: u64,
     pub output_bytes: u64,
     pub file_count: u32,
+    /// Progress percentage; pending reports have zero completion counters.
     pub reserved: u32,
 }
 
@@ -88,13 +89,20 @@ pub(crate) fn status(owner: u32, id: u32) -> i32 {
     }
 }
 
+/// Pending operations return a progress snapshot. Status remains authoritative
+/// for completion, and completed reports retain the original byte/file counters.
 pub(crate) fn report(owner: u32, id: u32) -> Result<TrueosArchiveReport, i32> {
+    let progress = crate::r::codec::operation_progress(owner, id).map_err(|error| map_error(&error))?;
     crate::r::codec::operation_report(owner, id)
+        .or_else(|error| match error {
+            crate::r::codec::CodecError::NotReady => Ok(crate::r::codec::CodecReport::default()),
+            error => Err(error),
+        })
         .map(|report| TrueosArchiveReport {
             input_bytes: report.input_bytes,
             output_bytes: report.output_bytes,
             file_count: report.file_count,
-            reserved: 0,
+            reserved: progress,
         })
         .map_err(|error| map_error(&error))
 }
@@ -322,7 +330,7 @@ pub unsafe extern "C" fn trueos_cabi_archive_report(id: u32, out: *mut TrueosArc
                 input_bytes: u64::from_le_bytes(bytes[0..8].try_into().unwrap_or_default()),
                 output_bytes: u64::from_le_bytes(bytes[8..16].try_into().unwrap_or_default()),
                 file_count: u32::from_le_bytes(bytes[16..20].try_into().unwrap_or_default()),
-                reserved: 0,
+                reserved: u32::from_le_bytes(bytes[20..24].try_into().unwrap_or_default()),
             };
         }
         return 0;

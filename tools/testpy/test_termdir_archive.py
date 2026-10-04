@@ -8,10 +8,10 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 SYMBOLS=[
     'async_fs_status','async_fs_result_len','async_fs_result_read','async_fs_discard',
-    'async_fs_stat_start','poll_once','archive_discard','archive_unpack_start',
+    'async_fs_stat_start','async_fs_list_mounts_start','poll_once','archive_discard','archive_unpack_start',
     'archive_pack_start','archive_pack_many_start','archive_status','archive_report',
     'async_fs_typed_list_dir_start','write','blueprint_shutdown',
 ]
@@ -25,5 +25,5 @@ def main():
         subprocess.run(['cargo','+nightly-2026-07-10','test','--manifest-path',
             str(ROOT.parent/'TRUEOS-Blueprints/buildins/termdir/Cargo.toml'),
             '--target','x86_64-unknown-linux-gnu','--target-dir',str(ROOT/'bld/termdir-archive-tests'),
-            'archive_operation_polls_once_and_rejects_duplicate_start'],cwd=folder,env=env,check=True)
+            'archive_'],cwd=folder,env=env,check=True)
 if __name__=='__main__':main()

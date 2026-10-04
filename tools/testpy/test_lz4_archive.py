@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import zlib
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -64,6 +65,7 @@ mod intel {{ pub mod gpgpu {{
     }}
 }} }}
 mod r {{
+    #[path="{ROOT / 'src/r/archive_limits.rs'}"] pub mod archive_limits;
     pub mod codec {{
         pub struct Pool;
         pub static CODEC_COMPUTE: Pool = Pool;
@@ -82,12 +84,19 @@ fn main() {{
     let source=std::fs::read(&args[2]).unwrap();
     match args[1].as_str() {{
         "asset-check" => {{
+            use r::archive_limits::*;
+            assert!(source.len() <= MAX_ARCHIVE_BYTES);
             intel::gpgpu::MODE.set(1);
-            let tar=block_on(r::lz4::decompress_frame(source,80*1024*1024)).unwrap();
-            let entries=r::tar::unpack(&tar,4096,32*1024*1024,64*1024*1024).unwrap();
-            assert_eq!(entries.len(),2977);
-            for entry in &entries {{
-                assert_eq!(entry.bytes,std::fs::read(std::path::Path::new(&args[3]).join(&entry.name)).unwrap(),"asset mismatch: {{}}",entry.name);
+            let tar=block_on(r::lz4::decompress_frame(source,MAX_TAR_BYTES)).unwrap();
+            let entries=r::tar::unpack(&tar,MAX_ARCHIVE_ENTRIES,MAX_SOURCE_FILE_BYTES,MAX_SOURCE_TOTAL_BYTES).unwrap();
+            let manifest=std::fs::read_to_string(&args[3]).unwrap();
+            let expected:Vec<_>=manifest.lines().collect();
+            assert_eq!(entries.len(),expected.len());
+            for (entry, line) in entries.iter().zip(expected) {{
+                let fields:Vec<_>=line.splitn(3,'\\t').collect();
+                assert_eq!(entry.name,fields[2]);
+                assert_eq!(entry.bytes.len(),fields[0].parse::<usize>().unwrap());
+                assert_eq!(crc32fast::hash(&entry.bytes),fields[1].parse::<u32>().unwrap(),"asset mismatch: {{}}",entry.name);
             }}
             println!("Production decoder verified {{}} asset files / {{}} bytes",entries.len(),entries.iter().map(|entry|entry.bytes.len()).sum::<usize>());
         }}
@@ -167,6 +176,18 @@ fn main() {{
         encoded=folder/'archive.tar.lz4';run('encode',repacked,encoded)
         with tarfile.open(fileobj=io.BytesIO(decompress(encoded.read_bytes()))) as tf: assert len(tf.getmembers())==25
         if os.environ.get('TRUEOS_LZ4_ASSET_ARCHIVE'):
-            run('asset-check',Path(os.environ['TRUEOS_LZ4_ASSET_ARCHIVE']),Path(os.environ['TRUEOS_LZ4_ASSET_SOURCE']))
+            asset_archive=Path(os.environ['TRUEOS_LZ4_ASSET_ARCHIVE'])
+            manifest=folder/'assets.manifest'
+            with subprocess.Popen(['lz4','-dc',str(asset_archive)],stdout=subprocess.PIPE) as process:
+                with tarfile.open(fileobj=process.stdout,mode='r|') as tf, manifest.open('w') as reference:
+                    for member in tf:
+                        if member.isfile():
+                            crc=0
+                            with tf.extractfile(member) as content:
+                                while chunk:=content.read(1024*1024):
+                                    crc=zlib.crc32(chunk,crc)
+                            reference.write(f'{member.size}\t{crc}\t{member.name}\n')
+                assert process.wait()==0
+            run('asset-check',asset_archive,manifest)
         print('LZ4 frames interoperate with liblz4; tar/PAX interoperates with tarfile; 25 files / 2.5 MB checked')
 if __name__=='__main__': main()

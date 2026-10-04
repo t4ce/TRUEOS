@@ -34,10 +34,18 @@ impl Operation {
     }
 
     async fn finish(&mut self) -> Result<Report, i32> {
+        self.finish_with_progress(|_| {}).await
+    }
+
+    async fn finish_with_progress(&mut self, mut progress: impl FnMut(u32)) -> Result<Report, i32> {
         poll_fn(|cx| {
             let status = unsafe { vcabi::trueos_cabi_archive_status(self.id) };
             match status {
                 0 => {
+                    let mut raw = TrueosArchiveReport::default();
+                    if unsafe { vcabi::trueos_cabi_archive_report(self.id, &mut raw) } == 0 {
+                        progress(raw.reserved.min(99));
+                    }
                     cx.waker().wake_by_ref();
                     Poll::Pending
                 }
@@ -57,6 +65,7 @@ impl Operation {
         if status != 0 {
             return Err(status);
         }
+        progress(100);
         self.discard();
         Ok(Report {
             input_bytes: raw.input_bytes,
@@ -147,6 +156,15 @@ pub async fn pack_many(sources: &[&[u8]], archive: &[u8]) -> Result<Report, i32>
 /// The kernel validates archive and path resource caps before extracting. The
 /// future resolves only after every output file has been written successfully.
 pub async fn unpack(archive: &[u8], destination: &[u8]) -> Result<Report, i32> {
+    unpack_with_progress(archive, destination, |_| {}).await
+}
+
+/// Report owner-scoped unpack progress on each poll, from 0 to 100.
+/// Reading and decoding occupy 0–20%; committed bytes and files occupy 20–99%.
+/// 100% is emitted only after successful completion. The caller controls polling cadence.
+pub async fn unpack_with_progress(
+    archive: &[u8], destination: &[u8], progress: impl FnMut(u32),
+) -> Result<Report, i32> {
     let mut operation = Operation::from_start(unsafe {
         vcabi::trueos_cabi_archive_unpack_start(
             archive.as_ptr(),
@@ -155,5 +173,5 @@ pub async fn unpack(archive: &[u8], destination: &[u8]) -> Result<Report, i32> {
             destination.len(),
         )
     })?;
-    operation.finish().await
+    operation.finish_with_progress(progress).await
 }

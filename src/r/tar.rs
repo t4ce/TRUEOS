@@ -194,6 +194,7 @@ pub fn unpack(
         }
         if kind == b'x' {
             if pending.is_some() || size > 16384 {
+                crate::log_warn!(target: "storage"; "codec/tar: phase=limit kind=pax-header bytes={} maximum=16384 pending={}\n", size, pending.is_some());
                 return Err(Error::Limit);
             }
             pending = Some(pax(data)?);
@@ -210,10 +211,12 @@ pub fn unpack(
             return Err(Error::Unsupported);
         }
         if size > max_file || out.len() >= max_entries {
+            crate::log_warn!(target: "storage"; "codec/tar: phase=limit kind=member file_bytes={} max_file_bytes={} files_done={} max_files={}\n", size, max_file, out.len(), max_entries);
             return Err(Error::Limit);
         }
         total = total.checked_add(size).ok_or(Error::Limit)?;
         if total > max_total {
+            crate::log_warn!(target: "storage"; "codec/tar: phase=limit kind=total-bytes actual={} maximum={} files_done={}\n", total, max_total, out.len());
             return Err(Error::Limit);
         }
         let name = match fields.path.take() {

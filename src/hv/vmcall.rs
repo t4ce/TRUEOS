@@ -5078,7 +5078,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     out[0..8].copy_from_slice(&report.input_bytes.to_le_bytes());
                     out[8..16].copy_from_slice(&report.output_bytes.to_le_bytes());
                     out[16..20].copy_from_slice(&report.file_count.to_le_bytes());
-                    out[20..24].fill(0);
+                    out[20..24].copy_from_slice(&report.reserved.to_le_bytes());
                     write_response(vm_id, seq, STATUS_OK, 0, 24);
                 }
                 Err(rc) => {

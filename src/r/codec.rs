@@ -18,11 +18,10 @@ pub(crate) static CODEC_COMPUTE: crate::cpu_task_pool::CpuTaskPool =
 const REQUEST_CAP: usize = 32;
 const OPERATION_CAP: usize = 64;
 
-const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
-// Map assets can exceed 16 MiB; retain the independent 64 MiB total budget.
-const MAX_SOURCE_FILE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_SOURCE_TOTAL_BYTES: usize = 64 * 1024 * 1024;
-const MAX_ARCHIVE_ENTRIES: usize = 4_096;
+use super::archive_limits::{
+    MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES, MAX_SOURCE_FILE_BYTES, MAX_SOURCE_TOTAL_BYTES,
+    MAX_TAR_BYTES,
+};
 const MAX_ARCHIVE_DICTIONARY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARCHIVE_PATH_BYTES: usize = 1_024;
 const MAX_ARCHIVE_PATH_DEPTH: usize = 64;
@@ -31,8 +30,6 @@ const MAX_ARCHIVE_PATH_DEPTH: usize = 64;
 /// its own registered identity after choosing the output encoding.
 const ARCHIVE_CONTENT_TYPE: crate::r::fs::trueosfs::ContentTypeId =
     crate::r::fs::trueosfs::ContentTypeId::SEVEN_Z;
-
-const MAX_TAR_BYTES: usize = MAX_SOURCE_TOTAL_BYTES + MAX_ARCHIVE_ENTRIES * 4096 + 1024;
 
 #[derive(Clone, Copy)]
 enum ArchiveFormat {
@@ -115,6 +112,7 @@ struct OperationRecord {
     owner: u32,
     id: u32,
     state: OperationState,
+    progress_percent: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -207,6 +205,7 @@ fn enqueue_operation(
         owner,
         id,
         state: OperationState::Queued,
+        progress_percent: 0,
     });
     requests.push_back(request(id));
     let queued = requests.len();
@@ -334,6 +333,26 @@ pub fn operation_report(owner: u32, id: u32) -> Result<CodecReport, CodecError> 
     match &operation.state {
         OperationState::Queued | OperationState::Running => Err(CodecError::NotReady),
         OperationState::Complete(result) => result.clone(),
+    }
+}
+
+/// Owner-scoped progress; 100 is reserved for successful completion.
+pub fn operation_progress(owner: u32, id: u32) -> Result<u32, CodecError> {
+    let operations = OPERATIONS.lock();
+    let operation = operations.iter().find(|op| op.owner == owner && op.id == id)
+        .ok_or(CodecError::NotFound)?;
+    match &operation.state {
+        OperationState::Complete(Ok(_)) => Ok(100),
+        OperationState::Complete(Err(error)) => Err(error.clone()),
+        _ => Ok(operation.progress_percent),
+    }
+}
+
+fn update_unpack_progress(owner: u32, id: u32, percent: u32) {
+    if let Some(operation) = OPERATIONS.lock().iter_mut()
+        .find(|op| op.owner == owner && op.id == id)
+    {
+        operation.progress_percent = operation.progress_percent.max(percent.min(99));
     }
 }
 
@@ -727,22 +746,25 @@ fn validate_entry_set(entries: &[crate::z7::SevenZEntry]) -> Result<Vec<String>,
     Ok(paths)
 }
 
-async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecReport, CodecError> {
+async fn unpack_path_job(owner: u32, id: u32, archive_path: &str, output_path: &str) -> Result<CodecReport, CodecError> {
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=read-begin source={:?} destination={:?} root={:?}\n", archive_path, output_path, disk);
     let info = crate::r::fs::trueosfs::file_info_async(disk, archive_path)
         .await?
         .ok_or(CodecError::NotFound)?;
     if info.data_len > MAX_ARCHIVE_BYTES as u64 {
+        crate::log_warn!(target: "storage"; "codec/archive: phase=limit kind=archive-bytes source={:?} actual={} maximum={}\n", archive_path, info.data_len, MAX_ARCHIVE_BYTES);
         return Err(CodecError::LimitExceeded);
     }
     let archive = crate::r::fs::trueosfs::file_out_async(disk, archive_path)
         .await?
         .ok_or(CodecError::ReadFailed)?;
     if archive.len() > MAX_ARCHIVE_BYTES {
+        crate::log_warn!(target: "storage"; "codec/archive: phase=limit kind=archive-bytes source={:?} actual={} maximum={}\n", archive_path, archive.len(), MAX_ARCHIVE_BYTES);
         return Err(CodecError::LimitExceeded);
     }
     let input_bytes = archive.len() as u64;
+    update_unpack_progress(owner, id, 10);
     crate::log_info!(target: "storage"; "codec/archive: phase=read-complete source={:?} input_bytes={} lz4_magic={}\n", archive_path, input_bytes, archive.starts_with(&super::lz4::MAGIC));
     let decode_started = codec_now_ms();
     let entries = if archive.starts_with(&super::lz4::MAGIC) {
@@ -779,6 +801,8 @@ async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecR
     };
     crate::log_important!(target: "storage"; "codec: phase=decode elapsed_ms={} input_bytes={} files={}\n", codec_now_ms().saturating_sub(decode_started), input_bytes, entries.len());
     let restore_started = codec_now_ms();
+    update_unpack_progress(owner, id, 20);
+    let total_output_bytes = entries.iter().map(|entry| entry.bytes.len() as u64).sum::<u64>();
     crate::log_info!(target: "storage"; "codec/archive: phase=preflight-begin destination={:?} files={}\n", output_path, entries.len());
     let validated = validate_entry_set(entries.as_slice())?;
     let restore_dispositions = match restored_content_types(entries.as_slice()) {
@@ -871,6 +895,12 @@ async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecR
         output_bytes = output_bytes
             .checked_add(entry.bytes.len() as u64)
             .ok_or(CodecError::LimitExceeded)?;
+        // Combine committed bytes and files so tiny/empty files also advance.
+        let byte_percent = if total_output_bytes == 0 { 100 } else {
+            output_bytes * 100 / total_output_bytes
+        };
+        let file_percent = (index as u64 + 1) * 100 / entries.len() as u64;
+        update_unpack_progress(owner, id, 20 + ((byte_percent + file_percent) * 79 / 200) as u32);
     }
 
     crate::log_important!(target: "storage"; "codec: phase=restore elapsed_ms={} output_bytes={} files={}\n", codec_now_ms().saturating_sub(restore_started), output_bytes, entries.len());
@@ -912,7 +942,7 @@ async fn execute_request(request: CodecRequest) {
             archive_path,
             output_path,
             ..
-        } => unpack_path_job(archive_path.as_str(), output_path.as_str()).await,
+        } => unpack_path_job(owner, id, archive_path.as_str(), output_path.as_str()).await,
     };
     match &result {
         Ok(report) => crate::log_info!(target: "storage"; "codec/archive: phase=complete owner={} operation={} elapsed_ms={} files={} input_bytes={} output_bytes={}\n", owner, id, codec_now_ms().saturating_sub(started), report.file_count, report.input_bytes, report.output_bytes),
