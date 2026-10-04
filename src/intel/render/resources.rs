@@ -2602,7 +2602,15 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     vertex_stride: u32,
     double_sided: bool,
     topology: ResidentScenePrimitiveTopology,
+    maxpix_tornado: bool,
 ) -> Result<ResidentChurnForward, &'static str> {
+    if maxpix_tornado
+        && (vertex_stride != 24
+            || max_instances != 1
+            || topology != ResidentScenePrimitiveTopology::PointList)
+    {
+        return Err("maxpix-pointlist-contract");
+    }
     let cube_patch = topology == ResidentScenePrimitiveTopology::CubePatchList1;
     if cube_patch && (vertex_stride != 12 || vertices.len() != 12
         || indices.len() != 44 || indices.iter().any(|&i| i != 0)
@@ -2695,6 +2703,23 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         };
         resident.vertex_stride = 48;
         resident.vertex_format = TriangleVertexFormat::PosNormalUvTangent;
+    }
+    if maxpix_tornado {
+        use crate::intel::shader::maxpix_tornado as captured;
+        resident.pipeline = *captured::pipeline();
+        resident.native_vf.vf_sgvs_dw1 = captured::VF_SGVS_DW1;
+        resident.native_vf.vf_sgvs_2_dw1 = captured::VF_SGVS_2_DW1;
+        resident.native_vf.vf_component_packing = [captured::VF_COMPONENT_PACKING, 0, 0, 0];
+        resident.front_end_contract = TriangleFrontEndContract {
+            label: "maxpix-tornado-pointlist-v1",
+            vs_urb_output_length_override: Some(1),
+            vs_urb_read_length: captured::VS_URB_READ_LENGTH,
+            sbe_read_offset: captured::SBE_READ_OFFSET,
+            sbe_read_length: captured::SBE_READ_LENGTH,
+            force_sbe_read_offset: true,
+            force_sbe_read_length: true,
+            force_vs_with_vf_synthesized_vue: false,
+        };
     }
     // Install a valid fallback for bootstrap. Every retained frame replaces
     // this with its live world-to-clip camera before the transform/draw pass;

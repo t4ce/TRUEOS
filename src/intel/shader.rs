@@ -206,6 +206,11 @@ mod generated_clip_position3_uv_texture;
 mod generated_triangle;
 #[path = "../../picasso/picasso-retained-pbr-forward/pipeline.rs"]
 pub(crate) mod picasso_retained_pbr;
+#[path = "../../picasso/maxpix-tornado/pipeline.rs"]
+pub(crate) mod maxpix_tornado;
+#[cfg(test)]
+#[path = "maxpix_tests.rs"]
+mod maxpix_tests;
 
 pub(crate) fn line_adjacency_geometry_shader() -> &'static AdjacencyGeometryShader {
     generated_adjacency_gs::line_adjacency_geometry_shader()

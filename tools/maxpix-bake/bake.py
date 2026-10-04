@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Compile the narrow maxpix vertex/fragment program; capture exact ADL-S metadata."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import struct
+import importlib.util
+
+ROOT = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+OUT = ROOT / 'picasso/maxpix-tornado'
+WORK = ROOT / 'bld/maxpix-bake'
+MESA = Path(os.environ.get('MAXPIX_MESA_BUILD', ROOT / '.codex_tmp/trueos-adj-instrumented-rpls/mesa-build')).resolve()
+
+def module(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    obj = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(obj)
+    return obj
+
+def main():
+    baker = module(ROOT / 'tools/helio-intel-bake/bake.py', 'maxpix_helio_baker')
+    pbr = module(ROOT / 'tools/picasso-retained-texture-bake/bake_pbr.py', 'maxpix_metadata_baker')
+    WORK.mkdir(parents=True, exist_ok=True)
+    capture = WORK / 'intel'
+    capture.mkdir(exist_ok=True)
+    for old in capture.iterdir():
+        if old.is_file(): old.unlink()
+    stages = []
+    for entry in ('vs_main', 'fs_main'):
+        spv = WORK / f'{entry}.spv'
+        subprocess.run(['cargo', 'run', '--offline', '-q', '--target', 'x86_64-unknown-linux-gnu',
+            '--manifest-path', str(ROOT / 'tools/wgsl-spv/Cargo.toml'), '--', entry,
+            str(HERE / 'shaders/tornado.wgsl'), str(spv)], cwd=ROOT.parent, check=True)
+        stages.append(spv)
+    c_path = WORK / 'pipeline_dump.c'
+    baker.make_churn_compile_only_dumper(c_path)
+    # Keep the proven pos3+normal3, stride24 and three VS-storage bindings.
+    # Compile as the exact native primitive requested by the demo.
+    c = re.sub(r'\bVK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST\b', 'VK_PRIMITIVE_TOPOLOGY_POINT_LIST', c_path.read_text())
+    c_path.write_text(c)
+    dumper = WORK / 'pipeline_dump'
+    subprocess.run(['cc', str(c_path), '-o', str(dumper), *baker.vulkan_compile_flags()], check=True)
+    driver = MESA / 'src/intel/vulkan/libvulkan_intel.so'
+    shim = MESA / 'src/intel/tools/libintel_noop_drm_shim.so'
+    if not driver.is_file() or not shim.is_file(): raise SystemExit('instrumented ANV build missing')
+    icd = WORK / 'icd.json'
+    icd.write_text(json.dumps({'file_format_version':'1.0.0','ICD':{'library_path':str(driver),'api_version':'1.3.0'}}))
+    env = os.environ.copy()
+    env.update({'LD_PRELOAD':str(shim),'VK_DRIVER_FILES':str(icd),'VK_ICD_FILENAMES':str(icd),
+        'INTEL_STUB_GPU_DEVICE_ID':'4680','TRUEOS_VK_DEVICE_ID':'0x4680',
+        'MESA_SHADER_CACHE_DISABLE':'true','TRUEOS_EXECUTABLE_DUMP_DIR':str(capture)})
+    log = WORK / 'compile.log'
+    baker.run([str(dumper), *(str(path) for path in stages)], env=env, log=log)
+    vs_meta = pbr.numbers(capture / 'vertex_TRUEOS_VS_state_v1.txt')
+    ps_meta = pbr.numbers(capture / 'fragment_TRUEOS_PS_state_v1.txt')
+    print('VS metadata:', vs_meta)
+    print('PS metadata:', ps_meta)
+    vs_file, = capture.glob('*_vertex_*_shader_serialize.bin')
+    ps_file = sorted(capture.glob('*_fragment_*_shader_serialize.bin'))[0]
+    vs = pbr.serialized_code(vs_file, 0)
+    ps_all = pbr.serialized_code(ps_file, 4)
+    if not ps_meta['dispatch16']: raise SystemExit('SIMD16 PS unavailable')
+    assemblies = sorted(capture.glob('*_fragment_*_GEN_Assembly.txt'))
+    ps_assembly = assemblies[1] if ps_meta['dispatch8'] else assemblies[0]
+    ps = ps_all[ps_meta['offset16']:ps_meta['offset16'] + baker.assembly_code_size(ps_assembly)]
+    for name, code in [('vertex',vs), ('fragment',ps)]:
+        path = WORK / f'{name}.bin'; path.write_bytes(code)
+        decoded = subprocess.run(['iga64','-d','-p=12p5',str(path)], capture_output=True, text=True, check=True)
+        if 'EOT' not in decoded.stdout: raise SystemExit(f'{name}: missing EOT')
+        (WORK / f'{name}.isa').write_text(decoded.stdout)
+    expected = {'vf_packing0':0xA77, 'urb_read_length':1, 'urb_entry_64b':1,
+        'binding_table_entries':4, 'dispatch_grf_start':2, 'scratch_bytes':0}
+    for key,value in expected.items():
+        if vs_meta.get(key) != value: raise SystemExit(f'VS {key}: {vs_meta.get(key)} != {value}')
+    if ps_meta['num_varying_inputs'] or ps_meta['sampler_count'] or ps_meta['scratch_bytes'] or ps_meta['push_bytes']:
+        raise SystemExit('unexpected fragment payload')
+    OUT.mkdir(parents=True, exist_ok=True)
+    pbr.OUT = OUT
+    pbr.emit_pipeline(vs, ps, vs_meta, ps_meta)
+    path = OUT / 'pipeline.rs'
+    rs = path.read_text().split('#[cfg(test)]')[0]
+    rs = rs.replace('RETAINED_PBR', 'MAXPIX').replace('0xE004_4004', '0xE002_4002').replace('0xB004_0004', '0xB002_0002')
+    rs = rs.replace('SBE_READ_LENGTH: u8 = 2', 'SBE_READ_LENGTH: u8 = 1')
+    rs = rs.replace('// Retained SGVS routing is unchanged; its synthetic element moves from2 to4.', '// Base-instance/instance-ID SGVS uses synthetic vertex element 2.')
+    rs = rs[rs.index('use super::{'):]
+    path.write_text('// @generated by tools/maxpix-bake/bake.py; ADL-S native POINTLIST.\n' + rs)
+    for name,code in [('vertex.bin',vs), ('fragment.bin',ps)]: (OUT / name).write_bytes(code)
+    for path in capture.iterdir():
+        if path.suffix == '.txt' and path.name != 'host_state_reference.txt': shutil.copy2(path, OUT / path.name)
+    shutil.copy2(HERE / 'shaders/tornado.wgsl', OUT / 'tornado.wgsl')
+    metadata = {'contract':'maxpix-tornado-pointlist-v1','mesa_version':'26.0.4','device_id':0x4680,'topology':'POINT_LIST',
+        'stride':24,'cpu_vertex_upload':'once','time_field':'camera.jitter_frame.z',
+        'vs':vs_meta,'ps':ps_meta,'vs_sha256':hashlib.sha256(vs).hexdigest(),
+        'ps_sha256':hashlib.sha256(ps).hexdigest(),'baremetal_verified':False}
+    (OUT / 'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+    print('Baked', OUT)
+
+if __name__ == '__main__': main()

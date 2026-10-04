@@ -1,0 +1,3 @@
+TRUEOS_VS_STATE_V1 ver=12 verx10=120 max_threads=546 dispatch_grf_start=2 urb_read_length=1 urb_entry_64b=1 vue_slots=2 position_slot=1 uv_slot=-1 vf_packing0=0x00000a77 uses_vertexid=0 uses_instanceid=1 binding_table_entries=4 sampler_count=0 scratch_bytes=0
+VUE_MAP location0_slot=-1 location1_slot=-1 location2_slot=-1 location3_slot=-1
+3DSTATE_VS 78100007 00000000 00000000 00100000 00000000 00000000 00200800 88400405 00000000

@@ -1,0 +1,126 @@
+--- a/src/intel/meson.build
++++ b/src/intel/meson.build
+@@ -34,8 +34,10 @@
+ if with_intel_hasvk or with_intel_vk or with_gallium_iris
+   subdir('ds')
+ endif
++if with_intel_tools or with_tools.contains('drm-shim')
++  subdir('tools')
++endif
+ if with_intel_tools
+-  subdir('tools')
+   subdir('executor')
+ endif
+ if get_option('vulkan-layers').contains('intel-nullhw')
+--- a/src/intel/vulkan/genX_shader.c
++++ b/src/intel/vulkan/genX_shader.c
+@@ -584,6 +584,41 @@
+ #endif
+    }
+ 
++   const char *trueos_vs_dump_dir = os_get_option("TRUEOS_EXECUTABLE_DUMP_DIR");
++   if (trueos_vs_dump_dir != NULL) {
++      char path[1024];
++      snprintf(path, sizeof(path), "%s/vertex_TRUEOS_VS_state_v1.txt", trueos_vs_dump_dir);
++      FILE *file = fopen(path, "w");
++      if (file != NULL) {
++         fprintf(file,
++                 "TRUEOS_VS_STATE_V1 ver=%u verx10=%u max_threads=%u "
++                 "dispatch_grf_start=%u urb_read_length=%u urb_entry_64b=%u "
++                 "vue_slots=%u position_slot=%d uv_slot=%d "
++                 "vf_packing0=0x%08x uses_vertexid=%u uses_instanceid=%u "
++                 "binding_table_entries=%u sampler_count=%u scratch_bytes=%u\n",
++                 devinfo->ver, devinfo->verx10, devinfo->max_vs_threads,
++                 vs_prog_data->base.base.dispatch_grf_start_reg,
++                 vs_prog_data->base.urb_read_length,
++                 vs_prog_data->base.urb_entry_size,
++                 vs_prog_data->base.vue_map.num_slots,
++                 vs_prog_data->base.vue_map.varying_to_slot[VARYING_SLOT_POS],
++                 vs_prog_data->base.vue_map.varying_to_slot[VARYING_SLOT_VAR0],
++                 vs_prog_data->vf_component_packing[0],
++                 vs_prog_data->uses_vertexid, vs_prog_data->uses_instanceid,
++                 shader->bind_map.surface_count, get_sampler_count(shader), vs_prog_data->base.base.total_scratch);
++         fprintf(file, "VUE_MAP");
++         for (unsigned i = 0; i < 4; i++)
++            fprintf(file, " location%u_slot=%d", i,
++                    vs_prog_data->base.vue_map.varying_to_slot[VARYING_SLOT_VAR0 + i]);
++         fputc('\n', file);
++         fprintf(file, "3DSTATE_VS");
++         for (unsigned i = 0; i < GENX(3DSTATE_VS_length); i++)
++            fprintf(file, " %08x", vs_dwords[i]);
++         fputc('\n', file);
++         fclose(file);
++      }
++   }
++
+    anv_shader_emit_merge(batch, shader, vs.vs, vs_dwords, GENX(3DSTATE_VS), vs) {
+ #if GFX_VERx10 >= 125
+       vs.ScratchSpaceBuffer = get_scratch_surf(batch, device, shader, false);
+@@ -1043,6 +1078,44 @@
+    const struct intel_device_info *devinfo = device->info;
+    const struct brw_wm_prog_data *wm_prog_data =
+       get_shader_wm_prog_data(shader);
++
++   const char *trueos_ps_dump_dir = os_get_option("TRUEOS_EXECUTABLE_DUMP_DIR");
++   if (trueos_ps_dump_dir != NULL) {
++      char path[1024];
++      snprintf(path, sizeof(path), "%s/fragment_TRUEOS_PS_state_v1.txt", trueos_ps_dump_dir);
++      FILE *file = fopen(path, "w");
++      if (file != NULL) {
++         fprintf(file,
++                 "TRUEOS_PS_STATE_V1 ver=%u verx10=%u dispatch8=%u dispatch16=%u dispatch32=%u "
++                 "grf_start8=%u grf_start16=%u grf_start32=%u offset16=%u "
++                 "num_varying_inputs=%u barycentric_interp_modes=0x%x uses_vmask=%u "
++                 "uses_src_depth=%u uses_src_w=%u uses_depth_w_coefficients=%u "
++                 "uses_pc_bary_coefficients=%u uses_npc_bary_coefficients=%u "
++                 "computed_depth_mode=%u computed_stencil=%u flat_inputs=0x%x "
++                 "binding_table_entries=%u sampler_prefetch_count=%u sampler_count=%u push_bytes=%u scratch_bytes=%u\n",
++                 devinfo->ver, devinfo->verx10,
++                 wm_prog_data->dispatch_8, wm_prog_data->dispatch_16, wm_prog_data->dispatch_32,
++                 wm_prog_data->base.dispatch_grf_start_reg,
++                 wm_prog_data->dispatch_grf_start_reg_16,
++                 wm_prog_data->dispatch_grf_start_reg_32,
++                 wm_prog_data->prog_offset_16,
++                 wm_prog_data->num_varying_inputs, wm_prog_data->barycentric_interp_modes,
++                 wm_prog_data->uses_vmask, wm_prog_data->uses_src_depth,
++                 wm_prog_data->uses_src_w, wm_prog_data->uses_depth_w_coefficients,
++                 wm_prog_data->uses_pc_bary_coefficients,
++                 wm_prog_data->uses_npc_bary_coefficients,
++                 wm_prog_data->computed_depth_mode, wm_prog_data->computed_stencil,
++                 wm_prog_data->flat_inputs,
++                 shader->bind_map.surface_count, get_sampler_count(shader),
++                 shader->bind_map.sampler_count, wm_prog_data->base.push_sizes[0], wm_prog_data->base.total_scratch);
++         fprintf(file, "URB_SETUP");
++         for (unsigned i = 0; i < 4; i++)
++            fprintf(file, " location%u_attribute=%d", i,
++                    wm_prog_data->urb_setup[VARYING_SLOT_VAR0 + i]);
++         fputc('\n', file);
++         fclose(file);
++      }
++   }
+ 
+    uint32_t ps_dwords[GENX(3DSTATE_PS_length)];
+    anv_shader_emit_tmp(batch, ps_dwords, GENX(3DSTATE_PS), ps) {
+--- a/src/intel/vulkan/anv_shader.c
++++ b/src/intel/vulkan/anv_shader.c
+@@ -103,6 +103,20 @@
+ {
+    struct anv_shader *shader =
+       container_of(vk_shader, struct anv_shader, vk);
++
++   const char *maxpix_dump_dir = os_get_option("TRUEOS_EXECUTABLE_DUMP_DIR");
++   if (maxpix_dump_dir && (vk_shader->stage == MESA_SHADER_VERTEX || vk_shader->stage == MESA_SHADER_FRAGMENT)) {
++      char path[1024];
++      snprintf(path, sizeof(path), "%s/00_%s_00_shader_serialize.bin", maxpix_dump_dir,
++               vk_shader->stage == MESA_SHADER_VERTEX ? "vertex" : "fragment");
++      FILE *file = fopen(path, "wb");
++      if (file) {
++         uint32_t header[2] = { vk_shader->stage, shader->prog_data->program_size };
++         fwrite(header, sizeof(header), 1, file);
++         fwrite(shader->code, 1, shader->prog_data->program_size, file);
++         fclose(file);
++      }
++   }
+ 
+    blob_write_uint32(blob, vk_shader->stage);
+ 

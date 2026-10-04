@@ -2063,9 +2063,15 @@ pub(crate) fn create_retained_mesh(
             | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
             | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
             | v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO
     ) || descriptor.vertex_count == 0
         || !topology.accepts_index_count(descriptor.index_count as usize)
     {
+        return Err(VgpuError::Unsupported);
+    }
+    let maxpix_tornado =
+        descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO;
+    if maxpix_tornado && topology != crate::intel::render::ResidentScenePrimitiveTopology::PointList {
         return Err(VgpuError::Unsupported);
     }
     let vertex_buffer = BufferHandle::from_raw(descriptor.vertex_buffer);
@@ -2210,10 +2216,15 @@ pub(crate) fn create_retained_mesh(
         carrier,
         &vertices,
         &indices,
-        v::vgpu::MAX_RETAINED_SCENE_INSTANCES,
+        if maxpix_tornado {
+            1
+        } else {
+            v::vgpu::MAX_RETAINED_SCENE_INSTANCES
+        },
         vertex_stride as u32,
         double_sided,
         topology,
+        maxpix_tornado,
     ) {
         Ok(resident) => resident,
         Err(_) => {

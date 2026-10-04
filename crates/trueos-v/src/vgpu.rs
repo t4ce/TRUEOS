@@ -432,6 +432,9 @@ pub const RETAINED_MATERIAL_EMISSIVE: usize = 2;
 pub const RETAINED_MATERIAL_OCCLUSION: usize = 3;
 pub const RETAINED_MATERIAL_NORMAL: usize = 4;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
+/// Native POINT_LIST tornado. Two Float3 inputs: phase/height/radius and offset.
+/// Camera jitter_frame[2] supplies elapsed seconds; color is shader constant.
+pub const RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO: u32 = 10;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch
 /// to three control points; this is not arbitrary PATCHLIST shader admission.
