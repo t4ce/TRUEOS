@@ -75,6 +75,31 @@ or unrelated work. The VM reservation keeps the referenced guest leaf tables
 and main-stack backing alive. Retirement frees the owned carrier tables only
 after switching away from them; 256 admitted tasks bound this storage to 3 MiB.
 
+## Tokio worker progress on shared carriers
+
+The packed Tokio 1.52.3 vendor disables the worker-local LIFO optimization on
+TRUEOS. That slot cannot be stolen by another Tokio worker. A synchronous scoped
+caller could therefore park with its child hidden there, despite spare workers.
+The normal worker queue is stealable and notifies idle workers on submission.
+
+Tokio task yields also do not themselves yield a TRUEOS carrier: a busy Tokio
+worker can immediately poll another task. Its native worker loop now checks a
+10 ms budget between polls and yields the logical std continuation, with no
+scheduler lock or core RefCell borrow held. The Veloren parallel adapter checks
+the same budget at root/job/scope boundaries, covering synchronous nested work
+that stays inside a single Tokio poll. Neither mechanism preempts an individual
+long CPU closure; those must still reach their own cooperative checkpoints.
+
+The `veloren_executor` Blueprint probe exercises these boundaries without
+logging or explicit std yields inside the workload. With `QEMU_SMP=4`, it forces
+1,024 condition-variable handoffs across eight Hull/native callers and 256 joins
+whose children were already claimed by other workers. Two CPU tasks must allow
+two sleeping std peers to advance both during nested parallel work and while
+using only `tokio::task::yield_now()`. Before the fixes, LIFO children stalled;
+both CPU scenarios recorded zero peer heartbeats during their one-second loops.
+The probe also retains the dependency-ordered Specs dispatch and borrowed-scope
+checks for one- and two-worker runtimes.
+
 ## Cooperative VM stop for persistent runtimes
 
 A persistent Tokio runtime needs its Hull owner to run Rust cleanup before the

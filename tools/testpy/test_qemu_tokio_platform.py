@@ -45,7 +45,17 @@ class ProbeEvidenceTests(unittest.TestCase):
         summary = "veloren_executor: PASS workers=1,2 ecs_ticks=64 borrowed=4096 scopes=64"
         self.assertEqual(verify.probe_result(summary, "veloren_executor")[0], "FAIL")
         waves = "\n".join(f"veloren_executor: wave workers={n} ticks=32 borrowed=64 scopes=32" for n in (1, 2))
-        self.assertEqual(verify.probe_result(waves + "\n" + summary, "veloren_executor")[0], "PASS")
+        progress = (
+            "veloren_executor: progress condvar_threads=8 handoffs=1024 hull_and_native=PASS",
+            "veloren_executor: progress claimed_joins=256 callers=hull,native workers=4 PASS",
+            "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=parallel-jobs",
+            "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=async-yield",
+            "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=worldgen-sites",
+        )
+        evidence = waves + "\n" + summary + "\n" + "\n".join(progress)
+        self.assertEqual(verify.probe_result(evidence, "veloren_executor")[0], "PASS")
+        for record in progress:
+            self.assertEqual(verify.probe_result(evidence.replace(record, ""), "veloren_executor")[0], "FAIL")
 
     def test_hypervisor_exception_fails_without_waiting_for_probe_timeout(self):
         status, detail = verify.probe_result(

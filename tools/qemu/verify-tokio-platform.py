@@ -58,6 +58,15 @@ def probe_result(text, probe="tokio_mrt"):
             for workers in (1, 2):
                 if f"veloren_executor: wave workers={workers} ticks=32 borrowed=64 scopes=32" not in text:
                     return "FAIL", f"PASS lacks workers={workers} ECS evidence"
+            for record in (
+                "veloren_executor: progress condvar_threads=8 handoffs=1024 hull_and_native=PASS",
+                "veloren_executor: progress claimed_joins=256 callers=hull,native workers=4 PASS",
+                "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=parallel-jobs",
+                "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=async-yield",
+                "veloren_executor: progress cpu_jobs=2 heartbeat_peers=2 bounded_turns=PASS mode=worldgen-sites",
+            ):
+                if record not in text:
+                    return "FAIL", "PASS lacks execution progress evidence: " + record
             return "PASS", marker
         return None, None
     if probe == "tokio_stop":
@@ -210,6 +219,7 @@ def main():
                                 f"hostfwd=tcp:127.0.0.1:{ports[1]}-:22"))
     env.setdefault("QEMU_DISPLAY", "egl-headless")
     result = {"status": "FAIL", "iso": str(args.iso), "timeout_seconds": args.timeout,
+              "qemu_cpu_slots": int(env.get("QEMU_SMP", "14")),
               "shell2": {"guest_port": 4245, "host_port": ports[0], "command": args.probe},
               "shell3": {"guest_port": 22, "host_port": ports[1], "observed": False}}
     started = time.monotonic()
