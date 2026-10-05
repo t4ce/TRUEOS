@@ -144,7 +144,9 @@ const RESIDENT_SCENE_MSAA_COLOR_TILE_WIDTH_PIXELS: usize = 64;
 const RESIDENT_SCENE_MSAA_COLOR_TILE_HEIGHT_PIXELS: usize = 64;
 const RESIDENT_SCENE_MSAA_DEPTH_TILE_WIDTH_BYTES: usize = 512;
 const RESIDENT_SCENE_MSAA_DEPTH_TILE_HEIGHT_SAMPLE_ROWS: usize = 128;
-const RENDER_RING_ENTRY_DWORDS: usize = 4;
+// One cache-line request entry: Gen12 invalidation prefix, BB_START, and
+// padding. A complete entry divides the ring, so no command wraps its end.
+const RENDER_RING_ENTRY_DWORDS: usize = 16;
 const RENDER_RING_ENTRY_BYTES: usize = RENDER_RING_ENTRY_DWORDS * core::mem::size_of::<u32>();
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const GPU_VA_RING_BASE: u64 = 0x0080_0000;
@@ -279,6 +281,9 @@ const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
+const MI_ARB_CHECK: u32 = 0x05 << 23;
+const MI_ARB_CHECK_PRE_PARSER_DISABLE_MASK: u32 = 1 << 8;
+const MI_ARB_CHECK_PRE_PARSER_DISABLE: u32 = 1;
 const MI_BATCH_PPGTT: u32 = 1 << 8;
 // MI_BATCH_BUFFER_END returns to the caller only for a second-level batch.
 // Resident scenes use one small secondary per object beneath one frame-level primary
@@ -313,6 +318,8 @@ const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_DONE: u32 = 0xC0DE_7701;
 const RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO: u32 = 0xC0DE_7741;
 const RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI: u32 = 0xC0DE_7742;
+const RCS_EXEC_RESULT_REQUEST_INVALIDATE_DONE_LO: u32 = 0xC0DE_7751;
+const RCS_EXEC_RESULT_REQUEST_INVALIDATE_DONE_HI: u32 = 0xC0DE_7752;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RCS_EXEC_RESULT_MI_PROBE_DONE: u32 = 0xC0DE_7711;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -678,6 +685,13 @@ const PIPE_CONTROL_BIG_PRE_DRAW_BITS: u32 = PIPE_CONTROL_DEPTH_CACHE_FLUSH
 const PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
 const PIPE_CONTROL_DEST_GGTT: u32 = 1 << 24;
 const PIPE_CONTROL_CS_STALL: u32 = 1 << 20;
+// Invalidate before BB_START while the Gen12 pre-parser is disabled. CS Stall
+// already satisfies the TLB-invalidate requirement; the distinct QWord adds
+// an observable request barrier. The address is direct GGTT, not HWSP indexed.
+const PIPE_CONTROL_REQUEST_INVALIDATE_BITS: u32 = PIPE_CONTROL_INVALIDATE_BITS
+    | PIPE_CONTROL_COMMAND_CACHE_INVALIDATE
+    | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE
+    | PIPE_CONTROL_DEST_GGTT;
 const PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS: u32 =
     PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT | PIPE_CONTROL_CS_STALL;
 const PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS: u32 =
@@ -689,6 +703,7 @@ const PIPE_CONTROL_POST_DRAW_SYNC_BITS: u32 =
 const _: () = {
     assert!(PIPE_CONTROL_FLUSH_BITS == 0x0010_10A0);
     assert!(PIPE_CONTROL_INVALIDATE_BITS == 0x0014_0C1C);
+    assert!(PIPE_CONTROL_REQUEST_INVALIDATE_BITS == 0x2114_4C1C);
     assert!(PIPE_CONTROL_FLUSH_BITS & PIPE_CONTROL_FLUSH_LLC == 0);
     assert!(PIPE_CONTROL_BIG_PRE_DRAW_BITS & PIPE_CONTROL_FLUSH_LLC == 0);
     // Every first draw after a lifecycle remap invalidates stale Render0 PPGTT
@@ -776,6 +791,17 @@ const RESULT_SLOT_GPGPU_EU_C_STORE_DWORD: usize = 22;
 // operation. Keep its destination 8-byte aligned; both DWORDs are checked so
 // an old or partially observed cookie cannot manufacture a release proof.
 const RESULT_SLOT_SCENE_FRAME_DWORD: usize = 24;
+// Ring prefix completion precedes every batch fetch and never aliases scene
+// release, secondary-return, depth-state workaround, or pipeline stats.
+const RESULT_SLOT_REQUEST_INVALIDATE_DWORD: usize = 28;
+const _: () = {
+    assert!(RESULT_SLOT_REQUEST_INVALIDATE_DWORD.is_multiple_of(2));
+    assert!(RESULT_SLOT_REQUEST_INVALIDATE_DWORD >= RESULT_SLOT_SCENE_FRAME_DWORD + 2);
+    assert!(RESULT_SLOT_REQUEST_INVALIDATE_DWORD + 2 <= RESULT_SLOT_SECONDARY_RETURN_DWORD);
+    assert!(RESULT_SLOT_REQUEST_INVALIDATE_DWORD + 2 <= RESULT_SLOT_DEPTH_STATE_WA_DWORD);
+    assert!(RESULT_SLOT_REQUEST_INVALIDATE_DWORD + 2 <= PICASSO_PIPELINE_STATS_BEGIN_DWORD);
+    assert!((RESULT_SLOT_REQUEST_INVALIDATE_DWORD + 2) * 4 <= WARM_RESULT_BYTES);
+};
 const RESULT_OA_REPORT_DWORDS: usize = 64;
 const RESULT_OA_BEGIN_DWORD: usize = 64;
 const RESULT_OA_END_DWORD: usize = RESULT_OA_BEGIN_DWORD + RESULT_OA_REPORT_DWORDS;

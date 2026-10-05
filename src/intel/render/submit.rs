@@ -243,7 +243,9 @@ fn submit_warm_render_batch(
         );
     }
     let Some(ring_tail_bytes) =
-        append_ring_batch_start(warm, old_ring_tail_bytes, GPU_VA_BATCH_BASE, false)
+        append_ring_batch_start(
+            warm, old_ring_tail_bytes, GPU_VA_BATCH_BASE, false, GPU_VA_RESULT_BASE,
+        )
     else {
         return false;
     };
@@ -604,7 +606,9 @@ fn submit_warm_render_batch(
             active & !4095, crate::intel::read_ggtt_pte(dev, active & !4095),
         );
         crate::log_error!(target: "render";
-            "resident-scene retirement-frontier entry=0x{:08X} post_opening=0x{:08X} pre3d=0x{:08X} post3d=0x{:08X} final=0x{:08X} secondary_return=0x{:08X}\n",
+            "resident-scene retirement-frontier request_invalidate=0x{:08X}:0x{:08X} entry=0x{:08X} post_opening=0x{:08X} pre3d=0x{:08X} post3d=0x{:08X} final=0x{:08X} secondary_return=0x{:08X}\n",
+            read_result_dword(warm, RESULT_SLOT_REQUEST_INVALIDATE_DWORD + 1),
+            read_result_dword(warm, RESULT_SLOT_REQUEST_INVALIDATE_DWORD),
             read_result_dword(warm, RESULT_SLOT_BATCH_ENTRY_DWORD),
             read_result_dword(warm, RESULT_SLOT_POST_OPENING_DWORD),
             read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD),
@@ -2344,9 +2348,14 @@ fn append_ring_batch_start(
     ring_tail_bytes: usize,
     batch_gpu_addr: u64,
     batch_ppgtt: bool,
+    result_ggtt_gpu: u64,
 ) -> Option<usize> {
     if warm.ring_virt.is_null()
-        || warm.ring_len < RENDER_RING_ENTRY_BYTES
+        || !(warm.ring_virt as usize).is_multiple_of(core::mem::align_of::<u32>())
+        // One entry must not consume the entire ring: TAIL == old HEAD
+        // would falsely satisfy the exact saved-HEAD retirement check.
+        || warm.ring_len <= RENDER_RING_ENTRY_BYTES
+        || warm.ring_len > u32::MAX as usize
         || !warm.ring_len.is_power_of_two()
         || !warm.ring_len.is_multiple_of(RENDER_RING_ENTRY_BYTES)
         || ring_tail_bytes >= warm.ring_len
@@ -2354,19 +2363,67 @@ fn append_ring_batch_start(
     {
         return None;
     }
+    let entry_end = ring_tail_bytes.checked_add(RENDER_RING_ENTRY_BYTES)?;
+    if entry_end > warm.ring_len
+        || !batch_gpu_addr.is_multiple_of(4)
+        || batch_gpu_addr.checked_add(4)? > if batch_ppgtt { 1u64 << 48 } else { 1u64 << 32 }
+    {
+        return None;
+    }
+    let mut packet = [MI_NOOP; RENDER_RING_ENTRY_DWORDS];
+    let batch_start = if device_is_gfx12(warm.device_id) {
+        let result_offset = RESULT_SLOT_REQUEST_INVALIDATE_DWORD.checked_mul(4)?;
+        let result_end = result_offset.checked_add(8)?;
+        let result_gpu = result_ggtt_gpu.checked_add(result_offset as u64)?;
+        if warm.result_virt.is_null()
+            || !(warm.result_virt as usize).is_multiple_of(core::mem::align_of::<u32>())
+            || result_end > warm.result_len
+            || !result_gpu.is_multiple_of(8)
+            || result_gpu.checked_add(8)? > 1u64 << 32
+        {
+            return None;
+        }
+        // Linux gen12_emit_flush_rcs disables the pre-parser around this
+        // invalidation, before BB_START, to prevent it fetching stale batch
+        // or request instructions across a reused address/translation.
+        packet[0] = MI_ARB_CHECK | MI_ARB_CHECK_PRE_PARSER_DISABLE_MASK
+            | MI_ARB_CHECK_PRE_PARSER_DISABLE;
+        packet[1..7].copy_from_slice(&render_pipe_control_packet(
+            true,
+            0,
+            PIPE_CONTROL_REQUEST_INVALIDATE_BITS,
+            result_gpu,
+            u64::from(RCS_EXEC_RESULT_REQUEST_INVALIDATE_DONE_LO)
+                | (u64::from(RCS_EXEC_RESULT_REQUEST_INVALIDATE_DONE_HI) << 32),
+        ));
+        packet[7] = MI_ARB_CHECK | MI_ARB_CHECK_PRE_PARSER_DISABLE_MASK;
+        // Reset only after every validation succeeds. A preceding request's
+        // marker must not masquerade as progress of the new ring prefix.
+        unsafe {
+            let result = warm.result_virt.add(result_offset).cast::<u32>();
+            core::ptr::write_volatile(result, RESULT_DEBUG_SENTINEL);
+            core::ptr::write_volatile(result.add(1), RESULT_DEBUG_SENTINEL);
+            crate::intel::dma_flush(result.cast(), 8);
+        }
+        8
+    } else {
+        // The pre-parser control and request PC are Gen12-specific. Preserve
+        // older generations' original batch-start semantics with NOOP padding.
+        0
+    };
+    packet[batch_start] = MI_BATCH_BUFFER_START_GEN8
+        | if batch_ppgtt { MI_BATCH_PPGTT } else { 0 };
+    packet[batch_start + 1] = batch_gpu_addr as u32;
+    packet[batch_start + 2] = (batch_gpu_addr >> 32) as u32;
     let start = ring_tail_bytes / core::mem::size_of::<u32>();
     unsafe {
         let dwords = warm.ring_virt.cast::<u32>();
-        core::ptr::write_volatile(
-            dwords.add(start),
-            MI_BATCH_BUFFER_START_GEN8 | if batch_ppgtt { MI_BATCH_PPGTT } else { 0 },
-        );
-        core::ptr::write_volatile(dwords.add(start + 1), batch_gpu_addr as u32);
-        core::ptr::write_volatile(dwords.add(start + 2), (batch_gpu_addr >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(start + 3), MI_NOOP);
+        for (index, word) in packet.into_iter().enumerate() {
+            core::ptr::write_volatile(dwords.add(start + index), word);
+        }
         crate::intel::dma_flush(warm.ring_virt.add(ring_tail_bytes), RENDER_RING_ENTRY_BYTES);
     }
-    Some((ring_tail_bytes + RENDER_RING_ENTRY_BYTES) % warm.ring_len)
+    Some(entry_end % warm.ring_len)
 }
 
 fn wait_for_gen12_lrc_saved_head(

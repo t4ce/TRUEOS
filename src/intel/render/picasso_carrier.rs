@@ -807,28 +807,29 @@ fn picasso_carrier_lrc_ring_image(warm: RenderWarmState) -> Option<[u32; 5]> {
     })
 }
 
-fn picasso_carrier_ring_entry(warm: RenderWarmState, offset: usize) -> Option<[u32; 4]> {
+fn picasso_carrier_ring_entry(
+    warm: RenderWarmState,
+    offset: usize,
+) -> Option<[u32; RENDER_RING_ENTRY_DWORDS]> {
     if warm.ring_virt.is_null()
+        || warm.ring_len < RENDER_RING_ENTRY_BYTES
         || offset > warm.ring_len.saturating_sub(RENDER_RING_ENTRY_BYTES)
         || !offset.is_multiple_of(RENDER_RING_ENTRY_BYTES)
     {
         return None;
     }
     let entry = unsafe { warm.ring_virt.add(offset).cast::<u32>() };
-    Some(unsafe {
-        [
-            core::ptr::read_volatile(entry),
-            core::ptr::read_volatile(entry.add(1)),
-            core::ptr::read_volatile(entry.add(2)),
-            core::ptr::read_volatile(entry.add(3)),
-        ]
-    })
+    let mut words = [0u32; RENDER_RING_ENTRY_DWORDS];
+    for (index, word) in words.iter_mut().enumerate() {
+        *word = unsafe { core::ptr::read_volatile(entry.add(index)) };
+    }
+    Some(words)
 }
 
 #[derive(Copy, Clone)]
 struct PicassoCarrierSubmitProofSnapshot {
     lrc: [u32; 5],
-    ring: [u32; 4],
+    ring: [u32; RENDER_RING_ENTRY_DWORDS],
     ring_pte: u64,
     hwlrca_pte: u64,
     result_pte: u64,
@@ -982,8 +983,9 @@ pub(crate) fn submit_picasso_render1_batch(
     // but its translation is owned by this VMX GPUVM. Selecting PPGTT here
     // is the isolation boundary: a GGTT fetch would execute Render0's mutable
     // batch at the same address.
-    let tail =
-        append_ring_batch_start(warm, old_tail, batch_gpu, true).ok_or("picasso-carrier-ring")?;
+    let tail = append_ring_batch_start(
+        warm, old_tail, batch_gpu, true, picasso_render1_result_ggtt(lease),
+    ).ok_or("picasso-carrier-ring")?;
     {
         let mut slot = picasso_carrier_slot(lease.carrier()).lock();
         let state = slot
@@ -1045,12 +1047,12 @@ pub(crate) fn submit_picasso_render1_batch(
         let result_ggtt_ok =
             proof.result_pte == crate::intel::gen12_integrated_ggtt_pte(warm.result_phys);
         crate::log_important!(target: "render";
-            "picasso-carrier-submit-proof carrier={} accepted=1 device=0x{:X} epoch={} context=0x{:X} guc_context_id={} serial={} h2g_publish_sequence={} old_tail={} published_tail={} lrc=[ctx_ctl:0x{:08X},head:0x{:08X},tail:0x{:08X},ring_start:0x{:08X},ring_ctl:0x{:08X}] ring_entry=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] batch=0x{:X} fetch=ppgtt ggtt_control=[ring:{}:0x{:016X},hwlrca:{}:0x{:016X},result:{}:0x{:016X}] guc=[policy_enqueued:{},enabled:{},pending_enable:{},submissions:{}] does_not_prove=hardware-dispatch\n",
+            "picasso-carrier-submit-proof carrier={} accepted=1 device=0x{:X} epoch={} context=0x{:X} guc_context_id={} serial={} h2g_publish_sequence={} old_tail={} published_tail={} lrc=[ctx_ctl:0x{:08X},head:0x{:08X},tail:0x{:08X},ring_start:0x{:08X},ring_ctl:0x{:08X}] ring_entry={:08X?} batch=0x{:X} fetch=ppgtt ggtt_control=[ring:{}:0x{:016X},hwlrca:{}:0x{:016X},result:{}:0x{:016X}] guc=[policy_enqueued:{},enabled:{},pending_enable:{},submissions:{}] does_not_prove=hardware-dispatch\n",
             lease.carrier().label(), lease.device_raw(), lease.epoch(), submission.context.raw(),
             guc.map_or(0, |value| value.context_id), submission.serial,
             submission.scheduler_publish_sequence, old_tail, tail, proof.lrc[0], proof.lrc[1],
-            proof.lrc[2], proof.lrc[3], proof.lrc[4], proof.ring[0], proof.ring[1], proof.ring[2],
-            proof.ring[3], batch_gpu, ring_ggtt_ok as u8, proof.ring_pte,
+            proof.lrc[2], proof.lrc[3], proof.lrc[4], proof.ring,
+            batch_gpu, ring_ggtt_ok as u8, proof.ring_pte,
             hwlrca_ggtt_ok as u8, proof.hwlrca_pte, result_ggtt_ok as u8, proof.result_pte,
             guc.is_some_and(|value| value.policy_enqueued) as u8,
             guc.is_some_and(|value| value.enabled) as u8,
@@ -1094,11 +1096,15 @@ pub(crate) fn submit_picasso_render1_batch(
             crate::intel::dma_flush(warm.result_virt, debug_bytes);
             let (scene_lo, scene_hi) =
                 read_result_qword_coherent(warm, RESULT_SLOT_SCENE_FRAME_DWORD);
+            let (request_lo, request_hi) =
+                read_result_qword_coherent(warm, RESULT_SLOT_REQUEST_INVALIDATE_DWORD);
             crate::log_important!(target: "render";
-                "picasso-carrier-timeout-proof carrier={} accepted=0 saved_head={} published_tail={} stage_markers=[entry:0x{:08X},opening:0x{:08X},vf:0x{:08X},vs:0x{:08X},clip:0x{:08X},raster:0x{:08X},ps_state:0x{:08X},pre3d:0x{:08X},post3d:0x{:08X},final:0x{:08X}] secondary_return=0x{:08X} scene_release=0x{:08X}/0x{:08X} interpretation=highest-secondary-index-and-last-command-frontier\n",
+                "picasso-carrier-timeout-proof carrier={} accepted=0 saved_head={} published_tail={} request_invalidate=0x{:08X}/0x{:08X} stage_markers=[entry:0x{:08X},opening:0x{:08X},vf:0x{:08X},vs:0x{:08X},clip:0x{:08X},raster:0x{:08X},ps_state:0x{:08X},pre3d:0x{:08X},post3d:0x{:08X},final:0x{:08X}] secondary_return=0x{:08X} scene_release=0x{:08X}/0x{:08X} interpretation=highest-secondary-index-and-last-command-frontier\n",
                 lease.carrier().label(),
                 head,
                 tail,
+                request_lo,
+                request_hi,
                 read_result_dword(warm, RESULT_SLOT_BATCH_ENTRY_DWORD),
                 read_result_dword(warm, RESULT_SLOT_POST_OPENING_DWORD),
                 read_result_dword(warm, RESULT_SLOT_POST_VF_DWORD),
