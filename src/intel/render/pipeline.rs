@@ -4884,10 +4884,16 @@ fn encode_triangle_probe_batch(
             push(batch_dwords, &mut cursor, command)?;
             push(batch_dwords, &mut cursor, value)?;
         }
-        push(batch_dwords, &mut cursor, CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS)?;
-        push(batch_dwords, &mut cursor, RENDER_MOCS)?;
-        push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        // The host tail invalidates every earlier VS constant/pointer packet.
+        // Voxy's compiled VF payload starts after its 96-byte camera range:
+        // re-arm that range, then its binding table, after the final reset.
+        let (vs_tail, vs_tail_len) = host_final_vs_state_packets(
+            draw.voxy_headless.then_some((draw.vertex_gpu_addr, draw.vertex_buffer_bytes)),
+            binding_table_pointer_offset,
+        )?;
+        for word in &vs_tail[..vs_tail_len] {
+            push(batch_dwords, &mut cursor, *word)?;
+        }
         push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
         push(batch_dwords, &mut cursor, ps_binding_table_pointer_offset)?;
     }
@@ -6537,6 +6543,55 @@ fn voxy_headless_constant_vs_packet(vertex_gpu: u64, vertex_bytes: u32) -> Resul
     words[9] = camera as u32;
     words[10] = (camera >> 32) as u32;
     Ok(words)
+}
+
+/// Final host-style VS state, including the reset that supersedes early state.
+/// Legacy draws keep their original empty range and null VS table unchanged.
+fn host_final_vs_state_packets(
+    voxy_camera: Option<(u64, u32)>,
+    binding_table_pointer: u32,
+) -> Result<([u32; 15], usize), &'static str> {
+    let mut words = [0u32; 15];
+    words[0] = CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS;
+    words[1] = RENDER_MOCS;
+    let binding_at = if let Some((vertex_gpu, vertex_bytes)) = voxy_camera {
+        words[2..13].copy_from_slice(&voxy_headless_constant_vs_packet(vertex_gpu, vertex_bytes)?);
+        13
+    } else {
+        2
+    };
+    words[binding_at] = CMD_3DSTATE_BINDING_TABLE_POINTERS_VS;
+    words[binding_at + 1] = if voxy_camera.is_some() { binding_table_pointer } else { 0 };
+    Ok((words, binding_at + 2))
+}
+
+#[cfg(test)]
+mod host_final_vs_state_tests {
+    use super::host_final_vs_state_packets;
+
+    #[test]
+    fn voxy_restores_camera_and_table_after_the_last_reset() {
+        let (words, len) = host_final_vs_state_packets(Some((0x1_0000_0000, 96)), 0x800).unwrap();
+        assert_eq!(len, 15);
+        // Reset VS/PS, restore VS slot3=96B at vertex_end, then commit the
+        // real VS table. The reset must precede both surviving state writes.
+        assert_eq!(words, [
+            0x786d_1100, 4, 0x7815_0409, 0, 0x0003_0000,
+            0, 0, 0, 0, 0, 0, 96, 1, 0x7826_0000, 0x800,
+        ]);
+    }
+
+    #[test]
+    fn legacy_host_tail_keeps_the_original_empty_vs_contract() {
+        let (words, len) = host_final_vs_state_packets(None, 0x800).unwrap();
+        assert_eq!(&words[..len], &[0x786d_1100, 4, 0x7826_0000, 0]);
+    }
+
+    #[test]
+    fn invalid_camera_range_never_produces_a_final_draw_contract() {
+        assert!(host_final_vs_state_packets(Some((0, 96)), 0x800).is_err());
+        assert!(host_final_vs_state_packets(Some((u64::MAX & !31, 96)), 0x800).is_err());
+    }
 }
 
 #[cfg(test)]

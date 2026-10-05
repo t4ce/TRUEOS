@@ -18,13 +18,16 @@ ROOT=Path(__file__).resolve().parents[2]
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--native',action='store_true')
+    parser.add_argument('--cooperative',action='store_true',help='test the candidate SIMD-group-per-block decoder')
     parser.add_argument('--artifact-dir',type=Path,default=ROOT/'crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp')
     parser.add_argument('--frame',type=Path)
     parser.add_argument('--repeat',type=int,default=1)
     parser.add_argument('--batch-bytes',type=int,default=1048576,help='frame dispatch capacity (1048576 matches TRUEOS; 4194304 reproduces the old limit)')
     options=parser.parse_args()
     if options.repeat < 1: parser.error('--repeat must be positive')
-    if not 1 <= options.batch_bytes <= 4194304: parser.error('--batch-bytes must be between 1 and 4194304')
+    batch_limit=268435456 if options.cooperative else 4194304
+    if not 1 <= options.batch_bytes <= batch_limit: parser.error(f'--batch-bytes must be between 1 and {batch_limit}')
+    kernel_name='lz4_decode_cooperative' if options.cooperative else 'lz4_blocks'
     cl=c.CDLL('libOpenCL.so.1')
     ptr=c.c_void_p; uint=c.c_uint; size=c.c_size_t; integer=c.c_int; ulong=c.c_ulonglong
     def api(name, args, result=integer):
@@ -58,9 +61,9 @@ def main():
     if not selected: raise SystemExit('No Intel OpenCL GPU; use an Intel ICD via OCL_ICD_VENDORS.')
     error=integer(); ctx=context(None,1,c.byref(selected),None,None,c.byref(error)); assert error.value==0,error.value
     q=queue(ctx,selected,2,c.byref(error)); assert error.value==0,error.value
-    il=(options.artifact_dir/'lz4_blocks.spv').read_bytes()
+    il=(options.artifact_dir/f'{kernel_name}.spv').read_bytes()
     if options.native:
-        native=(options.artifact_dir/'lz4_blocks.bin').read_bytes()
+        native=(options.artifact_dir/f'{kernel_name}.bin').read_bytes()
         binary=c.create_string_buffer(native); binary_ptr=c.cast(binary,ptr);binary_size=size(len(native));status=integer()
         create_binary=api('clCreateProgramWithBinary',[ptr,uint,c.POINTER(ptr),c.POINTER(size),c.POINTER(ptr),c.POINTER(integer),c.POINTER(integer)],ptr)
         prog=create_binary(ctx,1,c.byref(selected),c.byref(binary_size),c.byref(binary_ptr),c.byref(status),c.byref(error))
@@ -86,30 +89,35 @@ def main():
             strings=elf[headers[shstr][4]:headers[shstr][4]+headers[shstr][5]]
             for header in headers:
                 name=strings[header[0]:].split(b'\0',1)[0]
-                if name==b'.text.lz4_blocks': return elf[header[4]:header[4]+header[5]]
+                if name==f'.text.{kernel_name}'.encode(): return elf[header[4]:header[4]+header[5]]
             raise AssertionError('missing native kernel text')
         assert kernel_text(native)==kernel_text(built.raw),'driver rebuilt the native image; pinned-code test is not valid on this GPU'
         print('Pinned EU instruction bytes preserved by the OpenCL driver')
-    kern=kernel(prog,b'lz4_blocks',c.byref(error));assert error.value==0,error.value
+    kern=kernel(prog,kernel_name.encode(),c.byref(error));assert error.value==0,error.value
     lib=c.CDLL('liblz4.so.1')
     lib.LZ4_decompress_safe.argtypes=[ptr,ptr,integer,integer]
     lib.LZ4_compress_default.argtypes=[ptr,ptr,integer,integer]
     timings=[]
+    staged_timings=[]
     def execute(inputs, capacities, encode, report=True):
+        staged_start=time.perf_counter()
+        assert not (options.cooperative and encode),'cooperative kernel only decodes'
         packed=b''.join(inputs); output_bytes=sum(capacities); desc=[]; si=0; di=0
         for source,cap in zip(inputs,capacities):
             desc.extend([si,len(source),di,cap,0,1]);si+=len(source);di+=cap
         rawdesc=struct.pack('<'+'I'*len(desc),*desc)
         host=[c.create_string_buffer(packed or b'\0'),c.create_string_buffer(output_bytes or 1),c.create_string_buffer(rawdesc),c.create_string_buffer(((len(inputs)+15)//16)*4096*4)]
         lengths=[max(1,len(packed)),max(1,output_bytes),len(rawdesc),len(host[3])]
+        if options.cooperative: host=host[:3];lengths=lengths[:3]
         buffers=[]
         try:
             for i,(data,length) in enumerate(zip(host,lengths)):
                 mem=ptr(buffer(ctx,1|32,length,data,c.byref(error)));assert error.value==0,error.value
                 buffers.append(mem); assert arg(kern,i,c.sizeof(ptr),c.byref(mem))==0
-            for i,value in [(4,len(inputs)),(5,0 if encode else 1)]:
+            arguments=[(3,len(inputs))] if options.cooperative else [(4,len(inputs)),(5,0 if encode else 1)]
+            for i,value in arguments:
                 value=uint(value); assert arg(kern,i,4,c.byref(value))==0
-            global_size=size(((len(inputs)+15)//16)*16);local_size=size(16);event=ptr()
+            global_size=size(len(inputs)*16 if options.cooperative else ((len(inputs)+15)//16)*16);local_size=size(16);event=ptr()
             started=time.perf_counter();assert launch(q,kern,1,None,c.byref(global_size),c.byref(local_size),0,None,c.byref(event))==0
             assert finish(q)==0
             elapsed=(time.perf_counter()-started)*1000
@@ -117,18 +125,22 @@ def main():
             release_event(event)
             for i in [1,2]:assert read(q,buffers[i],1,0,lengths[i],host[i],0,None,None)==0
             result=struct.unpack('<'+'I'*len(desc),host[2].raw[:len(rawdesc)])
+            output_data=host[1].raw[:output_bytes]
             outputs=[]
             for i,cap in enumerate(capacities):
                 d=result[i*6:i*6+6];assert d[5]==0,(i,d);assert d[4]<=cap
-                outputs.append(host[1].raw[d[2]:d[2]+d[4]])
+                outputs.append(output_data[d[2]:d[2]+d[4]])
             gpu_ms=(b.value-a.value)/1e6
             timings.append(gpu_ms)
+            staged_timings.append((time.perf_counter()-staged_start)*1000)
             if report: print(f'{"encode" if encode else "decode"}: {len(inputs)} blocks, {len(packed)} input bytes, GPU {gpu_ms:.3f} ms, submit/wait {elapsed:.3f} ms')
             return outputs
         finally:
             for mem in buffers:release_mem(mem)
     if options.frame:
+        read_start=time.perf_counter()
         frame=options.frame.read_bytes()
+        read_ms=(time.perf_counter()-read_start)*1000
         assert frame[:4]==b'\x04\x22\x4d\x18','expected a standard LZ4 frame'
         flags,bd=frame[4:6]
         assert flags&0xe0==0x60 and not flags&1,'expected independent blocks without a dictionary'
@@ -147,6 +159,7 @@ def main():
         batch_size=min(256,max(1,options.batch_bytes//maximum))
         for iteration in range(options.repeat):
             timings.clear()
+            staged_timings.clear()
             for first in range(0,len(blocks),batch_size):
                 inputs=[b for b in blocks[first:first+batch_size] if b is not None]
                 if not inputs: continue
@@ -155,13 +168,14 @@ def main():
                     out=c.create_string_buffer(maximum)
                     n=lib.LZ4_decompress_safe(source,out,len(source),maximum)
                     assert n>=0 and decoded==out.raw[:n],(iteration,first,'liblz4 mismatch')
-            print(f'Frame run {iteration+1}: {len(blocks)-raw_blocks} compressed blocks verified, {raw_blocks} raw blocks skipped, GPU total {sum(timings):.3f} ms, maximum batch {max(timings,default=0):.3f} ms')
+            print(f'Frame run {iteration+1}: {len(blocks)-raw_blocks} compressed blocks verified, {raw_blocks} raw blocks skipped, GPU total {sum(timings):.3f} ms, maximum batch {max(timings,default=0):.3f} ms, staging/dispatch/readback {sum(staged_timings):.3f} ms, initial file read {read_ms:.3f} ms; excludes reference validation, frame parsing/checksum and TRUEOS VM delivery')
     for data in [b'a'*1048576,(b'hello shader LZ4\n'*65536)[:1048576],os.urandom(1048576)]:
         chunks=[data[i:i+4096] for i in range(0,len(data),4096)]
-        encoded=execute(chunks,[len(b)+len(b)//255+16 for b in chunks],True)
-        for source,compressed in zip(chunks,encoded):
-            out=c.create_string_buffer(len(source));assert lib.LZ4_decompress_safe(compressed,out,len(compressed),len(source))==len(source);assert out.raw==source
-        assert execute(encoded,[len(b) for b in chunks],False)==chunks
+        if not options.cooperative:
+            encoded=execute(chunks,[len(b)+len(b)//255+16 for b in chunks],True)
+            for source,compressed in zip(chunks,encoded):
+                out=c.create_string_buffer(len(source));assert lib.LZ4_decompress_safe(compressed,out,len(compressed),len(source))==len(source);assert out.raw==source
+            assert execute(encoded,[len(b) for b in chunks],False)==chunks
         reference=[]
         for source in chunks:
             out=c.create_string_buffer(len(source)+len(source)//255+16)

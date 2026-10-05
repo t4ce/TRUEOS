@@ -3488,6 +3488,23 @@ pub(crate) fn submit_ui4_indexed_draw(
         topology: draw.topology,
         point_width_px: 0,
     };
+    // Keep Voxygen's first draw and sparse retirement receipts visible under
+    // the current bring-up profile, which suppresses Render/Info.
+    let voxy_diagnostic = if voxy_camera.is_some() {
+        static DIAGNOSTICS: crate::log_os::LogRateLimitState =
+            crate::log_os::LogRateLimitState::new();
+        let observation = DIAGNOSTICS.observe(3, 128);
+        observation.should_emit().then_some(observation.occurrence())
+    } else {
+        None
+    };
+    if let Some(frame) = voxy_diagnostic {
+        crate::log_important!(target: "render";
+            "voxy-wgpu: phase=prepared frame={} principal={:?} window={} vertices={} indices={} target={}x{} clear=0x{:08X} first_vertex={:?}\n",
+            frame, principal, window_id, vertices.len(), indices.len(), width, height,
+            draw.clear_rgba8_srgb, vertices.first().map(|vertex| &vertex[..8]),
+        );
+    }
     let diagnostic_logs =
         if sampled_texture.is_some() && crate::log_os::flags::QUAD_TEXTURE_DIAG_PROFILE_ENABLED {
             static DIAGNOSTICS: crate::log_os::LogRateLimitState =
@@ -3609,6 +3626,23 @@ pub(crate) fn submit_ui4_indexed_draw(
         return Err(VgpuError::DeviceLost);
     };
 
+    if let Some(frame) = voxy_diagnostic {
+        // Inspect two pixels only after the exact target's render fence has
+        // retired, while the synchronous caller still owns its write lease.
+        let target = crate::phys::phys_to_virt(phys as usize) as *mut u8;
+        let center_offset = (height as usize / 2) * pitch as usize
+            + (width as usize / 2) * 4;
+        let mut pixels = [0u32; 2];
+        for (pixel, offset) in pixels.iter_mut().zip([0, center_offset]) {
+            crate::intel::dma_flush(unsafe { target.add(offset) }, 4);
+            *pixel = unsafe { core::ptr::read_volatile(target.add(offset).cast::<u32>()) };
+        }
+        crate::log_important!(target: "render";
+            "voxy-wgpu: phase=retired frame={} window={} target={}x{} completed_draws=1 render_release={} corner_rgba=0x{:08X} center_rgba=0x{:08X} proof=render-fence-retired display-proof=pending-ui4-publication\n",
+            frame, window_id, width, height, release.sequence(), pixels[0], pixels[1],
+        );
+    }
+
     // The renderer initializes a fresh attachment on the GPU, including when
     // the first operation is a draw. Publish initialization only after its fence.
     if let Some(depth) = drawable_depth.as_deref() {
@@ -3668,7 +3702,11 @@ pub(crate) fn submit_ui4_indexed_draw(
     crate::log_info!(target: "vgpu";
         "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} topology={:?} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
         principal,
-        if sampled_texture.is_some() {
+        if voxy_camera.is_some() {
+            v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+        } else if fixed_state.is_some() {
+            v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
+        } else if sampled_texture.is_some() {
             SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
         } else {
             SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64

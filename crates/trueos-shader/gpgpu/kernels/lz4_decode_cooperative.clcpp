@@ -1,0 +1,86 @@
+// One SIMD16 group cooperates on one independent standard LZ4 block.
+// Lane 0 parses sequence metadata; all lanes copy coalesced output bytes.
+// Match bytes read only the already-decoded seed preceding the match, so
+// even offset=1 matches have no inter-lane read-after-write dependency.
+// Descriptor ABI matches lz4_blocks: src, size, dst, capacity, length, status.
+#include "include/trueos_clcpp.hpp"
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__attribute__((reqd_work_group_size(16, 1, 1)))
+__kernel void lz4_decode_cooperative(
+    __global const uchar *input,
+    __global uchar *output,
+    __global uint *descriptors,
+    uint block_count)
+{
+    const uint block = uint(get_group_id(0));
+    const uint lane = uint(get_local_id(0));
+    if (block >= block_count) return;
+    __global uint *d = descriptors + block * 6u;
+    __global const uchar *src = input + d[0];
+    __global uchar *dst = output + d[2];
+    const uint n = d[1], cap = d[3];
+    if (lane == 0u) { d[4] = 0u; d[5] = 1u; }
+    if (n > 4194304u || cap > 4194304u + 16464u) return;
+    uint ip = 0u, op = 0u;
+    while (ip < n) {
+        uint token = 0u, literals = 0u, valid = 1u;
+        if (lane == 0u) {
+            token = src[ip++];
+            literals = token >> 4;
+            if (literals == 15u) {
+                uint extra = 255u;
+                while (extra == 255u) {
+                    if (ip == n) { valid = 0u; break; }
+                    extra = src[ip++]; literals += extra;
+                    if (literals > cap) { valid = 0u; break; }
+                }
+            }
+            if (literals > n - ip || literals > cap - op) valid = 0u;
+        }
+        valid = sub_group_broadcast(valid, 0u);
+        if (valid == 0u) return;
+        token = sub_group_broadcast(token, 0u);
+        ip = sub_group_broadcast(ip, 0u);
+        literals = sub_group_broadcast(literals, 0u);
+        for (uint i = lane; i < literals; i += 16u) dst[op + i] = src[ip + i];
+        sub_group_barrier(CLK_GLOBAL_MEM_FENCE);
+        ip += literals; op += literals;
+        if (ip == n) {
+            if (lane == 0u) { d[4] = op; d[5] = 0u; }
+            return;
+        }
+        uint offset = 0u, match = (token & 15u) + 4u;
+        if (lane == 0u) {
+            if (n - ip < 2u) valid = 0u;
+            else {
+                offset = uint(src[ip]) | (uint(src[ip + 1u]) << 8);
+                ip += 2u;
+                if (offset == 0u || offset > op) valid = 0u;
+                if (valid != 0u && (token & 15u) == 15u) {
+                    uint extra = 255u;
+                    while (extra == 255u) {
+                        if (ip == n) { valid = 0u; break; }
+                        extra = src[ip++]; match += extra;
+                        if (match > cap) { valid = 0u; break; }
+                    }
+                }
+                if (match > cap - op) valid = 0u;
+            }
+        }
+        valid = sub_group_broadcast(valid, 0u);
+        if (valid == 0u) return;
+        ip = sub_group_broadcast(ip, 0u);
+        offset = sub_group_broadcast(offset, 0u);
+        match = sub_group_broadcast(match, 0u);
+        const uint seed = op - offset;
+        const bool power_of_two = (offset & (offset - 1u)) == 0u;
+        for (uint i = lane; i < match; i += 16u) {
+            const uint within_seed = i < offset ? i :
+                (power_of_two ? i & (offset - 1u) : i % offset);
+            dst[op + i] = dst[seed + within_seed];
+        }
+        sub_group_barrier(CLK_GLOBAL_MEM_FENCE);
+        op += match;
+    }
+}
