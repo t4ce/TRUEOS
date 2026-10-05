@@ -169,9 +169,15 @@ pub fn compress_frame_cpu(input: &[u8]) -> Vec<u8> {
     out
 }
 pub fn decompress_frame_cpu(input: &[u8], max_output: usize) -> Result<Vec<u8>, Error> {
+    decompress_frame_cpu_with_progress(input, max_output, |_, _| {})
+}
+
+fn decompress_frame_cpu_with_progress(
+    input: &[u8], max_output: usize, mut progress: impl FnMut(usize, usize),
+) -> Result<Vec<u8>, Error> {
     let frame = parse(input, max_output)?;
     let mut out = Vec::new();
-    for block in &frame.blocks {
+    for (index, block) in frame.blocks.iter().enumerate() {
         let data = &input[block.range.clone()];
         let available = max_output.saturating_sub(out.len()).min(frame.max_block);
         if block.raw {
@@ -194,6 +200,7 @@ pub fn decompress_frame_cpu(input: &[u8], max_output: usize) -> Result<Vec<u8>, 
             .map_err(|_| Error::Invalid)?;
             out.extend_from_slice(&decoded[..length]);
         }
+        progress(index + 1, frame.blocks.len());
     }
     verify(&frame, &out)?;
     crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=cpu input_bytes={} output_bytes={} blocks={}\n", input.len(), out.len(), frame.blocks.len());
@@ -303,15 +310,25 @@ pub async fn compress_frame(input: Vec<u8>) -> Result<Vec<u8>, Error> {
 }
 
 pub async fn decompress_frame(input: Vec<u8>, max_output: usize) -> Result<Vec<u8>, Error> {
+    decompress_frame_with_progress(input, max_output, |_, _| {}).await
+}
+
+/// Report decoded block counts; successful checksum validation is still required
+/// before this future returns. The callback may run on a CPU pool worker.
+pub async fn decompress_frame_with_progress(
+    input: Vec<u8>, max_output: usize,
+    mut progress: impl FnMut(usize, usize) + Send + 'static,
+) -> Result<Vec<u8>, Error> {
     let frame = parse(&input, max_output)?;
     if !frame.independent || !crate::intel::gpgpu::lz4_gpu_available() {
         return super::codec::CODEC_COMPUTE
-            .run("codec/lz4-decode", move |_| decompress_frame_cpu(&input, max_output))
+            .run("codec/lz4-decode", move |_| decompress_frame_cpu_with_progress(&input, max_output, progress))
             .await
             .map_err(|_| Error::Worker)?;
     }
     let mut out = Vec::new();
     let per_batch = (4194304 / frame.max_block).min(256).max(1);
+    let mut completed = 0;
     for batch in frame.blocks.chunks(per_batch) {
         let capacity = frame.max_block.min(max_output.saturating_sub(out.len()));
         let compressed: Vec<_> = batch
@@ -325,7 +342,7 @@ pub async fn decompress_frame(input: Vec<u8>, max_output: usize) -> Result<Vec<u
                 crate::log_warn!(target: "storage"; "codec/lz4: phase=fallback operation=decode reason=gpu-unavailable backend=cpu\n");
                 drop(out);
                 return super::codec::CODEC_COMPUTE
-                    .run("codec/lz4-decode", move |_| decompress_frame_cpu(&input, max_output))
+                    .run("codec/lz4-decode", move |_| decompress_frame_cpu_with_progress(&input, max_output, progress))
                     .await
                     .map_err(|_| Error::Worker)?;
             }
@@ -349,6 +366,8 @@ pub async fn decompress_frame(input: Vec<u8>, max_output: usize) -> Result<Vec<u
             }
             out.extend_from_slice(bytes);
         }
+        completed += batch.len();
+        progress(completed, frame.blocks.len());
     }
     verify(&frame, &out)?;
     crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=gpu input_bytes={} output_bytes={} blocks={}\n", input.len(), out.len(), frame.blocks.len());

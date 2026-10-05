@@ -20,17 +20,18 @@ mod vcabi {
         pub static STEP: Cell<i32> = const { Cell::new(0) };
         pub static DISCARDS: Cell<u32> = const { Cell::new(0) };
         pub static READ_FAILURE: Cell<bool> = const { Cell::new(false) };
+        pub static LENGTH: Cell<usize> = const { Cell::new(150000) };
     }
     pub unsafe fn trueos_cabi_archive_unpack_start(_: *const u8, _: usize, _: *const u8, _: usize) -> i32 { 7 }
     pub unsafe fn trueos_cabi_archive_pack_start(_: *const u8, _: usize, _: *const u8, _: usize) -> i32 { 7 }
     pub unsafe fn trueos_cabi_archive_pack_many_start(_: *const u8, _: usize, _: *const u8, _: usize) -> i32 { 7 }
     pub unsafe fn trueos_cabi_archive_lz4_decode_start_v1(_: *const u8, _: usize) -> i32 { 7 }
-    pub unsafe fn trueos_cabi_archive_result_len_v1(id: u32) -> isize { assert_eq!(id,7); 150000 }
+    pub unsafe fn trueos_cabi_archive_result_len_v1(id: u32) -> isize { assert_eq!(id,7); LENGTH.get() as isize }
     pub unsafe fn trueos_cabi_archive_result_read_v1(id: u32, offset: usize, out: *mut u8, cap: usize) -> isize {
         assert_eq!(id,7);
         assert_eq!(DISCARDS.get(),0, "result was discarded before the copy");
         if READ_FAILURE.get() { return -2; }
-        let count = cap.min(1234).min(150000-offset);
+        let count = cap.min(1234).min(LENGTH.get()-offset);
         for i in 0..count { unsafe { *out.add(i) = ((offset+i)%251) as u8; } }
         count as isize
     }
@@ -111,6 +112,43 @@ fn poll<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> std::task::Pol
         assert!(poll(future.as_mut()).is_pending());
     }
     assert_eq!(vcabi::DISCARDS.get(),2);
+}
+#[test] fn ram_progress_distinguishes_decode_and_copy_and_yields_for_cancel() {
+    use archive::MemoryProgress::{Decoding, Copying};
+    let total = 3 * 1024 * 1024;
+    vcabi::LENGTH.set(total);
+    let seen = std::cell::RefCell::new(Vec::new());
+    {
+        let mut future = std::pin::pin!(archive::decode_lz4_to_memory_with_progress(b"archive", total, |p| seen.borrow_mut().push(p)));
+        assert!(poll(future.as_mut()).is_pending());
+        assert_eq!(*seen.borrow(), vec![Decoding { percent: 42 }]);
+        vcabi::STEP.set(1);
+        assert!(poll(future.as_mut()).is_pending());
+        let reports = seen.borrow();
+        assert_eq!(reports[1], Decoding { percent: 100 });
+        assert_eq!(reports[2], Copying { copied: 0, total });
+        assert!(matches!(reports.last(), Some(Copying { copied, .. }) if *copied > 0 && *copied < total));
+        assert_eq!(vcabi::DISCARDS.get(), 0);
+    }
+    assert_eq!(vcabi::DISCARDS.get(), 1);
+    vcabi::DISCARDS.set(0);
+    seen.borrow_mut().clear();
+    {
+        let mut future = std::pin::pin!(archive::decode_lz4_to_memory_with_progress(b"archive", total, |p| seen.borrow_mut().push(p)));
+        let bytes = loop {
+            match poll(future.as_mut()) {
+                std::task::Poll::Ready(Ok(bytes)) => break bytes,
+                std::task::Poll::Pending => {},
+                other => panic!("unexpected {other:?}"),
+            }
+        };
+        assert_eq!(bytes.len(), total);
+        assert!(bytes.iter().enumerate().all(|(i,b)| *b == (i % 251) as u8));
+    }
+    assert_eq!(seen.borrow().last(), Some(&Copying { copied: total, total }));
+    let copies: Vec<_> = seen.borrow().iter().filter_map(|p| match p { Copying { copied, .. } => Some(*copied), _ => None }).collect();
+    assert!(copies.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(vcabi::DISCARDS.get(), 1);
 }
 '''
 

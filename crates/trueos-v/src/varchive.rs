@@ -180,6 +180,13 @@ pub async fn unpack_with_progress(
     operation.finish_with_progress(progress).await
 }
 
+/// Progress for the kernel decode and the subsequent copy into caller RAM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryProgress {
+    Decoding { percent: u32 },
+    Copying { copied: usize, total: usize },
+}
+
 /// Ask the kernel codec service to decode one standard LZ4 frame into RAM.
 /// No output file or directory is created. GPU/CPU selection and checksum
 /// validation are identical to filesystem extraction. The returned buffer is
@@ -187,18 +194,30 @@ pub async fn unpack_with_progress(
 /// `max_bytes` bounds the caller allocation; the kernel also enforces its
 /// archive limits. This returns the TAR bytes, without parsing the container.
 pub async fn decode_lz4_to_memory(archive: &[u8], max_bytes: usize) -> Result<alloc::vec::Vec<u8>, i32> {
+    decode_lz4_to_memory_with_progress(archive, max_bytes, |_| {}).await
+}
+
+/// Decode progress is sampled on each poll. Copy progress is reported at the
+/// start, approximately every MiB, and after the last successful read. The
+/// future yields between copy batches so cancellation still releases results.
+pub async fn decode_lz4_to_memory_with_progress(
+    archive: &[u8], max_bytes: usize, mut progress: impl FnMut(MemoryProgress),
+) -> Result<alloc::vec::Vec<u8>, i32> {
     let mut operation = Operation::from_start(unsafe {
         vcabi::trueos_cabi_archive_lz4_decode_start_v1(archive.as_ptr(), archive.len())
     })?;
-    operation.ready_with_progress(|_| {}).await?;
+    operation.ready_with_progress(|percent| progress(MemoryProgress::Decoding { percent })).await?;
+    progress(MemoryProgress::Decoding { percent: 100 });
     let len = unsafe { vcabi::trueos_cabi_archive_result_len_v1(operation.id) };
     if len < 0 { return Err(len as i32); }
     let len = len as usize;
     if len > max_bytes { return Err(ERR_TOO_LARGE); }
+    progress(MemoryProgress::Copying { copied: 0, total: len });
     let mut bytes = alloc::vec::Vec::new();
     bytes.try_reserve_exact(len).map_err(|_| ERR_NO_SPACE)?;
     bytes.resize(len, 0);
     let mut offset = 0;
+    let mut reported = 0;
     while offset < len {
         let want = (len - offset).min(64 * 1024);
         let got = unsafe {
@@ -207,6 +226,20 @@ pub async fn decode_lz4_to_memory(archive: &[u8], max_bytes: usize) -> Result<al
         if got < 0 { return Err(got as i32); }
         if got == 0 || got as usize > want { return Err(ERR_IO); }
         offset += got as usize;
+        if offset - reported >= 1024 * 1024 || offset == len {
+            progress(MemoryProgress::Copying { copied: offset, total: len });
+            reported = offset;
+            if offset < len {
+                let mut yielded = false;
+                poll_fn(|cx| {
+                    if yielded { Poll::Ready(()) } else {
+                        yielded = true;
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                }).await;
+            }
+        }
     }
     operation.discard();
     Ok(bytes)

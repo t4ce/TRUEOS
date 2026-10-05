@@ -1035,8 +1035,9 @@ async fn decode_lz4_path_job(owner: u32, id: u32, path: &str) -> Result<(CodecRe
     }
     let input_bytes = input.len() as u64;
     update_unpack_progress(owner, id, 10);
-    let bytes = super::lz4::decompress_frame(input, MAX_TAR_BYTES).await
-        .map_err(CodecError::Lz4)?;
+    let bytes = super::lz4::decompress_frame_with_progress(input, MAX_TAR_BYTES, move |done, total| {
+        update_unpack_progress(owner, id, 10 + (done * 89 / total.max(1)) as u32);
+    }).await.map_err(CodecError::Lz4)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=ram-decoded source={:?} input_bytes={} output_bytes={} filesystem_writes=0\n", path, input_bytes, bytes.len());
     Ok((CodecReport { input_bytes, output_bytes: bytes.len() as u64, file_count: 0 }, bytes))
 }

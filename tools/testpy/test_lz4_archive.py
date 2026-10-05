@@ -60,7 +60,14 @@ mod intel {{ pub mod gpgpu {{
     #[derive(Debug)] pub enum Lz4GpuError {{ Unavailable, Submission }}
     std::thread_local! {{ pub static MODE: std::cell::Cell<u8> = const {{ std::cell::Cell::new(0) }}; }}
     pub fn lz4_gpu_available() -> bool {{ MODE.get() != 0 }}
-    pub async fn lz4_gpu_blocks(_: &[(&[u8],usize)], _: bool) -> Result<Vec<Vec<u8>>,Lz4GpuError> {{
+    pub async fn lz4_gpu_blocks(input: &[(&[u8],usize)], encode: bool) -> Result<Vec<Vec<u8>>,Lz4GpuError> {{
+        if MODE.get() == 3 && !encode {{
+            return Ok(input.iter().map(|(bytes, cap)| {{
+                let mut out = vec![0; *cap];
+                let len = lz4_flex::block::decompress_into(bytes, &mut out).unwrap();
+                out.truncate(len); out
+            }}).collect());
+        }}
         Err(if MODE.get() == 2 {{ Lz4GpuError::Submission }} else {{ Lz4GpuError::Unavailable }})
     }}
 }} }}
@@ -125,6 +132,24 @@ fn main() {{
     intel::gpgpu::MODE.set(2);
     assert_eq!(block_on(r::lz4::decompress_frame(frame,data.len())),Err(r::lz4::Error::Gpu));
     assert_eq!(block_on(r::lz4::compress_frame(data)),Err(r::lz4::Error::Gpu));
+}}
+#[test] fn decode_progress_tracks_cpu_and_gpu_blocks_without_changing_output() {{
+    let data = vec![17; 10 * 65536];
+    let frame = r::lz4::compress_frame_cpu(&data);
+    for mode in [0, 1, 3] {{
+        intel::gpgpu::MODE.set(mode);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = seen.clone();
+        let out = block_on(r::lz4::decompress_frame_with_progress(frame.clone(), data.len(), move |done, total| {{
+            captured.lock().unwrap().push((done, total));
+        }})).unwrap();
+        assert_eq!(out, data);
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|(done,total)| *done > 0 && done <= total));
+        assert!(seen.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 == w[1].1));
+        assert_eq!(seen.last().unwrap().0, seen.last().unwrap().1);
+    }}
 }}
 #[test] fn bounded_and_corrupt_frames() {{
     for data in [vec![],vec![0;100000],(0..100000).map(|n|(n*31) as u8).collect()] {{
