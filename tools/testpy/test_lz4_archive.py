@@ -57,7 +57,8 @@ extern crate alloc;
 #[macro_export] macro_rules! log_warn {{ ($($args:tt)*) => {{}}; }}
 #[path="{ROOT / 'src/z7.rs'}"] mod z7;
 mod intel {{ pub mod gpgpu {{
-    #[derive(Debug)] pub enum Lz4GpuError {{ Unavailable, Submission }}
+    #[derive(Debug)] pub enum Lz4GpuError {{ Unavailable, Submission, Capacity, InvalidInput }}
+    pub const LZ4_GPU_DECODE_BATCH_BYTES: usize = 16 * 1024 * 1024;
     std::thread_local! {{ pub static MODE: std::cell::Cell<u8> = const {{ std::cell::Cell::new(0) }}; }}
     pub fn lz4_gpu_available() -> bool {{ MODE.get() != 0 }}
     pub async fn lz4_gpu_blocks(input: &[(&[u8],usize)], encode: bool) -> Result<Vec<Vec<u8>>,Lz4GpuError> {{
@@ -70,10 +71,15 @@ mod intel {{ pub mod gpgpu {{
         }}
         Err(if MODE.get() == 2 {{ Lz4GpuError::Submission }} else {{ Lz4GpuError::Unavailable }})
     }}
+    pub async fn lz4_gpu_blocks_with_output(input: &[(&[u8],usize)], encode: bool, mut sink: impl FnMut(&[u8])->Result<(),Lz4GpuError>) -> Result<(),Lz4GpuError> {{
+        for block in lz4_gpu_blocks(input,encode).await? {{ sink(&block)?; }}
+        Ok(())
+    }}
 }} }}
 mod r {{
     #[path="{ROOT / 'src/r/archive_limits.rs'}"] pub mod archive_limits;
     pub mod codec {{
+        pub fn codec_now_ms() -> u64 {{ 0 }}
         pub struct Pool;
         pub static CODEC_COMPUTE: Pool = Pool;
         impl Pool {{ pub async fn run<F,T>(&self,_: &str,f:F) -> Result<T,()> where F:FnOnce(())->T {{ Ok(f(())) }} }}
@@ -134,7 +140,7 @@ fn main() {{
     assert_eq!(block_on(r::lz4::compress_frame(data)),Err(r::lz4::Error::Gpu));
 }}
 #[test] fn decode_progress_tracks_cpu_and_gpu_blocks_without_changing_output() {{
-    let data = vec![17; 33 * r::lz4::ENCODE_BLOCK_BYTES];
+    let data = vec![17; 513 * r::lz4::ENCODE_BLOCK_BYTES];
     let frame = r::lz4::compress_frame_cpu(&data);
     for mode in [0, 1, 3] {{
         intel::gpgpu::MODE.set(mode);
@@ -149,7 +155,7 @@ fn main() {{
         assert!(seen.iter().all(|(done,total)| *done > 0 && done <= total));
         assert!(seen.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 == w[1].1));
         assert_eq!(seen.last().unwrap().0, seen.last().unwrap().1);
-        if mode == 3 {{ assert_eq!(*seen, vec![(16, 33), (32, 33), (33, 33)]); }}
+        if mode == 3 {{ assert_eq!(*seen, vec![(256, 513), (512, 513), (513, 513)]); }}
     }}
 }}
 #[test] fn bounded_and_corrupt_frames() {{

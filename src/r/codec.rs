@@ -55,7 +55,7 @@ impl ArchiveFormat {
         }
     }
 }
-fn codec_now_ms() -> u64 {
+pub(super) fn codec_now_ms() -> u64 {
     trueos_time::Instant::now().as_millis()
 }
 
@@ -119,6 +119,8 @@ struct OperationRecord {
     state: OperationState,
     progress_percent: u32,
     result_bytes: Option<Vec<u8>>,
+    queued_ms: u64,
+    delivery_started_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -213,6 +215,8 @@ fn enqueue_operation(
         state: OperationState::Queued,
         progress_percent: 0,
         result_bytes: None,
+        queued_ms: codec_now_ms(),
+        delivery_started_ms: None,
     });
     requests.push_back(request(id));
     let queued = requests.len();
@@ -349,8 +353,8 @@ pub fn operation_result_len(owner: u32, id: u32) -> Result<usize, CodecError> {
 }
 
 pub fn operation_result_read(owner: u32, id: u32, offset: usize, out: &mut [u8]) -> Result<usize, CodecError> {
-    let operations = OPERATIONS.lock();
-    let operation = operations.iter().find(|op| op.owner == owner && op.id == id)
+    let mut operations = OPERATIONS.lock();
+    let operation = operations.iter_mut().find(|op| op.owner == owner && op.id == id)
         .ok_or(CodecError::NotFound)?;
     match &operation.state {
         OperationState::Complete(Ok(_)) => {},
@@ -360,7 +364,13 @@ pub fn operation_result_read(owner: u32, id: u32, offset: usize, out: &mut [u8])
     let bytes = operation.result_bytes.as_ref().ok_or(CodecError::NotFound)?;
     let remaining = bytes.get(offset..).ok_or(CodecError::BadPath)?;
     let count = remaining.len().min(out.len());
+    let delivery_started = *operation.delivery_started_ms.get_or_insert_with(codec_now_ms);
     out[..count].copy_from_slice(&remaining[..count]);
+    if count != 0 && offset + count == bytes.len() {
+        let now = codec_now_ms();
+        let elapsed = now.saturating_sub(operation.queued_ms);
+        crate::log_info!(target: "storage"; "codec/archive: phase=ram-delivered owner={} operation={} bytes={} delivery_ms={} request_to_last_host_copy_ms={} target_ms=1000 target_met={} boundary=last-host-copy-to-cabi-or-comm-page\n", owner, id, bytes.len(), now.saturating_sub(delivery_started), elapsed, elapsed < 1000);
+    }
     Ok(count)
 }
 
@@ -1021,6 +1031,7 @@ async fn execute_request(request: CodecRequest) {
 }
 
 async fn decode_lz4_path_job(owner: u32, id: u32, path: &str) -> Result<(CodecReport, Vec<u8>), CodecError> {
+    let started = codec_now_ms();
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=ram-read source={:?}\n", path);
     let info = crate::r::fs::trueosfs::file_info_async(disk, path).await?
@@ -1034,11 +1045,12 @@ async fn decode_lz4_path_job(owner: u32, id: u32, path: &str) -> Result<(CodecRe
         return Err(CodecError::LimitExceeded);
     }
     let input_bytes = input.len() as u64;
+    let read_ms = codec_now_ms().saturating_sub(started);
     update_unpack_progress(owner, id, 10);
     let bytes = super::lz4::decompress_frame_with_progress(input, MAX_TAR_BYTES, move |done, total| {
         update_unpack_progress(owner, id, 10 + (done * 89 / total.max(1)) as u32);
     }).await.map_err(CodecError::Lz4)?;
-    crate::log_info!(target: "storage"; "codec/archive: phase=ram-decoded source={:?} input_bytes={} output_bytes={} filesystem_writes=0\n", path, input_bytes, bytes.len());
+    crate::log_info!(target: "storage"; "codec/archive: phase=ram-decoded source={:?} input_bytes={} output_bytes={} read_ms={} decode_ms={} ready_ms={} filesystem_writes=0\n", path, input_bytes, bytes.len(), read_ms, codec_now_ms().saturating_sub(started).saturating_sub(read_ms), codec_now_ms().saturating_sub(started));
     Ok((CodecReport { input_bytes, output_bytes: bytes.len() as u64, file_count: 0 }, bytes))
 }
 

@@ -21,11 +21,20 @@ const _: () = {
         i += 1;
     }
     assert!(c.payload_args[4].offset_bytes == 80 && c.payload_args[5].offset_bytes == 84);
+    let d = LZ4_DECODE_COOPERATIVE_ADLS_CPP_ABI_CONTRACT;
+    assert!(matches!(d.validate(), Ok(())));
+    assert!(d.simd_width == 16 && d.scratch_bytes == 0 && d.slm_bytes == 0);
+    assert!(d.cross_thread_data_bytes == 96 && d.per_thread_data_bytes == 96);
+    assert!(d.bindings.len() == 3 && d.payload_args.len() == 4);
+    assert!(d.payload_args[0].offset_bytes == 32 && d.payload_args[1].offset_bytes == 40);
+    assert!(d.payload_args[2].offset_bytes == 48 && d.payload_args[3].offset_bytes == 56);
 };
 
 fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
     let state = resources.state;
-    let upload = resources.upload;
+    let decode = mode == 1;
+    let upload = if decode { resources.decode_upload } else { resources.upload };
+    let contract = if decode { LZ4_DECODE_COOPERATIVE_ADLS_CPP_ABI_CONTRACT } else { LZ4_BLOCKS_ADLS_CPP_ABI_CONTRACT };
     if count == 0 || count > LZ4_GPU_BATCH_BLOCKS as u32 || mode > 1 {
         return false;
     }
@@ -37,9 +46,9 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
         state,
         LZ4_IDD,
         LZ4_BINDING,
-        LZ4_BLOCKS_ADLS_CPP_ABI_CONTRACT.entry_offset as u64,
-        4,
-        4,
+        contract.entry_offset as u64,
+        contract.bindings.len() as u32,
+        contract.cross_thread_data_bytes / 32,
     ) {
         return false;
     }
@@ -50,6 +59,7 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
         (LZ4_HASH_OFFSET, 256 * 1024),
     ];
     for (index, (offset, bytes)) in regions.into_iter().enumerate() {
+        if index >= contract.bindings.len() { break; }
         let surface = LZ4_SURFACES + index * 64;
         if !direct_rcs_write_buffer_surface_state(
             state,
@@ -67,7 +77,7 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
             core::ptr::write_unaligned(
                 state
                     .batch_virt
-                    .add(LZ4_PAYLOAD + 48 + index * 8)
+                    .add(LZ4_PAYLOAD + contract.payload_args[index].offset_bytes as usize)
                     .cast::<u64>(),
                 LZ4_ARENA_GPU + offset as u64,
             );
@@ -82,12 +92,13 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
             (8, 16),
             (9, 1),
             (10, 1),
-            (20, count),
-            (21, mode),
         ] {
+            if decode && offset >= 8 { continue; }
             core::ptr::write_volatile(payload.add(offset), value);
         }
-        let ids = state.batch_virt.add(LZ4_PAYLOAD + 128).cast::<u16>();
+        core::ptr::write_volatile(payload.add(if decode { 14 } else { 20 }), count);
+        if !decode { core::ptr::write_volatile(payload.add(21), mode); }
+        let ids = state.batch_virt.add(LZ4_PAYLOAD + contract.cross_thread_data_bytes as usize).cast::<u16>();
         for lane in 0..16 {
             core::ptr::write_volatile(ids.add(lane), lane as u16);
         }
@@ -139,8 +150,8 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
         batch,
         &mut cursor,
         LZ4_PAYLOAD,
-        224,
-        count.div_ceil(16),
+        (contract.cross_thread_data_bytes + contract.per_thread_data_bytes) as usize,
+        if decode { count } else { count.div_ceil(16) },
         1,
         GPGPU_WALKER_SIMD16_MASK,
     );

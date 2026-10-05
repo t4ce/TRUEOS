@@ -14,6 +14,13 @@ const LZ4_BLOCKS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted
     LZ4_BLOCKS_SPV,
     &LZ4_BLOCKS_ADLS_CPP_ABI_CONTRACT,
 );
+include!("../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_decode_cooperative.contract.rs");
+const LZ4_DECODE_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
+    "lz4_decode_cooperative",
+    include_bytes!("../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_decode_cooperative.bin"),
+    include_bytes!("../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_decode_cooperative.spv"),
+    &LZ4_DECODE_COOPERATIVE_ADLS_CPP_ABI_CONTRACT,
+);
 const CODEC_RCS_GPU_VA_RING_BASE: u64 = 0x0860_0000;
 const CODEC_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     ring: CODEC_RCS_GPU_VA_RING_BASE,
@@ -30,13 +37,15 @@ const _: () = assert!(
     CODEC_RCS_GPU_VA.batch + DIRECT_RCS_BATCH_BYTES as u64 <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
 );
 const LZ4_KERNEL_GPU: u64 = 0x0D00_0000; // private codec PPGTT
+const LZ4_DECODE_KERNEL_GPU: u64 = 0x0D20_0000;
 const LZ4_ARENA_GPU: u64 = 0x1000_0000;
-const LZ4_REGION_BYTES: usize = 5 * 1024 * 1024;
+pub(crate) const LZ4_GPU_DECODE_BATCH_BYTES: usize = 16 * 1024 * 1024;
+const LZ4_REGION_BYTES: usize = LZ4_GPU_DECODE_BATCH_BYTES;
 const LZ4_DESC_OFFSET: usize = 2 * LZ4_REGION_BYTES;
 const LZ4_HASH_OFFSET: usize = LZ4_DESC_OFFSET + 8192;
 const LZ4_ARENA_BYTES: usize = LZ4_HASH_OFFSET + 256 * 1024;
 const _: () = assert!(LZ4_ARENA_GPU + LZ4_ARENA_BYTES as u64 <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
-const _: () = assert!(LZ4_KERNEL_GPU + LZ4_BLOCKS_BIN.len() as u64 <= LZ4_ARENA_GPU);
+const _: () = assert!(LZ4_KERNEL_GPU + LZ4_BLOCKS_BIN.len() as u64 <= LZ4_DECODE_KERNEL_GPU);
 pub(crate) const LZ4_GPU_BATCH_BLOCKS: usize = 256;
 static CODEC_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static CODEC_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
@@ -51,6 +60,7 @@ static LZ4_ACTIVE: AtomicBool = AtomicBool::new(false);
 struct Lz4Resources {
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
+    decode_upload: UploadedKernelArtifact,
     arena: *mut u8,
 }
 unsafe impl Send for Lz4Resources {}
@@ -112,6 +122,8 @@ fn lz4_resources(dev: super::Dev) -> Result<Lz4Resources, Lz4GpuError> {
     let state = codec_rcs_state_once().ok_or(Lz4GpuError::Unavailable)?;
     let upload = upload_ppgtt_resident_artifact(dev, LZ4_BLOCKS_ARTIFACT, LZ4_KERNEL_GPU)
         .ok_or(Lz4GpuError::Unavailable)?;
+    let decode_upload = upload_ppgtt_resident_artifact(dev, LZ4_DECODE_ARTIFACT, LZ4_DECODE_KERNEL_GPU)
+        .ok_or(Lz4GpuError::Unavailable)?;
     let (phys, arena) = crate::dma::alloc(LZ4_ARENA_BYTES, 4096).ok_or(Lz4GpuError::Unavailable)?;
     unsafe {
         core::ptr::write_bytes(arena, 0, LZ4_ARENA_BYTES);
@@ -121,6 +133,7 @@ fn lz4_resources(dev: super::Dev) -> Result<Lz4Resources, Lz4GpuError> {
         || !direct_rcs_map_state(dev, state)
         || !direct_rcs_init_ppgtt(state)
         || !direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
+        || !direct_rcs_map_ppgtt_kernel(state, decode_upload.gpu, decode_upload.phys, decode_upload.mapped_bytes)
         || !direct_rcs_map_ppgtt_kernel(state, LZ4_ARENA_GPU, phys, LZ4_ARENA_BYTES)
     {
         // Control mappings cannot be retried using freshly allocated backing.
@@ -130,6 +143,7 @@ fn lz4_resources(dev: super::Dev) -> Result<Lz4Resources, Lz4GpuError> {
     let resources = Lz4Resources {
         state,
         upload,
+        decode_upload,
         arena,
     };
     *LZ4_RESOURCES.lock() = Some(resources);
@@ -144,8 +158,23 @@ pub(crate) async fn lz4_gpu_blocks(
     blocks: &[(&[u8], usize)],
     encode: bool,
 ) -> Result<Vec<Vec<u8>>, Lz4GpuError> {
+    let mut output = Vec::with_capacity(blocks.len());
+    lz4_gpu_blocks_with_output(blocks, encode, |bytes| {
+        output.push(bytes.to_vec());
+        Ok(())
+    }).await?;
+    Ok(output)
+}
+
+/// Consume retired output directly, avoiding an intermediate allocation and
+/// copy for each block in frame decoding. A sink error cannot expose live DMA.
+pub(crate) async fn lz4_gpu_blocks_with_output(
+    blocks: &[(&[u8], usize)],
+    encode: bool,
+    mut consume: impl FnMut(&[u8]) -> Result<(), Lz4GpuError>,
+) -> Result<(), Lz4GpuError> {
     if blocks.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
     if blocks.len() > LZ4_GPU_BATCH_BLOCKS {
         return Err(Lz4GpuError::Capacity);
@@ -298,7 +327,6 @@ pub(crate) async fn lz4_gpu_blocks(
     }
     super::dma_flush(unsafe { resources.arena.add(LZ4_REGION_BYTES) }, output_bytes);
     super::dma_flush(unsafe { resources.arena.add(LZ4_DESC_OFFSET) }, blocks.len() * 24);
-    let mut output = Vec::with_capacity(blocks.len());
     let mut offset = 0;
     for (index, &(_, capacity)) in blocks.iter().enumerate() {
         let descriptor = unsafe {
@@ -313,13 +341,10 @@ pub(crate) async fn lz4_gpu_blocks(
             crate::log_warn!(target: "gpgpu"; "intel/gpgpu: lz4-failed phase=block-result index={} blocks={} encode={} status={} length={} capacity={} input_bytes={} marker=0x{:X}\n", index, blocks.len(), encode, status, length, capacity, blocks[index].0.len(), direct_rcs_read_result_slot(resources.state, LZ4_POST_MARKER_SLOT));
             return Err(Lz4GpuError::InvalidInput);
         }
-        output.push(
-            unsafe {
+        consume(unsafe {
                 core::slice::from_raw_parts(resources.arena.add(LZ4_REGION_BYTES + offset), length)
-            }
-            .to_vec(),
-        );
+            })?;
         offset += capacity;
     }
-    Ok(output)
+    Ok(())
 }

@@ -319,6 +319,7 @@ pub async fn decompress_frame_with_progress(
     input: Vec<u8>, max_output: usize,
     mut progress: impl FnMut(usize, usize) + Send + 'static,
 ) -> Result<Vec<u8>, Error> {
+    let started_ms = super::codec::codec_now_ms();
     let frame = parse(&input, max_output)?;
     if !frame.independent || !crate::intel::gpgpu::lz4_gpu_available() {
         return super::codec::CODEC_COMPUTE
@@ -326,12 +327,17 @@ pub async fn decompress_frame_with_progress(
             .await
             .map_err(|_| Error::Worker)?;
     }
-    let mut out = Vec::new();
-    // Codec shares RCS with interactive producers. Thread preemption is
-    // disabled in the direct-RCS IDD, so keep frame dispatches to at most
-    // 1 MiB (one SIMD16 group for the usual 64 KiB frame blocks), instead of
-    // making a 4 MiB dispatch monopolize the engine across four groups.
-    let per_batch = (1048576 / frame.max_block).min(256).max(1);
+    // Known content sizes avoid repeated frame reallocations. For frames
+    // without a size, reserve a bounded block-size upper bound only when it
+    // fits within 512 MiB; arbitrary short blocks must not trigger GiB reserves.
+    let reserve = frame.content_size.unwrap_or_else(|| {
+        frame.blocks.len().checked_mul(frame.max_block)
+            .filter(|&size| size <= 512 * 1024 * 1024).unwrap_or(0)
+    }).min(max_output);
+    let mut out = Vec::with_capacity(reserve);
+    // One SIMD group now cooperates on each block. A 16 MiB dispatch exposes
+    // up to 256 independent groups, rather than one mostly serial HW thread.
+    let per_batch = (crate::intel::gpgpu::LZ4_GPU_DECODE_BATCH_BYTES / frame.max_block).min(256).max(1);
     let mut completed = 0;
     for batch in frame.blocks.chunks(per_batch) {
         let capacity = frame.max_block.min(max_output.saturating_sub(out.len()));
@@ -340,8 +346,22 @@ pub async fn decompress_frame_with_progress(
             .filter(|block| !block.raw)
             .map(|block| (&input[block.range.clone()], capacity))
             .collect();
-        let decoded = match crate::intel::gpgpu::lz4_gpu_blocks(&compressed, false).await {
-            Ok(output) => output,
+        let mut ordered = batch.iter();
+        let mut limit_exceeded = false;
+        let decoded = crate::intel::gpgpu::lz4_gpu_blocks_with_output(&compressed, false, |decoded| {
+            loop {
+                let block = ordered.next().ok_or(crate::intel::gpgpu::Lz4GpuError::InvalidInput)?;
+                let bytes = if block.raw { &input[block.range.clone()] } else { decoded };
+                if bytes.len() > max_output.saturating_sub(out.len()) {
+                    limit_exceeded = true;
+                    return Err(crate::intel::gpgpu::Lz4GpuError::Capacity);
+                }
+                out.extend_from_slice(bytes);
+                if !block.raw { return Ok(()); }
+            }
+        }).await;
+        match decoded {
+            Ok(()) => {},
             Err(crate::intel::gpgpu::Lz4GpuError::Unavailable) => {
                 crate::log_warn!(target: "storage"; "codec/lz4: phase=fallback operation=decode reason=gpu-unavailable backend=cpu\n");
                 drop(out);
@@ -351,19 +371,15 @@ pub async fn decompress_frame_with_progress(
                     .map_err(|_| Error::Worker)?;
             }
             Err(error) => {
+                if limit_exceeded { return Err(Error::Limit); }
                 crate::log_warn!(target: "storage"; "codec/lz4: phase=gpu-failed operation=decode error={:?} first_block={} batch_blocks={} compressed_blocks={} total_blocks={} decoded_bytes={}\n", error, completed, batch.len(), compressed.len(), frame.blocks.len(), out.len());
                 return Err(Error::Gpu);
             }
-        };
-        let mut decoded = decoded.into_iter();
-        for block in batch {
-            let owned;
-            let bytes = if block.raw {
-                &input[block.range.clone()]
-            } else {
-                owned = decoded.next().ok_or(Error::Invalid)?;
-                &owned
-            };
+        }
+        // Raw blocks after the last compressed block need no GPU work.
+        for block in ordered {
+            if !block.raw { return Err(Error::Invalid); }
+            let bytes = &input[block.range.clone()];
             if bytes.len() > max_output.saturating_sub(out.len()) {
                 crate::log_warn!(target: "storage"; "codec/lz4: phase=limit kind=decoded-bytes output={} next={} maximum={}\n", out.len(), bytes.len(), max_output);
                 return Err(Error::Limit);
@@ -373,7 +389,9 @@ pub async fn decompress_frame_with_progress(
         completed += batch.len();
         progress(completed, frame.blocks.len());
     }
+    let decoded_ms = super::codec::codec_now_ms();
     verify(&frame, &out)?;
-    crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=gpu input_bytes={} output_bytes={} blocks={}\n", input.len(), out.len(), frame.blocks.len());
+    let verified_ms = super::codec::codec_now_ms();
+    crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=gpu algorithm=cooperative input_bytes={} output_bytes={} blocks={} pipeline_ms={} checksum_ms={} total_ms={}\n", input.len(), out.len(), frame.blocks.len(), decoded_ms.saturating_sub(started_ms), verified_ms.saturating_sub(decoded_ms), verified_ms.saturating_sub(started_ms));
     Ok(out)
 }
