@@ -165,14 +165,14 @@ retirement += r'''
         }
     }
     #[test]
-    fn a_retired_or_unsubmitted_cached_mesh_is_reusable_without_release() {
+    fn voxy_implicitly_retains_mesh_and_atlas_without_the_load_color_flag() {
         assert_eq!(crate::cleanup_cached_single(Ok(completed(1)), false, true).unwrap().sequence(), 7);
-        assert_eq!(take_releases(), [100]);
+        assert!(take_releases().is_empty());
         assert_eq!(crate::cleanup_cached_single(Ok(completed(1)), true, true).unwrap().sequence(), 7);
         assert!(take_releases().is_empty());
         for reason in ["render-busy", "render-storage-busy", "device-lost"] {
             assert!(crate::cleanup_cached_single(Err(reason), false, true).is_none());
-            assert_eq!(take_releases(), if reason == "device-lost" { vec![] } else { vec![100] });
+            assert!(take_releases().is_empty());
         }
     }
 }}
@@ -365,5 +365,106 @@ with tempfile.TemporaryDirectory(prefix='trueos-voxy-lease-') as tmp:
     src = Path(tmp) / 'lease.rs'
     exe = Path(tmp) / 'lease-tests'
     src.write_text(lease)
+    subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(exe)], check=True)
+    subprocess.run([str(exe)], check=True)
+
+# Compile the real mutable-atlas guard against recording storage. Hardware
+# writes are replaced only at the storage boundary; Arc pinning, validation,
+# range admission and error propagation stay in the production helper.
+atlas = r'''#![allow(dead_code)]
+use std::{cell::{Cell, RefCell}, sync::Arc};
+#[derive(Debug, PartialEq)]
+enum VgpuError { Busy, Unsupported }
+struct RecordingStorage {
+    gpu_base: u64,
+    pixels: RefCell<Vec<u8>>,
+    writes: Cell<usize>,
+    flushes: RefCell<Vec<(usize, usize)>>,
+}
+impl RecordingStorage {
+    fn write_and_flush(&self, offset: usize, bytes: &[u8]) -> bool {
+        let Some(end) = offset.checked_add(bytes.len()) else { return false; };
+        let mut pixels = self.pixels.borrow_mut();
+        if end > pixels.len() { return false; }
+        pixels[offset..end].copy_from_slice(bytes);
+        self.writes.set(self.writes.get() + 1);
+        if !bytes.is_empty() { self.flushes.borrow_mut().push((offset, bytes.len())); }
+        true
+    }
+}
+mod intel { pub mod render {
+    pub struct ResidentSampledTexture { pub storage: crate::RecordingStorage }
+}}
+'''
+atlas += item('src/gpu/vgpu.rs', 'SampledBufferCache')
+atlas += item('src/gpu/vgpu.rs', 'update_streaming_sampled_buffer')
+atlas += r'''
+fn cache(streaming: bool, logical_bytes: usize, storage_bytes: usize) -> SampledBufferCache {
+    SampledBufferCache {
+        shape: [4, 1, 16, 0], bytes: logical_bytes, streaming,
+        resident: Arc::new(intel::render::ResidentSampledTexture {
+            storage: RecordingStorage {
+                gpu_base: 0x2200_0000, pixels: RefCell::new(vec![0xA5; storage_bytes]),
+                writes: Cell::new(0), flushes: RefCell::new(Vec::new()),
+            },
+        }),
+    }
+}
+fn assert_untouched(cache: &SampledBufferCache) {
+    let storage = &cache.resident.storage;
+    assert!(storage.pixels.borrow().iter().all(|b| *b == 0xA5));
+    assert_eq!(storage.writes.get(), 0);
+    assert!(storage.flushes.borrow().is_empty());
+}
+#[test]
+fn exclusive_writes_preserve_resident_address_and_flush_only_dirty_ranges() {
+    let cache = cache(true, 16, 16);
+    let address = cache.resident.storage.gpu_base;
+    let identity = Arc::as_ptr(&cache.resident);
+    assert_eq!(update_streaming_sampled_buffer(&cache, 4, &[1, 2, 3, 4]), Ok(()));
+    assert_eq!(update_streaming_sampled_buffer(&cache, 12, &[5, 6, 7, 8]), Ok(()));
+    assert_eq!(*cache.resident.storage.pixels.borrow(), [
+        0xA5, 0xA5, 0xA5, 0xA5, 1, 2, 3, 4, 0xA5, 0xA5, 0xA5, 0xA5, 5, 6, 7, 8,
+    ]);
+    assert_eq!(*cache.resident.storage.flushes.borrow(), [(4, 4), (12, 4)]);
+    assert_eq!(cache.resident.storage.writes.get(), 2);
+    assert_eq!(cache.resident.storage.gpu_base, address);
+    assert_eq!(Arc::as_ptr(&cache.resident), identity);
+    assert_eq!(Arc::strong_count(&cache.resident), 1);
+}
+#[test]
+fn a_staged_gpu_arc_blocks_mutation_until_exact_owner_releases_it() {
+    let cache = cache(true, 16, 16);
+    let staged = Arc::clone(&cache.resident);
+    assert_eq!(update_streaming_sampled_buffer(&cache, 0, &[1, 2, 3, 4]), Err(VgpuError::Busy));
+    assert_untouched(&cache);
+    drop(staged);
+    assert_eq!(update_streaming_sampled_buffer(&cache, 0, &[1, 2, 3, 4]), Ok(()));
+    assert_eq!(&cache.resident.storage.pixels.borrow()[..4], &[1, 2, 3, 4]);
+    assert_eq!(*cache.resident.storage.flushes.borrow(), [(0, 4)]);
+}
+#[test]
+fn logical_bounds_and_overflow_reject_writes_into_page_padding() {
+    let cache = cache(true, 16, 4096);
+    for (offset, bytes) in [(usize::MAX, &[1u8][..]), (15, &[1, 2][..]), (16, &[1][..]), (17, &[][..])] {
+        assert_eq!(update_streaming_sampled_buffer(&cache, offset, bytes), Err(VgpuError::Unsupported));
+        assert_untouched(&cache);
+    }
+}
+#[test]
+fn immutable_caches_and_rejected_storage_writes_remain_unchanged() {
+    let immutable = cache(false, 16, 16);
+    assert_eq!(update_streaming_sampled_buffer(&immutable, 0, &[1, 2, 3, 4]), Err(VgpuError::Unsupported));
+    assert_untouched(&immutable);
+    // A broken storage extent must fail rather than copy part of an upload.
+    let short = cache(true, 16, 8);
+    assert_eq!(update_streaming_sampled_buffer(&short, 7, &[1, 2]), Err(VgpuError::Unsupported));
+    assert_untouched(&short);
+}
+'''
+with tempfile.TemporaryDirectory(prefix='trueos-voxy-atlas-') as tmp:
+    src = Path(tmp) / 'atlas.rs'
+    exe = Path(tmp) / 'atlas-tests'
+    src.write_text(atlas)
     subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
