@@ -168,6 +168,29 @@ fn main() {{
         let last=bad.len()-1; bad=frame; bad[last]^=1; assert!(r::lz4::decompress_frame_cpu(&bad,data.len()).is_err());
     }}
 }}
+#[test] fn gpu_sink_preserves_mixed_raw_and_compressed_order() {{
+    let mut seed = 0x12345678u32;
+    let mut data = Vec::new();
+    // Raw blocks at both ends and across the 256-block dispatch boundary.
+    for block in 0..259 {{
+        for _ in 0..r::lz4::ENCODE_BLOCK_BYTES {{
+            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+            data.push(if block % 3 == 1 {{ 42 }} else {{ seed as u8 }});
+        }}
+    }}
+    let frame = r::lz4::compress_frame_cpu(&data);
+    let mut cursor = 15; let mut raw = 0; let mut compressed = 0;
+    loop {{
+        let size = u32::from_le_bytes(frame[cursor..cursor+4].try_into().unwrap());
+        cursor += 4;
+        if size == 0 {{ break; }}
+        if size & 0x80000000 != 0 {{ raw += 1; }} else {{ compressed += 1; }}
+        cursor += (size & 0x7fffffff) as usize;
+    }}
+    assert!(raw > 0 && compressed > 0);
+    intel::gpgpu::MODE.set(3);
+    assert_eq!(block_on(r::lz4::decompress_frame(frame, data.len())).unwrap(), data);
+}}
 #[test] fn tar_limits_and_corruption() {{
     let entries=[z7::SevenZSourceEntry{{name:"nested/empty",bytes:b"",content_type_raw:None}},z7::SevenZSourceEntry{{name:"long",bytes:b"abc",content_type_raw:Some(1)}}];
     let tar=r::tar::pack(&entries,8192).unwrap();

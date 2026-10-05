@@ -29,6 +29,69 @@ const _: () = {
     assert!(PICASSO_VUE_RESULT_LIMIT_DWORD * 4 <= WARM_RESULT_BYTES);
 };
 
+fn render_pipe_control_packet(
+    gfx12: bool,
+    flags_dw0: u32,
+    flags_dw1: u32,
+    address: u64,
+    immediate: u64,
+) -> [u32; 6] {
+    // Mesa 26 ANV emit_pipe_control and Iris iris_emit_raw_pipe_control
+    // invalidate the geometry section of L3 separately from the VF address
+    // cache. CPU-written resident meshes can reuse a physical allocation, so
+    // leaving that section valid can feed stale vertices to the next draw.
+    let flags_dw0 = flags_dw0
+        | if gfx12 && flags_dw1 & PIPE_CONTROL_VF_CACHE_INVALIDATE != 0 {
+            PIPE_CONTROL_L3_READ_ONLY_CACHE_INVALIDATE_HEADER
+        } else {
+            0
+        };
+    [
+        PIPE_CONTROL_CMD | flags_dw0,
+        flags_dw1,
+        address as u32,
+        (address >> 32) as u32,
+        immediate as u32,
+        (immediate >> 32) as u32,
+    ]
+}
+
+#[cfg(test)]
+mod render_pipe_control_tests {
+    use super::*;
+
+    #[test]
+    fn gen12_vf_invalidation_also_invalidates_geometry_in_l3() {
+        assert_eq!(render_pipe_control_packet(true, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0),
+            [0x7A00_0404, 0x0014_0C1C, 0, 0, 0, 0]);
+        assert_eq!(render_pipe_control_packet(true, PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
+            PIPE_CONTROL_INVALIDATE_BITS, 0, 0),
+            [0x7A00_0604, 0x0014_0C1C, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn older_vf_invalidation_keeps_its_existing_packet() {
+        assert_eq!(render_pipe_control_packet(false, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0),
+            [0x7A00_0004, 0x0014_0C1C, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn gen12_post_sync_vf_invalidation_preserves_its_payload() {
+        let flags = PIPE_CONTROL_VF_CACHE_INVALIDATE
+            | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_CS_STALL;
+        assert_eq!(render_pipe_control_packet(true, PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
+            flags, 0x1_0084_0060, 0xC0DE_7742_C0DE_7741),
+            [0x7A00_0604, 0x0010_4010, 0x0084_0060, 1, 0xC0DE_7741, 0xC0DE_7742]);
+    }
+
+    #[test]
+    fn gen12_release_marker_preserves_address_data_and_header() {
+        assert_eq!(render_pipe_control_packet(true, 0, PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS,
+            0x1_0084_0060, 0xC0DE_7742_C0DE_7741),
+            [0x7A00_0004, 0x0010_4080, 0x0084_0060, 1, 0xC0DE_7741, 0xC0DE_7742]);
+    }
+}
+
 fn render_batch_lri_packet(reg: usize, value: u32) -> Result<[u32; 3], &'static str> {
     if reg & 3 != 0 || reg > 0x7F_FFFC {
         return Err("render-batch-register-address");
@@ -2308,33 +2371,31 @@ fn encode_triangle_probe_batch(
     }
 
     fn push_pipe_control(
+        device_id: u16,
         batch_dwords: &mut [u32],
         cursor: &mut usize,
         flags: u32,
     ) -> Result<(), &'static str> {
-        push_pipe_control_full(batch_dwords, cursor, 0, flags)
+        push_pipe_control_full(device_id, batch_dwords, cursor, 0, flags)
     }
 
     fn push_pipe_control_full(
+        device_id: u16,
         batch_dwords: &mut [u32],
         cursor: &mut usize,
         flags_dw0: u32,
         flags_dw1: u32,
     ) -> Result<(), &'static str> {
-        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
-        push(batch_dwords, cursor, flags_dw1)?;
-        if let Some(slot) = batch_dwords.get_mut(cursor.saturating_sub(2)) {
-            *slot |= flags_dw0;
-        } else {
-            return Err("probe-pipe-control-header");
+        for word in render_pipe_control_packet(
+            device_is_gfx12(device_id), flags_dw0, flags_dw1, 0, 0,
+        ) {
+            push(batch_dwords, cursor, word)?;
         }
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)
+        Ok(())
     }
 
     fn push_pipe_control_post_sync_imm(
+        device_id: u16,
         batch_dwords: &mut [u32],
         cursor: &mut usize,
         flags_dw0: u32,
@@ -2342,17 +2403,12 @@ fn encode_triangle_probe_batch(
         address: u64,
         value: u32,
     ) -> Result<(), &'static str> {
-        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
-        push(batch_dwords, cursor, flags_dw1)?;
-        if let Some(slot) = batch_dwords.get_mut(cursor.saturating_sub(2)) {
-            *slot |= flags_dw0;
-        } else {
-            return Err("probe-pipe-control-header");
+        for word in render_pipe_control_packet(
+            device_is_gfx12(device_id), flags_dw0, flags_dw1, address, u64::from(value),
+        ) {
+            push(batch_dwords, cursor, word)?;
         }
-        push(batch_dwords, cursor, address as u32)?;
-        push(batch_dwords, cursor, (address >> 32) as u32)?;
-        push(batch_dwords, cursor, value)?;
-        push(batch_dwords, cursor, 0)
+        Ok(())
     }
 
     fn push_store_data_imm(
@@ -3211,13 +3267,14 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "PIPE_CONTROL flush");
     push_pipe_control_full(
+        warm.device_id,
         batch_dwords,
         &mut cursor,
         PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
         PIPE_CONTROL_FLUSH_BITS,
     )?;
     log_batch_offset(cursor, "PIPE_CONTROL invalidate");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
+    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
 
     log_batch_offset(cursor, "PIPELINE_SELECT");
     push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
@@ -3335,14 +3392,14 @@ fn encode_triangle_probe_batch(
     }
 
     log_batch_offset(cursor, "PIPE_CONTROL pre-binding-table-pool");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POOL_ALLOC");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC)?;
     push(batch_dwords, &mut cursor, binding_table_pool_base_dw)?;
     push(batch_dwords, &mut cursor, binding_table_pool_base_hi)?;
     push(batch_dwords, &mut cursor, binding_table_pool_size_dw)?;
     log_batch_offset(cursor, "PIPE_CONTROL post-binding-table-pool");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
+    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
 
     log_batch_offset(cursor, "3DSTATE_SAMPLER_STATE_POINTERS_VS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLER_STATE_POINTERS_VS)?;
@@ -4094,7 +4151,7 @@ fn encode_triangle_probe_batch(
             push(batch_dwords, &mut cursor, streamout_dw4)?;
 
             log_batch_offset(cursor, "PIPE_CONTROL pre-so-buffer");
-            push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+            push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
             log_batch_offset(cursor, "3DSTATE_SO_BUFFER_INDEX_0");
             push(batch_dwords, &mut cursor, CMD_3DSTATE_SO_BUFFER_INDEX_0)?;
             push(batch_dwords, &mut cursor, so_buffer_index_dw1)?;
@@ -4103,7 +4160,7 @@ fn encode_triangle_probe_batch(
             push_addr(batch_dwords, &mut cursor, 0)?;
             push(batch_dwords, &mut cursor, so_buffer_stream_offset_dw)?;
             log_batch_offset(cursor, "PIPE_CONTROL post-so-buffer");
-            push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+            push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
 
             log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
             let streamout_decl_dword0 = streamout_experiment.so_decl_buffer_selects();
@@ -4168,7 +4225,7 @@ fn encode_triangle_probe_batch(
                 streamout_experiment.vf_slot_contract(),
             );
             log_batch_offset(cursor, "PIPE_CONTROL post-so-decl");
-            push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+            push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
         } else {
             for _ in 0..4 {
                 push(batch_dwords, &mut cursor, 0)?;
@@ -4230,7 +4287,7 @@ fn encode_triangle_probe_batch(
 
     if matches!(backend_probe_mode, BackendProbeMode::PsCpsDisabled) {
         log_batch_offset(cursor, "PIPE_CONTROL pre-cps-pointers");
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
         log_batch_offset(cursor, "3DSTATE_CPS_POINTERS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_CPS_POINTERS)?;
         push(batch_dwords, &mut cursor, probe_state.cps_state_offset_bytes & !0x1F)?;
@@ -4247,9 +4304,9 @@ fn encode_triangle_probe_batch(
     if hiz_layout.is_some() {
         // Required ordering before changing depth/aux bindings, including a
         // new extent reusing the same carrier-owned auxiliary allocation.
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_CACHE_FLUSH)?;
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_CACHE_FLUSH)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
     }
     // Bind a real tiled D32 surface only for the Resident-scene visibility contract.
     // Every other consumer retains the explicit null state proven during the
@@ -4357,13 +4414,13 @@ fn encode_triangle_probe_batch(
         for word in hiz::clear_packet(aux) { push(batch_dwords, &mut cursor, word)?; }
         let offset = RESULT_SLOT_DEPTH_STATE_WA_DWORD * 4;
         if offset + 8 > warm.result_len { return Err("hiz-clear-scratch-range"); }
-        push_pipe_control_post_sync_imm(batch_dwords, &mut cursor, 0,
+        push_pipe_control_post_sync_imm(warm.device_id, batch_dwords, &mut cursor, 0,
             PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE,
             GPU_VA_RESULT_BASE + offset as u64, 0)?;
         push_wm_hz_op(batch_dwords, &mut cursor, warm.device_id, 0, 0, 0, 0)?;
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_CACHE_FLUSH)?;
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_CACHE_FLUSH)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
     }
 
     if backend_probe_mode.sample_mask_before_clip() {
@@ -4435,7 +4492,7 @@ fn encode_triangle_probe_batch(
 
     if backend_probe_mode.pipe_control_between_clip_sf() {
         log_batch_offset(cursor, "PIPE_CONTROL clip-to-sf-cs-stall");
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
         intel_render_focus_log!(
             "probe-clip-sf-sync backend={} flags=cs-stall order=after-clip-before-sf does_not_prove=raster_samples_or_ps\n",
             backend_probe_mode.label(),
@@ -4695,6 +4752,7 @@ fn encode_triangle_probe_batch(
     if depth_config.is_some() && !matches!(backend_probe_mode, BackendProbeMode::WmLateReemit) {
         log_batch_offset(cursor, "PIPE_CONTROL resident-scene-depth-pre-draw");
         push_pipe_control_full(
+            warm.device_id,
             batch_dwords,
             &mut cursor,
             PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS,
@@ -4705,6 +4763,7 @@ fn encode_triangle_probe_batch(
     if matches!(backend_probe_mode, BackendProbeMode::WmLateReemit) {
         log_batch_offset(cursor, "PIPE_CONTROL big-pre-draw-flush");
         push_pipe_control_full(
+            warm.device_id,
             batch_dwords,
             &mut cursor,
             PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS,
@@ -4815,7 +4874,7 @@ fn encode_triangle_probe_batch(
         // immediately before 3DPRIMITIVE.  Keep the order and payloads exact:
         // this is the final SVL/URB admission block, not a second draw.
         log_batch_offset(cursor, "PIPE_CONTROL verified-host-pre-draw-tail");
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
 
         log_batch_offset(cursor, "3DSTATE_VF verified-host-tail");
         push(
@@ -5035,6 +5094,7 @@ fn encode_triangle_probe_batch(
         // that this drain retired as well.
         log_batch_offset(cursor, "PIPE_CONTROL post-3d-full-cache-drain");
         push_pipe_control_full(
+            warm.device_id,
             batch_dwords,
             &mut cursor,
             PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS,
@@ -5046,6 +5106,7 @@ fn encode_triangle_probe_batch(
     let light_sync_flags = post_draw_sync_variant.light_sync_flags();
     if post_draw_sync_variant.light_post_sync_enabled() {
         push_pipe_control_post_sync_imm(
+            warm.device_id,
             batch_dwords,
             &mut cursor,
             0,
@@ -5054,7 +5115,7 @@ fn encode_triangle_probe_batch(
             post3d_value,
         )?;
     } else {
-        push_pipe_control(batch_dwords, &mut cursor, light_sync_flags)?;
+        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, light_sync_flags)?;
     }
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final-after-light");
@@ -5074,6 +5135,7 @@ fn encode_triangle_probe_batch(
             };
         log_batch_offset(cursor, "PIPE_CONTROL post-3d-heavy-sync");
         push_pipe_control_post_sync_imm(
+            warm.device_id,
             batch_dwords,
             &mut cursor,
             0,
@@ -5659,31 +5721,31 @@ fn encode_minimal_streamout_proof_batch(
     }
 
     fn push_pipe_control(
+        device_id: u16,
         batch_dwords: &mut [u32],
         cursor: &mut usize,
         flags: u32,
     ) -> Result<(), &'static str> {
-        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
-        push(batch_dwords, cursor, flags)?;
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)
+        for word in render_pipe_control_packet(device_is_gfx12(device_id), 0, flags, 0, 0) {
+            push(batch_dwords, cursor, word)?;
+        }
+        Ok(())
     }
 
     fn push_pipe_control_post_sync_imm(
+        device_id: u16,
         batch_dwords: &mut [u32],
         cursor: &mut usize,
         flags: u32,
         address: u64,
         value: u32,
     ) -> Result<(), &'static str> {
-        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
-        push(batch_dwords, cursor, flags)?;
-        push(batch_dwords, cursor, address as u32)?;
-        push(batch_dwords, cursor, (address >> 32) as u32)?;
-        push(batch_dwords, cursor, value)?;
-        push(batch_dwords, cursor, 0)
+        for word in render_pipe_control_packet(
+            device_is_gfx12(device_id), 0, flags, address, u64::from(value),
+        ) {
+            push(batch_dwords, cursor, word)?;
+        }
+        Ok(())
     }
 
     fn push_load_register_imm(
@@ -5840,9 +5902,9 @@ fn encode_minimal_streamout_proof_batch(
     batch_dwords.fill(0);
 
     log_batch_offset(cursor, "PIPE_CONTROL flush");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
+    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
     log_batch_offset(cursor, "PIPE_CONTROL invalidate");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
+    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
 
     log_batch_offset(cursor, "PIPELINE_SELECT");
     push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
@@ -6218,7 +6280,7 @@ fn encode_minimal_streamout_proof_batch(
     push(batch_dwords, &mut cursor, streamout_dw4)?;
 
     log_batch_offset(cursor, "PIPE_CONTROL pre-so-buffer");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
     log_batch_offset(cursor, "3DSTATE_SO_BUFFER_INDEX_0");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_SO_BUFFER_INDEX_0)?;
     push(batch_dwords, &mut cursor, so_buffer_index_dw1)?;
@@ -6227,7 +6289,7 @@ fn encode_minimal_streamout_proof_batch(
     push_addr(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "PIPE_CONTROL post-so-buffer");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
 
     log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
     let streamout_decl_dword0 = streamout_experiment.so_decl_buffer_selects();
@@ -6289,7 +6351,7 @@ fn encode_minimal_streamout_proof_batch(
         primitive_topology_label(batch_mode.topology()),
     );
     log_batch_offset(cursor, "PIPE_CONTROL post-so-decl");
-    push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM pre-3d");
     push_store_data_imm(
@@ -6318,6 +6380,7 @@ fn encode_minimal_streamout_proof_batch(
 
     log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
     push_pipe_control_post_sync_imm(
+        warm.device_id,
         batch_dwords,
         &mut cursor,
         PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
@@ -6335,6 +6398,7 @@ fn encode_minimal_streamout_proof_batch(
 
     log_batch_offset(cursor, "PIPE_CONTROL post-3d-heavy-sync");
     push_pipe_control_post_sync_imm(
+        warm.device_id,
         batch_dwords,
         &mut cursor,
         PIPE_CONTROL_POST_DRAW_SYNC_BITS,
@@ -6464,22 +6528,18 @@ fn encode_3d_no_draw_probe_batch(
     }
 
     fn push_pipe_control_full(
+        device_id: u16,
         batch_dwords: &mut [u32],
         cursor: &mut usize,
         flags_dw0: u32,
         flags_dw1: u32,
     ) -> Result<(), &'static str> {
-        push(batch_dwords, cursor, PIPE_CONTROL_CMD)?;
-        push(batch_dwords, cursor, flags_dw1)?;
-        if let Some(slot) = batch_dwords.get_mut(cursor.saturating_sub(2)) {
-            *slot |= flags_dw0;
-        } else {
-            return Err("3d-no-draw-pipe-control-header");
+        for word in render_pipe_control_packet(
+            device_is_gfx12(device_id), flags_dw0, flags_dw1, 0, 0,
+        ) {
+            push(batch_dwords, cursor, word)?;
         }
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)?;
-        push(batch_dwords, cursor, 0)
+        Ok(())
     }
 
     fn push_sba_address(
@@ -6506,8 +6566,8 @@ fn encode_3d_no_draw_probe_batch(
     }
 
     batch_dwords.fill(0);
-    push_pipe_control_full(batch_dwords, &mut cursor, 0, PIPE_CONTROL_FLUSH_BITS)?;
-    push_pipe_control_full(batch_dwords, &mut cursor, 0, PIPE_CONTROL_INVALIDATE_BITS)?;
+    push_pipe_control_full(warm.device_id, batch_dwords, &mut cursor, 0, PIPE_CONTROL_FLUSH_BITS)?;
+    push_pipe_control_full(warm.device_id, batch_dwords, &mut cursor, 0, PIPE_CONTROL_INVALIDATE_BITS)?;
     push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;

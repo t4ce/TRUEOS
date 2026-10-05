@@ -22,7 +22,7 @@ def main():
     parser.add_argument('--artifact-dir',type=Path,default=ROOT/'crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp')
     parser.add_argument('--frame',type=Path)
     parser.add_argument('--repeat',type=int,default=1)
-    parser.add_argument('--batch-bytes',type=int,default=1048576,help='frame dispatch capacity (1048576 matches TRUEOS; 4194304 reproduces the old limit)')
+    parser.add_argument('--batch-bytes',type=int,default=16777216,help='frame dispatch capacity (16777216 matches the cooperative TRUEOS path)')
     options=parser.parse_args()
     if options.repeat < 1: parser.error('--repeat must be positive')
     batch_limit=268435456 if options.cooperative else 4194304
@@ -99,7 +99,7 @@ def main():
     lib.LZ4_compress_default.argtypes=[ptr,ptr,integer,integer]
     timings=[]
     staged_timings=[]
-    def execute(inputs, capacities, encode, report=True):
+    def execute(inputs, capacities, encode, report=True, expect_failure=False):
         staged_start=time.perf_counter()
         assert not (options.cooperative and encode),'cooperative kernel only decodes'
         packed=b''.join(inputs); output_bytes=sum(capacities); desc=[]; si=0; di=0
@@ -128,7 +128,11 @@ def main():
             output_data=host[1].raw[:output_bytes]
             outputs=[]
             for i,cap in enumerate(capacities):
-                d=result[i*6:i*6+6];assert d[5]==0,(i,d);assert d[4]<=cap
+                d=result[i*6:i*6+6]
+                if expect_failure:
+                    assert d[5]!=0 and d[4]==0,(i,d)
+                else:
+                    assert d[5]==0,(i,d);assert d[4]<=cap
                 outputs.append(output_data[d[2]:d[2]+d[4]])
             gpu_ms=(b.value-a.value)/1e6
             timings.append(gpu_ms)
@@ -181,6 +185,11 @@ def main():
             out=c.create_string_buffer(len(source)+len(source)//255+16)
             n=lib.LZ4_compress_default(source,out,len(source),len(out));assert n>0;reference.append(out.raw[:n])
         assert execute(reference,[len(b) for b in chunks],False)==chunks
+    # Truncated extensions, literals and offsets, plus invalid match seeds.
+    bad=[b'\xf0',b'\x20x',b'\x10x\x01',b'\x10x\x00\x00',b'\x10x\x02\x00',b'\x1fx\x01\x00']
+    execute(bad,[64]*len(bad),False,expect_failure=True)
+    # A valid block must also reject an output allocation smaller than its data.
+    execute([b'\x20xy'],[1],False,expect_failure=True)
     for name,obj in [('clReleaseKernel',kern),('clReleaseProgram',prog),('clReleaseCommandQueue',q),('clReleaseContext',ctx)]:api(name,[ptr])(obj)
     print(f'Production {"native image" if options.native else "SPIR-V"}: GPU encode/decode and reference-LZ4 cross-check passed')
 if __name__=='__main__':main()

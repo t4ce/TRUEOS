@@ -511,6 +511,12 @@ pub(crate) fn unmap_render_ppgtt_range(gpu: u64, bytes: usize) -> bool {
     ppgtt.unmap_range(gpu, bytes).is_some()
 }
 
+/// Read-only backing check during a failed submission, whose caller already
+/// owns RENDER_SUBMIT_RUNTIME. Do not reacquire that submission lock here.
+fn render_ppgtt_maps_page(gpu: u64, phys: u64) -> bool {
+    RENDER_PPGTT.lock().as_ref().is_some_and(|ppgtt| ppgtt.maps_page(gpu, phys))
+}
+
 pub fn warm_state() -> Option<RenderWarmState> {
     *WARM_STATE.lock()
 }

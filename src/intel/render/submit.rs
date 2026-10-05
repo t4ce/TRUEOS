@@ -95,6 +95,45 @@ static RENDER_SUBMIT_RUNTIME: Mutex<RenderSubmitRuntime> = Mutex::new(RenderSubm
 const RENDER_CONTEXT_SAVE_TIMEOUT_NS: u64 = 2_000_000_000;
 const RENDER_CONTEXT_SAVE_POLL_LIMIT: u64 = 5_000_000;
 
+fn stalled_batch_offset(
+    batch_gpu: u64,
+    bytes: usize,
+    active: u64,
+    batch_address: u64,
+) -> Option<usize> {
+    [active, batch_address].into_iter().find_map(|address| {
+        address.checked_sub(batch_gpu)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .filter(|offset| *offset < bytes)
+    })
+}
+
+#[cfg(test)]
+mod stalled_batch_tests {
+    use super::stalled_batch_offset;
+
+    #[test]
+    fn uses_batch_address_when_active_head_is_outside_the_warm_batch() {
+        assert_eq!(
+            stalled_batch_offset(0x1750000, 4096, 0xEAC01D58, 0x175006C),
+            Some(0x6C),
+        );
+        assert_eq!(
+            stalled_batch_offset(0x1750000, 4096, 0x1750020, 0x175006C),
+            Some(0x20),
+        );
+    }
+
+    #[test]
+    fn refuses_addresses_outside_the_allocation() {
+        assert_eq!(
+            stalled_batch_offset(0x1750000, 4096, 0x174FFFF, 0x1751000),
+            None,
+        );
+        assert_eq!(stalled_batch_offset(0x1750000, 0, 0x1750000, 0x1750000), None);
+    }
+}
+
 fn resident_scene_last_gpu_poll_profile() -> (u64, u64) {
     (
         RESIDENT_SCENE_LAST_GPU_POLL_US.load(Ordering::Acquire),
@@ -546,9 +585,16 @@ fn submit_warm_render_batch(
         );
         let active = u64::from(crate::intel::mmio_read(dev, RCS_RING_ACTHD))
             | (u64::from(crate::intel::mmio_read(dev, RCS_RING_ACTHD_UDW)) << 32);
-        if let Some(offset) = active.checked_sub(GPU_VA_BATCH_BASE)
-            .and_then(|offset| usize::try_from(offset).ok())
-            .filter(|offset| *offset < warm.batch_len)
+        let batch_address = u64::from(crate::intel::mmio_read(dev, RCS_RING_BBADDR))
+            | (u64::from(crate::intel::mmio_read(dev, RCS_RING_BBADDR_UDW)) << 32);
+        crate::log_error!(target: "render";
+            "resident-scene retirement-backing batch_gpu=0x{:X} batch_phys=0x{:X} batch_page_matches={} result_gpu=0x{:X} result_phys=0x{:X} result_page_matches={} secondary_return=0x{:08X} pml4=0x{:X}\n",
+            GPU_VA_BATCH_BASE, warm.batch_phys, render_ppgtt_maps_page(GPU_VA_BATCH_BASE, warm.batch_phys),
+            GPU_VA_RESULT_BASE, warm.result_phys, render_ppgtt_maps_page(GPU_VA_RESULT_BASE, warm.result_phys),
+            read_result_dword(warm, RESULT_SLOT_SECONDARY_RETURN_DWORD), render_ppgtt_pml4_phys(),
+        );
+        if let Some(offset) =
+            stalled_batch_offset(GPU_VA_BATCH_BASE, warm.batch_len, active, batch_address)
         {
             let start = (offset & !3).saturating_sub(64);
             let end = (start + 128).min(warm.batch_len) & !3;

@@ -360,7 +360,8 @@ const TS_GPGPU_THREADS_DISPATCHED_HI: usize = 0x2294;
 const RENDER_MOCS: u32 = 4;
 // The verified Gen12 Mesa draw uses MOCS 4 for vertex buffers.  Gen12 also
 // requires L3BypassDisable when vertex data is consumed through the L3
-// read-only path; PIPE_CONTROL_INVALIDATE_BITS already invalidates that path.
+// read-only path. VF cache invalidation must additionally invalidate that L3
+// section through PIPE_CONTROL DW0, independently of the DW1 VF invalidate.
 const VERTEX_BUFFER_MOCS: u32 = 4;
 const VERTEX_BUFFER_L3_BYPASS_DISABLE: u32 = 1 << 25;
 // Vertex/index buffer addresses are absolute on Gen12.  Mesa therefore keeps
@@ -631,8 +632,12 @@ const DRAW_INDEXED_INDIRECT_DWORDS: usize = 5;
 const DRAW_INDEXED_INDIRECT_BYTES: usize =
     DRAW_INDEXED_INDIRECT_DWORDS * core::mem::size_of::<u32>();
 const PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER: u32 = 1 << 9;
+// Mesa 26 gen120.xml and both ANV/Iris pair this with VF invalidation:
+// invalidating the VF address cache alone leaves vertex/index L3 lines valid.
+const PIPE_CONTROL_L3_READ_ONLY_CACHE_INVALIDATE_HEADER: u32 = 1 << 10;
 const PIPE_CONTROL_DEPTH_CACHE_FLUSH: u32 = 1 << 0;
 const PIPE_CONTROL_STALL_AT_SCOREBOARD: u32 = 1 << 1;
+const PIPE_CONTROL_VF_CACHE_INVALIDATE: u32 = 1 << 4;
 const PIPE_CONTROL_DC_FLUSH_ENABLE: u32 = 1 << 5;
 const PIPE_CONTROL_FLUSH_ENABLE: u32 = 1 << 7;
 const PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH: u32 = 1 << 12;
@@ -652,7 +657,7 @@ const PIPE_CONTROL_FLUSH_BITS: u32 = PIPE_CONTROL_DC_FLUSH_ENABLE
     | PIPE_CONTROL_CS_STALL;
 const PIPE_CONTROL_INVALIDATE_BITS: u32 = (1 << 2)
     | (1 << 3)
-    | (1 << 4)
+    | PIPE_CONTROL_VF_CACHE_INVALIDATE
     | (1 << 10)
     | (1 << 11)
     | PIPE_CONTROL_TLB_INVALIDATE

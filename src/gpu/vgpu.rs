@@ -2876,6 +2876,29 @@ pub(crate) struct Ui4SurfaceIndexedCompletion {
     pub(crate) point: TimelinePoint,
 }
 
+/// An `Ok` scene result can still report an accepted, unretired GPU batch.
+/// Require the complete exact-target proof before releasing any resources
+/// referenced by the indexed submission.
+fn ui4_indexed_target_release(
+    rendered: &Result<crate::intel::render::ResidentSceneFrameResult, &'static str>,
+    expected_draws: usize,
+    phys: u64,
+    bytes: usize,
+) -> Option<crate::intel::render::ResidentSceneReleaseFence> {
+    let result = rendered.as_ref().ok()?;
+    if !result.frame_complete
+        || result.completion_error().is_some()
+        || result.completed_draws != expected_draws
+        || result.requested_draws != expected_draws
+        || result.present_copy_performed
+    {
+        return None;
+    }
+    result
+        .release_fence
+        .filter(|release| release.matches(phys, bytes))
+}
+
 fn ui4_single_indexed_topology_valid(
     topology: crate::intel::render::ResidentScenePrimitiveTopology,
     index_count: u32,
@@ -3553,6 +3576,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     let timing_rendered = crate::chronos::monotonic_nanos();
     let render_error = rendered.as_ref().err().copied();
+    // These direct single-sample routes reject Busy before accepting geometry.
     let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));
     if let Some(reason) = render_error {
         if !transient_busy || diagnostic_logs {
@@ -3571,7 +3595,8 @@ pub(crate) fn submit_ui4_indexed_draw(
             result.present_copy_performed, result.gpu_poll_us, result.gpu_poll_iters,
         );
     }
-    let released_mesh = if rendered.is_ok() || transient_busy {
+    let release = ui4_indexed_target_release(&rendered, 1, phys, bytes);
+    let released_mesh = if release.is_some() || transient_busy {
         crate::intel::render::release_resident_triangle_mesh(&mesh)
     } else {
         // Physical completion is ambiguous. Keep the resident geometry pinned
@@ -3581,7 +3606,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     // The buffer owns the immutable resident texture. The staged Arc pins it
     // through completion; writes and destruction invalidate only after retirement.
-    let released_texture = (rendered.is_ok() || transient_busy)
+    let released_texture = (release.is_some() || transient_busy)
         && (draw.retain_texture
             || sampled_texture
                 .as_deref()
@@ -3590,17 +3615,6 @@ pub(crate) fn submit_ui4_indexed_draw(
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
         return Err(VgpuError::Busy);
     }
-    let release = rendered
-        .as_ref()
-        .ok()
-        .and_then(|result| {
-            (result.completed_draws == 1
-                && result.requested_draws == 1
-                && !result.present_copy_performed)
-                .then_some(result.release_fence)
-                .flatten()
-        })
-        .filter(|release| release.matches(phys, bytes));
     let Some(release) = release.filter(|_| released_mesh && released_texture) else {
         crate::log_warn!(target: "render";
             "vgpu-indexed: phase=release-rejected renderer_error={:?} completion_error={:?} completed_draws={} requested_draws={} release_present={} release_matches={} present_copy={} mesh_released={} texture_released={} action=device-lost+retain-unretired-storage\n",
@@ -4020,9 +4034,12 @@ pub(crate) fn submit_ui4_indexed_batch(
             false,
         );
     let render_error = rendered.as_ref().err().copied();
+    // This direct single-sample route rejects Busy before accepting geometry.
     let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));
+    let expected_draws = batch.draws.len();
+    let release = ui4_indexed_target_release(&rendered, expected_draws, phys, bytes);
     let mut released_resources = true;
-    if rendered.is_ok() || transient_busy {
+    if release.is_some() || transient_busy {
         for mesh in &meshes {
             released_resources &= crate::intel::render::release_resident_triangle_mesh(mesh);
         }
@@ -4033,7 +4050,6 @@ pub(crate) fn submit_ui4_indexed_batch(
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, batch.surface);
         return Err(VgpuError::Busy);
     }
-    let expected_draws = batch.draws.len();
     let completed_draws = rendered
         .as_ref()
         .ok()
@@ -4053,16 +4069,6 @@ pub(crate) fn submit_ui4_indexed_batch(
             .release_fence
             .is_some_and(|release| release.matches(phys, bytes))
     });
-    let release = rendered
-        .ok()
-        .and_then(|result| {
-            (result.completed_draws == expected_draws
-                && result.requested_draws == expected_draws
-                && !result.present_copy_performed)
-                .then_some(result.release_fence)
-                .flatten()
-        })
-        .filter(|release| release.matches(phys, bytes));
     let Some(release) = release.filter(|_| released_resources) else {
         crate::log_error!(target: "vgpu";
             "vgpu: indexed UI4 batch rejected stage=resident-render-completion error={} expected_draws={} completed_draws={} requested_draws={} present_copy={} release_present={} release_matches={} resources_released={} target_phys=0x{:X} target_bytes=0x{:X} action=device-lost-and-frame-quarantine\n",
