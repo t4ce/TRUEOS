@@ -32,7 +32,7 @@ pub const BUFFER_USAGE_VERTEX: u32 = 1 << 5;
 pub const BUFFER_USAGE_INDEX: u32 = 1 << 6;
 pub const BUFFER_INFO_FLAG_VVIDEO_MEM: u32 = 1 << 0;
 /// Stable UI4 lease/storage token, not a selectable WebGPU texture format.
-/// Native graphics leases currently expose BGRA8 UNORM pixels. The historical
+/// Native graphics leases currently expose RGBA8 UNORM pixels. The historical
 /// constant name is retained for packed-application ABI compatibility.
 pub const SURFACE_FORMAT_RGBA8_UNORM_SRGB: u32 = 1;
 pub const SURFACE_FORMAT_UI4_DEFAULT: u32 = SURFACE_FORMAT_RGBA8_UNORM_SRGB;
@@ -43,7 +43,8 @@ pub const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 = 0x1438_5963_136A_A36
 /// Authenticated position-only package whose fragment color is supplied as
 /// one `vec4<f32>` block of WGPU immediate data for each indexed draw.
 pub const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 = 0x4A7C_D238_6AA5_C232;
-/// Exact headless WGSL package; native ISA targets physical Intel 8086:9A49.
+/// Exact headless WGSL package; native ISA targets physical Intel 8086:9A49
+/// rev01 and 8086:4680 rev0C, compiled separately to identical code and state.
 /// Vertex buffer prefix: 80 camera bytes, then 32-byte float4 position/color vertices.
 pub const SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64: u64 = 0x2EAA72CFCA1B1C77;
 pub const VOXY_HEADLESS_CAMERA_BYTES: usize = 80;

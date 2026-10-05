@@ -2700,7 +2700,7 @@ pub(crate) fn create_shader_module(
         return Err(VgpuError::Unsupported);
     }
     if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
-        && !crate::pci::experimental_tgl_9a49_active() { return Err(VgpuError::Unsupported); }
+        && !crate::intel::voxy_headless_target_active() { return Err(VgpuError::Unsupported); }
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
@@ -3075,7 +3075,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
         let fixed = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64;
         let voxy = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64;
-        if voxy && (!crate::pci::experimental_tgl_9a49_active() || geometry_clear
+        if voxy && (!crate::intel::voxy_headless_target_active() || geometry_clear
             || draw.vertex_offset != 80 || draw.sampled_texture.raw() != 0
             || draw.topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList) {
             return Err(unsupported("voxy-headless-layout"));

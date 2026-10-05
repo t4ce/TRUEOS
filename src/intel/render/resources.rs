@@ -4308,7 +4308,7 @@ pub(crate) fn create_resident_fixed_gl_mesh(
 pub(crate) fn create_resident_voxy_headless_mesh(
     vertices: &[[f32; 16]], indices: &[u32], camera: &[f32; 20],
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    if !crate::pci::experimental_tgl_9a49_active() { return Err("voxy-headless-target"); }
+    if !crate::intel::voxy_headless_target_active() { return Err("voxy-headless-target"); }
     if vertices.is_empty() || indices.is_empty() || indices.len() % 3 != 0
         || vertices.iter().flatten().chain(camera.iter()).any(|v| !v.is_finite())
         || indices.iter().any(|i| *i as usize >= vertices.len()) { return Err("voxy-headless-shape"); }

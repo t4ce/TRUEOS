@@ -431,6 +431,20 @@ pub(crate) fn claimed_device() -> Option<Dev> {
     CLAIMED_DEVICE.get().copied()
 }
 
+/// Admit the exact Voxygen shader bake against the GPU that owns rendering.
+/// Read raw dwords so the Tiger Lake compatibility alias cannot hide its
+/// physical device or revision, and an unrelated PCI device cannot admit it.
+pub(crate) fn voxy_headless_target_active() -> bool {
+    let Some(dev) = claimed_device() else { return false; };
+    let identity = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x00);
+    let revision = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x08) as u8;
+    shader::voxy_headless_supports_physical_device(
+        identity as u16,
+        (identity >> 16) as u16,
+        revision,
+    )
+}
+
 pub(crate) fn gen12_actual_gt_ratio(dev: Dev) -> u32 {
     self::gt_state::actual_ratio(dev)
 }

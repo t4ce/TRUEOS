@@ -1,5 +1,11 @@
-// Target 8086:9A49; exact voxygen headless WGSL, offline Mesa/Naga bake.
+// Exact Voxygen headless WGSL, offline Mesa/Naga bake.
+// Physical 8086:9A49 rev01 and 8086:4680 rev0C compile to identical code and
+// pipeline state. See the Blueprint's shaders/tgl/metadata.json compile proof.
 use super::*;
+pub(crate) const PHYSICAL_TARGETS: [(u16, u16, u8); 2] = [
+    (0x8086, 0x9A49, 0x01),
+    (0x8086, 0x4680, 0x0C),
+];
 static VS_CODE: [u32; 132] = [
     0xBD000070,0x00000801,0x01030022,0x0000C000,0x00000150,0x00000060,0x00030061,0x13050220,
     0x00460705,0x00000000,0x00030061,0x11050220,0x00460505,0x00000000,0x00030061,0x27050220,

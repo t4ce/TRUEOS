@@ -1649,7 +1649,7 @@ fn stage_resident_scene_secondary(
     }
     draw.state_gpu_addr = state_gpu;
     draw.voxy_headless = matches!(fragment_contract, ResidentSceneFragmentContract::VoxyHeadless);
-    if draw.voxy_headless && !crate::pci::experimental_tgl_9a49_active() { return Err("voxy-headless-target"); }
+    if draw.voxy_headless && !crate::intel::voxy_headless_target_active() { return Err("voxy-headless-target"); }
     if let ResidentSceneFragmentContract::FixedGl(state) = fragment_contract { draw.fixed_gl = Some(state); }
     if draw.native.is_some() {
         return Err("scene-fragment-contract-native-mismatch");
