@@ -72,7 +72,7 @@ static CLIP_POSITION3_UV_TEXTURE_PIPELINE: TrianglePipeline = TrianglePipeline {
     },
 };
 
-pub(crate) fn clip_position3_uv_texture_pipeline() -> &'static TrianglePipeline {
+pub(crate) const fn clip_position3_uv_texture_pipeline() -> &'static TrianglePipeline {
     &CLIP_POSITION3_UV_TEXTURE_PIPELINE
 }
 

@@ -340,6 +340,9 @@ const SAMPLER_CACHE_LINE_DWORDS: usize = 16;
 // TGL PRM Vol 2d, SAMPLER_STATE: zero means enabled, nearest min/mag,
 // no mip filtering, LOD zero, normalized coordinates and WRAP in U/V/W.
 const NEAREST_REPEAT_SAMPLER_STATE: [u32; 4] = [0; 4];
+// Mesa gfx12 SAMPLER_STATE: TCM_CLAMP=2 at TCZ[2:0], TCY[5:3], TCX[8:6].
+// Remaining fields retain normalized nearest sampling with LOD zero.
+const NEAREST_CLAMP_SAMPLER_STATE: [u32; 4] = [0, 0, 0, 0x92];
 
 fn write_nearest_repeat_sampler_cache_line(samplers: &mut [u32]) {
     // TGL PRM Vol 9 p558 requires every 16-byte sampler in a fetched
@@ -347,6 +350,28 @@ fn write_nearest_repeat_sampler_cache_line(samplers: &mut [u32]) {
     assert_eq!(samplers.len(), SAMPLER_CACHE_LINE_DWORDS);
     for sampler in samplers.chunks_exact_mut(4) {
         sampler.copy_from_slice(&NEAREST_REPEAT_SAMPLER_STATE);
+    }
+}
+
+fn write_nearest_clamp_sampler_cache_line(samplers: &mut [u32]) {
+    assert_eq!(samplers.len(), SAMPLER_CACHE_LINE_DWORDS);
+    for sampler in samplers.chunks_exact_mut(4) {
+        sampler.copy_from_slice(&NEAREST_CLAMP_SAMPLER_STATE);
+    }
+}
+
+/// A shared table gives the VS its camera at BTI1 and the sampled PS its
+/// atlas at BTI2. Its descriptor count also bounds the surface-state region.
+const fn voxy_headless_shared_binding_table_entries(has_texture: bool) -> usize {
+    if has_texture { 3 } else { 2 }
+}
+
+const fn resident_scene_sampler_flags_valid(voxy_headless: bool, sampler_flags: u32) -> bool {
+    if voxy_headless {
+        sampler_flags == 0
+    } else {
+        // The existing indexed texture contract requires repeat in U and V.
+        sampler_flags == 3
     }
 }
 
@@ -445,6 +470,52 @@ mod ordinary_pos_uv_state_tests {
             // Enabled; normalized; nearest/no mip; WRAP in all axes.
             assert_eq!(sampler, [0, 0, 0, 0]);
         }
+    }
+}
+
+#[cfg(test)]
+mod voxy_headless_atlas_state_tests {
+    use super::*;
+
+    #[test]
+    fn shared_table_and_surface_extent_cover_both_compiler_binding_maps() {
+        let atlas = crate::intel::shader::voxy_headless_texture_pipeline();
+        let count = voxy_headless_shared_binding_table_entries(true);
+        assert!(count >= atlas.vs.meta.kernel.binding_table_entry_count as usize);
+        assert!(count >= atlas.ps.meta.kernel.binding_table_entry_count as usize);
+        // The descriptor at BTI2 must fit before the sampler cache line;
+        // using the old two-surface extent would alias that cache line.
+        let camera_start = 64;
+        let atlas_start = 2 * 64;
+        let sampler_start = count * 64;
+        assert!(camera_start + 64 <= atlas_start);
+        assert!(atlas_start + 64 <= sampler_start);
+        assert_eq!(voxy_headless_shared_binding_table_entries(false), 2);
+    }
+
+    #[test]
+    fn atlas_sampler_clamps_all_axes_without_changing_legacy_repeat_contract() {
+        let mut words = [0xA5A5_A5A5; SAMPLER_CACHE_LINE_DWORDS + 2];
+        write_nearest_clamp_sampler_cache_line(&mut words[1..=SAMPLER_CACHE_LINE_DWORDS]);
+        assert_eq!(words[0], 0xA5A5_A5A5);
+        assert_eq!(words[SAMPLER_CACHE_LINE_DWORDS + 1], 0xA5A5_A5A5);
+        for sampler in words[1..=SAMPLER_CACHE_LINE_DWORDS].chunks_exact(4) {
+            assert_eq!(&sampler[..3], &[0, 0, 0]);
+            for shift in [0, 3, 6] {
+                assert_eq!((sampler[3] >> shift) & 7, 2);
+            }
+            assert_eq!(sampler[3] & (1 << 10), 0); // Normalized coordinates.
+        }
+        assert!(resident_scene_sampler_flags_valid(true, 0));
+        assert!(!resident_scene_sampler_flags_valid(true, 3));
+        assert!(resident_scene_sampler_flags_valid(false, 3));
+        assert!(!resident_scene_sampler_flags_valid(false, 0));
+        for flags in [1, 2, 4, u32::MAX] {
+            assert!(!resident_scene_sampler_flags_valid(true, flags));
+            assert!(!resident_scene_sampler_flags_valid(false, flags));
+        }
+        write_nearest_repeat_sampler_cache_line(&mut words[1..=SAMPLER_CACHE_LINE_DWORDS]);
+        assert_eq!(&words[1..=SAMPLER_CACHE_LINE_DWORDS], &[0; SAMPLER_CACHE_LINE_DWORDS]);
     }
 }
 
@@ -1034,7 +1105,9 @@ fn write_triangle_probe_state_with_flush(
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
     let native_pbr = native_sampled && draw.pbr_material.is_some();
     let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
-    let binding_table_entries = if fixed_gl || draw.voxy_headless { 2usize } else if draw.native.is_some() {
+    let binding_table_entries = if fixed_gl { 2usize } else if draw.voxy_headless {
+        voxy_headless_shared_binding_table_entries(draw.sampled_texture.is_some())
+    } else if draw.native.is_some() {
         4usize
     } else if draw.sampled_texture.is_some() {
         3usize
@@ -1344,14 +1417,15 @@ fn write_triangle_probe_state_with_flush(
     let samplers =
         &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + SAMPLER_CACHE_LINE_DWORDS];
     write_nearest_repeat_sampler_cache_line(samplers);
+    if draw.voxy_headless && draw.sampled_texture.is_some() {
+        write_nearest_clamp_sampler_cache_line(samplers);
+    }
     if native_pbr {
         write_pbr_sampler_cache_line(samplers, draw.pbr_material.is_some_and(|m|
             m.parameters[12] & v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST != 0));
     }
     if let Some(texture) = draw.sampled_texture
-        && texture.sampler_flags
-            != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
-                | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT)
+        && !resident_scene_sampler_flags_valid(draw.voxy_headless, texture.sampler_flags)
     {
         return Err("probe-sampler-mode");
     }

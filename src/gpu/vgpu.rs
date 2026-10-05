@@ -697,6 +697,8 @@ enum BufferBacking {
 struct SampledBufferCache {
     shape: [u32; 4], // width, height, pitch, sampler flags
     bytes: usize,
+    /// This atlas may be updated only while no staged render Arc owns it.
+    streaming: bool,
     resident: Arc<crate::intel::render::ResidentSampledTexture>,
 }
 
@@ -1853,6 +1855,9 @@ pub(crate) fn write_buffer(
         if record.usage & BUFFER_USAGE_MAP_WRITE == 0 {
             return Err(VgpuError::PermissionDenied);
         }
+        if record.in_flight != 0 {
+            return Err(VgpuError::Busy);
+        }
         let end = offset
             .checked_add(bytes.len())
             .ok_or(VgpuError::Unsupported)?;
@@ -1864,6 +1869,9 @@ pub(crate) fn write_buffer(
             BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
         };
         let released = if bytes.is_empty() {
+            0
+        } else if let Some(cache) = record.sampled.as_ref().filter(|cache| cache.streaming) {
+            update_streaming_sampled_buffer(cache, offset, bytes)?;
             0
         } else {
             release_sampled_buffer(record)?
@@ -2706,11 +2714,14 @@ pub(crate) fn create_shader_module(
         && package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
         && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+        && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
     {
         return Err(VgpuError::Unsupported);
     }
     if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
         && !crate::intel::voxy_headless_target_active() { return Err(VgpuError::Unsupported); }
+    if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
+        && !crate::intel::voxy_headless_texture_target_active() { return Err(VgpuError::Unsupported); }
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
@@ -2803,7 +2814,8 @@ pub(crate) fn create_render_pipeline(
     {
         return Err(VgpuError::Unsupported);
     }
-    if shader.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+    if matches!(shader.package_digest, v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+        | v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64)
         && (vertex_stride != 32 || position_offset != 0) { return Err(VgpuError::Unsupported); }
     let record = RenderPipelineRecord {
         package_digest: shader.package_digest,
@@ -3102,14 +3114,19 @@ pub(crate) fn submit_ui4_indexed_draw(
             || (pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
                 && pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
                 && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
-                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64)
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64)
         {
             return Err(VgpuError::InvalidHandle);
         }
         let fixed = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64;
-        let voxy = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64;
-        if voxy && (!crate::intel::voxy_headless_target_active() || geometry_clear
-            || draw.vertex_offset != 80 || draw.sampled_texture.raw() != 0
+        let voxy_textured = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64;
+        let voxy = voxy_textured || pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64;
+        let voxy_target = if voxy_textured {
+            crate::intel::voxy_headless_texture_target_active()
+        } else { crate::intel::voxy_headless_target_active() };
+        if voxy && (!voxy_target || geometry_clear
+            || draw.vertex_offset != 80 || (draw.sampled_texture.raw() != 0) != voxy_textured
             || draw.topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList) {
             return Err(unsupported("voxy-headless-layout"));
         }
@@ -3117,8 +3134,8 @@ pub(crate) fn submit_ui4_indexed_draw(
             return Err(unsupported("fixed-layout"));
         }
         let textured =
-            fixed || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
-        if draw.retain_texture
+            fixed || voxy_textured || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
+        if (draw.retain_texture || voxy_textured)
             && textured
             && !geometry_clear
             && lookup_buffer(device, draw.sampled_texture)?.usage != BUFFER_USAGE_MAP_WRITE
@@ -3127,7 +3144,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
         if textured
             && !geometry_clear
-            && draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT)
+            && draw.sampler_flags != if voxy_textured { 0 } else { SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT }
         {
             return Err(unsupported("sampler-contract"));
         }
@@ -3329,7 +3346,12 @@ pub(crate) fn submit_ui4_indexed_draw(
             } else {
                 None
             };
-            let texture = if textured && !geometry_clear {
+            // Voxy's mutable atlas is staged after dropping BROKER: resident
+            // mapping takes the Render0 execution lease and must not invert
+            // that executor's broker lock order.
+            let texture = if voxy_textured {
+                None
+            } else if textured && !geometry_clear {
                 let shape = [
                     draw.texture_width,
                     draw.texture_height,
@@ -3339,7 +3361,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 let cached = lookup_buffer(device, draw.sampled_texture)?
                     .sampled
                     .as_ref()
-                    .filter(|cache| draw.retain_texture && cache.shape == shape)
+                    .filter(|cache| (draw.retain_texture || voxy_textured) && cache.shape == shape)
                     .map(|cache| Arc::clone(&cache.resident));
                 if let Some(cached) = cached {
                     Some(cached)
@@ -3393,11 +3415,12 @@ pub(crate) fn submit_ui4_indexed_draw(
                             VgpuError::OutOfMemory
                         })?,
                     );
-                    if draw.retain_texture {
+                    if draw.retain_texture || voxy_textured {
                         lookup_buffer_mut(device, draw.sampled_texture)?.sampled =
                             Some(SampledBufferCache {
                                 shape,
                                 bytes: texture_bytes.len(),
+                                streaming: false,
                                 resident: Arc::clone(&resident),
                             });
                         device.memory_used = device.memory_used.saturating_add(texture_bytes.len());
@@ -3496,6 +3519,15 @@ pub(crate) fn submit_ui4_indexed_draw(
             }
         }
     };
+    let sampled_texture = if voxy_camera.is_some() && draw.sampled_texture.raw() != 0 {
+        match prepare_voxy_atlas(principal, device_handle, &draw) {
+            Ok(texture) => Some(texture),
+            Err(error) => {
+                rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
+                return Err(error);
+            }
+        }
+    } else { sampled_texture };
     let scene_draw = crate::intel::render::ResidentSceneDraw {
         depth_flags: None,
         mesh: &mesh,
@@ -3514,7 +3546,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             sampled_texture.as_deref()
         },
         fragment_contract: if voxy_camera.is_some() {
-            crate::intel::render::ResidentSceneFragmentContract::VoxyHeadless
+            if sampled_texture.is_some() {
+                crate::intel::render::ResidentSceneFragmentContract::VoxyHeadlessTexture
+            } else { crate::intel::render::ResidentSceneFragmentContract::VoxyHeadless }
         } else if let Some(state) = fixed_state.as_ref() {
             crate::intel::render::ResidentSceneFragmentContract::FixedGl([
                 state[116] as u32,
@@ -3635,7 +3669,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     // The buffer owns the immutable resident texture. The staged Arc pins it
     // through completion; writes and destruction invalidate only after retirement.
     let released_texture = (release.is_some() || transient_busy)
-        && (draw.retain_texture
+        && (draw.retain_texture || cached_voxy_mesh
             || sampled_texture
                 .as_deref()
                 .is_none_or(crate::intel::render::release_resident_sampled_texture));
@@ -3756,7 +3790,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} topology={:?} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
         principal,
         if voxy_camera.is_some() {
-            v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+            if sampled_texture.is_some() {
+                v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
+            } else { v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64 }
         } else if fixed_state.is_some() {
             v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
         } else if sampled_texture.is_some() {
@@ -5166,6 +5202,82 @@ pub(crate) fn submit_ui4_retained_frame(
         mesh_handle,
         release,
     )
+}
+
+/// Keep mutable sampled pixels at one resident address. A staged render Arc
+/// makes CPU updates Busy; device loss keeps the allocation pinned until reset.
+fn prepare_voxy_atlas(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    draw: &Ui4IndexedDrawDescriptor,
+) -> Result<Arc<crate::intel::render::ResidentSampledTexture>, VgpuError> {
+    let shape = [draw.texture_width, draw.texture_height, draw.texture_pitch, draw.sampler_flags];
+    let (pixels, byte_len) = {
+        let mut broker = BROKER.lock();
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        if !device.voxy_stream_in_flight {
+            return Err(VgpuError::Busy);
+        }
+        let record = lookup_buffer(device, draw.sampled_texture)?;
+        if let Some(cache) = record.sampled.as_ref() {
+            if cache.shape != shape || !cache.streaming {
+                return Err(VgpuError::Unsupported);
+            }
+            return Ok(Arc::clone(&cache.resident));
+        }
+        let byte_len = (draw.texture_pitch as usize)
+            .checked_mul(draw.texture_height as usize).ok_or(VgpuError::Unsupported)?;
+        if draw.texture_width == 0 || draw.texture_height == 0
+            || draw.texture_width > 4096 || draw.texture_height > 4096
+            || draw.texture_pitch < draw.texture_width.saturating_mul(4)
+            || draw.texture_pitch % 4 != 0 || draw.sampler_flags != 0
+            || record.usage != BUFFER_USAGE_MAP_WRITE || byte_len > record.bytes
+        {
+            return Err(VgpuError::Unsupported);
+        }
+        if record.in_flight != 0 {
+            return Err(VgpuError::Busy);
+        }
+        if device.memory_used.saturating_add(byte_len) > device.quota.memory_bytes {
+            return Err(VgpuError::QuotaExceeded);
+        }
+        let virt = match record.backing {
+            BufferBacking::Dma { virt, .. } => virt,
+            BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+        };
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(byte_len).map_err(|_| VgpuError::OutOfMemory)?;
+        crate::intel::dma_flush(virt, byte_len);
+        pixels.extend_from_slice(unsafe { core::slice::from_raw_parts(virt, byte_len) });
+        lookup_buffer_mut(device, draw.sampled_texture)?.in_flight = 1;
+        device.memory_used += byte_len;
+        (pixels, byte_len)
+    };
+    let created = crate::intel::render::create_resident_sampled_rgba8_texture(
+        shape[0], shape[1], shape[2], shape[3], &pixels,
+    );
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    lookup_buffer_mut(device, draw.sampled_texture)?.in_flight = 0;
+    let texture = match created {
+        Ok(texture) => Arc::new(texture),
+        Err(reason) => {
+            device.memory_used = device.memory_used.saturating_sub(byte_len);
+            crate::log_error!(target: "render";
+                "voxy-wgpu: phase=atlas-allocation-rejected reason={} shape={}x{} bytes={}\n",
+                reason, shape[0], shape[1], byte_len);
+            return Err(VgpuError::OutOfMemory);
+        }
+    };
+    lookup_buffer_mut(device, draw.sampled_texture)?.sampled = Some(SampledBufferCache {
+        shape, bytes: byte_len, streaming: true, resident: Arc::clone(&texture),
+    });
+    crate::log_important!(target: "render";
+        "voxy-wgpu: phase=atlas-resident shape={}x{} bytes={} gpu=0x{:X} format=rgba8-unorm sampler=nearest-clamp updates=retired-in-place\n",
+        shape[0], shape[1], byte_len, texture.storage.gpu_base());
+    ensure_live(device)?;
+    Ok(texture)
 }
 
 /// The operation lease spans CPU writes, native submission and exact retirement.
@@ -7330,6 +7442,24 @@ fn device_has_operation_leases(device: &VirtualDevice) -> bool {
             .any(|record| {
                 record.writing || record.in_flight != 0 || Arc::strong_count(&record.resident) != 1
             })
+}
+
+fn update_streaming_sampled_buffer(
+    cache: &SampledBufferCache,
+    offset: usize,
+    bytes: &[u8],
+) -> Result<(), VgpuError> {
+    if !cache.streaming {
+        return Err(VgpuError::Unsupported);
+    }
+    if Arc::strong_count(&cache.resident) != 1 {
+        return Err(VgpuError::Busy);
+    }
+    let end = offset.checked_add(bytes.len()).ok_or(VgpuError::Unsupported)?;
+    if end > cache.bytes || !cache.resident.storage.write_and_flush(offset, bytes) {
+        return Err(VgpuError::Unsupported);
+    }
+    Ok(())
 }
 
 fn release_sampled_buffer(record: &mut BufferRecord) -> Result<usize, VgpuError> {

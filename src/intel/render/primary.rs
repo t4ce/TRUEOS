@@ -363,6 +363,7 @@ pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
     ClipPosition3UvTexture,
     VoxyHeadless,
+    VoxyHeadlessTexture,
     // scissor xyxy, cull enable, blend enable, then RGB/alpha source/dest factors.
     FixedGl([u32; 10]),
 }
@@ -385,6 +386,9 @@ fn resident_scene_shader_pipeline(
         (ResidentSceneFragmentContract::VoxyHeadless, false)
             if vertex_format == TriangleVertexFormat::VoxyHeadless && vertex_stride == 32 =>
                 Ok(crate::intel::shader::voxy_headless_pipeline()),
+        (ResidentSceneFragmentContract::VoxyHeadlessTexture, true)
+            if vertex_format == TriangleVertexFormat::VoxyHeadless && vertex_stride == 32 =>
+                Ok(crate::intel::shader::voxy_headless_texture_pipeline()),
         (ResidentSceneFragmentContract::FixedGl(_), true)
             if vertex_format == TriangleVertexFormat::FixedGl && vertex_stride == 64 =>
             Ok(crate::intel::shader::wc3_fixed_pipeline()),
@@ -411,6 +415,23 @@ mod resident_scene_shader_pipeline_tests {
         assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, true, Vertex::VoxyHeadless, 32).is_err());
         assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::Float3, 32).is_err());
         assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::VoxyHeadless, 12).is_err());
+    }
+
+    #[test]
+    fn voxy_atlas_requires_the_existing_camera_vertex_contract_and_a_texture() {
+        let atlas = resident_scene_shader_pipeline(Fragment::VoxyHeadlessTexture, true, Vertex::VoxyHeadless, 32).unwrap();
+        assert!(core::ptr::eq(atlas, crate::intel::shader::voxy_headless_texture_pipeline()));
+        assert!(core::ptr::eq(atlas.vs.code, crate::intel::shader::voxy_headless_pipeline().vs.code));
+        assert!(core::ptr::eq(atlas.ps.code, crate::intel::shader::clip_position3_uv_texture_pipeline().ps.code));
+        for (texture, vertex, stride) in [
+            (false, Vertex::VoxyHeadless, 32),
+            (true, Vertex::PosUv, 20),
+            (true, Vertex::Float3, 32),
+            (true, Vertex::VoxyHeadless, 20),
+            (true, Vertex::VoxyHeadless, 48),
+        ] {
+            assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadlessTexture, texture, vertex, stride).is_err());
+        }
     }
     #[test]
     fn fixed_gl_pipeline_matches_compiler_payload_and_rejects_legacy_vertices() {
@@ -1662,8 +1683,13 @@ fn stage_resident_scene_secondary(
         return Err("scene-point-width");
     }
     draw.state_gpu_addr = state_gpu;
-    draw.voxy_headless = matches!(fragment_contract, ResidentSceneFragmentContract::VoxyHeadless);
-    if draw.voxy_headless && !crate::intel::voxy_headless_target_active() { return Err("voxy-headless-target"); }
+    draw.voxy_headless = matches!(fragment_contract,
+        ResidentSceneFragmentContract::VoxyHeadless | ResidentSceneFragmentContract::VoxyHeadlessTexture);
+    if matches!(fragment_contract, ResidentSceneFragmentContract::VoxyHeadlessTexture) {
+        if !crate::intel::voxy_headless_texture_target_active() { return Err("voxy-headless-texture-target"); }
+    } else if draw.voxy_headless && !crate::intel::voxy_headless_target_active() {
+        return Err("voxy-headless-target");
+    }
     if let ResidentSceneFragmentContract::FixedGl(state) = fragment_contract { draw.fixed_gl = Some(state); }
     if draw.native.is_some() {
         return Err("scene-fragment-contract-native-mismatch");

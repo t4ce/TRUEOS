@@ -8,12 +8,36 @@ Run from any directory with ``python3 tools/test_clip_position3_uv_texture.py``.
 """
 
 from pathlib import Path
+import hashlib
+import json
 import re
 import subprocess
 import tempfile
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def verify_voxy_texture_composition_metadata() -> None:
+    manifest = json.loads((ROOT / "crates/trueos-shader/voxy_headless_texture/metadata.json").read_text())
+    source = (ROOT.parent / "veloren-voxygen/src/headless/render_textured.wgsl").read_bytes()
+    digest = 0xCBF29CE484222325
+    for byte in source:
+        digest = ((digest ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    assert digest == int(manifest["source_fnv1a64"], 0)
+    assert hashlib.sha256(source).hexdigest() == manifest["source_sha256"]
+    for stage, path in [
+        ("vertex", ROOT.parent / "veloren-voxygen/src/headless/shaders/tgl/vs.bin"),
+        ("fragment", ROOT / "picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin"),
+    ]:
+        code = path.read_bytes()
+        assert len(code) == manifest[stage]["bytes"]
+        assert hashlib.sha256(code).hexdigest() == manifest[stage]["sha256"]
+    assert manifest["new_native_compilation"] is False
+    assert manifest["host_render_verified"] is False
+    assert manifest["baremetal_render_verified"] is False
+    assert [(int(t["vendor_id"], 0), int(t["device_id"], 0), int(t["revision"], 0))
+            for t in manifest["targets"]] == [(0x8086, 0x4680, 0x0C)]
 
 
 def item(path: str, name: str) -> str:
@@ -74,7 +98,7 @@ def harness_source() -> str:
     # changing a kernel item name makes this harness fail at extraction time.
     declarations.extend(
         constant(pipeline, name)
-        for name in ("SAMPLER_CACHE_LINE_DWORDS", "NEAREST_REPEAT_SAMPLER_STATE",
+        for name in ("SAMPLER_CACHE_LINE_DWORDS", "NEAREST_REPEAT_SAMPLER_STATE", "NEAREST_CLAMP_SAMPLER_STATE",
                      "SF_POINT_WIDTH_MASK", "MESA_SF_DW3", "RESIDENT_POINT_WIDTH_U8_3",
                      "MESA_CLIP_DW2", "MESA_POINT_CLIP_DW2", "MESA_POINT_SAMPLE_MASK_DW",
                      "MESA_POINT_WM_DEPTH_STENCIL_DW1")
@@ -83,6 +107,10 @@ def harness_source() -> str:
         item(pipeline, name)
         for name in (
             "write_nearest_repeat_sampler_cache_line",
+            "write_nearest_clamp_sampler_cache_line",
+            "voxy_headless_shared_binding_table_entries",
+            "resident_scene_sampler_flags_valid",
+            "voxy_headless_atlas_state_tests",
             "ordinary_vf_vertex_element_count",
             "cmd_3dstate_vertex_elements",
             "mesa_vf_component_packing",
@@ -112,6 +140,7 @@ def harness_source() -> str:
 
 
 def main() -> None:
+    verify_voxy_texture_composition_metadata()
     source = harness_source()
     with tempfile.TemporaryDirectory(prefix="trueos-clip-uv-tests-") as temporary:
         directory = Path(temporary)

@@ -1,0 +1,58 @@
+{
+  "format": "voxy-headless-intel-gen12-atlas-composite-v1",
+  "source": "veloren-voxygen/src/headless/render_textured.wgsl",
+  "source_sha256": "2bcf3c3f6c8183725fd82180b4df3621be2c6ae8b7b4f4d4fdaeb33b58db04aa",
+  "source_fnv1a64": "0xF84DE655632EF102",
+  "provenance": "Composition of two existing native stage artifacts; no new linked WGSL compilation is claimed.",
+  "new_native_compilation": false,
+  "host_render_verified": false,
+  "baremetal_render_verified": false,
+  "targets": [
+    { "vendor_id": "0x8086", "device_id": "0x4680", "revision": "0x0C", "family": "ADL-S GT1" }
+  ],
+  "vertex": {
+    "reused_from": "veloren-voxygen/src/headless/shaders/tgl/vs.bin",
+    "source_fnv1a64": "0x2EAA72CFCA1B1C77",
+    "sha256": "3f12e447eb4afb6197938b5e8f676ffe714639dedd66e3d03c2c11f43da537d2",
+    "bytes": 528,
+    "dispatch": "simd8",
+    "dispatch_grf_start": 2,
+    "binding_table_entries": 2,
+    "push_constant_bytes": 96,
+    "camera_bytes": 80,
+    "camera_padding_bytes": 16,
+    "vertex_stride": 32,
+    "vertex_attributes": ["float32x4 position@0", "float32x4 atlas_uv@16"],
+    "vf_component_packing": "0xFF",
+    "vue_slots": { "header": 0, "position": 1, "atlas_uv": 2 },
+    "urb_entry_64b": 1
+  },
+  "fragment": {
+    "reused_from": "TRUEOS/picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin",
+    "metadata_from": "TRUEOS/crates/trueos-shader/clip_position3_uv_texture/fragment_TRUEOS_PS_state_v1.txt",
+    "sha256": "220dd52a7439b428f150f3e363ae253ec2c15cd5804a06c3092faacbfd46e7e2",
+    "bytes": 160,
+    "code_offset_bytes": 576,
+    "dispatch": "simd16",
+    "setup_grf_start": 6,
+    "perspective_varying_inputs": 1,
+    "consumed_components": "location0.xy at VUE slot2; ZW ignored",
+    "binding_table_entries": 3,
+    "sampler_count": 1,
+    "sampler_index": 0,
+    "push_constant_bytes": 0,
+    "scratch_bytes": 0
+  },
+  "shared_bindings": { "RT0": 0, "VS_camera": 1, "PS_RGBA8_atlas": 2 },
+  "atlas": {
+    "format": "R8G8B8A8_UNORM",
+    "sampler_flags": 0,
+    "filter": "nearest",
+    "address_u": "clamp-to-edge",
+    "address_v": "clamp-to-edge",
+    "coordinates": "normalized texel centers",
+    "color_source": "Voxygen Block RGB with face-axis factor baked into RGBA8 atlas texels",
+    "alpha": 255
+  },
+  "runtime_contract": "Existing world-camera/32-byte streaming mesh, clear/depth, and exact UI4 publication receipts are preserved. Compilation provenance does not establish physical image correctness."
+}

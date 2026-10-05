@@ -47,6 +47,9 @@ pub const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 = 0x4A7C_D23
 /// rev01 and 8086:4680 rev0C, compiled separately to identical code and state.
 /// Vertex buffer prefix: 80 camera bytes, then 32-byte float4 position/color vertices.
 pub const SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64: u64 = 0x2EAA72CFCA1B1C77;
+/// World-camera Voxygen vertices whose second float4 carries sampled atlas UV.
+/// Native VS is unchanged; the sampled fragment stage consumes location0.xy.
+pub const SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64: u64 = 0xF84DE655632EF102;
 pub const VOXY_HEADLESS_CAMERA_BYTES: usize = 80;
 pub const VOXY_HEADLESS_VERTEX_STRIDE: usize = 32;
 const VVIDEO_PAGE_BYTES: usize = 4096;

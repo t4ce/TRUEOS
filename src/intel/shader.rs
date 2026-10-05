@@ -294,6 +294,26 @@ mod voxy_headless_tgl;
 const _: () = assert!(voxy_headless_tgl::SOURCE_FNV1A64 == 0x2EAA72CFCA1B1C77);
 pub(crate) fn voxy_headless_pipeline() -> &'static TrianglePipeline { &voxy_headless_tgl::PIPELINE }
 
+// A sealed composition of two existing native programs, not a new compiler
+// output: Voxy's unchanged world-camera VS exports its second float4 at VUE
+// slot 2; the Picasso/clip-UV PS samples its first two perspective components.
+// The PS must follow the larger Voxy VS at the next 64-byte code boundary.
+static VOXY_HEADLESS_TEXTURE_PIPELINE: TrianglePipeline = {
+    let mut pipeline = voxy_headless_tgl::PIPELINE;
+    pipeline.ps = generated_clip_position3_uv_texture::clip_position3_uv_texture_pipeline().ps;
+    pipeline.ps.meta.kernel.code_offset_bytes = 576;
+    pipeline
+};
+
+pub(crate) fn voxy_headless_texture_pipeline() -> &'static TrianglePipeline {
+    &VOXY_HEADLESS_TEXTURE_PIPELINE
+}
+
+/// The reused sampled PS was compiled for ADL-S, not Tiger Lake.
+pub(crate) fn voxy_headless_texture_supports_physical_device(vendor: u16, device: u16, revision: u8) -> bool {
+    (vendor, device, revision) == (0x8086, 0x4680, 0x0C)
+}
+
 /// Compiler-validated devices, sealed to the deployed physical revisions.
 pub(crate) fn voxy_headless_supports_physical_device(vendor: u16, device: u16, revision: u8) -> bool {
     voxy_headless_tgl::PHYSICAL_TARGETS.contains(&(vendor, device, revision))

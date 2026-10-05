@@ -445,6 +445,18 @@ pub(crate) fn voxy_headless_target_active() -> bool {
     )
 }
 
+/// The atlas composition reuses a sampled fragment bake sealed to ADL-S.
+pub(crate) fn voxy_headless_texture_target_active() -> bool {
+    let Some(dev) = claimed_device() else { return false; };
+    let identity = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x00);
+    let revision = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x08) as u8;
+    shader::voxy_headless_texture_supports_physical_device(
+        identity as u16,
+        (identity >> 16) as u16,
+        revision,
+    )
+}
+
 pub(crate) fn gen12_actual_gt_ratio(dev: Dev) -> u32 {
     self::gt_state::actual_ratio(dev)
 }
