@@ -40,6 +40,12 @@ __kernel void lz4_blocks(
                 } while (extra == 255u);
             }
             if (literals > n - ip || literals > cap - op) return;
+            // vload/vstore permit byte alignment. Wider copies avoid one
+            // data-port transaction and loop dependency per output byte.
+            while (literals >= 16u) {
+                vstore16(vload16(0, src + ip), 0, dst + op);
+                ip += 16u; op += 16u; literals -= 16u;
+            }
             for (uint i = 0; i < literals; ++i) dst[op++] = src[ip++];
             if (ip == n) { d[4] = op; d[5] = 0; return; }
             if (n - ip < 2u) return;
@@ -56,7 +62,25 @@ __kernel void lz4_blocks(
                 } while (extra == 255u);
             }
             if (match > cap - op) return;
-            // Deliberately forward copy: LZ4 permits overlapping matches.
+            // A full vector is safe only when its source precedes all of its
+            // destination bytes. Advance forward to preserve LZ4 overlap.
+            if (offset >= 16u) {
+                while (match >= 16u) {
+                    const uchar16 bytes = vload16(0, dst + op - offset);
+                    vstore16(bytes, 0, dst + op);
+                    op += 16u; match -= 16u;
+                }
+            } else if ((offset & (offset - 1u)) == 0u && match >= 16u) {
+                // Periods 1/2/4/8 divide 16. Read their existing seed once,
+                // then repeat it without reading each just-written byte back.
+                uchar16 bytes;
+                for (uint i = 0; i < 16u; ++i) bytes[i] = dst[op - offset + (i & (offset - 1u))];
+                while (match >= 16u) {
+                    vstore16(bytes, 0, dst + op);
+                    op += 16u; match -= 16u;
+                }
+            }
+            // Short copies and other small periods retain forward semantics.
             for (uint i = 0; i < match; ++i) { dst[op] = dst[op - offset]; ++op; }
         }
         return; // A block must end with a literal sequence, even when empty.

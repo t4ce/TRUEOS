@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Run the production LZ4 SPIR-V on a local OpenCL GPU (no TRUEOS rig access).
 
-This checks the shader on a driver-managed GPU. It does not validate TRUEOS's
-GuC submission, PPGTT ownership, retirement, or the pinned ADL-S native image.
+Use --native to execute the pinned ADL-S image instead of compiling SPIR-V,
+and --frame PATH to compare every compressed block of an independent LZ4
+frame against liblz4. This does not validate TRUEOS's GuC submission, PPGTT
+ownership, context switching, or retirement.
 """
+import argparse
 import ctypes as c
 import os
 from pathlib import Path
@@ -13,6 +16,15 @@ import time
 ROOT=Path(__file__).resolve().parents[2]
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--native',action='store_true')
+    parser.add_argument('--artifact-dir',type=Path,default=ROOT/'crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp')
+    parser.add_argument('--frame',type=Path)
+    parser.add_argument('--repeat',type=int,default=1)
+    parser.add_argument('--batch-bytes',type=int,default=1048576,help='frame dispatch capacity (1048576 matches TRUEOS; 4194304 reproduces the old limit)')
+    options=parser.parse_args()
+    if options.repeat < 1: parser.error('--repeat must be positive')
+    if not 1 <= options.batch_bytes <= 4194304: parser.error('--batch-bytes must be between 1 and 4194304')
     cl=c.CDLL('libOpenCL.so.1')
     ptr=c.c_void_p; uint=c.c_uint; size=c.c_size_t; integer=c.c_int; ulong=c.c_ulonglong
     def api(name, args, result=integer):
@@ -46,16 +58,44 @@ def main():
     if not selected: raise SystemExit('No Intel OpenCL GPU; use an Intel ICD via OCL_ICD_VENDORS.')
     error=integer(); ctx=context(None,1,c.byref(selected),None,None,c.byref(error)); assert error.value==0,error.value
     q=queue(ctx,selected,2,c.byref(error)); assert error.value==0,error.value
-    il=(ROOT/'crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_blocks.spv').read_bytes()
-    prog=program(ctx,il,len(il),c.byref(error)); assert error.value==0,error.value
+    il=(options.artifact_dir/'lz4_blocks.spv').read_bytes()
+    if options.native:
+        native=(options.artifact_dir/'lz4_blocks.bin').read_bytes()
+        binary=c.create_string_buffer(native); binary_ptr=c.cast(binary,ptr);binary_size=size(len(native));status=integer()
+        create_binary=api('clCreateProgramWithBinary',[ptr,uint,c.POINTER(ptr),c.POINTER(size),c.POINTER(ptr),c.POINTER(integer),c.POINTER(integer)],ptr)
+        prog=create_binary(ctx,1,c.byref(selected),c.byref(binary_size),c.byref(binary_ptr),c.byref(status),c.byref(error))
+        assert error.value==0 and status.value==0,(error.value,status.value)
+    else:
+        prog=program(ctx,il,len(il),c.byref(error)); assert error.value==0,error.value
     rc=build(prog,1,c.byref(selected),b'',None,None)
     if rc:
-        log=c.create_string_buffer(65536);build_info(prog,selected,0x1183,len(log),log,None);raise RuntimeError(log.value.decode())
+        log=c.create_string_buffer(65536);build_info(prog,selected,0x1183,len(log),log,None);raise RuntimeError(f'clBuildProgram={rc}: {log.value.decode()}')
+    if options.native:
+        # Zebin also embeds SPIR-V. A driver can silently rebuild for another
+        # product; prove that this test really executed the pinned EU code.
+        program_info=api('clGetProgramInfo',[ptr,uint,size,ptr,c.POINTER(size)])
+        binary_length=size()
+        assert program_info(prog,0x1165,c.sizeof(size),c.byref(binary_length),None)==0
+        built=c.create_string_buffer(binary_length.value);built_ptr=c.cast(built,ptr)
+        assert program_info(prog,0x1166,c.sizeof(ptr),c.byref(built_ptr),None)==0
+        def kernel_text(elf):
+            assert elf[:6]==b'\x7fELF\x02\x01','expected little-endian ELF64 Zebin'
+            shoff=struct.unpack_from('<Q',elf,40)[0]
+            shsize,shnum,shstr=struct.unpack_from('<HHH',elf,58)
+            headers=[struct.unpack_from('<IIQQQQIIQQ',elf,shoff+i*shsize) for i in range(shnum)]
+            strings=elf[headers[shstr][4]:headers[shstr][4]+headers[shstr][5]]
+            for header in headers:
+                name=strings[header[0]:].split(b'\0',1)[0]
+                if name==b'.text.lz4_blocks': return elf[header[4]:header[4]+header[5]]
+            raise AssertionError('missing native kernel text')
+        assert kernel_text(native)==kernel_text(built.raw),'driver rebuilt the native image; pinned-code test is not valid on this GPU'
+        print('Pinned EU instruction bytes preserved by the OpenCL driver')
     kern=kernel(prog,b'lz4_blocks',c.byref(error));assert error.value==0,error.value
     lib=c.CDLL('liblz4.so.1')
     lib.LZ4_decompress_safe.argtypes=[ptr,ptr,integer,integer]
     lib.LZ4_compress_default.argtypes=[ptr,ptr,integer,integer]
-    def execute(inputs, capacities, encode):
+    timings=[]
+    def execute(inputs, capacities, encode, report=True):
         packed=b''.join(inputs); output_bytes=sum(capacities); desc=[]; si=0; di=0
         for source,cap in zip(inputs,capacities):
             desc.extend([si,len(source),di,cap,0,1]);si+=len(source);di+=cap
@@ -81,10 +121,41 @@ def main():
             for i,cap in enumerate(capacities):
                 d=result[i*6:i*6+6];assert d[5]==0,(i,d);assert d[4]<=cap
                 outputs.append(host[1].raw[d[2]:d[2]+d[4]])
-            print(f'{"encode" if encode else "decode"}: {len(inputs)} blocks, {len(packed)} input bytes, GPU {(b.value-a.value)/1e6:.3f} ms, submit/wait {elapsed:.3f} ms')
+            gpu_ms=(b.value-a.value)/1e6
+            timings.append(gpu_ms)
+            if report: print(f'{"encode" if encode else "decode"}: {len(inputs)} blocks, {len(packed)} input bytes, GPU {gpu_ms:.3f} ms, submit/wait {elapsed:.3f} ms')
             return outputs
         finally:
             for mem in buffers:release_mem(mem)
+    if options.frame:
+        frame=options.frame.read_bytes()
+        assert frame[:4]==b'\x04\x22\x4d\x18','expected a standard LZ4 frame'
+        flags,bd=frame[4:6]
+        assert flags&0xe0==0x60 and not flags&1,'expected independent blocks without a dictionary'
+        maximum={4:65536,5:262144,6:1048576,7:4194304}[(bd>>4)&7]
+        offset=6+(8 if flags&8 else 0)+1
+        blocks=[]; raw_blocks=0
+        while True:
+            value=struct.unpack_from('<I',frame,offset)[0];offset+=4
+            if not value: break
+            n=value&0x7fffffff
+            assert 0<n<=maximum and offset+n<=len(frame),'truncated or oversized block'
+            source=frame[offset:offset+n];offset+=n+(4 if flags&16 else 0)
+            blocks.append(None if value&0x80000000 else source)
+            raw_blocks+=bool(value&0x80000000)
+        assert offset+(4 if flags&4 else 0)==len(frame),'trailing or missing frame data'
+        batch_size=min(256,max(1,options.batch_bytes//maximum))
+        for iteration in range(options.repeat):
+            timings.clear()
+            for first in range(0,len(blocks),batch_size):
+                inputs=[b for b in blocks[first:first+batch_size] if b is not None]
+                if not inputs: continue
+                outputs=execute(inputs,[maximum]*len(inputs),False,False)
+                for source,decoded in zip(inputs,outputs):
+                    out=c.create_string_buffer(maximum)
+                    n=lib.LZ4_decompress_safe(source,out,len(source),maximum)
+                    assert n>=0 and decoded==out.raw[:n],(iteration,first,'liblz4 mismatch')
+            print(f'Frame run {iteration+1}: {len(blocks)-raw_blocks} compressed blocks verified, {raw_blocks} raw blocks skipped, GPU total {sum(timings):.3f} ms, maximum batch {max(timings,default=0):.3f} ms')
     for data in [b'a'*1048576,(b'hello shader LZ4\n'*65536)[:1048576],os.urandom(1048576)]:
         chunks=[data[i:i+4096] for i in range(0,len(data),4096)]
         encoded=execute(chunks,[len(b)+len(b)//255+16 for b in chunks],True)
@@ -97,5 +168,5 @@ def main():
             n=lib.LZ4_compress_default(source,out,len(source),len(out));assert n>0;reference.append(out.raw[:n])
         assert execute(reference,[len(b) for b in chunks],False)==chunks
     for name,obj in [('clReleaseKernel',kern),('clReleaseProgram',prog),('clReleaseCommandQueue',q),('clReleaseContext',ctx)]:api(name,[ptr])(obj)
-    print('Production SPIR-V: GPU encode/decode and reference-LZ4 cross-check passed')
+    print(f'Production {"native image" if options.native else "SPIR-V"}: GPU encode/decode and reference-LZ4 cross-check passed')
 if __name__=='__main__':main()

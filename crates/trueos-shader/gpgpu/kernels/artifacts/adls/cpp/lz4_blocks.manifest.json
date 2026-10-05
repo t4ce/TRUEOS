@@ -5,11 +5,11 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "ae8a7c88196e005c7d9cb8dcf00d51f627a6a989edf022e699a510e11d2e6fa3",
-      "size_bytes": 50352,
+      "sha256": "5c3db58869a88bd65ab5fdd6fd389562969e8c138ccb154149e7a4085abdd63e",
+      "size_bytes": 66264,
       "type": "relocatable",
-      "ze_info_section_offset": 45432,
-      "ze_info_section_size": 4115
+      "ze_info_section_offset": 61240,
+      "ze_info_section_size": 4219
     },
     "kernels": [
       {
@@ -31,7 +31,7 @@
             "bti": 3
           }
         ],
-        "cross_thread_data_bytes": 96,
+        "cross_thread_data_bytes": 128,
         "execution_env": {
           "eu_thread_count": 7,
           "grf_count": 128,
@@ -57,15 +57,20 @@
             "size": 12
           },
           {
+            "arg_type": "private_base_stateless",
+            "offset": 88,
+            "size": 8
+          },
+          {
             "arg_index": 0,
             "arg_type": "buffer_offset",
-            "offset": 88,
+            "offset": 96,
             "size": 4
           },
           {
             "arg_index": 1,
             "arg_type": "buffer_offset",
-            "offset": 92,
+            "offset": 100,
             "size": 4
           }
         ],
@@ -225,13 +230,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 7840,
+          "entry_size": 10232,
           "section_alignment": 0,
           "section_name": ".text.lz4_blocks",
           "section_offset": 64,
-          "section_size": 8000,
-          "sha256": "236a8334517342fcafc15574673f944c939c00deac8e9db53c5aed0978a876cc",
-          "symbol_size": 7840,
+          "section_size": 10368,
+          "sha256": "60f19597f8744472ee1fa98221fcbdb7fff649213040b48d09abd7bd9f797b37",
+          "symbol_size": 10232,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -247,10 +252,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 8136,
-      "embedded_section_size": 37220,
-      "sha256": "ac8d31ed95a082c39c9849b187c112ccc8fc7014d5153dc48950b882ece522d4",
-      "size_bytes": 37220
+      "embedded_section_offset": 10504,
+      "embedded_section_size": 50660,
+      "sha256": "76310f0499d38304d9c4288b637806f5482af733f809517be1b5f6754e0de5f4",
+      "size_bytes": 50660
     }
   },
   "provenance": {
@@ -455,8 +460,8 @@
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/lz4_blocks.clcpp",
-        "sha256": "2be15725e71fd52166be5ca593e44ac3c7db60045eb1e6ae82e4c26cc847d73c",
-        "size_bytes": 4340
+        "sha256": "de9296325193b2b9a4d76461f5cddcfc6900255f01b6007739bf8331fcc996c4",
+        "size_bytes": 5594
       }
     ],
     "language": "C++ for OpenCL",

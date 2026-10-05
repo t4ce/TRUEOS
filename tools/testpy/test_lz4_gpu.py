@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Execute the production shader as native C++ under ASan/UBSan against liblz4.
 
-Only OpenCL address-space annotations and invocation IDs are adapted. The
+Only OpenCL annotations, vector builtins and invocation IDs are adapted. The
 compression/decompression algorithm itself is the checked-in shader source.
 This proves memory safety/interoperability on the host, not GPU throughput.
 """
@@ -16,8 +16,16 @@ def main():
     shader = shader.replace('#include "include/trueos_clcpp.hpp"', '''
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 using uint = uint32_t;
 using uchar = unsigned char;
+typedef uchar uchar16 __attribute__((vector_size(16)));
+static uchar16 vload16(uint offset, const uchar* source) {
+    uchar16 result; std::memcpy(&result, source + offset * 16, 16); return result;
+}
+static void vstore16(uchar16 value, uint offset, uchar* destination) {
+    std::memcpy(destination + offset * 16, &value, 16);
+}
 using std::min;
 #define __global
 #define __kernel
@@ -47,6 +55,17 @@ static Bytes transform(const Bytes& input, uint capacity, bool encode, bool* acc
 }
 int main() {
     std::mt19937 random(20260924);
+    // Exercise short-period overlap, vector-boundary tails, and byte-unaligned
+    // sources/destinations against the reference encoder and decoder.
+    for (uint period = 1; period <= 31; ++period) {
+        for (uint n : {15u,16u,17u,31u,32u,33u,255u,256u,257u,65536u}) {
+            Bytes input(n); for (uint i = 0; i < n; ++i) input[i] = i % period;
+            Bytes reference(LZ4_compressBound(n));
+            int size = LZ4_compress_default(reinterpret_cast<const char*>(input.data()), reinterpret_cast<char*>(reference.data()), n, reference.size());
+            assert(size > 0); reference.resize(size);
+            assert(transform(reference, n, false) == input);
+        }
+    }
     for (uint n : {0u,1u,4u,5u,12u,13u,15u,19u,255u,256u,4095u,4096u,65535u,65536u}) {
         for (uint mode = 0; mode < 5; ++mode) {
             Bytes input(n);

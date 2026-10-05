@@ -11,7 +11,7 @@ const _: () = {
     let c = LZ4_BLOCKS_ADLS_CPP_ABI_CONTRACT;
     assert!(matches!(c.validate(), Ok(())));
     assert!(c.simd_width == 16 && c.scratch_bytes == 0 && c.slm_bytes == 0);
-    assert!(c.cross_thread_data_bytes == 96 && c.per_thread_data_bytes == 96);
+    assert!(c.cross_thread_data_bytes == 128 && c.per_thread_data_bytes == 96);
     assert!(c.bindings.len() == 4 && c.payload_args.len() == 6);
     let mut i = 0;
     while i < 4 {
@@ -39,7 +39,7 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
         LZ4_BINDING,
         LZ4_BLOCKS_ADLS_CPP_ABI_CONTRACT.entry_offset as u64,
         4,
-        3,
+        4,
     ) {
         return false;
     }
@@ -87,7 +87,7 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
         ] {
             core::ptr::write_volatile(payload.add(offset), value);
         }
-        let ids = state.batch_virt.add(LZ4_PAYLOAD + 96).cast::<u16>();
+        let ids = state.batch_virt.add(LZ4_PAYLOAD + 128).cast::<u16>();
         for lane in 0..16 {
             core::ptr::write_volatile(ids.add(lane), lane as u16);
         }
@@ -139,7 +139,7 @@ fn encode_lz4_batch(resources: Lz4Resources, count: u32, mode: u32) -> bool {
         batch,
         &mut cursor,
         LZ4_PAYLOAD,
-        192,
+        224,
         count.div_ceil(16),
         1,
         GPGPU_WALKER_SIMD16_MASK,

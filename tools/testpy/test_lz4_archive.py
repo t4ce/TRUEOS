@@ -134,7 +134,7 @@ fn main() {{
     assert_eq!(block_on(r::lz4::compress_frame(data)),Err(r::lz4::Error::Gpu));
 }}
 #[test] fn decode_progress_tracks_cpu_and_gpu_blocks_without_changing_output() {{
-    let data = vec![17; 10 * 65536];
+    let data = vec![17; 33 * r::lz4::ENCODE_BLOCK_BYTES];
     let frame = r::lz4::compress_frame_cpu(&data);
     for mode in [0, 1, 3] {{
         intel::gpgpu::MODE.set(mode);
@@ -149,6 +149,7 @@ fn main() {{
         assert!(seen.iter().all(|(done,total)| *done > 0 && done <= total));
         assert!(seen.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 == w[1].1));
         assert_eq!(seen.last().unwrap().0, seen.last().unwrap().1);
+        if mode == 3 {{ assert_eq!(*seen, vec![(16, 33), (32, 33), (33, 33)]); }}
     }}
 }}
 #[test] fn bounded_and_corrupt_frames() {{

@@ -223,7 +223,7 @@ pub(crate) async fn lz4_gpu_blocks(
         crate::log_warn!(target: "gpgpu"; "intel/gpgpu: lz4-failed phase=batch-encode blocks={} encode={}\n", blocks.len(), encode);
         return Err(Lz4GpuError::Submission);
     }
-    let started = direct_rcs_now_tick();
+    let admission_started = direct_rcs_now_tick();
     loop {
         match direct_rcs_submit_batch_on_lane_state(dev, resources.state, DirectRcsLane::Codec) {
             DirectRcsSubmissionState::Submitted => {
@@ -236,31 +236,65 @@ pub(crate) async fn lz4_gpu_blocks(
             }
             DirectRcsSubmissionState::Rejected => {
                 if CODEC_RCS_CONTEXT_QUARANTINED.load(Ordering::Acquire)
-                    || direct_rcs_elapsed_ms_since(started) > 2000
+                    || direct_rcs_elapsed_ms_since(admission_started) > 2000
                 {
+                    crate::log_warn!(target: "gpgpu"; "intel/gpgpu: lz4-failed phase=admission blocks={} encode={} elapsed_ms={} quarantined={}\n", blocks.len(), encode, direct_rcs_elapsed_ms_since(admission_started), CODEC_RCS_CONTEXT_QUARANTINED.load(Ordering::Acquire));
                     return Err(Lz4GpuError::Submission);
                 }
                 trueos_time::Timer::after(trueos_time::Duration::from_millis(1)).await;
             }
         }
     }
+    // Admission can spend nearly its entire budget waiting for the broker.
+    // Start a separate retirement deadline only after GuC accepted the job.
+    let started = direct_rcs_now_tick();
+    let admission_ms = direct_rcs_elapsed_ms_since(admission_started);
     loop {
         let observed = direct_rcs_read_result_slot(resources.state, LZ4_POST_MARKER_SLOT);
-        if direct_rcs_retirement_proof_on_lane(
+        let proof = direct_rcs_retirement_proof_on_lane(
             resources.state,
             DirectRcsLane::Codec,
             observed == LZ4_POST_MARKER,
-        )
-        .complete()
-        {
+        );
+        if proof.complete() {
             complete_direct_rcs_submission_on_lane(DirectRcsLane::Codec);
             admission.inflight = false;
             break;
         }
         if direct_rcs_elapsed_ms_since(started) > 2000 {
+            crate::log_warn!(target: "gpgpu"; "intel/gpgpu: lz4-failed phase=retirement blocks={} encode={} input_bytes={} output_capacity={} admission_ms={} elapsed_ms={} pre_marker=0x{:08X} post_marker=0x{:08X} marker_observed={} saved_head={} published_tail={}\n", blocks.len(), encode, input_bytes, output_bytes, admission_ms, direct_rcs_elapsed_ms_since(started), direct_rcs_read_result_slot(resources.state, 0), observed, proof.marker_observed, proof.saved_head_bytes, proof.published_tail_bytes);
+            // Diagnostic sampling only: descriptors may still be GPU-owned.
+            // These observations never authorize output reads or DMA reuse.
+            super::dma_flush(unsafe { resources.arena.add(LZ4_DESC_OFFSET) }, blocks.len() * 24);
+            let mut completed = 0;
+            let mut first_pending = None;
+            for index in 0..blocks.len() {
+                let descriptor = unsafe { resources.arena.add(LZ4_DESC_OFFSET + index * 24).cast::<u32>() };
+                let status = unsafe { core::ptr::read_volatile(descriptor.add(5)) };
+                if status == 0 {
+                    completed += 1;
+                } else if first_pending.is_none() {
+                    first_pending = Some((index, status, unsafe { core::ptr::read_volatile(descriptor.add(4)) }));
+                }
+            }
+            let activity = activity_snapshot();
+            let gt = crate::intel::gt_state::read(dev);
+            crate::log_warn!(target: "gpgpu"; "intel/gpgpu: lz4-timeout-snapshot completed_blocks={} total_blocks={} first_pending={:?} batch_gpu=0x{:X} acthd=0x{:08X} ring_start=0x{:08X} ring_head=0x{:08X} ring_tail=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instps=0x{:08X} fault=0x{:08X} fault_data0=0x{:08X} fault_data1=0x{:08X} actual_mhz={} requested_mhz={} throttle=0x{:08X} scope=shared-rcs-registers+unretired-descriptor-observations\n", completed, blocks.len(), first_pending, resources.state.gpu_va.batch, activity.acthd, activity.ring_start, activity.ring_head, activity.ring_tail, activity.ipeir, activity.ipehr, activity.eir, activity.instdone, activity.instps, super::mmio_read(dev, 0xCEC4), super::mmio_read(dev, 0xCEB8), super::mmio_read(dev, 0xCEBC), gt.actual_mhz, gt.requested_mhz, gt.throttle_reasons_raw);
+            quarantine_direct_rcs_lane(DirectRcsLane::Codec, if proof.marker_observed {
+                "lz4-context-save-timeout"
+            } else {
+                "lz4-marker-timeout"
+            });
+            // The context and its backing remain pinned by quarantine. Drop
+            // must not misreport this timeout as a cancelled future.
+            admission.inflight = false;
             return Err(Lz4GpuError::Timeout);
         }
         trueos_time::Timer::after(trueos_time::Duration::from_millis(1)).await;
+    }
+    let submission = CODEC_RCS_SUBMIT_RUNTIME.lock().submissions;
+    if submission <= 4 || submission.is_power_of_two() {
+        crate::log_info!(target: "gpgpu"; "intel/gpgpu: lz4-retired submission={} blocks={} encode={} input_bytes={} output_capacity={} admission_ms={} elapsed_ms={}\n", submission, blocks.len(), encode, input_bytes, output_bytes, admission_ms, direct_rcs_elapsed_ms_since(started));
     }
     super::dma_flush(unsafe { resources.arena.add(LZ4_REGION_BYTES) }, output_bytes);
     super::dma_flush(unsafe { resources.arena.add(LZ4_DESC_OFFSET) }, blocks.len() * 24);

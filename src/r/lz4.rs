@@ -327,7 +327,11 @@ pub async fn decompress_frame_with_progress(
             .map_err(|_| Error::Worker)?;
     }
     let mut out = Vec::new();
-    let per_batch = (4194304 / frame.max_block).min(256).max(1);
+    // Codec shares RCS with interactive producers. Thread preemption is
+    // disabled in the direct-RCS IDD, so keep frame dispatches to at most
+    // 1 MiB (one SIMD16 group for the usual 64 KiB frame blocks), instead of
+    // making a 4 MiB dispatch monopolize the engine across four groups.
+    let per_batch = (1048576 / frame.max_block).min(256).max(1);
     let mut completed = 0;
     for batch in frame.blocks.chunks(per_batch) {
         let capacity = frame.max_block.min(max_output.saturating_sub(out.len()));
@@ -347,7 +351,7 @@ pub async fn decompress_frame_with_progress(
                     .map_err(|_| Error::Worker)?;
             }
             Err(error) => {
-                crate::log_warn!(target: "storage"; "codec/lz4: phase=gpu-failed operation=decode error={:?}\n", error);
+                crate::log_warn!(target: "storage"; "codec/lz4: phase=gpu-failed operation=decode error={:?} first_block={} batch_blocks={} compressed_blocks={} total_blocks={} decoded_bytes={}\n", error, completed, batch.len(), compressed.len(), frame.blocks.len(), out.len());
                 return Err(Error::Gpu);
             }
         };
