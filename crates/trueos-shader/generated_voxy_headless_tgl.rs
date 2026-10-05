@@ -1,6 +1,7 @@
 // Exact Voxygen headless WGSL, offline Mesa/Naga bake.
-// Physical 8086:9A49 rev01 and 8086:4680 rev0C compile to identical code and
-// pipeline state. See the Blueprint's shaders/tgl/metadata.json compile proof.
+// Device bakes for 8086:9A49 and 8086:4680 produce identical code and pipeline
+// state, admitted only on physical rev01 and rev0C respectively. See the
+// Blueprint's shaders/tgl/metadata.json compile proof.
 use super::*;
 pub(crate) const PHYSICAL_TARGETS: [(u16, u16, u8); 2] = [
     (0x8086, 0x9A49, 0x01),

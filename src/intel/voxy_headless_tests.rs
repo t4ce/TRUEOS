@@ -1,7 +1,7 @@
 use super::voxy_headless_tgl;
 
 #[test]
-fn admits_only_compiler_validated_physical_targets() {
+fn admits_only_sealed_physical_targets() {
     use super::voxy_headless_supports_physical_device as supports;
     assert!(supports(0x8086, 0x9A49, 0x01));
     assert!(supports(0x8086, 0x4680, 0x0C));

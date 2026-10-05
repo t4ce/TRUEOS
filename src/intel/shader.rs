@@ -294,7 +294,7 @@ mod voxy_headless_tgl;
 const _: () = assert!(voxy_headless_tgl::SOURCE_FNV1A64 == 0x2EAA72CFCA1B1C77);
 pub(crate) fn voxy_headless_pipeline() -> &'static TrianglePipeline { &voxy_headless_tgl::PIPELINE }
 
-/// Only physical device/revision pairs validated by the exact shader bake.
+/// Compiler-validated devices, sealed to the deployed physical revisions.
 pub(crate) fn voxy_headless_supports_physical_device(vendor: u16, device: u16, revision: u8) -> bool {
     voxy_headless_tgl::PHYSICAL_TARGETS.contains(&(vendor, device, revision))
 }
