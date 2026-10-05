@@ -31,7 +31,11 @@ pub const BUFFER_USAGE_COPY_DST: u32 = 1 << 4;
 pub const BUFFER_USAGE_VERTEX: u32 = 1 << 5;
 pub const BUFFER_USAGE_INDEX: u32 = 1 << 6;
 pub const BUFFER_INFO_FLAG_VVIDEO_MEM: u32 = 1 << 0;
+/// Stable UI4 lease/storage token, not a selectable WebGPU texture format.
+/// Native graphics leases currently expose BGRA8 UNORM pixels. The historical
+/// constant name is retained for packed-application ABI compatibility.
 pub const SURFACE_FORMAT_RGBA8_UNORM_SRGB: u32 = 1;
+pub const SURFACE_FORMAT_UI4_DEFAULT: u32 = SURFACE_FORMAT_RGBA8_UNORM_SRGB;
 /// Authenticated AOT package backing the first WGPU graphics-module contract.
 /// The value is the stable FNV-1a digest of the exact WGSL accepted by the
 /// Picasso renderer adapter, not an application/demo selector.
@@ -808,6 +812,9 @@ impl Device {
         })
     }
 
+    /// Import the current UI4 back-buffer write lease, acquired by the frame's
+    /// GPU begin operation. Dropping an unused import cancels that write lease.
+    /// Submit consumes only the import; the frame must still be published.
     pub fn acquire_ui4_surface(self, window_id: u32) -> Result<Ui4Surface, i32> {
         let mut info = SurfaceInfo::default();
         rc_result(unsafe {
@@ -938,6 +945,9 @@ impl Device {
         Ok(point)
     }
 
+    /// Retire one native graphics draw and stage its render fence in UI4.
+    /// The caller must then publish the owning frame through its ordinary
+    /// publisher; the compute-only publisher rejects native render fences.
     pub fn submit_ui4_indexed(
         self,
         queue: Queue,

@@ -897,11 +897,11 @@ fn write_triangle_probe_state(
     )
 }
 
-// Captured WGSL textured VS executables negate clip Y (Naga coordinate-space
-// adjustment); the native GLSL cube DS does not. Undo that difference here,
-// after clipping, so CPU culling and both draws retain one world camera.
-fn retained_viewport_y_scale(height: u32, native_sampled: bool) -> f32 {
-    height as f32 * if native_sampled { 0.5 } else { -0.5 }
+// Naga-baked WGSL executables negate clip Y. Use the corresponding Vulkan
+// viewport orientation so their world geometry and screen text agree with
+// WebGPU. Native GLSL executables retain their existing camera orientation.
+fn retained_viewport_y_scale(height: u32, naga_y_flipped: bool) -> f32 {
+    height as f32 * if naga_y_flipped { 0.5 } else { -0.5 }
 }
 
 #[cfg(test)]
@@ -915,6 +915,16 @@ mod retained_viewport_tests {
             let cube = y/w*retained_viewport_y_scale(441,false)+220.5;
             let image = -y/w*retained_viewport_y_scale(441,true)+220.5;
             assert_eq!(cube,image);
+        }
+    }
+
+    #[test]
+    fn voxy_screen_text_keeps_webgpu_top_and_bottom() {
+        // The exact embedded VS changes authored WebGPU Y to -Y. Its
+        // positive viewport scale must map +1 to row 0 and -1 to row 720.
+        let scale = retained_viewport_y_scale(720, true);
+        for (authored_y, expected_row) in [(1.0, 0.0), (0.0, 360.0), (-1.0, 720.0)] {
+            assert_eq!(-authored_y * scale + 360.0, expected_row);
         }
     }
 }
@@ -1386,7 +1396,8 @@ fn write_triangle_probe_state_with_flush(
         &mut dwords[sf_clip_viewport_offset / 4..sf_clip_viewport_offset / 4 + 16];
     sf_clip_viewport.fill(0);
     sf_clip_viewport[0] = (draw.target_w as f32 * 0.5).to_bits();
-    sf_clip_viewport[1] = retained_viewport_y_scale(draw.target_h, native_sampled).to_bits();
+    sf_clip_viewport[1] =
+        retained_viewport_y_scale(draw.target_h, native_sampled || draw.voxy_headless).to_bits();
     sf_clip_viewport[2] = 1.0f32.to_bits();
     sf_clip_viewport[3] = (draw.target_w as f32 * 0.5 + viewport_translation_px[0]).to_bits();
     sf_clip_viewport[4] = (draw.target_h as f32 * 0.5 + viewport_translation_px[1]).to_bits();
@@ -2692,9 +2703,10 @@ fn encode_triangle_probe_batch(
                 0
             }
     };
-    if diagnostic_cull_off {
+    if diagnostic_cull_off || draw.voxy_headless {
         // CLIP.DW1[18] performs early backface rejection. Disable it along
-        // with RASTER culling so CL output counters exclude that optimization.
+        // with RASTER culling. Voxy's authenticated pipeline has cull-none
+        // semantics and preserves every authored triangle winding.
         clip_dw1 &= !(1 << 18);
     }
     let clip_dw2 = if viewport_or_rectlist_clip_bypass {
@@ -3344,7 +3356,7 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        if artifact_native_fixed_function {
+        if artifact_native_fixed_function || draw.voxy_headless {
             binding_table_pointer_offset
         } else {
             0
@@ -6525,4 +6537,26 @@ fn voxy_headless_constant_vs_packet(vertex_gpu: u64, vertex_bytes: u32) -> Resul
     words[9] = camera as u32;
     words[10] = (camera >> 32) as u32;
     Ok(words)
+}
+
+#[cfg(test)]
+mod voxy_headless_constant_tests {
+    use super::voxy_headless_constant_vs_packet;
+
+    #[test]
+    fn camera_uses_the_compiler_range_in_final_constant_slot() {
+        // Gen12 ANV: 96 bytes, three 32-byte units in slot 3. The packet
+        // carries MOCS in its header and leaves the address bits untouched.
+        assert_eq!(voxy_headless_constant_vs_packet(0x1_0000_0000, 96).unwrap(), [
+            0x7815_0409, 0, 0x0003_0000, 0, 0, 0, 0, 0, 0, 96, 1,
+        ]);
+        assert_eq!(voxy_headless_constant_vs_packet(0x1_0000_0000, 128).unwrap()[9], 128);
+    }
+
+    #[test]
+    fn rejects_unusable_constant_addresses() {
+        assert!(voxy_headless_constant_vs_packet(0, 96).is_err());
+        assert!(voxy_headless_constant_vs_packet(1, 96).is_err());
+        assert!(voxy_headless_constant_vs_packet(u64::MAX & !31, 96).is_err());
+    }
 }
