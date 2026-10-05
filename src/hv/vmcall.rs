@@ -5080,7 +5080,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 let payload = unsafe { &(&(*p).payload)[..n] };
                 match core::str::from_utf8(payload) {
-                    Ok(path) => match crate::r::io::env::resolve_fs_path(path, false) {
+                    Ok(path) => match crate::r::archive_cabi::resolve_lz4_decode_path(path) {
                         Some(path) => crate::r::archive_cabi::start_lz4_decode(crate::r::io::async_fs_cabi::owner_for_vm(vm_id), path),
                         None => crate::r::io::cabi::FS_ERR_BAD_PATH,
                     },

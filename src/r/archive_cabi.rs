@@ -106,14 +106,19 @@ pub(crate) fn result_read(owner: u32, id: u32, offset: usize, out: &mut [u8]) ->
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_archive_lz4_decode_start_v1(path_ptr: *const u8, path_len: usize) -> i32 {
-    let path = match parse_path(path_ptr, path_len) {
+    let path = match parse_raw_path(path_ptr, path_len) {
         Ok(path) => path,
         Err(error) => return error,
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        // Preserve the leading slash across the VM boundary. The host resolves
+        // it once; resolving here first would lose the volume-root namespace.
         guest_start(trueos_vm::vmcall::OP_BP_ARCHIVE_LZ4_DECODE_START, &path, "")
     } else {
-        start_lz4_decode(direct_owner(), path)
+        match resolve_lz4_decode_path(&path) {
+            Some(path) => start_lz4_decode(direct_owner(), path),
+            None => FS_ERR_BAD_PATH,
+        }
     }
 }
 
@@ -167,7 +172,22 @@ pub(crate) fn discard(owner: u32, id: u32) -> i32 {
     }
 }
 
+/// RAM archive reads use absolute paths from the TRUEOSFS volume root.
+/// Relative paths retain the caller's app/instance directory.
+pub(crate) fn resolve_lz4_decode_path(path: &str) -> Option<String> {
+    if path.starts_with('/') {
+        crate::r::path::FsPath::parse(path, false).ok().map(|path| path.to_relative_string())
+    } else {
+        crate::r::io::env::resolve_fs_path(path, false)
+    }
+}
+
 fn parse_path(path_ptr: *const u8, path_len: usize) -> Result<String, i32> {
+    let path = parse_raw_path(path_ptr, path_len)?;
+    crate::r::io::env::resolve_fs_path(&path, false).ok_or(FS_ERR_BAD_PATH)
+}
+
+fn parse_raw_path(path_ptr: *const u8, path_len: usize) -> Result<String, i32> {
     if path_ptr.is_null() || path_len == 0 {
         return Err(FS_ERR_BAD_PARAM);
     }
@@ -176,7 +196,7 @@ fn parse_path(path_ptr: *const u8, path_len: usize) -> Result<String, i32> {
     }
     let bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
     let path = core::str::from_utf8(bytes).map_err(|_| FS_ERR_BAD_UTF8)?;
-    crate::r::io::env::resolve_fs_path(path, false).ok_or(FS_ERR_BAD_PATH)
+    Ok(String::from(path))
 }
 
 fn guest_start(op: u32, first: &str, second: &str) -> i32 {

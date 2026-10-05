@@ -93,6 +93,19 @@ fn bridge_is_specific_to_the_server_and_never_grants_global_fs() {
             .contains_key("VELOREN_USERDATA"));
     }
 }
+#[test]
+fn absolute_ram_archive_path_survives_guest_transport_for_each_instance() {
+    let archive = "/apps/voxy/voxygen-assets.tar.lz4";
+    for root in ["apps/voxy", "apps/voxy/container_1--uuid", "apps/voxy/container_2--uuid"] {
+        ENV.with(|e| *e.borrow_mut() = build_process_env("voxy.bp", Some(root), None, None, false));
+        // The CABI must send the original path; the VM handler resolves it once.
+        let transported = archive::parse_raw_path(archive.as_ptr(), archive.len()).unwrap();
+        assert_eq!(transported, archive);
+        assert_eq!(archive::resolve_lz4_decode_path(&transported), Some("apps/voxy/voxygen-assets.tar.lz4".into()));
+        assert_eq!(archive::resolve_lz4_decode_path("voxygen-assets.tar.lz4"), Some(format!("{root}/voxygen-assets.tar.lz4")));
+        assert_eq!(archive::resolve_lz4_decode_path("/apps/voxy/../other/file.tar.lz4"), None);
+    }
+}
 '''
     production = "\n".join(function(blueprint, name) for name in (
         "build_process_env", "safe_archive_stem", "app_fs_common_root"
@@ -100,6 +113,12 @@ fn bridge_is_specific_to_the_server_and_never_grants_global_fs() {
     production += "\n" + "\n".join(function(ROOT / "src/r/io.rs", name) for name in (
         "trueosfs_scope_granted", "normalize_app_path", "resolve_fs_path"
     ))
+    archive_functions = "\n".join(function(ROOT / "src/r/archive_cabi.rs", name) for name in (
+        "parse_raw_path", "resolve_lz4_decode_path"
+    )).replace("fn parse_raw_path(", "pub(crate) fn parse_raw_path(")
+    harness += "\nmod archive { use alloc::string::String; const FS_ERR_BAD_PARAM: i32 = -4; const FS_ERR_TOO_LARGE: i32 = -7; const FS_ERR_BAD_UTF8: i32 = -1; const BLUEPRINT_ASYNC_FS_MAX_PATH: usize = 1024;\n" + archive_functions + "\n}\n"
+    harness += "\nmod r_io_env_bridge { pub(crate) use crate::resolve_fs_path; }\n"
+    harness = harness.replace("pub mod io { pub mod kfs {", "pub mod io { pub(crate) use crate::r_io_env_bridge as env; pub mod kfs {")
     harness += f'\nmod locale {{ {locales} }}\n'
     harness += f'#[path = "{ROOT / "src/r/path.rs"}"] pub mod path;\n'
     with tempfile.TemporaryDirectory(prefix="trueos-velosrv-env-") as directory:
