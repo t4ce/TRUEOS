@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 source = (ROOT / "src/hv/mod.rs").read_text()
 
 
@@ -59,6 +59,35 @@ fn x86_session_reserves_asset_memory_before_generic_classification() {
         assert_eq!(p.heap_upper_mib, 2048);
         assert!(p.heap_lower_mib * MIB > 1024 * MIB + 128 * MIB);
     }
+}
+#[test]
+fn ram_asset_ingestion_takes_priority_over_incidental_server_imports() {
+    use hv::blueprint::*;
+    let imports = [
+        ElfImport { name: "trueos_cabi_archive_lz4_decode_start_v1" },
+        ElfImport { name: "bind" },
+        ElfImport { name: "listen" },
+        ElfImport { name: "accept4" },
+        ElfImport { name: "trueos_cabi_dns_resolve_ipv4" },
+        ElfImport { name: "pthread_create" },
+    ];
+    for archive in ["voxy.bp", "renamed.bp"] {
+        let module = BlueprintModule { raw_payload_len: 190 * MIB, _data: &[] };
+        let p = estimate_blueprint_memory_profile(archive, &module, &[], &imports);
+        assert_eq!(p.class.label(), "ram-assets");
+        assert_eq!((p.heap_lower_mib, p.heap_recommended_mib, p.heap_upper_mib), (3072, 3072, 3072));
+        // Image + TAR + simultaneous old/new redb buffers + working headroom.
+        assert!(p.heap_lower_mib > 190 + 424 + 516 + 1032 + 128);
+    }
+}
+#[test]
+fn ordinary_servers_keep_their_existing_budget() {
+    use hv::blueprint::*;
+    let module = BlueprintModule { raw_payload_len: 190 * MIB, _data: &[] };
+    let imports = [ElfImport { name: "bind" }, ElfImport { name: "listen" }, ElfImport { name: "accept4" }];
+    let p = estimate_blueprint_memory_profile("server.bp", &module, &[], &imports);
+    assert_eq!(p.class.label(), "network-server");
+    assert_eq!((p.heap_lower_mib, p.heap_recommended_mib, p.heap_upper_mib), (128, 1024, 1024));
 }
 #[test]
 fn ordinary_blueprints_keep_their_existing_budget() {

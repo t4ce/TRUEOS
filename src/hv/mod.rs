@@ -529,6 +529,7 @@ pub enum VmBootMode {
 #[derive(Copy, Clone)]
 enum BlueprintMemoryClass {
     X86Session,
+    RamAssets,
     TokioRuntime,
     AudioPlayer,
     NetworkClient,
@@ -542,6 +543,7 @@ impl BlueprintMemoryClass {
     const fn label(self) -> &'static str {
         match self {
             Self::X86Session => "x86-session",
+            Self::RamAssets => "ram-assets",
             Self::TokioRuntime => "tokio-runtime",
             Self::AudioPlayer => "audio-player",
             Self::NetworkClient => "network-client",
@@ -2907,6 +2909,13 @@ fn classify_blueprint_memory(
         return BlueprintMemoryClass::X86Session;
     }
 
+    // RAM asset ingestion retains a decoded TAR while redb builds its database.
+    // The codec import identifies that peak independently of executable size or
+    // incidental listener symbols pulled in by the networking runtime.
+    if import_name_has(imports, "trueos_cabi_archive_lz4_decode_start_v1") {
+        return BlueprintMemoryClass::RamAssets;
+    }
+
     let audio_player_signal = archive_has(archive, "scope-tui")
         || archive_has(archive, "scope_tui")
         || archive_has(archive, "aud-player-scope-tui")
@@ -2996,6 +3005,10 @@ fn estimate_blueprint_memory_profile(
             // headroom. Refuse a smaller arena instead of failing mid-preload.
             // This is Blueprint backing RAM, not XP process virtual memory.
             BlueprintMemoryClass::X86Session => (2048, 2048, 2048, 16, 32, 128),
+            // Voxygen's ~190 MiB image, ~424 MiB staging TAR, and redb's old
+            // and new backing buffers overlap during growth. Reserve room for
+            // the full import; do not accept the former 1 GiB server budget.
+            BlueprintMemoryClass::RamAssets => (3072, 3072, 3072, 16, 32, 128),
             BlueprintMemoryClass::TokioRuntime => (
                 64,
                 round_pow2_mib(base_live_mib.saturating_mul(12).saturating_add(64)).max(128),
@@ -3059,8 +3072,13 @@ fn estimate_blueprint_memory_profile(
 }
 
 fn log_blueprint_memory_profile_info(profile: BlueprintVmMemoryProfile) {
+    let level = if matches!(profile.class, BlueprintMemoryClass::RamAssets) {
+        log_os_core::LogLevel::Important
+    } else {
+        log_os_core::LogLevel::Info
+    };
     crate::log_os::blueprint_line(
-        log_os_core::LogLevel::Info,
+        level,
         format_args!(
             "apps: profile {} heap={}/{}/{}MiB stack={}/{}/{}MiB\n",
             profile.class.label(),
