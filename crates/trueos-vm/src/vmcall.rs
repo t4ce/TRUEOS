@@ -230,6 +230,9 @@ pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_TEXT: u32 = 0xF2;
 pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_JSON: u32 = 0xF3;
 pub const OP_BP_KEYBOARD_CONTROL_IDLE: u32 = 0xF4;
 pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5;
+/// High half of arg0 selects exact-publication tracking on the existing UI4
+/// publish/first-presentation operations; low half remains the window handle.
+pub const UI4_SCENE_TRACK_PUBLICATION_V1: u64 = 1 << 32;
 pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6;
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7;
 pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8;

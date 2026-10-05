@@ -96,7 +96,7 @@ pub const OP_BP_UI4_SHELL2_FONT_SCALE_STEPS_V1: u32 = 0x12E; // arg0 cap -> Shel
 pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2; // arg0 cap -> count + FontSize payload
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
-pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 window,arg1 x/y,payload w/h -> rc
+pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 mode:window,arg1 x/y,payload w/h -> rc [+ mode1 serial]
 pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window,arg1 close flags -> rc
 pub const OP_BP_UI4_SOLARA_TEXT_SCENE: u32 = 0xB8; // arg0 window,arg1 font,payload viewport/rows -> rc
 pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 instance:scale,payload fixed page -> rc
@@ -212,7 +212,7 @@ pub const OP_BP_KEYBOARD_CONTROL_SUBMIT: u32 = 0xF1; // arg0 handle,payload Keyb
 pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_TEXT: u32 = 0xF2; // arg0 handle,arg1 interval:flags,payload UTF-8 -> count/rc
 pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_JSON: u32 = 0xF3; // arg0 handle,payload JSON -> command count/rc
 pub const OP_BP_KEYBOARD_CONTROL_IDLE: u32 = 0xF4; // arg0 handle -> bool/rc
-pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5; // arg0 window -> first SURFLIVE event/empty/rc
+pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5; // arg0 mode:window; mode0 first event, mode1 arg1 exact serial -> presented/empty/rc
 pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output width:height
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7; // arg0 offset, arg1 cap -> USB inventory snapshot
 pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8; // arg0 window,arg1 cap -> selected combo/keyboard routes
@@ -2282,6 +2282,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SOLARA_FRAME_PUBLISH => {
+            if arg0 >> 32 > 1 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
@@ -2293,6 +2297,20 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let width = u32::from_le_bytes([extent[0], extent[1], extent[2], extent[3]]);
             let height = u32::from_le_bytes([extent[4], extent[5], extent[6], extent[7]]);
             let (x, y) = unpack_u32_pair(arg1);
+            if arg0 & trueos_vm::vmcall::UI4_SCENE_TRACK_PUBLICATION_V1 != 0 {
+                let mut serial = 0;
+                let rc = unsafe {
+                    crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_publish_tracked_v1(
+                        arg0 as u32, x, y, width, height, &mut serial,
+                    )
+                };
+                if rc == 0 {
+                    write_record_response(vm_id, seq, 0, &serial);
+                } else {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                }
+                return DispatchOutcome::Resume;
+            }
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_publish(
                 arg0 as u32,
                 x,
@@ -2903,9 +2921,20 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_first_presentation_take(
-                arg0 as u32,
-            );
+            let rc = match arg0 >> 32 {
+                0 if arg1 == 0 => {
+                    crate::ui4::blueprint_text::trueos_cabi_ui4_scene_first_presentation_take(
+                        arg0 as u32,
+                    )
+                }
+                1 => crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_was_presented_v1(
+                    arg0 as u32, arg1,
+                ),
+                _ => {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    return DispatchOutcome::Resume;
+                }
+            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

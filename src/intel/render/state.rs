@@ -228,11 +228,16 @@ pub(crate) struct ResidentTriangleMesh {
     pub(crate) storage_bytes: usize,
     pub(crate) gpu_base: u64,
     pub(crate) vertex_gpu_addr: u64,
+    /// Streaming Voxy meshes keep their allocated capacity here; the live
+    /// draw count belongs to the indexed-indirect record.
     pub(crate) vertex_count: u32,
+    /// Authored VF extent, excluding appended state. For streaming Voxy this
+    /// is the fixed capacity extent, which also locates the padded camera.
     pub(crate) vertex_bytes: u32,
     pub(crate) vertex_stride: u32,
     vertex_format: TriangleVertexFormat,
     pub(crate) index_gpu_addr: u64,
+    /// Index capacity for streaming Voxy; direct meshes use their live count.
     pub(crate) index_count: u32,
     pub(crate) index_bytes: u32,
     /// One tightly packed, GPU-visible WGPU/Helio indexed-indirect record.

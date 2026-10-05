@@ -791,6 +791,10 @@ unsafe extern "C" {
         out: *mut TrueosUi4ResizeEvent,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_first_presentation_take(window_id: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_frame_was_presented_v1(
+        window_id: u32,
+        publish_serial: u64,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_output_dimensions() -> u64;
     pub fn trueos_cabi_ui4_scene_keyboard_state(
         window_id: u32,
@@ -834,6 +838,14 @@ unsafe extern "C" {
         damage_y: u32,
         damage_width: u32,
         damage_height: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_frame_publish_tracked_v1(
+        window_id: u32,
+        damage_x: u32,
+        damage_y: u32,
+        damage_width: u32,
+        damage_height: u32,
+        out_publish_serial: *mut u64,
     ) -> i32;
     /// Publish the active BlueprintScene lease after a compute producer has
     /// completed an exact RGBA8 surface write. The producer release remains

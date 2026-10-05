@@ -2,7 +2,9 @@
 """Host tests of the production video API, ring protocol and textured draws."""
 from pathlib import Path
 import subprocess,tempfile
-from test_clip_position3_uv_texture import ROOT,item
+import test_clip_position3_uv_texture as production
+production.ROOT = Path(__file__).resolve().parents[2]
+ROOT, item = production.ROOT, production.item
 from test_retained_material import harness_source
 
 def run(source):
@@ -189,10 +191,13 @@ lease=item('src/gpu/vgpu.rs','device_has_operation_leases')
 run('''use std::sync::Arc;
 #[derive(Default)]struct Record{in_flight:u32,writing:bool,resident:Arc<()>}
 struct Slot{record:Option<Record>}
-#[derive(Default)]struct VirtualDevice{picasso_setup_in_flight:bool,buffers:Vec<Slot>,surfaces:Vec<Slot>,queues:Vec<Slot>,retained_meshes:Vec<Slot>,retained_textures:Vec<Slot>}
+#[derive(Default)]struct VirtualDevice{picasso_setup_in_flight:bool,voxy_stream_in_flight:bool,buffers:Vec<Slot>,surfaces:Vec<Slot>,queues:Vec<Slot>,retained_meshes:Vec<Slot>,retained_textures:Vec<Slot>}
 '''+lease+'''
 #[test] fn texture_writers_and_readers_block_device_teardown(){
- let mut d=VirtualDevice::default();d.retained_textures.push(Slot{record:Some(Record::default())});
+ let mut d=VirtualDevice::default();
+ d.voxy_stream_in_flight=true;assert!(device_has_operation_leases(&d));
+ d.voxy_stream_in_flight=false;assert!(!device_has_operation_leases(&d));
+ d.retained_textures.push(Slot{record:Some(Record::default())});
  assert!(!device_has_operation_leases(&d));
  d.retained_textures[0].record.as_mut().unwrap().writing=true;assert!(device_has_operation_leases(&d));
  d.retained_textures[0].record.as_mut().unwrap().writing=false;

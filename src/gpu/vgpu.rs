@@ -1064,6 +1064,12 @@ struct VirtualDevice {
     retained_meshes: Vec<RetainedMeshSlot>,
     retained_textures: Vec<RetainedTextureSlot>,
     drawable_depths: Vec<(u32, Arc<crate::intel::render::DrawableDepth>)>,
+    /// Voxygen streams one bounded geometry allocation after exact retirement.
+    /// The camera and indirect draw retain their GPU addresses as terrain arrives.
+    voxy_stream_mesh: Option<Arc<crate::intel::render::ResidentTriangleMesh>>,
+    voxy_stream_in_flight: bool,
+    voxy_stream_owner: Option<(QueueHandle, SurfaceHandle)>,
+    voxy_stream_quarantined: bool,
     /// Phase-1 Picasso carrier. A VMX device may bind one RendererN lane for
     /// its epoch; no retained route may silently select Render0.
     picasso_carrier: Option<crate::intel::render::PicassoCarrierLease>,
@@ -1273,6 +1279,10 @@ pub(crate) fn open(
         retained_meshes: Vec::new(),
         retained_textures: Vec::new(),
         drawable_depths: Vec::new(),
+        voxy_stream_mesh: None,
+        voxy_stream_in_flight: false,
+        voxy_stream_owner: None,
+        voxy_stream_quarantined: false,
         picasso_carrier: None,
         picasso_setup_in_flight: false,
         picasso_carrier_quarantined: false,
@@ -2110,7 +2120,7 @@ pub(crate) fn create_retained_mesh(
         {
             return Err(VgpuError::PermissionDenied);
         }
-        if device.picasso_setup_in_flight {
+        if device.picasso_setup_in_flight || device.voxy_stream_in_flight {
             return Err(VgpuError::Busy);
         }
         if device.picasso_carrier_quarantined {
@@ -3079,7 +3089,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
-        if device.picasso_setup_in_flight {
+        if device.picasso_setup_in_flight || device.voxy_stream_in_flight {
             return Err(VgpuError::Busy);
         }
         if !device.capabilities.contains(Capabilities::RENDER)
@@ -3414,6 +3424,10 @@ pub(crate) fn submit_ui4_indexed_draw(
                 .collect::<Vec<_>>();
             canonicalize_ui4_single_indexed_winding(&legacy, &mut indices, draw.topology);
         }
+        device.voxy_stream_in_flight = voxy_camera.is_some();
+        if voxy_camera.is_some() {
+            device.voxy_stream_owner = Some((queue_handle, draw.surface));
+        }
         (
             window_id,
             phys,
@@ -3439,35 +3453,47 @@ pub(crate) fn submit_ui4_indexed_draw(
         width,
         height,
         pitch,
-    )
-    .ok_or_else(|| unsupported("surface-shape"))?;
-    let mesh = match if let Some(camera) = voxy_camera.as_ref() {
-        crate::intel::render::create_resident_voxy_headless_mesh(&vertices, &indices, camera)
-    } else if let Some(state) = fixed_state.as_ref() {
-        crate::intel::render::create_resident_fixed_gl_mesh(&vertices, &indices, state)
-    } else if sampled_texture.is_some() && !geometry_clear {
-        crate::intel::render::create_resident_textured_indexed_mesh(
-            &vertices
-                .iter()
-                .map(|v| [v[0], v[1], v[2], v[3], v[4]])
-                .collect::<Vec<_>>(),
-            &indices,
-            draw.topology,
-        )
+    );
+    let Some(destination) = destination else {
+        rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
+        return Err(unsupported("surface-shape"));
+    };
+    let cached_voxy_mesh = voxy_camera.is_some();
+    let mesh = if let Some(camera) = voxy_camera.as_ref() {
+        match prepare_voxy_stream_mesh(principal, device_handle, &vertices, &indices, camera) {
+            Ok(mesh) => mesh,
+            Err(error) => {
+                rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
+                return Err(error);
+            }
+        }
     } else {
-        let positions = vertices
-            .iter()
-            .map(|vertex| [vertex[0], vertex[1], vertex[2]])
-            .collect::<Vec<_>>();
-        crate::intel::render::create_resident_indexed_mesh(&positions, &indices, draw.topology)
-    } {
-        Ok(mesh) => mesh,
-        Err(reason) => {
-            crate::log_warn!(target: "vgpu";
-                "vgpu-indexed: resource-failed resource=mesh reason={} vertices={} indices={} fixed={}\n",
-                reason, vertices.len(), indices.len(), fixed_state.is_some());
-            rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
-            return Err(VgpuError::OutOfMemory);
+        match if let Some(state) = fixed_state.as_ref() {
+            crate::intel::render::create_resident_fixed_gl_mesh(&vertices, &indices, state)
+        } else if sampled_texture.is_some() && !geometry_clear {
+            crate::intel::render::create_resident_textured_indexed_mesh(
+                &vertices
+                    .iter()
+                    .map(|v| [v[0], v[1], v[2], v[3], v[4]])
+                    .collect::<Vec<_>>(),
+                &indices,
+                draw.topology,
+            )
+        } else {
+            let positions = vertices
+                .iter()
+                .map(|vertex| [vertex[0], vertex[1], vertex[2]])
+                .collect::<Vec<_>>();
+            crate::intel::render::create_resident_indexed_mesh(&positions, &indices, draw.topology)
+        } {
+            Ok(mesh) => Arc::new(mesh),
+            Err(reason) => {
+                crate::log_warn!(target: "vgpu";
+                    "vgpu-indexed: resource-failed resource=mesh reason={} vertices={} indices={} fixed={}\n",
+                    reason, vertices.len(), indices.len(), fixed_state.is_some());
+                rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
+                return Err(VgpuError::OutOfMemory);
+            }
         }
     };
     let scene_draw = crate::intel::render::ResidentSceneDraw {
@@ -3597,7 +3623,9 @@ pub(crate) fn submit_ui4_indexed_draw(
     }
     let release = ui4_indexed_target_release(&rendered, 1, phys, bytes);
     let released_mesh = if release.is_some() || transient_busy {
-        crate::intel::render::release_resident_triangle_mesh(&mesh)
+        // Exact retirement (or pre-accept Busy) permits reuse of the streaming
+        // allocation; other shader routes retain their existing release policy.
+        cached_voxy_mesh || crate::intel::render::release_resident_triangle_mesh(&mesh)
     } else {
         // Physical completion is ambiguous. Keep the resident geometry pinned
         // with the lost device instead of recycling storage still reachable by
@@ -3637,6 +3665,8 @@ pub(crate) fn submit_ui4_indexed_draw(
         let mut broker = BROKER.lock();
         if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
             device.lost = true;
+            clear_voxy_stream_lease(device, queue_handle, draw.surface);
+            device.voxy_stream_quarantined |= cached_voxy_mesh;
             if let Ok(queue) = lookup_queue_mut(device, queue_handle) {
                 queue.in_flight = 0;
                 queue.timeline.failures = queue.timeline.failures.saturating_add(1);
@@ -3695,6 +3725,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     physical.unmap_gpuvm(vm, guest_gpu, bytes)?;
     let record = surface_slot.record.take().expect("validated surface");
     device.memory_used = device.memory_used.saturating_sub(record.bytes);
+    clear_voxy_stream_lease(device, queue_handle, draw.surface);
     let queue = lookup_queue_mut(device, queue_handle)?;
     queue.in_flight = 0;
     queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
@@ -3805,6 +3836,9 @@ pub(crate) fn submit_ui4_indexed_batch(
             || !device.capabilities.contains(Capabilities::PRESENT)
         {
             return Err(VgpuError::PermissionDenied);
+        }
+        if device.voxy_stream_in_flight {
+            return Err(VgpuError::Busy);
         }
         let pipeline = lookup_render_pipeline(device, batch.pipeline)?;
         if pipeline.epoch != device.epoch
@@ -5134,6 +5168,85 @@ pub(crate) fn submit_ui4_retained_frame(
     )
 }
 
+/// The operation lease spans CPU writes, native submission and exact retirement.
+/// Allocate the bounded maximum once so terrain/entity count changes never move
+/// the camera, index buffer or indirect record while this device is alive.
+fn prepare_voxy_stream_mesh(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
+) -> Result<Arc<crate::intel::render::ResidentTriangleMesh>, VgpuError> {
+    let capacity = crate::intel::render::VOXY_HEADLESS_MAX_STREAM_CAPACITY;
+    let charge = crate::intel::render::voxy_headless_stream_storage_bytes(capacity)
+        .ok_or(VgpuError::OutOfMemory)?;
+    let existing = {
+        let mut broker = BROKER.lock();
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        if !device.voxy_stream_in_flight {
+            return Err(VgpuError::Busy);
+        }
+        if let Some(mesh) = device.voxy_stream_mesh.as_ref() {
+            Some(Arc::clone(mesh))
+        } else {
+            if device.memory_used.saturating_add(charge) > device.quota.memory_bytes {
+                return Err(VgpuError::OutOfMemory);
+            }
+            device.memory_used += charge;
+            None
+        }
+    };
+    if let Some(mesh) = existing {
+        crate::intel::render::update_resident_voxy_headless_streaming_mesh(
+            &mesh, vertices, indices, camera,
+        ).map_err(|reason| {
+            crate::log_error!(target: "render";
+                "voxy-wgpu: phase=stream-update-rejected reason={} vertices={} indices={}\n",
+                reason, vertices.len(), indices.len());
+            VgpuError::Unsupported
+        })?;
+        return Ok(mesh);
+    }
+    let created = crate::intel::render::create_resident_voxy_headless_streaming_mesh(
+        capacity, vertices, indices, camera,
+    );
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    let mesh = match created {
+        Ok(mesh) => Arc::new(mesh),
+        Err(reason) => {
+            device.memory_used = device.memory_used.saturating_sub(charge);
+            crate::log_error!(target: "render";
+                "voxy-wgpu: phase=stream-allocation-rejected reason={} capacity={} bytes={}\n",
+                reason, capacity, charge);
+            return Err(VgpuError::OutOfMemory);
+        }
+    };
+    // Keep the allocation attached even if an asynchronous fault lost the
+    // device during mapping; teardown still has its exact backing ownership.
+    device.voxy_stream_mesh = Some(Arc::clone(&mesh));
+    crate::log_important!(target: "render";
+        "voxy-wgpu: phase=stream-resident capacity={} bytes={} vb_gpu=0x{:X} camera_gpu=0x{:X} ib_gpu=0x{:X} args_gpu=0x{:X}\n",
+        capacity, mesh.storage_bytes, mesh.vertex_gpu_addr,
+        mesh.vertex_gpu_addr + mesh.vertex_bytes as u64, mesh.index_gpu_addr,
+        mesh.indirect_args_gpu_addr);
+    ensure_live(device)?;
+    Ok(mesh)
+}
+
+fn clear_voxy_stream_lease(
+    device: &mut VirtualDevice,
+    queue: QueueHandle,
+    surface: SurfaceHandle,
+) {
+    if device.voxy_stream_owner == Some((queue, surface)) {
+        device.voxy_stream_owner = None;
+        device.voxy_stream_in_flight = false;
+    }
+}
+
 fn rollback_indexed_submission_lease(
     principal: Principal,
     device_handle: DeviceHandle,
@@ -5142,6 +5255,7 @@ fn rollback_indexed_submission_lease(
 ) {
     let mut broker = BROKER.lock();
     if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
+        clear_voxy_stream_lease(device, queue_handle, surface_handle);
         if let Ok(surface) = lookup_surface_mut(device, surface_handle)
             && surface.in_flight == 2
         {
@@ -6952,6 +7066,10 @@ fn ensure_kernel_device(
         retained_meshes: Vec::new(),
         retained_textures: Vec::new(),
         drawable_depths: Vec::new(),
+        voxy_stream_mesh: None,
+        voxy_stream_in_flight: false,
+        voxy_stream_owner: None,
+        voxy_stream_quarantined: false,
         picasso_carrier: None,
         picasso_setup_in_flight: false,
         picasso_carrier_quarantined: false,
@@ -7070,7 +7188,7 @@ fn destroy_device_resources(
     // An ambiguous carrier execution is boot-lifetime quarantine.  Check it
     // before taking any resident allocation or carrier token: RCS0 may still
     // own those pages, so teardown must not guess at release.
-    if device.picasso_carrier_quarantined {
+    if device.picasso_carrier_quarantined || device.voxy_stream_quarantined {
         return Err(VgpuError::DeviceLost);
     }
     if device_has_operation_leases(device) {
@@ -7087,6 +7205,18 @@ fn destroy_device_resources(
     };
     if device.surfaces.iter().any(|slot| slot.record.is_some()) {
         return Err(VgpuError::Busy);
+    }
+    if let Some(mesh) = device.voxy_stream_mesh.as_ref() {
+        if Arc::strong_count(mesh) != 1 {
+            return Err(VgpuError::Busy);
+        }
+        if !crate::intel::render::release_resident_triangle_mesh(mesh) {
+            device.voxy_stream_quarantined = true;
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+        device.memory_used = device.memory_used.saturating_sub(mesh.storage_bytes);
+        device.voxy_stream_mesh = None;
     }
     for slot in &mut device.retained_textures {
         if let Some(record) = slot.record.take() {
@@ -7172,6 +7302,7 @@ fn destroy_device_resources(
 
 fn device_has_operation_leases(device: &VirtualDevice) -> bool {
     device.picasso_setup_in_flight
+        || device.voxy_stream_in_flight
         || device
             .buffers
             .iter()

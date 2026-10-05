@@ -2545,6 +2545,39 @@ pub extern "C" fn trueos_cabi_ui4_scene_first_presentation_take(window_id: u32) 
     }
 }
 
+/// Observe one exact foreground publication at the physical SURFLIVE boundary.
+/// Zero means presented; one means absent from the bounded presentation history.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_was_presented_v1(
+    window_id: u32,
+    publish_serial: u64,
+) -> i32 {
+    if publish_serial == 0 {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE,
+            u64::from(window_id) | trueos_vm::vmcall::UI4_SCENE_TRACK_PUBLICATION_V1,
+            publish_serial,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.render_target != surface.window.raw() {
+            return ERROR_STATE;
+        }
+        surface.window
+    };
+    i32::from(!super::window_frame_was_presented(owner, window, publish_serial))
+}
+
 /// Return the cursor/UI4 output extent packed as `width << 32 | height`.
 ///
 /// Zero means that no usable output geometry is available.
@@ -5763,6 +5796,72 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     damage_width: u32,
     damage_height: u32,
 ) -> i32 {
+    publish_blueprint_frame(window_id, damage_x, damage_y, damage_width, damage_height, None)
+}
+
+/// Publish a foreground frame and report the serial from the same broker commit.
+/// The output is written only when a new publication was actually committed.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_frame_publish_tracked_v1(
+    window_id: u32,
+    damage_x: u32,
+    damage_y: u32,
+    damage_width: u32,
+    damage_height: u32,
+    out_publish_serial: *mut u64,
+) -> i32 {
+    if out_publish_serial.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut payload = [0u8; 8];
+        payload[..4].copy_from_slice(&damage_width.to_le_bytes());
+        payload[4..].copy_from_slice(&damage_height.to_le_bytes());
+        let mut response = [0u8; 8];
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_SOLARA_FRAME_PUBLISH,
+            u64::from(window_id) | trueos_vm::vmcall::UI4_SCENE_TRACK_PUBLICATION_V1,
+            pack_u32_pair(damage_x, damage_y),
+            &payload,
+            &mut response,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return ERROR_UI4;
+        }
+        let result = data as i64 as i32;
+        if result != 0 {
+            return result;
+        }
+        let serial = u64::from_le_bytes(response);
+        if serial == 0 {
+            return ERROR_STATE;
+        }
+        unsafe { out_publish_serial.write(serial) };
+        return 0;
+    }
+    let mut serial = 0;
+    let result = publish_blueprint_frame(
+        window_id, damage_x, damage_y, damage_width, damage_height, Some(&mut serial),
+    );
+    if result != 0 {
+        return result;
+    }
+    if serial == 0 {
+        // An obsolete resize can succeed without publishing its replacement.
+        // It must never supply a receipt for a different displayed frame.
+        return ERROR_STATE;
+    }
+    unsafe { out_publish_serial.write(serial) };
+    0
+}
+
+fn publish_blueprint_frame(
+    window_id: u32,
+    damage_x: u32,
+    damage_y: u32,
+    damage_width: u32,
+    damage_height: u32,
+    mut publish_serial: Option<&mut u64>,
+) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let mut payload = [0u8; 8];
         payload[..4].copy_from_slice(&damage_width.to_le_bytes());
@@ -5792,6 +5891,16 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
+    if publish_serial.is_some()
+        && (surface.render_target != surface.window.raw()
+            || (surface.pending_resize.is_some()
+                && super::window_broker::window_snapshot(owner, surface.window)
+                    .is_some_and(|window| window.background.is_some())))
+    {
+        // A background update and a staged paired resize do not independently
+        // publish the foreground frame queried by was_presented.
+        return ERROR_STATE;
+    }
     if damage_x >= surface.width || damage_y >= surface.height {
         return ERROR_INVALID;
     }
@@ -5859,7 +5968,11 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
             pending.resize_epoch,
             damage,
         ) {
-            Ok(_) => {}
+            Ok(serial) => {
+                if let Some(out) = publish_serial.as_deref_mut() {
+                    *out = serial;
+                }
+            }
             Err(WindowBrokerError::StaleResize) => {
                 // A newer dock/restore target won while this frame rendered.
                 // Revert the producer to the exact frame the broker still
@@ -5912,6 +6025,9 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
                 crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh publish failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-old-front\n", owner, window_id, previous.raw(), replacement.raw());
             }
             return ERROR_UI4;
+        }
+        if let Some(out) = publish_serial.as_deref_mut() {
+            *out = publish.expect("successful broker publication checked above");
         }
         if let Some((previous, replacement)) = immutable_replacement {
             surface.frame = replacement;

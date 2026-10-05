@@ -139,6 +139,10 @@ retirement += r'''
                 assert!(release.is_none());
                 assert!(take_releases().is_empty(), "unretired allocation was released");
             }
+            let mut result = completed(1);
+            mutate(&mut result);
+            assert!(crate::cleanup_cached_single(Ok(result), false, true).is_none());
+            assert!(take_releases().is_empty(), "unretired cached allocation was released");
         }
     }
     #[test]
@@ -160,6 +164,17 @@ retirement += r'''
             assert_eq!(take_releases(), if busy { vec![1, 2] } else { vec![] });
         }
     }
+    #[test]
+    fn a_retired_or_unsubmitted_cached_mesh_is_reusable_without_release() {
+        assert_eq!(crate::cleanup_cached_single(Ok(completed(1)), false, true).unwrap().sequence(), 7);
+        assert_eq!(take_releases(), [100]);
+        assert_eq!(crate::cleanup_cached_single(Ok(completed(1)), true, true).unwrap().sequence(), 7);
+        assert!(take_releases().is_empty());
+        for reason in ["render-busy", "render-storage-busy", "device-lost"] {
+            assert!(crate::cleanup_cached_single(Err(reason), false, true).is_none());
+            assert_eq!(take_releases(), if reason == "device-lost" { vec![] } else { vec![100] });
+        }
+    }
 }}
 '''
 retirement += item('src/gpu/vgpu.rs', 'ui4_indexed_target_release')
@@ -169,6 +184,10 @@ struct TestDraw { retain_texture: bool }
 struct TestBatch { draws: Vec<()> }
 fn cleanup_single(rendered: Result<ResidentSceneFrameResult, &'static str>, retain_texture: bool)
     -> Option<ResidentSceneReleaseFence> {
+    cleanup_cached_single(rendered, retain_texture, false)
+}
+fn cleanup_cached_single(rendered: Result<ResidentSceneFrameResult, &'static str>, retain_texture: bool,
+    cached_voxy_mesh: bool) -> Option<ResidentSceneReleaseFence> {
     let phys = 0x1000; let bytes = 4096;
     let mesh = TestMesh(1); let draw = TestDraw { retain_texture };
     let sampled_texture = Some(Box::new(TestTexture));
@@ -190,5 +209,161 @@ with tempfile.TemporaryDirectory(prefix='trueos-indexed-retirement-') as tmp:
     src = Path(tmp) / 'retirement.rs'
     exe = Path(tmp) / 'retirement-tests'
     src.write_text(retirement)
+    subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(exe)], check=True)
+    subprocess.run([str(exe)], check=True)
+
+# Compile the actual Voxy streaming constructor and byte-writing mutator.
+# A recording allocator replaces only DMA/map admission; stable layout,
+# validation, uploads and the indirect record are production code.
+resources = 'src/intel/render/resources.rs'
+streaming = '''#![allow(dead_code, unfulfilled_lint_expectations)]
+type PicassoCarrierLease = ();
+mod intel {
+    pub fn align_up(v: usize, a: usize) -> Option<usize> {
+        v.checked_add(a - 1).map(|n| n & !(a - 1))
+    }
+    pub fn voxy_headless_target_active() -> bool { true }
+    std::thread_local! {
+        static FLUSHES: std::cell::RefCell<Vec<(usize, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    pub fn dma_flush(ptr: *mut u8, bytes: usize) {
+        FLUSHES.with(|flushes| flushes.borrow_mut().push((ptr as usize, bytes)));
+    }
+    pub fn take_flushes() -> Vec<(usize, usize)> {
+        FLUSHES.with(|flushes| std::mem::take(&mut *flushes.borrow_mut()))
+    }
+}
+std::thread_local! {
+    static ALLOCATIONS: std::cell::RefCell<Vec<Box<[u8]>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+'''
+streaming += '\n'.join(item('src/intel/render/state.rs', name) for name in (
+    'TriangleVertexFormat', 'ResidentTriangleMesh'))
+streaming += '\n'.join(constant(resources, name) for name in (
+    'VOXY_HEADLESS_MAX_STREAM_CAPACITY', 'VOXY_HEADLESS_VERTEX_STRIDE', 'VOXY_HEADLESS_CAMERA_BYTES'))
+streaming += '\n'.join(constant('src/intel/render/constants.rs', name) for name in (
+    'DRAW_INDEXED_INDIRECT_DWORDS', 'DRAW_INDEXED_INDIRECT_BYTES'))
+streaming += '\n'.join(item(resources, name) for name in (
+    'voxy_headless_stream_capacity', 'voxy_headless_stream_layout',
+    'voxy_headless_stream_storage_bytes', 'validate_voxy_headless_stream_shape',
+    'create_resident_voxy_headless_streaming_mesh', 'update_resident_voxy_headless_streaming_mesh',
+    'update_resident_triangle_draw_indexed_indirect', 'voxy_headless_streaming_tests'))
+streaming += r'''
+fn create_resident_triangle_mesh_typed(
+    vertices: &[[f32; 8]], indices: &[u32], format: TriangleVertexFormat,
+    carrier: Option<PicassoCarrierLease>,
+) -> Result<ResidentTriangleMesh, &'static str> {
+    let vertex_bytes = core::mem::size_of_val(vertices);
+    let index = intel::align_up(vertex_bytes, 64).unwrap();
+    let index_bytes = core::mem::size_of_val(indices);
+    let indirect = intel::align_up(index + index_bytes, 64).unwrap();
+    let bytes = intel::align_up(indirect + 20, 4096).unwrap();
+    let mut allocation = vec![0u8; bytes].into_boxed_slice();
+    let ptr = allocation.as_mut_ptr();
+    unsafe {
+        core::ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), ptr, vertex_bytes);
+        core::ptr::copy_nonoverlapping(indices.as_ptr().cast::<u8>(), ptr.add(index), index_bytes);
+    }
+    intel::dma_flush(ptr, bytes);
+    ALLOCATIONS.with(|allocations| allocations.borrow_mut().push(allocation));
+    let gpu = 0x2000_0000;
+    Ok(ResidentTriangleMesh {
+        storage_phys: 0x1_0010_0000, storage_virt: ptr, storage_bytes: bytes,
+        gpu_base: gpu, vertex_gpu_addr: gpu, vertex_count: vertices.len() as u32,
+        vertex_bytes: vertex_bytes as u32, vertex_stride: 32, vertex_format: format,
+        index_gpu_addr: gpu + index as u64, index_count: indices.len() as u32,
+        index_bytes: index_bytes as u32, indirect_args_gpu_addr: gpu + indirect as u64,
+        indirect_args_offset: indirect, carrier,
+    })
+}
+fn release_resident_triangle_mesh(_: &ResidentTriangleMesh) -> bool { true }
+fn live_camera() -> [f32;20] {
+    let mut camera = [1.0;20]; camera[18] = 0.1; camera[19] = 256.0; camera
+}
+#[test]
+fn constructor_keeps_capacity_descriptors_and_flushes_only_live_update_ranges() {
+    let mesh = create_resident_voxy_headless_streaming_mesh(
+        9, &[[1.0;16];3], &[0,1,2,2,1,0], &live_camera()).unwrap();
+    assert_eq!(mesh.vertex_count, 9);
+    assert_eq!(mesh.vertex_bytes, 288);
+    assert_eq!(mesh.index_count, 9);
+    assert_eq!(mesh.index_bytes, 36);
+    assert_eq!(mesh.index_gpu_addr - mesh.gpu_base, 384);
+    assert_eq!(mesh.indirect_args_offset, 448);
+    let ptr = mesh.storage_virt as usize;
+    assert_eq!(intel::take_flushes(), vec![(ptr,4096), (ptr,96), (ptr+288,96), (ptr+384,24), (ptr+448,20)]);
+    let record = unsafe { core::slice::from_raw_parts(mesh.storage_virt.add(448),20) };
+    assert_eq!(record, &[6u32,1,0,0,0].iter().flat_map(|n| n.to_le_bytes()).collect::<Vec<_>>());
+    update_resident_voxy_headless_streaming_mesh(&mesh, &[[2.0;16];6], &[0,1,2], &live_camera()).unwrap();
+    assert_eq!(intel::take_flushes(), vec![(ptr,192), (ptr+288,96), (ptr+384,12), (ptr+448,20)]);
+}
+#[test]
+fn invalid_constructor_input_does_not_reach_allocation_or_flush() {
+    for capacity in [0,4,780003,usize::MAX] {
+        assert!(create_resident_voxy_headless_streaming_mesh(capacity, &[[1.0;16];3], &[0,1,2], &live_camera()).is_err());
+    }
+    assert!(create_resident_voxy_headless_streaming_mesh(3, &[[1.0;16];3], &[0,1,3], &live_camera()).is_err());
+    assert!(intel::take_flushes().is_empty());
+    assert!(ALLOCATIONS.with(|allocations| allocations.borrow().is_empty()));
+}
+'''
+with tempfile.TemporaryDirectory(prefix='trueos-voxy-streaming-') as tmp:
+    src = Path(tmp) / 'streaming.rs'
+    exe = Path(tmp) / 'streaming-tests'
+    src.write_text(streaming)
+    subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(exe)], check=True)
+    subprocess.run([str(exe)], check=True)
+
+# Exercise the broker's actual owner-matching helper: an unrelated indexed
+# operation must not unlock CPU writes to a still-live streaming allocation.
+lease = '''
+type QueueHandle = u64;
+type SurfaceHandle = u64;
+struct VirtualDevice {
+    voxy_stream_owner: Option<(QueueHandle, SurfaceHandle)>,
+    voxy_stream_in_flight: bool,
+    voxy_stream_quarantined: bool,
+}
+'''
+lease += item('src/gpu/vgpu.rs', 'clear_voxy_stream_lease')
+lease += r'''
+#[test]
+fn foreign_queue_or_surface_keeps_the_exact_stream_owner_and_lease() {
+    let mut device = VirtualDevice {
+        voxy_stream_owner: Some((11,21)), voxy_stream_in_flight: true,
+        voxy_stream_quarantined: false,
+    };
+    for (queue, surface) in [(12,21), (11,22), (12,22)] {
+        clear_voxy_stream_lease(&mut device, queue, surface);
+        assert_eq!(device.voxy_stream_owner, Some((11,21)));
+        assert!(device.voxy_stream_in_flight);
+        assert!(!device.voxy_stream_quarantined);
+    }
+    // An absent ownership receipt never authorizes release, even if another
+    // operation happens to observe the boolean reservation.
+    device.voxy_stream_owner = None;
+    clear_voxy_stream_lease(&mut device,11,21);
+    assert!(device.voxy_stream_in_flight);
+}
+#[test]
+fn exact_owner_clears_only_its_operation_lease_and_preserves_quarantine() {
+    let mut device = VirtualDevice {
+        voxy_stream_owner: Some((11,21)), voxy_stream_in_flight: true,
+        voxy_stream_quarantined: true,
+    };
+    clear_voxy_stream_lease(&mut device,11,21);
+    assert_eq!(device.voxy_stream_owner,None);
+    assert!(!device.voxy_stream_in_flight);
+    assert!(device.voxy_stream_quarantined);
+    clear_voxy_stream_lease(&mut device,11,21);
+    assert_eq!(device.voxy_stream_owner,None);
+    assert!(!device.voxy_stream_in_flight);
+    assert!(device.voxy_stream_quarantined);
+}
+'''
+with tempfile.TemporaryDirectory(prefix='trueos-voxy-lease-') as tmp:
+    src = Path(tmp) / 'lease.rs'
+    exe = Path(tmp) / 'lease-tests'
+    src.write_text(lease)
     subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
