@@ -324,7 +324,8 @@ impl ResidentRenderBuffer {
     }
 }
 
-/// Immutable RGBA8 texture copied into the render engine's persistent PPGTT.
+/// RGBA8 texture copied into the render engine's persistent PPGTT. Mutable
+/// atlas uploads require an exclusive broker lease after exact GPU retirement.
 /// The vGPU broker creates this from a generic client buffer; neither this
 /// object nor the renderer knows anything about the originating application.
 pub(crate) struct ResidentSampledTexture {

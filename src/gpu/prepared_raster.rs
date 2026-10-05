@@ -50,6 +50,7 @@ fn prepared_raster_texture(
         desc.sampler_flags, bytes,
     ).map_err(|_| VgpuError::OutOfMemory)?);
     lookup_buffer_mut(device, handle)?.sampled = Some(SampledBufferCache {
+        streaming: false,
         shape, bytes: byte_count, resident: Arc::clone(&resident),
     });
     device.memory_used += byte_count;
