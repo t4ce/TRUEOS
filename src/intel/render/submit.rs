@@ -571,6 +571,7 @@ fn submit_warm_render_batch(
     if resident_scene_submit && !completed {
         // Capture before disabling the context. Verbose probe logging is
         // normally off; losing this snapshot leaves callers with only -32.
+        crate::intel::dma_flush(warm.result_virt, warm.result_len);
         let (release_lo, release_hi) = read_result_qword_coherent(warm, RESULT_SLOT_SCENE_FRAME_DWORD);
         crate::log_error!(target: "render";
             "resident-scene retirement-failed submission={} saved_head={} published_tail={} poll_us={} release=0x{:08X}:0x{:08X} acthd=0x{:08X}:0x{:08X} bbaddr=0x{:08X}:0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} instdone=0x{:08X} geom=0x{:08X} sampler=0x{:08X} row=0x{:08X} fault=0x{:08X} action=retain-unretired-storage\n",
@@ -592,6 +593,24 @@ fn submit_warm_render_batch(
             GPU_VA_BATCH_BASE, warm.batch_phys, render_ppgtt_maps_page(GPU_VA_BATCH_BASE, warm.batch_phys),
             GPU_VA_RESULT_BASE, warm.result_phys, render_ppgtt_maps_page(GPU_VA_RESULT_BASE, warm.result_phys),
             read_result_dword(warm, RESULT_SLOT_SECONDARY_RETURN_DWORD), render_ppgtt_pml4_phys(),
+        );
+        // Primary fetch and breadcrumb stores use GGTT, independently of the
+        // Render0 PPGTT checked above. Observe both domains before containment.
+        crate::log_error!(target: "render";
+            "resident-scene retirement-ggtt batch_pte={:#X?} batch_expected=0x{:X} result_pte={:#X?} result_expected=0x{:X} context_pte={:#X?} context_expected=0x{:X} acthd_page=0x{:X} acthd_pte={:#X?}\n",
+            crate::intel::read_ggtt_pte(dev, GPU_VA_BATCH_BASE), warm.batch_phys | 1,
+            crate::intel::read_ggtt_pte(dev, GPU_VA_RESULT_BASE), warm.result_phys | 1,
+            crate::intel::read_ggtt_pte(dev, GPU_VA_CONTEXT_BASE), warm.context_phys | 1,
+            active & !4095, crate::intel::read_ggtt_pte(dev, active & !4095),
+        );
+        crate::log_error!(target: "render";
+            "resident-scene retirement-frontier entry=0x{:08X} post_opening=0x{:08X} pre3d=0x{:08X} post3d=0x{:08X} final=0x{:08X} secondary_return=0x{:08X}\n",
+            read_result_dword(warm, RESULT_SLOT_BATCH_ENTRY_DWORD),
+            read_result_dword(warm, RESULT_SLOT_POST_OPENING_DWORD),
+            read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD),
+            read_result_dword(warm, RESULT_SLOT_POST3D_DWORD),
+            read_result_dword(warm, RESULT_SLOT_FINAL_DWORD),
+            read_result_dword(warm, RESULT_SLOT_SECONDARY_RETURN_DWORD),
         );
         if let Some(offset) =
             stalled_batch_offset(GPU_VA_BATCH_BASE, warm.batch_len, active, batch_address)

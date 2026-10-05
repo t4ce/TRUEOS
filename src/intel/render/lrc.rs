@@ -1,9 +1,10 @@
 /// Install the GGTT-resident Gen12 RCS restore workarounds.
 ///
-/// Gen12.0--12.10 requires instruction/state-cache invalidation on RCS context
-/// restore. i915's gen12_emit_indirect_ctx_rcs() emits this masked register write
-/// at the default 13-cacheline restore offset. The Gen12 hardware context image
-/// occupies 14 pages (including HWSP); our 22-page allocations leave page 14
+/// Gen12 RCS needs timestamp and command-buffer cache-control restore repairs,
+/// followed by instruction/state-cache invalidation on Gen12.0--12.10. Match
+/// i915's gen12_emit_indirect_ctx_rcs() at the default 13-cacheline restore offset.
+/// The Gen12 hardware context image occupies 14 pages (including HWSP); our
+/// 22-page allocations leave page 14
 /// available for this immutable batch, outside the hardware save area. Page 15
 /// holds a separate, explicitly terminated batch for post-restore programming.
 /// Return (indirect pointer/length, indirect offset, post-restore pointer).
@@ -21,20 +22,57 @@ pub(crate) fn init_gen12_rcs_restore_wa(
     const POST_RESTORE_DWORD_OFFSET: usize =
         POST_RESTORE_BYTE_OFFSET / core::mem::size_of::<u32>();
     const WA_CACHELINE_DWORDS: usize = 64 / core::mem::size_of::<u32>();
+    const INDIRECT_CACHELINES: u32 = 2;
+    const INDIRECT_DWORDS: usize = INDIRECT_CACHELINES as usize * WA_CACHELINE_DWORDS;
+    // Gen12 RCS saved register values, relative to the register state page.
+    // Linux CTX_TIMESTAMP, lrc_ring_cmd_buf_cctl()+1 and lrc_ring_gpr0()+1.
+    const TIMESTAMP_VALUE_DWORD: usize = 0x23;
+    const CMD_BUF_CCTL_VALUE_DWORD: usize = 0xB7;
+    const GPR0_VALUE_DWORD: usize = 0x75;
+    const MI_GLOBAL_GTT: u32 = 1 << 22;
+    const MI_LRR_SOURCE_CS_MMIO: u32 = 1 << 18;
+    const MI_LOAD_REGISTER_REG: u32 = (0x2A << 23) | 1;
     if context_ggtt & 4095 != 0 || context.len() < 16 * 4096 / core::mem::size_of::<u32>() {
         return None;
     }
     let batch_ggtt = u32::try_from(context_ggtt.checked_add(WA_BYTE_OFFSET as u64)?).ok()?;
     let post_restore_ggtt =
         u32::try_from(context_ggtt.checked_add(POST_RESTORE_BYTE_OFFSET as u64)?).ok()?;
-    let batch = context.get_mut(WA_DWORD_OFFSET..WA_DWORD_OFFSET + WA_CACHELINE_DWORDS)?;
+    let saved_value_ggtt = |value_dword: usize| {
+        u32::try_from(context_ggtt.checked_add(
+            ((LRC_STATE_OFFSET_DWORDS + value_dword) * core::mem::size_of::<u32>()) as u64,
+        )?).ok()
+    };
+    let timestamp_ggtt = saved_value_ggtt(TIMESTAMP_VALUE_DWORD)?;
+    let cmd_buf_cctl_ggtt = saved_value_ggtt(CMD_BUF_CCTL_VALUE_DWORD)?;
+    let gpr0_ggtt = saved_value_ggtt(GPR0_VALUE_DWORD)?;
+    let load_saved = MI_LOAD_REGISTER_MEM | MI_GLOBAL_GTT | MI_LRI_CS_MMIO;
+    let copy_register = MI_LOAD_REGISTER_REG | MI_LRR_SOURCE_CS_MMIO | MI_LRI_CS_MMIO;
+    let batch = context.get_mut(WA_DWORD_OFFSET..WA_DWORD_OFFSET + INDIRECT_DWORDS)?;
     batch.fill(MI_NOOP);
-    // Absolute MMIO address: unlike the context-register-list LRIs, do not set
-    // MI_LRI_CS_MMIO here. Size is one cacheline, not a minus-one encoding, and
-    // INDIRECT_CTX must not contain MI_BATCH_BUFFER_END (PRM Vol2c, p1247).
-    batch[0] = MI_LOAD_REGISTER_IMM | 1;
-    batch[1] = RCS_CS_DEBUG_MODE2 as u32;
-    batch[2] = masked_bit_enable(1 << 6);
+    // i915 685d21096f6c: timestamp restore can race the timestamp update.
+    // Load its saved value into scratch, then perform the faster LRR twice.
+    // The CS-MMIO bits add the engine base to these relative registers;
+    // memory sources use this carrier's owned GGTT context, never its PPGTT.
+    batch[..10].copy_from_slice(&[
+        load_saved, 0x600, timestamp_ggtt, 0,
+        copy_register, 0x600, 0x3A8,
+        copy_register, 0x600, 0x3A8,
+    ]);
+    // i915 b8a1181122f7: CMD_BUF_CCTL restoration can corrupt its value.
+    // Repair it from the saved context, then undo our scratch-register use.
+    batch[10..21].copy_from_slice(&[
+        load_saved, 0x600, cmd_buf_cctl_ggtt, 0,
+        copy_register, 0x600, 0x084,
+        load_saved, 0x600, gpr0_ggtt, 0,
+    ]);
+    // Wa_18022495364. This LRI uses an absolute MMIO address, without adding
+    // the RCS base. INDIRECT_CTX is length-delimited in whole cachelines,
+    // not minus-one encoded, and must not contain MI_BATCH_BUFFER_END.
+    batch[21..24].copy_from_slice(&[
+        MI_LOAD_REGISTER_IMM | 1, RCS_CS_DEBUG_MODE2 as u32,
+        masked_bit_enable(1 << 6),
+    ]);
 
     // Mesa genX_init_state.c restricts Gfx12.0 3D preemption to prevent VS
     // push-constant corruption; gen120.xml defines CS_CHICKEN1 at 0x2580.
@@ -53,7 +91,7 @@ pub(crate) fn init_gen12_rcs_restore_wa(
     post_restore[2] = masked_bits_update(1 << 10, 1);
     post_restore[3] = MI_BATCH_BUFFER_END;
     Some((
-        batch_ggtt | 1,
+        batch_ggtt | INDIRECT_CACHELINES,
         GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT << 6,
         post_restore_ggtt | 1,
     ))

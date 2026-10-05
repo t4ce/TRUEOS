@@ -505,6 +505,7 @@ fn finish_resident_secondary_breadcrumbs(
     encoded_payload_bytes: usize,
     secondary_index: usize,
     result_ggtt_gpu: u64,
+    device_id: u16,
 ) -> Result<usize, &'static str> {
     if !encoded_payload_bytes.is_multiple_of(core::mem::size_of::<u32>()) {
         return Err("scene-frame-secondary-size");
@@ -523,9 +524,22 @@ fn finish_resident_secondary_breadcrumbs(
         result_ggtt_gpu + (RESULT_SLOT_POST_OPENING_DWORD * core::mem::size_of::<u32>()) as u64;
     let payload = &mut batch[RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS..payload_end];
     let marker = RESIDENT_SECONDARY_POST_OPENING_MARKER_DWORD;
+    // Validate the complete packets for this device. Gen12 VF invalidation
+    // also carries a DW0 L3 invalidate flag; matching only the opcode would
+    // either reject that required flag or admit an unrelated header bit.
+    let gfx12 = device_is_gfx12(device_id);
+    let opening_flush = render_pipe_control_packet(
+        gfx12,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
+        PIPE_CONTROL_FLUSH_BITS,
+        0,
+        0,
+    );
+    let opening_invalidate =
+        render_pipe_control_packet(gfx12, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0);
     if payload.len() < marker + RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS
-        || payload[0] != (PIPE_CONTROL_CMD | PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER)
-        || payload[RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS] != PIPE_CONTROL_CMD
+        || payload[..RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS] != opening_flush
+        || payload[RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS..marker - 1] != opening_invalidate
         || payload[marker - 1] != PIPELINE_SELECT_3D
         || payload[marker] != MI_STORE_DATA_IMM_GGTT_DW1
         || payload[marker + 1] != result_entry_gpu as u32
@@ -1772,6 +1786,7 @@ fn stage_resident_scene_secondary(
         encoded_payload_bytes,
         secondary_index,
         result_ggtt_gpu,
+        state_warm.device_id,
     )?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
     if sampled_texture.is_some()
@@ -1895,6 +1910,7 @@ fn stage_resident_churn_forward_secondary(
         encoded_payload_bytes,
         secondary_index,
         result_ggtt_gpu,
+        state_warm.device_id,
     )?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
     log_resident_churn_flushed_binding_packets(

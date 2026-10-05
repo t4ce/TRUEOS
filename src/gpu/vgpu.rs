@@ -3616,6 +3616,14 @@ pub(crate) fn submit_ui4_indexed_draw(
         return Err(VgpuError::Busy);
     }
     let Some(release) = release.filter(|_| released_mesh && released_texture) else {
+        if voxy_camera.is_some() {
+            crate::log_error!(target: "render";
+                "voxy-wgpu: phase=failed window={} vertices={} indices={} vb_gpu=0x{:X} vb_bytes={} ib_gpu=0x{:X} ib_bytes={} args_gpu=0x{:X} storage_phys=0x{:X} storage_bytes={} first_vertex={:?}\n",
+                window_id, vertices.len(), indices.len(), mesh.vertex_gpu_addr, mesh.vertex_bytes,
+                mesh.index_gpu_addr, mesh.index_bytes, mesh.indirect_args_gpu_addr,
+                mesh.storage_phys, mesh.storage_bytes, vertices.first().map(|vertex| &vertex[..8]),
+            );
+        }
         crate::log_warn!(target: "render";
             "vgpu-indexed: phase=release-rejected renderer_error={:?} completion_error={:?} completed_draws={} requested_draws={} release_present={} release_matches={} present_copy={} mesh_released={} texture_released={} action=device-lost+retain-unretired-storage\n",
             render_error, rendered.as_ref().ok().and_then(|result| result.completion_error()),
