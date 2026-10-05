@@ -89,6 +89,59 @@ pub(crate) fn status(owner: u32, id: u32) -> i32 {
     }
 }
 
+pub(crate) fn start_lz4_decode(owner: u32, path: String) -> i32 {
+    crate::r::codec::enqueue_lz4_decode(owner, path)
+        .map(|id| id as i32).unwrap_or_else(|error| map_error(&error))
+}
+
+pub(crate) fn result_len(owner: u32, id: u32) -> isize {
+    crate::r::codec::operation_result_len(owner, id)
+        .map(|len| len as isize).unwrap_or_else(|error| map_error(&error) as isize)
+}
+
+pub(crate) fn result_read(owner: u32, id: u32, offset: usize, out: &mut [u8]) -> isize {
+    crate::r::codec::operation_result_read(owner, id, offset, out)
+        .map(|len| len as isize).unwrap_or_else(|error| map_error(&error) as isize)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_archive_lz4_decode_start_v1(path_ptr: *const u8, path_len: usize) -> i32 {
+    let path = match parse_path(path_ptr, path_len) {
+        Ok(path) => path,
+        Err(error) => return error,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ARCHIVE_LZ4_DECODE_START, &path, "")
+    } else {
+        start_lz4_decode(direct_owner(), path)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_archive_result_len_v1(id: u32) -> isize {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, value) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_ARCHIVE_RESULT_LEN, id as u64, 0);
+        return if status == trueos_vm::vmcall::STATUS_OK { (value as i64) as isize } else { FS_ERR_BAD_PARAM as isize };
+    }
+    result_len(direct_owner(), id)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_archive_result_read_v1(id: u32, offset: usize, out_ptr: *mut u8, out_cap: usize) -> isize {
+    if (out_ptr.is_null() && out_cap != 0) || offset > u32::MAX as usize {
+        return FS_ERR_BAD_PARAM as isize;
+    }
+    let out = if out_cap == 0 { &mut [][..] } else { unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) } };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let want = out.len().min(trueos_vm::vmcall::PAYLOAD_CAP);
+        let packed = ((offset as u64) << 32) | want as u64;
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_ARCHIVE_RESULT_READ, id as u64, packed, &[], &mut out[..want]);
+        return if status == trueos_vm::vmcall::STATUS_OK { (value as i64) as isize } else { FS_ERR_BAD_PARAM as isize };
+    }
+    result_read(direct_owner(), id, offset, out)
+}
+
 /// Pending operations return a progress snapshot. Status remains authoritative
 /// for completion, and completed reports retain the original byte/file counters.
 pub(crate) fn report(owner: u32, id: u32) -> Result<TrueosArchiveReport, i32> {

@@ -291,6 +291,9 @@ pub const OP_BP_VGPU_RETAINED_TEXTURED_FRAME_V1: u32 = 0x162;
 pub const OP_BP_VMEDIA_VIDEO_COMMAND_V1: u32 = 0x161;
 pub const OP_BP_VMEDIA_TEXTURE_RELEASE: u32 = 0x159; // arg0 device,arg1 opaque texture id -> rc
 pub const OP_BP_ARCHIVE_PACK_MANY_START: u32 = 0x15A; // arg0 NUL-separated source-path bytes,payload sources+archive path -> operation id/rc
+pub const OP_BP_ARCHIVE_LZ4_DECODE_START: u32 = trueos_vm::vmcall::OP_BP_ARCHIVE_LZ4_DECODE_START;
+pub const OP_BP_ARCHIVE_RESULT_LEN: u32 = trueos_vm::vmcall::OP_BP_ARCHIVE_RESULT_LEN;
+pub const OP_BP_ARCHIVE_RESULT_READ: u32 = trueos_vm::vmcall::OP_BP_ARCHIVE_RESULT_READ;
 pub const OP_BP_TERMINAL_LEASE_CURRENT_V1: u32 = 0x134; // arg0 ready epoch or 0 -> active epoch/error
 pub const OP_BP_TERMINAL_LEASE_RELEASE_V1: u32 = 0x135; // arg0 expected active epoch -> parking ticket/error
 pub const OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1: u32 = 0x136; // arg0 parking ticket -> pending/active epoch/error
@@ -5064,6 +5067,46 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let rc = crate::r::archive_cabi::status(owner, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ARCHIVE_LZ4_DECODE_START => {
+            let n = req_len as usize;
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = if n == 0 || n > PAYLOAD_CAP || n > crate::r::io::cabi::BLUEPRINT_ASYNC_FS_MAX_PATH {
+                crate::r::io::cabi::FS_ERR_BAD_PARAM
+            } else {
+                let payload = unsafe { &(&(*p).payload)[..n] };
+                match core::str::from_utf8(payload) {
+                    Ok(path) => match crate::r::io::env::resolve_fs_path(path, false) {
+                        Some(path) => crate::r::archive_cabi::start_lz4_decode(crate::r::io::async_fs_cabi::owner_for_vm(vm_id), path),
+                        None => crate::r::io::cabi::FS_ERR_BAD_PATH,
+                    },
+                    Err(_) => crate::r::io::cabi::FS_ERR_BAD_UTF8,
+                }
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ARCHIVE_RESULT_LEN => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::archive_cabi::result_len(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ARCHIVE_RESULT_READ => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let offset = (arg1 >> 32) as usize;
+            let want = (arg1 as u32 as usize).min(PAYLOAD_CAP);
+            let out = unsafe { &mut (&mut (*p).payload)[..want] };
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::archive_cabi::result_read(owner, arg0 as u32, offset, out);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, if rc > 0 { rc as u32 } else { 0 });
             DispatchOutcome::Resume
         }
         OP_BP_ARCHIVE_REPORT => {

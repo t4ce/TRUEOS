@@ -88,6 +88,11 @@ enum CodecRequest {
         archive_path: String,
         output_path: String,
     },
+    DecodeLz4Path {
+        owner: u32,
+        id: u32,
+        archive_path: String,
+    },
 }
 
 impl CodecRequest {
@@ -95,6 +100,7 @@ impl CodecRequest {
         match self {
             Self::PackPath { owner, id, .. }
             | Self::PackPaths { owner, id, .. }
+            | Self::DecodeLz4Path { owner, id, .. }
             | Self::UnpackPath { owner, id, .. } => (*owner, *id),
         }
     }
@@ -107,12 +113,12 @@ enum OperationState {
     Complete(Result<CodecReport, CodecError>),
 }
 
-#[derive(Clone)]
 struct OperationRecord {
     owner: u32,
     id: u32,
     state: OperationState,
     progress_percent: u32,
+    result_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -206,6 +212,7 @@ fn enqueue_operation(
         id,
         state: OperationState::Queued,
         progress_percent: 0,
+        result_bytes: None,
     });
     requests.push_back(request(id));
     let queued = requests.len();
@@ -323,6 +330,49 @@ pub fn operation_status(owner: u32, id: u32) -> i32 {
     }
 }
 
+/// Decode only: no destination directory or filesystem writes.
+pub fn enqueue_lz4_decode(owner: u32, archive_path: String) -> Result<u32, CodecError> {
+    let archive_path = normalize_path(&archive_path, false)?;
+    enqueue_operation(owner, |id| CodecRequest::DecodeLz4Path { owner, id, archive_path })
+}
+
+pub fn operation_result_len(owner: u32, id: u32) -> Result<usize, CodecError> {
+    let operations = OPERATIONS.lock();
+    let operation = operations.iter().find(|op| op.owner == owner && op.id == id)
+        .ok_or(CodecError::NotFound)?;
+    match &operation.state {
+        OperationState::Complete(Ok(_)) => operation.result_bytes.as_ref()
+            .map(Vec::len).ok_or(CodecError::NotFound),
+        OperationState::Complete(Err(error)) => Err(error.clone()),
+        _ => Err(CodecError::NotReady),
+    }
+}
+
+pub fn operation_result_read(owner: u32, id: u32, offset: usize, out: &mut [u8]) -> Result<usize, CodecError> {
+    let operations = OPERATIONS.lock();
+    let operation = operations.iter().find(|op| op.owner == owner && op.id == id)
+        .ok_or(CodecError::NotFound)?;
+    match &operation.state {
+        OperationState::Complete(Ok(_)) => {},
+        OperationState::Complete(Err(error)) => return Err(error.clone()),
+        _ => return Err(CodecError::NotReady),
+    }
+    let bytes = operation.result_bytes.as_ref().ok_or(CodecError::NotFound)?;
+    let remaining = bytes.get(offset..).ok_or(CodecError::BadPath)?;
+    let count = remaining.len().min(out.len());
+    out[..count].copy_from_slice(&remaining[..count]);
+    Ok(count)
+}
+
+fn retain_result_bytes(owner: u32, id: u32, bytes: Vec<u8>) {
+    if let Some(operation) = OPERATIONS.lock().iter_mut()
+        .find(|op| op.owner == owner && op.id == id)
+    {
+        operation.result_bytes = Some(bytes);
+    }
+    // If the caller canceled while decoding, dropping bytes releases the result.
+}
+
 /// Return a retained result. The caller must explicitly discard the operation.
 pub fn operation_report(owner: u32, id: u32) -> Result<CodecReport, CodecError> {
     let operations = OPERATIONS.lock();
@@ -368,6 +418,16 @@ pub fn discard_operation(owner: u32, id: u32) -> i32 {
     operations.swap_remove(index);
     requests.retain(|request| request.operation_key() != (owner, id));
     0
+}
+
+/// Release queued requests and retained RAM results when an owner stops.
+pub(crate) fn release_owner(owner: u32) -> usize {
+    let mut requests = REQUESTS.lock();
+    let mut operations = OPERATIONS.lock();
+    let before = operations.len();
+    operations.retain(|operation| operation.owner != owner);
+    requests.retain(|request| request.operation_key().0 != owner);
+    before - operations.len()
 }
 
 fn normalize_path(path: &str, allow_empty: bool) -> Result<String, CodecError> {
@@ -943,12 +1003,42 @@ async fn execute_request(request: CodecRequest) {
             output_path,
             ..
         } => unpack_path_job(owner, id, archive_path.as_str(), output_path.as_str()).await,
+        CodecRequest::DecodeLz4Path { archive_path, .. } => {
+            match decode_lz4_path_job(owner, id, &archive_path).await {
+                Ok((report, bytes)) => {
+                    retain_result_bytes(owner, id, bytes);
+                    Ok(report)
+                },
+                Err(error) => Err(error),
+            }
+        },
     };
     match &result {
         Ok(report) => crate::log_info!(target: "storage"; "codec/archive: phase=complete owner={} operation={} elapsed_ms={} files={} input_bytes={} output_bytes={}\n", owner, id, codec_now_ms().saturating_sub(started), report.file_count, report.input_bytes, report.output_bytes),
         Err(error) => crate::log_warn!(target: "storage"; "codec/archive: phase=failed owner={} operation={} elapsed_ms={} error={}\n", owner, id, codec_now_ms().saturating_sub(started), error),
     }
     complete_operation(owner, id, result);
+}
+
+async fn decode_lz4_path_job(owner: u32, id: u32, path: &str) -> Result<(CodecReport, Vec<u8>), CodecError> {
+    let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
+    crate::log_info!(target: "storage"; "codec/archive: phase=ram-read source={:?}\n", path);
+    let info = crate::r::fs::trueosfs::file_info_async(disk, path).await?
+        .ok_or(CodecError::NotFound)?;
+    if info.data_len > MAX_ARCHIVE_BYTES as u64 {
+        return Err(CodecError::LimitExceeded);
+    }
+    let input = crate::r::fs::trueosfs::file_out_async(disk, path).await?
+        .ok_or(CodecError::ReadFailed)?;
+    if input.len() != info.data_len as usize || input.len() > MAX_ARCHIVE_BYTES {
+        return Err(CodecError::LimitExceeded);
+    }
+    let input_bytes = input.len() as u64;
+    update_unpack_progress(owner, id, 10);
+    let bytes = super::lz4::decompress_frame(input, MAX_TAR_BYTES).await
+        .map_err(CodecError::Lz4)?;
+    crate::log_info!(target: "storage"; "codec/archive: phase=ram-decoded source={:?} input_bytes={} output_bytes={} filesystem_writes=0\n", path, input_bytes, bytes.len());
+    Ok((CodecReport { input_bytes, output_bytes: bytes.len() as u64, file_count: 0 }, bytes))
 }
 
 #[trueos_executor::task(pool_size = CODEC_WORKER_CAP)]

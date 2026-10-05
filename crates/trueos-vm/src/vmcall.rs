@@ -181,6 +181,9 @@ pub const OP_BP_VMEDIA_TEXTURE_RELEASE: u32 = 0x159;
 /// `arg0` is the byte length of the NUL-separated source-path list; the
 /// payload is that list followed by the destination archive path.
 pub const OP_BP_ARCHIVE_PACK_MANY_START: u32 = 0x15A;
+pub const OP_BP_ARCHIVE_LZ4_DECODE_START: u32 = 0x21B;
+pub const OP_BP_ARCHIVE_RESULT_LEN: u32 = 0x21C;
+pub const OP_BP_ARCHIVE_RESULT_READ: u32 = 0x21D;
 pub const OP_BP_TERMINAL_LEASE_CURRENT_V1: u32 = 0x134;
 pub const OP_BP_TERMINAL_LEASE_RELEASE_V1: u32 = 0x135;
 pub const OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1: u32 = 0x136;

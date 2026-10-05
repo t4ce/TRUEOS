@@ -6185,6 +6185,12 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
 
     if !vm.pause_latched.load(Ordering::Acquire) {
+        let archive_released = crate::r::codec::release_owner(
+            crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+        );
+        if archive_released != 0 {
+            hvlogf(format_args!("hv: vm{} lifecycle: archive cleanup released_operations={}", vm_id, archive_released));
+        }
         let gridpaper_released =
             crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
         if gridpaper_released != 0 {

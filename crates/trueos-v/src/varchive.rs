@@ -38,6 +38,25 @@ impl Operation {
     }
 
     async fn finish_with_progress(&mut self, mut progress: impl FnMut(u32)) -> Result<Report, i32> {
+        self.ready_with_progress(&mut progress).await?;
+
+        let mut raw = TrueosArchiveReport::default();
+        let status =
+            unsafe { vcabi::trueos_cabi_archive_report(self.id, core::ptr::addr_of_mut!(raw)) };
+        let _ = crate::vsys::log_record(3, "apps", &alloc::format!("archive-api: phase=report operation={} status={status} files={} input_bytes={} output_bytes={}", self.id, raw.file_count, raw.input_bytes, raw.output_bytes));
+        if status != 0 {
+            return Err(status);
+        }
+        progress(100);
+        self.discard();
+        Ok(Report {
+            input_bytes: raw.input_bytes,
+            output_bytes: raw.output_bytes,
+            file_count: raw.file_count,
+        })
+    }
+
+    async fn ready_with_progress(&mut self, mut progress: impl FnMut(u32)) -> Result<(), i32> {
         poll_fn(|cx| {
             let status = unsafe { vcabi::trueos_cabi_archive_status(self.id) };
             match status {
@@ -56,22 +75,7 @@ impl Operation {
                 }
             }
         })
-        .await?;
-
-        let mut raw = TrueosArchiveReport::default();
-        let status =
-            unsafe { vcabi::trueos_cabi_archive_report(self.id, core::ptr::addr_of_mut!(raw)) };
-        let _ = crate::vsys::log_record(3, "apps", &alloc::format!("archive-api: phase=report operation={} status={status} files={} input_bytes={} output_bytes={}", self.id, raw.file_count, raw.input_bytes, raw.output_bytes));
-        if status != 0 {
-            return Err(status);
-        }
-        progress(100);
-        self.discard();
-        Ok(Report {
-            input_bytes: raw.input_bytes,
-            output_bytes: raw.output_bytes,
-            file_count: raw.file_count,
-        })
+        .await
     }
 
     fn discard(&mut self) {
@@ -174,4 +178,36 @@ pub async fn unpack_with_progress(
         )
     })?;
     operation.finish_with_progress(progress).await
+}
+
+/// Ask the kernel codec service to decode one standard LZ4 frame into RAM.
+/// No output file or directory is created. GPU/CPU selection and checksum
+/// validation are identical to filesystem extraction. The returned buffer is
+/// caller-owned, and the kernel operation is discarded on success/error/drop.
+/// `max_bytes` bounds the caller allocation; the kernel also enforces its
+/// archive limits. This returns the TAR bytes, without parsing the container.
+pub async fn decode_lz4_to_memory(archive: &[u8], max_bytes: usize) -> Result<alloc::vec::Vec<u8>, i32> {
+    let mut operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_archive_lz4_decode_start_v1(archive.as_ptr(), archive.len())
+    })?;
+    operation.ready_with_progress(|_| {}).await?;
+    let len = unsafe { vcabi::trueos_cabi_archive_result_len_v1(operation.id) };
+    if len < 0 { return Err(len as i32); }
+    let len = len as usize;
+    if len > max_bytes { return Err(ERR_TOO_LARGE); }
+    let mut bytes = alloc::vec::Vec::new();
+    bytes.try_reserve_exact(len).map_err(|_| ERR_NO_SPACE)?;
+    bytes.resize(len, 0);
+    let mut offset = 0;
+    while offset < len {
+        let want = (len - offset).min(64 * 1024);
+        let got = unsafe {
+            vcabi::trueos_cabi_archive_result_read_v1(operation.id, offset, bytes[offset..].as_mut_ptr(), want)
+        };
+        if got < 0 { return Err(got as i32); }
+        if got == 0 || got as usize > want { return Err(ERR_IO); }
+        offset += got as usize;
+    }
+    operation.discard();
+    Ok(bytes)
 }

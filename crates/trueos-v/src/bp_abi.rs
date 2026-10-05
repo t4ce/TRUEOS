@@ -1156,6 +1156,9 @@ unsafe extern "C" {
         destination_ptr: *const u8,
         destination_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_archive_lz4_decode_start_v1(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_archive_result_len_v1(id: u32) -> isize;
+    pub fn trueos_cabi_archive_result_read_v1(id: u32, offset: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_archive_status(id: u32) -> i32;
     pub fn trueos_cabi_archive_report(id: u32, out: *mut TrueosArchiveReport) -> i32;
     pub fn trueos_cabi_archive_discard(id: u32) -> i32;

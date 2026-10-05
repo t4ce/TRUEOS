@@ -19,10 +19,21 @@ mod vcabi {
     thread_local! {
         pub static STEP: Cell<i32> = const { Cell::new(0) };
         pub static DISCARDS: Cell<u32> = const { Cell::new(0) };
+        pub static READ_FAILURE: Cell<bool> = const { Cell::new(false) };
     }
     pub unsafe fn trueos_cabi_archive_unpack_start(_: *const u8, _: usize, _: *const u8, _: usize) -> i32 { 7 }
     pub unsafe fn trueos_cabi_archive_pack_start(_: *const u8, _: usize, _: *const u8, _: usize) -> i32 { 7 }
     pub unsafe fn trueos_cabi_archive_pack_many_start(_: *const u8, _: usize, _: *const u8, _: usize) -> i32 { 7 }
+    pub unsafe fn trueos_cabi_archive_lz4_decode_start_v1(_: *const u8, _: usize) -> i32 { 7 }
+    pub unsafe fn trueos_cabi_archive_result_len_v1(id: u32) -> isize { assert_eq!(id,7); 150000 }
+    pub unsafe fn trueos_cabi_archive_result_read_v1(id: u32, offset: usize, out: *mut u8, cap: usize) -> isize {
+        assert_eq!(id,7);
+        assert_eq!(DISCARDS.get(),0, "result was discarded before the copy");
+        if READ_FAILURE.get() { return -2; }
+        let count = cap.min(1234).min(150000-offset);
+        for i in 0..count { unsafe { *out.add(i) = ((offset+i)%251) as u8; } }
+        count as isize
+    }
     pub unsafe fn trueos_cabi_archive_status(id: u32) -> i32 { assert_eq!(id,7); STEP.get() }
     pub unsafe fn trueos_cabi_archive_report(id: u32, out: *mut crate::bp_abi::TrueosArchiveReport) -> i32 {
         assert_eq!(id,7);
@@ -66,6 +77,37 @@ fn poll<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> std::task::Pol
     vcabi::STEP.set(0);
     {
         let mut future = std::pin::pin!(archive::unpack(b"archive", b"out"));
+        assert!(poll(future.as_mut()).is_pending());
+    }
+    assert_eq!(vcabi::DISCARDS.get(),2);
+}
+#[test] fn ram_decode_copies_partial_reads_before_discard() {
+    vcabi::STEP.set(1);
+    {
+        let mut future = std::pin::pin!(archive::decode_lz4_to_memory(b"archive", 150000));
+        let std::task::Poll::Ready(Ok(bytes)) = poll(future.as_mut()) else { panic!() };
+        assert_eq!(bytes.len(),150000);
+        assert!(bytes.iter().enumerate().all(|(i,b)| *b==(i%251) as u8));
+    }
+    assert_eq!(vcabi::DISCARDS.get(),1);
+}
+#[test] fn ram_decode_limit_read_error_and_cancel_release_results() {
+    vcabi::STEP.set(1);
+    {
+        let mut future = std::pin::pin!(archive::decode_lz4_to_memory(b"archive", 16));
+        assert_eq!(poll(future.as_mut()),std::task::Poll::Ready(Err(-7)));
+    }
+    assert_eq!(vcabi::DISCARDS.get(),1);
+    vcabi::DISCARDS.set(0);
+    vcabi::READ_FAILURE.set(true);
+    {
+        let mut future = std::pin::pin!(archive::decode_lz4_to_memory(b"archive", 150000));
+        assert_eq!(poll(future.as_mut()),std::task::Poll::Ready(Err(-2)));
+    }
+    assert_eq!(vcabi::DISCARDS.get(),1);
+    vcabi::STEP.set(0);
+    {
+        let mut future = std::pin::pin!(archive::decode_lz4_to_memory(b"archive", 150000));
         assert!(poll(future.as_mut()).is_pending());
     }
     assert_eq!(vcabi::DISCARDS.get(),2);

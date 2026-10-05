@@ -16,8 +16,8 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
     }
 
     if name.starts_with("trueos_cabi_archive_") {
-        // Archive jobs run on the background worker pool and complete only
-        // after their TRUEOSFS destination writes have committed.
+        // Archive jobs read TRUEOSFS on background workers. RAM decode results
+        // and filesystem extraction share this service readiness contract.
         mask |= crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
             | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
     }
