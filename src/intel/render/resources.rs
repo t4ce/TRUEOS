@@ -617,6 +617,7 @@ fn prepare_triangle_draw_resources_for_geometry(
     Some(TriangleDrawPrep {
         vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -739,6 +740,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
     Some(TriangleDrawPrep {
         vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -824,6 +826,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
     Some(TriangleDrawPrep {
         vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
         vertex_count: u32::try_from(indices.len()).ok()?,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -3122,6 +3125,7 @@ fn prepare_resident_churn_forward_draw(
     Some(TriangleDrawPrep {
         vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
         vertex_count: resident.vertex_count,
         vertex_stride: resident.vertex_stride,
         vertex_buffer_bytes: resident.vertex_bytes,
@@ -3202,6 +3206,7 @@ fn prepare_resident_churn_expanded_draw(
     Some(TriangleDrawPrep {
         vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
         vertex_count: resident.expanded_index_count,
         vertex_stride: core::mem::size_of::<[f32; 3]>() as u32,
         vertex_buffer_bytes: resident.expanded_vertex_bytes,
@@ -3687,6 +3692,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
     Some(TriangleDrawPrep {
         vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
         vertex_count: mesh.index_count,
         vertex_stride: mesh.vertex_stride,
         vertex_buffer_bytes: mesh.vertex_bytes,
@@ -3745,6 +3751,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
     Some(TriangleDrawPrep {
         vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -4174,6 +4181,7 @@ fn prepare_vf_streamout_proof_resources(
     Some(TriangleDrawPrep {
         vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
         vertex_count: TRIANGLE_DRAW_VERTICES as u32,
         vertex_stride: vertex_stride as u32,
         vertex_buffer_bytes: u32::try_from(TRIANGLE_DRAW_VERTICES * vertex_stride).ok()?,
@@ -4293,5 +4301,24 @@ pub(crate) fn create_resident_fixed_gl_mesh(
     // The allocation also contains state, but VF and the state binding need
     // the authored vertex extent. Otherwise BTI1/BTI2 point past the state.
     mesh.vertex_bytes -= core::mem::size_of_val(state) as u32;
+    Ok(mesh)
+}
+
+/// Append the compiler's 96-byte constant range, with the last 16 bytes zero.
+pub(crate) fn create_resident_voxy_headless_mesh(
+    vertices: &[[f32; 16]], indices: &[u32], camera: &[f32; 20],
+) -> Result<ResidentTriangleMesh, &'static str> {
+    if !crate::pci::experimental_tgl_9a49_active() { return Err("voxy-headless-target"); }
+    if vertices.is_empty() || indices.is_empty() || indices.len() % 3 != 0
+        || vertices.iter().flatten().chain(camera.iter()).any(|v| !v.is_finite())
+        || indices.iter().any(|i| *i as usize >= vertices.len()) { return Err("voxy-headless-shape"); }
+    let mut upload: Vec<[f32; 8]> = vertices.iter().map(|v| v[..8].try_into().unwrap()).collect();
+    let vertex_bytes = (upload.len() * 32) as u32;
+    // Vertex stride 32 keeps the appended constant range 32-byte aligned.
+    let mut padded = [0.0; 24]; padded[..20].copy_from_slice(camera);
+    for row in padded.chunks_exact(8) { upload.push(row.try_into().unwrap()); }
+    let mut mesh = create_resident_triangle_mesh_typed(&upload, indices, TriangleVertexFormat::VoxyHeadless, None)?;
+    mesh.vertex_count = vertices.len() as u32;
+    mesh.vertex_bytes = vertex_bytes;
     Ok(mesh)
 }

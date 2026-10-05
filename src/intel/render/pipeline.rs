@@ -299,7 +299,7 @@ fn write_pbr_sampler_cache_line(samplers: &mut [u32], nearest: bool) {
 const fn ordinary_vf_vertex_element_count(vertex_format: TriangleVertexFormat) -> usize {
     match vertex_format {
         TriangleVertexFormat::Float2 | TriangleVertexFormat::Float3 => 1,
-        TriangleVertexFormat::PosUv => 2,
+        TriangleVertexFormat::PosUv | TriangleVertexFormat::VoxyHeadless => 2,
         TriangleVertexFormat::FixedGl => 4,
         TriangleVertexFormat::PosNormal | TriangleVertexFormat::PosNormalUv => 3,
         TriangleVertexFormat::PosNormalUvTangent => 5,
@@ -316,7 +316,8 @@ fn cmd_3dstate_vertex_elements(count: usize) -> Result<u32, &'static str> {
 }
 
 const fn mesa_vf_component_packing(vertex_format: TriangleVertexFormat) -> [u32; 4] {
-    if matches!(vertex_format, TriangleVertexFormat::FixedGl) { [0xffff, 0, 0, 0] }
+    if matches!(vertex_format, TriangleVertexFormat::VoxyHeadless) { [0xff, 0, 0, 0] }
+    else if matches!(vertex_format, TriangleVertexFormat::FixedGl) { [0xffff, 0, 0, 0] }
     else if matches!(vertex_format, TriangleVertexFormat::PosUv) {
         // SIMD8 VS payload: xyz from element 0, then uv from element 1.
         [0x0000_0037, 0, 0, 0]
@@ -960,7 +961,7 @@ fn write_triangle_probe_state_with_flush(
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
     let native_pbr = native_sampled && draw.pbr_material.is_some();
     let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
-    let binding_table_entries = if fixed_gl { 2usize } else if draw.native.is_some() {
+    let binding_table_entries = if fixed_gl || draw.voxy_headless { 2usize } else if draw.native.is_some() {
         4usize
     } else if draw.sampled_texture.is_some() {
         3usize
@@ -1108,6 +1109,13 @@ fn write_triangle_probe_state_with_flush(
         }
     }
 
+    if draw.voxy_headless {
+        let start = surface_state_offset / 4 + 16;
+        write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16], TriangleStorageBufferBinding {
+            gpu_addr: (draw.vertex_gpu_addr + u64::from(draw.vertex_buffer_bytes) + 31) & !31,
+            byte_len: 96,
+        })?;
+    }
     if fixed_gl {
         for (entry, surface_index) in fixed_gl_ps_surface_indices().into_iter().enumerate() {
             dwords[ps_binding_table_offset / 4 + entry] =
@@ -1958,6 +1966,7 @@ mod retained_native_matrix_draw_contract_tests {
         TriangleDrawPrep {
             vue_capture: false,
         fixed_gl: None,
+        voxy_headless: false,
             vertex_count: 108,
             vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
             vertex_buffer_bytes: 108 * trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
@@ -2638,7 +2647,7 @@ fn encode_triangle_probe_batch(
     // id (source attribute 1).  Xe-LP's enabled SBE swizzle packet must spell
     // that identity routing out; an all-zero payload aliases both inputs to
     // attribute 0.
-    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function || draw.fixed_gl.is_some(), pipeline.ps.meta.num_varying_inputs);
+    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function || draw.fixed_gl.is_some() || draw.voxy_headless, pipeline.ps.meta.num_varying_inputs);
     let sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (u32::from(sbe_attr_swizzle_enable) << 21)
         | ((sbe_num_sf_attrs as u32) << 22)
@@ -3386,6 +3395,11 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, RENDER_MOCS)?;
     }
 
+    if draw.voxy_headless {
+        for word in voxy_headless_constant_vs_packet(draw.vertex_gpu_addr, draw.vertex_buffer_bytes)? {
+            push(batch_dwords, &mut cursor, word)?;
+        }
+    }
     log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS_CC");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_CC)?;
     push(batch_dwords, &mut cursor, probe_state.cc_viewport_offset_bytes)?;
@@ -3588,6 +3602,13 @@ fn encode_triangle_probe_batch(
                         VFCOMP_STORE_0, VFCOMP_STORE_0)?;
                 }
             },
+            TriangleVertexFormat::VoxyHeadless => {
+                for offset in [0, 16] {
+                    push_vertex_element_state(batch_dwords, &mut cursor, 0, offset,
+                        SURFACE_FORMAT_R32G32B32A32_FLOAT, VFCOMP_STORE_SRC, VFCOMP_STORE_SRC,
+                        VFCOMP_STORE_SRC, VFCOMP_STORE_SRC)?;
+                }
+            }
             TriangleVertexFormat::FixedGl => {
                 for offset in [0, 16, 32, 48] {
                     push_vertex_element_state(batch_dwords, &mut cursor, 0, offset,
@@ -3803,7 +3824,7 @@ fn encode_triangle_probe_batch(
     // insert system values into the sampled shader's fetched attributes.
     let ordinary_pos_uv = draw.native.is_none()
         && !vf_synthesized_vue
-        && matches!(draw.vertex_format, TriangleVertexFormat::PosUv | TriangleVertexFormat::FixedGl);
+        && matches!(draw.vertex_format, TriangleVertexFormat::PosUv | TriangleVertexFormat::FixedGl | TriangleVertexFormat::VoxyHeadless);
     let vf_sgvs_dw1 = if let Some(native) = draw.native {
         native.vf_sgvs_dw1
     } else if ordinary_pos_uv {
@@ -6491,4 +6512,17 @@ fn encode_3d_no_draw_probe_batch(
     push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
     push(batch_dwords, &mut cursor, MI_NOOP)?;
     Ok(cursor * core::mem::size_of::<u32>())
+}
+
+/// Gen12 ANV places its single 96B UBO push range in the final constant slot.
+fn voxy_headless_constant_vs_packet(vertex_gpu: u64, vertex_bytes: u32) -> Result<[u32; 11], &'static str> {
+    let camera = vertex_gpu.checked_add(u64::from(vertex_bytes)).and_then(|v| v.checked_add(31))
+        .ok_or("voxy-headless-camera-address")? & !31;
+    if vertex_gpu == 0 || vertex_gpu & 31 != 0 { return Err("voxy-headless-vertex-address"); }
+    let mut words = [0u32; 11];
+    words[0] = 0x7815_0009 | (RENDER_MOCS << 8);
+    words[2] = 3 << 16;
+    words[9] = camera as u32;
+    words[10] = (camera >> 32) as u32;
+    Ok(words)
 }

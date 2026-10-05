@@ -362,6 +362,7 @@ impl ResidentScenePrimitiveTopology {
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
     ClipPosition3UvTexture,
+    VoxyHeadless,
     // scissor xyxy, cull enable, blend enable, then RGB/alpha source/dest factors.
     FixedGl([u32; 10]),
 }
@@ -381,6 +382,9 @@ fn resident_scene_shader_pipeline(
         {
             Ok(crate::intel::shader::clip_position3_uv_texture_pipeline())
         }
+        (ResidentSceneFragmentContract::VoxyHeadless, false)
+            if vertex_format == TriangleVertexFormat::VoxyHeadless && vertex_stride == 32 =>
+                Ok(crate::intel::shader::voxy_headless_pipeline()),
         (ResidentSceneFragmentContract::FixedGl(_), true)
             if vertex_format == TriangleVertexFormat::FixedGl && vertex_stride == 64 =>
             Ok(crate::intel::shader::wc3_fixed_pipeline()),
@@ -397,13 +401,25 @@ mod resident_scene_shader_pipeline_tests {
     use crate::intel::shader::DispatchMode;
 
     #[test]
+    fn voxy_headless_preserves_camera_and_authored_color_contract() {
+        let shader = resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::VoxyHeadless, 32).unwrap();
+        assert_eq!(shader.vs.meta.kernel.push_constant_bytes, 96);
+        assert_eq!(shader.vs.meta.urb_entry_output_length, 1);
+        assert_eq!(shader.ps.meta.num_varying_inputs, 1);
+        assert_eq!(shader.ps.meta.kernel.grf_start_register, 6);
+        assert_eq!(shader.ps.meta.kernel.sampler_count, 0);
+        assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, true, Vertex::VoxyHeadless, 32).is_err());
+        assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::Float3, 32).is_err());
+        assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::VoxyHeadless, 12).is_err());
+    }
+    #[test]
     fn fixed_gl_pipeline_matches_compiler_payload_and_rejects_legacy_vertices() {
         let contract = Fragment::FixedGl([0, 0, 640, 480, 1, 0, 1, 17, 1, 17]);
         let shader = resident_scene_shader_pipeline(contract, true, Vertex::FixedGl, 64).unwrap();
         assert_eq!(shader.vs.meta.kernel.grf_start_register, 2);
         assert_eq!(shader.vs.meta.kernel.binding_table_entry_count, 2);
         assert_eq!(shader.vs.meta.urb_entry_output_length, 2);
-        assert_eq!(shader.ps.meta.kernel.grf_start_register, 6);
+        assert_eq!(shader.ps.meta.kernel.grf_start_register, 10);
         assert_eq!(shader.ps.meta.kernel.binding_table_entry_count, 4);
         assert_eq!(shader.ps.meta.num_varying_inputs, 3);
         assert!(resident_scene_shader_pipeline(contract, true, Vertex::PosUv, 20).is_err());
@@ -1632,6 +1648,8 @@ fn stage_resident_scene_secondary(
         return Err("scene-point-width");
     }
     draw.state_gpu_addr = state_gpu;
+    draw.voxy_headless = matches!(fragment_contract, ResidentSceneFragmentContract::VoxyHeadless);
+    if draw.voxy_headless && !crate::pci::experimental_tgl_9a49_active() { return Err("voxy-headless-target"); }
     if let ResidentSceneFragmentContract::FixedGl(state) = fragment_contract { draw.fixed_gl = Some(state); }
     if draw.native.is_some() {
         return Err("scene-fragment-contract-native-mismatch");
@@ -1652,7 +1670,7 @@ fn stage_resident_scene_secondary(
     let shader_layout = upload_triangle_shader_pipeline_at(
         state_warm,
         pipeline,
-        sampled_texture.is_none().then_some(rgba),
+        (sampled_texture.is_none() && !draw.voxy_headless).then_some(rgba),
         state_gpu,
         false,
     ).inspect_err(|reason| {

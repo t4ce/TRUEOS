@@ -2695,9 +2695,12 @@ pub(crate) fn create_shader_module(
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64
         && package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+        && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
     {
         return Err(VgpuError::Unsupported);
     }
+    if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+        && !crate::pci::experimental_tgl_9a49_active() { return Err(VgpuError::Unsupported); }
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
@@ -2790,6 +2793,8 @@ pub(crate) fn create_render_pipeline(
     {
         return Err(VgpuError::Unsupported);
     }
+    if shader.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+        && (vertex_stride != 32 || position_offset != 0) { return Err(VgpuError::Unsupported); }
     let record = RenderPipelineRecord {
         package_digest: shader.package_digest,
         vertex_stride,
@@ -3046,6 +3051,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         sampled_texture,
         drawable_depth,
         fixed_state,
+        voxy_camera,
     ) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
@@ -3062,11 +3068,18 @@ pub(crate) fn submit_ui4_indexed_draw(
         if pipeline.epoch != device.epoch
             || (pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
                 && pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
-                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64)
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64)
         {
             return Err(VgpuError::InvalidHandle);
         }
         let fixed = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64;
+        let voxy = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64;
+        if voxy && (!crate::pci::experimental_tgl_9a49_active() || geometry_clear
+            || draw.vertex_offset != 80 || draw.sampled_texture.raw() != 0
+            || draw.topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList) {
+            return Err(unsupported("voxy-headless-layout"));
+        }
         if fixed && (geometry_clear || draw.vertex_offset != v::vgpu::WC3_FIXED_STATE_BYTES) {
             return Err(unsupported("fixed-layout"));
         }
@@ -3232,7 +3245,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             let mut vertices = Vec::with_capacity(vertex_count);
             for vertex in 0..vertex_count {
                 let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
-                let attribute_bytes = if fixed {
+                let attribute_bytes = if voxy {
+                    32
+                } else if fixed {
                     64
                 } else if textured {
                     20
@@ -3247,6 +3262,19 @@ pub(crate) fn submit_ui4_indexed_draw(
                 }
                 vertices.push(attributes);
             }
+            let voxy_camera = if voxy {
+                crate::intel::dma_flush(vertex_virt, 80);
+                let raw = unsafe { core::slice::from_raw_parts(vertex_virt, 80) };
+                let mut camera = [0f32; 20];
+                for (out, bytes) in camera.iter_mut().zip(raw.chunks_exact(4)) {
+                    *out = f32::from_le_bytes(bytes.try_into().unwrap());
+                }
+                if camera.iter().any(|v| !v.is_finite()) || camera[16] <= 0.0
+                    || camera[17] <= 0.0 || camera[18] <= 0.0 || camera[19] <= camera[18] {
+                    return Err(unsupported("voxy-headless-camera"));
+                }
+                Some(camera)
+            } else { None };
             let fixed_state = if fixed {
                 let raw = unsafe {
                     core::slice::from_raw_parts(vertex_virt, v::vgpu::WC3_FIXED_STATE_BYTES)
@@ -3346,9 +3374,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             } else {
                 None
             };
-            Ok((vertices, indices, texture, depth, fixed_state))
+            Ok((vertices, indices, texture, depth, fixed_state, voxy_camera))
         })();
-        let (vertices, mut indices, sampled_texture, drawable_depth, fixed_state) = match copied {
+        let (vertices, mut indices, sampled_texture, drawable_depth, fixed_state, voxy_camera) = match copied {
             Ok(copied) => copied,
             Err(error) => {
                 lookup_surface_mut(device, draw.surface)?.in_flight = 1;
@@ -3356,7 +3384,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 return Err(error);
             }
         };
-        if fixed_state.is_none() {
+        if fixed_state.is_none() && voxy_camera.is_none() {
             let legacy = vertices
                 .iter()
                 .map(|v| [v[0], v[1], v[2], v[3], v[4]])
@@ -3376,6 +3404,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             sampled_texture,
             drawable_depth,
             fixed_state,
+            voxy_camera,
         )
     };
 
@@ -3389,7 +3418,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         pitch,
     )
     .ok_or_else(|| unsupported("surface-shape"))?;
-    let mesh = match if let Some(state) = fixed_state.as_ref() {
+    let mesh = match if let Some(camera) = voxy_camera.as_ref() {
+        crate::intel::render::create_resident_voxy_headless_mesh(&vertices, &indices, camera)
+    } else if let Some(state) = fixed_state.as_ref() {
         crate::intel::render::create_resident_fixed_gl_mesh(&vertices, &indices, state)
     } else if sampled_texture.is_some() && !geometry_clear {
         crate::intel::render::create_resident_textured_indexed_mesh(
@@ -3433,7 +3464,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         } else {
             sampled_texture.as_deref()
         },
-        fragment_contract: if let Some(state) = fixed_state.as_ref() {
+        fragment_contract: if voxy_camera.is_some() {
+            crate::intel::render::ResidentSceneFragmentContract::VoxyHeadless
+        } else if let Some(state) = fixed_state.as_ref() {
             crate::intel::render::ResidentSceneFragmentContract::FixedGl([
                 state[116] as u32,
                 state[117] as u32,

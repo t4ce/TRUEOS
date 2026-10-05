@@ -288,3 +288,12 @@ mod generated_wc3_fixed;
 pub(crate) fn wc3_fixed_pipeline() -> &'static TrianglePipeline {
     generated_wc3_fixed::wc3_fixed_pipeline()
 }
+
+#[path = "../../crates/trueos-shader/generated_voxy_headless_tgl.rs"]
+mod voxy_headless_tgl;
+const _: () = assert!(voxy_headless_tgl::SOURCE_FNV1A64 == 0x2EAA72CFCA1B1C77);
+pub(crate) fn voxy_headless_pipeline() -> &'static TrianglePipeline { &voxy_headless_tgl::PIPELINE }
+
+#[cfg(test)]
+#[path = "voxy_headless_tests.rs"]
+mod voxy_headless_tests;
