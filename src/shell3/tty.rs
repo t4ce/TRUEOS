@@ -1,6 +1,6 @@
 //! Small UTF-8 line terminal. Socket framing and graphics stay outside it.
-use super::{Shell3, SpecialRows, StripSide};
-use alloc::{string::String, vec::Vec};
+use super::{MetaFmtStr, RgbaColor, Shell3, SpecialRows};
+use alloc::{format, string::String, vec::Vec};
 
 const LINE_LIMIT: usize = 1024;
 pub(super) const OUTPUT_LIMIT: usize = 16 * 1024;
@@ -32,10 +32,11 @@ impl Terminal {
             closing: false,
             overflow: false,
         };
-        let title = terminal
-            .shell
-            .get_strip(SpecialRows::TitleRow, StripSide::Left);
-        terminal.write(title.as_bytes());
+        terminal.write(b"\x1b[0m\x1b[2J\x1b[H");
+        let title = terminal.shell.row_for_render(SpecialRows::TitleRow);
+        for run in &title.left {
+            terminal.write_meta(run);
+        }
         terminal.write(b"\r\n");
         terminal.prompt();
         terminal
@@ -50,11 +51,33 @@ impl Terminal {
         }
     }
 
-    fn prompt(&mut self) {
-        self.write("§".as_bytes());
-        if let Some(name) = self.shell.active_matrix_slot_name() {
-            self.write(name.as_bytes());
+    fn write_meta(&mut self, run: &MetaFmtStr) {
+        if run.color.is_none() && !run.underline {
+            self.write(run.text.as_bytes());
+            return;
         }
+        self.write(b"\x1b[0m");
+        if let Some(color) = run.color {
+            let [r, g, b, _] = color.rgba();
+            self.write(format!("\x1b[38;2;{r};{g};{b}m").as_bytes());
+            if let Some([r, g, b, _]) = color.background() {
+                self.write(format!("\x1b[48;2;{r};{g};{b}m").as_bytes());
+            }
+        }
+        if run.underline || run.color.is_some_and(RgbaColor::underline) {
+            self.write(b"\x1b[4m");
+        }
+        self.write(run.text.as_bytes());
+        self.write(b"\x1b[0m");
+    }
+
+    fn prompt(&mut self) {
+        let mut prompt = String::from("§");
+        if let Some(name) = self.shell.active_matrix_slot_name() {
+            prompt.push_str(&name);
+        }
+        // Match the selected Matrix slot's UI4 highlight.
+        self.write_meta(&MetaFmtStr::new(prompt).color(RgbaColor::Pink));
         self.write(b" ");
     }
 

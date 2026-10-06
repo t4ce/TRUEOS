@@ -20,7 +20,11 @@ pub use window_api::TrueosUi4WindowStateV1;
 use crate::intel::gpgpu::shadertoy_package::{
     ShaderToyPackageUpload, program_id as shadertoy_program_id,
 };
-use alloc::{collections::VecDeque, string::String, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, VecDeque},
+    string::String,
+    vec::Vec,
+};
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 use trueos_time::Instant;
@@ -37,10 +41,10 @@ use crate::intel::gpgpu::{
     Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
     allocate_font_instance_rgba8_surface_cleared, alpha_blend_worklist_max_descs,
     fill_solid_rects_rgba8_scanout_result, glyph_mask_layers_rgba8_2d_mode,
-    particle_craft_rgba8_frame, poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
-    queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
-    release_rgba8_surface_for_scanout, skybox_sample_rgb565_to_rgba8,
-    sprite_quad_worklist_max_descs,
+    particle_craft_rgba8_frame, poll_ui4_bcs0_sprite_copy, poll_ui4_blueprint_sprite_scene,
+    poll_ui4_compositor_submission, queue_ui4_blueprint_alpha_rects,
+    queue_ui4_blueprint_sprite_scene, release_rgba8_surface_for_scanout,
+    skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba, MAX_DYNAMIC_TEXT_CHARS};
 use crate::r::services::font_kernel_service::{
@@ -111,8 +115,14 @@ const UI4_SCENE_SPRITE_GPU: u64 = UI4_SCENE_SOURCE_GPU + UI4_SCENE_SOURCE_MAX_BY
 const UI4_SCENE_SPRITE_MAX_BYTES: usize = 128 * 1024 * 1024;
 const UI4_SCENE_SOLID_SOURCE_BYTES: usize = 4096;
 const MAX_SPRITE_QUADS: usize = 8_192;
+const MAX_BCS0_CACHED_ALPHA_RUNS: usize = 65_536;
+const MAX_BCS0_COMMANDS_PER_BATCH: usize = 160;
 const UI4_SPRITE_BATCH_TIMEOUT_NS: u64 = 1_000_000_000;
 const SPRITE_QUAD_FLAG_SRC_OVER: u32 = 1 << 0;
+/// Explicitly request source-over with an already-premultiplied source.
+const SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR: u32 = 1 << 30;
+/// Explicitly request direct BCS0 copies of unscaled premultiplied RGBA pixels.
+const SPRITE_QUAD_FLAG_BCS0_COPY: u32 = 1 << 31;
 const MAX_BLUEPRINT_FONT_SPRITES: usize = 4_096;
 const FONT_SPRITE_STATUS_PENDING: u32 = 1;
 const FONT_SPRITE_STATUS_READY: u32 = 2;
@@ -131,7 +141,8 @@ pub struct TrueosUi4FontSpriteStatusV1 {
     pub origin_x: i32,
     pub origin_y: i32,
 }
-const SPRITE_QUAD_VALID_FLAGS: u32 = SPRITE_QUAD_FLAG_SRC_OVER;
+const SPRITE_QUAD_VALID_FLAGS: u32 =
+    SPRITE_QUAD_FLAG_SRC_OVER | SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR | SPRITE_QUAD_FLAG_BCS0_COPY;
 const _: () = {
     assert!(UI4_SCENE_SOURCE_GPU.is_multiple_of(4096));
     assert!(UI4_SCENE_SPRITE_GPU.is_multiple_of(4096));
@@ -663,7 +674,7 @@ pub struct TrueosUi4ShadertoyParamsV1 {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4ShadertoyParamsV1>() == 16 * 4);
 
-/// One ordered, straight-alpha RGBA sprite operation. Sprite id zero selects
+/// One ordered RGBA sprite operation. Sprite id zero selects
 /// the frame-owned one-pixel white source and therefore represents a solid
 /// rectangle when every UV is zero.
 #[repr(C)]
@@ -964,9 +975,20 @@ struct Rgb565Upload {
 #[derive(Copy, Clone)]
 struct OwnedRgba8Surface {
     opaque: bool,
+    premultiplied: bool,
+    nonzero_alpha_runs: *const NonzeroAlphaRun,
+    nonzero_alpha_run_count: usize,
     surface: GpgpuRgba8Surface,
     virt: *mut u8,
     bytes: usize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct NonzeroAlphaRun {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
 }
 
 enum BlueprintSpriteSource {
@@ -991,6 +1013,13 @@ impl BlueprintSpriteSource {
 
     const fn is_premultiplied(&self) -> bool {
         sprite_source_is_premultiplied(matches!(self, Self::Font(_)))
+    }
+
+    const fn has_validated_premultiplied_pixels(&self) -> bool {
+        match self {
+            Self::Uploaded(source) => source.premultiplied,
+            Self::Font(_) => true,
+        }
     }
 }
 
@@ -6547,6 +6576,9 @@ pub(crate) fn begin_sprite_rgba8_upload(
         sprite_id,
         owned: OwnedRgba8Surface {
             opaque: false,
+            premultiplied: false,
+            nonzero_alpha_runs: core::ptr::null(),
+            nonzero_alpha_run_count: 0,
             surface: gpu_surface,
             virt,
             bytes,
@@ -6678,6 +6710,30 @@ pub(crate) fn finish_sprite_rgba8_upload(
         };
         row.chunks_exact(4).all(|pixel| pixel[3] == 255)
     });
+    let alpha_runs = {
+        let bytes = unsafe { core::slice::from_raw_parts(upload.owned.virt, upload.owned.bytes) };
+        cache_premultiplied_alpha_runs(
+            upload.owned.surface.width,
+            upload.owned.surface.height,
+            upload.owned.surface.pitch_bytes as usize,
+            bytes,
+        )
+    };
+    if let Some(runs) = alpha_runs {
+        let boxed = runs.into_boxed_slice();
+        upload.owned.nonzero_alpha_run_count = boxed.len();
+        upload.owned.nonzero_alpha_runs =
+            alloc::boxed::Box::into_raw(boxed) as *const NonzeroAlphaRun;
+    }
+    upload.owned.premultiplied = {
+        let bytes = unsafe { core::slice::from_raw_parts(upload.owned.virt, upload.owned.bytes) };
+        rgba8_is_premultiplied(
+            upload.owned.surface.width,
+            upload.owned.surface.height,
+            upload.owned.surface.pitch_bytes as usize,
+            bytes,
+        )
+    };
     crate::intel::dma_flush(upload.owned.virt, upload.owned.bytes);
     let old = {
         let mut surfaces = SURFACES.lock();
@@ -6813,7 +6869,17 @@ fn valid_sprite_quad(quad: TrueosUi4SpriteQuad) -> bool {
         quad.c0_x, quad.c0_y, quad.c0_u, quad.c0_v, quad.c1_x, quad.c1_y, quad.c1_u, quad.c1_v,
         quad.c2_x, quad.c2_y, quad.c2_u, quad.c2_v, quad.c3_x, quad.c3_y, quad.c3_u, quad.c3_v,
     ];
-    values.iter().all(|value| value.is_finite()) && quad.flags & !SPRITE_QUAD_VALID_FLAGS == 0
+    values.iter().all(|value| value.is_finite())
+        && quad.flags & !SPRITE_QUAD_VALID_FLAGS == 0
+        && !(quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY != 0
+            && quad.flags & SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR != 0)
+}
+
+fn sprite_scene_uses_bcs0_clear(quads: &[TrueosUi4SpriteQuad]) -> bool {
+    quads.is_empty()
+        || quads
+            .iter()
+            .any(|quad| quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY != 0)
 }
 
 #[derive(Copy, Clone)]
@@ -7042,7 +7108,8 @@ fn gpgpu_sprite_quad_descriptor(
         c3_u: quad.c3_u,
         c3_v: quad.c3_v,
         color_rgba: quad.color_rgba,
-        flags: if quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
+        flags: if quad.flags & (SPRITE_QUAD_FLAG_SRC_OVER | SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR) != 0
+        {
             SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
         } else {
             0
@@ -7220,13 +7287,164 @@ const fn sprite_scene_needs_clear(render_overlay: bool, full_frame_copy: bool) -
 
 #[cfg(test)]
 mod sprite_overlay_tests {
-    use super::sprite_scene_needs_clear;
+    use super::{
+        NonzeroAlphaRun, SPRITE_QUAD_FLAG_BCS0_COPY, SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR,
+        TrueosUi4SpriteQuad, bcs0_solid_rect, bcs0_sprite_copies, cache_premultiplied_alpha_runs,
+        gpgpu_sprite_quad_descriptor, rgba8_is_premultiplied, sprite_scene_needs_clear,
+        sprite_scene_uses_bcs0_clear, sprite_source_is_premultiplied, valid_sprite_quad,
+    };
+    use crate::intel::gpgpu::GpgpuRgba8Surface;
     #[test]
     fn only_fresh_partial_sprite_scenes_clear_the_background() {
         assert!(sprite_scene_needs_clear(false, false));
         assert!(!sprite_scene_needs_clear(false, true));
         assert!(!sprite_scene_needs_clear(true, false));
         assert!(!sprite_scene_needs_clear(true, true));
+    }
+
+    #[test]
+    fn premultiplied_alpha_runs_merge_rows_and_preserve_zero_holes() {
+        let pixels = [
+            8, 4, 2, 128, 0, 0, 0, 0, 16, 8, 4, 255, 12, 6, 3, 192, 0, 0, 0, 0, 20, 10, 5, 255,
+        ];
+        let runs = cache_premultiplied_alpha_runs(3, 2, 12, &pixels).unwrap();
+        assert_eq!(
+            runs,
+            alloc::vec![
+                NonzeroAlphaRun {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 2
+                },
+                NonzeroAlphaRun {
+                    x: 2,
+                    y: 0,
+                    width: 1,
+                    height: 2
+                },
+            ]
+        );
+        assert!(rgba8_is_premultiplied(3, 2, 12, &pixels));
+        let straight_alpha = [200, 0, 0, 100];
+        assert!(cache_premultiplied_alpha_runs(1, 1, 4, &straight_alpha).is_none());
+        assert!(!rgba8_is_premultiplied(1, 1, 4, &straight_alpha));
+    }
+
+    #[test]
+    fn bcs_rect_fill_accepts_partial_premultiplied_color_and_rejects_scale() {
+        let destination = GpgpuRgba8Surface::new(0x100000, 0x100000, 64 * 8, 8, 8, 64).unwrap();
+        let quad = TrueosUi4SpriteQuad {
+            sprite_id: 0,
+            c0_x: 1.0,
+            c0_y: 2.0,
+            c1_x: 4.0,
+            c1_y: 2.0,
+            c2_x: 4.0,
+            c2_y: 5.0,
+            c3_x: 1.0,
+            c3_y: 5.0,
+            color_rgba: u32::from_le_bytes([50, 25, 10, 128]),
+            flags: SPRITE_QUAD_FLAG_BCS0_COPY,
+            ..TrueosUi4SpriteQuad::default()
+        };
+        assert_eq!(quad.color_rgba.to_le_bytes(), [50, 25, 10, 128]);
+        assert_eq!(quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY, SPRITE_QUAD_FLAG_BCS0_COPY);
+        assert_eq!(super::rounded_sprite_coordinate(quad.c0_x), Some(1));
+        let fill = bcs0_solid_rect(quad, destination).unwrap();
+        assert_eq!((fill.x, fill.y, fill.width, fill.height), (1, 2, 3, 3));
+        assert_eq!(fill.color, quad.color_rgba);
+        assert!(bcs0_solid_rect(TrueosUi4SpriteQuad { c1_x: 4.5, ..quad }, destination).is_none());
+    }
+
+    #[test]
+    fn bcs_sprite_copy_accepts_integer_one_to_one_uv_crop() {
+        let source = GpgpuRgba8Surface::new(0x200000, 0x200000, 64 * 3, 4, 3, 64).unwrap();
+        let destination = GpgpuRgba8Surface::new(0x300000, 0x300000, 64 * 32, 32, 32, 64).unwrap();
+        let quad = TrueosUi4SpriteQuad {
+            sprite_id: 7,
+            c0_x: 10.0,
+            c0_y: 20.0,
+            c0_u: 0.25,
+            c0_v: 1.0 / 3.0,
+            c1_x: 12.0,
+            c1_y: 20.0,
+            c1_u: 0.75,
+            c1_v: 1.0 / 3.0,
+            c2_x: 12.0,
+            c2_y: 22.0,
+            c2_u: 0.75,
+            c2_v: 1.0,
+            c3_x: 10.0,
+            c3_y: 22.0,
+            c3_u: 0.25,
+            c3_v: 1.0,
+            color_rgba: u32::MAX,
+            flags: SPRITE_QUAD_FLAG_BCS0_COPY,
+        };
+        let runs = [NonzeroAlphaRun {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 3,
+        }];
+        let copies = bcs0_sprite_copies(quad, source, &runs, destination).unwrap();
+        assert_eq!(copies.len(), 1);
+        assert_eq!((copies[0].source_x, copies[0].source_y), (1, 1));
+        assert_eq!((copies[0].destination_x, copies[0].destination_y), (10, 20));
+        assert_eq!((copies[0].width, copies[0].height), (2, 2));
+    }
+
+    #[test]
+    fn bcs_and_raster_premul_modes_are_explicit_and_exclusive() {
+        let bcs_quad = TrueosUi4SpriteQuad {
+            sprite_id: 1,
+            flags: SPRITE_QUAD_FLAG_BCS0_COPY,
+            ..TrueosUi4SpriteQuad::default()
+        };
+        assert!(valid_sprite_quad(bcs_quad));
+        assert!(!valid_sprite_quad(TrueosUi4SpriteQuad {
+            flags: SPRITE_QUAD_FLAG_BCS0_COPY | SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR,
+            ..bcs_quad
+        }));
+        let premul = TrueosUi4SpriteQuad {
+            flags: SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR,
+            ..bcs_quad
+        };
+        assert_ne!(
+            gpgpu_sprite_quad_descriptor(premul, true).flags
+                & crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER,
+            0
+        );
+    }
+
+    #[test]
+    fn empty_sprite_scene_selects_bcs0_clear_and_clears_to_transparent_black() {
+        assert!(sprite_scene_uses_bcs0_clear(&[]));
+        let destination = GpgpuRgba8Surface::new(0x400000, 0x400000, 64 * 8, 8, 8, 64).unwrap();
+        let clear = TrueosUi4SpriteQuad {
+            sprite_id: 0,
+            c0_x: 0.0,
+            c0_y: 0.0,
+            c1_x: 8.0,
+            c1_y: 0.0,
+            c2_x: 8.0,
+            c2_y: 8.0,
+            c3_x: 0.0,
+            c3_y: 8.0,
+            color_rgba: 0,
+            flags: SPRITE_QUAD_FLAG_BCS0_COPY,
+            ..TrueosUi4SpriteQuad::default()
+        };
+        let fill = bcs0_solid_rect(clear, destination).unwrap();
+        assert_eq!((fill.x, fill.y, fill.width, fill.height, fill.color), (0, 0, 8, 8, 0));
+        assert!(!sprite_scene_uses_bcs0_clear(&[TrueosUi4SpriteQuad::default()]));
+    }
+
+    #[test]
+    fn upload_validation_does_not_change_default_uploaded_sprite_alpha_mode() {
+        assert!(!sprite_source_is_premultiplied(false));
+        assert!(sprite_source_is_premultiplied(true));
     }
 }
 
@@ -7242,6 +7460,12 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
 
     #[derive(Copy, Clone)]
     enum PreparedOp {
+        Bcs0 {
+            copy: crate::intel::GucBcs0RgbaCopy,
+        },
+        Bcs0Fill {
+            fill: crate::intel::GucBcs0RgbaFill,
+        },
         Alpha {
             sprite_id: u32,
             source: GpgpuRgba8Surface,
@@ -7255,6 +7479,12 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     }
 
     enum PreparedBatch {
+        Bcs0 {
+            copies: Vec<crate::intel::GucBcs0RgbaCopy>,
+        },
+        Bcs0Fill {
+            fills: Vec<crate::intel::GucBcs0RgbaFill>,
+        },
         Alpha {
             source: GpgpuRgba8Surface,
             descriptors: Vec<GpgpuAlphaBlendWorklistDesc>,
@@ -7267,6 +7497,8 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     impl PreparedBatch {
         fn descriptor_count(&self) -> usize {
             match self {
+                Self::Bcs0 { copies } => copies.len(),
+                Self::Bcs0Fill { fills } => fills.len(),
                 Self::Alpha { descriptors, .. } => descriptors.len(),
                 Self::Quad { groups } => groups
                     .iter()
@@ -7276,6 +7508,8 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
 
         fn backend(&self) -> &'static str {
             match self {
+                Self::Bcs0 { .. } => "bcs0-premultiplied-rgba-copy",
+                Self::Bcs0Fill { .. } => "bcs0-premultiplied-rect-fill",
                 Self::Alpha { .. } => "gpgpu-alpha-rect-worklist",
                 Self::Quad { .. } => "gpgpu-arbitrary-quad-fallback",
             }
@@ -7334,6 +7568,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     // no clear, sampling, alpha arithmetic or EU dispatch required.
     if !render_overlay
         && let [quad] = upload.quads.as_slice()
+        && quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY == 0
         && let Some((_, BlueprintSpriteSource::Uploaded(source))) =
             surface.sprites.iter().find(|(id, _)| *id == quad.sprite_id)
         && source.opaque
@@ -7420,9 +7655,14 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     // their overwrite order into disjoint rectangles and use the alpha
     // compositor's source-free SOLID mode. The former path paid general UV,
     // sampling, and arbitrary-quad setup for every decoration.
-    if let Some(rects) = (!render_overlay)
-        .then(|| solid_scene_fast_rects(clear_rgba, &upload.quads, destination))
-        .flatten()
+    if let Some(rects) = (!render_overlay
+        && !upload.quads.is_empty()
+        && !upload
+            .quads
+            .iter()
+            .any(|quad| quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY != 0))
+    .then(|| solid_scene_fast_rects(clear_rgba, &upload.quads, destination))
+    .flatten()
     {
         let composite_started_ns = crate::chronos::monotonic_nanos();
         let composited = fill_solid_rects_rgba8_scanout_result(destination, rects.as_slice());
@@ -7523,22 +7763,89 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         ..TrueosUi4SpriteQuad::default()
     };
     let mut prepared = Vec::with_capacity(upload.quads.len().saturating_add(1));
+    let mut bcs0_command_count = 0usize;
     if sprite_scene_needs_clear(render_overlay, full_frame_copy) {
-        prepared.push(PreparedOp::Quad {
-            sprite_id: 0,
-            source: solid.surface,
-            descriptor: gpgpu_sprite_quad_descriptor(clear, false),
-        });
+        let explicit_bcs_scene = sprite_scene_uses_bcs0_clear(&upload.quads);
+        if explicit_bcs_scene {
+            let clear_fill = TrueosUi4SpriteQuad {
+                sprite_id: 0,
+                c0_x: 0.0,
+                c0_y: 0.0,
+                c1_x: surface.width as f32,
+                c1_y: 0.0,
+                c2_x: surface.width as f32,
+                c2_y: surface.height as f32,
+                c3_x: 0.0,
+                c3_y: surface.height as f32,
+                color_rgba: clear_rgba,
+                flags: SPRITE_QUAD_FLAG_BCS0_COPY,
+                ..TrueosUi4SpriteQuad::default()
+            };
+            let Some(fill) = bcs0_solid_rect(clear_fill, destination) else {
+                cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                return ERROR_INVALID;
+            };
+            prepared.push(PreparedOp::Bcs0Fill { fill });
+            bcs0_command_count = bcs0_command_count.saturating_add(1);
+        } else {
+            prepared.push(PreparedOp::Quad {
+                sprite_id: 0,
+                source: solid.surface,
+                descriptor: gpgpu_sprite_quad_descriptor(clear, false),
+            });
+        }
     }
     for quad in upload.quads {
-        let (source, premultiplied_source) = if quad.sprite_id == 0 {
-            (solid.surface, false)
+        if quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY != 0 {
+            if quad.sprite_id == 0 {
+                if quad.color_rgba.to_le_bytes()[3] == 0 {
+                    continue;
+                }
+                let Some(fill) = bcs0_solid_rect(quad, destination) else {
+                    cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                    return ERROR_INVALID;
+                };
+                prepared.push(PreparedOp::Bcs0Fill { fill });
+                bcs0_command_count = bcs0_command_count.saturating_add(1);
+                continue;
+            }
+            let Some((_, BlueprintSpriteSource::Uploaded(source))) = surface
+                .sprites
+                .iter()
+                .find(|(sprite_id, _)| *sprite_id == quad.sprite_id)
+            else {
+                cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                return ERROR_INVALID;
+            };
+            if source.nonzero_alpha_runs.is_null() {
+                cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                return ERROR_INVALID;
+            }
+            let runs = unsafe {
+                core::slice::from_raw_parts(
+                    source.nonzero_alpha_runs,
+                    source.nonzero_alpha_run_count,
+                )
+            };
+            let copies = match bcs0_sprite_copies(quad, source.surface, runs, destination) {
+                Ok(copies) => copies,
+                Err(code) => {
+                    cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                    return code;
+                }
+            };
+            bcs0_command_count = bcs0_command_count.saturating_add(copies.len());
+            prepared.extend(copies.into_iter().map(|copy| PreparedOp::Bcs0 { copy }));
+            continue;
+        }
+        let (source, mut premultiplied_source, validated_premultiplied) = if quad.sprite_id == 0 {
+            (solid.surface, false, solid.premultiplied)
         } else if quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID {
             let Some(source) = retained_font_canvas_surface(surface) else {
                 cancel_blueprint_sprite_frame_without_live_gpu(surface);
                 return ERROR_NOT_FOUND;
             };
-            (source, true)
+            (source, true, true)
         } else {
             let Some((_, source)) = surface
                 .sprites
@@ -7548,13 +7855,24 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 cancel_blueprint_sprite_frame_without_live_gpu(surface);
                 return ERROR_NOT_FOUND;
             };
-            (source.surface(), source.is_premultiplied())
+            (
+                source.surface(),
+                source.is_premultiplied(),
+                source.has_validated_premultiplied_pixels(),
+            )
         };
         // Physical XeLP has proven the general sprite-quad source-over path,
         // while the older compact alpha-rectangle source-over kernel can
         // accept a submission without retiring its marker. Keep opaque 1:1
         // copies eligible for the compact path, but route every blended sprite
         // through the newer ordered quad worklist.
+        if quad.flags & SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR != 0 {
+            if !validated_premultiplied {
+                cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                return ERROR_INVALID;
+            }
+            premultiplied_source = true;
+        }
         let conversion = if quad.sprite_id == 0
             || premultiplied_source
             || quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0
@@ -7583,6 +7901,28 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     let mut cursor = 0usize;
     while cursor < prepared.len() {
         match prepared[cursor] {
+            PreparedOp::Bcs0 { .. } => {
+                let mut copies = Vec::new();
+                while cursor < prepared.len() && copies.len() < MAX_BCS0_COMMANDS_PER_BATCH {
+                    let PreparedOp::Bcs0 { copy } = prepared[cursor] else {
+                        break;
+                    };
+                    copies.push(copy);
+                    cursor = cursor.saturating_add(1);
+                }
+                batches.push(PreparedBatch::Bcs0 { copies });
+            }
+            PreparedOp::Bcs0Fill { .. } => {
+                let mut fills = Vec::new();
+                while cursor < prepared.len() && fills.len() < MAX_BCS0_COMMANDS_PER_BATCH {
+                    let PreparedOp::Bcs0Fill { fill } = prepared[cursor] else {
+                        break;
+                    };
+                    fills.push(fill);
+                    cursor = cursor.saturating_add(1);
+                }
+                batches.push(PreparedBatch::Bcs0Fill { fills });
+            }
             PreparedOp::Alpha {
                 sprite_id, source, ..
             } => {
@@ -7642,10 +7982,187 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     }
 
     let batch_count = batches.len();
+    static MIXED_BCS_ROUTE_LOGGED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+    if bcs0_command_count > 0 && !MIXED_BCS_ROUTE_LOGGED.swap(true, Ordering::Relaxed) {
+        let gpu_batches = batches.len().saturating_sub(
+            batches
+                .iter()
+                .filter(|batch| {
+                    matches!(batch, PreparedBatch::Bcs0 { .. } | PreparedBatch::Bcs0Fill { .. })
+                })
+                .count(),
+        );
+        crate::log_important!(target: "ui4";
+            "ui4/blueprint: mixed sprite route bcs0_commands={} ordered_batches={} gpu_batches={} route=explicit-bit31-only no-cpu-compositor=1\n",
+            bcs0_command_count,
+            batch_count,
+            gpu_batches,
+        );
+    }
     let mut final_release = None;
     for (batch_index, batch) in batches.iter().enumerate() {
         let descriptor_count = batch.descriptor_count();
         let backend = batch.backend();
+        let final_batch = batch_index.saturating_add(1) == batch_count;
+        if let PreparedBatch::Bcs0 { copies } = batch {
+            let started = crate::chronos::monotonic_nanos();
+            let submission = loop {
+                match crate::intel::queue_guc_bcs0_rgba_copies(
+                    bcs0_rgba_surface(destination),
+                    copies,
+                ) {
+                    Ok(submission) => break Some(submission),
+                    Err(crate::intel::GucBcs0CopySubmitError::Busy)
+                        if crate::chronos::monotonic_nanos().saturating_sub(started)
+                            < UI4_SPRITE_BATCH_TIMEOUT_NS =>
+                    {
+                        core::hint::spin_loop()
+                    }
+                    Err(crate::intel::GucBcs0CopySubmitError::Busy) => {
+                        cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                        return ERROR_BUSY;
+                    }
+                    Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
+                        quarantine_blueprint_sprite_submission(
+                            surface,
+                            owner,
+                            window_id,
+                            lease,
+                            batch_index,
+                            batch_count,
+                            "bcs0-copy-submit-uncertain",
+                        );
+                        return ERROR_UI4;
+                    }
+                    Err(_) => {
+                        cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                        return ERROR_UI4;
+                    }
+                }
+            };
+            let Some(submission) = submission else {
+                unreachable!()
+            };
+            let retired = loop {
+                let completed = if final_batch {
+                    match poll_ui4_bcs0_sprite_copy(submission, destination) {
+                        Ui4SpriteSceneCompletion::Pending => false,
+                        Ui4SpriteSceneCompletion::Complete { release, .. } => {
+                            final_release = Some(release);
+                            true
+                        }
+                        Ui4SpriteSceneCompletion::Failed => break false,
+                    }
+                } else {
+                    match crate::intel::poll_guc_bcs0_rgba_copies(submission) {
+                        crate::intel::GucBcs0CopyCompletion::Pending => false,
+                        crate::intel::GucBcs0CopyCompletion::Complete => true,
+                        _ => break false,
+                    }
+                };
+                if completed {
+                    break true;
+                }
+                if crate::chronos::monotonic_nanos().saturating_sub(started)
+                    >= UI4_SPRITE_BATCH_TIMEOUT_NS
+                {
+                    break false;
+                }
+                core::hint::spin_loop();
+            };
+            if !retired {
+                quarantine_blueprint_sprite_submission(
+                    surface,
+                    owner,
+                    window_id,
+                    lease,
+                    batch_index,
+                    batch_count,
+                    "bcs0-copy-retirement-incomplete",
+                );
+                return ERROR_UI4;
+            }
+            continue;
+        }
+        if let PreparedBatch::Bcs0Fill { fills } = batch {
+            let started = crate::chronos::monotonic_nanos();
+            let submission = loop {
+                match crate::intel::queue_guc_bcs0_rgba_fills(bcs0_rgba_surface(destination), fills)
+                {
+                    Ok(submission) => break Some(submission),
+                    Err(crate::intel::GucBcs0CopySubmitError::Busy)
+                        if crate::chronos::monotonic_nanos().saturating_sub(started)
+                            < UI4_SPRITE_BATCH_TIMEOUT_NS =>
+                    {
+                        core::hint::spin_loop()
+                    }
+                    Err(crate::intel::GucBcs0CopySubmitError::Busy) => {
+                        cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                        return ERROR_BUSY;
+                    }
+                    Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
+                        quarantine_blueprint_sprite_submission(
+                            surface,
+                            owner,
+                            window_id,
+                            lease,
+                            batch_index,
+                            batch_count,
+                            "bcs0-fill-submit-uncertain",
+                        );
+                        return ERROR_UI4;
+                    }
+                    Err(_) => {
+                        cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                        return ERROR_UI4;
+                    }
+                }
+            };
+            let Some(submission) = submission else {
+                unreachable!()
+            };
+            let retired = loop {
+                let completed = if final_batch {
+                    match poll_ui4_bcs0_sprite_copy(submission, destination) {
+                        Ui4SpriteSceneCompletion::Pending => false,
+                        Ui4SpriteSceneCompletion::Complete { release, .. } => {
+                            final_release = Some(release);
+                            true
+                        }
+                        Ui4SpriteSceneCompletion::Failed => break false,
+                    }
+                } else {
+                    match crate::intel::poll_guc_bcs0_rgba_copies(submission) {
+                        crate::intel::GucBcs0CopyCompletion::Pending => false,
+                        crate::intel::GucBcs0CopyCompletion::Complete => true,
+                        _ => break false,
+                    }
+                };
+                if completed {
+                    break true;
+                }
+                if crate::chronos::monotonic_nanos().saturating_sub(started)
+                    >= UI4_SPRITE_BATCH_TIMEOUT_NS
+                {
+                    break false;
+                }
+                core::hint::spin_loop();
+            };
+            if !retired {
+                quarantine_blueprint_sprite_submission(
+                    surface,
+                    owner,
+                    window_id,
+                    lease,
+                    batch_index,
+                    batch_count,
+                    "bcs0-fill-retirement-incomplete",
+                );
+                return ERROR_UI4;
+            }
+            continue;
+        }
         let queued = match batch {
             PreparedBatch::Alpha {
                 source,
@@ -7661,6 +8178,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                     .collect::<Vec<_>>();
                 queue_blueprint_sprite_batch(destination, &runs)
             }
+            PreparedBatch::Bcs0 { .. } | PreparedBatch::Bcs0Fill { .. } => unreachable!(),
         };
         let submission = match queued {
             Ok(submission) => submission,
@@ -7715,7 +8233,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             }
         };
 
-        let final_batch = batch_index.saturating_add(1) == batch_count;
         let retire_started = crate::chronos::monotonic_nanos();
         loop {
             let completed = if final_batch {
@@ -8018,6 +8535,9 @@ fn ensure_solid_source(surface: &mut BlueprintSceneSurface) -> Result<OwnedRgba8
     };
     let owned = OwnedRgba8Surface {
         opaque: true,
+        premultiplied: true,
+        nonzero_alpha_runs: core::ptr::null(),
+        nonzero_alpha_run_count: 0,
         surface: gpu_surface,
         virt,
         bytes: UI4_SCENE_SOLID_SOURCE_BYTES,
@@ -8030,6 +8550,249 @@ fn expected_rgb565_len(width: u32, height: u32) -> Option<usize> {
     (width as usize)
         .checked_mul(height as usize)?
         .checked_mul(core::mem::size_of::<u16>())
+}
+
+fn cache_premultiplied_alpha_runs(
+    width: u32,
+    height: u32,
+    pitch_bytes: usize,
+    rgba: &[u8],
+) -> Option<Vec<NonzeroAlphaRun>> {
+    let row_bytes = (width as usize).checked_mul(4)?;
+    let required = pitch_bytes.checked_mul(height as usize)?;
+    if width == 0 || height == 0 || pitch_bytes < row_bytes || rgba.len() < required {
+        return None;
+    }
+    let mut runs = Vec::<NonzeroAlphaRun>::new();
+    let mut previous_row = BTreeMap::<(u32, u32), usize>::new();
+    for y in 0..height as usize {
+        let row = &rgba[y * pitch_bytes..y * pitch_bytes + row_bytes];
+        let mut current_row = BTreeMap::<(u32, u32), usize>::new();
+        let mut x = 0usize;
+        while x < width as usize {
+            let pixel = &row[x * 4..x * 4 + 4];
+            let alpha = pixel[3];
+            if pixel[0] > alpha || pixel[1] > alpha || pixel[2] > alpha {
+                return None;
+            }
+            if alpha == 0 {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            x += 1;
+            while x < width as usize {
+                let next = &row[x * 4..x * 4 + 4];
+                let next_alpha = next[3];
+                if next[0] > next_alpha || next[1] > next_alpha || next[2] > next_alpha {
+                    return None;
+                }
+                if next_alpha == 0 {
+                    break;
+                }
+                x += 1;
+            }
+            let key = (start as u32, (x - start) as u32);
+            let index = if let Some(&index) = previous_row.get(&key) {
+                runs[index].height = runs[index].height.saturating_add(1);
+                index
+            } else {
+                if runs.len() >= MAX_BCS0_CACHED_ALPHA_RUNS {
+                    return None;
+                }
+                let index = runs.len();
+                runs.push(NonzeroAlphaRun {
+                    x: key.0,
+                    y: y as u32,
+                    width: key.1,
+                    height: 1,
+                });
+                index
+            };
+            current_row.insert(key, index);
+        }
+        previous_row = current_row;
+    }
+    Some(runs)
+}
+
+fn rgba8_is_premultiplied(width: u32, height: u32, pitch_bytes: usize, rgba: &[u8]) -> bool {
+    let Some(row_bytes) = (width as usize).checked_mul(4) else {
+        return false;
+    };
+    let Some(required) = pitch_bytes.checked_mul(height as usize) else {
+        return false;
+    };
+    if width == 0 || height == 0 || pitch_bytes < row_bytes || rgba.len() < required {
+        return false;
+    }
+    (0..height as usize).all(|y| {
+        rgba[y * pitch_bytes..y * pitch_bytes + row_bytes]
+            .chunks_exact(4)
+            .all(|pixel| pixel[0] <= pixel[3] && pixel[1] <= pixel[3] && pixel[2] <= pixel[3])
+    })
+}
+
+fn bcs0_rgba_surface(surface: GpgpuRgba8Surface) -> crate::intel::GucBcs0RgbaSurface {
+    crate::intel::GucBcs0RgbaSurface {
+        phys: surface.phys,
+        gpu: surface.gpu,
+        bytes: surface.bytes,
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+    }
+}
+
+fn bcs0_solid_rect(
+    quad: TrueosUi4SpriteQuad,
+    destination: GpgpuRgba8Surface,
+) -> Option<crate::intel::GucBcs0RgbaFill> {
+    let [red, green, blue, alpha] = quad.color_rgba.to_le_bytes();
+    if quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY == 0
+        || quad.flags & !(SPRITE_QUAD_FLAG_BCS0_COPY | SPRITE_QUAD_FLAG_SRC_OVER) != 0
+        || alpha == 0 && (red != 0 || green != 0 || blue != 0)
+        || red > alpha
+        || green > alpha
+        || blue > alpha
+    {
+        return None;
+    }
+    let [x0, y0, x1, y1, x2, y2, x3, y3] = [
+        quad.c0_x, quad.c0_y, quad.c1_x, quad.c1_y, quad.c2_x, quad.c2_y, quad.c3_x, quad.c3_y,
+    ]
+    .map(rounded_sprite_coordinate);
+    let (Some(x0), Some(y0), Some(x1), Some(y1), Some(x2), Some(y2), Some(x3), Some(y3)) =
+        (x0, y0, x1, y1, x2, y2, x3, y3)
+    else {
+        return None;
+    };
+    if x0 < 0
+        || y0 < 0
+        || x1 <= x0
+        || y3 <= y0
+        || y0 != y1
+        || x1 != x2
+        || y2 != y3
+        || x0 != x3
+        || x1 as u32 > destination.width
+        || y3 as u32 > destination.height
+    {
+        return None;
+    }
+    Some(crate::intel::GucBcs0RgbaFill {
+        x: x0 as u32,
+        y: y0 as u32,
+        width: (x1 - x0) as u32,
+        height: (y3 - y0) as u32,
+        color: quad.color_rgba,
+    })
+}
+
+fn bcs0_sprite_copies(
+    quad: TrueosUi4SpriteQuad,
+    source: GpgpuRgba8Surface,
+    runs: &[NonzeroAlphaRun],
+    destination: GpgpuRgba8Surface,
+) -> Result<Vec<crate::intel::GucBcs0RgbaCopy>, i32> {
+    if quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY == 0
+        || quad.flags & !(SPRITE_QUAD_FLAG_BCS0_COPY | SPRITE_QUAD_FLAG_SRC_OVER) != 0
+        || quad.color_rgba != u32::MAX
+    {
+        return Err(ERROR_INVALID);
+    }
+    let geometry = [
+        quad.c0_x, quad.c0_y, quad.c1_x, quad.c1_y, quad.c2_x, quad.c2_y, quad.c3_x, quad.c3_y,
+    ]
+    .map(rounded_sprite_coordinate);
+    let [
+        Some(x0),
+        Some(y0),
+        Some(x1),
+        Some(y1),
+        Some(x2),
+        Some(y2),
+        Some(x3),
+        Some(y3),
+    ] = geometry
+    else {
+        return Err(ERROR_INVALID);
+    };
+    let src_pixels = [
+        rounded_sprite_coordinate(quad.c0_u * source.width as f32),
+        rounded_sprite_coordinate(quad.c0_v * source.height as f32),
+        rounded_sprite_coordinate(quad.c1_u * source.width as f32),
+        rounded_sprite_coordinate(quad.c1_v * source.height as f32),
+        rounded_sprite_coordinate(quad.c2_u * source.width as f32),
+        rounded_sprite_coordinate(quad.c2_v * source.height as f32),
+        rounded_sprite_coordinate(quad.c3_u * source.width as f32),
+        rounded_sprite_coordinate(quad.c3_v * source.height as f32),
+    ];
+    let [
+        Some(sx0),
+        Some(sy0),
+        Some(sx1),
+        Some(sy1),
+        Some(sx2),
+        Some(sy2),
+        Some(sx3),
+        Some(sy3),
+    ] = src_pixels
+    else {
+        return Err(ERROR_INVALID);
+    };
+    if y0 != y1
+        || x1 != x2
+        || y2 != y3
+        || x0 != x3
+        || sy0 != sy1
+        || sx1 != sx2
+        || sy2 != sy3
+        || sx0 != sx3
+        || x1 <= x0
+        || y3 <= y0
+        || sx1 <= sx0
+        || sy3 <= sy0
+        || x1 - x0 != sx1 - sx0
+        || y3 - y0 != sy3 - sy0
+        || x0 < 0
+        || y0 < 0
+        || x2 as u32 > destination.width
+        || y3 as u32 > destination.height
+        || sx0 < 0
+        || sy0 < 0
+        || sx1 > source.width as i32
+        || sy3 > source.height as i32
+    {
+        return Err(ERROR_INVALID);
+    }
+    let mut copies = Vec::with_capacity(runs.len());
+    for run in runs {
+        if run.width == 0
+            || run.height == 0
+            || run.x.saturating_add(run.width) > source.width
+            || run.y.saturating_add(run.height) > source.height
+        {
+            return Err(ERROR_INVALID);
+        }
+        let left = run.x.max(sx0 as u32);
+        let right = run.x.saturating_add(run.width).min(sx1 as u32);
+        let top = run.y.max(sy0 as u32);
+        let bottom = run.y.saturating_add(run.height).min(sy3 as u32);
+        if right <= left || bottom <= top {
+            continue;
+        }
+        copies.push(crate::intel::GucBcs0RgbaCopy {
+            source: bcs0_rgba_surface(source),
+            source_x: left,
+            source_y: top,
+            destination_x: x0 as u32 + left - sx0 as u32,
+            destination_y: y0 as u32 + top - sy0 as u32,
+            width: right - left,
+            height: bottom - top,
+        });
+    }
+    Ok(copies)
 }
 
 pub(crate) fn begin_skybox_rgb565_upload(
@@ -8268,6 +9031,13 @@ fn destroy_rgb565_surface(surface: OwnedRgb565Surface) {
 }
 
 fn destroy_rgba8_surface(surface: OwnedRgba8Surface) {
+    if !surface.nonzero_alpha_runs.is_null() {
+        let runs = core::ptr::slice_from_raw_parts_mut(
+            surface.nonzero_alpha_runs.cast_mut(),
+            surface.nonzero_alpha_run_count,
+        );
+        unsafe { drop(alloc::boxed::Box::from_raw(runs)) };
+    }
     crate::dma::dealloc(surface.virt, surface.bytes);
 }
 

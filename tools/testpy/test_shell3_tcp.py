@@ -20,10 +20,13 @@ extern crate alloc;
 use alloc::{string::String, vec::Vec};
 use std::cell::{Cell, RefCell};
 '''
-    for name in ('Mode', 'SpecialRows', 'StripSide'):
+    for name in ('Mode', 'SpecialRows', 'StripSide', 'RgbaColor'):
         source += extract.item('src/shell3/shell3.rs', name)
+    source += re.search(r'^impl RgbaColor \{.*?^}', (ROOT/'src/shell3/shell3.rs').read_text(), re.M | re.S).group()
+    source += f'\n#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
     source += '''
 const OPERATOR: char = '§';
+struct RowStrips {left:Vec<MetaFmtStr>}
 struct Shell3 { vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal() -> Result<Self, ()> {
@@ -32,6 +35,7 @@ impl Shell3 {
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
     fn stop_active_vmx(&mut self)->bool {core::mem::take(&mut self.vmx)}
+    fn row_for_render(&self, _: SpecialRows) -> RowStrips { RowStrips {left:vec![MetaFmtStr::new("TrueOS § 12:34")]} }
     fn get_strip(&self, _: SpecialRows, _: StripSide) -> String { "TrueOS § 12:34".into() }
     fn mode(&self) -> Mode { match self.mode { 1 => Mode::HV, 2 => Mode::CMD, _ => Mode::ADM } }
     fn get_mode(&self) -> u8 { self.mode }
@@ -55,6 +59,14 @@ mod tty {
         let mut tty = Terminal::new(Shell3::new_terminal().unwrap());
         tty.output.clear(); tty
     }
+    #[test] fn metadata_emits_foreground_background_underline_and_resets() {
+        let mut tty=terminal();
+        tty.write_meta(&MetaFmtStr::new("colored").color(RgbaColor::Terminal {
+            foreground:[1,2,3,255],background:[4,5,6,255],underline:true,
+        }));
+        tty.write_meta(&MetaFmtStr::new("plain"));
+        assert_eq!(tty.output,b"\\x1b[0m\\x1b[38;2;1;2;3m\\x1b[48;2;4;5;6m\\x1b[4mcolored\\x1b[0mplain");
+    }
     #[test] fn stop_dispatches_for_vmx_only_and_returns_to_prompt() {
         let mut tty=terminal();tty.shell.vmx=true;
         tty.input(b"stop\\r");assert!(!tty.shell.vmx);assert!(tty.shell.parsed.borrow().is_empty());
@@ -63,13 +75,13 @@ mod tty {
     }
     #[test] fn connection_banner_contains_only_title_and_slot_prompt() {
         let tty=Terminal::new(Shell3::new_terminal().unwrap());
-        assert_eq!(tty.output, "TrueOS § 12:34\\r\\n§sh1 ".as_bytes());
+        assert_eq!(tty.output, "\\x1b[0m\\x1b[2J\\x1b[HTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m ".as_bytes());
     }
     #[test] fn clear_screen_returns_to_active_slot_prompt() {
         let mut tty=terminal();
         tty.input(b"\\t");tty.output.clear();
         tty.input(b"clear\\r");tty.input(b"\\n");
-        assert_eq!(tty.output, "clear\\r\\n\\x1b[2J\\x1b[H§sh1 ".as_bytes());
+        assert_eq!(tty.output, "clear\\r\\n\\x1b[2J\\x1b[H\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m ".as_bytes());
         assert!(tty.shell.parsed.borrow().is_empty());
         assert_eq!(tty.shell.prompt, "");assert!(!tty.closing);
         tty.input(b"known\\n");
@@ -83,7 +95,7 @@ mod tty {
         assert_eq!(tty.shell.prompt, "");assert_eq!(tty.shell.cursor,0);
         let output=String::from_utf8_lossy(&tty.output);
         assert!(!output.contains("unknown name"));assert!(!output.contains("not wired"));
-        assert_eq!(output.matches("§sh1 ").count(),1);
+        assert_eq!(output.matches("§sh1").count(),1);
     }
     #[test] fn fragmented_unicode_crlf_and_backspace() {
         let mut tty = terminal();
@@ -92,7 +104,7 @@ mod tty {
         assert_eq!(tty.shell.prompt, "§"); assert_eq!(tty.shell.cursor, 1);
         tty.input(b"\\r"); tty.input(b"\\n");
         assert_eq!(&*tty.shell.parsed.borrow(), &["§"]);
-        assert_eq!(String::from_utf8_lossy(&tty.output).matches("§sh1 ").count(), 1);
+        assert_eq!(String::from_utf8_lossy(&tty.output).matches("§sh1").count(), 1);
     }
     #[test] fn every_packet_split_produces_identical_results() {
         let input = "§é😀\\x7f\\tknown\\r\\nnext\\n".as_bytes();

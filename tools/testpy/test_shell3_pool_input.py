@@ -37,6 +37,7 @@ const OPERATOR:char='§';
 '''
     for name in ('Mode', 'RgbaColor', 'SpecialRows', 'StripSide', 'PromptState', 'vmx_hash_text', 'vmx_title_meta', 'title_left_text', 'mode_title_meta', 'MatrixSlotsState', 'matrix_slots', 'matrix_slots_meta', 'matrix_slots_text', 'current_matrix_slots_text'):
         source += extract.item('src/shell3/shell3.rs', name)
+    source += re.search(r'^impl RgbaColor \{.*?^}', shell, re.M | re.S).group()
     source += re.search(r'^impl MatrixSlotsState \{.*?^}', shell, re.M | re.S).group()
     source += re.search(r'^impl MatrixSlots \{.*?^}', shell, re.M | re.S).group()
     source += """

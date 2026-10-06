@@ -27,10 +27,10 @@ mod uc_fw;
 
 pub(crate) use self::blt::{
     GUC_BCS0_MONO_MAX_GLYPHS, GucBcs0CopyCompletion, GucBcs0CopySubmission, GucBcs0CopySubmitError,
-    GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaSurface, guc_bcs0_last_timeout,
+    GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaFill, GucBcs0RgbaSurface, guc_bcs0_last_timeout,
     poll_guc_bcs0_rgba_copies, queue_guc_bcs0_legacy_rgba_copies, queue_guc_bcs0_marker,
     queue_guc_bcs0_mono_glyphs, queue_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_fill,
-    queue_guc_bcs0_uncached_copies, submit_guc_bcs0_fast_copy_probe_now,
+    queue_guc_bcs0_rgba_fills, queue_guc_bcs0_uncached_copies, submit_guc_bcs0_fast_copy_probe_now,
 };
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;
 pub(crate) use self::media::hw_pic;
@@ -435,7 +435,9 @@ pub(crate) fn claimed_device() -> Option<Dev> {
 /// Read raw dwords so the Tiger Lake compatibility alias cannot hide its
 /// physical device or revision, and an unrelated PCI device cannot admit it.
 pub(crate) fn voxy_headless_target_active() -> bool {
-    let Some(dev) = claimed_device() else { return false; };
+    let Some(dev) = claimed_device() else {
+        return false;
+    };
     let identity = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x00);
     let revision = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x08) as u8;
     shader::voxy_headless_supports_physical_device(
@@ -447,7 +449,9 @@ pub(crate) fn voxy_headless_target_active() -> bool {
 
 /// The atlas composition reuses a sampled fragment bake sealed to ADL-S.
 pub(crate) fn voxy_headless_texture_target_active() -> bool {
-    let Some(dev) = claimed_device() else { return false; };
+    let Some(dev) = claimed_device() else {
+        return false;
+    };
     let identity = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x00);
     let revision = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x08) as u8;
     shader::voxy_headless_texture_supports_physical_device(

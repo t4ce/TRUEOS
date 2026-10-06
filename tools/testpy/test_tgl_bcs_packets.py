@@ -31,11 +31,11 @@ mod blt {
         'DIRECT_BLT_COPY_BYTES', 'GUC_BCS0_MONO_MAX_GLYPHS',
     ))
     source += '\n' + '\n'.join(extract.item(BLT, name) for name in (
-        'DirectBltState', 'GucBcs0RgbaSurface', 'GucBcs0RgbaCopy',
+        'DirectBltState', 'GucBcs0RgbaSurface', 'GucBcs0RgbaCopy', 'GucBcs0RgbaFill',
         'guc_blt_valid_surface', 'guc_blt_valid_copy', 'guc_blt_map_ui4_surfaces',
         'guc_blt_physical_ranges_overlap', 'guc_blt_gpu_ranges_overlap', 'guc_blt_encode_ui4_copy_batch',
         'guc_blt_append_ring_batch_start', 'boot_bcs0_legacy_ring_words',
-        'guc_blt_valid_fill', 'guc_blt_encode_ui4_fill_batch',
+        'guc_blt_valid_fill', 'guc_blt_valid_fill_rect', 'guc_blt_encode_ui4_fill_batch', 'guc_blt_encode_ui4_fill_rects_batch',
         'guc_blt_valid_legacy_copy', 'guc_blt_encode_legacy_copy_batch', 'guc_blt_encode_copy_batch',
         'GucBcs0MonoGlyph', 'guc_blt_valid_mono_glyph', 'guc_blt_encode_mono_batch',
     ))
@@ -188,6 +188,21 @@ fn fast_color_has_32bpp_pitch_minus_one_and_ordered_retirement() {
     assert!(!guc_blt_valid_fill(GucBcs0RgbaSurface { height: 32768, bytes: 128*32768, ..dst }));
     assert!(!guc_blt_valid_fill(GucBcs0RgbaSurface { bytes: 323, ..dst }));
     assert!(!guc_blt_valid_fill(GucBcs0RgbaSurface { gpu: BCS0_GGTT_BASE, ..dst }));
+}
+#[test]
+fn rect_fills_preserve_partial_alpha_and_retire_after_the_last_rectangle() {
+    let mut batch = vec![0u32; DIRECT_BLT_BATCH_BYTES / 4];
+    let mut result = vec![0u32; 1024];
+    let mut state: DirectBltState = unsafe { core::mem::zeroed() };
+    state.batch_virt=batch.as_mut_ptr().cast();state.result_virt=result.as_mut_ptr().cast();
+    let dst=GucBcs0RgbaSurface {width:17,height:3,pitch_bytes:128,..surface(0x200000)};
+    let clear=GucBcs0RgbaFill{x:0,y:0,width:17,height:3,color:0};
+    let partial=GucBcs0RgbaFill{x:4,y:1,width:2,height:2,color:0x80604020};
+    assert_eq!(guc_blt_encode_ui4_fill_rects_batch(state,dst,&[clear,partial],0xBC500006),Some((2,220)));
+    assert_eq!(&batch[23..34],&[0x51100009,127,0x00010004,0x00030006,0x200000,0,0,0x80604020,0,0,0]);
+    assert_eq!(&batch[34..42],&[0x13004003,0x01AD0004,0,0xBC500006,0,0x02800000,0x05000000,0]);
+    assert!(!guc_blt_valid_fill_rect(dst,GucBcs0RgbaFill{x:16,..partial}));
+    assert!(guc_blt_encode_ui4_fill_rects_batch(state,dst,&[],1).is_none());
 }
 #[test]
 fn ring_entry_writes_before_batch_and_wraps_without_overrun() {

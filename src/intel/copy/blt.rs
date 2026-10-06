@@ -283,6 +283,15 @@ pub(crate) struct GucBcs0RgbaCopy {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GucBcs0RgbaFill {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) color: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GucBcs0CopySubmission {
     sequence: u32,
 }
@@ -755,6 +764,7 @@ enum GucBcs0BatchKind<'a> {
     FastCopy,
     LegacyCopy,
     FastFill(u32),
+    FastFills(&'a [GucBcs0RgbaFill]),
     LegacyMono(&'a [GucBcs0MonoGlyph]),
 }
 
@@ -820,6 +830,21 @@ pub(crate) fn queue_guc_bcs0_rgba_fill(
     queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::FastFill(color))
 }
 
+pub(crate) fn queue_guc_bcs0_rgba_fills(
+    destination: GucBcs0RgbaSurface,
+    fills: &[GucBcs0RgbaFill],
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    if fills.is_empty()
+        || fills.len() > GUC_BLT_UI4_MAX_COPIES
+        || fills
+            .iter()
+            .any(|fill| !guc_blt_valid_fill_rect(destination, *fill))
+    {
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    }
+    queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::FastFills(fills))
+}
+
 fn queue_guc_bcs0_batch(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
@@ -867,6 +892,9 @@ fn queue_guc_bcs0_batch(
         let (copy_count, copied_bytes) = match kind {
             GucBcs0BatchKind::FastFill(color) => {
                 guc_blt_encode_ui4_fill_batch(state, destination, color, marker)?
+            }
+            GucBcs0BatchKind::FastFills(fills) => {
+                guc_blt_encode_ui4_fill_rects_batch(state, destination, fills, marker)?
             }
             GucBcs0BatchKind::FastCopy => {
                 guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?
@@ -950,6 +978,7 @@ fn queue_guc_bcs0_batch(
         destination.height, destination.pitch_bytes, match kind {
             GucBcs0BatchKind::FastCopy => "xy-fast-copy-blt",
             GucBcs0BatchKind::FastFill(_) => "xy-fast-color-blt",
+            GucBcs0BatchKind::FastFills(_) => "xy-fast-color-blt-rects",
             GucBcs0BatchKind::LegacyCopy => "xy-src-copy-blt",
             GucBcs0BatchKind::LegacyMono(_) => "xy-mono-src-copy-blt",
         },
@@ -1927,39 +1956,91 @@ fn guc_blt_valid_fill(destination: GucBcs0RgbaSurface) -> bool {
         && destination.height <= i16::MAX as u32
 }
 
+fn guc_blt_valid_fill_rect(destination: GucBcs0RgbaSurface, fill: GucBcs0RgbaFill) -> bool {
+    guc_blt_valid_fill(destination)
+        && fill.width != 0
+        && fill.height != 0
+        && fill
+            .x
+            .checked_add(fill.width)
+            .is_some_and(|right| right <= destination.width)
+        && fill
+            .y
+            .checked_add(fill.height)
+            .is_some_and(|bottom| bottom <= destination.height)
+        && fill.x.saturating_add(fill.width) <= i16::MAX as u32
+        && fill.y.saturating_add(fill.height) <= i16::MAX as u32
+}
+
 fn guc_blt_encode_ui4_fill_batch(
     state: DirectBltState,
     destination: GucBcs0RgbaSurface,
     color: u32,
     marker: u32,
 ) -> Option<(usize, u64)> {
-    if !guc_blt_valid_fill(destination) {
+    guc_blt_encode_ui4_fill_rects_batch(
+        state,
+        destination,
+        &[GucBcs0RgbaFill {
+            x: 0,
+            y: 0,
+            width: destination.width,
+            height: destination.height,
+            color,
+        }],
+        marker,
+    )
+}
+
+fn guc_blt_encode_ui4_fill_rects_batch(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    fills: &[GucBcs0RgbaFill],
+    marker: u32,
+) -> Option<(usize, u64)> {
+    if fills.is_empty()
+        || fills.len() > GUC_BLT_UI4_MAX_COPIES
+        || fills
+            .iter()
+            .any(|fill| !guc_blt_valid_fill_rect(destination, *fill))
+    {
         return None;
     }
     // Reuse the copy lane's TLB/pre-parser boundary and ordered retirement.
-    // Insert one 11-DWord color packet before the marker-only batch's tail.
+    // Place one XY_COLOR_BLT command per rectangle before the exact marker.
     guc_blt_encode_ui4_copy_batch(state, destination, &[], marker)?;
     let batch = unsafe {
         core::slice::from_raw_parts_mut(state.batch_virt.cast::<u32>(), DIRECT_BLT_BATCH_BYTES / 4)
     };
-    batch.copy_within(12..20, 23);
+    let marker_start = 12 + fills.len() * 11;
+    batch.copy_within(12..20, marker_start);
     // TGL Vol 2a pp.1367-1370: 32bpp is 2<<19; linear pitch is bytes-1
-    // (unlike XY_FAST_COPY_BLT). MOCS0, linear tiling, zero XY offsets.
-    batch[12..23].copy_from_slice(&[
-        (2 << 29) | (0x44 << 22) | (2 << 19) | 9,
-        destination.pitch_bytes - 1,
-        0,
-        destination.width | (destination.height << 16),
-        destination.gpu as u32,
-        (destination.gpu >> 32) as u32,
-        0,
-        color,
-        0,
-        0,
-        0,
-    ]);
-    super::dma_flush(state.batch_virt, 31 * 4);
-    Some((1, u64::from(destination.width) * u64::from(destination.height) * 4))
+    // (unlike XY_FAST_COPY_BLT). MOCS0 and linear tiling.
+    let mut copied_bytes = 0u64;
+    for (index, fill) in fills.iter().enumerate() {
+        let offset = 12 + index * 11;
+        batch[offset..offset + 11].copy_from_slice(&[
+            (2 << 29) | (0x44 << 22) | (2 << 19) | 9,
+            destination.pitch_bytes - 1,
+            fill.x | (fill.y << 16),
+            (fill.x + fill.width) | ((fill.y + fill.height) << 16),
+            destination.gpu as u32,
+            (destination.gpu >> 32) as u32,
+            0,
+            fill.color,
+            0,
+            0,
+            0,
+        ]);
+        copied_bytes = copied_bytes.saturating_add(
+            u64::from(fill.width)
+                .saturating_mul(u64::from(fill.height))
+                .saturating_mul(4),
+        );
+    }
+    let end = marker_start + 8;
+    super::dma_flush(state.batch_virt, end * 4);
+    Some((fills.len(), copied_bytes))
 }
 
 fn guc_blt_gpu_ranges_overlap(left: GucBcs0RgbaSurface, right: GucBcs0RgbaSurface) -> bool {
