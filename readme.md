@@ -57,6 +57,18 @@ hardware—not a thin proof of concept around a boot screen.
 
 ## Start here
 
+For kernel development, use `make kernel`. To build a bootable image locally,
+use `make iso START_BAREMETAL_LOG=0 PUBLISH_RELEASE_SMB=0 RELEASE_BUMP_CNT=0`,
+then boot it with `tools/qemu/run.sh iso -snapshot`. See the
+[QEMU setup and verification guide](tools/qemu/README.md) for firmware requirements.
+`cargo run` builds the kernel but rejects host execution with these instructions;
+the kernel ELF requires a bootloader.
+
+For experimental headless kernel bring-up without QEMU or an ISO, use
+`cargo kvm`. The [direct KVM launcher](tools/kvm/README.md) boots Cargo's exact
+kernel ELF with a limited boot handoff and stops after 10 seconds by default.
+It currently provides one CPU and UART output, with no GPU, storage or network.
+
 | If you want to… | Start with… |
 | --- | --- |
 | **Use TRUEOS** | The [latest official cloud release](https://github.com/t4ce/TRUEOS/releases/latest). It contains the supported bootable image, verification material, and launch guidance. |

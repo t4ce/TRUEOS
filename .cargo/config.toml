@@ -2,6 +2,11 @@
 target-dir = "tgt"
 target = ".cargo/x86_64-unknown-trueos.json"
 
+[alias]
+# Explicitly opt into the experimental headless KVM platform. The exact target
+# runner overrides the normal cargo-run guard and receives the freshly built ELF.
+kvm = ["run", "--config", "target.x86_64-unknown-trueos.runner=['sh','tools/kvm/run.sh']"]
+
 [unstable]
 build-std = ["core", "compiler_builtins", "alloc", "panic_abort"]
 build-std-features = ["compiler-builtins-mem"]
@@ -25,6 +30,8 @@ rustflags = [
 ]
 
 [target.'cfg(target_os = "trueos")']
+# Kernel ELFs require a bootloader; never execute them as host processes.
+runner = ["sh", "tools/cargo-run.sh"]
 rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
 	"--cfg", "kmod",
