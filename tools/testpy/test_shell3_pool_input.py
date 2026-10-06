@@ -171,15 +171,20 @@ fn new(columns:usize)->Self {Self {layout_generation:0,status_hover:None,tui_fro
     fn apply_screen(screen:&mut Vec<Vec<char>>, output:&[u8]) {
         let text=String::from_utf8_lossy(output);let mut chars=text.chars().peekable();
         let (mut row,mut col)=(0,0);
+        let (mut top,mut bottom)=(3,screen.len()-1);
         while let Some(ch)=chars.next() {
             if ch=='\x1b' {
-                assert_eq!(chars.next(),Some('['));let mut args=String::new();
+                let kind=chars.next().unwrap();
+                if kind==']' {while chars.next().unwrap()!='\x07' {}continue;}
+                assert_eq!(kind,'[');let mut args=String::new();
                 let command=loop {let c=chars.next().unwrap();if c.is_ascii_alphabetic(){break c;}args.push(c);};
                 let params:Vec<usize>=args.split(';').map(|v|v.parse().unwrap_or(0)).collect();
                 match command {
                     'H'=>{row=params[0].max(1)-1;col=params.get(1).copied().unwrap_or(1).max(1)-1;}
                     'J'=>{assert_eq!(params[0],2);for line in screen.iter_mut(){line.fill(' ');}}
                     'K'=>{assert_eq!(params[0],2);screen[row].fill(' ');}
+                    'r'=>{if params[0]==0 {top=0;bottom=screen.len()-1;}else {top=params[0]-1;bottom=params[1]-1;}}
+                    'T'=>{for _ in 0..params[0].max(1) {screen[top..=bottom].rotate_right(1);screen[top].fill(' ');}}
                     'm'=>{},_=>panic!("unexpected ANSI command {command}"),
                 }
             } else if ch=='\r' {col=0;}
@@ -219,6 +224,35 @@ fn new(columns:usize)->Self {Self {layout_generation:0,status_hover:None,tui_fro
         assert!(screen[3].iter().all(|ch|*ch==' '));
         assert!(screen[0].iter().collect::<String>().ends_with("bios vgpu vcpy"));
         assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[38;2;255;105;180m"));
+        assert!(!String::from_utf8_lossy(&tty.output).contains("\x1b[2J"));
+        matrix_slots().lock().echoes.clear();
+    }
+    #[test] fn reverse_scroll_keeps_headers_and_drops_oldest_visible_and_stored_entries() {
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
+        let mut shell=Shell3::new(100);shell.set_prompt("");
+        let mut tty=Terminal::new(shell);let mut screen=vec![vec![' ';100];25];
+        apply_screen(&mut screen,&tty.output);tty.output.clear();
+        for n in 0..22 {tty.shell.terminal_message(&format!("message {n}"));}
+        tty.reconcile_matrix_selection();apply_screen(&mut screen,&tty.output);tty.output.clear();
+        let headers=screen[..3].to_vec();
+        tty.shell.terminal_message("message 22");tty.reconcile_matrix_selection();
+        assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[1T"));
+        apply_screen(&mut screen,&tty.output);tty.output.clear();
+        assert_eq!(&screen[..3],&headers);
+        assert!(screen[3].iter().collect::<String>().starts_with("message 22"));
+        assert!(screen[4].iter().collect::<String>().starts_with("message 21"));
+        assert!(screen[24].iter().collect::<String>().starts_with("message 1 "));
+        tty.shell.terminal_message("message 23");tty.shell.terminal_message("message 24");
+        tty.reconcile_matrix_selection();assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[2T"));
+        apply_screen(&mut screen,&tty.output);tty.output.clear();
+        assert!(screen[3].iter().collect::<String>().starts_with("message 24"));
+        for n in 25..300 {tty.shell.terminal_message(&format!("message {n}"));}
+        tty.reconcile_matrix_selection();apply_screen(&mut screen,&tty.output);
+        let history=MatrixSlots::echo_lines(None);assert_eq!(history.len(),256);
+        assert_eq!(history[0],"message 299");assert_eq!(history[255],"message 44");
+        assert!(screen[3].iter().collect::<String>().starts_with("message 299"));
+        assert!(screen[24].iter().collect::<String>().starts_with("message 278"));
+        assert_eq!(&screen[..3],&headers);
         assert!(!String::from_utf8_lossy(&tty.output).contains("\x1b[2J"));
         matrix_slots().lock().echoes.clear();
     }

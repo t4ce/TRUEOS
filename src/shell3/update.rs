@@ -65,10 +65,10 @@ impl Snapshot {
 
     pub(super) fn with_matrix(mut self, lines: &[String], generation: u64) -> Self {
         self.matrix_generation = generation;
-        let count = self.size.1.saturating_sub(3).min(10);
-        let first = lines.len().saturating_sub(count);
+        let count = self.size.1.saturating_sub(3);
         for index in 0..count {
-            let text = lines.get(first + index).map(String::as_str).unwrap_or("");
+            // Matrix history is newest first; never select its oldest tail.
+            let text = lines.get(index).map(String::as_str).unwrap_or("");
             self.rows.push(VisibleRow {
                 rendered: fit_meta_strips(&[MetaFmtStr::new(text)], &[], self.size.0),
             });

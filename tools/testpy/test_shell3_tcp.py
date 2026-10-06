@@ -24,7 +24,7 @@ use std::cell::{Cell, RefCell};
         source += extract.item('src/shell3/shell3.rs', name)
     source += re.search(r'^impl RgbaColor \{.*?^}', (ROOT/'src/shell3/shell3.rs').read_text(), re.M | re.S).group()
     source += '''
-mod update {pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>; pub struct Snapshot(pub Vec<RenderedLine>);impl Snapshot {pub fn rendered_lines(&self)->Vec<RenderedLine>{self.0.clone()}pub fn size(&self)->(usize,usize){(100,25)}}}
+mod update {pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>; pub struct Snapshot(pub Vec<RenderedLine>);impl Snapshot {pub fn rendered_lines(&self)->Vec<RenderedLine>{self.0.clone()}pub fn size(&self)->(usize,usize){(100,25)}pub fn terminal_active(&self)->bool{false}}}
 const OPERATOR: char = '§';
 struct Shell3 { vmx:bool, mode: u8, prompt: String, cursor: usize, messages:RefCell<Vec<String>>, parsed: RefCell<Vec<String>> }
 impl Shell3 {
@@ -73,7 +73,7 @@ mod tty {
     #[test] fn connection_clears_once_and_positions_shared_rows() {
         let tty=Terminal::new(Shell3::new_terminal().unwrap());
         let output=String::from_utf8_lossy(&tty.output);
-        assert!(output.starts_with("\\x1b[2J\\x1b[H"));
+        assert!(output.starts_with("\\x1b]0;TrueOS §\\x07\\x1b[2J\\x1b[H"));
         assert!(output.contains("TrueOS § 12:34"));assert!(output.contains("§sh1"));
         assert!(output.contains("\\x1b[3;1H"));
         assert_eq!(output.matches("\\x1b[2J").count(),1);

@@ -15,6 +15,7 @@ pub(super) struct Terminal {
     after_cr: bool,
     presented: Vec<RenderedLine>,
     presented_cursor: Option<usize>,
+    scroll_rows: usize,
     pub output: Vec<u8>,
     pub closing: bool,
     pub overflow: bool,
@@ -32,6 +33,7 @@ impl Terminal {
             after_cr: false,
             presented: Vec::new(),
             presented_cursor: None,
+            scroll_rows: 0,
             output: Vec::new(),
             closing: false,
             overflow: false,
@@ -58,6 +60,27 @@ impl Terminal {
         let lines = snapshot.rendered_lines();
         let cursor = self.shell.cursor().min(snapshot.size().0.saturating_sub(1));
         let mut changed = self.presented_cursor != Some(cursor);
+        if self.scroll_rows != snapshot.size().1 {
+            self.scroll_rows = snapshot.size().1;
+            self.write(format!("\x1b[4;{}r", self.scroll_rows).as_bytes());
+            changed = true;
+        }
+        // A prepend moves older Matrix rows down, dropping the bottom row.
+        // Let the terminal do that within the body, then paint the new rows.
+        if !snapshot.terminal_active() && lines.len() == self.presented.len() && lines.len() > 4 {
+            let body = &lines[3..];
+            let previous = &self.presented[3..];
+            if body != previous {
+                if let Some(count) = (1..body.len()).find(|&n| body[n..] == previous[..body.len() - n]) {
+                    self.write(format!("\x1b[4;1H\x1b[0m\x1b[{count}T").as_bytes());
+                    self.presented[3..].rotate_right(count);
+                    for line in &mut self.presented[3..3 + count] {
+                        line.fill((' ', None));
+                    }
+                    changed = true;
+                }
+            }
+        }
         for row in 0..lines.len().max(self.presented.len()) {
             let line = lines.get(row).map(Vec::as_slice).unwrap_or(&[]);
             // nc's local echo may have touched the prompt even when a whole
@@ -112,7 +135,7 @@ impl Terminal {
                 self.shell.set_mode(self.shell.get_mode() % 3 + 1);
             }
             "exit" => {
-                self.write(b"Bye.\r\n");
+                self.write(b"\x1b[rBye.\r\n");
                 self.closing = true;
             }
             _ => {
@@ -176,7 +199,7 @@ impl Terminal {
                         self.line_overflow = false;
                     }
                     4 if self.line.is_empty() => {
-                        self.write(b"\r\nBye.\r\n");
+                        self.write(b"\x1b[r\r\nBye.\r\n");
                         self.closing = true;
                     }
                     21 => {
