@@ -105,6 +105,8 @@ pub const OP_BP_GUEST_COMPUTE_CAPACITY: u32 = 0x216;
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 = 0x208;
 /// `arg0=owned frame`, payload=`red[256] + green[256] + blue[256]` u16 LE.
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_GAMMA_RAMP: u32 = 0x211;
+/// arg0=owned window, arg1=signed fade -65535 (black)..65535 (white); 0 restores.
+pub const OP_BP_UI4_SCENE_DISPLAY_FADE: u32 = 0x220;
 pub const OP_BP_ASYNC_FS_READ_START: u32 = 0xCE;
 pub const OP_BP_ASYNC_FS_REMOVE_START: u32 = 0xCF;
 pub const OP_BP_ASYNC_FS_STATUS: u32 = 0xD0;

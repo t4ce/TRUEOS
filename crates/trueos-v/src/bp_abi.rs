@@ -879,6 +879,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32, rgb: u32) -> i32;
     /// Program the shared primary display gamma LUT from a 3×256 RGB u16 ramp.
     pub fn trueos_cabi_ui4_scene_set_display_gamma_ramp(window_id: u32, ramp: *const u16) -> i32;
+    pub fn trueos_cabi_ui4_scene_display_fade_v1(window_id: u32, amount: i32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_escape_key_action(window_id: u32, action: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_register_cursor_image_v1(

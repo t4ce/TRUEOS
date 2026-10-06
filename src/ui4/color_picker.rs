@@ -4,6 +4,9 @@
 //! queues an open request; Escape closes the session and transfers its frame
 //! ring back to UI4 for SURFLIVE-safe retirement.
 
+#[path = "display_fade_curve.rs"]
+mod display_fade_curve;
+
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use trueos_time::{Duration, Timer};
@@ -55,7 +58,7 @@ enum PickerPanel {
     Gamma,
 }
 
-struct PipeGammaSnapshot {
+pub(crate) struct PipeGammaSnapshot {
     mode: u32,
     precision_palette: [u32; PRECISION_PALETTE_ENTRIES],
 }
@@ -572,7 +575,7 @@ fn set_bottom_color(rgb: [u8; 3]) -> bool {
 
 // Keep this first gamma experiment local to the UI4 picker. Reading the
 // precision palette captures the hardware state before any UI interaction.
-fn read_pipe_a_gamma() -> Option<PipeGammaSnapshot> {
+pub(crate) fn read_pipe_a_gamma() -> Option<PipeGammaSnapshot> {
     let dev = crate::intel::claimed_device()?;
     let mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
     let precision_index = crate::intel::mmio_read(dev, PIPE_A_PREC_INDEX);
@@ -643,4 +646,21 @@ pub(crate) fn program_pipe_a_precision_gamma(entries: &[u32; PRECISION_PALETTE_E
     // Keep the indirect palette port exactly as another display user left it.
     crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, old_index);
     verified
+}
+
+/// Apply a fade relative to the exact display state captured before the transition.
+pub(crate) fn fade_pipe_a_gamma(snapshot: &PipeGammaSnapshot, amount: i32) -> bool {
+    if amount == 0 {
+        let Some(dev) = crate::intel::claimed_device() else { return false; };
+        if !program_pipe_a_precision_gamma(&snapshot.precision_palette) { return false; }
+        crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, snapshot.mode);
+        return crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE) == snapshot.mode;
+    }
+    // When precision gamma is disabled, its saved palette is not the transfer
+    // function currently on screen. Use identity for the fade, restore mode at end.
+    if snapshot.mode & POST_CSC_GAMMA_ENABLE != 0
+        && snapshot.mode & GAMMA_MODE_MASK != GAMMA_MODE_10_BIT { return false; }
+    let entries = display_fade_curve::palette(&snapshot.precision_palette, amount,
+        snapshot.mode & POST_CSC_GAMMA_ENABLE != 0);
+    program_pipe_a_precision_gamma(&entries)
 }

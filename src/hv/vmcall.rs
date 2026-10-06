@@ -2615,6 +2615,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_DISPLAY_FADE => {
+            let amount = arg1 as i64;
+            let rc = if arg0 > u32::MAX as u64 || !(-65535..=65535).contains(&amount) || req_len != 0 {
+                -1
+            } else {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_display_fade_v1(arg0 as u32, amount as i32)
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_SCENE_FRAME_SET_OPACITY => {
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_opacity(
                 arg0 as u32,

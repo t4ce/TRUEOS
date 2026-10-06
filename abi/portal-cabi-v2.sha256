@@ -7,4 +7,5 @@
 # Additive stackful TRUEOS thread lifecycle. Existing symbol signatures unchanged.
 # Additive cooperative Blueprint stop control v1. Existing symbol signatures unchanged.
 # Additive exact UI4 publication receipt/query v1. All 366 existing signatures unchanged.
-67ceae19c2a6e8690edd89a1c67d1b1c06d2de0961d89e2bfa20f527b60be2f0
+# Additive display fade v1 with owned gamma restoration. Existing signatures unchanged.
+45f8855b0cf2987182942acd9284fd56eef2b084ad4171cdbe8a7d77b49cb33d
