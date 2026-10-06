@@ -27,7 +27,7 @@ pub const MAX_SHELL3_INSTANCES: usize = 256;
 pub const OPERATOR: char = '§';
 pub const MODESTEP: char = '\t';
 pub const PROMPT_CURSOR: char = '#';
-pub const Default_COLUMNS: usize = 120;
+pub const Default_COLUMNS: usize = 100;
 pub const Default_ROWS: usize = 25;
 pub const MIN_COLUMNS: usize = 20;
 pub const MIN_ROWS: usize = 5;
@@ -1224,7 +1224,7 @@ impl Shell3 {
             .collect()
     }
 
-    pub(super) fn capture_update_snapshot(&self) -> update::Snapshot {
+    fn capture_update_snapshot(&self) -> update::Snapshot {
         let revision = tui::revision(self.tui_frontend);
         if let Some(lines) = tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
             return update::Snapshot::terminal((self.columns, self.rows_count), self.layout_generation, lines, revision);
@@ -1249,12 +1249,6 @@ impl Shell3 {
         )
         .with_matrix(&matrix_lines, matrix_generation)
         .with_tui_revision(revision)
-    }
-
-    pub(super) fn terminal_message(&self, message: &str) {
-        for line in message.lines().rev() {
-            MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line.into());
-        }
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
