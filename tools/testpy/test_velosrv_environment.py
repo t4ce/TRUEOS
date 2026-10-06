@@ -94,6 +94,23 @@ fn bridge_is_specific_to_the_server_and_never_grants_global_fs() {
     }
 }
 #[test]
+fn screenshots_have_shared_pictures_and_private_instance_defaults() {
+    for root in ["apps/voxy", "apps/voxy/container--uuid"] {
+        let env = build_process_env("voxy.bp", Some(root), None, None, false);
+        assert_eq!(env["VOXYGEN_SCREENSHOT"], format!("/{root}/screenshots"));
+        assert_eq!(env["XDG_PICTURES_DIR"], "/screenshots");
+        ENV.with(|e| *e.borrow_mut() = env);
+        assert_eq!(resolve_fs_path("/screenshots/capture.png", false), Some("screenshots/capture.png".into()));
+        assert_eq!(resolve_fs_path("screenshots/capture.png", false), Some(format!("{root}/screenshots/capture.png")));
+        assert_eq!(resolve_fs_path(&format!("/{root}/screenshots"), false), Some(format!("{root}/screenshots")));
+        assert_eq!(resolve_fs_path("/screenshots/../outside", false), None);
+        assert_eq!(resolve_fs_path("/other/file", false), Some(format!("{root}/other/file")));
+        assert!(!trueosfs_scope_granted());
+    }
+    assert!(!build_process_env("other.bp", Some("apps/other"), None, None, false).contains_key("VOXYGEN_SCREENSHOT"));
+}
+
+#[test]
 fn absolute_ram_archive_path_survives_guest_transport_for_each_instance() {
     let archive = "/apps/voxy/voxygen-assets.tar.lz4";
     for root in ["apps/voxy", "apps/voxy/container_1--uuid", "apps/voxy/container_2--uuid"] {

@@ -1766,11 +1766,20 @@ pub(crate) fn build_process_env(
             );
         }
     }
+    // Temporary platform Pictures location, shared with Shell2 `shot`. A future
+    // user service can replace this value without changing UserDirs consumers.
+    vars.insert(String::from("XDG_PICTURES_DIR"), String::from("/screenshots"));
     vars.insert(String::from("XDG_CONFIG_HOME"), String::from("/config"));
     vars.insert(String::from("XDG_CACHE_HOME"), String::from("/cache"));
     vars.insert(String::from("BAT_CONFIG_DIR"), String::from("/config/bat"));
     vars.insert(String::from("BAT_CACHE_PATH"), String::from("/cache/bat"));
     let archive_stem = safe_archive_stem(archive);
+    if archive_stem == "voxy" {
+        vars.insert(
+            String::from("VOXYGEN_SCREENSHOT"),
+            alloc::format!("{}/screenshots", app_home.trim_end_matches('/')),
+        );
+    }
     if archive_stem == "velosrv" {
         // Veloren uses this override for logs, settings and saves before its
         // executable-relative fallback. Use the actual per-instance home even

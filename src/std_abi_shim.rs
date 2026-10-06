@@ -5979,14 +5979,51 @@ pub unsafe extern "C" fn dladdr(_address: *const c_void, _info: *mut c_void) -> 
     0
 }
 
+fn app_executable_path(root: &str, archive: Option<&str>) -> String {
+    let name = archive
+        .and_then(|archive| archive.rsplit('/').next())
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .unwrap_or("blueprint.bp");
+    alloc::format!("/{}/{}", root.trim_matches('/'), name)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn readlink(
-    _path: *const c_char,
-    _buf: *mut c_char,
-    _bufsiz: usize,
+    path: *const c_char,
+    buf: *mut c_char,
+    bufsiz: usize,
 ) -> isize {
-    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-    -1
+    if path.is_null() || buf.is_null() || bufsiz == 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(path) = abi_cstr_to_string(path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    // Rust's Unix current_exe() uses this process identity link. A Blueprint's
+    // logical executable lives in its app/instance root even when its image is
+    // loaded from app.db or a remote archive; no Linux procfs mount is required.
+    if path != "/proc/self/exe" {
+        TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+        return -1;
+    }
+    let Some(root) = crate::r::io::env::current_app_fs_root() else {
+        TRUEOS_ERRNO.store(TRUEOS_ENOENT, Ordering::Relaxed);
+        return -1;
+    };
+    let archive = crate::r::io::env::var("TRUEOS_APP_ARCHIVE");
+    let executable = app_executable_path(&root, archive.as_deref());
+    // POSIX readlink truncates to capacity and does not append a NUL. The std
+    // caller grows its buffer when the returned length equals that capacity.
+    let count = bufsiz.min(executable.len());
+    let Some(out) = abi_write_bytes(buf.cast::<u8>(), count) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    out.copy_from_slice(&executable.as_bytes()[..count]);
+    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+    count as isize
 }
 
 #[unsafe(no_mangle)]

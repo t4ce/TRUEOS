@@ -96,7 +96,7 @@ pub(super) const HV_GROUPS: [NameGroup; 3] = [
 
 const CMD_AKA_NAMES: [NameEntry; 0] = [];
 
-const CMD_MEDIA_NAMES: [NameEntry; 6] = [
+const CMD_MEDIA_NAMES: [NameEntry; 4] = [
     NameEntry {
         name: "img",
         color: RgbaColor::White,

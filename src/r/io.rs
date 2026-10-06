@@ -460,6 +460,12 @@ pub mod env {
         };
 
         let rel = normalize_app_path(path, allow_empty)?;
+        // The rooted Pictures export is the platform screenshot directory.
+        // Relative "screenshots" stays private to the app. Normalization above
+        // rejects traversal; this grants no access to any other root directory.
+        if path.starts_with('/') && (rel == "screenshots" || rel.starts_with("screenshots/")) {
+            return Some(rel);
+        }
         let root_rel = normalize_app_path(root.as_str(), true)?;
         if rel.is_empty() || rel == root_rel {
             Some(root)
