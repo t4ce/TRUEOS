@@ -32,7 +32,7 @@ impl Terminal {
             closing: false,
             overflow: false,
         };
-        terminal.write(b"\x1b[0m\x1b[2J\x1b[H");
+        terminal.write(b"\x1b[?1049h\x1b[0m");
         let title = terminal.shell.row_for_render(SpecialRows::TitleRow);
         for run in &title.left {
             terminal.write_meta(run);
@@ -98,7 +98,7 @@ impl Terminal {
                 self.shell.set_mode(self.shell.get_mode() % 3 + 1);
             }
             "exit" => {
-                self.write(b"Bye.\r\n");
+                self.write(b"\x1b[0m\x1b[?1049lBye.\r\n");
                 self.closing = true;
             }
             _ => {
@@ -171,7 +171,7 @@ impl Terminal {
                         self.prompt();
                     }
                     4 if self.line.is_empty() => {
-                        self.write(b"\r\nBye.\r\n");
+                        self.write(b"\x1b[0m\x1b[?1049l\r\nBye.\r\n");
                         self.closing = true;
                     }
                     21 => {

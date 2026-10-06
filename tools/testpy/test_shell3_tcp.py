@@ -75,7 +75,7 @@ mod tty {
     }
     #[test] fn connection_banner_contains_only_title_and_slot_prompt() {
         let tty=Terminal::new(Shell3::new_terminal().unwrap());
-        assert_eq!(tty.output, "\\x1b[0m\\x1b[2J\\x1b[HTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m ".as_bytes());
+        assert_eq!(tty.output, "\\x1b[?1049h\\x1b[0mTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m ".as_bytes());
     }
     #[test] fn clear_screen_returns_to_active_slot_prompt() {
         let mut tty=terminal();
@@ -142,9 +142,11 @@ mod tty {
         let mut tty = terminal(); tty.input(b"known\\nhelp\\nexit\\nignored\\n");
         assert_eq!(&*tty.shell.parsed.borrow(), &["known"]);
         assert!(tty.closing);
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1049l"));
         assert!(String::from_utf8_lossy(&tty.output).contains("Enter replays the line"));
         let mut eof = terminal(); eof.input(b"x\\x04"); assert!(!eof.closing);
         eof.input(b"\\x7f\\x04"); assert!(eof.closing);
+        assert!(String::from_utf8_lossy(&eof.output).contains("\\x1b[?1049l"));
     }
 }
 }
