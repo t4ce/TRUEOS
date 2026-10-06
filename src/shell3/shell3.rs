@@ -1224,7 +1224,7 @@ impl Shell3 {
             .collect()
     }
 
-    fn capture_update_snapshot(&self) -> update::Snapshot {
+    pub(super) fn capture_update_snapshot(&self) -> update::Snapshot {
         let revision = tui::revision(self.tui_frontend);
         if let Some(lines) = tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
             return update::Snapshot::terminal((self.columns, self.rows_count), self.layout_generation, lines, revision);
@@ -1249,6 +1249,12 @@ impl Shell3 {
         )
         .with_matrix(&matrix_lines, matrix_generation)
         .with_tui_revision(revision)
+    }
+
+    pub(super) fn terminal_message(&self, message: &str) {
+        for line in message.lines().rev() {
+            MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line.into());
+        }
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {

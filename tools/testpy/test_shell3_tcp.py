@@ -20,14 +20,16 @@ extern crate alloc;
 use alloc::{string::String, vec::Vec};
 use std::cell::{Cell, RefCell};
 '''
-    for name in ('Mode', 'SpecialRows', 'StripSide'):
+    for name in ('Mode', 'SpecialRows', 'StripSide', 'RgbaColor'):
         source += extract.item('src/shell3/shell3.rs', name)
+    source += re.search(r'^impl RgbaColor \{.*?^}', (ROOT/'src/shell3/shell3.rs').read_text(), re.M | re.S).group()
     source += '''
+mod update {pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>; pub struct Snapshot(pub Vec<RenderedLine>);impl Snapshot {pub fn rendered_lines(&self)->Vec<RenderedLine>{self.0.clone()}pub fn size(&self)->(usize,usize){(100,25)}}}
 const OPERATOR: char = '§';
-struct Shell3 { vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
+struct Shell3 { vmx:bool, mode: u8, prompt: String, cursor: usize, messages:RefCell<Vec<String>>, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal() -> Result<Self, ()> {
-        Ok(Self { vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
+        Ok(Self { vmx:false, mode: 1, prompt: String::new(), cursor: 0, messages:RefCell::new(Vec::new()), parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
@@ -40,6 +42,13 @@ impl Shell3 {
     fn set_cursor(&mut self, cursor: usize) { self.cursor = cursor; }
     fn parse_operator(&mut self,text:&str)->bool {self.parsed.borrow_mut().push(text.into());text.starts_with(OPERATOR)}
     fn prompt(&self) -> &str { &self.prompt }
+    fn cursor(&self) -> usize { self.cursor }
+    fn terminal_message(&self, message: &str) {self.messages.borrow_mut().push(message.into());}
+    fn capture_update_snapshot(&self) -> update::Snapshot {
+        update::Snapshot(vec!["TrueOS § 12:34".chars().map(|c|(c,None)).collect(),
+            "§sh1".chars().map(|c|(c,None)).collect(),
+            format!("{}#",self.prompt).chars().map(|c|(c,None)).collect()])
+    }
     fn replay_terminal_line(&mut self, text: &str) {
         if text != "stop" || !self.stop_active_vmx() { self.parsed.borrow_mut().push(text.into()); }
         self.prompt.clear();self.cursor=0;
@@ -61,15 +70,20 @@ mod tty {
         assert!(!String::from_utf8_lossy(&tty.output).contains("not wired"));
         tty.input(b"stop\\r");assert_eq!(&*tty.shell.parsed.borrow(),&["stop"]);
     }
-    #[test] fn connection_banner_contains_only_title_and_slot_prompt() {
+    #[test] fn connection_clears_once_and_positions_shared_rows() {
         let tty=Terminal::new(Shell3::new_terminal().unwrap());
-        assert_eq!(tty.output, "TrueOS § 12:34\\r\\n§sh1 ".as_bytes());
+        let output=String::from_utf8_lossy(&tty.output);
+        assert!(output.starts_with("\\x1b[2J\\x1b[H"));
+        assert!(output.contains("TrueOS § 12:34"));assert!(output.contains("§sh1"));
+        assert!(output.contains("\\x1b[3;1H"));
+        assert_eq!(output.matches("\\x1b[2J").count(),1);
     }
     #[test] fn clear_screen_returns_to_active_slot_prompt() {
         let mut tty=terminal();
         tty.input(b"\\t");tty.output.clear();
         tty.input(b"clear\\r");tty.input(b"\\n");
-        assert_eq!(tty.output, "clear\\r\\n\\x1b[2J\\x1b[H§sh1 ".as_bytes());
+        let output=String::from_utf8_lossy(&tty.output);
+        assert!(output.starts_with("\\x1b[2J\\x1b[H"));assert!(output.contains("TrueOS § 12:34"));
         assert!(tty.shell.parsed.borrow().is_empty());
         assert_eq!(tty.shell.prompt, "");assert!(!tty.closing);
         tty.input(b"known\\n");
@@ -83,23 +97,23 @@ mod tty {
         assert_eq!(tty.shell.prompt, "");assert_eq!(tty.shell.cursor,0);
         let output=String::from_utf8_lossy(&tty.output);
         assert!(!output.contains("unknown name"));assert!(!output.contains("not wired"));
-        assert_eq!(output.matches("§sh1 ").count(),1);
+        assert!(output.contains("\\x1b[3;1H"));
     }
     #[test] fn fragmented_unicode_crlf_and_backspace() {
         let mut tty = terminal();
-        tty.input(b"\\xc2"); assert!(tty.output.is_empty());
+        tty.input(b"\\xc2"); assert_eq!(tty.shell.prompt, "");
         tty.input(b"\\xa7x\\x7f");
         assert_eq!(tty.shell.prompt, "§"); assert_eq!(tty.shell.cursor, 1);
         tty.input(b"\\r"); tty.input(b"\\n");
         assert_eq!(&*tty.shell.parsed.borrow(), &["§"]);
-        assert_eq!(String::from_utf8_lossy(&tty.output).matches("§sh1 ").count(), 1);
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1H"));
     }
     #[test] fn every_packet_split_produces_identical_results() {
         let input = "§é😀\\x7f\\tknown\\r\\nnext\\n".as_bytes();
         let mut whole = terminal(); whole.input(input);
         for split in 0..=input.len() {
             let mut tty = terminal(); tty.input(&input[..split]); tty.input(&input[split..]);
-            assert_eq!(tty.output, whole.output, "split {split}");
+            assert_eq!(tty.presented, whole.presented, "split {split}");
             assert_eq!(*tty.shell.parsed.borrow(), *whole.shell.parsed.borrow());
             assert_eq!(tty.shell.prompt, whole.shell.prompt);
         }
@@ -121,16 +135,16 @@ mod tty {
     #[test] fn overlong_line_is_discarded_and_output_is_bounded() {
         let mut tty = terminal(); tty.input(&vec![b'a'; LINE_LIMIT + 1]); tty.input(b"\\n");
         assert!(tty.shell.parsed.borrow().is_empty());
-        assert!(String::from_utf8_lossy(&tty.output).contains("line discarded"));
+        assert!(tty.shell.messages.borrow().iter().any(|text|text.contains("line discarded")));
         tty.input(b"known\\n"); assert_eq!(&*tty.shell.parsed.borrow(), &["known"]);
-        tty.input(&vec![b'x'; OUTPUT_LIMIT * 2]);
+        for _ in 0..OUTPUT_LIMIT {tty.input(b"x");}
         assert!(tty.overflow && tty.closing); assert!(tty.output.len() <= OUTPUT_LIMIT);
     }
     #[test] fn help_exit_eof_and_recognition() {
         let mut tty = terminal(); tty.input(b"known\\nhelp\\nexit\\nignored\\n");
         assert_eq!(&*tty.shell.parsed.borrow(), &["known"]);
         assert!(tty.closing);
-        assert!(String::from_utf8_lossy(&tty.output).contains("Enter replays the line"));
+        assert!(tty.shell.messages.borrow().iter().any(|text|text.contains("Enter replays the line")));
         let mut eof = terminal(); eof.input(b"x\\x04"); assert!(!eof.closing);
         eof.input(b"\\x7f\\x04"); assert!(eof.closing);
     }
@@ -175,7 +189,7 @@ use super::tty::Terminal;
         connection.in_flight = 0; connection.deadline = None;
         assert!(connection.flush(&queue, Instant(3)));
         assert_eq!(queue.commands.borrow().len(), 2);
-        assert!(matches!(&queue.commands.borrow()[1], NetCommand::SendTcp { handle: NetHandle(1), data } if data == b"x"));
+        assert!(matches!(&queue.commands.borrow()[1], NetCommand::SendTcp { handle: NetHandle(1), data } if String::from_utf8_lossy(data).contains("x#")));
     }
     #[test] fn graceful_finish_waits_for_output_and_has_teardown_deadline() {
         let queue = queue(); let mut connection = Connection::new(NetHandle(2), Shell3::new_terminal().unwrap());

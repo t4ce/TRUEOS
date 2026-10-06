@@ -32,11 +32,13 @@ mod r {pub mod readiness {pub fn mask()->u32 {0}} pub mod keyboard {
     pub const KEYBOARD_OUTPUT_FLAG_PRESS:u32=1;
     #[derive(Default)] pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32,pub flags:u32,pub utf8:[u8;4],pub utf8_len:u8 }
 } }
+#[allow(non_upper_case_globals)] const SpecialSeperator:char='│';
 const PROMPT_CURSOR:char='#';
 const OPERATOR:char='§';
 '''
     for name in ('Mode', 'RgbaColor', 'SpecialRows', 'StripSide', 'PromptState', 'vmx_hash_text', 'vmx_title_meta', 'title_left_text', 'mode_title_meta', 'MatrixSlotsState', 'matrix_slots', 'matrix_slots_meta', 'matrix_slots_text', 'current_matrix_slots_text'):
         source += extract.item('src/shell3/shell3.rs', name)
+    source += re.search(r'^impl RgbaColor \{.*?^}', shell, re.M | re.S).group()
     source += re.search(r'^impl MatrixSlotsState \{.*?^}', shell, re.M | re.S).group()
     source += re.search(r'^impl MatrixSlots \{.*?^}', shell, re.M | re.S).group()
     source += """
@@ -53,6 +55,8 @@ mod tui {
 #[derive(Clone,Copy)] pub struct Frontend {pub id:u64,pub cols:usize,pub rows:usize}
 pub fn select(_:Frontend,_:Option<&str>)->bool {true}
 pub fn park(_:u64)->bool {true}
+pub fn revision(_:u64)->u64 {0}
+pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<crate::update::RenderedLine>> {None}
 pub fn keyboard(_:u64,_:Option<&str>,_:&crate::r::keyboard::TrueosKeyboardOutputEvent)->bool {false}
 pub static REQUESTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
 pub fn request(_:Frontend,name:&str)->Result<(),&'static str>{REQUESTS.lock().unwrap().push(name.into());Ok(())}
@@ -89,11 +93,11 @@ impl Rows {fn row(&self,row:SpecialRows)->&Row {match row {SpecialRows::TitleRow
 #[derive(Clone)] struct RowStrips {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
 impl RowStrips {fn new(left:&str,right:&str)->Self {Self {left:vec![MetaFmtStr::new(left)],right:vec![MetaFmtStr::new(right)]}}}
 
-struct Shell3 {status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
+struct Shell3 {layout_generation:usize,status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
 impl Shell3 {
-fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
+fn new(columns:usize)->Self {Self {layout_generation:0,status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
+    for name in ('launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line','capture_update_snapshot','terminal_message','cursor'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += '}\n'
     source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//') + '\n'
@@ -141,12 +145,82 @@ fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:2
         MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
         let mut tty=Terminal::new(Shell3::new(100));
         tty.input("onXonline§new\n".as_bytes());
-        assert_eq!(tty.line,"onX");assert_eq!(tty.shell.prompt(),"onX");
+        assert_eq!(tty.line,"");assert_eq!(tty.shell.prompt(),"");
         assert!(MatrixSlots::echo_lines(None).is_empty());
         assert!(!MatrixSlots::slot_ids().contains(&"new".into()));
-        tty.input(b"\x15on\n");assert_eq!(tty.line,"on");
-        tty.input(b"linepause\n");assert_eq!(MatrixSlots::echo_lines(None),vec!["online"]);
+        tty.input(b"on\n");assert_eq!(tty.line,"");
+        tty.input(b"linepause\n");assert!(MatrixSlots::echo_lines(None).is_empty());
+        tty.input(b"onlinepause\n");assert_eq!(MatrixSlots::echo_lines(None),vec!["online"]);
         assert_eq!(tty.line,"");matrix_slots().lock().echoes.clear();
+    }
+    #[test] fn every_enter_starts_fresh_for_hv_rejections_and_admin_matches() {
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
+        let mut tty=Terminal::new(Shell3::new(100));tty.output.clear();
+        tty.input(b"smp\n\npp\nasd\n");
+        assert_eq!(tty.line,"");assert_eq!(tty.shell.prompt(),"");
+        assert!(MatrixSlots::echo_lines(None).is_empty());
+        assert!(!String::from_utf8_lossy(&tty.output).contains("§ sm"));
+        tty.input(b"tab\ntab\nsmpjunk\n");
+        assert_eq!(tty.shell.mode,Mode::ADM);
+        assert_eq!(MatrixSlots::echo_lines(None),vec!["smp"]);
+        assert_eq!(tty.line,"");assert_eq!(tty.shell.prompt(),"");
+        matrix_slots().lock().echoes.clear();
+    }
+    // Minimal terminal decoder: verify the screen produced by production ANSI
+    // output, independently of the renderer's cached rows.
+    fn apply_screen(screen:&mut Vec<Vec<char>>, output:&[u8]) {
+        let text=String::from_utf8_lossy(output);let mut chars=text.chars().peekable();
+        let (mut row,mut col)=(0,0);
+        while let Some(ch)=chars.next() {
+            if ch=='\x1b' {
+                assert_eq!(chars.next(),Some('['));let mut args=String::new();
+                let command=loop {let c=chars.next().unwrap();if c.is_ascii_alphabetic(){break c;}args.push(c);};
+                let params:Vec<usize>=args.split(';').map(|v|v.parse().unwrap_or(0)).collect();
+                match command {
+                    'H'=>{row=params[0].max(1)-1;col=params.get(1).copied().unwrap_or(1).max(1)-1;}
+                    'J'=>{assert_eq!(params[0],2);for line in screen.iter_mut(){line.fill(' ');}}
+                    'K'=>{assert_eq!(params[0],2);screen[row].fill(' ');}
+                    'm'=>{},_=>panic!("unexpected ANSI command {command}"),
+                }
+            } else if ch=='\r' {col=0;}
+            else if ch=='\n' {row+=1;}
+            else {if row<screen.len() && col<screen[row].len(){screen[row][col]=ch;}col+=1;}
+        }
+    }
+    #[test] fn ansi_initial_view_matches_ui4_composition_at_100_columns() {
+        MatrixSlots::set(&["id","123"]);matrix_slots().lock().echoes.clear();
+        let mut shell=Shell3::new(100);shell.aka_names=vec!["hello".into()];shell.set_mode(2);shell.set_prompt("");
+        let mut tty=Terminal::new(shell);let mut screen=vec![vec![' ';100];25];
+        apply_screen(&mut screen,&tty.output);
+        for (row,line) in tty.shell.capture_update_snapshot().rendered_lines().iter().enumerate() {
+            assert_eq!(screen[row],line.iter().map(|cell|cell.0).collect::<Vec<_>>());
+        }
+        let title:String=screen[0].iter().collect();let status:String=screen[1].iter().collect();
+        assert!(title.starts_with("TrueOS § 12:34"));assert!(title.ends_with("[AppDB]"));
+        assert!(status.ends_with("[Aka hello]"));assert_eq!(screen[2][0],'#');
+        assert_eq!(String::from_utf8_lossy(&tty.output).matches("\x1b[2J").count(),1);
+        tty.output.clear();tty.reconcile_matrix_selection();assert!(tty.output.is_empty());
+    }
+    #[test] fn ansi_updates_mode_transcript_and_erases_deleted_rows_without_clear() {
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
+        let mut shell=Shell3::new(100);shell.set_prompt("");
+        let mut tty=Terminal::new(shell);let mut screen=vec![vec![' ';100];25];
+        apply_screen(&mut screen,&tty.output);tty.output.clear();
+        // Simulate nc's local echo of a rejected line before the server replies.
+        screen[2][0]='z';screen[2][1]='z';
+        tty.input(b"zz\n");apply_screen(&mut screen,&tty.output);tty.output.clear();
+        assert_eq!(screen[2][0],'#');assert_eq!(screen[2][1],' ');
+        tty.input(b"onlinepause\n");apply_screen(&mut screen,&tty.output);tty.output.clear();
+        assert!(screen[3].iter().collect::<String>().starts_with("online"));
+        tty.shell.terminal_message("external update");tty.reconcile_matrix_selection();
+        apply_screen(&mut screen,&tty.output);tty.output.clear();
+        assert!(screen[3].iter().collect::<String>().starts_with("external update"));
+        tty.input("§§\ntab\ntab\n".as_bytes());apply_screen(&mut screen,&tty.output);
+        assert!(screen[3].iter().all(|ch|*ch==' '));
+        assert!(screen[0].iter().collect::<String>().ends_with("bios vgpu vcpy"));
+        assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[38;2;255;105;180m"));
+        assert!(!String::from_utf8_lossy(&tty.output).contains("\x1b[2J"));
+        matrix_slots().lock().echoes.clear();
     }
     #[test] fn dynamic_names_share_prefix_registry_and_shortest_match_wins() {
         MatrixSlots::set(&[] as &[&str]);service::LAUNCHES.lock().unwrap().clear();
@@ -161,7 +235,7 @@ fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:2
 }
 '''
     source += f'#[path="{ROOT}/src/shell3/status.rs"] mod status;\n'
-    source += 'mod update {use alloc::vec::Vec;\n' + extract.item('src/shell3/update.rs', 'fit_strips') + '}\n'
+    source += f'#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')
     source += re.search(r'^impl ShellOwnership \{.*?^}', service, re.M | re.S).group()
     source += extract.item('src/shell3/service.rs', 'advance_round_robin')

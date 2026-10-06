@@ -1,6 +1,6 @@
-//! Small UTF-8 line terminal. Socket framing and graphics stay outside it.
-use super::{Shell3, SpecialRows, StripSide};
-use alloc::{string::String, vec::Vec};
+//! UTF-8 line input and ANSI presentation of Shell3's shared visual snapshot.
+use super::{Shell3, update::RenderedLine};
+use alloc::{format, string::String, vec::Vec};
 
 const LINE_LIMIT: usize = 1024;
 pub(super) const OUTPUT_LIMIT: usize = 16 * 1024;
@@ -13,6 +13,8 @@ pub(super) struct Terminal {
     utf8_len: usize,
     escape: u8,
     after_cr: bool,
+    presented: Vec<RenderedLine>,
+    presented_cursor: Option<usize>,
     pub output: Vec<u8>,
     pub closing: bool,
     pub overflow: bool,
@@ -28,16 +30,14 @@ impl Terminal {
             utf8_len: 0,
             escape: 0,
             after_cr: false,
+            presented: Vec::new(),
+            presented_cursor: None,
             output: Vec::new(),
             closing: false,
             overflow: false,
         };
-        let title = terminal
-            .shell
-            .get_strip(SpecialRows::TitleRow, StripSide::Left);
-        terminal.write(title.as_bytes());
-        terminal.write(b"\r\n");
-        terminal.prompt();
+        terminal.write(b"\x1b[2J\x1b[H");
+        terminal.present();
         terminal
     }
 
@@ -50,27 +50,63 @@ impl Terminal {
         }
     }
 
-    fn prompt(&mut self) {
-        self.write("§".as_bytes());
-        if let Some(name) = self.shell.active_matrix_slot_name() {
-            self.write(name.as_bytes());
+    /// Consume the same composed cells as UI4, at Shell3's fixed default size.
+    fn present(&mut self) {
+        if self.closing { return; }
+        let snapshot = self.shell.capture_update_snapshot();
+        let lines = snapshot.rendered_lines();
+        let cursor = self.shell.cursor().min(snapshot.size().0.saturating_sub(1));
+        let mut changed = self.presented_cursor != Some(cursor);
+        for row in 0..lines.len().max(self.presented.len()) {
+            let line = lines.get(row).map(Vec::as_slice).unwrap_or(&[]);
+            // nc's local echo may have touched the prompt even when a whole
+            // submitted line leaves the model unchanged. Repaint it on input.
+            if self.presented.get(row).map(Vec::as_slice) == Some(line)
+                && !(row == 2 && self.presented_cursor.is_none()) { continue; }
+            changed = true;
+            self.write(format!("\x1b[{};1H\x1b[0m\x1b[2K", row + 1).as_bytes());
+            let end = line.iter().rposition(|cell| *cell != (' ', None)).map_or(0, |i| i + 1);
+            let mut style = None;
+            for &(ch, color) in &line[..end] {
+                if color != style {
+                    self.write(b"\x1b[0m");
+                    if let Some(color) = color {
+                        let [r, g, b, _] = color.rgba();
+                        self.write(format!("\x1b[38;2;{r};{g};{b}m").as_bytes());
+                        if let Some([r, g, b, _]) = color.background() {
+                            self.write(format!("\x1b[48;2;{r};{g};{b}m").as_bytes());
+                        }
+                        if color.underline() { self.write(b"\x1b[4m"); }
+                    }
+                    style = color;
+                }
+                let mut utf8 = [0; 4];
+                self.write(ch.encode_utf8(&mut utf8).as_bytes());
+            }
         }
-        self.write(b" ");
+        if changed {
+            self.write(format!("\x1b[0m\x1b[3;{}H", cursor + 1).as_bytes());
+        }
+        self.presented = lines;
+        self.presented_cursor = Some(cursor);
     }
 
     fn submit(&mut self) {
-        self.write(b"\r\n");
         let line = core::mem::take(&mut self.line);
         let command = line.trim();
         if core::mem::take(&mut self.line_overflow) {
-            self.write(b"Input exceeded 1024 bytes; line discarded.\r\n");
-            self.prompt();
+            self.shell.terminal_message("Input exceeded 1024 bytes; line discarded.");
+            self.shell.set_prompt("");
             return;
         }
         match command {
-            "help" => self.write(b"UTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"),
+            "help" => self.shell.terminal_message("UTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"),
             // The remote terminal interprets these bytes; TCP only carries them.
-            "clear" => self.write(b"\x1b[2J\x1b[H"),
+            "clear" => {
+                self.write(b"\x1b[2J\x1b[H");
+                self.presented.clear();
+                self.presented_cursor = None;
+            }
             "tab" => {
                 self.shell.set_mode(self.shell.get_mode() % 3 + 1);
             }
@@ -80,24 +116,20 @@ impl Terminal {
             }
             _ => {
                 self.shell.replay_terminal_line(&line);
-                self.line = self.shell.prompt().into();
             }
         }
-        if !self.closing {
-            self.prompt();
-            let line = self.line.clone();
-            self.write(line.as_bytes());
-        }
+        // Enter consumes the entire submission, including unmatched prefixes.
+        // Never seed the next network line with the replay's temporary prompt.
+        self.shell.set_prompt("");
     }
 
     fn erase(&mut self) {
-        if self.line.pop().is_some() {
-            self.write(b"\x08 \x08");
-        }
+        self.line.pop();
     }
 
     pub(super) fn reconcile_matrix_selection(&mut self) {
         self.shell.reconcile_matrix_selection();
+        self.present();
     }
 
     pub fn input(&mut self, bytes: &[u8]) {
@@ -137,16 +169,10 @@ impl Terminal {
                     8 | 127 => self.erase(),
                     b'\t' => {
                         self.shell.set_mode(self.shell.get_mode() % 3 + 1);
-                        self.write(b"\r\n");
-                        self.prompt();
-                        let line = self.line.clone();
-                        self.write(line.as_bytes());
                     }
                     3 => {
                         self.line.clear();
                         self.line_overflow = false;
-                        self.write(b"^C\r\n");
-                        self.prompt();
                     }
                     4 if self.line.is_empty() => {
                         self.write(b"\r\nBye.\r\n");
@@ -178,8 +204,6 @@ impl Terminal {
                     }
                     if !ch.is_control() && !self.line_overflow {
                         self.line.push(ch);
-                        let encoded = self.utf8;
-                        self.write(&encoded[..self.utf8_len]);
                     } else {
                         self.write(b"\x07");
                     }
@@ -194,5 +218,7 @@ impl Terminal {
         }
         self.shell.set_prompt(&self.line);
         self.shell.set_cursor(self.line.chars().count());
+        if !bytes.is_empty() { self.presented_cursor = None; }
+        self.present();
     }
 }
