@@ -30,6 +30,7 @@ impl Shell3 {
         Ok(Self { vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
+    fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
     fn stop_active_vmx(&mut self)->bool {core::mem::take(&mut self.vmx)}
     fn get_strip(&self, _: SpecialRows, _: StripSide) -> String { "TrueOS § 12:34".into() }
     fn mode(&self) -> Mode { match self.mode { 1 => Mode::HV, 2 => Mode::CMD, _ => Mode::ADM } }
@@ -56,11 +57,15 @@ mod tty {
         assert!(!String::from_utf8_lossy(&tty.output).contains("not wired"));
         tty.input(b"stop\\r");assert_eq!(&*tty.shell.parsed.borrow(),&["stop"]);
     }
-    #[test] fn clear_screen_returns_to_current_mode_prompt() {
+    #[test] fn connection_banner_contains_only_title_and_slot_prompt() {
+        let tty=Terminal::new(Shell3::new_terminal().unwrap());
+        assert_eq!(tty.output, "TrueOS § 12:34\\r\\n§sh1 ".as_bytes());
+    }
+    #[test] fn clear_screen_returns_to_active_slot_prompt() {
         let mut tty=terminal();
         tty.input(b"\\t");tty.output.clear();
         tty.input(b"clear\\r");tty.input(b"\\n");
-        assert_eq!(tty.output, "clear\\r\\n\\x1b[2J\\x1b[HCMD § ".as_bytes());
+        assert_eq!(tty.output, "clear\\r\\n\\x1b[2J\\x1b[H§sh1 ".as_bytes());
         assert!(tty.shell.parsed.borrow().is_empty());
         assert_eq!(tty.shell.prompt, "");assert!(!tty.closing);
         tty.input(b"known\\n");
@@ -74,7 +79,7 @@ mod tty {
         assert_eq!(tty.shell.prompt, "");assert_eq!(tty.shell.cursor,0);
         let output=String::from_utf8_lossy(&tty.output);
         assert!(!output.contains("unknown name"));assert!(!output.contains("not wired"));
-        assert_eq!(output.matches("HV § ").count(),1);
+        assert_eq!(output.matches("§sh1 ").count(),1);
     }
     #[test] fn fragmented_unicode_crlf_and_backspace() {
         let mut tty = terminal();
@@ -83,7 +88,7 @@ mod tty {
         assert_eq!(tty.shell.prompt, "§"); assert_eq!(tty.shell.cursor, 1);
         tty.input(b"\\r"); tty.input(b"\\n");
         assert_eq!(&*tty.shell.parsed.borrow(), &["§"]);
-        assert_eq!(String::from_utf8_lossy(&tty.output).matches("HV § ").count(), 1);
+        assert_eq!(String::from_utf8_lossy(&tty.output).matches("§sh1 ").count(), 1);
     }
     #[test] fn every_packet_split_produces_identical_results() {
         let input = "§é😀\\x7f\\tknown\\r\\nnext\\n".as_bytes();

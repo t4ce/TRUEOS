@@ -23,8 +23,8 @@ mod spin {
 thread_local! {static CURRENT_SLOT:std::cell::Cell<u32>=const {std::cell::Cell::new(0)};}
 static DROPPED_2:AtomicU32=AtomicU32::new(0);
 static DROPPED_7:AtomicU32=AtomicU32::new(0);
-struct Shell3 {slot:u32}
-impl Shell3 {fn new_terminal_reserved(slot:u32)->Self {assert_eq!(CURRENT_SLOT.get(),slot);Self {slot}}}
+struct Shell3 {slot:u32,peer_port:Option<u16>}
+impl Shell3 {fn new_terminal_reserved(slot:u32,peer_port:Option<u16>)->Self {assert_eq!(CURRENT_SLOT.get(),slot);Self {slot,peer_port}}}
 impl Drop for Shell3 {fn drop(&mut self) {assert_eq!(CURRENT_SLOT.get(),self.slot);if self.slot==2 {DROPPED_2.fetch_add(1,Ordering::Relaxed);} else {DROPPED_7.fetch_add(1,Ordering::Relaxed);}}}
 mod tty {
 use super::*;
@@ -50,14 +50,16 @@ impl core::ops::Add<Duration> for Instant {type Output=Self;fn add(self,d:Durati
 #[test] fn sessions_are_created_executed_and_dropped_only_on_their_ap() {
     let commands=NetQueue::new_leaked("test-cmd",8); COMMANDS.call_once(||commands);
     let mut a=WorkerTerminals::new(2); let mut b=WorkerTerminals::new(7);
-    a.events.push(WorkerEvent::Accepted(NetHandle(1))).ok().unwrap();
-    a.events.push(WorkerEvent::Accepted(NetHandle(2))).ok().unwrap();
-    b.events.push(WorkerEvent::Accepted(NetHandle(3))).ok().unwrap();
+    a.events.push(WorkerEvent::Accepted(NetHandle(1),Some(49152))).ok().unwrap();
+    a.events.push(WorkerEvent::Accepted(NetHandle(2),Some(65535))).ok().unwrap();
+    b.events.push(WorkerEvent::Accepted(NetHandle(3),None)).ok().unwrap();
     a.events.push(WorkerEvent::Socket(NetEvent::TcpData {handle:NetHandle(2),data:b"second".to_vec()})).ok().unwrap();
     b.events.push(WorkerEvent::Socket(NetEvent::TcpData {handle:NetHandle(3),data:b"other AP".to_vec()})).ok().unwrap();
     assert!(a.has_events()); assert!(b.has_events());
     CURRENT_SLOT.set(2); a.poll();
     assert_eq!(a.connections.len(),2); assert!(b.connections.is_empty());
+    assert_eq!(a.connections[0].terminal.as_ref().unwrap().shell.peer_port,Some(49152));
+    assert_eq!(a.connections[1].terminal.as_ref().unwrap().shell.peer_port,Some(65535));
     assert!(a.connections[0].terminal.as_ref().unwrap().input_bytes.is_empty());
     assert_eq!(a.connections[1].terminal.as_ref().unwrap().input_bytes,b"second");
     CURRENT_SLOT.set(7); b.poll();

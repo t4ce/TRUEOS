@@ -178,6 +178,20 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
 '''
     source += '''
 fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(shell,1,0,ch));}}
+#[test] fn terminal_slots_skip_existing_names_and_allocate_atomically() {
+    MatrixSlots::set(&["sh1", "sh3", "custom"]);
+    let (name, lifetime)=MatrixSlots::fresh_terminal_slot(None);
+    assert_eq!(name,"sh2");
+    assert_eq!(MatrixSlots::fresh_terminal_slot(None).0,"sh4");
+    assert_eq!(MatrixSlots::fresh_terminal_slot(Some(49152)).0,"49152");
+    assert_eq!(MatrixSlots::fresh_terminal_slot(Some(49152)).0,"sh5");
+    assert_eq!(MatrixSlots::fresh_terminal_slot(Some(0)).0,"sh6");
+    let threads:Vec<_>=(0..8).map(|_|std::thread::spawn(|| MatrixSlots::fresh_terminal_slot(Some(65535)))).collect();
+    let mut names:Vec<_>=threads.into_iter().map(|t|t.join().unwrap().0).collect();
+    assert!(names.iter().any(|name|name=="65535"));
+    names.sort();names.dedup();assert_eq!(names.len(),8);
+    assert_eq!(matrix_slots().lock().lifetimes.iter().find(|(id,_)|id==&name).unwrap().1,lifetime);
+}
 #[test] fn exact_mode_names_echo_without_enter_and_clear_prompt() {
     MatrixSlots::set(&["id","123"]); matrix_slots().lock().echoes.clear();
     let mut a=Shell3::new(80); let mut b=Shell3::new(80);

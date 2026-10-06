@@ -309,12 +309,12 @@ def main():
             result["shell2"]["banner"] = "TRUE OS"
             result["shell2"]["connected_seconds"] = round(time.monotonic() - started, 3)
             # Record the separate Shell3 route when ready, without depending on it
-            # for execution. Its checked-in banner explicitly says plaintext.
+            # for execution. Its greeting identifies the Shell3 title and assigned slot.
             try:
                 with socket.create_connection(("127.0.0.1", ports[1]), .3) as shell3:
                     shell3.settimeout(.1)
                     drain(shell3, shell3_log, .4)
-                    if b"Shell3 plaintext terminal" in shell3_log:
+                    if b"TrueOS " in shell3_log and "§sh".encode() in shell3_log:
                         result["shell3"]["observed"] = True
                         shell3.sendall(b"help\r")
                         drain(shell3, shell3_log, .3)

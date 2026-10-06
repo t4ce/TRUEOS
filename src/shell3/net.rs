@@ -74,7 +74,7 @@ impl Connection {
 }
 
 enum WorkerEvent {
-    Accepted(NetHandle),
+    Accepted(NetHandle, Option<u16>),
     Socket(NetEvent),
 }
 
@@ -121,8 +121,8 @@ impl WorkerTerminals {
         };
         for event in self.events.drain(64) {
             match event {
-                WorkerEvent::Accepted(handle) => {
-                    let shell = super::Shell3::new_terminal_reserved(self.slot);
+                WorkerEvent::Accepted(handle, peer_port) => {
+                    let shell = super::Shell3::new_terminal_reserved(self.slot, peer_port);
                     self.connections.push(Connection::new(handle, shell));
                 }
                 WorkerEvent::Socket(NetEvent::TcpData { handle, data }) => {
@@ -212,10 +212,16 @@ pub async fn terminal_task() {
                     if listener == Some(handle) =>
                 {
                     listener = None;
+                    let peer_port = match &event {
+                        NetEvent::TcpEstablished { peer, peer6, .. } => peer
+                            .as_ref().map(|endpoint| endpoint.port)
+                            .or_else(|| peer6.as_ref().map(|endpoint| endpoint.port)),
+                        _ => None,
+                    };
                     match super::service::reserve_terminal_slot() {
                         Ok(slot) => {
                             if let Some(queue) = queue_for(slot) {
-                                if queue.push(WorkerEvent::Accepted(handle)).is_ok() {
+                                if queue.push(WorkerEvent::Accepted(handle, peer_port)).is_ok() {
                                     routes.push((handle, slot));
                                     // Established is informational; early data must follow
                                     // Accepted in FIFO order on the same permanent owner.

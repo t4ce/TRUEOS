@@ -1,5 +1,5 @@
 //! Small UTF-8 line terminal. Socket framing and graphics stay outside it.
-use super::{Mode, OPERATOR, Shell3, SpecialRows, StripSide};
+use super::{OPERATOR, Shell3, SpecialRows, StripSide};
 use alloc::{string::String, vec::Vec};
 
 const LINE_LIMIT: usize = 1024;
@@ -32,12 +32,11 @@ impl Terminal {
             closing: false,
             overflow: false,
         };
-        terminal.write(b"Shell3 plaintext terminal (SSH transport not installed)\r\n");
         let title = terminal
             .shell
             .get_strip(SpecialRows::TitleRow, StripSide::Left);
         terminal.write(title.as_bytes());
-        terminal.write(b"\r\nType help for terminal controls.\r\n");
+        terminal.write(b"\r\n");
         terminal.prompt();
         terminal
     }
@@ -52,11 +51,11 @@ impl Terminal {
     }
 
     fn prompt(&mut self) {
-        self.write(match self.shell.mode() {
-            Mode::HV => "HV § ".as_bytes(),
-            Mode::CMD => "CMD § ".as_bytes(),
-            Mode::ADM => "ADM § ".as_bytes(),
-        });
+        self.write("§".as_bytes());
+        if let Some(name) = self.shell.active_matrix_slot_name() {
+            self.write(name.as_bytes());
+        }
+        self.write(b" ");
     }
 
     fn submit(&mut self) {

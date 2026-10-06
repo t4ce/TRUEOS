@@ -171,7 +171,7 @@ def terminal(guest):
         while True:
             connection, _ = listener.accept()
             with connection:
-                connection.sendall(b'TRUE OS\\r\\n' if guest == 4245 else b'Shell3 plaintext terminal (SSH transport not installed)\\r\\n')
+                connection.sendall(b'TRUE OS\\r\\n' if guest == 4245 else "TrueOS § 12:34\\r\\n§sh1 ".encode())
                 pending = bytearray()
                 while True:
                     data = connection.recv(4096)

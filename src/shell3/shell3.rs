@@ -261,6 +261,31 @@ impl MatrixSlots {
         lifetime
     }
 
+    /// Allocate under one lock so simultaneous connections cannot share a name.
+    fn fresh_terminal_slot(peer_port: Option<u16>) -> (String, u64) {
+        let mut slots = matrix_slots().lock();
+        let preferred = peer_port.filter(|port| *port != 0).map(|port| port.to_string());
+        let mut number = 1u64;
+        let name = loop {
+            if let Some(candidate) = preferred.as_ref().filter(|name| !slots.ids.contains(name)) {
+                break candidate.clone();
+            }
+            let candidate = format!("sh{number}");
+            if !slots.ids.contains(&candidate) {
+                break candidate;
+            }
+            number += 1;
+        };
+        let lifetime = slots.next_lifetime;
+        slots.next_lifetime = slots.next_lifetime.wrapping_add(1);
+        slots.ids.push(name.clone());
+        slots.lifetimes.push((name.clone(), lifetime));
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
+        (name, lifetime)
+    }
+
     /// None resets the implicit default slot; named slots disappear entirely.
     fn drop_slot(name: Option<&str>) -> bool {
         let mut slots = matrix_slots().lock();
@@ -503,7 +528,7 @@ impl Drop for Shell3 {
 
 impl Shell3 {
     /// Construct a previously admitted terminal on its permanent AP owner.
-    pub(super) fn new_terminal_reserved(slot: u32) -> Self {
+    pub(super) fn new_terminal_reserved(slot: u32, peer_port: Option<u16>) -> Self {
         debug_assert_eq!(crate::percpu::current_slot() as u32, slot);
         let mut shell = Self::new_inner(
             &TitleTime::current(),
@@ -515,6 +540,11 @@ impl Shell3 {
             slot,
         );
         shell.set_show_backend(ShowBackend::Network);
+        let (name, lifetime) = MatrixSlots::fresh_terminal_slot(peer_port);
+        shell.active_matrix_slot = Some(name);
+        shell.active_matrix_lifetime = Some(lifetime);
+        shell.matrix_selection_dirty = true;
+        tui::select(shell.tui_frontend(), shell.active_matrix_slot.as_deref());
         shell
     }
 
