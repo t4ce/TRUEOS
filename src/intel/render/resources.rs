@@ -4386,6 +4386,18 @@ pub(crate) fn create_resident_voxy_headless_streaming_mesh(
         return Err("voxy-headless-target");
     }
     validate_voxy_headless_stream_shape(capacity, vertices, indices, camera)?;
+    let mesh = allocate_resident_voxy_headless_streaming_mesh(capacity)?;
+    if let Err(error) = update_resident_voxy_headless_streaming_mesh(&mesh, vertices, indices, camera) {
+        let _ = release_resident_triangle_mesh(&mesh);
+        return Err(error);
+    }
+    Ok(mesh)
+}
+
+fn allocate_resident_voxy_headless_streaming_mesh(
+    capacity: usize,
+) -> Result<ResidentTriangleMesh, &'static str> {
+    voxy_headless_stream_layout(capacity).ok_or("voxy-headless-stream-layout")?;
     let mut upload = Vec::new();
     upload.try_reserve_exact(capacity + 3).map_err(|_| "voxy-headless-stream-alloc")?;
     upload.resize(capacity + 3, [0.0f32; 8]);
@@ -4401,21 +4413,13 @@ pub(crate) fn create_resident_voxy_headless_streaming_mesh(
     // end of the capacity, independent of this frame's authored vertex count.
     mesh.vertex_count = capacity as u32;
     mesh.vertex_bytes = (capacity * VOXY_HEADLESS_VERTEX_STRIDE) as u32;
-    if let Err(error) = update_resident_voxy_headless_streaming_mesh(&mesh, vertices, indices, camera) {
-        let _ = release_resident_triangle_mesh(&mesh);
-        return Err(error);
-    }
     Ok(mesh)
 }
 
-/// Update a previously retired producer allocation in place. The caller must
-/// hold an exclusive broker operation lease through the following submission;
-/// this function neither admits GPU work nor establishes GPU retirement.
-pub(crate) fn update_resident_voxy_headless_streaming_mesh(
-    mesh: &ResidentTriangleMesh, vertices: &[[f32; 16]], indices: &[u32], camera: &[f32; 20],
-) -> Result<(), &'static str> {
+fn validate_voxy_headless_stream_mesh_layout(
+    mesh: &ResidentTriangleMesh,
+) -> Result<(usize, usize, usize, usize), &'static str> {
     let capacity = mesh.vertex_count as usize;
-    validate_voxy_headless_stream_shape(capacity, vertices, indices, camera)?;
     let (camera_offset, index_offset, indirect_offset, storage_bytes) =
         voxy_headless_stream_layout(capacity).ok_or("voxy-headless-stream-layout")?;
     if mesh.vertex_format != TriangleVertexFormat::VoxyHeadless
@@ -4429,9 +4433,22 @@ pub(crate) fn update_resident_voxy_headless_streaming_mesh(
         || mesh.gpu_base.checked_add(index_offset as u64) != Some(mesh.index_gpu_addr)
         || mesh.gpu_base.checked_add(indirect_offset as u64) != Some(mesh.indirect_args_gpu_addr)
         || mesh.indirect_args_offset != indirect_offset
+        || mesh.gpu_base.checked_add(storage_bytes as u64).is_none()
+        || (mesh.storage_virt as usize).checked_add(storage_bytes).is_none()
     {
         return Err("voxy-headless-stream-layout");
     }
+    Ok((camera_offset, index_offset, indirect_offset, storage_bytes))
+}
+
+/// Update a previously retired producer allocation in place. The caller must
+/// hold an exclusive broker operation lease through the following submission;
+/// this function neither admits GPU work nor establishes GPU retirement.
+pub(crate) fn update_resident_voxy_headless_streaming_mesh(
+    mesh: &ResidentTriangleMesh, vertices: &[[f32; 16]], indices: &[u32], camera: &[f32; 20],
+) -> Result<(), &'static str> {
+    validate_voxy_headless_stream_shape(mesh.vertex_count as usize, vertices, indices, camera)?;
+    let (camera_offset, index_offset, _, _) = validate_voxy_headless_stream_mesh_layout(mesh)?;
     let mut padded = [0.0f32; 24];
     padded[..20].copy_from_slice(camera);
     unsafe {
@@ -4456,6 +4473,135 @@ pub(crate) fn update_resident_voxy_headless_streaming_mesh(
     }
     // Publish the live count only after the addressed payload is coherent.
     update_resident_triangle_draw_indexed_indirect(mesh, indices.len() as u32, 1, 0, 0, 0)
+}
+
+fn validate_voxy_headless_raw_stream_shape(
+    capacity: usize,
+    vertex_updates: &[(usize, Vec<u8>)],
+    index_updates: &[(usize, Vec<u8>)],
+    camera: &[f32; 20],
+    live_index_count: u32,
+) -> Result<(), &'static str> {
+    let (vertex_bytes, _, _, _) =
+        voxy_headless_stream_layout(capacity).ok_or("voxy-headless-stream-layout")?;
+    let index_bytes = capacity * core::mem::size_of::<u32>();
+    if live_index_count == 0 || live_index_count % 3 != 0
+        || live_index_count as usize > capacity
+        || camera.iter().any(|value| !value.is_finite())
+        || camera[16] <= 0.0 || camera[17] <= 0.0 || camera[18] <= 0.0
+        || camera[19] <= camera[18]
+    {
+        return Err("voxy-headless-stream-shape");
+    }
+    let mut vertex_end = 0;
+    for (offset, bytes) in vertex_updates {
+        if offset % VOXY_HEADLESS_VERTEX_STRIDE != 0
+            || bytes.len() % VOXY_HEADLESS_VERTEX_STRIDE != 0
+            || *offset < vertex_end
+            || offset.checked_add(bytes.len()).is_none_or(|end| end > vertex_bytes)
+        {
+            return Err("voxy-headless-stream-vertex-range");
+        }
+        vertex_end = offset + bytes.len();
+    }
+    let mut index_end = 0;
+    for (offset, bytes) in index_updates {
+        if offset % core::mem::size_of::<u32>() != 0
+            || bytes.len() % core::mem::size_of::<u32>() != 0
+            || *offset < index_end
+            || offset.checked_add(bytes.len()).is_none_or(|end| end > index_bytes)
+            || bytes.chunks_exact(4).any(|word| {
+                u32::from_le_bytes(word.try_into().unwrap()) as usize >= capacity
+            })
+        {
+            return Err("voxy-headless-stream-index-range");
+        }
+        index_end = offset + bytes.len();
+    }
+    Ok(())
+}
+
+/// Allocate the fixed native layout directly from admitted packed WGPU bytes.
+/// The broker must supply every initially drawable vertex/index and validate
+/// vertex attributes and indices against the current live vertex extent.
+pub(crate) fn create_resident_voxy_headless_streaming_mesh_raw(
+    capacity: usize,
+    vertex_updates: &[(usize, Vec<u8>)],
+    index_updates: &[(usize, Vec<u8>)],
+    camera: &[f32; 20],
+    live_index_count: u32,
+) -> Result<ResidentTriangleMesh, &'static str> {
+    if !crate::intel::voxy_headless_target_active() {
+        return Err("voxy-headless-target");
+    }
+    validate_voxy_headless_raw_stream_shape(
+        capacity, vertex_updates, index_updates, camera, live_index_count,
+    )?;
+    let mesh = allocate_resident_voxy_headless_streaming_mesh(capacity)?;
+    if let Err(error) = update_resident_voxy_headless_streaming_mesh_raw(
+        &mesh, vertex_updates, index_updates, camera, live_index_count,
+    ) {
+        let _ = release_resident_triangle_mesh(&mesh);
+        return Err(error);
+    }
+    Ok(mesh)
+}
+
+// Called only after validation, while the broker owns the retired producer's
+// exclusive operation lease. Comparing just the supplied range avoids a flush
+// for unchanged camera/indirect data without scanning the retained mesh.
+fn write_voxy_headless_stream_bytes_if_changed(
+    mesh: &ResidentTriangleMesh, offset: usize, bytes: &[u8],
+) {
+    if bytes.is_empty() { return; }
+    unsafe {
+        let target = mesh.storage_virt.add(offset);
+        if core::slice::from_raw_parts(target, bytes.len()) != bytes {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
+            crate::intel::dma_flush(target, bytes.len());
+        }
+    }
+}
+
+/// Apply only admitted dirty ranges to a previously retired producer. Vertex
+/// offsets are relative to the native VB (the source's 80-byte camera prefix
+/// is excluded); index offsets are relative to the fixed native IB. Each list
+/// must be sorted and contain no overlapping ranges. Capacity,
+/// camera padding and GPU addresses remain unchanged when live counts vary.
+///
+/// The broker validates vertex attributes and live-vertex index bounds and
+/// supplies newly exposed ranges when a draw grows. It must hold the exclusive
+/// operation lease through submission and pin this allocation until retirement.
+pub(crate) fn update_resident_voxy_headless_streaming_mesh_raw(
+    mesh: &ResidentTriangleMesh,
+    vertex_updates: &[(usize, Vec<u8>)],
+    index_updates: &[(usize, Vec<u8>)],
+    camera: &[f32; 20],
+    live_index_count: u32,
+) -> Result<(), &'static str> {
+    let (camera_offset, index_offset, indirect_offset, _) =
+        validate_voxy_headless_stream_mesh_layout(mesh)?;
+    // Check the whole transaction before touching even its first valid range.
+    validate_voxy_headless_raw_stream_shape(
+        mesh.vertex_count as usize, vertex_updates, index_updates, camera, live_index_count,
+    )?;
+    for (offset, bytes) in vertex_updates {
+        write_voxy_headless_stream_bytes_if_changed(mesh, *offset, bytes);
+    }
+    for (offset, bytes) in index_updates {
+        write_voxy_headless_stream_bytes_if_changed(mesh, index_offset + offset, bytes);
+    }
+    let camera_bytes = unsafe {
+        core::slice::from_raw_parts(camera.as_ptr().cast::<u8>(), core::mem::size_of_val(camera))
+    };
+    write_voxy_headless_stream_bytes_if_changed(mesh, camera_offset, camera_bytes);
+    let mut indirect = [0u8; DRAW_INDEXED_INDIRECT_BYTES];
+    for (word, value) in indirect.chunks_exact_mut(4).zip([live_index_count, 1, 0, 0, 0]) {
+        word.copy_from_slice(&value.to_le_bytes());
+    }
+    // Publish the live count only after every addressed dirty range is coherent.
+    write_voxy_headless_stream_bytes_if_changed(mesh, indirect_offset, &indirect);
+    Ok(())
 }
 
 #[cfg(test)]

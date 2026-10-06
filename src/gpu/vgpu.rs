@@ -711,6 +711,52 @@ struct BufferRecord {
     in_flight: u32,
     mapping_digest: u64,
     sampled: Option<SampledBufferCache>,
+    write_revision: u64,
+    dirty_ranges: Vec<core::ops::Range<usize>>,
+}
+
+/// One persistent WGPU pass source. Handle generations and byte offsets are
+/// part of the identity; a new source always refreshes the resident payload.
+struct VoxyStreamSource {
+    vertex_buffer: BufferHandle,
+    index_buffer: BufferHandle,
+    vertex_offset: usize,
+    index_start: usize,
+    vertex_revision: u64,
+    index_revision: u64,
+    validated_vertices: usize,
+    indices: Vec<u32>,
+    identity_indices: bool,
+}
+
+struct VoxyStreamUpdate {
+    vertices: Vec<(usize, Vec<u8>)>,
+    indices: Vec<(usize, Vec<u8>)>,
+    camera: [f32; 20],
+    vertex_count: usize,
+    index_count: u32,
+    first_vertex: Option<[f32; 8]>,
+}
+
+fn record_dirty_range(ranges: &mut Vec<core::ops::Range<usize>>, mut range: core::ops::Range<usize>) {
+    if range.is_empty() { return; }
+    let mut index = 0;
+    while index < ranges.len() {
+        if range.start <= ranges[index].end && ranges[index].start <= range.end {
+            let old = ranges.remove(index);
+            range.start = range.start.min(old.start);
+            range.end = range.end.max(old.end);
+        } else { index += 1; }
+    }
+    ranges.push(range);
+    ranges.sort_unstable_by_key(|range| range.start);
+    // Bound bookkeeping for callers issuing many tiny disjoint writes.
+    if ranges.len() > 64 {
+        let end = ranges.last().expect("nonempty dirty ranges").end;
+        let start = ranges[0].start;
+        ranges.clear();
+        ranges.push(start..end);
+    }
 }
 
 unsafe impl Send for BufferRecord {}
@@ -1069,6 +1115,8 @@ struct VirtualDevice {
     /// Voxygen streams one bounded geometry allocation after exact retirement.
     /// The camera and indirect draw retain their GPU addresses as terrain arrives.
     voxy_stream_mesh: Option<Arc<crate::intel::render::ResidentTriangleMesh>>,
+    voxy_stream_source: Option<VoxyStreamSource>,
+    voxy_stream_buffers: Option<(BufferHandle, BufferHandle)>,
     voxy_stream_in_flight: bool,
     voxy_stream_owner: Option<(QueueHandle, SurfaceHandle)>,
     voxy_stream_quarantined: bool,
@@ -1282,6 +1330,8 @@ pub(crate) fn open(
         retained_textures: Vec::new(),
         drawable_depths: Vec::new(),
         voxy_stream_mesh: None,
+        voxy_stream_source: None,
+        voxy_stream_buffers: None,
         voxy_stream_in_flight: false,
         voxy_stream_owner: None,
         voxy_stream_quarantined: false,
@@ -1598,6 +1648,8 @@ pub(crate) fn create_buffer(
             in_flight: 0,
             mapping_digest: 0,
             sampled: None,
+            write_revision: 0,
+            dirty_ranges: Vec::new(),
         },
     ))
 }
@@ -1737,6 +1789,8 @@ pub(crate) fn create_vvideo_mem(
             in_flight: 0,
             mapping_digest,
             sampled: None,
+            write_revision: 0,
+            dirty_ranges: Vec::new(),
         },
     ))
 }
@@ -1881,6 +1935,10 @@ pub(crate) fn write_buffer(
                 core::ptr::copy_nonoverlapping(bytes.as_ptr(), virt.add(offset), bytes.len());
             }
             crate::intel::dma_flush(unsafe { virt.add(offset) }, bytes.len());
+            record.write_revision = record.write_revision.wrapping_add(1);
+            if record.usage & (BUFFER_USAGE_VERTEX | BUFFER_USAGE_INDEX) != 0 {
+                record_dirty_range(&mut record.dirty_ranges, offset..end);
+            }
         }
         device.memory_used = device.memory_used.saturating_sub(released);
     }
@@ -3097,6 +3155,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         drawable_depth,
         fixed_state,
         voxy_camera,
+        voxy_update,
     ) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
@@ -3231,6 +3290,10 @@ pub(crate) fn submit_ui4_indexed_draw(
                 None
             };
 
+            let (vertices, indices, voxy_camera, voxy_update) = if voxy {
+                let update = stage_voxy_stream_update(device, &draw)?;
+                (Vec::new(), Vec::new(), Some(update.camera), Some(update))
+            } else {
             let index_record = lookup_buffer(device, draw.index_buffer)?;
             if index_record.usage & BUFFER_USAGE_INDEX == 0 {
                 return Err(VgpuError::PermissionDenied);
@@ -3312,20 +3375,13 @@ pub(crate) fn submit_ui4_indexed_draw(
                 }
                 vertices.push(attributes);
             }
-            let voxy_camera = if voxy {
-                crate::intel::dma_flush(vertex_virt, 80);
-                let raw = unsafe { core::slice::from_raw_parts(vertex_virt, 80) };
-                let mut camera = [0f32; 20];
-                for (out, bytes) in camera.iter_mut().zip(raw.chunks_exact(4)) {
-                    *out = f32::from_le_bytes(bytes.try_into().unwrap());
-                }
-                if camera.iter().any(|v| !v.is_finite()) || camera[16] <= 0.0
-                    || camera[17] <= 0.0 || camera[18] <= 0.0 || camera[19] <= camera[18] {
-                    return Err(unsupported("voxy-headless-camera"));
-                }
-                Some(camera)
-            } else { None };
+                (vertices, indices, None, None)
+            };
             let fixed_state = if fixed {
+                let vertex_virt = match lookup_buffer(device, draw.vertex_buffer)?.backing {
+                    BufferBacking::Dma { virt, .. } => virt,
+                    BufferBacking::GuestPages { .. } => return Err(unsupported("vertex-backing")),
+                };
                 let raw = unsafe {
                     core::slice::from_raw_parts(vertex_virt, v::vgpu::WC3_FIXED_STATE_BYTES)
                 };
@@ -3430,9 +3486,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             } else {
                 None
             };
-            Ok((vertices, indices, texture, depth, fixed_state, voxy_camera))
+            Ok((vertices, indices, texture, depth, fixed_state, voxy_camera, voxy_update))
         })();
-        let (vertices, mut indices, sampled_texture, drawable_depth, fixed_state, voxy_camera) = match copied {
+        let (vertices, mut indices, sampled_texture, drawable_depth, fixed_state, voxy_camera, voxy_update) = match copied {
             Ok(copied) => copied,
             Err(error) => {
                 lookup_surface_mut(device, draw.surface)?.in_flight = 1;
@@ -3450,6 +3506,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         device.voxy_stream_in_flight = voxy_camera.is_some();
         if voxy_camera.is_some() {
             device.voxy_stream_owner = Some((queue_handle, draw.surface));
+            lookup_buffer_mut(device, draw.vertex_buffer)?.in_flight += 1;
+            lookup_buffer_mut(device, draw.index_buffer)?.in_flight += 1;
+            device.voxy_stream_buffers = Some((draw.vertex_buffer, draw.index_buffer));
         }
         (
             window_id,
@@ -3465,8 +3524,14 @@ pub(crate) fn submit_ui4_indexed_draw(
             drawable_depth,
             fixed_state,
             voxy_camera,
+            voxy_update,
         )
     };
+    let vertex_count = voxy_update.as_ref().map_or(vertices.len(), |update| update.vertex_count);
+    let index_count = voxy_update.as_ref().map_or(indices.len(), |update| update.index_count as usize);
+    let first_vertex: Option<&[f32]> = if let Some(update) = &voxy_update {
+        update.first_vertex.as_ref().map(|vertex| &vertex[..])
+    } else { vertices.first().map(|vertex| &vertex[..8]) };
 
     let timing_prepared = crate::chronos::monotonic_nanos();
     let destination = crate::intel::gpgpu::GpgpuRgba8Surface::new(
@@ -3482,8 +3547,8 @@ pub(crate) fn submit_ui4_indexed_draw(
         return Err(unsupported("surface-shape"));
     };
     let cached_voxy_mesh = voxy_camera.is_some();
-    let mesh = if let Some(camera) = voxy_camera.as_ref() {
-        match prepare_voxy_stream_mesh(principal, device_handle, &vertices, &indices, camera) {
+    let mesh = if let Some(update) = voxy_update.as_ref() {
+        match prepare_voxy_stream_mesh_raw(principal, device_handle, update) {
             Ok(mesh) => mesh,
             Err(error) => {
                 rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
@@ -3513,7 +3578,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             Err(reason) => {
                 crate::log_warn!(target: "vgpu";
                     "vgpu-indexed: resource-failed resource=mesh reason={} vertices={} indices={} fixed={}\n",
-                    reason, vertices.len(), indices.len(), fixed_state.is_some());
+                    reason, vertex_count, index_count, fixed_state.is_some());
                 rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
                 return Err(VgpuError::OutOfMemory);
             }
@@ -3584,8 +3649,8 @@ pub(crate) fn submit_ui4_indexed_draw(
     if let Some(frame) = voxy_diagnostic {
         crate::log_important!(target: "render";
             "voxy-wgpu: phase=prepared frame={} principal={:?} window={} vertices={} indices={} target={}x{} clear=0x{:08X} first_vertex={:?}\n",
-            frame, principal, window_id, vertices.len(), indices.len(), width, height,
-            draw.clear_rgba8_srgb, vertices.first().map(|vertex| &vertex[..8]),
+            frame, principal, window_id, vertex_count, index_count, width, height,
+            draw.clear_rgba8_srgb, first_vertex,
         );
     }
     let diagnostic_logs =
@@ -3604,8 +3669,8 @@ pub(crate) fn submit_ui4_indexed_draw(
     if diagnostic_logs {
         crate::log_info!(target: "render";
             "quad-texture: phase=prepared principal={:?} pipeline={} surface={} topology={:?} vertices={} indices={} first_xyzuv={:?} texture={}x{} pitch={} sampler_flags=0x{:X} target={}x{} depth=enabled\n",
-            principal, draw.pipeline.raw(), draw.surface.raw(), draw.topology, vertices.len(), indices.len(),
-            vertices.first(), draw.texture_width, draw.texture_height, draw.texture_pitch,
+            principal, draw.pipeline.raw(), draw.surface.raw(), draw.topology, vertex_count, index_count,
+            first_vertex, draw.texture_width, draw.texture_height, draw.texture_pitch,
             draw.sampler_flags, width, height,
         );
     }
@@ -3681,9 +3746,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         if voxy_camera.is_some() {
             crate::log_error!(target: "render";
                 "voxy-wgpu: phase=failed window={} vertices={} indices={} vb_gpu=0x{:X} vb_bytes={} ib_gpu=0x{:X} ib_bytes={} args_gpu=0x{:X} storage_phys=0x{:X} storage_bytes={} first_vertex={:?}\n",
-                window_id, vertices.len(), indices.len(), mesh.vertex_gpu_addr, mesh.vertex_bytes,
+                window_id, vertex_count, index_count, mesh.vertex_gpu_addr, mesh.vertex_bytes,
                 mesh.index_gpu_addr, mesh.index_bytes, mesh.indirect_args_gpu_addr,
-                mesh.storage_phys, mesh.storage_bytes, vertices.first().map(|vertex| &vertex[..8]),
+                mesh.storage_phys, mesh.storage_bytes, first_vertex,
             );
         }
         crate::log_warn!(target: "render";
@@ -3724,8 +3789,15 @@ pub(crate) fn submit_ui4_indexed_draw(
             *pixel = unsafe { core::ptr::read_volatile(target.add(offset).cast::<u32>()) };
         }
         crate::log_important!(target: "render";
-            "voxy-wgpu: phase=retired frame={} window={} target={}x{} completed_draws=1 render_release={} corner_rgba=0x{:08X} center_rgba=0x{:08X} proof=render-fence-retired display-proof=pending-ui4-publication\n",
+            "voxy-wgpu: phase=retired frame={} window={} target={}x{} completed_draws=1 render_release={} corner_rgba=0x{:08X} center_rgba=0x{:08X} proof=render-fence-retired display-proof=pending-ui4-publication prepare_us={} stream_update_us={} render_us={} gpu_poll_us={} vertex_upload_bytes={} index_upload_bytes={} uptime_ms={}\n",
             frame, window_id, width, height, release.sequence(), pixels[0], pixels[1],
+            timing_prepared.saturating_sub(timing_start) / 1000,
+            timing_mesh.saturating_sub(timing_prepared) / 1000,
+            timing_rendered.saturating_sub(timing_mesh) / 1000,
+            rendered.as_ref().map_or(0, |result| result.gpu_poll_us),
+            voxy_update.as_ref().map_or(0, |update| update.vertices.iter().map(|(_, bytes)| bytes.len()).sum::<usize>()),
+            voxy_update.as_ref().map_or(0, |update| update.indices.iter().map(|(_, bytes)| bytes.len()).sum::<usize>()),
+            crate::chronos::monotonic_nanos() / 1_000_000,
         );
     }
 
@@ -5283,12 +5355,141 @@ fn prepare_voxy_atlas(
 /// The operation lease spans CPU writes, native submission and exact retirement.
 /// Allocate the bounded maximum once so terrain/entity count changes never move
 /// the camera, index buffer or indirect record while this device is alive.
-fn prepare_voxy_stream_mesh(
+/// Snapshot only changed byte ranges while the broker owns the source buffers.
+/// Native storage is updated after dropping BROKER; the operation lease keeps
+/// both source handles and the resident allocation alive through retirement.
+fn stage_voxy_stream_update(
+    device: &mut VirtualDevice,
+    draw: &Ui4IndexedDrawDescriptor,
+) -> Result<VoxyStreamUpdate, VgpuError> {
+    let index_start = draw.index_offset.checked_add(
+        (draw.first_index as usize).checked_mul(4).ok_or(VgpuError::Unsupported)?
+    ).ok_or(VgpuError::Unsupported)?;
+    let same_source = device.voxy_stream_source.as_ref().is_some_and(|source|
+        source.vertex_buffer == draw.vertex_buffer && source.index_buffer == draw.index_buffer
+        && source.vertex_offset == draw.vertex_offset && source.index_start == index_start);
+    let mut source = if same_source {
+        device.voxy_stream_source.take().expect("matching Voxy source")
+    } else {
+        device.voxy_stream_source = None;
+        VoxyStreamSource {
+            vertex_buffer: draw.vertex_buffer, index_buffer: draw.index_buffer,
+            vertex_offset: draw.vertex_offset, index_start,
+            vertex_revision: 0, index_revision: 0, validated_vertices: 0,
+            indices: Vec::new(), identity_indices: true,
+        }
+    };
+    let index_record = lookup_buffer(device, draw.index_buffer)?;
+    if index_record.usage & BUFFER_USAGE_INDEX == 0 { return Err(VgpuError::PermissionDenied); }
+    if index_record.in_flight != 0 { return Err(VgpuError::Busy); }
+    let index_revision = index_record.write_revision;
+    let index_count = draw.index_count as usize;
+    let capacity = crate::intel::render::VOXY_HEADLESS_MAX_STREAM_CAPACITY;
+    let index_end = index_start.checked_add(index_count.checked_mul(4)
+        .ok_or(VgpuError::Unsupported)?).ok_or(VgpuError::Unsupported)?;
+    if index_count == 0 || index_count > capacity || index_end > index_record.bytes {
+        return Err(VgpuError::Unsupported);
+    }
+    let index_virt = match index_record.backing {
+        BufferBacking::Dma { virt, .. } => virt,
+        BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+    };
+    if !same_source || source.index_revision != index_revision {
+        source.indices.clear();
+        source.identity_indices = true;
+    }
+    let old_indices = source.indices.len();
+    let mut index_updates = Vec::new();
+    if old_indices < index_count {
+        let raw = unsafe { core::slice::from_raw_parts(
+            index_virt.add(index_start + old_indices * 4), (index_count - old_indices) * 4) };
+        for bytes in raw.chunks_exact(4) {
+            let index = u32::from_le_bytes(bytes.try_into().expect("four-byte index"));
+            source.identity_indices &= index as usize == source.indices.len();
+            if index as usize >= capacity { return Err(VgpuError::Unsupported); }
+            source.indices.push(index);
+        }
+        index_updates.push((old_indices * 4, raw.to_vec()));
+    }
+    let vertex_count = if source.identity_indices {
+        index_count
+    } else {
+        source.indices[..index_count].iter().copied().max()
+            .ok_or(VgpuError::Unsupported)? as usize + 1
+    };
+    let vertex_record = lookup_buffer(device, draw.vertex_buffer)?;
+    if vertex_record.usage & BUFFER_USAGE_VERTEX == 0 { return Err(VgpuError::PermissionDenied); }
+    if vertex_record.in_flight != 0 { return Err(VgpuError::Busy); }
+    let vertex_bytes = vertex_count.checked_mul(32).ok_or(VgpuError::Unsupported)?;
+    let vertex_end = draw.vertex_offset.checked_add(vertex_bytes).ok_or(VgpuError::Unsupported)?;
+    if draw.vertex_offset != 80 || vertex_end > vertex_record.bytes {
+        return Err(VgpuError::Unsupported);
+    }
+    let vertex_virt = match vertex_record.backing {
+        BufferBacking::Dma { virt, .. } => virt,
+        BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+    };
+    let camera_bytes = unsafe { core::slice::from_raw_parts(vertex_virt, 80) };
+    let mut camera = [0.0f32; 20];
+    for (value, bytes) in camera.iter_mut().zip(camera_bytes.chunks_exact(4)) {
+        *value = f32::from_le_bytes(bytes.try_into().expect("four-byte camera component"));
+    }
+    if camera.iter().any(|value| !value.is_finite()) || camera[16] <= 0.0
+        || camera[17] <= 0.0 || camera[18] <= 0.0 || camera[19] <= camera[18] {
+        return Err(VgpuError::Unsupported);
+    }
+    let mut dirty = Vec::new();
+    if !same_source {
+        record_dirty_range(&mut dirty, 0..vertex_bytes);
+    } else {
+        if source.vertex_revision != vertex_record.write_revision {
+            for range in &vertex_record.dirty_ranges {
+                let start = range.start.max(draw.vertex_offset);
+                let end = range.end.min(vertex_end);
+                if start < end {
+                    let relative_start = (start - draw.vertex_offset) / 32 * 32;
+                    let relative_end = (end - draw.vertex_offset).div_ceil(32) * 32;
+                    record_dirty_range(&mut dirty, relative_start..relative_end);
+                }
+            }
+        }
+        if vertex_count > source.validated_vertices {
+            record_dirty_range(&mut dirty, source.validated_vertices * 32..vertex_bytes);
+        }
+    }
+    let mut vertex_updates = Vec::with_capacity(dirty.len());
+    for range in dirty {
+        let raw = unsafe { core::slice::from_raw_parts(
+            vertex_virt.add(draw.vertex_offset + range.start), range.len()) };
+        if raw.chunks_exact(4).any(|bytes|
+            !f32::from_le_bytes(bytes.try_into().expect("four-byte vertex component")).is_finite()) {
+            return Err(VgpuError::Unsupported);
+        }
+        vertex_updates.push((range.start, raw.to_vec()));
+    }
+    let mut first_vertex = [0.0; 8];
+    let first_bytes = unsafe { core::slice::from_raw_parts(vertex_virt.add(draw.vertex_offset), 32) };
+    for (value, bytes) in first_vertex.iter_mut().zip(first_bytes.chunks_exact(4)) {
+        *value = f32::from_le_bytes(bytes.try_into().expect("first vertex component"));
+    }
+    source.vertex_revision = vertex_record.write_revision;
+    source.index_revision = index_revision;
+    // Shrinking forgets the hidden tail: growing again must validate it even
+    // if an intervening write touched bytes outside the smaller live range.
+    source.validated_vertices = vertex_count;
+    lookup_buffer_mut(device, draw.vertex_buffer)?.dirty_ranges.clear();
+    lookup_buffer_mut(device, draw.index_buffer)?.dirty_ranges.clear();
+    device.voxy_stream_source = Some(source);
+    Ok(VoxyStreamUpdate {
+        vertices: vertex_updates, indices: index_updates, camera, vertex_count,
+        index_count: draw.index_count, first_vertex: Some(first_vertex),
+    })
+}
+
+fn prepare_voxy_stream_mesh_raw(
     principal: Principal,
     device_handle: DeviceHandle,
-    vertices: &[[f32; 16]],
-    indices: &[u32],
-    camera: &[f32; 20],
+    update: &VoxyStreamUpdate,
 ) -> Result<Arc<crate::intel::render::ResidentTriangleMesh>, VgpuError> {
     let capacity = crate::intel::render::VOXY_HEADLESS_MAX_STREAM_CAPACITY;
     let charge = crate::intel::render::voxy_headless_stream_storage_bytes(capacity)
@@ -5297,9 +5498,7 @@ fn prepare_voxy_stream_mesh(
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
-        if !device.voxy_stream_in_flight {
-            return Err(VgpuError::Busy);
-        }
+        if !device.voxy_stream_in_flight { return Err(VgpuError::Busy); }
         if let Some(mesh) = device.voxy_stream_mesh.as_ref() {
             Some(Arc::clone(mesh))
         } else {
@@ -5311,18 +5510,13 @@ fn prepare_voxy_stream_mesh(
         }
     };
     if let Some(mesh) = existing {
-        crate::intel::render::update_resident_voxy_headless_streaming_mesh(
-            &mesh, vertices, indices, camera,
-        ).map_err(|reason| {
-            crate::log_error!(target: "render";
-                "voxy-wgpu: phase=stream-update-rejected reason={} vertices={} indices={}\n",
-                reason, vertices.len(), indices.len());
-            VgpuError::Unsupported
-        })?;
+        crate::intel::render::update_resident_voxy_headless_streaming_mesh_raw(
+            &mesh, &update.vertices, &update.indices, &update.camera, update.index_count,
+        ).map_err(|_| VgpuError::Unsupported)?;
         return Ok(mesh);
     }
-    let created = crate::intel::render::create_resident_voxy_headless_streaming_mesh(
-        capacity, vertices, indices, camera,
+    let created = crate::intel::render::create_resident_voxy_headless_streaming_mesh_raw(
+        capacity, &update.vertices, &update.indices, &update.camera, update.index_count,
     );
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
@@ -5330,21 +5524,16 @@ fn prepare_voxy_stream_mesh(
         Ok(mesh) => Arc::new(mesh),
         Err(reason) => {
             device.memory_used = device.memory_used.saturating_sub(charge);
-            crate::log_error!(target: "render";
-                "voxy-wgpu: phase=stream-allocation-rejected reason={} capacity={} bytes={}\n",
-                reason, capacity, charge);
+            crate::log_warn!(target: "render"; "voxy-wgpu: stream allocation rejected reason={}\n", reason);
             return Err(VgpuError::OutOfMemory);
         }
     };
-    // Keep the allocation attached even if an asynchronous fault lost the
-    // device during mapping; teardown still has its exact backing ownership.
     device.voxy_stream_mesh = Some(Arc::clone(&mesh));
-    crate::log_important!(target: "render";
-        "voxy-wgpu: phase=stream-resident capacity={} bytes={} vb_gpu=0x{:X} camera_gpu=0x{:X} ib_gpu=0x{:X} args_gpu=0x{:X}\n",
-        capacity, mesh.storage_bytes, mesh.vertex_gpu_addr,
-        mesh.vertex_gpu_addr + mesh.vertex_bytes as u64, mesh.index_gpu_addr,
-        mesh.indirect_args_gpu_addr);
     ensure_live(device)?;
+    crate::log_important!(target: "render";
+        "voxy-wgpu: phase=stream-resident capacity={} bytes={} vb_gpu=0x{:X} camera_gpu=0x{:X} ib_gpu=0x{:X} args_gpu=0x{:X} uploads=dirty-ranges\n",
+        capacity, charge, mesh.vertex_gpu_addr, mesh.vertex_gpu_addr + u64::from(mesh.vertex_bytes),
+        mesh.index_gpu_addr, mesh.indirect_args_gpu_addr);
     Ok(mesh)
 }
 
@@ -5356,6 +5545,14 @@ fn clear_voxy_stream_lease(
     if device.voxy_stream_owner == Some((queue, surface)) {
         device.voxy_stream_owner = None;
         device.voxy_stream_in_flight = false;
+        if let Some((vertex, index)) = device.voxy_stream_buffers.take() {
+            if let Ok(record) = lookup_buffer_mut(device, vertex) {
+                record.in_flight = record.in_flight.saturating_sub(1);
+            }
+            if let Ok(record) = lookup_buffer_mut(device, index) {
+                record.in_flight = record.in_flight.saturating_sub(1);
+            }
+        }
     }
 }
 
@@ -5367,6 +5564,11 @@ fn rollback_indexed_submission_lease(
 ) {
     let mut broker = BROKER.lock();
     if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
+        if device.voxy_stream_owner == Some((queue_handle, surface_handle)) {
+            // An update may have failed before it reached resident storage.
+            // Rebuild the validated snapshot on the next attempt.
+            device.voxy_stream_source = None;
+        }
         clear_voxy_stream_lease(device, queue_handle, surface_handle);
         if let Ok(surface) = lookup_surface_mut(device, surface_handle)
             && surface.in_flight == 2
@@ -7179,6 +7381,8 @@ fn ensure_kernel_device(
         retained_textures: Vec::new(),
         drawable_depths: Vec::new(),
         voxy_stream_mesh: None,
+        voxy_stream_source: None,
+        voxy_stream_buffers: None,
         voxy_stream_in_flight: false,
         voxy_stream_owner: None,
         voxy_stream_quarantined: false,
