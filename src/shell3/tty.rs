@@ -36,6 +36,7 @@ impl Terminal {
             closing: false,
             overflow: false,
         };
+        terminal.write("\x1b]0;TrueOS §\x07".as_bytes());
         terminal.write(b"\x1b[2J\x1b[H");
         terminal.present();
         terminal
