@@ -21,6 +21,7 @@ To run an already built kernel without Cargo, or check KVM independently:
 ```sh
 tools/kvm/run.sh --timeout 10 tgt/x86_64-unknown-trueos/debug/TRUEOS
 tools/kvm/run.sh --self-test
+python3 tools/kvm/test_launcher.py
 ```
 
 The launcher defaults to 1024 MiB of anonymous guest RAM, one vCPU and a
@@ -30,6 +31,8 @@ the signal number, and unsupported guest operations exit 1 with registers and
 the failing IO port or MMIO address. The self-test exits 0 only after its small
 guest executes in 64-bit higher-half addresses and sends its completion marker
 through a KVM IO exit. It does not certify a complete TRUEOS boot.
+The test suite additionally exercises handoff pointers in a synthetic ELF guest,
+malformed ELF rejection, unsupported IO/MMIO, timeout and interrupt cleanup.
 
 ## Boot handoff
 
