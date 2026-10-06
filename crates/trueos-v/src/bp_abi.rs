@@ -796,6 +796,16 @@ unsafe extern "C" {
         publish_serial: u64,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_output_dimensions() -> u64;
+    pub fn trueos_cabi_clipboard_command_v1(
+        window_id: u32,
+        command: u32,
+        kind: u32,
+        input: *const u8,
+        input_len: usize,
+        output: *mut u8,
+        output_cap: usize,
+    ) -> i32;
+
     pub fn trueos_cabi_ui4_scene_keyboard_state(
         window_id: u32,
         out: *mut TrueosUi4KeyboardState,

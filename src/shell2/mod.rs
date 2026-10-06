@@ -1214,6 +1214,21 @@ pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) -> b
     matrix::bind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id, true)
 }
 
+pub(crate) fn matrix_target_auth_scope(target: &MatrixTarget) -> Option<u8> {
+    with_matrix_target_lease(target, || {
+        if target.output_mask & OUTPUT_LOCAL_MASK != 0 {
+            Some(TRANSPORT_LOCAL_SCOPE)
+        } else if target.output_mask == OUTPUT_NET_TCP_MASK {
+            Some(TRANSPORT_NET_TCP_SCOPE)
+        } else if target.output_mask == OUTPUT_CONTAINER_MASK {
+            Some(TRANSPORT_CONTAINER_SCOPE)
+        } else {
+            None
+        }
+    })
+    .flatten()
+}
+
 pub(crate) fn matrix_target_slot_lease(target: &MatrixTarget) -> MatrixSlotLease {
     MatrixSlotLease::from_identity(target.slot_id.clone(), target.slot_lifetime_generation)
 }

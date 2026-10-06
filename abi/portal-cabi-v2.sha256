@@ -1,3 +1,4 @@
+# Additive typed clipboard command v1. Existing symbol signatures unchanged.
 # Additive RAM-only LZ4 decode/result API v1. All existing signatures reviewed unchanged.
 # Additive disc-qualified TRUEOSFS video open v2. Existing symbol signatures unchanged.
 # Additive frame-scoped cursor image registration/selection v1. Existing symbols unchanged.
@@ -6,4 +7,4 @@
 # Additive stackful TRUEOS thread lifecycle. Existing symbol signatures unchanged.
 # Additive cooperative Blueprint stop control v1. Existing symbol signatures unchanged.
 # Additive exact UI4 publication receipt/query v1. All 366 existing signatures unchanged.
-653312de89e196d72eec5c4b89fb14d461c26996b3889ef5e1954702e80f2c14
+67ceae19c2a6e8690edd89a1c67d1b1c06d2de0961d89e2bfa20f527b60be2f0

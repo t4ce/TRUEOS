@@ -184,6 +184,7 @@ const _: () = {
     assert!(core::mem::size_of::<v::vgpu::RetainedFrameSubmitV3>() <= PAYLOAD_CAP);
     assert!(core::mem::size_of::<v::vgpu::RetainedFrameSubmitV4>() <= PAYLOAD_CAP);
 };
+pub const OP_BP_CLIPBOARD_COMMAND_V1: u32 = 0x230;
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
@@ -3212,6 +3213,22 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             if rc == 0 {
                 write_record_response(vm_id, seq, 0, &event);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_CLIPBOARD_COMMAND_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let mut output = zeroize::Zeroizing::new([0u8; 512]);
+            let rc = unsafe { crate::ui4::blueprint_text::clipboard_api::trueos_cabi_clipboard_command_v1(
+                arg0 as u32, arg1 as u32, (arg1 >> 32) as u32,
+                payload.as_ptr(), payload.len(), output.as_mut_ptr(), output.len()) };
+            if rc > 0 {
+                write_record_slice_response(vm_id, seq, rc as u64, &output[..rc as usize]);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }

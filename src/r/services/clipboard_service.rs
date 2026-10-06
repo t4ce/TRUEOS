@@ -62,11 +62,10 @@ pub(crate) enum ClipboardPasteAuthPolicy {
     AuthenticatedTwoFactorForPasswords,
 }
 
-/// TRUEOS currently chooses the strict interpretation: every paste requires
-/// the active `crypt` two-factor session for the trusted input scope. Password
-/// delivery is unconditionally authenticated under every policy variant.
+/// Ordinary clips remain usable without login. Password delivery requires
+/// the active `crypt` two-factor session for the trusted input scope.
 pub(crate) const CLIPBOARD_PASTE_AUTH_POLICY: ClipboardPasteAuthPolicy =
-    ClipboardPasteAuthPolicy::AuthenticatedTwoFactorForEveryClip;
+    ClipboardPasteAuthPolicy::AuthenticatedTwoFactorForPasswords;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClipboardPrincipal {
@@ -624,6 +623,37 @@ pub(crate) fn publish_clip(
     CLIPBOARD
         .lock()
         .publish(principal, delivery, embassy_time_driver::now())
+}
+
+/// Password ingress is authorized at acceptance, without a reusable token.
+pub(crate) fn publish_from_blueprint(
+    principal: ClipboardPrincipal,
+    published: ClipboardPublish<'_>,
+    auth_scope: u8,
+) -> Result<(), ClipboardError> {
+    if matches!(published, ClipboardPublish::Password(_))
+        && !crate::crypt::has_authenticated_two_factor_session(auth_scope)
+    {
+        return Err(ClipboardError::AuthenticationRequired);
+    }
+    publish_clip(principal, published)
+}
+
+pub(crate) fn close_delivery_gate(target: &MatrixSlotLease, recipient: ClipboardPrincipal) {
+    let attachment = {
+        let mut core = CLIPBOARD.lock();
+        let Some(index) = core
+            .gates
+            .iter()
+            .position(|gate| gate.target == *target && gate.recipient == recipient)
+        else {
+            return;
+        };
+        core.gates.swap_remove(index).attachment_id
+    };
+    if let Some(id) = attachment {
+        let _ = detach_matrix_slot_resource(target, id);
+    }
 }
 
 /// Place one typed push gate on an existing Matrix lifetime. The gate is

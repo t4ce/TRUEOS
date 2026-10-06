@@ -1394,6 +1394,9 @@ impl InputBroker {
         if !window.interaction.receives_input {
             return;
         }
+        if event.key_code == 0x19 && event.modifiers & 0x11 != 0 {
+            super::blueprint_text::clipboard_api::trusted_paste(key.owner, key.window);
+        }
         let routed = Ui4KeyboardEvent {
             source: route_source,
             window: key.window,

@@ -154,6 +154,7 @@ const _: () = {
     assert!(OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V2 == 0x179);
     assert!(OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V3 == 0x17A);
 };
+pub const OP_BP_CLIPBOARD_COMMAND_V1: u32 = 0x230;
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB;
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123;
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150;
@@ -526,6 +527,12 @@ pub fn call_with_payload(op: u32, arg0: u64, arg1: u64, req: &[u8], out: &mut [u
         );
         if resp_n != 0 {
             out[..resp_n].copy_from_slice(&(&(*p).payload)[..resp_n]);
+        }
+        if op == OP_BP_CLIPBOARD_COMMAND_V1 {
+            // Clipboard bytes must not linger in the VM-call page.
+            for index in 0..req_n.max(resp_n) {
+                core::ptr::write_volatile((*p).payload.as_mut_ptr().add(index), 0);
+            }
         }
         (status, data)
     }

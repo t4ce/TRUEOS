@@ -6,6 +6,7 @@
 //! producer was the first consumer; shaded scene producers share the same
 //! coherent UI4 frame lifecycle.
 
+pub(crate) mod clipboard_api;
 pub(crate) mod cursor_image_api;
 pub(crate) mod display_api;
 pub(crate) mod font_api;
@@ -1068,6 +1069,7 @@ static QUARANTINED_SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec:
 /// The caller owns the application lifecycle decision. UI4 only applies the
 /// owner-scoped resource revocation and does not inspect VM state.
 pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
+    clipboard_api::release_owner(owner);
     display_api::release_owner(owner);
     let owned = {
         let mut surfaces = SURFACES.lock();
@@ -8496,6 +8498,7 @@ fn blueprint_surface_close_request(
 }
 
 fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurfaceRelease) {
+    clipboard_api::release_window(surface.owner, surface.window);
     DYNAMIC_CONTEXT_MENU_EVENTS
         .lock()
         .retain(|(owner, window, _)| *owner != surface.owner || *window != surface.window);
