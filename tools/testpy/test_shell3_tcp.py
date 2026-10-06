@@ -56,6 +56,16 @@ mod tty {
         assert!(!String::from_utf8_lossy(&tty.output).contains("not wired"));
         tty.input(b"stop\\r");assert_eq!(&*tty.shell.parsed.borrow(),&["stop"]);
     }
+    #[test] fn clear_screen_returns_to_current_mode_prompt() {
+        let mut tty=terminal();
+        tty.input(b"\\t");tty.output.clear();
+        tty.input(b"clear\\r");tty.input(b"\\n");
+        assert_eq!(tty.output, "clear\\r\\n\\x1b[2J\\x1b[HCMD § ".as_bytes());
+        assert!(tty.shell.parsed.borrow().is_empty());
+        assert_eq!(tty.shell.prompt, "");assert!(!tty.closing);
+        tty.input(b"known\\n");
+        assert_eq!(&*tty.shell.parsed.borrow(), &["known"]);
+    }
     #[test] fn matrix_operator_is_submitted_once_with_enter() {
         let mut tty = terminal();
         tty.input("§id§".as_bytes());assert!(tty.shell.parsed.borrow().is_empty());

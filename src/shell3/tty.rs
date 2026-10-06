@@ -70,7 +70,9 @@ impl Terminal {
         }
         match command {
             "" => {}
-            "help" => self.write(b"UTF-8 line input; Enter submits; Backspace erases.\r\nTab cycles HV/CMD/ADM; Ctrl-U clears; Ctrl-C cancels.\r\nexit or Ctrl-D on an empty line disconnects.\r\nShell3 recognizes names; command execution is not wired yet. Matrix operators are submitted with Enter.\r\n"),
+            "help" => self.write(b"UTF-8 line input; Enter submits; Backspace erases.\r\nTab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nShell3 recognizes names; command execution is not wired yet. Matrix operators are submitted with Enter.\r\n"),
+            // The remote terminal interprets these bytes; TCP only carries them.
+            "clear" => self.write(b"\x1b[2J\x1b[H"),
             "exit" => {
                 self.write(b"Bye.\r\n");
                 self.closing = true;

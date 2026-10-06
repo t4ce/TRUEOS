@@ -102,25 +102,17 @@ const CMD_MEDIA_NAMES: [NameEntry; 6] = [
         color: RgbaColor::White,
     },
     NameEntry {
-        name: "shot",
-        color: RgbaColor::White,
-    },
-    NameEntry {
         name: "vid",
         color: RgbaColor::White,
     },
     NameEntry {
-        name: "film",
+        name: "aud",
         color: RgbaColor::White,
     },
     NameEntry {
-        name: "cam",
+        name: "vaud",
         color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "rec",
-        color: RgbaColor::White,
-    },
+    }
 ];
 
 const CMD_APPDB_NAMES: [NameEntry; 0] = [];
@@ -131,7 +123,7 @@ pub(super) const CMD_GROUPS: [NameGroup; 3] = [
         names: &CMD_AKA_NAMES,
     },
     NameGroup {
-        name: "Media",
+        name: "Capture",
         names: &CMD_MEDIA_NAMES,
     },
     NameGroup {
