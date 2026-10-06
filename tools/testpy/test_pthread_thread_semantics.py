@@ -111,6 +111,12 @@ mod r {{ pub mod threads {{
 }} pub mod platform {{
     use std::sync::{{Arc, Mutex, Condvar, LazyLock}};
     use std::collections::HashMap;
+    std::thread_local! {{
+        pub static CLOCK_OFFSET_NS: std::cell::Cell<u64> = const {{ std::cell::Cell::new(0) }};
+    }}
+    pub fn trueos_platform_monotonic_nanos() -> u64 {{
+        crate::embassy_time_driver::now() * 1_000_000 + CLOCK_OFFSET_NS.with(|offset| offset.get())
+    }}
     struct Queue {{ generation: Mutex<u32>, wait: Condvar }}
     static QUEUES: LazyLock<Mutex<HashMap<u64, Arc<Queue>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
     fn queue(key: u64) -> Arc<Queue> {{
@@ -139,6 +145,37 @@ mod r {{ pub mod threads {{
         let queue = queue(key); *queue.generation.lock().unwrap() += 1; queue.wait.notify_all(); 1
     }}
 }} }}
+#[cfg(test)] mod platform_clock_tests {{
+    use super::*;
+    #[test] fn guest_deadline_uses_the_platform_clock_despite_local_driver_offset() {{
+        // The Hull's Rust std forms this absolute deadline using the platform
+        // clock. The local driver view need not have the same clock origin.
+        r::platform::CLOCK_OFFSET_NS.with(|offset| offset.set(15_470_000_000));
+        let mutex = PthreadMutexStorage {{
+            owner: AtomicUsize::new(0), depth: AtomicUsize::new(0),
+            kind: AtomicI32::new(TRUEOS_PTHREAD_MUTEX_NORMAL),
+        }};
+        let cond = PthreadCondStorage {{
+            generation: AtomicU64::new(0), clock: AtomicI32::new(TRUEOS_CLOCK_MONOTONIC),
+        }};
+        let mutex_key = &mutex as *const _ as usize;
+        let cond_key = &cond as *const _ as usize;
+        let deadline = r::platform::trueos_platform_monotonic_nanos() + 8_000_000;
+        let abstime = PthreadTimespec {{
+            tv_sec: (deadline / 1_000_000_000) as i64,
+            tv_nsec: (deadline % 1_000_000_000) as i64,
+        }};
+        let remaining = pthread_deadline_millis(abstime, pthread_clock_nanos(TRUEOS_CLOCK_MONOTONIC)).unwrap();
+        assert!(remaining <= 8, "8ms deadline incorrectly became {{remaining}}ms");
+        assert_eq!(pthread_mutex_lock_key(mutex_key), 0);
+        let started = std::time::Instant::now();
+        assert_eq!(pthread_cond_wait_key(cond_key, mutex_key, Some(abstime)), TRUEOS_ETIMEDOUT);
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert_eq!(mutex.owner.load(Ordering::Acquire), pthread_current_id());
+        assert_eq!(pthread_mutex_unlock_key(mutex_key), 0);
+        r::platform::CLOCK_OFFSET_NS.with(|offset| offset.set(0));
+    }}
+}}
 '''
     with tempfile.TemporaryDirectory(prefix="trueos-pthread-semantics-") as directory:
         folder = Path(directory)

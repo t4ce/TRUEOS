@@ -1443,7 +1443,15 @@ struct PthreadTimespec {
 }
 
 fn pthread_clock_nanos(clock: c_int) -> u128 {
-    // Match the clock_gettime ABI, including the subsecond part of realtime.
+    if clock == TRUEOS_CLOCK_MONOTONIC {
+        // TRUEOS Rust std forms its absolute condvar deadline with this same
+        // platform clock. In the Hull it crosses VMCALL to the host; reading
+        // the local Embassy driver instead can compare different clock origins
+        // and turn an 8ms wait into a many-second wait. Native carriers use the
+        // same entry point, which resolves directly to the host clock there.
+        return u128::from(crate::r::platform::trueos_platform_monotonic_nanos());
+    }
+    // Match the C clock_gettime ABI's subsecond realtime timestamp.
     let ticks = embassy_time_driver::now();
     let hz = u128::from(embassy_time_driver::TICK_HZ.max(1));
     let elapsed = u128::from(ticks).saturating_mul(1_000_000_000) / hz;

@@ -467,6 +467,20 @@ pub mod env {
             return Some(rel);
         }
         let root_rel = normalize_app_path(root.as_str(), true)?;
+        // A container may explicitly use its package's shared userdata. Keep
+        // relative paths instance-local and restrict this rooted export to the
+        // owning app's userdata subtree, rather than granting global FS scope.
+        if path.starts_with('/') {
+            if let Some(app_path) = root_rel.strip_prefix("apps/") {
+                let app = app_path.split('/').next()?;
+                let shared = alloc::format!("apps/{app}/userdata");
+                if rel == shared
+                    || rel.strip_prefix(shared.as_str()).is_some_and(|tail| tail.starts_with('/'))
+                {
+                    return Some(rel);
+                }
+            }
+        }
         if rel.is_empty() || rel == root_rel {
             Some(root)
         } else if let Some(app_rel) = rel.strip_prefix(root_rel.as_str()) {

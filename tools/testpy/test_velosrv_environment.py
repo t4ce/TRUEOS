@@ -55,6 +55,38 @@ mod r {
 }
 
 #[test]
+fn voxy_userdata_is_shared_across_container_launches() {
+    for root in ["apps/voxy", "apps/voxy/container_1--first", "apps/voxy/container_1--second"] {
+        for broad in [false, true] {
+            let env = build_process_env("voxy.bp", Some(root), None, None, broad);
+            assert_eq!(env["VELOREN_USERDATA"], "/apps/voxy/userdata");
+            assert_eq!(env.contains_key("TRUEOS_FS_SCOPE"), broad);
+            ENV.with(|e| *e.borrow_mut() = env);
+            for suffix in ["", "/voxygen/settings.ron", "/voxygen/profile.ron", "/voxygen/logs/today.log"] {
+                let path = format!("/apps/voxy/userdata{suffix}");
+                assert_eq!(resolve_fs_path(&path, false), Some(path.trim_start_matches('/').into()));
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_app_userdata_is_scoped_and_relative_paths_stay_private() {
+    let root = "apps/voxy/container_1--uuid";
+    ENV.with(|e| *e.borrow_mut() = build_process_env("voxy.bp", Some(root), None, None, false));
+    assert_eq!(resolve_fs_path("/apps/voxy/userdata/voxygen/settings.ron", false),
+               Some("apps/voxy/userdata/voxygen/settings.ron".into()));
+    assert_eq!(resolve_fs_path("userdata/voxygen/settings.ron", false),
+               Some(format!("{root}/userdata/voxygen/settings.ron")));
+    for path in ["/apps/other/userdata/settings.ron", "/apps/voxy/userdata-other/file",
+                 "/apps/voxy/container_1--other/file", "/apps/voxy/voxy.pw"] {
+        assert_eq!(resolve_fs_path(path, false), Some(format!("{root}{}", path)));
+    }
+    assert_eq!(resolve_fs_path("/apps/voxy/userdata/../voxy.pw", false), None);
+    assert!(!trueosfs_scope_granted());
+}
+
+#[test]
 fn userdata_stays_in_its_instance_even_with_broader_scope() {
     for root in ["apps/velosrv", "apps/velosrv/first--uuid", "apps/velosrv/second--uuid"] {
         for broad in [false, true] {

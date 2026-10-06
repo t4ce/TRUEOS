@@ -1775,6 +1775,12 @@ pub(crate) fn build_process_env(
     vars.insert(String::from("BAT_CACHE_PATH"), String::from("/cache/bat"));
     let archive_stem = safe_archive_stem(archive);
     if archive_stem == "voxy" {
+        // Settings, profiles and logs survive replacement of the container.
+        // The resolver exports only this app's shared userdata subtree.
+        vars.insert(
+            String::from("VELOREN_USERDATA"),
+            String::from("/apps/voxy/userdata"),
+        );
         vars.insert(
             String::from("VOXYGEN_SCREENSHOT"),
             alloc::format!("{}/screenshots", app_home.trim_end_matches('/')),

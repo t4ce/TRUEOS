@@ -32,7 +32,7 @@ impl Terminal {
             closing: false,
             overflow: false,
         };
-        terminal.write(b"\x1b[?1049h\x1b[0m");
+        terminal.write(b"\x1b[?1049h\x1b[0m\x1b[2J\x1b[H");
         let title = terminal.shell.row_for_render(SpecialRows::TitleRow);
         for run in &title.left {
             terminal.write_meta(run);

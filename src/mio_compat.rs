@@ -1046,6 +1046,16 @@ impl MioCompat {
                         socket.listen_handles.retain(|h| *h != handle);
                         refill_listener = Some(socket.id);
                     } else {
+                        // Tokio wakes on WRITE_CLOSED and checks take_error to
+                        // finish a nonblocking connect. A pre-establishment
+                        // close must fail that check, rather than look like a
+                        // successful connection followed by an immediate EOF.
+                        if socket.kind == MioSocketKind::TcpStream
+                            && !socket.connected
+                            && socket.error == STATUS_OK
+                        {
+                            socket.error = STATUS_NOT_CONNECTED;
+                        }
                         if socket.kind == MioSocketKind::TcpStream
                             && !socket.connected
                             && let Some(peer) = socket.peer

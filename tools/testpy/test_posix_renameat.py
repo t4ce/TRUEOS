@@ -203,6 +203,22 @@ mod r {
         assert!(!state.files.contains_key("apps/velosrv/destination"));
         assert!(state.operations.iter().all(|(stage,_)| *stage!=Stage::Remove));
     }
+    #[test] fn containers_read_and_update_the_same_shared_userdata_files() {
+        prepare();
+        for path in ["/apps/voxy/userdata/voxygen/settings.ron",
+                     "/apps/voxy/userdata/voxygen/profile.ron",
+                     "/apps/voxy/userdata/voxygen/logs/today.log"] {
+            *r::io::env::ROOT.lock()=Some("apps/voxy/container_1--first".into());
+            write_file_to_cabi(path,b"first launch").unwrap();
+            *r::io::env::ROOT.lock()=Some("apps/voxy/container_1--second".into());
+            assert_eq!(read_file_from_cabi(path).unwrap(),b"first launch");
+            write_file_to_cabi(path,b"second launch").unwrap();
+            *r::io::env::ROOT.lock()=Some("apps/voxy".into());
+            assert_eq!(read_file_from_cabi(path).unwrap(),b"second launch");
+        }
+        let state=STATE.lock();
+        assert!(state.operations.iter().all(|(_,path)| path.starts_with("apps/voxy/userdata/")));
+    }
     #[test] fn cwd_rename_commits_destination_before_deleting_source() {
         prepare();assert_eq!(invoke(TRUEOS_AT_FDCWD,"source",TRUEOS_AT_FDCWD,"destination"),0);
         assert_eq!(errno(),0);
