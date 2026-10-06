@@ -78,17 +78,6 @@ mod tty {
         assert!(output.contains("\\x1b[3;1H"));
         assert_eq!(output.matches("\\x1b[2J").count(),1);
     }
-    #[test] fn clear_screen_returns_to_active_slot_prompt() {
-        let mut tty=terminal();
-        tty.input(b"\\t");tty.output.clear();
-        tty.input(b"clear\\r");tty.input(b"\\n");
-        let output=String::from_utf8_lossy(&tty.output);
-        assert!(output.starts_with("\\x1b[2J\\x1b[H"));assert!(output.contains("TrueOS § 12:34"));
-        assert!(tty.shell.parsed.borrow().is_empty());
-        assert_eq!(tty.shell.prompt, "");assert!(!tty.closing);
-        tty.input(b"known\\n");
-        assert_eq!(&*tty.shell.parsed.borrow(), &["known"]);
-    }
     #[test] fn matrix_operator_is_submitted_once_with_enter() {
         let mut tty = terminal();
         tty.input("§id§".as_bytes());assert!(tty.shell.parsed.borrow().is_empty());

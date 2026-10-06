@@ -124,13 +124,7 @@ impl Terminal {
             return;
         }
         match command {
-            "help" => self.shell.terminal_message("UTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"),
-            // The remote terminal interprets these bytes; TCP only carries them.
-            "clear" => {
-                self.write(b"\x1b[2J\x1b[H");
-                self.presented.clear();
-                self.presented_cursor = None;
-            }
+            "help" => self.shell.terminal_message("UTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"),
             "tab" => {
                 self.shell.set_mode(self.shell.get_mode() % 3 + 1);
             }
