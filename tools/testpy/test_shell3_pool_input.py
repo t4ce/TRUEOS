@@ -30,7 +30,7 @@ mod r {pub mod readiness {pub fn mask()->u32 {0}} pub mod keyboard {
     pub const KEYBOARD_KEY_BACKSPACE:u16=1;
     pub const KEYBOARD_KEY_ESCAPE:u16=4;
     pub const KEYBOARD_OUTPUT_FLAG_PRESS:u32=1;
-    pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32,pub flags:u32 }
+    #[derive(Default)] pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32,pub flags:u32,pub utf8:[u8;4],pub utf8_len:u8 }
 } }
 const PROMPT_CURSOR:char='#';
 const OPERATOR:char='§';
@@ -93,9 +93,73 @@ struct Shell3 {status_hover:Option<status::Target>,tui_frontend:u64,rows_count:u
 impl Shell3 {
 fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
+    for name in ('launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += '}\n'
+    source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//') + '\n'
+    source += r'''
+#[cfg(test)] mod replay_tests {
+    use super::*;
+    use crate::{MatrixSlots, matrix_slots, service, Mode};
+    #[test] fn network_defers_until_enter_and_first_latch_discards_tail() {
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
+        let mut tty=Terminal::new(Shell3::new(100));
+        tty.input(b"onlinepause");
+        assert!(MatrixSlots::echo_lines(None).is_empty());
+        tty.input(b"\r");tty.input(b"\n");
+        assert_eq!(MatrixSlots::echo_lines(None),vec!["online"]);
+        assert_eq!(tty.shell.prompt(),"");assert_eq!(tty.line,"");
+        tty.input(b"pause\n");
+        assert_eq!(MatrixSlots::echo_lines(None),vec!["pause","online"]);
+        matrix_slots().lock().echoes.clear();
+    }
+    #[test] fn replay_launches_once_and_discards_vme_tail() {
+        MatrixSlots::set(&[] as &[&str]);service::LAUNCHES.lock().unwrap().clear();
+        let mut shell=Shell3::new(100);shell.set_appdb_names(&["termdir".into()]);
+        let mut tty=Terminal::new(shell);
+        tty.input(b"tab\n");assert_eq!(tty.shell.mode,Mode::CMD);
+        tty.input(b"termdirescstop\n");
+        assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("termdir".into(),"".into())]);
+        assert!(tty.shell.active_vmx_app().is_some());assert_eq!(tty.line,"");
+        tty.input(b"tab\n");assert_eq!(tty.shell.mode,Mode::CMD);
+        tty.input(b"stoptermdir\n");assert!(tty.shell.active_vmx_app().is_none());
+        assert_eq!(service::LAUNCHES.lock().unwrap().len(),1);
+        tty.input(b"tab\n");assert_eq!(tty.shell.mode,Mode::ADM);
+    }
+    #[test] fn unicode_latch_discards_tail_and_operator_still_waits_for_enter() {
+        MatrixSlots::set(&[] as &[&str]);service::LAUNCHES.lock().unwrap().clear();
+        let mut shell=Shell3::new(100);shell.set_mode(2);shell.aka_names=vec!["héllo".into()];
+        let mut tty=Terminal::new(shell);
+        tty.input("hélloescrest\n".as_bytes());
+        assert_eq!(service::LAUNCHES.lock().unwrap()[0].0,"alias:héllo");
+        assert!(tty.shell.active_vmx_app().is_some());assert_eq!(tty.line,"");
+        tty.input("§new".as_bytes());assert_ne!(tty.shell.active_matrix_slot_name(),Some("new".into()));
+        tty.input(b"\n");assert_eq!(tty.shell.active_matrix_slot_name(),Some("new".into()));
+        assert_eq!(tty.line,"");matrix_slots().lock().echoes.clear();
+    }
+    #[test] fn impossible_prefix_stops_before_later_names_or_operators() {
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
+        let mut tty=Terminal::new(Shell3::new(100));
+        tty.input("onXonline§new\n".as_bytes());
+        assert_eq!(tty.line,"onX");assert_eq!(tty.shell.prompt(),"onX");
+        assert!(MatrixSlots::echo_lines(None).is_empty());
+        assert!(!MatrixSlots::slot_ids().contains(&"new".into()));
+        tty.input(b"\x15on\n");assert_eq!(tty.line,"on");
+        tty.input(b"linepause\n");assert_eq!(MatrixSlots::echo_lines(None),vec!["online"]);
+        assert_eq!(tty.line,"");matrix_slots().lock().echoes.clear();
+    }
+    #[test] fn dynamic_names_share_prefix_registry_and_shortest_match_wins() {
+        MatrixSlots::set(&[] as &[&str]);service::LAUNCHES.lock().unwrap().clear();
+        let mut shell=Shell3::new(100);shell.set_mode(2);
+        shell.aka_names=vec!["hé".into(),"héllo".into()];
+        let mut tty=Terminal::new(shell);tty.input("héllo\n".as_bytes());
+        assert_eq!(service::LAUNCHES.lock().unwrap()[0].0,"alias:hé");
+        assert_eq!(service::LAUNCHES.lock().unwrap().len(),1);assert_eq!(tty.line,"");
+        matrix_slots().lock().echoes.clear();
+    }
+}
+}
+'''
     source += f'#[path="{ROOT}/src/shell3/status.rs"] mod status;\n'
     source += 'mod update {use alloc::vec::Vec;\n' + extract.item('src/shell3/update.rs', 'fit_strips') + '}\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')
@@ -144,7 +208,7 @@ fn refresh_appdb_names(){}
     o.shells_by_slot[2]=99; o.shells_by_slot[7]=0; o.pending_by_slot[11]=42;
     assert_eq!(o.preferred_slot(),Some(2));
 }
-fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keyboard(&r::keyboard::TrueosKeyboardOutputEvent {kind,key_code,codepoint:ch as u32,flags:1})}
+fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keyboard(&r::keyboard::TrueosKeyboardOutputEvent {kind,key_code,codepoint:ch as u32,flags:1,..Default::default()})}
 #[test] fn bounded_unicode_input_backspace_and_refill() {
     let mut s=Shell3::new(5);
     for ch in "aé😀z".chars() {assert!(key(&mut s,1,0,ch));}
@@ -162,7 +226,7 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
         assert!(key(&mut a,2,2,'\\t')); assert_eq!(a.mode,mode);
         assert_eq!(a.rows.title.left[0].text,"TrueOS § 12:34");
         let legend:String=a.rows.title.right.iter().map(|run|run.text.as_str()).collect();
-        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"[Media img shot vid film cam rec] [AppDB]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
+        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"[Capture img vid aud vaud] [AppDB]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
     }
     assert_eq!(b.mode,Mode::HV); assert_eq!(b.prompt.text,"y");
     assert!(!key(&mut a,2,3,'\\r')); assert!(!key(&mut a,1,0,'\\n'));
@@ -253,7 +317,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     s.set_appdb_names(&["Demo".into()]);
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
     s.set_mode(2);
-    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Media img shot vid film cam rec] [AppDB Demo]");
+    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Capture img vid aud vaud] [AppDB Demo]");
     for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render(),"#");s.select_matrix_slot_index(0);}
     assert_eq!(MatrixSlots::echo_lines(None),vec!["img"]);
     s.set_mode(3); let admin=s.rows.title.right.clone();

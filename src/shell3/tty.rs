@@ -1,5 +1,5 @@
 //! Small UTF-8 line terminal. Socket framing and graphics stay outside it.
-use super::{OPERATOR, Shell3, SpecialRows, StripSide};
+use super::{Shell3, SpecialRows, StripSide};
 use alloc::{string::String, vec::Vec};
 
 const LINE_LIMIT: usize = 1024;
@@ -68,31 +68,25 @@ impl Terminal {
             return;
         }
         match command {
-            "" => {}
-            "help" => self.write(b"UTF-8 line input; Enter submits; Backspace erases.\r\nTab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nShell3 recognizes names; command execution is not wired yet. Matrix operators are submitted with Enter.\r\n"),
+            "help" => self.write(b"UTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"),
             // The remote terminal interprets these bytes; TCP only carries them.
             "clear" => self.write(b"\x1b[2J\x1b[H"),
+            "tab" => {
+                self.shell.set_mode(self.shell.get_mode() % 3 + 1);
+            }
             "exit" => {
                 self.write(b"Bye.\r\n");
                 self.closing = true;
             }
-            "stop" if self.shell.stop_active_vmx() => {}
-            _ if command.starts_with(OPERATOR) => {
-                if !self.shell.parse_operator(command) {
-                    self.write(b"Shell3: invalid or absent Matrix slot operator.\r\n");
-                }
-            }
             _ => {
-                let recognized = self.shell.parse(command);
-                self.write(if recognized {
-                    b"Shell3: name recognized; execution is not wired yet.\r\n"
-                } else {
-                    b"Shell3: unknown name in this mode.\r\n"
-                });
+                self.shell.replay_terminal_line(&line);
+                self.line = self.shell.prompt().into();
             }
         }
         if !self.closing {
             self.prompt();
+            let line = self.line.clone();
+            self.write(line.as_bytes());
         }
     }
 

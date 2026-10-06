@@ -893,25 +893,67 @@ impl Shell3 {
         true
     }
 
+    /// Line transports defer input until Enter, then replay the same events as
+    /// UI typing. The first latch consumes the submission; its remaining input
+    /// is discarded. Stop early when the prompt cannot become a valid name.
+    pub(super) fn replay_terminal_line(&mut self, line: &str) {
+        use crate::r::keyboard::*;
+        self.set_prompt("");
+        for ch in line.chars() {
+            let mut utf8 = [0; 4];
+            let utf8_len = ch.encode_utf8(&mut utf8).len() as u8;
+            let (changed, latched) = self.handle_keyboard_with_latch(&TrueosKeyboardOutputEvent {
+                kind: KEYBOARD_OUTPUT_KIND_TEXT,
+                codepoint: ch as u32,
+                utf8,
+                utf8_len,
+                flags: KEYBOARD_OUTPUT_FLAG_PRESS,
+                ..Default::default()
+            });
+            if latched || !changed {
+                return;
+            }
+            if !self.prompt.text.starts_with(OPERATOR)
+                && !self.any_name_matching(|name| name.starts_with(&self.prompt.text))
+            {
+                return;
+            }
+        }
+        self.handle_keyboard(&TrueosKeyboardOutputEvent {
+            kind: KEYBOARD_OUTPUT_KIND_KEY,
+            key_code: KEYBOARD_KEY_ENTER,
+            flags: KEYBOARD_OUTPUT_FLAG_PRESS,
+            ..Default::default()
+        });
+    }
+
     /// UI editing with immediate exact-name recognition and AppDB/AKA launch.
     pub(super) fn handle_keyboard(
         &mut self,
         event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
     ) -> bool {
+        self.handle_keyboard_with_latch(event).0
+    }
+
+    /// (Input changed the view or reached a TUI, exact name latched.)
+    fn handle_keyboard_with_latch(
+        &mut self,
+        event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+    ) -> (bool, bool) {
         use crate::r::keyboard::*;
-        if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 { return false; }
+        if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 { return (false, false); }
         let operator = event.kind == KEYBOARD_OUTPUT_KIND_TEXT && event.codepoint == OPERATOR as u32;
-        if operator && !tui::park(self.tui_frontend) { return false; }
+        if operator && !tui::park(self.tui_frontend) { return (false, false); }
         if !operator {
-            if tui::keyboard(self.tui_frontend, self.active_matrix_slot_name().as_deref(), event) { return true; }
+            if tui::keyboard(self.tui_frontend, self.active_matrix_slot_name().as_deref(), event) { return (true, false); }
         }
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
             match event.key_code {
-                KEYBOARD_KEY_ENTER => return self.submit_operator_prompt(),
-                KEYBOARD_KEY_TAB => return self.set_mode(self.get_mode() % 3 + 1),
+                KEYBOARD_KEY_ENTER => return (self.submit_operator_prompt(), false),
+                KEYBOARD_KEY_TAB => return (self.set_mode(self.get_mode() % 3 + 1), false),
                 KEYBOARD_KEY_BACKSPACE => {
                     if self.prompt.cursor == 0 {
-                        return false;
+                        return (false, false);
                     }
                     let index = self.prompt.cursor - 1;
                     let byte = self.prompt.text.char_indices().nth(index).unwrap().0;
@@ -921,16 +963,16 @@ impl Shell3 {
                     }
                     self.prompt.cursor = index;
                     self.refresh_prompt_strip();
-                    return true;
+                    return (true, false);
                 }
-                _ => return false,
+                _ => return (false, false),
             }
         }
         if event.kind != KEYBOARD_OUTPUT_KIND_TEXT {
-            return false;
+            return (false, false);
         }
         let Some(ch) = char::from_u32(event.codepoint).filter(|ch| !ch.is_control()) else {
-            return false;
+            return (false, false);
         };
         let right_len = self
             .rows
@@ -941,7 +983,7 @@ impl Shell3 {
             .sum::<usize>();
         // Keep all typed glyphs and the cursor visible beside the right strip.
         if self.prompt.char_len() + 1 >= self.columns.saturating_sub(right_len) {
-            return false;
+            return (false, false);
         }
         let byte = self
             .prompt
@@ -954,9 +996,9 @@ impl Shell3 {
         self.prompt.colors.resize(self.prompt.char_len() - 1, None);
         self.prompt.colors.insert(self.prompt.cursor, None);
         self.prompt.cursor += 1;
-        self.echo_recognized_prompt();
+        let latched = self.echo_recognized_prompt();
         self.refresh_prompt_strip();
-        true
+        (true, latched)
     }
 
     fn launch_named_app(&mut self, text: &str, is_alias: bool) {
@@ -987,9 +1029,9 @@ impl Shell3 {
         }
     }
 
-    fn echo_recognized_prompt(&mut self) {
+    fn echo_recognized_prompt(&mut self) -> bool {
         if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) {
-            return;
+            return false;
         }
         let text = core::mem::take(&mut self.prompt.text);
         let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
@@ -1016,6 +1058,7 @@ impl Shell3 {
         }
         self.prompt.colors.clear();
         self.prompt.cursor = 0;
+        true
     }
 
     pub(super) fn matrix_output_needed(&self) -> bool {
@@ -1299,21 +1342,26 @@ impl Shell3 {
     }
 
     pub fn parse_name(&self, name: &str) -> bool {
+        self.any_name_matching(|candidate| candidate == name)
+    }
+
+    /// Exact recognition and prefix viability consult the same live registry.
+    fn any_name_matching(&self, matches: impl Fn(&str) -> bool) -> bool {
         if self.active_vmx_app().is_some() {
-            return names::VME_GROUP.names.iter().any(|entry| entry.name == name);
+            return names::VME_GROUP.names.iter().any(|entry| matches(entry.name));
         }
         match self.mode {
             Mode::HV => HV_GROUPS
                 .iter()
-                .any(|group| group.names.iter().any(|entry| entry.name == name)),
+                .any(|group| group.names.iter().any(|entry| matches(entry.name))),
             Mode::CMD => {
                 CMD_GROUPS
                     .iter()
-                    .any(|group| group.names.iter().any(|entry| entry.name == name))
-                    || self.aka_names.iter().any(|alias| alias == name)
-                    || self.appdb_names.iter().any(|entry| entry == name)
+                    .any(|group| group.names.iter().any(|entry| matches(entry.name)))
+                    || self.aka_names.iter().any(|alias| matches(alias))
+                    || self.appdb_names.iter().any(|entry| matches(entry))
             }
-            Mode::ADM => ADM_NAMES.iter().any(|entry| entry.name == name),
+            Mode::ADM => ADM_NAMES.iter().any(|entry| matches(entry.name)),
         }
     }
 }

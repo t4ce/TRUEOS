@@ -39,7 +39,11 @@ impl Shell3 {
     fn set_prompt(&mut self, text: &str) { self.prompt = text.into(); }
     fn set_cursor(&mut self, cursor: usize) { self.cursor = cursor; }
     fn parse_operator(&mut self,text:&str)->bool {self.parsed.borrow_mut().push(text.into());text.starts_with(OPERATOR)}
-    fn parse(&self, text: &str) -> bool { self.parsed.borrow_mut().push(text.into()); text == "known" }
+    fn prompt(&self) -> &str { &self.prompt }
+    fn replay_terminal_line(&mut self, text: &str) {
+        if text != "stop" || !self.stop_active_vmx() { self.parsed.borrow_mut().push(text.into()); }
+        self.prompt.clear();self.cursor=0;
+    }
 }
 mod tty {
 '''
@@ -126,7 +130,7 @@ mod tty {
         let mut tty = terminal(); tty.input(b"known\\nhelp\\nexit\\nignored\\n");
         assert_eq!(&*tty.shell.parsed.borrow(), &["known"]);
         assert!(tty.closing);
-        assert!(String::from_utf8_lossy(&tty.output).contains("execution is not wired"));
+        assert!(String::from_utf8_lossy(&tty.output).contains("Enter replays the line"));
         let mut eof = terminal(); eof.input(b"x\\x04"); assert!(!eof.closing);
         eof.input(b"\\x7f\\x04"); assert!(eof.closing);
     }
