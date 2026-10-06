@@ -1088,7 +1088,32 @@ struct SpriteSceneUpload {
 static SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
 // One primary-display transition at a time. Revoke on VM teardown as well as
 // normal client completion, so a crashing Blueprint cannot leave a black screen.
-static DISPLAY_FADE: Mutex<Option<(WindowOwner, u32, super::color_picker::PipeGammaSnapshot)>> = Mutex::new(None);
+struct DisplayFadeState {
+    owner: WindowOwner,
+    window_id: u32,
+    snapshot: super::color_picker::PipeGammaSnapshot,
+    amount: i32,
+}
+
+static DISPLAY_FADE: Mutex<Option<DisplayFadeState>> = Mutex::new(None);
+static DISPLAY_GAMMA: Mutex<Option<(WindowOwner, u32, super::color_picker::PipeGammaSnapshot)>> =
+    Mutex::new(None);
+
+fn release_display_color(owner: WindowOwner, window_id: Option<u32>) {
+    let mut gamma = DISPLAY_GAMMA.lock();
+    let mut fade = DISPLAY_FADE.lock();
+    let matches = |o, w| o == owner && window_id.is_none_or(|id| id == w);
+    if fade.as_ref().is_some_and(|f| matches(f.owner, f.window_id)) {
+        if let Some(f) = fade.take() {
+            super::color_picker::fade_pipe_a_gamma(&f.snapshot, 0);
+        }
+    }
+    if gamma.as_ref().is_some_and(|(o, w, _)| matches(*o, *w)) {
+        if let Some((_, _, snapshot)) = gamma.take() {
+            super::color_picker::fade_pipe_a_gamma(&snapshot, 0);
+        }
+    }
+}
 
 static NEXT_BLUEPRINT_FONT_SPRITE_ID: AtomicU32 = AtomicU32::new(0x8000_0000);
 static RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
@@ -1102,11 +1127,7 @@ static QUARANTINED_SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec:
 /// The caller owns the application lifecycle decision. UI4 only applies the
 /// owner-scoped resource revocation and does not inspect VM state.
 pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
-    let mut fade = DISPLAY_FADE.lock();
-    if fade.as_ref().is_some_and(|(fade_owner, _, _)| *fade_owner == owner) {
-        if let Some((_, _, snapshot)) = fade.take() { super::color_picker::fade_pipe_a_gamma(&snapshot, 0); }
-    }
-    drop(fade);
+    release_display_color(owner, None);
     clipboard_api::release_owner(owner);
     display_api::release_owner(owner);
     let owned = {
@@ -3144,32 +3165,73 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32,
 
 /// Shared display fade with automatic restoration of the prior LUT and mode.
 pub extern "C" fn trueos_cabi_ui4_scene_display_fade_v1(window_id: u32, amount: i32) -> i32 {
-    if !(-65535..=65535).contains(&amount) { return ERROR_INVALID; }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_status(trueos_vm::vmcall::OP_BP_UI4_SCENE_DISPLAY_FADE,
-            window_id as u64, amount as i64 as u64, &[]);
+    if !(-65535..=65535).contains(&amount) {
+        return ERROR_INVALID;
     }
-    let Some(owner) = blueprint_owner() else { return ERROR_CONTEXT; };
-    if surface_mut(&mut SURFACES.lock(), owner, window_id).is_none() { return ERROR_NOT_FOUND; }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_DISPLAY_FADE,
+            window_id as u64,
+            amount as i64 as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    if surface_mut(&mut SURFACES.lock(), owner, window_id).is_none() {
+        return ERROR_NOT_FOUND;
+    }
+    let gamma = DISPLAY_GAMMA.lock();
+    if gamma
+        .as_ref()
+        .is_some_and(|(o, w, _)| *o != owner || *w != window_id)
+    {
+        return ERROR_BUSY;
+    }
     let mut fade = DISPLAY_FADE.lock();
-    if fade.as_ref().is_some_and(|(o, w, _)| *o != owner || *w != window_id) { return ERROR_BUSY; }
+    if fade
+        .as_ref()
+        .is_some_and(|f| f.owner != owner || f.window_id != window_id)
+    {
+        return ERROR_BUSY;
+    }
     if amount == 0 {
-        if let Some((_, _, snapshot)) = fade.as_ref() {
-            if !super::color_picker::fade_pipe_a_gamma(snapshot, 0) { return ERROR_UI4; }
+        if let Some(f) = fade.as_ref() {
+            if !super::color_picker::fade_pipe_a_gamma(&f.snapshot, 0) {
+                return ERROR_UI4;
+            }
         }
         *fade = None;
         return 0;
     }
-    if fade.is_none() {
-        let Some(snapshot) = super::color_picker::read_pipe_a_gamma() else { return ERROR_UI4; };
-        *fade = Some((owner, window_id, snapshot));
+    if let Some(f) = fade.as_mut() {
+        if !super::color_picker::fade_pipe_a_gamma(&f.snapshot, amount) {
+            return ERROR_UI4;
+        }
+        f.amount = amount;
+    } else {
+        let Some(snapshot) = super::color_picker::read_pipe_a_gamma() else {
+            return ERROR_UI4;
+        };
+        *fade = Some(DisplayFadeState {
+            owner,
+            window_id,
+            snapshot,
+            amount,
+        });
+        if !super::color_picker::fade_pipe_a_gamma(&fade.as_ref().unwrap().snapshot, amount) {
+            return ERROR_UI4;
+        }
     }
-    if super::color_picker::fade_pipe_a_gamma(&fade.as_ref().unwrap().2, amount) { 0 } else { ERROR_UI4 }
+    0
 }
 
 /// Program the shared Pipe A precision gamma LUT from a Windows GAMMARAMP.
 /// The caller must own a live frame; the 3×256 u16 ramp is copied over the
-/// Blueprint VMCALL payload rather than retaining a guest pointer.
+/// Blueprint VMCALL payload rather than retaining a guest pointer. The window
+/// owns the transfer until close/teardown, which restores the original state.
+/// An active fade from that window is applied over each replacement ramp.
 pub extern "C" fn trueos_cabi_ui4_scene_set_display_gamma_ramp(
     window_id: u32,
     ramp: *const u16,
@@ -3209,11 +3271,47 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_display_gamma_ramp(
         };
         (channel(0) << 20) | (channel(256) << 10) | channel(512)
     });
-    if super::color_picker::program_pipe_a_precision_gamma(&entries) {
-        0
-    } else {
-        ERROR_UI4
+    let mut gamma = DISPLAY_GAMMA.lock();
+    let mut fade = DISPLAY_FADE.lock();
+    if gamma
+        .as_ref()
+        .is_some_and(|(o, w, _)| *o != owner || *w != window_id)
+        || fade
+            .as_ref()
+            .is_some_and(|f| f.owner != owner || f.window_id != window_id)
+    {
+        return ERROR_BUSY;
     }
+    let original = if gamma.is_none() {
+        let snapshot = if let Some(f) = fade.as_ref() {
+            Some(f.snapshot.clone())
+        } else {
+            super::color_picker::read_pipe_a_gamma()
+        };
+        let Some(snapshot) = snapshot else {
+            return ERROR_UI4;
+        };
+        if !snapshot.supports_precision_transfer() {
+            return ERROR_UI4;
+        }
+        Some(snapshot)
+    } else {
+        None
+    };
+    // Retain restoration state even if the programming/readback step fails.
+    if let Some(snapshot) = original {
+        *gamma = Some((owner, window_id, snapshot));
+    }
+    if let Some(f) = fade.as_mut() {
+        let snapshot = f.snapshot.with_precision_palette(entries);
+        if !super::color_picker::fade_pipe_a_gamma(&snapshot, f.amount) {
+            return ERROR_UI4;
+        }
+        f.snapshot = snapshot;
+    } else if !super::color_picker::program_pipe_a_precision_gamma(&entries) {
+        return ERROR_UI4;
+    }
+    0
 }
 
 /// Set window opacity, or only background opacity when given its layer target.
@@ -9302,11 +9400,7 @@ fn blueprint_surface_close_request(
 }
 
 fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurfaceRelease) {
-    let mut fade = DISPLAY_FADE.lock();
-    if fade.as_ref().is_some_and(|(owner, target, _)| *owner == surface.owner && *target == surface.render_target) {
-        if let Some((_, _, snapshot)) = fade.take() { super::color_picker::fade_pipe_a_gamma(&snapshot, 0); }
-    }
-    drop(fade);
+    release_display_color(surface.owner, Some(surface.render_target));
     clipboard_api::release_window(surface.owner, surface.window);
     DYNAMIC_CONTEXT_MENU_EVENTS
         .lock()

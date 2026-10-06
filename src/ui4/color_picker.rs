@@ -58,10 +58,26 @@ enum PickerPanel {
     Gamma,
 }
 
+#[derive(Clone)]
 pub(crate) struct PipeGammaSnapshot {
     mode: u32,
     precision_palette: [u32; PRECISION_PALETTE_ENTRIES],
 }
+
+impl PipeGammaSnapshot {
+    pub(crate) fn supports_precision_transfer(&self) -> bool {
+        self.mode & POST_CSC_GAMMA_ENABLE == 0 || self.mode & GAMMA_MODE_MASK == GAMMA_MODE_10_BIT
+    }
+
+    pub(crate) fn with_precision_palette(&self, entries: [u32; PRECISION_PALETTE_ENTRIES]) -> Self {
+        Self {
+            mode: (self.mode & !GAMMA_MODE_MASK) | GAMMA_MODE_10_BIT | POST_CSC_GAMMA_ENABLE,
+            precision_palette: entries,
+        }
+    }
+}
+
+static PIPE_GAMMA: Mutex<()> = Mutex::new(());
 
 #[derive(Copy, Clone)]
 struct PickerGesture {
@@ -576,6 +592,7 @@ fn set_bottom_color(rgb: [u8; 3]) -> bool {
 // Keep this first gamma experiment local to the UI4 picker. Reading the
 // precision palette captures the hardware state before any UI interaction.
 pub(crate) fn read_pipe_a_gamma() -> Option<PipeGammaSnapshot> {
+    let _guard = PIPE_GAMMA.lock();
     let dev = crate::intel::claimed_device()?;
     let mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
     let precision_index = crate::intel::mmio_read(dev, PIPE_A_PREC_INDEX);
@@ -624,6 +641,11 @@ fn set_pipe_a_gamma(x: u8) -> bool {
 }
 
 pub(crate) fn program_pipe_a_precision_gamma(entries: &[u32; PRECISION_PALETTE_ENTRIES]) -> bool {
+    let _guard = PIPE_GAMMA.lock();
+    program_pipe_a_precision_gamma_locked(entries)
+}
+
+fn program_pipe_a_precision_gamma_locked(entries: &[u32; PRECISION_PALETTE_ENTRIES]) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -651,8 +673,9 @@ pub(crate) fn program_pipe_a_precision_gamma(entries: &[u32; PRECISION_PALETTE_E
 /// Apply a fade relative to the exact display state captured before the transition.
 pub(crate) fn fade_pipe_a_gamma(snapshot: &PipeGammaSnapshot, amount: i32) -> bool {
     if amount == 0 {
+        let _guard = PIPE_GAMMA.lock();
         let Some(dev) = crate::intel::claimed_device() else { return false; };
-        if !program_pipe_a_precision_gamma(&snapshot.precision_palette) { return false; }
+        if !program_pipe_a_precision_gamma_locked(&snapshot.precision_palette) { return false; }
         crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, snapshot.mode);
         return crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE) == snapshot.mode;
     }
