@@ -2606,7 +2606,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_first_presentation_take(window_id: u32) 
     }
 }
 
-/// Observe one exact foreground or background publication at physical SURFLIVE.
+/// Observe one exact foreground publication at the physical SURFLIVE boundary.
 /// Zero means presented; one means absent from the bounded presentation history.
 pub extern "C" fn trueos_cabi_ui4_scene_frame_was_presented_v1(
     window_id: u32,
@@ -2626,20 +2626,17 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_was_presented_v1(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let (window, background) = {
+    let window = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
         };
-        (surface.window, surface.render_target != surface.window.raw())
+        if surface.render_target != surface.window.raw() {
+            return ERROR_STATE;
+        }
+        surface.window
     };
-    i32::from(
-        !(if background {
-            super::window_background_frame_was_presented(owner, window, publish_serial)
-        } else {
-            super::window_frame_was_presented(owner, window, publish_serial)
-        }),
-    )
+    i32::from(!super::window_frame_was_presented(owner, window, publish_serial))
 }
 
 /// Return the cursor/UI4 output extent packed as `width << 32 | height`.
@@ -5965,7 +5962,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     publish_blueprint_frame(window_id, damage_x, damage_y, damage_width, damage_height, None)
 }
 
-/// Publish a frame and report the serial from the same layer's broker commit.
+/// Publish a foreground frame and report the serial from the same broker commit.
 /// The output is written only when a new publication was actually committed.
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_frame_publish_tracked_v1(
     window_id: u32,
@@ -6006,12 +6003,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_frame_publish_tracked_v1(
     }
     let mut serial = 0;
     let result = publish_blueprint_frame(
-        window_id,
-        damage_x,
-        damage_y,
-        damage_width,
-        damage_height,
-        Some(&mut serial),
+        window_id, damage_x, damage_y, damage_width, damage_height, Some(&mut serial),
     );
     if result != 0 {
         return result;
@@ -6063,12 +6055,13 @@ fn publish_blueprint_frame(
         return ERROR_NOT_FOUND;
     };
     if publish_serial.is_some()
-        && surface.pending_resize.is_some()
-        && super::window_broker::window_snapshot(owner, surface.window)
-            .is_some_and(|window| window.background.is_some())
+        && (surface.render_target != surface.window.raw()
+            || (surface.pending_resize.is_some()
+                && super::window_broker::window_snapshot(owner, surface.window)
+                    .is_some_and(|window| window.background.is_some())))
     {
-        // A staged paired resize commits the two layers atomically; a single
-        // layer cannot supply an independent serial for that transaction.
+        // A background update and a staged paired resize do not independently
+        // publish the foreground frame queried by was_presented.
         return ERROR_STATE;
     }
     if damage_x >= surface.width || damage_y >= surface.height {

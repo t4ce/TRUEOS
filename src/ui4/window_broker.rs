@@ -508,10 +508,6 @@ struct WindowRecord {
     /// a producer may publish again while an older transaction is pending.
     presented_serials: [u64; 8],
     presented_serial_cursor: u8,
-    /// Background serials are independent of foreground serials. Record them
-    /// only after the paired compositor batch has crossed SURFLIVE.
-    background_presented_serials: [u64; 8],
-    background_presented_serial_cursor: u8,
     first_presentation_emitted: bool,
     first_presentation_taken: bool,
     damage: Option<DamageRegion>,
@@ -1587,15 +1583,6 @@ impl WindowBroker {
 }
 
 impl WindowRecord {
-    fn note_background_surflive(&mut self, publish_serial: u64) {
-        debug_assert_ne!(publish_serial, 0);
-        let index = usize::from(self.background_presented_serial_cursor)
-            % self.background_presented_serials.len();
-        self.background_presented_serials[index] = publish_serial;
-        self.background_presented_serial_cursor =
-            self.background_presented_serial_cursor.wrapping_add(1);
-    }
-
     fn new(generation: u16, request: WindowCreate, buffering: FrameBuffering) -> Self {
         Self {
             generation,
@@ -1615,8 +1602,6 @@ impl WindowRecord {
             publish_serial: 0,
             presented_serials: [0; 8],
             presented_serial_cursor: 0,
-            background_presented_serials: [0; 8],
-            background_presented_serial_cursor: 0,
             first_presentation_emitted: false,
             first_presentation_taken: false,
             damage: None,
@@ -3300,54 +3285,27 @@ pub(crate) fn window_frame_was_presented(
     })
 }
 
-/// Whether this exact background publication crossed the compositor's
-/// physical SURFLIVE boundary. Its serial namespace is layer-local.
-pub(crate) fn window_background_frame_was_presented(
-    owner: WindowOwner,
-    id: WindowId,
-    publish_serial: u64,
-) -> bool {
-    let Ok((slot, generation)) = unpack_handle(id.0) else {
-        return false;
-    };
-    let broker = WINDOW_BROKER.lock();
-    broker.windows.get(slot).is_some_and(|window| {
-        window.generation == generation
-            && window.owner == owner
-            && publish_serial != 0
-            && window
-                .background_presented_serials
-                .contains(&publish_serial)
-    })
-}
-
 /// Clear only the damage represented by a successfully composed snapshot.
 /// If the producer published again meanwhile, the serial differs and its new
 /// damage remains pending.
 pub(super) fn acknowledge_window_surface(window: WindowSnapshot) -> bool {
     if window.layer == 1 {
-        let mut broker = WINDOW_BROKER.lock();
+        let broker = WINDOW_BROKER.lock();
         let Ok((slot, generation)) = unpack_handle(window.id.raw()) else {
             return false;
         };
-        let Some(record) = broker.windows.get_mut(slot) else {
-            return false;
-        };
-        if record.generation != generation
-            || record.owner != window.owner
-            || !matches!(record.state, WindowState::Ready | WindowState::Closing)
-            || window.publish_serial == 0
+        if let Some(record) = broker.windows.get(slot)
+            && record.generation == generation
+            && record.revision == window.revision
+            && record
+                .background
+                .is_some_and(|background| background.frame == window.frame)
         {
-            return false;
+            return record
+                .background
+                .is_some_and(|background| background.publish_serial == window.publish_serial);
         }
-        // Record the exact displayed serial even when the producer has since
-        // published again. A stale snapshot must not ACK the newer damage.
-        record.note_background_surflive(window.publish_serial);
-        return record.revision == window.revision
-            && record.background.is_some_and(|background| {
-                background.frame == window.frame
-                    && background.publish_serial == window.publish_serial
-            });
+        return false;
     }
     acknowledge_window_frame_revision(window.id, window.publish_serial, window.revision)
 }
@@ -3652,25 +3610,6 @@ fn unpack_handle(raw: u32) -> Result<(usize, u16), WindowBrokerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn background_receipts_have_a_bounded_layer_local_history() {
-        let owner = WindowOwner::GPGPU_PREVIEW;
-        let mut record = WindowRecord::new(
-            1,
-            test_window(owner, WindowSessionId::from_raw(1).unwrap(), 1, 0, 0, true),
-            FrameBuffering::Double,
-        );
-        record.presented_serials[0] = 77;
-        for serial in 1..=9 {
-            record.note_background_surflive(serial);
-        }
-        assert!(!record.background_presented_serials.contains(&1));
-        assert!(record.background_presented_serials.contains(&2));
-        assert!(record.background_presented_serials.contains(&9));
-        assert!(!record.background_presented_serials.contains(&77));
-        assert_eq!(record.presented_serials[0], 77);
-    }
 
     fn test_window(
         owner: WindowOwner,

@@ -149,8 +149,7 @@ pub(crate) use window_broker::{
     take_window_first_presentation, ui4_window_broker_snapshot_service_task,
     visible_windows_for_output, wait_for_window_composition_change,
     wait_for_window_first_presentation, window_composition_revision, window_escape_key_action,
-    window_background_frame_was_presented, window_frame_was_presented, window_is_closed,
-    window_placement, window_resize_state,
+    window_frame_was_presented, window_is_closed, window_placement, window_resize_state,
     window_state, window_title, window_transitions_active,
 };
 
