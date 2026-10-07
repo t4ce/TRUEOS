@@ -241,7 +241,8 @@ pub unsafe extern "C" fn trueos_cabi_log(
     message_ptr: *const u8,
     message_len: usize,
 ) -> i32 {
-    let level = match level_code {
+    let query = level_code & v::vsys::LOG_FLAG_QUERY_ENABLED != 0;
+    let level = match level_code & !v::vsys::LOG_FLAG_QUERY_ENABLED {
         trueos_vm::vmcall::BP_LOG_LEVEL_ERROR => LogLevel::Error,
         trueos_vm::vmcall::BP_LOG_LEVEL_WARN => LogLevel::Warn,
         trueos_vm::vmcall::BP_LOG_LEVEL_INFO => LogLevel::Info,
@@ -273,6 +274,7 @@ pub unsafe extern "C" fn trueos_cabi_log(
         return -1;
     };
     let message = message.trim_end_matches(&['\r', '\n'][..]);
+    if query && message_len != 0 { return -1; }
     let purpose = crate::log_os::purpose_for_level(level);
 
     // A Hull owns a private copy of kernel static state. Routing a structured
@@ -298,11 +300,19 @@ pub unsafe extern "C" fn trueos_cabi_log(
             record.as_slice(),
             &mut [],
         );
+        if query {
+            return if status == trueos_vm::vmcall::STATUS_OK { i32::from(accepted != 0) } else { -1 };
+        }
         return if status == trueos_vm::vmcall::STATUS_OK && accepted as usize == record.len() {
             0
         } else {
             -1
         };
+    }
+
+    if query {
+        return i32::from(crate::log_os::flags::area_log_enabled(
+            crate::log_os::flags::LogArea::Apps, level));
     }
 
     crate::log_os::log_with_area_purpose(

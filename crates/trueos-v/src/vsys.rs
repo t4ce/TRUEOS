@@ -11,6 +11,8 @@ pub const LOG_LEVEL_DEBUG: u32 = 4;
 pub const LOG_LEVEL_TRACE: u32 = 5;
 pub const LOG_LEVEL_IMPORTANT: u32 = 6;
 pub const LOG_LEVEL_ONCE: u32 = 7;
+/// Query host filtering through the existing structured logging boundary.
+pub const LOG_FLAG_QUERY_ENABLED: u32 = 1 << 31;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +84,15 @@ pub fn log_record(level: u32, target: &str, message: &str) -> i32 {
             message.as_ptr(),
             message.len(),
         )
+    }
+}
+
+/// Returns None on kernels without the optional enabled-query protocol.
+pub fn log_enabled(level: u32, target: &str) -> Option<bool> {
+    match log_record(level | LOG_FLAG_QUERY_ENABLED, target, "") {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
     }
 }
 

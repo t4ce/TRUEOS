@@ -532,7 +532,7 @@ fn guc_blt_observe_context_save(
     let observed = guc_blt_saved_head_reached_tail(saved_head, runtime.published_tail_bytes);
     if observed {
         if runtime.save_deferrals != 0 {
-            crate::log_info!(target: "gfx";
+            crate::log_trace!(target: "gfx";
                 "intel/blt: guc-bcs0 context-save observed=1 saved_head={} published_tail={} deferrals={} action=storage-owned-by-cpu\n",
                 saved_head & (DIRECT_BLT_RING_BYTES as u32 - 1),
                 runtime.published_tail_bytes,
@@ -543,7 +543,7 @@ fn guc_blt_observe_context_save(
     } else {
         runtime.save_deferrals = runtime.save_deferrals.saturating_add(1);
         if runtime.save_deferrals == 1 || runtime.save_deferrals.is_power_of_two() {
-            crate::log_info!(target: "gfx";
+            crate::log_trace!(target: "gfx";
                 "intel/blt: guc-bcs0 context-save observed=0 saved_head={} published_tail={} deferrals={} ownership=wait-guc-context-save action=defer-storage-reuse\n",
                 saved_head & (DIRECT_BLT_RING_BYTES as u32 - 1),
                 runtime.published_tail_bytes,

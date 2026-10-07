@@ -4473,7 +4473,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let target_len = arg1 as usize;
-            let level = match u32::try_from(arg0).ok() {
+            let Some(level_code) = u32::try_from(arg0).ok() else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let query = level_code & v::vsys::LOG_FLAG_QUERY_ENABLED != 0;
+            let level = match Some(level_code & !v::vsys::LOG_FLAG_QUERY_ENABLED) {
                 Some(trueos_vm::vmcall::BP_LOG_LEVEL_ERROR) => LogLevel::Error,
                 Some(trueos_vm::vmcall::BP_LOG_LEVEL_WARN) => LogLevel::Warn,
                 Some(trueos_vm::vmcall::BP_LOG_LEVEL_INFO) => LogLevel::Info,
@@ -4499,6 +4504,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let message = message.trim_end_matches(&['\r', '\n'][..]);
+            if query {
+                if target_len != data.len() {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                } else {
+                    let enabled = crate::log_os::flags::area_log_enabled(
+                        crate::log_os::flags::LogArea::Apps, level);
+                    write_response(vm_id, seq, STATUS_OK, u64::from(enabled), 0);
+                }
+                return DispatchOutcome::Resume;
+            }
             if target == "termdir-startup-probe" {
                 // This sparse, enumerated startup channel exists specifically
                 // to distinguish pre-lease app initialization from terminal
