@@ -153,7 +153,7 @@ impl Shell3 {
     }
 }
 '''
-    source += 'mod tty {\n'+(ROOT/'src/shell3/tty.rs').read_text().replace('//!','//')+'\n}\n'
+    source += 'mod tty {\n'+(ROOT/'src/shell3/tty.rs').read_text().replace('//!','//').replace('mod input;', f'#[path="{ROOT}/src/shell3/tty/input.rs"] mod input;').replace('mod ansi;', f'#[path="{ROOT}/src/shell3/tty/ansi.rs"] mod ansi;')+'\n}\n'
     source += r'''
 #[test] fn ssh_shares_tui_frames_raw_input_resize_park_release_and_reentry(){
     let (f,t)=session("ssh-tui",7,12,5);
@@ -176,6 +176,39 @@ impl Shell3 {
     tty.output.clear();tty.reconcile_matrix_selection();assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[r"));
     assert_eq!(tui::release(&t,7),Some(true));tty.output.clear();tty.reconcile_matrix_selection();
     assert!(String::from_utf8_lossy(&tty.output).contains("TrueOS"));
+}
+'''
+    source += r'''
+#[test] fn ssh_app_mouse_preferences_are_scoped_to_the_live_lease(){
+    use trueos_terminal::{MouseTracking,MouseEncoding};
+    let (f,t)=session("mouse-scope",8,12,5);
+    let shell=Shell3 {tui_frontend:f.id,name:"mouse-scope".into(),size:(12,5),prompt:String::new(),mode:3};
+    let mut tty=tty::Terminal::new_ssh(shell);
+    assert!(!String::from_utf8_lossy(&tty.output).contains("?1003h"));
+    assert_eq!(tui::claim(&t,8),Some(true));tty.output.clear();tty.reconcile_matrix_selection();
+    assert!(!String::from_utf8_lossy(&tty.output).contains("?1003h"));
+    // Exact EnableMouseCapture sequence emitted by crossterm/termdir.
+    tui::write(&t,8,b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h");
+    let options=tui::mouse_options(f.id,Some("mouse-scope"));assert_eq!(options.tracking,MouseTracking::Any);assert_eq!(options.encoding,MouseEncoding::Sgr);
+    tty.output.clear();tty.reconcile_matrix_selection();let out=String::from_utf8_lossy(&tty.output);
+    assert!(out.contains("\x1b[?1003h"));assert!(out.contains("\x1b[?1006h"));
+    hv::INPUT.lock().unwrap().clear();let mouse=b"\x1b[<35;2;2M\x1b[<0;2;2M\x1b[<32;3;2M\x1b[<0;3;2m\x1b[<64;3;2M\x1b[<65;3;2M";
+    for byte in mouse {tty.input(&[*byte]);}assert_eq!(*hv::INPUT.lock().unwrap(),mouse);
+    // App forgets to disable capture. § still disables it at handoff.
+    tty.output.clear();tty.input("§".as_bytes());assert_eq!(tui::mouse_options(f.id,Some("mouse-scope")).tracking,MouseTracking::Off);
+    assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[?1003l"));
+    assert_eq!(tui::claim(&t,8),Some(true));tty.output.clear();tty.reconcile_matrix_selection();
+    assert!(!String::from_utf8_lossy(&tty.output).contains("\x1b[?1003h"));
+    tui::write(&t,8,b"\x1b[?1003h\x1b[?1006h");tty.reconcile_matrix_selection();
+    // Explicit disable also reconciles without a lease transition.
+    tui::write(&t,8,b"\x1b[?1000l\x1b[?1002l\x1b[?1003l");tty.output.clear();tty.reconcile_matrix_selection();
+    assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[?1003l"));
+    tui::write(&t,8,b"\x1b[?1003h");tty.reconcile_matrix_selection();tty.output.clear();
+    assert_eq!(tui::release(&t,8),Some(true));tty.reconcile_matrix_selection();
+    assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[?1003l"));
+    assert_eq!(tui::claim(&t,8),Some(true));tui::write(&t,8,b"\x1b[?1003h\x1b[?1006h");tty.reconcile_matrix_selection();tty.output.clear();
+    shell2::free_name("mouse-scope");tty.reconcile_matrix_selection();
+    assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[?1003l"));
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-tui-') as directory:

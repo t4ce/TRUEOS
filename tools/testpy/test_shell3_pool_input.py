@@ -52,6 +52,7 @@ mod spin {
 use spin::Once;
 static MATRIX_SLOTS:Once<spin::Mutex<MatrixSlotsState>>=Once::new();
 mod tui {
+pub fn mouse_options(_:u64,_:Option<&str>)->trueos_terminal::MouseOptions {Default::default()}
 pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<crate::update::RenderedLine>> {None}
 pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
 #[derive(Clone,Copy)] pub struct Frontend {pub id:u64,pub cols:usize,pub rows:usize}
@@ -100,7 +101,7 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
     for name in ('scroll_matrix','capture_matrix_snapshot','record_terminal_notice','capture_controls_snapshot','launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += 'fn get_size(&self)->(usize,usize) {(self.columns,self.rows_count)} fn set(&mut self,cols:usize,rows:usize) {self.columns=cols;self.rows_count=rows;} }\n'
-    source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//') + '\n'
+    source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//').replace('mod input;', f'#[path="{ROOT}/src/shell3/tty/input.rs"] mod input;').replace('mod ansi;', f'#[path="{ROOT}/src/shell3/tty/ansi.rs"] mod ansi;') + '\n'
     source += r'''
 #[cfg(test)] mod replay_tests {
     use super::*;
@@ -143,7 +144,7 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
         assert_eq!(tty.shell.get_mode(),ui.get_mode());
         tty.input(b"online");type_text(&mut ui,"online");
         assert_eq!(MatrixSlots::echo_lines(None),vec!["online","online"]);
-        assert_eq!(tty.history,vec!["online"]);
+        assert_eq!(tty.history.entries,vec!["online"]);
         assert_eq!(tty.line,"");assert_eq!(tty.shell.prompt(),ui.prompt());
         tty.input("§fresh".as_bytes());type_text(&mut ui,"§fresh");
         assert_eq!(tty.shell.active_matrix_slot_name(),None);
@@ -611,7 +612,8 @@ pub fn stop(id:u8)->Result<bool,()> {assert_eq!(id,7);STOPS.fetch_add(1,Ordering
     with tempfile.TemporaryDirectory(prefix='shell3-pool-input-') as directory:
         path = Path(directory)
         (path/'test.rs').write_text(source)
-        subprocess.run(['rustc','--edition=2024','--test',str(path/'test.rs'),'-o',str(path/'tests')],check=True)
+        subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name','trueos_terminal',str(ROOT/'crates/trueos-terminal/src/lib.rs'),'-o',str(path/'libtrueos_terminal.rlib')],check=True)
+        subprocess.run(['rustc','--edition=2024','--test',str(path/'test.rs'),'-o',str(path/'tests'),'--extern',f'trueos_terminal={path}/libtrueos_terminal.rlib'],check=True)
         subprocess.run([str(path/'tests'),'--test-threads=1'],check=True)
 
 

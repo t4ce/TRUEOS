@@ -300,6 +300,13 @@ pub(super) fn active(frontend: u64, name: Option<&str>) -> bool {
     })
 }
 
+/// Only a currently owned lease may request mouse capture from the client.
+pub(super) fn mouse_options(frontend: u64, name: Option<&str>) -> trueos_terminal::MouseOptions {
+    ROUTES.lock().routes.iter().find(|route| {
+        route.frontend == frontend && Some(route.lease.name()) == name && route.owner.is_some()
+    }).map(|route| route.screen.mouse_options()).unwrap_or_default()
+}
+
 pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<RenderedLine>> {
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|route| {

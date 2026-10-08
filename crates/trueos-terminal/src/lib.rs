@@ -15,6 +15,30 @@ pub struct Cursor {
     pub visible: bool,
 }
 
+/// Mouse preferences belong to an app's terminal, not to the host shell.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MouseOptions {
+    pub tracking: MouseTracking,
+    pub encoding: MouseEncoding,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MouseTracking {
+    #[default]
+    Off,
+    Buttons,
+    Drag,
+    Any,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MouseEncoding {
+    #[default]
+    Legacy,
+    Urxvt,
+    Sgr,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MouseButton {
     Left,
@@ -605,6 +629,18 @@ impl Terminal {
                 1015 => self.mouse_urxvt_encoding = enabled,
                 _ => {}
             }
+        }
+    }
+
+    pub fn mouse_options(&self) -> MouseOptions {
+        MouseOptions {
+            tracking: if self.mouse_any_tracking { MouseTracking::Any }
+                else if self.mouse_button_tracking { MouseTracking::Drag }
+                else if self.mouse_normal_tracking { MouseTracking::Buttons }
+                else { MouseTracking::Off },
+            encoding: if self.mouse_sgr_encoding { MouseEncoding::Sgr }
+                else if self.mouse_urxvt_encoding { MouseEncoding::Urxvt }
+                else { MouseEncoding::Legacy },
         }
     }
 

@@ -38,6 +38,7 @@ const OPERATOR: char = '§';
 const SpecialSeperator:char='│';
 struct RowStrips {left:Vec<MetaFmtStr>}
 mod tui {
+pub fn mouse_options(_:u64,_:Option<&str>)->trueos_terminal::MouseOptions {Default::default()}
     pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<super::update::RenderedLine>> {None}
     pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
 }
@@ -98,7 +99,7 @@ impl Shell3 {
 }
 mod tty {
 '''
-    source += (ROOT/'src/shell3/tty.rs').read_text().replace('//!', '//')
+    source += (ROOT/'src/shell3/tty.rs').read_text().replace('//!', '//').replace('mod input;', f'#[path="{ROOT}/src/shell3/tty/input.rs"] mod input;').replace('mod ansi;', f'#[path="{ROOT}/src/shell3/tty/ansi.rs"] mod ansi;')
     source += '''
 impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.borrow().clone()}}
 #[cfg(test)] mod tests {
@@ -290,12 +291,12 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
     #[test] fn ssh_recall_filters_secrets_is_bounded_and_connection_local() {
         let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
         tty.input(b"cry login 123456\\rcry unlock t4ce secret\\rcry ssh add 123456 key\\r123456\\r");
-        assert!(tty.history.is_empty());
+        assert!(tty.history.entries.is_empty());
         for n in 0..70 {tty.input(format!("command{n}\\r").as_bytes());}
-        assert_eq!(tty.history.len(),64);assert_eq!(tty.history[0],"command6");
+        assert_eq!(tty.history.entries.len(),64);assert_eq!(tty.history.entries[0],"command6");
         let mut other=Terminal::new_ssh(Shell3::new_terminal().unwrap());
         other.input(b"\\x1b[A");assert!(other.line.is_empty());
-        let mut plain=terminal();plain.input(b"first\\r\\x1b[A");assert!(plain.history.is_empty());
+        let mut plain=terminal();plain.input(b"first\\r\\x1b[A");assert!(plain.history.entries.is_empty());
         tty.input(b"\\x1b[A\\x7fX");assert_eq!(tty.line,"command6X");
         tty.input(b"\\x03\\x1b[B");assert!(tty.line.is_empty());
     }
@@ -426,7 +427,8 @@ use super::tty::Terminal;
     with tempfile.TemporaryDirectory(prefix='shell3-tcp-') as directory:
         path = Path(directory)
         (path/'test.rs').write_text(source)
-        subprocess.run(['rustc', '--edition=2024', '--test', str(path/'test.rs'), '-o', str(path/'tests')], check=True)
+        subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name','trueos_terminal',str(ROOT/'crates/trueos-terminal/src/lib.rs'),'-o',str(path/'libtrueos_terminal.rlib')],check=True)
+        subprocess.run(['rustc', '--edition=2024', '--test', str(path/'test.rs'), '-o', str(path/'tests'),'--extern',f'trueos_terminal={path}/libtrueos_terminal.rlib'], check=True)
         subprocess.run([str(path/'tests')], check=True)
 
 
