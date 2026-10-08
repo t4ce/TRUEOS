@@ -273,7 +273,10 @@ impl WorkerTerminals {
 pub async fn terminal_task() {
     super::ssh::init();
     let spawner = unsafe { trueos_executor::Spawner::for_current_executor().await };
-    if let Ok(task) = super::ssh::auth_task() { spawner.spawn(task); }
+    match super::ssh::auth_task() {
+        Ok(task) => spawner.spawn(task),
+        Err(_) => crate::log_warn!(target: "service"; "shell3-ssh: authentication worker unavailable\n"),
+    }
     let commands = NetQueue::new_leaked("shell3-tcp-cmd", 128);
     let events = NetQueue::new_leaked("shell3-tcp-evt", 256);
     register_app_queues("shell3-tcp", commands, events);

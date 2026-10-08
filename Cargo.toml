@@ -124,6 +124,7 @@ trueos-credential-store = { path = "crates/trueos-credential-store" }
 ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
 qrcodegen = { package = "qrcodegen-no-heap", version = "1.8.1", default-features = false }
 heapless = { version = "0.9", default-features = false }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 bytes = { version = "1.11.1", default-features = false }
 limine = { version = "0.6", default-features = false }
 acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }

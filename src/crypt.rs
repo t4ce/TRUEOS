@@ -7,6 +7,7 @@
 //! machine-login proof.
 
 use alloc::{string::String, vec::Vec};
+use base64::Engine;
 use core::fmt::Write;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -52,6 +53,10 @@ pub(crate) enum CryError {
     NotAuthenticated,
     Persistence(StoreError),
     PersistenceStateChanged,
+    InvalidSshKey,
+    SshKeyAlreadyEnrolled,
+    SshKeyNotFound,
+    SshKeyLimit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -174,6 +179,7 @@ struct AuthenticatedSession {
 }
 
 struct PendingLogin {
+    ssh_public_keys: Option<Vec<[u8; 32]>>,
     session: AuthenticatedSession,
     report: CryLoginReport,
 }
@@ -236,6 +242,7 @@ struct CryState {
     session: Option<AuthenticatedSession>,
     pending_login: Option<PendingLogin>,
     durable: Option<DurableCredential>,
+    ssh_public_keys: Vec<[u8; 32]>,
 }
 
 impl CryState {
@@ -251,6 +258,7 @@ impl CryState {
             session: None,
             pending_login: None,
             durable: None,
+            ssh_public_keys: Vec::new(),
         }
     }
 }
@@ -401,7 +409,11 @@ pub(crate) fn prepare_remote_login(username: &str, code: &str) -> Result<CryLogi
     prepare_login_inner(code, 0, Some(username))
 }
 
-fn prepare_login_inner(code: &str, scope_id: u8, remote_username: Option<&str>) -> Result<CryLoginReport, CryError> {
+fn prepare_login_inner(
+    code: &str,
+    scope_id: u8,
+    remote_username: Option<&str>,
+) -> Result<CryLoginReport, CryError> {
     let code = parse_totp_code(code).ok_or(CryError::InvalidTotpCode)?;
     let unix_seconds = totp_unix_seconds()?;
     let mut nonce = [0u8; 32];
@@ -419,8 +431,10 @@ fn prepare_login_inner(code: &str, scope_id: u8, remote_username: Option<&str>) 
     let credential = state.credential.ok_or(CryError::NotConfigured)?;
     let username = state.username.clone().ok_or(CryError::NotConfigured)?;
     if let Some(requested) = remote_username {
-        if requested != username || state.durable.is_none()
-            || !state.totp.as_ref().is_some_and(|factor| factor.active) {
+        if requested != username
+            || state.durable.is_none()
+            || !state.totp.as_ref().is_some_and(|factor| factor.active)
+        {
             return Err(CryError::NotAuthenticated);
         }
     }
@@ -554,8 +568,11 @@ fn prepare_login_inner(code: &str, scope_id: u8, remote_username: Option<&str>) 
     };
     // A verified proof is not yet a session. The accepted TOTP step must be
     // durably sealed before command recording or other session gates open.
-    if remote_username.is_none() { state.session = None; }
+    if remote_username.is_none() {
+        state.session = None;
+    }
     state.pending_login = Some(PendingLogin {
+        ssh_public_keys: None,
         session,
         report: report.clone(),
     });
@@ -615,6 +632,11 @@ pub(crate) fn prepare_persistence(challenge_sequence: u64) -> Result<CryPersiste
         totp_secret: Zeroizing::new(factor.secret),
         totp_active: factor.active,
         last_accepted_step: factor.last_accepted_step,
+        ssh_public_keys: pending
+            .ssh_public_keys
+            .as_ref()
+            .unwrap_or(&state.ssh_public_keys)
+            .clone(),
     };
     let envelope = seal_credential(username.as_str(), &recovery_key, generation, nonce, &stored)
         .map_err(CryError::Persistence)?;
@@ -638,15 +660,22 @@ pub(crate) fn prepare_persistence(challenge_sequence: u64) -> Result<CryPersiste
     })
 }
 
-pub(crate) fn complete_persisted_login(plan: CryPersistencePlan) -> Result<CryLoginReport, CryError> {
+pub(crate) fn complete_persisted_login(
+    plan: CryPersistencePlan,
+) -> Result<CryLoginReport, CryError> {
     complete_persisted_login_inner(plan, true)
 }
 
-pub(crate) fn complete_persisted_remote_login(plan: CryPersistencePlan) -> Result<CryLoginReport, CryError> {
+pub(crate) fn complete_persisted_remote_login(
+    plan: CryPersistencePlan,
+) -> Result<CryLoginReport, CryError> {
     complete_persisted_login_inner(plan, false)
 }
 
-fn complete_persisted_login_inner(plan: CryPersistencePlan, local: bool) -> Result<CryLoginReport, CryError> {
+fn complete_persisted_login_inner(
+    plan: CryPersistencePlan,
+    local: bool,
+) -> Result<CryLoginReport, CryError> {
     let mut state = CRY_STATE.lock();
     let pending = state
         .pending_login
@@ -677,7 +706,12 @@ fn complete_persisted_login_inner(plan: CryPersistencePlan, local: bool) -> Resu
         .pending_login
         .take()
         .ok_or(CryError::PersistenceStateChanged)?;
-    if local { state.session = Some(pending.session); }
+    if let Some(keys) = pending.ssh_public_keys {
+        state.ssh_public_keys = keys;
+    }
+    if local {
+        state.session = Some(pending.session);
+    }
     Ok(pending.report)
 }
 
@@ -757,6 +791,7 @@ pub(crate) fn unlock_persisted(
         totp_secret.zeroize();
         return Err(CryError::AlreadyConfigured);
     }
+    state.ssh_public_keys = opened.credential.ssh_public_keys.clone();
     state.username = Some(username.clone());
     state.signing_key = Some(signing_key);
     state.credential = Some(credential);
@@ -989,11 +1024,114 @@ fn append_hex(output: &mut String, bytes: &[u8]) {
 /// No host identity is available before the account is unlocked and sealed.
 pub(crate) fn ssh_host_seed() -> Result<Zeroizing<[u8; 32]>, CryError> {
     let state = CRY_STATE.lock();
-    if state.durable.is_none() { return Err(CryError::NotAuthenticated); }
+    if state.durable.is_none() {
+        return Err(CryError::NotAuthenticated);
+    }
     let key = state.signing_key.as_ref().ok_or(CryError::NotConfigured)?;
     let seed = Zeroizing::new(key.to_bytes());
     let mut hash = Sha256::new();
     hash.update(b"TRUEOS/ssh-host/ed25519/v1\0");
     hash.update(seed.as_slice());
     Ok(Zeroizing::new(hash.finalize().into()))
+}
+
+const SSH_ED25519_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
+
+/// Accept ordinary OpenSSH .pub lines; comments are descriptive only.
+pub(crate) fn parse_ssh_public_key(line: &str) -> Result<[u8; 32], CryError> {
+    let mut words = line.split_whitespace();
+    if words.next() != Some("ssh-ed25519") {
+        return Err(CryError::InvalidSshKey);
+    }
+    let encoded = words.next().ok_or(CryError::InvalidSshKey)?;
+    if encoded.len() != 68 {
+        return Err(CryError::InvalidSshKey);
+    }
+    let wire = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| CryError::InvalidSshKey)?;
+    if wire.len() != 51 || !wire.starts_with(SSH_ED25519_PREFIX) {
+        return Err(CryError::InvalidSshKey);
+    }
+    let key: [u8; 32] = wire[19..].try_into().map_err(|_| CryError::InvalidSshKey)?;
+    let verifier = VerifyingKey::from_bytes(&key).map_err(|_| CryError::InvalidSshKey)?;
+    if verifier.is_weak() {
+        return Err(CryError::InvalidSshKey);
+    }
+    Ok(key)
+}
+
+pub(crate) fn ssh_key_fingerprint(key: &[u8; 32]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(SSH_ED25519_PREFIX);
+    hash.update(key);
+    alloc::format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash.finalize())
+    )
+}
+
+pub(crate) fn ssh_authorized_keys() -> Vec<[u8; 32]> {
+    CRY_STATE.lock().ssh_public_keys.clone()
+}
+
+pub(crate) fn ssh_key_allowed(username: &str, key: &[u8; 32]) -> bool {
+    let state = CRY_STATE.lock();
+    state.durable.is_some()
+        && state.username.as_deref() == Some(username)
+        && state.ssh_public_keys.contains(key)
+}
+
+/// A fresh cry code authorizes adding or revoking one client public key.
+/// The replacement set becomes live only after the encrypted envelope commits.
+pub(crate) fn prepare_ssh_key_change(
+    code: &str,
+    key: [u8; 32],
+    remove: bool,
+) -> Result<CryLoginReport, CryError> {
+    let (username, original) = {
+        let state = CRY_STATE.lock();
+        (state.username.clone().ok_or(CryError::NotConfigured)?, state.ssh_public_keys.clone())
+    };
+    let mut keys = original.clone();
+    if remove {
+        let index = keys
+            .iter()
+            .position(|candidate| *candidate == key)
+            .ok_or(CryError::SshKeyNotFound)?;
+        keys.remove(index);
+    } else {
+        let verifier = VerifyingKey::from_bytes(&key).map_err(|_| CryError::InvalidSshKey)?;
+        if verifier.is_weak() {
+            return Err(CryError::InvalidSshKey);
+        }
+        if keys.contains(&key) {
+            return Err(CryError::SshKeyAlreadyEnrolled);
+        }
+        if keys.len() >= trueos_credential_store::MAX_SSH_PUBLIC_KEYS {
+            return Err(CryError::SshKeyLimit);
+        }
+        keys.push(key);
+    }
+    let report = prepare_remote_login(&username, code)?;
+    let mut state = CRY_STATE.lock();
+    if state.ssh_public_keys != original {
+        if state
+            .pending_login
+            .as_ref()
+            .is_some_and(|pending| pending.report.challenge_sequence == report.challenge_sequence)
+        {
+            state.pending_login = None;
+        }
+        return Err(CryError::PersistenceStateChanged);
+    }
+    let pending = state
+        .pending_login
+        .as_mut()
+        .ok_or(CryError::PersistenceStateChanged)?;
+    if pending.report.challenge_sequence != report.challenge_sequence {
+        return Err(CryError::PersistenceStateChanged);
+    }
+    pending.ssh_public_keys = Some(keys);
+    Ok(report)
 }

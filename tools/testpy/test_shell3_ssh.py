@@ -69,6 +69,11 @@ fn ready<F:std::future::Future>(f:F)->F::Output {
 fn code(secret:&[u8;20])->String {
     format!("{:06}",trueos_crypto::generate_totp_sha1(secret,UNIX.load(Ordering::Relaxed)/30).unwrap())
 }
+fn bad_code(secret:&[u8;20])->String {
+    let unix=UNIX.load(Ordering::Relaxed);
+    let value=(0..1000000).find(|code|trueos_crypto::verify_totp_sha1(secret,unix,*code,1).unwrap().is_none()).unwrap();
+    format!("{value:06}")
+}
 fn fixture()->[u8;20] {
     crypt::test_reset();UNIX.store(1800000000,Ordering::Relaxed);
     assert!(crypt::ssh_host_seed().is_err());
@@ -78,10 +83,22 @@ fn fixture()->[u8;20] {
     let report=crypt::prepare_login(&code(&secret),7).unwrap();
     let plan=crypt::prepare_persistence(report.challenge_sequence).unwrap();
     crypt::complete_persisted_login(plan).unwrap();
-    UNIX.fetch_add(60,Ordering::Relaxed);secret
+    UNIX.fetch_add(60,Ordering::Relaxed);
+    if let Ok(public)=std::env::var("TRUEOS_TEST_PUBLIC_KEY") {
+        let key=crypt::parse_ssh_public_key(&public).unwrap();
+        let report=crypt::prepare_ssh_key_change(&code(&secret),key,false).unwrap();
+        assert!(!crypt::ssh_key_allowed("alice",&key));
+        let plan=crypt::prepare_persistence(report.challenge_sequence).unwrap();
+        crypt::complete_persisted_remote_login(plan).unwrap();
+        assert!(crypt::ssh_key_allowed("alice",&key));
+        assert!(!crypt::ssh_key_allowed("mallory",&key));
+        UNIX.fetch_add(60,Ordering::Relaxed);
+    }
+    secret
 }
 fn crypto_checks() {
     let secret=fixture();let local=crypt::status().session;let seed=*crypt::ssh_host_seed().unwrap();
+    let authorized=crypt::ssh_authorized_keys();
     assert!(crypt::prepare_remote_login("wrong-user",&code(&secret)).is_err());
     let report=crypt::prepare_remote_login("alice",&code(&secret)).unwrap();
     assert_eq!(crypt::status().session,local);
@@ -91,20 +108,79 @@ fn crypto_checks() {
     assert_eq!(crypt::status().session,local);
     assert_eq!(crypt::prepare_remote_login("alice",&code(&secret)),Err(crypt::CryError::TotpReplay));
     crypt::test_reset();crypt::unlock_persisted("alice",&key,&envelope).unwrap();
+    assert_eq!(crypt::ssh_authorized_keys(),authorized);
     assert_eq!(*crypt::ssh_host_seed().unwrap(),seed);
     assert!(crypt::status().session.is_none());
     assert_eq!(crypt::prepare_remote_login("alice",&code(&secret)),Err(crypt::CryError::TotpReplay));
     UNIX.fetch_add(60,Ordering::Relaxed);
-    let good=code(&secret);let bad=format!("{:06}",(good.parse::<u32>().unwrap()+1)%1000000);
+    let good=code(&secret);let bad=bad_code(&secret);
     for _ in 0..4 {assert_eq!(crypt::prepare_remote_login("alice",&bad),Err(crypt::CryError::InvalidTotpCode));}
     assert!(matches!(crypt::prepare_remote_login("alice",&bad),Err(crypt::CryError::TotpRateLimited{..})));
     assert!(matches!(crypt::prepare_remote_login("alice",&good),Err(crypt::CryError::TotpRateLimited{..})));
+    // A failed durable key change must never authorize its replacement set.
+    let secret=fixture();let key=crypt::ssh_authorized_keys()[0];
+    let report=crypt::prepare_ssh_key_change(&code(&secret),key,true).unwrap();
+    assert!(crypt::ssh_key_allowed("alice",&key));
+    crypt::abort_pending_login(report.challenge_sequence);
+    assert!(crypt::ssh_key_allowed("alice",&key));
+    UNIX.fetch_add(60,Ordering::Relaxed);
+    let report=crypt::prepare_ssh_key_change(&code(&secret),key,true).unwrap();
+    let plan=crypt::prepare_persistence(report.challenge_sequence).unwrap();
+    let envelope=plan.envelope.to_vec();let recovery=crypt::test_plan_key(&plan);
+    crypt::complete_persisted_remote_login(plan).unwrap();
+    assert!(!crypt::ssh_key_allowed("alice",&key));
+    crypt::test_reset();crypt::unlock_persisted("alice",&recovery,&envelope).unwrap();
+    assert!(!crypt::ssh_key_allowed("alice",&key));
+    UNIX.fetch_add(60,Ordering::Relaxed);
+    let report=crypt::prepare_ssh_key_change(&code(&secret),key,false).unwrap();
+    let plan=crypt::prepare_persistence(report.challenge_sequence).unwrap();
+    crypt::complete_persisted_remote_login(plan).unwrap();
+    assert!(crypt::ssh_key_allowed("alice",&key));
+}
+// Advertise the trusted public key but sign with another private key. This
+// checks that a public-key offer cannot authenticate without a valid signature.
+fn bad_agent(path:&str) {
+    use ed25519_dalek::Signer;
+    fn string(out:&mut Vec<u8>,bytes:&[u8]) {out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());out.extend_from_slice(bytes);}
+    fn take<'a>(input:&mut &'a [u8])->&'a [u8] {
+        let count=u32::from_be_bytes(input[..4].try_into().unwrap()) as usize;
+        let value=&input[4..4+count];*input=&input[4+count..];value
+    }
+    let public=std::env::var("TRUEOS_TEST_PUBLIC_KEY").unwrap();
+    let key=crypt::parse_ssh_public_key(&public).unwrap();
+    let mut wire=Vec::new();string(&mut wire,b"ssh-ed25519");string(&mut wire,&key);
+    let signer=ed25519_dalek::SigningKey::from_bytes(&[7;32]);
+    let listener=std::os::unix::net::UnixListener::bind(path).unwrap();
+    println!("agent-ready");std::io::stdout().flush().unwrap();
+    for socket in listener.incoming() {
+        let mut socket=socket.unwrap();
+        loop {
+            let mut length=[0;4];if socket.read_exact(&mut length).is_err() {break;}
+            let count=u32::from_be_bytes(length) as usize;assert!(count<=8192);
+            let mut request=vec![0;count];socket.read_exact(&mut request).unwrap();
+            let mut response=Vec::new();
+            match request[0] {
+                11=>{response.push(12);response.extend_from_slice(&1u32.to_be_bytes());string(&mut response,&wire);string(&mut response,b"forged-signature-test");}
+                13=>{
+                    let mut input=&request[1..];assert_eq!(take(&mut input),wire);
+                    let data=take(&mut input);let signature=signer.sign(data).to_bytes();
+                    let mut encoded=Vec::new();string(&mut encoded,b"ssh-ed25519");string(&mut encoded,&signature);
+                    response.push(14);string(&mut response,&encoded);
+                }
+                _=>response.push(5),
+            }
+            socket.write_all(&(response.len() as u32).to_be_bytes()).unwrap();socket.write_all(&response).unwrap();
+        }
+    }
 }
 fn main() {
+    if std::env::args().nth(1).as_deref()==Some("bad-agent") {
+        bad_agent(&std::env::args().nth(2).unwrap());return;
+    }
     crypto_checks();let secret=fixture();
     let mode=std::env::args().nth(1).unwrap();
     FAIL_DISK.store(mode=="disk-failure",Ordering::Relaxed);
-    let answer=if mode=="bad-code" {let c=code(&secret).parse::<u32>().unwrap();format!("{:06}",(c+1)%1000000)}else {code(&secret)};
+    let answer=if mode=="bad-code" {bad_code(&secret)}else {code(&secret)};
     let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     println!("{} {}",listener.local_addr().unwrap().port(),answer);std::io::stdout().flush().unwrap();
     let(mut socket,_)=listener.accept().unwrap();socket.set_nonblocking(true).unwrap();
@@ -144,6 +220,7 @@ ed25519-dalek={{version="2.2",default-features=false,features=["zeroize"]}}
 sha2={{version="0.10",default-features=false}}
 spin="0.9"
 zeroize={{version="1",features=["alloc"]}}
+base64={{version="0.22",default-features=false,features=["alloc"]}}
 getrandom_02={{package="getrandom",version="0.2"}}
 '''
         (work/'Cargo.toml').write_text(deps)
@@ -164,18 +241,39 @@ getrandom_02={{package="getrandom",version="0.2"}}
         askpass = work/'askpass'
         askpass.write_text('#!/bin/sh\nprintf "%s\\n" "$TRUEOS_TEST_CODE"\n')
         askpass.chmod(0o700)
+        trusted = work/'trusted'
+        other = work/'other'
+        for identity in (trusted, other):
+            subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(identity)],check=True)
+        public = trusted.with_suffix('.pub').read_text()
         cases = [('success','alice','keyboard-interactive',True),
+                 ('success-pty','alice','keyboard-interactive',True),
+                 ('key-success','alice','publickey',True),
+                 ('key-untrusted','alice','publickey',False),
+                 ('key-forged-signature','alice','publickey',False),
+                 ('key-wrong-user','mallory','publickey',False),
                  ('bad-code','alice','keyboard-interactive',False),
                  ('disk-failure','alice','keyboard-interactive',False),
                  ('wrong-user','mallory','keyboard-interactive',False),
                  ('password-disabled','alice','password',False)]
         for mode, user, method, expected in cases:
-            server = subprocess.Popen([str(binary),mode], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            agent = None
+            server = subprocess.Popen([str(binary),mode], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                env=dict(os.environ,TRUEOS_TEST_PUBLIC_KEY=public))
             try:
                 port, code = server.stdout.readline().split()
                 ssh_env = dict(os.environ, SSH_ASKPASS=str(askpass), SSH_ASKPASS_REQUIRE='force', DISPLAY=':test', TRUEOS_TEST_CODE=code)
-                client = subprocess.run(['ssh','-T','-p',port,'-o','StrictHostKeyChecking=no',
+                identity = other if mode == 'key-untrusted' else trusted
+                if mode == 'key-forged-signature':
+                    socket = work/'bad-agent.sock'
+                    agent = subprocess.Popen([str(binary),'bad-agent',str(socket)], stdout=subprocess.PIPE,
+                        env=dict(os.environ,TRUEOS_TEST_PUBLIC_KEY=public),text=True)
+                    assert agent.stdout.readline().strip() == 'agent-ready'
+                    ssh_env['SSH_AUTH_SOCK'] = str(socket)
+                    identity = trusted.with_suffix('.pub')
+                client = subprocess.run(['ssh','-F','/dev/null','-tt' if mode == 'success-pty' else '-T','-p',port,'-o','StrictHostKeyChecking=no',
                     '-o','UserKnownHostsFile=/dev/null','-o','ConnectTimeout=5',
+                    '-o','IdentitiesOnly=yes','-i',str(identity),
                     '-o','NumberOfPasswordPrompts=1','-o',f'PreferredAuthentications={method}',
                     f'{user}@127.0.0.1'],input=b'\n',capture_output=True,env=ssh_env,timeout=15)
                 output, errors = server.communicate(timeout=15)
@@ -188,6 +286,9 @@ getrandom_02={{package="getrandom",version="0.2"}}
                     assert client.returncode != 0, client.stderr
                 print(f'{mode}: passed')
             finally:
+                if agent is not None:
+                    agent.terminate()
+                    agent.communicate(timeout=5)
                 if server.poll() is None:
                     server.kill()
                     server.communicate()

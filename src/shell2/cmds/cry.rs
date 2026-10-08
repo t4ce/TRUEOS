@@ -28,6 +28,10 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "cry login [username] <6-digit authenticator code>");
     print_shell_line(io, "cry recovery show");
     print_shell_line(io, "cry logout");
+    print_shell_line(io, "cry ssh list");
+    print_shell_line(io, "cry ssh add <6-digit code> ssh-ed25519 <public-key-base64> [comment]");
+    print_shell_line(io, "cry ssh remove <6-digit code> ssh-ed25519 <public-key-base64> [comment]");
+    print_shell_line(io, "cry ssh remove <6-digit code> SHA256:<fingerprint from cry ssh list>");
 }
 
 pub(crate) fn try_parse(
@@ -37,6 +41,9 @@ pub(crate) fn try_parse(
 ) -> ParseOutcome {
     let active_target = matrix_target_for_backend(io);
     let _ = claim_matrix_target_for_app_slot_selected(&active_target, CRY_SLOT, CRY_SLOT);
+    if try_parse_ssh_keys(spawner, io, rest) {
+        return ParseOutcome::Handled;
+    }
     let mut args = rest.split_whitespace();
     match (args.next(), args.next(), args.next(), args.next(), args.next()) {
         (None, None, None, None, None) => {
@@ -157,6 +164,117 @@ fn setup_key(io: &'static dyn ShellBackend2, username: &str) {
         }
         Err(error) => print_error(io, "key setup", error),
     }
+}
+
+fn try_parse_ssh_keys(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> bool {
+    let mut words = rest.split_whitespace();
+    if !words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("ssh"))
+    {
+        return false;
+    }
+    let Some(action) = words.next() else {
+        usage(io);
+        return true;
+    };
+    if action.eq_ignore_ascii_case("list") && words.next().is_none() {
+        let keys = crypt::ssh_authorized_keys();
+        print_shell_line(io, alloc::format!("cry ssh: authorized-keys={}", keys.len()).as_str());
+        for key in keys {
+            print_shell_line(io, crypt::ssh_key_fingerprint(&key).as_str());
+        }
+        return true;
+    }
+    let remove = action.eq_ignore_ascii_case("remove");
+    if !remove && !action.eq_ignore_ascii_case("add") {
+        usage(io);
+        return true;
+    }
+    let (Some(code), Some(algorithm)) = (words.next(), words.next()) else {
+        usage(io);
+        return true;
+    };
+    let parsed = if remove && algorithm.starts_with("SHA256:") {
+        crypt::ssh_authorized_keys()
+            .into_iter()
+            .find(|key| crypt::ssh_key_fingerprint(key) == algorithm)
+            .ok_or(CryError::SshKeyNotFound)
+    } else if let Some(encoded) = words.next() {
+        crypt::parse_ssh_public_key(alloc::format!("{algorithm} {encoded}").as_str())
+    } else {
+        Err(CryError::InvalidSshKey)
+    };
+    let key = match parsed {
+        Ok(key) => key,
+        Err(error) => {
+            print_error(io, "ssh", error);
+            return true;
+        }
+    };
+    if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        print_error(io, "ssh", CryError::InvalidTotpCode);
+        return true;
+    }
+    let target = matrix_target_for_backend(io);
+    match ssh_key_change_task(target.clone(), Zeroizing::new(String::from(code)), key, remove) {
+        Ok(task) => {
+            set_matrix_target_active(&target, true);
+            spawner.spawn(task);
+        }
+        Err(_) => print_shell_line(io, "cry ssh: key-management task unavailable"),
+    }
+    true
+}
+
+#[trueos_executor::task(pool_size = 2)]
+async fn ssh_key_change_task(
+    target: MatrixTarget,
+    code: Zeroizing<String>,
+    key: [u8; 32],
+    remove: bool,
+) {
+    let report = match crypt::prepare_ssh_key_change(&code, key, remove) {
+        Ok(report) => report,
+        Err(error) => {
+            print_matrix_target_line(
+                &target,
+                alloc::format!("cry ssh: rejected ({error:?})").as_str(),
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    let sequence = report.challenge_sequence;
+    let result = match crypt::prepare_persistence(sequence) {
+        Ok(plan) => match write_persistence(&plan).await {
+            Ok(()) => crypt::complete_persisted_remote_login(plan)
+                .map(|_| ())
+                .map_err(|error| alloc::format!("{error:?}")),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(alloc::format!("{error:?}")),
+    };
+    match result {
+        Ok(()) => print_matrix_target_line(
+            &target,
+            alloc::format!(
+                "cry ssh: {} {}",
+                if remove { "revoked" } else { "enrolled" },
+                crypt::ssh_key_fingerprint(&key)
+            )
+            .as_str(),
+        ),
+        Err(error) => {
+            crypt::abort_pending_login(sequence);
+            print_matrix_target_line(
+                &target,
+                alloc::format!("cry ssh: persistence failed ({error}); authorization unchanged")
+                    .as_str(),
+            );
+        }
+    }
+    set_matrix_target_active(&target, false);
 }
 
 fn present_totp_enrollment(io: &'static dyn ShellBackend2) {
@@ -636,6 +754,10 @@ fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError)
         CryError::NotAuthenticated => "a verified 2fa session is required",
         CryError::Persistence(_) => "credential persistence rejected the encrypted state",
         CryError::PersistenceStateChanged => "credential persistence state changed; retry",
+        CryError::InvalidSshKey => "invalid OpenSSH Ed25519 public key",
+        CryError::SshKeyAlreadyEnrolled => "SSH key is already enrolled",
+        CryError::SshKeyNotFound => "SSH key is not enrolled",
+        CryError::SshKeyLimit => "SSH authorized-key limit reached",
     };
     print_shell_line(io, alloc::format!("cry {operation}: {detail}").as_str());
     if matches!(error, CryError::InvalidTotpCode | CryError::WallClockUnavailable) {

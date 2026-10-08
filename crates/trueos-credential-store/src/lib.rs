@@ -28,6 +28,8 @@ pub const FINGERPRINT_BYTES: usize = 16;
 
 const MAGIC: &[u8; 4] = b"TCRY";
 const FORMAT_VERSION: u8 = 1;
+const SSH_KEYS_FORMAT_VERSION: u8 = 2;
+pub const MAX_SSH_PUBLIC_KEYS: usize = 16;
 const ALGORITHM_AES_256_GCM: u8 = 1;
 const HEADER_BYTES: usize = 144;
 const PLAINTEXT_BYTES: usize = 128;
@@ -108,10 +110,18 @@ pub struct CredentialData {
     pub totp_secret: Zeroizing<[u8; TOTP_SECRET_BYTES]>,
     pub totp_active: bool,
     pub last_accepted_step: Option<u64>,
+    pub ssh_public_keys: Vec<[u8; PUBLIC_KEY_BYTES]>,
 }
 
 impl CredentialData {
     fn validate(&self) -> Result<(), StoreError> {
+        if self.ssh_public_keys.len() > MAX_SSH_PUBLIC_KEYS
+            || self.ssh_public_keys.iter().enumerate().any(|(index, key)| {
+                key.iter().all(|byte| *byte == 0) || self.ssh_public_keys[..index].contains(key)
+            })
+        {
+            return Err(StoreError::InvalidCredential);
+        }
         if self.role > 2
             || self.provider_id.iter().all(|byte| *byte == 0)
             || self.key_handle.iter().all(|byte| *byte == 0)
@@ -154,14 +164,26 @@ pub fn seal(
     }
     credential.validate()?;
 
+    let extended = !credential.ssh_public_keys.is_empty();
+    let plaintext_bytes = PLAINTEXT_BYTES
+        + if extended {
+            4 + 32 * credential.ssh_public_keys.len()
+        } else {
+            0
+        };
+    let envelope_bytes = HEADER_BYTES + plaintext_bytes + TAG_BYTES;
     let mut header = [0u8; HEADER_BYTES];
     header[0..4].copy_from_slice(MAGIC);
-    header[4] = FORMAT_VERSION;
+    header[4] = if extended {
+        SSH_KEYS_FORMAT_VERSION
+    } else {
+        FORMAT_VERSION
+    };
     header[5] = ALGORITHM_AES_256_GCM;
     header[6] = username.len() as u8;
     header[8..10].copy_from_slice(&(HEADER_BYTES as u16).to_le_bytes());
-    header[10..12].copy_from_slice(&(PLAINTEXT_BYTES as u16).to_le_bytes());
-    header[12..16].copy_from_slice(&(ENVELOPE_BYTES as u32).to_le_bytes());
+    header[10..12].copy_from_slice(&(plaintext_bytes as u16).to_le_bytes());
+    header[12..16].copy_from_slice(&(envelope_bytes as u32).to_le_bytes());
     header[16..24].copy_from_slice(&generation.to_le_bytes());
     header[24..32].copy_from_slice(&credential.account_id.to_le_bytes());
     header[32] = credential.role;
@@ -171,7 +193,7 @@ pub fn seal(
     header[96..112].copy_from_slice(&credential.fingerprint);
     header[112..112 + username.len()].copy_from_slice(username.as_bytes());
 
-    let mut plaintext = Zeroizing::new([0u8; PLAINTEXT_BYTES]);
+    let mut plaintext = Zeroizing::new(alloc::vec![0u8; plaintext_bytes]);
     plaintext[0..32].copy_from_slice(credential.signing_seed.as_slice());
     plaintext[32..64].copy_from_slice(&credential.machine_id);
     plaintext[64..84].copy_from_slice(credential.totp_secret.as_slice());
@@ -181,6 +203,13 @@ pub fn seal(
         plaintext[88..96].copy_from_slice(&step.to_le_bytes());
     }
     plaintext[96..128].copy_from_slice(&credential.public_key);
+    if extended {
+        plaintext[128..132]
+            .copy_from_slice(&(credential.ssh_public_keys.len() as u32).to_le_bytes());
+        for (index, key) in credential.ssh_public_keys.iter().enumerate() {
+            plaintext[132 + index * 32..164 + index * 32].copy_from_slice(key);
+        }
+    }
 
     let unbound =
         UnboundKey::new(&AES_256_GCM, recovery_key).map_err(|_| StoreError::CryptoUnavailable)?;
@@ -193,7 +222,7 @@ pub fn seal(
         )
         .map_err(|_| StoreError::CryptoUnavailable)?;
 
-    let mut envelope = Zeroizing::new(Vec::with_capacity(ENVELOPE_BYTES));
+    let mut envelope = Zeroizing::new(Vec::with_capacity(envelope_bytes));
     envelope.extend_from_slice(&header);
     envelope.extend_from_slice(plaintext.as_slice());
     envelope.extend_from_slice(tag.as_ref());
@@ -210,19 +239,31 @@ pub fn open(
     if recovery_key.iter().all(|byte| *byte == 0) {
         return Err(StoreError::InvalidRecoveryKey);
     }
-    if envelope.len() != ENVELOPE_BYTES || envelope.get(0..4) != Some(MAGIC.as_slice()) {
+    if envelope.len() < ENVELOPE_BYTES || envelope.get(0..4) != Some(MAGIC.as_slice()) {
         return Err(StoreError::InvalidEnvelope);
     }
-    if envelope[4] != FORMAT_VERSION {
+    if !matches!(envelope[4], FORMAT_VERSION | SSH_KEYS_FORMAT_VERSION) {
         return Err(StoreError::UnsupportedVersion);
     }
     if envelope[5] != ALGORITHM_AES_256_GCM {
         return Err(StoreError::UnsupportedAlgorithm);
     }
+    let plaintext_bytes = u16::from_le_bytes(envelope[10..12].try_into().unwrap()) as usize;
+    let valid_length = match envelope[4] {
+        FORMAT_VERSION => plaintext_bytes == PLAINTEXT_BYTES,
+        SSH_KEYS_FORMAT_VERSION => {
+            (PLAINTEXT_BYTES + 4..=PLAINTEXT_BYTES + 4 + 32 * MAX_SSH_PUBLIC_KEYS)
+                .contains(&plaintext_bytes)
+                && (plaintext_bytes - PLAINTEXT_BYTES - 4) % 32 == 0
+        }
+        _ => false,
+    };
+    if !valid_length || envelope.len() != HEADER_BYTES + plaintext_bytes + TAG_BYTES {
+        return Err(StoreError::InvalidEnvelope);
+    }
     if envelope[7] != 0
         || envelope[8..10] != (HEADER_BYTES as u16).to_le_bytes()
-        || envelope[10..12] != (PLAINTEXT_BYTES as u16).to_le_bytes()
-        || envelope[12..16] != (ENVELOPE_BYTES as u32).to_le_bytes()
+        || envelope[12..16] != (envelope.len() as u32).to_le_bytes()
         || envelope[33..36].iter().any(|byte| *byte != 0)
     {
         return Err(StoreError::InvalidEnvelope);
@@ -254,10 +295,10 @@ pub fn open(
     let nonce: [u8; NONCE_BYTES] = envelope[36..48]
         .try_into()
         .map_err(|_| StoreError::InvalidEnvelope)?;
-    let tag = Tag::try_from(&envelope[HEADER_BYTES + PLAINTEXT_BYTES..])
+    let tag = Tag::try_from(&envelope[HEADER_BYTES + plaintext_bytes..])
         .map_err(|_| StoreError::InvalidEnvelope)?;
     let mut plaintext =
-        Zeroizing::new(envelope[HEADER_BYTES..HEADER_BYTES + PLAINTEXT_BYTES].to_vec());
+        Zeroizing::new(envelope[HEADER_BYTES..HEADER_BYTES + plaintext_bytes].to_vec());
 
     let unbound =
         UnboundKey::new(&AES_256_GCM, recovery_key).map_err(|_| StoreError::CryptoUnavailable)?;
@@ -287,6 +328,16 @@ pub fn open(
         return Err(StoreError::InvalidCredential);
     }
 
+    let mut ssh_public_keys = Vec::new();
+    if envelope[4] == SSH_KEYS_FORMAT_VERSION {
+        let count = u32::from_le_bytes(plaintext[128..132].try_into().unwrap()) as usize;
+        if count > MAX_SSH_PUBLIC_KEYS || plaintext_bytes != PLAINTEXT_BYTES + 4 + count * 32 {
+            return Err(StoreError::InvalidCredential);
+        }
+        for key in plaintext[132..].chunks_exact(32) {
+            ssh_public_keys.push(key.try_into().unwrap());
+        }
+    }
     let credential = CredentialData {
         account_id: u64::from_le_bytes(
             envelope[24..32]
@@ -318,6 +369,7 @@ pub fn open(
         ),
         totp_active: plaintext[84] == 1,
         last_accepted_step: has_last_step.then_some(raw_last_step),
+        ssh_public_keys,
         public_key: plaintext[96..128]
             .try_into()
             .map_err(|_| StoreError::InvalidCredential)?,
@@ -347,6 +399,7 @@ mod tests {
             totp_secret: Zeroizing::new([7; TOTP_SECRET_BYTES]),
             totp_active: true,
             last_accepted_step: Some(42),
+            ssh_public_keys: Vec::new(),
         }
     }
 
@@ -404,11 +457,47 @@ mod tests {
     }
 
     #[test]
+    fn ssh_authorization_roundtrips_and_is_authenticated() {
+        let key = [0x11; RECOVERY_KEY_BYTES];
+        let mut credential = credential();
+        credential.ssh_public_keys = alloc::vec![[0x33; 32], [0x44; 32]];
+        let envelope = seal("root", &key, 2, [0x22; NONCE_BYTES], &credential).unwrap();
+        assert_eq!(envelope[4], SSH_KEYS_FORMAT_VERSION);
+        let opened = open("root", &key, &envelope).unwrap();
+        assert_eq!(opened.credential.ssh_public_keys, credential.ssh_public_keys);
+        let mut tampered = envelope.to_vec();
+        tampered[HEADER_BYTES + 132] ^= 1;
+        assert_eq!(open("root", &key, &tampered).err(), Some(StoreError::AuthenticationFailed));
+        // Revoking all keys retains a readable legacy, keyless credential.
+        credential.ssh_public_keys.clear();
+        let envelope = seal("root", &key, 3, [0x23; NONCE_BYTES], &credential).unwrap();
+        assert_eq!(envelope[4], FORMAT_VERSION);
+        assert!(
+            open("root", &key, &envelope)
+                .unwrap()
+                .credential
+                .ssh_public_keys
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ssh_registry_rejects_duplicates_and_excessive_keys() {
+        let mut credential = credential();
+        credential.ssh_public_keys = alloc::vec![[0x33; 32], [0x33; 32]];
+        assert_eq!(credential.validate(), Err(StoreError::InvalidCredential));
+        credential.ssh_public_keys = (1..=MAX_SSH_PUBLIC_KEYS + 1)
+            .map(|i| [i as u8; 32])
+            .collect();
+        assert_eq!(credential.validate(), Err(StoreError::InvalidCredential));
+    }
+
+    #[test]
     fn envelope_rejects_unknown_version_and_truncation() {
         let key = [0x11; RECOVERY_KEY_BYTES];
         let envelope = seal("root", &key, 1, [0x22; NONCE_BYTES], &credential()).unwrap();
         let mut future = envelope.to_vec();
-        future[4] = FORMAT_VERSION + 1;
+        future[4] = SSH_KEYS_FORMAT_VERSION + 1;
         assert_eq!(
             open("root", &key, future.as_slice()).err(),
             Some(StoreError::UnsupportedVersion)

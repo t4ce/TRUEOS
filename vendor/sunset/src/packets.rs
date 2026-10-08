@@ -225,12 +225,14 @@ impl<'de: 'a, 'a> SSHDecode<'de> for Userauth60<'a> {
 
 // RFC 4256: this server requests exactly one non-echoed authenticator code.
 #[derive(Debug, SSHEncode, SSHDecode, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub struct MethodKeyboardInteractive<'a> {
     pub language: &'a str,
     pub submethods: &'a str,
 }
 
 #[derive(Debug, SSHEncode)]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub struct UserauthInfoRequest<'a> {
     pub name: &'a str,
     pub instruction: &'a str,
@@ -241,6 +243,7 @@ pub struct UserauthInfoRequest<'a> {
 }
 
 #[derive(SSHEncode)]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub struct UserauthInfoResponse<'a> {
     pub count: u32,
     pub response: TextString<'a>,
