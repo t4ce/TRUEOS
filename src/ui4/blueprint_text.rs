@@ -312,7 +312,7 @@ const CONTEXT_MENU_WIRE_HEADER_BYTES: usize = 20;
 /// Action id, enabled flag, and label length per entry.
 const CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES: usize = 12;
 
-const ERROR_INVALID: i32 = -1;
+pub(crate) const ERROR_INVALID: i32 = -1;
 const ERROR_CONTEXT: i32 = -2;
 const ERROR_NOT_FOUND: i32 = -3;
 const ERROR_STATE: i32 = -4;
@@ -715,6 +715,9 @@ struct BlueprintSceneSurface {
     height: u32,
     cadence: FrameCadence,
     visual_cadence: Option<BlueprintVisualCadence>,
+    // Winit foreground-only clients keep a transparent background until the
+    // first real producer lease. Its resize needs no second application redraw.
+    winit_dormant_background: bool,
     pending_resize: Option<BlueprintPendingResize>,
     pending_resize_ready: bool,
     write_lease: Option<FrameWriteLease>,
@@ -740,6 +743,7 @@ struct BlueprintSceneSurface {
     sprite_upload: Option<Rgba8Upload>,
     solid_source: Option<OwnedRgba8Surface>,
     sprite_clear_rgba: Option<u32>,
+    sprite_repaint_region: Option<DamageRect>,
     sprite_scene_upload: Option<SpriteSceneUpload>,
     pending_pointer_events: VecDeque<TrueosUi4PointerEvent>,
     pending_pan_events: VecDeque<TrueosUi4PanEvent>,
@@ -1351,6 +1355,96 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_layered_v1(
     window_id
 }
 
+/// Winit contract: a reusable double-buffered UI above a triple-buffered scene.
+/// Released foreground allocations can be scanned directly and are writable
+/// only after the display retires their read leases.
+pub extern "C" fn trueos_cabi_ui4_winit_frame_open_v1(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    background_hz: u32,
+) -> u32 {
+    if width == 0
+        || height == 0
+        || width > MAX_FRAME_WIDTH
+        || height > MAX_FRAME_HEIGHT
+        || background_hz == 0
+        || background_hz > UI4_VISUAL_SOFT_CAP_HZ
+    {
+        return 0;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, window) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_WINIT_FRAME_OPEN_V1,
+            pack_i32_pair(x, y),
+            pack_u32_pair(width, height),
+            &background_hz.to_le_bytes(),
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            window as u32
+        } else {
+            0
+        };
+    }
+    let window_id = open_blueprint_frame(x, y, width, height, FrameCadence::Dirty, None);
+    if window_id == 0 {
+        return 0;
+    }
+    let owner = blueprint_owner().unwrap();
+    let parent = {
+        let mut surfaces = SURFACES.lock();
+        let surface = surface_mut(&mut surfaces, owner, window_id).unwrap();
+        (surface.window, surface.session)
+    };
+    if open_blueprint_surface_with_cadence(
+        x,
+        y,
+        width,
+        height,
+        FrameCadence::Streaming,
+        Some(background_hz),
+        Some(parent),
+    ) == 0 {
+        let _ = trueos_cabi_ui4_solara_frame_close(window_id);
+        return 0;
+    }
+    let seeded = {
+        let mut surfaces = SURFACES.lock();
+        let target = super::layer_contract::background_target(window_id);
+        let surface = surface_mut(&mut surfaces, owner, target).unwrap();
+        if publish_transparent_winit_background(surface.frame).is_ok()
+            && super::window_broker::publish_window_background(
+                owner,
+                surface.window,
+                DamageRect::FULL,
+            )
+            .is_ok()
+        {
+            surface.winit_dormant_background = true;
+            true
+        } else {
+            false
+        }
+    };
+    if !seeded {
+        let _ = trueos_cabi_ui4_solara_frame_close(window_id);
+        return 0;
+    }
+    window_id
+}
+
+/// Only called for freshly allocated, transparently initialized storage.
+fn publish_transparent_winit_background(frame: FrameHandle) -> Result<(), FramePoolError> {
+    let lease = acquire_frame_buffer(frame)?;
+    if let Err(error) = publish_frame_buffer(lease) {
+        let _ = cancel_frame_buffer(lease);
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Return an owned render-target capability, never another input window ID.
 /// 0 selects foreground; 1 selects background. Other layer numbers fail.
 pub extern "C" fn trueos_cabi_ui4_scene_frame_layer_v1(window_id: u32, layer: u32) -> u32 {
@@ -1445,36 +1539,51 @@ fn open_blueprint_surface(
     visual_target_hz: Option<u32>,
     parent: Option<(WindowId, WindowSessionId)>,
 ) -> u32 {
-    reap_retired_frames();
-    let Some(owner) = blueprint_owner() else {
-        return 0;
-    };
-    let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
-    // Visual compute is a synchronous full-frame producer. It needs one live
-    // front and one producer back, not the generic streaming scene's third
-    // queued allocation.
+    // Preserve the legacy visual/double policy for existing Blueprint callers.
     let frame_cadence = if visual_target_hz.is_some() {
         FrameCadence::Dirty
     } else {
         cadence
     };
+    open_blueprint_surface_with_cadence(
+        x, y, width, height, frame_cadence, visual_target_hz, parent,
+    )
+}
+
+fn blueprint_frame_buffering(cadence: FrameCadence) -> super::FrameBuffering {
+    match cadence {
+        FrameCadence::Immutable => super::FrameBuffering::Single,
+        FrameCadence::Dirty => super::FrameBuffering::Double,
+        FrameCadence::Streaming => super::FrameBuffering::Triple,
+    }
+}
+
+fn open_blueprint_surface_with_cadence(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    frame_cadence: FrameCadence,
+    visual_target_hz: Option<u32>,
+    parent: Option<(WindowId, WindowSessionId)>,
+) -> u32 {
+    reap_retired_frames();
+    let Some(owner) = blueprint_owner() else {
+        return 0;
+    };
+    let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame_spec = FrameSpec {
         output,
         content: FrameContent::BlueprintScene,
         cadence: frame_cadence,
-        buffering: match frame_cadence {
-            FrameCadence::Immutable => super::FrameBuffering::Single,
-            FrameCadence::Dirty => super::FrameBuffering::Double,
-            FrameCadence::Streaming => super::FrameBuffering::Triple,
-        },
+        buffering: blueprint_frame_buffering(frame_cadence),
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
-        base_color: visual_target_hz
-            .is_none()
+        base_color: (visual_target_hz.is_none() || frame_cadence == FrameCadence::Streaming)
             .then_some(PremultipliedRgba8::TRANSPARENT),
     };
-    let frame = match if visual_target_hz.is_some() {
+    let frame = match if visual_target_hz.is_some() && frame_cadence == FrameCadence::Dirty {
         create_gpu_full_overwrite_frame(frame_spec)
     } else {
         create_frame(frame_spec)
@@ -1516,7 +1625,7 @@ fn open_blueprint_surface(
         opacity: u8::MAX,
         visible: true,
     };
-    let plane_slot = if cadence == FrameCadence::Streaming || visual_target_hz.is_some() {
+    let plane_slot = if frame_cadence == FrameCadence::Streaming || visual_target_hz.is_some() {
         super::ALPHA_OVERLAY_PLANE_SLOT
     } else {
         super::RGB_OVERLAY_PLANE_SLOT_2
@@ -1574,6 +1683,7 @@ fn open_blueprint_surface(
                 height,
                 cadence: frame_cadence,
                 visual_cadence: visual_target_hz.map(BlueprintVisualCadence::new),
+                winit_dormant_background: false,
                 pending_resize: None,
                 pending_resize_ready: false,
                 write_lease: None,
@@ -1597,6 +1707,7 @@ fn open_blueprint_surface(
                 sprite_upload: None,
                 solid_source: None,
                 sprite_clear_rgba: None,
+                sprite_repaint_region: None,
                 sprite_scene_upload: None,
                 pending_pointer_events: VecDeque::new(),
                 pending_pan_events: VecDeque::new(),
@@ -1635,6 +1746,7 @@ fn open_blueprint_surface(
         height,
         cadence: frame_cadence,
         visual_cadence: visual_target_hz.map(BlueprintVisualCadence::new),
+        winit_dormant_background: false,
         pending_resize: None,
         pending_resize_ready: false,
         write_lease: None,
@@ -1657,6 +1769,7 @@ fn open_blueprint_surface(
         sprite_upload: None,
         solid_source: None,
         sprite_clear_rgba: None,
+        sprite_repaint_region: None,
         sprite_scene_upload: None,
         pending_pointer_events: VecDeque::new(),
         pending_pan_events: VecDeque::new(),
@@ -1748,6 +1861,120 @@ pub extern "C" fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear
         return ERROR_CONTEXT;
     };
     begin_blueprint_frame(owner, window_id, clear_rgba, false)
+}
+
+/// Acquire the idle foreground buffer and clear only the repaint rectangle.
+/// The caller keeps both buffers coherent by replaying current and preceding
+/// publication damage. Commands must stay inside this region.
+pub extern "C" fn trueos_cabi_ui4_scene_sprite_frame_begin_region_v1(
+    window_id: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut payload = [0u8; 16];
+        for (slot, value) in [x, y, width, height].into_iter().enumerate() {
+            payload[slot * 4..slot * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN_REGION_V1,
+            window_id as u64,
+            0,
+            &payload,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    begin_blueprint_sprite_region(
+        owner,
+        window_id,
+        DamageRect {
+            x,
+            y,
+            width,
+            height,
+        },
+    )
+}
+
+pub(crate) fn begin_blueprint_sprite_region(
+    owner: WindowOwner,
+    window_id: u32,
+    region: DamageRect,
+) -> i32 {
+    // Deferred emulator paint reconstructs whole frames rather than retaining
+    // GPU backing pixels. Let the client select its ordinary full-frame path.
+    if crate::virtio_gpu_logo::output_dimensions().is_some() {
+        return ERROR_INVALID;
+    }
+    begin_blueprint_frame_with_region(owner, window_id, 0, false, Some(region))
+}
+
+fn valid_sprite_region(
+    cadence: FrameCadence,
+    visual: bool,
+    target: u32,
+    window: u32,
+    width: u32,
+    height: u32,
+    region: DamageRect,
+) -> bool {
+    cadence == FrameCadence::Dirty
+        && !visual
+        && target == window
+        && region.width != 0
+        && region.height != 0
+        && region
+            .x
+            .checked_add(region.width)
+            .is_some_and(|right| right <= width)
+        && region
+            .y
+            .checked_add(region.height)
+            .is_some_and(|bottom| bottom <= height)
+}
+
+fn sprite_region_contains_quad(region: DamageRect, quad: TrueosUi4SpriteQuad) -> bool {
+    let right = u64::from(region.x) + u64::from(region.width);
+    let bottom = u64::from(region.y) + u64::from(region.height);
+    [
+        (quad.c0_x, quad.c0_y),
+        (quad.c1_x, quad.c1_y),
+        (quad.c2_x, quad.c2_y),
+        (quad.c3_x, quad.c3_y),
+    ]
+    .into_iter()
+    .all(|(x, y)| {
+        x.is_finite()
+            && y.is_finite()
+            && x >= region.x as f32
+            && y >= region.y as f32
+            && x <= right as f32
+            && y <= bottom as f32
+    })
+}
+
+fn sprite_frame_clear_quad(clear_rgba: u32, region: DamageRect) -> TrueosUi4SpriteQuad {
+    let x = region.x as f32;
+    let y = region.y as f32;
+    let right = (u64::from(region.x) + u64::from(region.width)) as f32;
+    let bottom = (u64::from(region.y) + u64::from(region.height)) as f32;
+    TrueosUi4SpriteQuad {
+        sprite_id: 0,
+        c0_x: x,
+        c0_y: y,
+        c1_x: right,
+        c1_y: y,
+        c2_x: right,
+        c2_y: bottom,
+        c3_x: x,
+        c3_y: bottom,
+        color_rgba: clear_rgba,
+        ..TrueosUi4SpriteQuad::default()
+    }
 }
 
 pub(crate) fn begin_vgpu_surface_import(
@@ -1920,6 +2147,16 @@ pub(crate) fn begin_blueprint_frame(
     clear_rgba: u32,
     cpu_clear: bool,
 ) -> i32 {
+    begin_blueprint_frame_with_region(owner, window_id, clear_rgba, cpu_clear, None)
+}
+
+fn begin_blueprint_frame_with_region(
+    owner: WindowOwner,
+    window_id: u32,
+    clear_rgba: u32,
+    cpu_clear: bool,
+    repaint_region: Option<DamageRect>,
+) -> i32 {
     // Guest vmcalls enter here directly, bypassing the C-ABI wrappers. Reclaim
     // old immutable generations before admission on every producer path.
     reap_retired_frames();
@@ -1927,6 +2164,19 @@ pub(crate) fn begin_blueprint_frame(
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
+    if let Some(region) = repaint_region
+        && !valid_sprite_region(
+            surface.cadence,
+            surface.visual_cadence.is_some(),
+            surface.render_target,
+            surface.window.raw(),
+            surface.width,
+            surface.height,
+            region,
+        )
+    {
+        return ERROR_INVALID;
+    }
     if surface.pending_resize_ready {
         return ERROR_BUSY;
     }
@@ -2040,6 +2290,7 @@ pub(crate) fn begin_blueprint_frame(
     surface.pending_gpu_release = None;
     surface.pending_render_release = None;
     surface.sprite_clear_rgba = (!cpu_clear).then_some(clear_rgba);
+    surface.sprite_repaint_region = repaint_region;
     surface.sprite_scene_upload = None;
     surface.retained_text_cursor = 0;
     surface.retained_text_rendered = false;
@@ -2050,6 +2301,7 @@ pub(crate) fn begin_blueprint_frame(
     surface.stamped_text_pending_ocean = false;
     surface.stamped_text_rendered = false;
     surface.write_lease = Some(lease);
+    surface.winit_dormant_background = false;
     if let Some(cadence) = surface.visual_cadence.as_mut() {
         cadence.consume_admission();
     }
@@ -7681,6 +7933,13 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         cancel_blueprint_sprite_frame_without_live_gpu(surface);
         return ERROR_STATE;
     };
+    if let Some(region) = surface.sprite_repaint_region
+        && region != (DamageRect { x: 0, y: 0, width: surface.width, height: surface.height })
+        && upload.quads.iter().any(|quad| !sprite_region_contains_quad(region, *quad))
+    {
+        cancel_blueprint_sprite_frame_without_live_gpu(surface);
+        return ERROR_INVALID;
+    }
     if surface.gpu_submission_unretired {
         return ERROR_BUSY;
     }
@@ -7797,6 +8056,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     // compositor's source-free SOLID mode. The former path paid general UV,
     // sampling, and arbitrary-quad setup for every decoration.
     if let Some(rects) = (!render_overlay
+        && surface.sprite_repaint_region.is_none()
         && !upload.quads.is_empty()
         && !upload
             .quads
@@ -7890,37 +8150,21 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
         _ => false,
     };
-    let clear = TrueosUi4SpriteQuad {
-        sprite_id: 0,
-        c0_x: 0.0,
-        c0_y: 0.0,
-        c1_x: surface.width as f32,
-        c1_y: 0.0,
-        c2_x: surface.width as f32,
-        c2_y: surface.height as f32,
-        c3_x: 0.0,
-        c3_y: surface.height as f32,
-        color_rgba: clear_rgba,
-        ..TrueosUi4SpriteQuad::default()
-    };
+    let clear = sprite_frame_clear_quad(
+        clear_rgba,
+        surface.sprite_repaint_region.unwrap_or(DamageRect {
+            x: 0, y: 0, width: surface.width, height: surface.height,
+        }),
+    );
     let mut prepared = Vec::with_capacity(upload.quads.len().saturating_add(1));
     let mut bcs0_command_count = 0usize;
     if sprite_scene_needs_clear(render_overlay, full_frame_copy) {
-        let explicit_bcs_scene = sprite_scene_uses_bcs0_clear(&upload.quads);
+        let explicit_bcs_scene = surface.sprite_repaint_region.is_some()
+            || sprite_scene_uses_bcs0_clear(&upload.quads);
         if explicit_bcs_scene {
             let clear_fill = TrueosUi4SpriteQuad {
-                sprite_id: 0,
-                c0_x: 0.0,
-                c0_y: 0.0,
-                c1_x: surface.width as f32,
-                c1_y: 0.0,
-                c2_x: surface.width as f32,
-                c2_y: surface.height as f32,
-                c3_x: 0.0,
-                c3_y: surface.height as f32,
-                color_rgba: clear_rgba,
                 flags: SPRITE_QUAD_FLAG_BCS0_COPY,
-                ..TrueosUi4SpriteQuad::default()
+                ..clear
             };
             let Some(fill) = bcs0_solid_rect(clear_fill, destination) else {
                 cancel_blueprint_sprite_frame_without_live_gpu(surface);
@@ -9286,11 +9530,7 @@ fn stage_layered_resize(
             output: OutputId::from_slot(0).unwrap(),
             content: FrameContent::BlueprintScene,
             cadence: surface.cadence,
-            buffering: if surface.visual_cadence.is_some() {
-                super::FrameBuffering::Double
-            } else {
-                super::FrameBuffering::Triple
-            },
+            buffering: blueprint_frame_buffering(surface.cadence),
             format: ScanoutFormat::Rgba8888Premultiplied,
             width,
             height,
@@ -9319,6 +9559,16 @@ fn stage_layered_resize(
             }
         }
     }
+    for (&index, &replacement) in members.iter().zip(&replacements) {
+        if surfaces[index].winit_dormant_background
+            && publish_transparent_winit_background(replacement).is_err()
+        {
+            for frame in replacements {
+                let _ = destroy_frame(frame);
+            }
+            return ERROR_UI4;
+        }
+    }
     crate::log_important!(target: "ui4/resize";
         "paired resize staged owner={:?} window={} extent={}x{} epoch={} commit=after-both-publish\n",
         owner, window.raw(), width, height, epoch,
@@ -9336,7 +9586,7 @@ fn stage_layered_resize(
             placement,
             resize_epoch: epoch,
         });
-        surface.pending_resize_ready = false;
+        surface.pending_resize_ready = surface.winit_dormant_background;
         surface.frame = replacement;
         surface.width = width;
         surface.height = height;

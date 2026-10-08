@@ -118,6 +118,8 @@ pub const OP_BP_UI4_SCENE_FRAME_SET_POSITION: u32 = 0xC5; // arg0 window,arg1 x/
 pub const OP_BP_UI4_SCENE_FRAME_RESIZE: u32 = 0xC6; // arg0 window,arg1 width/height -> rc
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_LAYERED_V1: u32 = 0x180;
 pub const OP_BP_UI4_SCENE_FRAME_LAYER_V1: u32 = 0x181;
+pub const OP_BP_UI4_WINIT_FRAME_OPEN_V1: u32 = 0x184;
+pub const OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN_REGION_V1: u32 = 0x185;
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING: u32 = 0xC7; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB; // arg0 cap -> attached-shell input payload
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_POP: u32 = 0xCC; // response payload is one keyboard event
@@ -2689,6 +2691,24 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_UI4_WINIT_FRAME_OPEN_V1 => {
+            let (x, y) = unpack_i32_pair(arg0);
+            let (width, height) = unpack_u32_pair(arg1);
+            let window = request_payload(vm_id, req_len)
+                .filter(|payload| payload.len() == 4)
+                .map(|payload| {
+                    crate::ui4::blueprint_text::trueos_cabi_ui4_winit_frame_open_v1(
+                        x,
+                        y,
+                        width,
+                        height,
+                        u32::from_le_bytes(payload.try_into().unwrap()),
+                    )
+                })
+                .unwrap_or(0);
+            write_response(vm_id, seq, STATUS_OK, window as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_SCENE_FRAME_LAYER_V1 => {
             let target = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_layer_v1(
                 arg0 as u32,
@@ -2845,6 +2865,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN_REGION_V1 => {
+            let rc = request_payload(vm_id, req_len)
+                .filter(|payload| payload.len() == 16)
+                .map(|payload| {
+                    let value = |i| u32::from_le_bytes(payload[i..i + 4].try_into().unwrap());
+                    crate::ui4::blueprint_text::begin_blueprint_sprite_region(
+                        crate::ui4::WindowOwner::Vm(vm_id),
+                        arg0 as u32,
+                        crate::ui4::DamageRect {
+                            x: value(0), y: value(4), width: value(8), height: value(12),
+                        },
+                    )
+                })
+                .unwrap_or(crate::ui4::blueprint_text::ERROR_INVALID);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN => {

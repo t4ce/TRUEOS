@@ -18,6 +18,64 @@ second window. Existing ABI signatures remain unchanged.
 target. Its factor multiplies parent opacity on both direct scanout and slot-0
 composition; it does not dim the foreground. The factor survives paired resize.
 
+## Winit frame contract v1
+
+`trueos_cabi_ui4_winit_frame_open_v1` is the separate entry point for all
+TRUEOS winit windows, with the same geometry and background-Hz arguments.
+It creates a dirty/double-buffer foreground for BCS0 ICED widgets, text and
+overlays, above a streaming/triple-buffer background for rich scene content.
+The background keeps the requested visual pacing ceiling and checked GPU
+release handoff. The generic layered v1 entry retains its original policy,
+including the Cubes foreground scene and ambient background.
+
+The foreground's two retained allocations alternate between producer and
+published/display ownership. An eligible released foreground is imported
+straight into the hardware plane: it is the scanout image, with no intermediate
+fullscreen copy into the display compositor's own pair. The producer may never
+write the live member. Direct scanout remains conditional on hardware-plane
+admission, format, geometry and producer release; stacked windows retain the
+existing compositor path and its display-owned buffers.
+
+`trueos_cabi_ui4_scene_sprite_frame_begin_region_v1` acquires the idle dirty UI
+buffer and clears only a validated rectangle through BCS0. The sprite batch is
+clipped to that rectangle; pixels outside it remain untouched. Legacy visual
+GPU-only allocations cannot use this partial-write contract. On the deferred
+emulator paint backend, clients use the established full-frame path instead.
+
+Voxy compares its published UI draw commands/assets with the next revision.
+The following menu cases bound the affected command rectangles:
+
+| Menu change | Region to repaint |
+| --- | --- |
+| Typing or caret blink | Changed glyph/caret bounds, with editbox background replayed |
+| Add a server | Added row and any affected list content |
+| Hover or focus | Changed control bounds |
+| Scroll | Changed content within the clipped viewport |
+| Switch or animate dialog | Affected dialog bounds |
+| Startup or resize | Full frame to initialize each of the two buffers |
+| Unchanged UI | No publication or rendering |
+
+The idle buffer is one publication behind the current front. Voxy therefore
+repaints the union of current damage and the preceding publication's damage,
+including every current command overlapping that region in draw order. It
+publishes only the current logical damage. Busy retries and mailbox coalescing
+advance this history only after an actual publication. Unusual non-axis-aligned
+geometry conservatively uses the full-frame path. Both layered policies preserve
+their buffer counts through paired resize and the two-producer commit barrier.
+
+Every winit background starts as a published transparent scene. Until its first
+successful application write lease, the kernel publishes transparent resize
+replacements too, allowing foreground-only clients to open and resize. Taking
+that first lease transfers responsibility for background publication to the
+application and restores the ordinary paired-producer resize barrier. The
+initialized streaming allocation uses the normal frame allocator; the legacy
+visual/double GPU-only allocation contract is unchanged.
+
+Voxy's menu/loadscreen split already assigns fullscreen scene images to the
+background and widgets/text to the foreground. Its post-login scene bootstrap
+binds the background capability, but still has no native execution device;
+this contract does not by itself make the rich game renderer operational.
+
 ## Plane budget and interaction
 
 Slot 0 is shared composition; slots 1–3 are hardware leases; slot 4 remains
