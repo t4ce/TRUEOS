@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 const REGISTERED: u8 = 1;
 const REQUESTED: u8 = 2;
+const FORCED: u8 = 4;
 
 pub(crate) struct CooperativeStop(AtomicU8);
 impl CooperativeStop {
@@ -21,13 +22,20 @@ impl CooperativeStop {
     }
     /// True means the guest must retain execution and admission for cleanup.
     pub(crate) fn request(&self) -> bool {
-        self.0.fetch_or(REQUESTED, Ordering::AcqRel) & REGISTERED != 0
+        self.0.fetch_or(REQUESTED, Ordering::AcqRel) & (REGISTERED | FORCED) == REGISTERED
+    }
+    /// Irrevocably bypass guest cleanup for this incarnation, even after stop.
+    pub(crate) fn force(&self) {
+        self.0.fetch_or(REQUESTED | FORCED, Ordering::AcqRel);
+    }
+    pub(crate) fn forced(&self) -> bool {
+        self.0.load(Ordering::Acquire) & FORCED != 0
     }
     pub(crate) fn requested(&self) -> bool {
         self.0.load(Ordering::Acquire) & REQUESTED != 0
     }
     pub(crate) fn registered(&self) -> bool {
-        self.0.load(Ordering::Acquire) & REGISTERED != 0
+        self.0.load(Ordering::Acquire) & (REGISTERED | FORCED) == REGISTERED
     }
 }
 
@@ -42,6 +50,25 @@ mod tests {
         assert!(stop.request());
         assert!(stop.registered() && stop.requested());
         assert!(stop.request()); // repeated requests preserve the handshake
+    }
+    #[test]
+    fn force_overrides_pending_cleanup_and_cannot_be_downgraded() {
+        let stop = CooperativeStop::new();
+        assert!(stop.register());
+        assert!(stop.request());
+        stop.force();
+        assert!(stop.forced() && stop.requested());
+        assert!(!stop.registered() && !stop.request() && !stop.register());
+        stop.reset();
+        assert!(!stop.forced());
+        assert!(stop.register());
+    }
+    #[test]
+    fn force_before_registration_is_immediate() {
+        let stop = CooperativeStop::new();
+        stop.force();
+        assert!(stop.forced() && stop.requested());
+        assert!(!stop.register() && !stop.request());
     }
     #[test]
     fn stop_before_registration_cannot_become_cooperative() {

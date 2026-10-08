@@ -125,6 +125,37 @@ def stop_wave_result(text, serial_text, instance):
     return None, None, None
 
 
+def matrix_slot_from_repaint(text):
+    # Keep escapes as delimiters after the id; removing them concatenates the
+    # title with transcript text. Colours are allowed between the two § marks.
+    slots = re.findall(r"§(?:\x1b\[[0-?]*[ -/]*[@-~]|[ \t])+§([^\s\x1b§]+)", text)
+    return slots[-1] if slots else None
+
+
+def kill_wave_result(text, serial_text, instance):
+    """A forced exit must override stop and retire workers without guest ACK."""
+    text, serial_text = plain(text), plain(serial_text)
+    if not instance or f"tokio_stop: KILL-READY instance={instance}" not in text:
+        return None, None, None
+    if f"tokio_stop: DONE instance={instance}" in text or "tokio_stop: PASS" in text:
+        return "FAIL", "Unresponsive guest unexpectedly performed cleanup", None
+    vm = re.search(r"hv: vm(\d+) lifecycle: offline native_jobs=0 carrier=released", serial_text)
+    required = ("lifecycle: stop requested cooperative=1", "lifecycle: kill requested cleanup=skipped checkpoint=none")
+    if vm and all(record in text for record in required):
+        return "PASS", "force overrode pending stop; guest ACK absent; native_jobs=0", int(vm.group(1))
+    return None, None, None
+
+
+def quit_wave_result(text, serial_text, instance):
+    text = plain(text)
+    vm = re.search(r"hv: vm(\d+) lifecycle: offline native_jobs=0 carrier=released", plain(serial_text))
+    required = ("tokio_stop: observed application-quit",
+                "tokio_stop: PASS started=3 stopped=3 tls_destructors=4 cpu=joined std=joined cleanup_blocking=42")
+    if instance and vm and f"tokio_stop: DONE instance={instance}" in text and all(record in text for record in required):
+        return "PASS", "application quit completed normal Rust/TLS cleanup; native_jobs=0", int(vm.group(1))
+    return None, None, None
+
+
 class Qmp:
     def __init__(self, path, transcript):
         self.sock = socket.socket(socket.AF_UNIX)
@@ -188,6 +219,7 @@ def main():
     parser.add_argument("--gdb-port", type=int, help="Expose this private QEMU instance to loopback GDB for diagnostics")
     parser.add_argument("--probe", choices=("tokio_mrt", "veloren_executor", "tokio_stop"), default="tokio_mrt", help="Embedded probe to run (tokio_stop checks stop and VM-slot reuse)")
     parser.add_argument("--veloren-executor", action="store_true", help="Also run the vendored Veloren Tokio executor probe")
+    parser.add_argument("--stop-mode", choices=("graceful", "exit", "kill"), default="graceful", help="tokio_stop scenario: host stop, application quit, or force after pending stop")
     args = parser.parse_args()
     if not 0 < args.timeout <= 90:
         parser.error("--timeout must be greater than zero and at most 90 seconds")
@@ -327,7 +359,10 @@ def main():
             drain(shell, shell_log, .3)
             serial_begin = serial_path.stat().st_size
             shell_begin = len(shell_log)
-            shell.sendall((args.probe + "\r").encode())
+            launch = args.probe
+            if args.probe == "tokio_stop" and args.stop_mode != "graceful":
+                launch = "tokio_kill" if args.stop_mode == "kill" else "tokio_quit"
+            shell.sendall((launch + "\r").encode())
             result["shell2"]["mode"] = "Default (selected with §)"
             if args.probe == "tokio_stop":
                 result["stop_waves"] = []
@@ -338,7 +373,9 @@ def main():
                         drain(shell, shell_log, .3)
                         serial_begin = serial_path.stat().st_size
                         shell_begin = len(shell_log)
-                        shell.sendall(b"tokio_stop\r")
+                        shell.sendall(b"tokio_quit\r" if args.stop_mode == "exit" else b"tokio_stop\r")
+                    mode = args.stop_mode if wave == 0 or args.stop_mode == "exit" else "graceful"
+                    sent_kill = False
                     sent_stop = False
                     instance = None
                     stop_sends = 0
@@ -349,22 +386,35 @@ def main():
                                     + shell_log[shell_begin:].decode(errors="replace"))
                         if not sent_stop:
                             instance = next_stop_instance(observed, instances)
-                            if instance:
+                            ready = instance and (mode != "kill" or f"tokio_stop: KILL-READY instance={instance}" in plain(observed))
+                            if ready:
                                 instances.add(instance)
-                                shell.sendall(b"vmx_stop\r")
+                                if mode != "exit":
+                                    shell.sendall(b"vmx_stop\r")
+                                    stop_sends += 1
                                 sent_stop = True
-                                stop_sends += 1
-                        status, detail, vm = stop_wave_result(observed, serial_observed, instance)
+                        if mode == "kill":
+                            if sent_stop and not sent_kill and "lifecycle: stop requested cooperative=1" in plain(observed):
+                                slot = matrix_slot_from_repaint(observed)
+                                if not slot:
+                                    raise RuntimeError("Kill probe has no observed Matrix slot identity")
+                                shell.sendall(("§" + slot + "§\r").encode())
+                                sent_kill = True
+                            status, detail, vm = kill_wave_result(observed, serial_observed, instance)
+                        elif mode == "exit":
+                            status, detail, vm = quit_wave_result(observed, serial_observed, instance)
+                        else:
+                            status, detail, vm = stop_wave_result(observed, serial_observed, instance)
                         if status == "FAIL":
                             raise RuntimeError(detail)
                         if status == "PASS":
-                            result["stop_waves"].append({"wave": wave, "vmid": vm, "instance": instance, "stop_sends": stop_sends, "detail": detail})
+                            result["stop_waves"].append({"wave": wave, "vmid": vm, "instance": instance, "stop_sends": stop_sends, "mode": mode, "kill_sent": sent_kill, "detail": detail})
                             break
                         drain(shell, shell_log, .1)
                 if result["stop_waves"][0]["vmid"] != result["stop_waves"][1]["vmid"]:
                     raise RuntimeError("Stop probe did not reuse the same VM slot")
                 result["status"] = "PASS"
-                result["detail"] = "tokio_stop: PASS graceful_stop=2 same_vm_slot=1 native_jobs=0"
+                result["detail"] = f"tokio_stop: PASS scenario={args.stop_mode} waves=2 same_vm_slot=1 native_jobs=0"
             while True:
                 if args.probe == "tokio_stop":
                     break

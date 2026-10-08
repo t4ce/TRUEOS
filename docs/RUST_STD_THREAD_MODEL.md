@@ -429,3 +429,41 @@ and returns Shell2 to Default before selecting the second probe. Optional
 The combined run in `bld/veloren-tokio/qemu-combined-fixed/result.json` passed
 both probes in 16.775 seconds, including complete runtime shutdown/recreation
 and TLS cleanup followed by the ECS probe in the same OS instance.
+
+
+## Slot retirement and forced termination
+
+`vmx_stop` and Apps `stop` retain the cooperative cleanup contract. Voxy's
+full client polls once before each game/event-loop turn; its native menu and
+headless loop use the same boundary. In-game Quit returns through the normal
+Rust scopes. Neither path requires a durable snapshot: the shutdown guard is
+a cleanup acknowledgement, not a saved game or a resumable checkpoint.
+
+Freeing `§slot§` (or dropping a VME slot) instead calls `hv::kill`. Force is an
+irreversible bit for that VM incarnation: it overrides pending cooperative
+stop, forbids late registration, closes native admission, cancels preservation,
+and interrupts the Hull at its existing VM-exit/preemption boundary. A host
+control wait also interrupts VMX tasks parked in sleep/console/Condvar futures;
+a lifecycle IPI alone cannot complete those waits. Startup
+claims and stop/kill requests share a short host lock so preparation cannot
+reset a newly latched request. An already offline retained pause is ejected.
+Expired Matrix launch lifetimes cancel queued/fetching launches. Force requests
+carry the retired Matrix lifetime as well as the VM id, so a delayed attachment
+retirement cannot kill a different slot which has since reused that id.
+
+Native std/Tokio tasks register a host kill waker once. At their next carrier
+poll, including an otherwise indefinite Condvar park, force discards the
+suspended stack without entering guest code or running guest/TLS destructors.
+Host wait futures, stack mappings and admission tokens still retire normally.
+Finite queued service/compute work is discarded without calling its guest
+closure or destructor. The host waits for all admission tokens before releasing
+executable/arena/process storage or reusing the VM id. This does not force a
+Rust unwind and does not require an application shutdown acknowledgement.
+
+The native carrier remains cooperative. A native function which never returns,
+parks or yields cannot be safely stopped by this implementation; its storage
+is retained rather than freed under a running CPU. Existing GPU retirement
+fences/quarantine likewise remain authoritative for pages still owned by DMA.
+No timeout pretends those resources are safe to reuse. Arbitrary instruction
+preemption of native guest code would require a separate isolation/preemption
+architecture.

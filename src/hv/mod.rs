@@ -84,11 +84,34 @@ pub const fn cross_principal_snapshot_restore_supported() -> bool {
     false
 }
 
+// VMX tasks can be parked in host waits rather than executing VMRESUME. An IPI
+// alone cannot finish those futures; stop/kill also wakes this host wait path.
+static VM_CONTROL_WAITS: [crate::wait::WaitQueue; TRUEOS_VM_ID_LIMIT] =
+    [const { crate::wait::WaitQueue::new() }; TRUEOS_VM_ID_LIMIT];
+
+async fn await_vm_control_boundary<F: core::future::Future>(vm_id: u8, future: F) -> Option<F::Output> {
+    let queue = &VM_CONTROL_WAITS[vm_id as usize];
+    let observed = queue.observe();
+    if vm_slot(vm_id).is_some_and(immediate_stop_requested) {
+        return None;
+    }
+    let mut control = core::pin::pin!(queue.wait_after(observed));
+    let mut future = core::pin::pin!(future);
+    core::future::poll_fn(|cx| {
+        if control.as_mut().poll(cx).is_ready() {
+            return core::task::Poll::Ready(None);
+        }
+        future.as_mut().poll(cx).map(Some)
+    }).await
+}
+
 struct TrueosVmId {
     running: AtomicBool,
     starting: AtomicBool,
     stop_req: AtomicBool,
     cooperative_stop: cooperative_stop::CooperativeStop,
+    lifecycle_control: spin::Mutex<()>,
+    matrix_owner: spin::Mutex<Option<crate::shell2::MatrixSlotLease>>,
     preserve_req: AtomicBool,
     preserve_exit: AtomicBool,
     clean_exit: AtomicBool,
@@ -113,6 +136,8 @@ impl TrueosVmId {
             starting: AtomicBool::new(false),
             stop_req: AtomicBool::new(false),
             cooperative_stop: cooperative_stop::CooperativeStop::new(),
+            lifecycle_control: spin::Mutex::new(()),
+            matrix_owner: spin::Mutex::new(None),
             preserve_req: AtomicBool::new(false),
             preserve_exit: AtomicBool::new(false),
             clean_exit: AtomicBool::new(false),
@@ -1352,11 +1377,12 @@ fn reserve_blueprint_child_vm_id() -> Option<u8> {
     loop {
         let vm_id = first_free_vm_id()?;
         let vm = vm_slot(vm_id)?;
-        if vm
-            .starting
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
+        let _control = vm.lifecycle_control.lock();
+        if !vm.running.load(Ordering::Acquire) && !vm.starting.load(Ordering::Acquire) {
+            vm.cooperative_stop.reset();
+            vm.stop_req.store(false, Ordering::Release);
+            *vm.matrix_owner.lock() = None;
+            vm.starting.store(true, Ordering::Release);
             return Some(vm_id);
         }
     }
@@ -2120,16 +2146,29 @@ fn start_with_mode(
         return Err(StartError::VgpuQuarantined);
     }
 
-    if already_reserved {
-        if !vm.starting.load(Ordering::Acquire) {
+    {
+        let _control = vm.lifecycle_control.lock();
+        if vm.running.load(Ordering::Acquire) {
             return Err(StartError::AlreadyRunning);
         }
-    } else if vm
-        .starting
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err(StartError::AlreadyRunning);
+        if already_reserved {
+            if !vm.starting.load(Ordering::Acquire) {
+                return Err(StartError::AlreadyRunning);
+            }
+        } else {
+            if vm.starting.load(Ordering::Acquire) {
+                return Err(StartError::AlreadyRunning);
+            }
+            vm.cooperative_stop.reset();
+            vm.stop_req.store(false, Ordering::Release);
+            if let Some(pending) = pending_blueprint.as_ref() {
+                *vm.matrix_owner.lock() = pending.console_target.as_ref()
+                    .map(crate::shell2::matrix_target_slot_lease);
+            } else if !vm.pause_latched.load(Ordering::Acquire) {
+                *vm.matrix_owner.lock() = None;
+            }
+            vm.starting.store(true, Ordering::Release);
+        }
     }
 
     let (compatible, has_msr, _, locked, _) = vmx_caps();
@@ -2234,8 +2273,6 @@ fn start_with_mode(
         ));
     }
 
-    vm.cooperative_stop.reset();
-    vm.stop_req.store(false, Ordering::Release);
     vm.marker_seen.store(false, Ordering::Release);
     if let Some(mode) = VM_BOOT_MODES.get(vm_id as usize) {
         *mode.lock() = boot_mode;
@@ -2359,6 +2396,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
         return Err(StopError::UnsupportedVmId);
     };
 
+    let _control = vm.lifecycle_control.lock();
     if vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire) {
         let cooperative = vm.cooperative_stop.request();
         if !cooperative {
@@ -2366,6 +2404,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
             clear_blueprint_lifecycle_capability(vm_id);
         }
         vm.stop_req.store(true, Ordering::Release);
+        VM_CONTROL_WAITS[vm_id as usize].notify_all();
         crate::log_os::blueprint_important_line(format_args!(
             "hv: vm{} lifecycle: stop requested cooperative={} native_jobs={} cleanup=guest-before-drain\n",
             vm_id, cooperative as u8, crate::r::blocking::guest_jobs_in_flight(vm_id)
@@ -2376,6 +2415,53 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
         hvwarnf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
         Ok(false)
     }
+}
+
+/// Discard a Hull without requesting guest cleanup or a checkpoint. Native
+/// continuations are abandoned only back on their host scheduler stacks; guest
+/// drops/TLS destructors are deliberately skipped. A native call that never
+/// returns/yields cannot be interrupted safely by the current carrier design.
+pub fn kill(vm_id: u8) -> Result<bool, EjectError> {
+    kill_matching_owner(vm_id, None)
+}
+
+pub(crate) fn kill_for_matrix_slot(vm_id: u8, owner: &crate::shell2::MatrixSlotLease) -> Result<bool, EjectError> {
+    kill_matching_owner(vm_id, Some(owner))
+}
+
+fn kill_matching_owner(vm_id: u8, owner: Option<&crate::shell2::MatrixSlotLease>) -> Result<bool, EjectError> {
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(EjectError::UnsupportedVmId);
+    };
+    let _control = vm.lifecycle_control.lock();
+    // Slot attachment retirement may race an old guest finishing and another
+    // slot reusing its vmid. Match the Matrix lifetime, never just that vmid.
+    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) {
+        return Ok(false);
+    }
+    if !vm.running.load(Ordering::Acquire) && !vm.starting.load(Ordering::Acquire) {
+        return eject_offline_vm(vm_id, false);
+    }
+    vm.cooperative_stop.force();
+    vm.stop_req.store(true, Ordering::Release);
+    vm.preserve_req.store(false, Ordering::Release);
+    vm.pause_latched.store(false, Ordering::Release);
+    vm.preserve_exit.store(false, Ordering::Release);
+    reset_prepare_pause(vm);
+    clear_blueprint_lifecycle_capability(vm_id);
+    crate::r::blocking::close_guest_jobs(vm_id);
+    crate::r::threads::wake_killed_guest(vm_id);
+    VM_CONTROL_WAITS[vm_id as usize].notify_all();
+    crate::log_os::blueprint_important_line(format_args!(
+        "hv: vm{} lifecycle: kill requested cleanup=skipped checkpoint=none native_jobs={}\n",
+        vm_id, crate::r::blocking::guest_jobs_in_flight(vm_id)
+    ));
+    nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Stop, "kill");
+    Ok(true)
+}
+
+pub(crate) fn guest_kill_requested(vm_id: u8) -> bool {
+    vm_slot(vm_id).is_some_and(|vm| vm.cooperative_stop.forced())
 }
 
 /// Control registration/polling is scoped to the current VM incarnation.
@@ -2462,6 +2548,9 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     vm.resume_prepared.store(false, Ordering::Release);
     vm.pause_store_seq.store(0, Ordering::Release);
     reset_prepare_pause(vm);
+    if !allow_starting {
+        *vm.matrix_owner.lock() = None;
+    }
     Ok(had_state)
 }
 
@@ -2490,6 +2579,8 @@ pub fn request_blueprint_prepare_pause(
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
     };
+    let _control = vm.lifecycle_control.lock();
+    if vm.cooperative_stop.forced() { return Ok(false); }
     let running = vm.running.load(Ordering::Acquire);
     let starting = vm.starting.load(Ordering::Acquire);
     if !running && !starting {
@@ -2574,6 +2665,8 @@ pub(crate) fn prepare_preserve_mode(vm_id: u8, mode: PreserveMode) -> Result<boo
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
     };
+    let _control = vm.lifecycle_control.lock();
+    if vm.cooperative_stop.forced() { return Ok(false); }
 
     vm.pause_store_seq
         .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
@@ -5986,8 +6079,8 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         return;
     };
     let lineage_record = LineageRecord::new();
-    vm.starting.store(false, Ordering::Release);
     vm.running.store(true, Ordering::Release);
+    vm.starting.store(false, Ordering::Release);
     vm.preserve_req.store(false, Ordering::Release);
     vm.preserve_exit.store(false, Ordering::Release);
     vm.clean_exit.store(false, Ordering::Release);
@@ -6077,7 +6170,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         clear_blueprint_process_context(vm_id);
         blueprint_child_lifecycle_cleanup(vm_id, vm.run_generation.load(Ordering::Acquire), false);
         lane_lease.release_now();
-        vm.running.store(false, Ordering::Release);
+        publish_vm_offline(vm_id, vm);
         return;
     }
     hvlogf(format_args!("hv: vm{} reporting: vmx preflight ok, stage=m1", vm_id));
@@ -6133,6 +6226,11 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     crate::log!("app-vm-run-queue: vm launch returned vm={} mode={:?}\n", vm_id, boot_mode);
     clear_current_vm_id();
     crate::r::blocking::drain_guest_jobs(vm_id).await;
+    if vm.cooperative_stop.forced() {
+        vm.pause_latched.store(false, Ordering::Release);
+        vm.preserve_exit.store(false, Ordering::Release);
+        vm.clean_exit.store(true, Ordering::Release);
+    }
     if vm.pause_latched.load(Ordering::Acquire) {
         suspend_blueprint_process_context(vm_id);
         crate::r::services::gridpaper_service::pause_owner_lifecycle(vm_id);
@@ -6142,7 +6240,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     crate::allocators::with_host_alloc_domain_strong(|| match launch_result {
         Ok(lr) => {
             let preserve_exit = vmexit_is_preserve(vm_id, lr);
-            if preserve_exit {
+            if preserve_exit && !vm.cooperative_stop.forced() {
                 snapshot_on_preserve_exit(vm_id);
             } else if vm.pause_latched.load(Ordering::Acquire) {
                 hvlogf(format_args!(
@@ -6348,11 +6446,25 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // the same AP while reporting the first VM as already offline.
     let native_jobs = crate::r::blocking::guest_jobs_in_flight(vm_id);
     lane_lease.release_now();
-    vm.running.store(false, Ordering::Release);
+    publish_vm_offline(vm_id, vm);
     crate::log_os::blueprint_important_line(format_args!(
         "hv: vm{} lifecycle: offline native_jobs={} carrier=released wait_queues_retired={}\n",
         vm_id, native_jobs, wait_queues_retired
     ));
+}
+
+fn publish_vm_offline(vm_id: u8, vm: &TrueosVmId) {
+    // Called only after native jobs drained and the Hull carrier was released.
+    // Serialize destruction with a new claim, including failed preparation.
+    let _control = vm.lifecycle_control.lock();
+    vm.running.store(false, Ordering::Release);
+    if vm.cooperative_stop.forced() {
+        if let Err(error) = eject_offline_vm(vm_id, false) {
+            hvwarnf(format_args!(
+                "hv: vm{} lifecycle: kill resource release retained reason={:?}", vm_id, error
+            ));
+        }
+    }
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -6734,7 +6846,7 @@ async fn vmx_launch_once_with_ept_vpid(
                             if ms == 0 {
                                 execution_policy::yield_executor_turn().await;
                             } else {
-                                Timer::after(EmbassyDuration::from_millis(ms)).await;
+                                await_vm_control_boundary(vm_id, Timer::after(EmbassyDuration::from_millis(ms))).await;
                             }
                             set_current_vm_id(vm_id);
                             break 'vmcall;
@@ -6744,7 +6856,8 @@ async fn vmx_launch_once_with_ept_vpid(
                             timeout_ms,
                         } => {
                             clear_current_vm_id();
-                            let woke = wait_blueprint_console_input(vm_id, timeout_ms).await;
+                            let woke = await_vm_control_boundary(vm_id,
+                                wait_blueprint_console_input(vm_id, timeout_ms)).await.unwrap_or(false);
                             set_current_vm_id(vm_id);
                             crate::hv::vmcall::complete_console_input_wait(vm_id, seq, woke);
                             break 'vmcall;
@@ -6756,10 +6869,10 @@ async fn vmx_launch_once_with_ept_vpid(
                             timeout_ms,
                         } => {
                             clear_current_vm_id();
-                            let notified = crate::wait::platform_wait_after_for_vm_async(
-                                vm_id, key, observed, timeout_ms,
-                            )
-                            .await;
+                            let notified = await_vm_control_boundary(vm_id,
+                                crate::wait::platform_wait_after_for_vm_async(
+                                    vm_id, key, observed, timeout_ms,
+                                )).await.unwrap_or(false);
                             set_current_vm_id(vm_id);
                             crate::smp::poll();
                             if vm
@@ -6777,7 +6890,8 @@ async fn vmx_launch_once_with_ept_vpid(
                         }
                         crate::hv::vmcall::DispatchOutcome::RetryAfterMs(ms) => {
                             clear_current_vm_id();
-                            Timer::after(EmbassyDuration::from_millis(ms.max(1))).await;
+                            await_vm_control_boundary(vm_id,
+                                Timer::after(EmbassyDuration::from_millis(ms.max(1)))).await;
                             set_current_vm_id(vm_id);
                             crate::smp::poll();
                             if vm
@@ -6929,7 +7043,7 @@ async fn vmx_launch_once_with_ept_vpid(
             cpuid_other_count
         ));
     }
-    if !preserve_requested {
+    if !preserve_requested || guest_kill_requested(vm_id) {
         if let Some(vm) = vm {
             vm.preserve_exit.store(false, Ordering::Release);
         }

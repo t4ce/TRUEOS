@@ -865,8 +865,9 @@ fn start_blueprint_launch(
             // A free between the ownership bind and start may have observed
             // an idle VM. Cancel that launch once its stop latch is available.
             if matrix_target_interrupted(&request.target) {
-                let _ = crate::hv::stop(vm_id);
-                log("apps: slot freed during vm start; stop requested");
+                let owner = crate::shell2::matrix_target_slot_lease(&request.target);
+                let _ = crate::hv::kill_for_matrix_slot(vm_id, &owner);
+                log("apps: slot freed during vm start; kill requested");
                 return;
             }
             crate::log!(

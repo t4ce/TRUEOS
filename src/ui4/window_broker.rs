@@ -2834,6 +2834,29 @@ pub(crate) fn dock_window(
     )
 }
 
+/// Application requests share the exact dock transaction used by pointer input.
+pub(crate) fn set_window_maximized(
+    owner: WindowOwner,
+    id: WindowId,
+    maximized: bool,
+) -> Result<(), WindowBrokerError> {
+    let snapshot = window_snapshot(owner, id).ok_or(WindowBrokerError::InteractionDenied)?;
+    if snapshot.maximized == maximized && (maximized || snapshot.dock_target.is_none()) {
+        return Ok(());
+    }
+    let (width, height) = super::output_dimensions().ok_or(WindowBrokerError::EmptyExtent)?;
+    change_window_dock(
+        owner,
+        id,
+        maximized.then_some(WindowDockTarget::Maximize),
+        width,
+        height,
+        None,
+        None,
+    )
+    .map(|_| ())
+}
+
 /// Restore one docked window under the cursor at the beginning of a drag.
 pub(crate) fn restore_docked_window(
     owner: WindowOwner,

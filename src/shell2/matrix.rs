@@ -604,7 +604,7 @@ pub(crate) fn detach_from_live_slot(
     true
 }
 
-pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
+pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<(u8, MatrixSlotLease)>) {
     let freed_id = normalize_slot_id(requested);
     let default_id = default_slot_id();
     let mut guard = state().lock();
@@ -622,7 +622,7 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
         };
         freed_attachments = core::mem::replace(&mut slot.attachments, HVec::new());
         if let Some(vm_id) = slot.vm_id {
-            vm_ids.push(vm_id);
+            vm_ids.push((vm_id, freed_lease.clone()));
         }
         if !slot.lines.is_empty()
             || slot.activity != MatrixSlotActivity::Idle
@@ -658,7 +658,7 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
         };
         freed_attachments = removed.attachments;
         if let Some(vm_id) = removed.vm_id {
-            vm_ids.push(vm_id);
+            vm_ids.push((vm_id, freed_lease.clone()));
         }
         for scope_index in 0..super::OUTPUT_SCOPE_COUNT {
             if guard.active_slot_ids[scope_index] == freed_id {
@@ -1226,6 +1226,18 @@ mod tests {
         assert!(claim_named_app_slot_selected(1, "flmbz", "film").is_none());
         assert_eq!(active_slot_id(1), id);
         assert_eq!(slot_transcript_text(&id), "unrelated transcript");
+    }
+
+    #[test]
+    fn freed_vm_retains_its_original_matrix_lifetime() {
+        let (owner, _) = claim_named_app_slot_selected(2, "killt", "kill-test").unwrap();
+        assert!(bind_live_slot_vm(&owner.id, owner.lifetime_generation, 7, false));
+        let (_, killed) = free_slot(owner.name());
+        assert_eq!(killed, alloc::vec![(7, owner.clone())]);
+        let (replacement, _) = claim_named_app_slot_selected(2, "killt", "new-test").unwrap();
+        assert!(bind_live_slot_vm(&replacement.id, replacement.lifetime_generation, 7, false));
+        assert_ne!(killed[0].1, replacement, "reusing vmid/name must not transfer kill authority");
+        free_slot(replacement.name());
     }
 
     #[test]

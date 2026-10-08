@@ -109,7 +109,7 @@ fn launch_archive(archive: alloc::string::String, slot: &str, frontend: super::t
 }
 
 /// Retire the launch target too: queued work is cancelled by its expired
-/// lifetime, and a starting/running Blueprint follows normal VM teardown.
+/// lifetime, and a starting/running Blueprint is killed without guest cleanup.
 pub(super) fn drop_vmx_slot(name: &str) {
     crate::shell2::free_matrix_slot(name);
 }

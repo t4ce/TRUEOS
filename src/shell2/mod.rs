@@ -1684,14 +1684,14 @@ fn is_six_digit_code(value: &str) -> bool {
     value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-/// Free the Matrix lifetime and its attachments, then request VM teardown.
+/// Free the Matrix lifetime and its attachments, then force VM teardown.
 /// Shared by Shell3's VME stop and slot-drop operator.
 pub(crate) fn free_matrix_slot(name: &str) {
     let (freed_id, vm_ids) = matrix::free_slot(name);
-    for vm_id in vm_ids {
-        if let Err(error) = crate::hv::stop(vm_id) {
+    for (vm_id, owner) in vm_ids {
+        if let Err(error) = crate::hv::kill_for_matrix_slot(vm_id, &owner) {
             crate::log_warn!(target: "service";
-                "matrix: freed slot §{}§; vm{} stop failed: {:?}\n",
+                "matrix: freed slot §{}§; vm{} kill failed: {:?}\n",
                 freed_id, vm_id, error,
             );
         }
@@ -1710,10 +1710,10 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         .is_some()
     {
         let (freed_id, vm_ids) = matrix::free_slot(submitted);
-        for vm_id in vm_ids {
-            match crate::hv::stop(vm_id) {
+        for (vm_id, owner) in vm_ids {
+            match crate::hv::kill_for_matrix_slot(vm_id, &owner) {
                 Ok(true) => matrix::record_line_in_default(
-                    alloc::format!("matrix: freed slot §{}§; vm{} stop requested", freed_id, vm_id)
+                    alloc::format!("matrix: freed slot §{}§; vm{} kill requested", freed_id, vm_id)
                         .as_str(),
                 ),
                 Ok(false) => matrix::record_line_in_default(
@@ -1725,7 +1725,7 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
                     .as_str(),
                 ),
                 Err(_) => matrix::record_line_in_default(
-                    alloc::format!("matrix: freed slot §{}§; vm{} stop failed", freed_id, vm_id)
+                    alloc::format!("matrix: freed slot §{}§; vm{} kill failed", freed_id, vm_id)
                         .as_str(),
                 ),
             }

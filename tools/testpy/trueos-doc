@@ -81,7 +81,7 @@ TOPICS: dict[str, dict[str, Any]] = {
         "operators": [
             {"input": "§", "effect": "Select the default Matrix slot."},
             {"input": "§<slot>", "effect": "Select <slot>, creating an empty slot if absent. Slot ids are truncated to the Matrix id capacity."},
-            {"input": "§<slot>§", "effect": "Free <slot>, retire its attachments, request stop for its VM(s), and return affected views to default."},
+            {"input": "§<slot>§", "effect": "Free <slot>, retire its attachments, force-kill its VM(s) without guest cleanup or a checkpoint, and return affected views to default."},
             {"input": "§§", "effect": "Clear the active slot transcript. This is not a slot free."},
             {"input": "§§<selector>", "effect": "Online-fetch and launch a Blueprint selector from any mode."},
         ],

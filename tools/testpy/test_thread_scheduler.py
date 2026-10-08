@@ -33,7 +33,7 @@ def main():
     platform_items = wait_source[wait_source.index("const PLATFORM_WAIT_HOST_SCOPE:"):
                                 wait_source.index("struct LocalJobQueue {")]
 
-    support = '''#![allow(dead_code, unused_imports)]
+    support = '''#![allow(dead_code, unused_imports, unexpected_cfgs)]
 extern crate alloc;
 use core::future::Future;
 use core::pin::Pin;
@@ -43,8 +43,35 @@ impl<T> Mutex<T> {
     const fn new(value: T) -> Self { Self(std::sync::Mutex::new(value)) }
     fn lock(&self) -> std::sync::MutexGuard<'_, T> { self.0.lock().unwrap() }
 }
-mod allcaps { pub mod hv { pub const VM_CPU_SLOT_LIMIT: usize = 1; } }
-mod hv { pub fn current_hull_guest_context_vm_id() -> Option<u8> { None } }
+mod allcaps { pub mod hv { pub const VM_CPU_SLOT_LIMIT: usize = 1; pub const VM_ID_LIMIT: usize = 64; } }
+mod hv {
+    pub fn current_hull_guest_context_vm_id() -> Option<u8> { None }
+    static KILLED: [core::sync::atomic::AtomicBool; 64] = [const { core::sync::atomic::AtomicBool::new(false) }; 64];
+    pub fn guest_kill_requested(vm: u8) -> bool { KILLED[vm as usize].load(core::sync::atomic::Ordering::Acquire) }
+    pub fn set_guest_kill_for_test(vm: u8, value: bool) { KILLED[vm as usize].store(value, core::sync::atomic::Ordering::Release); }
+    fn vm_slot(vm: u8) -> Option<u8> { Some(vm) }
+    fn immediate_stop_requested(vm: u8) -> bool { guest_kill_requested(vm) }
+    const TRUEOS_VM_ID_LIMIT: usize = 64;
+    __CONTROL_BOUNDARY__
+    #[test]
+    fn stop_or_kill_interrupts_an_indefinite_hull_wait() {
+        let vm = 61;
+        let mut future = core::pin::pin!(await_vm_control_boundary(vm, core::future::pending::<()>()));
+        let mut cx = core::task::Context::from_waker(std::task::Waker::noop());
+        assert!(core::future::Future::poll(future.as_mut(), &mut cx).is_pending());
+        VM_CONTROL_WAITS[vm as usize].notify_all();
+        assert_eq!(core::future::Future::poll(future.as_mut(), &mut cx), core::task::Poll::Ready(None));
+    }
+    #[test]
+    fn latched_kill_does_not_wait_for_another_notification() {
+        let vm = 62;
+        set_guest_kill_for_test(vm, true);
+        let mut future = core::pin::pin!(await_vm_control_boundary(vm, core::future::pending::<()>()));
+        let mut cx = core::task::Context::from_waker(std::task::Waker::noop());
+        assert_eq!(core::future::Future::poll(future.as_mut(), &mut cx), core::task::Poll::Ready(None));
+        set_guest_kill_for_test(vm, false);
+    }
+}
 mod percpu { pub fn current_slot() -> usize { 0 } }
 mod allocators {
     static STATE: std::sync::Mutex<[u32; 4]> = std::sync::Mutex::new([0; 4]);
@@ -91,6 +118,9 @@ mod wait {
     }
     fn spin_step_no_exec() { spin_step(); }
 '''
+    hv_source = (ROOT / "src/hv/mod.rs").read_text()
+    control = hv_source[hv_source.index("static VM_CONTROL_WAITS:"):hv_source.index("\nstruct TrueosVmId")]
+    support = support.replace("__CONTROL_BOUNDARY__", control)
     support += registers + wait_items + platform_items + "\n}\n"
     support += '''mod r {
     pub mod blocking {
@@ -107,6 +137,7 @@ mod wait {
     pub mod threads {
         use crate::trueos_time;
 '''
+    scheduler = scheduler.replace("spin::Mutex", "crate::Mutex")
     support += scheduler + "\n}\n}\n"
     with tempfile.TemporaryDirectory(prefix="trueos-thread-scheduler-") as directory:
         folder = Path(directory)
@@ -119,6 +150,7 @@ mod wait {
         subprocess.run([
             "cargo", "test", "--offline", "--target", "x86_64-unknown-linux-gnu",
             "--target-dir", str(ROOT / "bld/thread-scheduler-host-tests"),
+            "--config", 'build.rustflags=["--cfg","thread_scheduler_harness"]',
         ], cwd=folder, check=True)
 
 

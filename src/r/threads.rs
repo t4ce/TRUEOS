@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicUsize, Ordering};
-use core::task::{Context, Poll};
+use core::task::{Context, Poll, Waker};
 
 mod context;
 mod stack;
@@ -22,6 +22,19 @@ const THREAD_LIMIT: usize = 256;
 const MAX_STACK_BYTES: usize = 64 * 1024 * 1024;
 static THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NEXT_CARRIER: AtomicUsize = AtomicUsize::new(0);
+// One registration per task lifetime, not per guest operation. Killing wakes
+// even a Condvar/sleep parked task whose ordinary wait never completes.
+static KILL_WAKERS: [spin::Mutex<alloc::vec::Vec<Waker>>; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { spin::Mutex::new(alloc::vec::Vec::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
+
+pub(crate) fn wake_killed_guest(vm_id: u8) {
+    if let Some(wakers) = KILL_WAKERS.get(vm_id as usize) {
+        let pending = core::mem::take(&mut *wakers.lock());
+        for waker in pending {
+            waker.wake();
+        }
+    }
+}
 static CURRENT: [AtomicPtr<Thread>; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicPtr::new(core::ptr::null_mut()) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 
@@ -52,6 +65,7 @@ struct Thread {
     vm_id: Option<u8>,
     job: Option<Job>,
     done: bool,
+    kill_waker: Option<Waker>,
     wait: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     domain: (u32, u8),
     allocation: [u32; 4],
@@ -142,10 +156,12 @@ pub(crate) fn wait(queue: &crate::wait::WaitQueue, observed: u32, timeout_ms: u6
         return None;
     }
     let queue_ptr = queue as *const crate::wait::WaitQueue as usize;
-    let result = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let result = crate::allocators::with_host_alloc_domain_strong(|| {
+        alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false))
+    });
     let out = result.clone();
     // The suspended caller keeps its queue reference and owner alive until
-    // this future completes. Thread tasks cannot be cancelled mid-stack.
+    // this future completes, or the host discards the suspended stack on kill.
     let future = crate::allocators::with_host_alloc_domain_strong(|| {
         Box::pin(async move {
             let queue = unsafe { &*(queue_ptr as *const crate::wait::WaitQueue) };
@@ -185,6 +201,25 @@ impl Future for ThreadTask {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let thread = &mut *self.get_mut().0;
+        if let Some(vm_id) = thread.vm_id {
+            if thread.kill_waker.is_none() {
+                if let Some(wakers) = KILL_WAKERS.get(vm_id as usize) {
+                    crate::wait::register_waker_list(&mut wakers.lock(), cx.waker());
+                    thread.kill_waker = Some(cx.waker().clone());
+                }
+            }
+            // Registration precedes the flag read: a racing kill either wakes
+            // us or is consumed here. Never poll the ordinary wait or re-enter
+            // guest code/destructors after this irreversible transition.
+            if crate::hv::guest_kill_requested(vm_id) {
+                thread.wait = None;
+                if let Some(job) = thread.job.take() {
+                    core::mem::forget(job);
+                }
+                thread.done = true;
+                return Poll::Ready(());
+            }
+        }
         if let Some(wait) = thread.wait.as_mut() {
             if wait.as_mut().poll(cx).is_pending() {
                 return Poll::Pending;
@@ -235,6 +270,19 @@ impl Future for ThreadTask {
             }
             Poll::Pending
         }
+    }
+}
+
+impl Drop for ThreadTask {
+    fn drop(&mut self) {
+        let thread = &mut *self.0;
+        if let (Some(vm_id), Some(waker)) = (thread.vm_id, thread.kill_waker.take()) {
+            if let Some(wakers) = KILL_WAKERS.get(vm_id as usize) {
+                wakers.lock().retain(|registered| !registered.will_wake(&waker));
+            }
+        }
+        // Host-owned wait/stack/address-space storage drops before admission;
+        // no guest destructor is called for frames on an abandoned stack.
     }
 }
 
@@ -290,6 +338,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
             vm_id,
             job: None,
             done: false,
+            kill_waker: None,
             wait: None,
             domain: (
                 if vm_id.is_some() {

@@ -228,5 +228,30 @@ with connection:
             self.assertIn("fresh directory", again.stderr)
 
 
+class ForceEvidenceTests(unittest.TestCase):
+    def test_matrix_repaint_preserves_the_slot_delimiter(self):
+        repaint = "§\x1b[0m \x1b[1;38;2;255;55;255m§tk\x1b[0m\x1b[u\x1b[s\x1b[4;1Hvmx-shell: stop requested"
+        self.assertEqual(verify.matrix_slot_from_repaint(repaint), "tk")
+        self.assertIsNone(verify.matrix_slot_from_repaint("§"))
+
+    def test_force_requires_pending_stop_zero_jobs_and_no_guest_ack(self):
+        instance = "01234567-1234-1234-1234-123456789abc"
+        ready = f"tokio_stop: KILL-READY instance={instance}"
+        pending = "hv: vm0 lifecycle: stop requested cooperative=1"
+        kill = "hv: vm0 lifecycle: kill requested cleanup=skipped checkpoint=none"
+        offline = "hv: vm0 lifecycle: offline native_jobs=0 carrier=released"
+        self.assertEqual(verify.kill_wave_result(ready + pending + kill, "", instance)[0], None)
+        self.assertEqual(verify.kill_wave_result(ready + kill, offline, instance)[0], None)
+        self.assertEqual(verify.kill_wave_result(ready + pending + kill, offline, instance)[0], "PASS")
+        self.assertEqual(verify.kill_wave_result(ready + pending + kill + f"tokio_stop: DONE instance={instance}", offline, instance)[0], "FAIL")
+
+    def test_quit_requires_destructors_and_incarnation_completion(self):
+        instance = "01234567-1234-1234-1234-123456789abc"
+        text = ("tokio_stop: observed application-quit\n"
+                "tokio_stop: PASS started=3 stopped=3 tls_destructors=4 cpu=joined std=joined cleanup_blocking=42\n")
+        offline = "hv: vm0 lifecycle: offline native_jobs=0 carrier=released"
+        self.assertEqual(verify.quit_wave_result(text, offline, instance)[0], None)
+        self.assertEqual(verify.quit_wave_result(text + f"tokio_stop: DONE instance={instance}", offline, instance)[0], "PASS")
+
 if __name__ == "__main__":
     unittest.main()

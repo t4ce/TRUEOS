@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from test_clip_position3_uv_texture import item
 
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 
 def main():
     with tempfile.TemporaryDirectory(prefix='trueos-native-worker-') as directory:

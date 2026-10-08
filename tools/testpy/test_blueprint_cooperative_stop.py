@@ -80,7 +80,7 @@ fn sdk_late_registration_does_not_acknowledge_an_immediate_stop() {
             subprocess.run(["rustc", "--edition=2024", "--test", "--cfg", 'target_os="trueos"',
                             "-Aexplicit_builtin_cfgs_in_flags", str(src), "-o", str(binary)], check=True)
             result = subprocess.run([str(binary), "--test-threads=1"], check=True, text=True, capture_output=True)
-            self.assertIn("7 passed; 0 failed", result.stdout)
+            self.assertIn("9 passed; 0 failed", result.stdout)
 
 
 if __name__ == "__main__":

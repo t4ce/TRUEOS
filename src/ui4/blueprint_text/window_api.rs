@@ -22,6 +22,8 @@ pub struct TrueosUi4WindowStateV1 {
     pub hit_testable: u32,
     pub opacity: u32,
     pub focused: u32,
+    /// [0]: observed maximize state (0/1); [1]: command (0=keep, 1=maximize,
+    /// 2=restore); [2]: reserved zero. Zero-filled legacy setters preserve docking.
     pub reserved: [u32; 3],
 }
 
@@ -46,6 +48,10 @@ pub(super) unsafe fn get_state(window_id: u32, out: *mut TrueosUi4WindowStateV1)
     let Ok((placement, interaction)) = window_state(owner, window) else {
         return ERROR_UI4;
     };
+    let maximized = match crate::ui4::window_broker::window_snapshot(owner, window) {
+        Some(snapshot) => snapshot.maximized,
+        None => return ERROR_UI4,
+    };
     let focused = focused_keyboard_state(owner, window).is_some();
     unsafe {
         out.write(TrueosUi4WindowStateV1 {
@@ -54,7 +60,7 @@ pub(super) unsafe fn get_state(window_id: u32, out: *mut TrueosUi4WindowStateV1)
             hit_testable: interaction.hit_testable as u32,
             opacity: placement.opacity as u32,
             focused: focused as u32,
-            reserved: [0; 3],
+            reserved: [maximized as u32, 0, 0],
         });
     }
     0
@@ -65,7 +71,9 @@ pub(super) fn set_state(window_id: u32, state: &TrueosUi4WindowStateV1) -> i32 {
         || state.visible > 1
         || state.hit_testable > 1
         || state.opacity > u8::MAX as u32
-        || state.reserved != [0; 3]
+        || state.reserved[0] > 1
+        || state.reserved[1] > 2
+        || state.reserved[2] != 0
     {
         return ERROR_INVALID;
     }
@@ -73,6 +81,13 @@ pub(super) fn set_state(window_id: u32, state: &TrueosUi4WindowStateV1) -> i32 {
         Ok(window) => window,
         Err(error) => return error,
     };
+    if state.reserved[1] != 0 {
+        if crate::ui4::window_broker::set_window_maximized(owner, window, state.reserved[1] == 1)
+            .is_err()
+        {
+            return ERROR_UI4;
+        }
+    }
     set_window_state(
         owner,
         window,

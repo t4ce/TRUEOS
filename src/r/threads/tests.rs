@@ -31,6 +31,7 @@ fn make_thread(id: usize, job: impl FnOnce() + Send + 'static) -> ThreadTask {
         vm_id: Some(id as u8),
         job: Some(Job::Owned(Box::new(job))),
         done: false,
+        kill_waker: None,
         wait: None,
         domain: (77, id as u8),
         allocation: [0; 4],
@@ -184,4 +185,50 @@ fn timed_wait_resumes_only_after_its_deadline() {
     std::thread::sleep(std::time::Duration::from_millis(10));
     assert!(poll_thread(&mut thread).is_ready());
     assert_eq!(result.load(Ordering::Acquire), 1);
+}
+
+
+#[cfg(thread_scheduler_harness)]
+#[test]
+fn kill_discards_a_parked_stack_without_guest_drops_or_resuming() {
+    let _serial = SERIAL.lock().unwrap();
+    let drops = Arc::new(AtomicUsize::new(0));
+    struct GuestDrop(Arc<AtomicUsize>);
+    impl Drop for GuestDrop {
+        fn drop(&mut self) { self.0.fetch_add(1, Ordering::AcqRel); }
+    }
+    let drop_counter = drops.clone();
+    let mut task = make_thread(51, move || {
+        let _guest = GuestDrop(drop_counter);
+        suspend(Some(Box::pin(core::future::pending())));
+        panic!("killed guest resumed");
+    });
+    struct WakeCount(AtomicUsize);
+    impl std::task::Wake for WakeCount {
+        fn wake(self: Arc<Self>) { self.0.fetch_add(1, Ordering::AcqRel); }
+    }
+    let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+    let waker = std::task::Waker::from(wakes.clone());
+    let mut cx = Context::from_waker(&waker);
+    assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
+    assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
+    crate::hv::set_guest_kill_for_test(51, true);
+    wake_killed_guest(51);
+    assert_eq!(wakes.0.load(Ordering::Acquire), 1, "kill must wake an indefinite park");
+    assert!(poll_thread(&mut task).is_ready());
+    drop(task);
+    assert_eq!(drops.load(Ordering::Acquire), 0);
+    crate::hv::set_guest_kill_for_test(51, false);
+}
+
+#[cfg(thread_scheduler_harness)]
+#[test]
+fn kill_before_first_poll_never_calls_the_guest_closure() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut task = make_thread(52, || panic!("killed job ran"));
+    crate::hv::set_guest_kill_for_test(52, true);
+    wake_killed_guest(52);
+    assert!(poll_thread(&mut task).is_ready());
+    drop(task);
+    crate::hv::set_guest_kill_for_test(52, false);
 }

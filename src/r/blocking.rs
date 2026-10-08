@@ -182,6 +182,11 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
         call,
         owner,
     } = entry;
+    if vm_id.is_some_and(crate::hv::guest_kill_requested) {
+        core::mem::forget(call);
+        drop(owner);
+        return;
+    }
     let started_ms = now_ms();
     let trace_each_job = purpose != "vmx-service-lane";
     service_lane_activity_begin(slot, id, vm_id, purpose);
@@ -956,6 +961,10 @@ async fn xpapp_compute_worker(
                         // preemption granularity; rebuilding those identities
                         // for every step would put the old call-chain overhead
                         // straight back on the frame path.
+                        if crate::hv::guest_kill_requested(entry.vm_id) {
+                            core::mem::forget(entry.job.take());
+                            return false;
+                        }
                         let cancelled = guest_job_cancellation_requested(entry.vm_id);
                         let mut more = !cancelled;
                         while more {
