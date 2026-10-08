@@ -6003,7 +6003,12 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_frame_publish_tracked_v1(
     }
     let mut serial = 0;
     let result = publish_blueprint_frame(
-        window_id, damage_x, damage_y, damage_width, damage_height, Some(&mut serial),
+        window_id,
+        damage_x,
+        damage_y,
+        damage_width,
+        damage_height,
+        Some(&mut serial),
     );
     if result != 0 {
         return result;
@@ -6109,6 +6114,10 @@ fn publish_blueprint_frame(
         && super::window_broker::window_snapshot(owner, surface.window)
             .is_some_and(|window| window.background.is_some())
     {
+        crate::log_important!(target: "ui4/resize";
+            "paired resize producer ready owner={:?} window={} target={} frame={} extent={}x{}\n",
+            owner, surface.window.raw(), window_id, surface.frame.raw(), surface.width, surface.height,
+        );
         surface.pending_resize_ready = true;
         let window = surface.window;
         return commit_layered_resize_if_ready(&mut surfaces, owner, window);
@@ -9235,11 +9244,24 @@ fn stage_layered_resize(
     if members.len() != 2 {
         return ERROR_STATE;
     }
-    if members.iter().any(|&i| {
+    if let Some(&index) = members.iter().find(|&&i| {
         surfaces[i].write_lease.is_some()
             || surfaces[i].gpu_submission_unretired
             || surfaces[i].vgpu_surface.is_some()
     }) {
+        static BUSY_RESIZES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        let attempt = BUSY_RESIZES
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if attempt == 1 || attempt.is_power_of_two() {
+            let surface = &surfaces[index];
+            crate::log_warn!(target: "ui4/resize";
+                "paired resize busy owner={:?} window={} target={} request={}x{} write_lease={} gpu_unretired={} vgpu_import={} attempts={}\n",
+                owner, window.raw(), surface.render_target, width, height,
+                surface.write_lease.is_some(), surface.gpu_submission_unretired,
+                surface.vgpu_surface.is_some(), attempt,
+            );
+        }
         return ERROR_BUSY;
     }
     let (placement, epoch) = match window_resize_state(owner, window) {
@@ -9251,6 +9273,12 @@ fn stage_layered_resize(
         height,
         ..placement
     };
+    static ALLOCATION_ATTEMPTS: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(0);
+    let attempt = ALLOCATION_ATTEMPTS
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    let log_attempt = attempt <= 8 || attempt.is_power_of_two();
     let mut replacements = Vec::new();
     for &index in &members {
         let surface = &surfaces[index];
@@ -9268,9 +9296,22 @@ fn stage_layered_resize(
             height,
             base_color: Some(PremultipliedRgba8::TRANSPARENT),
         };
+        if log_attempt {
+            crate::log_important!(target: "ui4/resize";
+                "paired resize allocate owner={:?} window={} target={} extent={}x{} buffers={} old_frame={}\n",
+                owner, window.raw(), surface.render_target, width, height,
+                spec.buffering.count(), surface.frame.raw(),
+            );
+        }
         match create_frame(spec) {
             Ok(frame) => replacements.push(frame),
-            Err(_) => {
+            Err(error) => {
+                if log_attempt {
+                    crate::log_warn!(target: "ui4/resize";
+                        "paired resize allocation failed owner={:?} window={} target={} extent={}x{} error={:?}\n",
+                        owner, window.raw(), surface.render_target, width, height, error,
+                    );
+                }
                 for frame in replacements {
                     let _ = destroy_frame(frame);
                 }
@@ -9278,6 +9319,10 @@ fn stage_layered_resize(
             }
         }
     }
+    crate::log_important!(target: "ui4/resize";
+        "paired resize staged owner={:?} window={} extent={}x{} epoch={} commit=after-both-publish\n",
+        owner, window.raw(), width, height, epoch,
+    );
     for (&index, replacement) in members.iter().zip(replacements) {
         let surface = &mut surfaces[index];
         if let Some(superseded) = revert_blueprint_pending_resize(surface, None) {
@@ -9343,6 +9388,11 @@ fn commit_layered_resize_if_ready(
         pending.resize_epoch,
     );
     if let Err(error) = result {
+        crate::log_warn!(target: "ui4/resize";
+            "paired resize commit rejected owner={:?} window={} extent={}x{} epoch={} error={:?}\n",
+            owner, window.raw(), pending.placement.width, pending.placement.height,
+            pending.resize_epoch, error,
+        );
         // Both old fronts remain broker-owned on stale/failed commits.
         for index in members {
             if let Some(frame) = revert_blueprint_pending_resize(&mut surfaces[index], None) {
@@ -9357,6 +9407,10 @@ fn commit_layered_resize_if_ready(
             ERROR_UI4
         };
     }
+    crate::log_important!(target: "ui4/resize";
+        "paired resize committed owner={:?} window={} extent={}x{} epoch={}\n",
+        owner, window.raw(), pending.placement.width, pending.placement.height, pending.resize_epoch,
+    );
     for index in members {
         let surface = &mut surfaces[index];
         let old = surface.pending_resize.take().unwrap().previous_frame;

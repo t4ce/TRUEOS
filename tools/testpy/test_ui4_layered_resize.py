@@ -12,6 +12,8 @@ SOURCE = "src/ui4/blueprint_text.rs"
 HARNESS = r'''
 #![allow(dead_code)]
 use std::cell::RefCell;
+#[macro_export] macro_rules! log_warn { (target: $target:expr; $($arg:tt)*) => { let _ = format_args!($($arg)*); }; }
+#[macro_export] macro_rules! log_important { (target: $target:expr; $($arg:tt)*) => { let _ = format_args!($($arg)*); }; }
 type WindowOwner = u32;
 type FrameHandle = u32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)] struct WindowId(u32);
