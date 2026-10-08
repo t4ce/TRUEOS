@@ -351,8 +351,7 @@ fn submit_login(
     };
 
     crate::shell2::matrix::clear_active_lines(output_target_for_backend(io));
-    print_network_trust_warning(io);
-    print_shell_line(io, "cry login: proof=verified persistence=committing input-recording=off");
+    crate::log_info!(target: "storage"; "cry-login: proof=verified persistence=committing input-recording=off\n");
     let target = matrix_target_for_backend(io);
     set_matrix_target_active(&target, true);
     match persist_login_task(target.clone(), scope_id, plan) {
@@ -396,38 +395,26 @@ async fn persist_login_task(target: MatrixTarget, scope_id: u8, plan: crypt::Cry
     match crypt::complete_persisted_login(plan) {
         Ok(report) => {
             crate::log_important!(target: "storage";
-                "cry-persistence: status=sealed username={} path={} algorithm=aes-256-gcm generation={} recovery-key=external\n",
+                "cry-persistence: status=sealed username={} path={} algorithm=aes-256-gcm generation={} boot-key=plaintext-file\n",
                 username,
                 secret_path,
                 generation,
             );
-            if report.enrollment_activated {
-                print_matrix_target_line(
-                    &target,
-                    "cry 2fa: enrollment=confirmed profile=totp-sha1-6digit-30s",
-                );
-            }
+            print_matrix_target_line(
+                &target,
+                if report.enrollment_activated {
+                    "cry: 2FA confirmed; account saved and signed in."
+                } else {
+                    "cry: signed in; account saved."
+                },
+            );
             if let Some(recovery_key) = recovery_key.as_ref() {
                 print_matrix_target_line(
                     &target,
                     alloc::format!("cry recovery-key: {}", recovery_key.as_str()).as_str(),
                 );
-                print_matrix_target_line(
-                    &target,
-                    "cry recovery-key: save outside TRUEOSFS; it is required by `cry unlock` after reboot",
-                );
             }
-            print_matrix_target_line(
-                &target,
-                alloc::format!(
-                    "cry persistence: username={} path={} algorithm=aes-256-gcm generation={} key-storage=external",
-                    username,
-                    secret_path,
-                    generation,
-                )
-                .as_str(),
-            );
-            print_login_report(&target, &report, scope_id);
+            log_login_report(&report, scope_id);
         }
         Err(_) => {
             print_matrix_target_line(
@@ -453,6 +440,7 @@ pub(crate) async fn write_persistence(plan: &crypt::CryPersistencePlan) -> Resul
     if plan.initial {
         write_and_verify(disk, plan.profile_path.as_str(), plan.profile.as_slice()).await?;
     }
+    crate::machine_key::seal(disk, &plan.username, plan.recovery_key_bytes()).await?;
     Ok(())
 }
 
@@ -474,38 +462,20 @@ async fn write_and_verify(
     }
 }
 
-fn print_login_report(target: &MatrixTarget, report: &crypt::CryLoginReport, scope_id: u8) {
-    print_matrix_target_line(
-        target,
-        alloc::format!(
-            "cry login: proof=verified username={} account-id={} role={:?} factors=machine-key+totp challenge={} totp-step={} fingerprint={}",
-            report.username,
-            report.account.raw(),
-            report.role,
-            report.challenge_sequence,
-            report.totp_step,
-            full_hex(&report.fingerprint),
-        )
-        .as_str(),
-    );
-    print_matrix_target_line(
-        target,
-        alloc::format!(
-            "cry login: issued_tick={} expires_tick={} provider={} key={}",
-            report.issued_at_ticks,
-            report.expires_at_ticks,
-            short_hex(report.key.provider.as_bytes()),
-            short_hex(report.key.handle.as_bytes()),
-        )
-        .as_str(),
-    );
-    print_matrix_target_line(
-        target,
-        alloc::format!(
-            "cry login: input-recording=on scope={} storage=chacha20-poly1305",
-            scope_name(scope_id),
-        )
-        .as_str(),
+fn log_login_report(report: &crypt::CryLoginReport, scope_id: u8) {
+    crate::log_info!(target: "storage";
+        "cry-login: proof=verified username={} account-id={} role={:?} factors=machine-key+totp challenge={} totp-step={} fingerprint={} issued_tick={} expires_tick={} provider={} key={} input-recording=on scope={} storage=chacha20-poly1305\n",
+        report.username,
+        report.account.raw(),
+        report.role,
+        report.challenge_sequence,
+        report.totp_step,
+        full_hex(&report.fingerprint),
+        report.issued_at_ticks,
+        report.expires_at_ticks,
+        short_hex(report.key.provider.as_bytes()),
+        short_hex(report.key.handle.as_bytes()),
+        scope_name(scope_id),
     );
 }
 
@@ -552,8 +522,12 @@ async fn unlock_task(target: MatrixTarget, username: String, recovery_key: Zeroi
             .await
             .map_err(|error| alloc::format!("read error: {error:?}"))?
             .ok_or_else(|| String::from("credential not found"))?;
-        crypt::unlock_persisted(username.as_str(), &recovery_key, envelope.as_slice())
-            .map_err(|_| String::from("credential envelope rejected"))
+        let report = crypt::unlock_persisted(username.as_str(), &recovery_key, envelope.as_slice())
+            .map_err(|_| String::from("credential envelope rejected"))?;
+        if let Err(error) = crate::machine_key::seal(disk, &username, &recovery_key).await {
+            print_matrix_target_line(&target, alloc::format!("cry unlock: boot-key save failed ({error}); automatic boot unlock unavailable").as_str());
+        }
+        Ok::<_, String>(report)
     }
     .await;
 

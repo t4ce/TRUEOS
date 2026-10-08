@@ -320,6 +320,7 @@ pub async fn mount_service_task() {
                             crate::log_info!(target: "trueosfs";
                                 "trueosfs: diag phase=mount-complete disk={}\n", disk_id.raw()
                             );
+                            crate::machine_key::restore_account(disk).await;
                             request_warm_index(disk_id);
                         }
                         Ok(None) => {}

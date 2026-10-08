@@ -29,6 +29,7 @@ mod chronos;
 mod cpu;
 mod cpu_task_pool;
 mod crypt;
+mod machine_key;
 mod disc;
 pub mod dma;
 mod efi;
