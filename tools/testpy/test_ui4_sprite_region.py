@@ -18,6 +18,7 @@ mod intel {
     #[derive(Debug)] pub struct GucBcs0RgbaFill {pub x:u32,pub y:u32,pub width:u32,pub height:u32,pub color:u32}
 }
 #[derive(Clone,Copy)] struct GpgpuRgba8Surface {width:u32,height:u32}
+mod layer_contract {pub fn background_target(window:u32)->u32 {window | 0x80000000}}
 mod production {use super::*;
 ITEMS
 }
@@ -31,6 +32,9 @@ fn region()->DamageRect {DamageRect{x:12,y:8,width:40,height:20}}
         assert!(!valid_sprite_region(cadence,false,7,7,100,100,region()));
     }
     assert!(!valid_sprite_region(FrameCadence::Dirty,false,0x80000007,7,100,100,region()));
+    assert!(valid_sprite_region(FrameCadence::Streaming,true,0x80000007,7,100,100,region()));
+    assert!(valid_sprite_region(FrameCadence::Streaming,false,0x80000007,7,100,100,region()));
+    assert!(!valid_sprite_region(FrameCadence::Streaming,true,0x80000008,7,100,100,region()));
 }
 #[test] fn accepts_exact_edges_rejects_empty_outside_and_overflow() {
     let valid=|r| valid_sprite_region(FrameCadence::Dirty,false,7,7,100,100,r);

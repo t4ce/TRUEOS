@@ -1863,9 +1863,9 @@ pub extern "C" fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear
     begin_blueprint_frame(owner, window_id, clear_rgba, false)
 }
 
-/// Acquire the idle foreground buffer and clear only the repaint rectangle.
-/// The caller keeps both buffers coherent by replaying current and preceding
-/// publication damage. Commands must stay inside this region.
+/// Acquire an idle foreground or streaming background and clear the repaint rectangle.
+/// Foregrounds replay current and preceding damage; streaming backgrounds repaint
+/// their entire content viewport. Commands must stay inside this region.
 pub extern "C" fn trueos_cabi_ui4_scene_sprite_frame_begin_region_v1(
     window_id: u32,
     x: u32,
@@ -1922,9 +1922,11 @@ fn valid_sprite_region(
     height: u32,
     region: DamageRect,
 ) -> bool {
-    cadence == FrameCadence::Dirty
-        && !visual
-        && target == window
+    // Foregrounds retain their two-buffer damage contract. Streaming back
+    // producers may repaint a content viewport in initialized frame storage.
+    ((cadence == FrameCadence::Dirty && !visual && target == window)
+        || (cadence == FrameCadence::Streaming
+            && target == super::layer_contract::background_target(window)))
         && region.width != 0
         && region.height != 0
         && region
