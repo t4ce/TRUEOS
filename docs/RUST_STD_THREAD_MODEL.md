@@ -433,6 +433,24 @@ and TLS cleanup followed by the ECS probe in the same OS instance.
 
 ## Slot retirement and forced termination
 
+When Apps `status` sees a pending stop, it also prints the shutdown stage
+(`hull`, `native-drain`, or the host resource being released), force/cleanup
+flags and native job count. Each surviving job has a host-owned diagnostic
+record with run generation, purpose, std thread id/name, pinned carrier,
+phase, phase age, boundary count and wait queue/timeout. A wait address is
+an identity only; reports never dereference guest memory. Reports are bounded
+to 32 jobs, with an explicit omitted count. Stop/kill also emits these records
+to the Blueprint log; a pending native drain repeats them at most every five
+seconds. A stable `running` boundary count suggests a call that has not
+returned to its carrier; a stable `wait-queue` record identifies a parked
+continuation. Neither observation grants permission to reclaim live memory.
+
+The roster changes only on admission/retirement and naming. Worker boundaries
+update atomics without allocating or logging on each poll; pending wait polls
+do not count as guest progress. Voxy separately marks event-loop exit,
+play-state drops, settings/profile saves and global-state destruction, so
+an unreturned guest drop can be distinguished from host native-job drain.
+
 `vmx_stop` and Apps `stop` retain the cooperative cleanup contract. Voxy's
 full client polls once before each game/event-loop turn; its native menu and
 headless loop use the same boundary. In-game Quit returns through the normal

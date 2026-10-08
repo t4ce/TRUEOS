@@ -51,6 +51,35 @@ fn poll_thread(thread: &mut ThreadTask) -> Poll<()> {
 }
 
 #[test]
+#[cfg(thread_scheduler_harness)]
+fn diagnostics_identify_the_parked_worker_and_retire_on_force_kill() {
+    let _serial = SERIAL.lock().unwrap();
+    let queue = Arc::new(crate::wait::WaitQueue::new());
+    let mut thread = make_thread(53, move || {
+        set_current_name("tokio-voxygen-0");
+        let observed = queue.observe();
+        assert_eq!(wait(&queue, observed, 0), Some(true));
+        panic!("killed continuation resumed");
+    });
+    let diagnostic = diagnostics::JobDiagnostic::new(53, 19);
+    diagnostic.identify("std-thread", 53, 0);
+    thread.0._admission._owner = Some(GuestJobOwner { diagnostic });
+    assert!(poll_thread(&mut thread).is_pending());
+    let before = diagnostics::lines(53).join("\n");
+    assert!(before.contains("name=tokio-voxygen-0 carrier=0 phase=wait-queue"));
+    // Re-polling a parked task does not falsely count as guest progress.
+    assert!(poll_thread(&mut thread).is_pending());
+    assert!(diagnostics::lines(53)[0].contains("boundary=2"));
+    crate::hv::set_guest_kill_for_test(53, true);
+    wake_killed_guest(53);
+    assert!(poll_thread(&mut thread).is_ready());
+    assert!(diagnostics::lines(53)[0].contains("phase=cancelling"));
+    drop(thread);
+    assert!(diagnostics::lines(53).is_empty());
+    crate::hv::set_guest_kill_for_test(53, false);
+}
+
+#[test]
 fn two_continuations_keep_frames_realm_and_errno_on_one_carrier() {
     let _serial = SERIAL.lock().unwrap();
     kernel_task_domain::replace_context((91, 92));

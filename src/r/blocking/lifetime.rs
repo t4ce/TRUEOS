@@ -116,12 +116,12 @@ pub(crate) async fn drain_guest_jobs(vm_id: u8) {
             "native-worker: draining vm={} jobs={} resources=retained\n", vm_id, count);
         super::diagnostics::report(vm_id);
     }
-    let mut report_ticks = 0u32;
+    let mut last_report_ms = super::now_ms();
     while guest_jobs_in_flight(vm_id) != 0 {
         trueos_time::Timer::after(trueos_time::Duration::from_millis(1)).await;
-        report_ticks += 1;
-        if report_ticks == 5000 {
-            report_ticks = 0;
+        let now_ms = super::now_ms();
+        if now_ms.saturating_sub(last_report_ms) >= 5000 {
+            last_report_ms = now_ms;
             crate::log_os::blueprint_important_line(format_args!(
                 "native-worker: drain pending vm={} jobs={}\n", vm_id, guest_jobs_in_flight(vm_id)));
             super::diagnostics::report(vm_id);

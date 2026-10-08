@@ -2189,6 +2189,7 @@ fn start_with_mode(
             } else if !vm.pause_latched.load(Ordering::Acquire) {
                 *vm.matrix_owner.lock() = None;
             }
+            teardown_diagnostics::set(vm_id, TeardownStage::Preparing);
             vm.starting.store(true, Ordering::Release);
         }
     }
