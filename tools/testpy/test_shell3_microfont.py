@@ -185,13 +185,13 @@ fn each_back_buffer_gets_its_own_color_diff() {
 }
 
 #[test]
-fn matrix_transcripts_render_tail_and_clear_when_selection_changes() {
+fn matrix_transcripts_render_newest_first_and_clear_when_selection_changes() {
     let title=[MetaFmtStr::new("TrueOS §")];let prompt=[MetaFmtStr::new("#")];
     let make=|rows,lines:&[String],generation|update::Snapshot::new((12,rows),0,[(&title,&[]),(&[],&[]),(&prompt,&[])],12).with_matrix(lines,generation);
     let history=vec!["online".into(),"pause".into(),"stop".into()];
     let snapshot=make(5,&history,1);let lines=snapshot.rendered_lines();
-    assert_eq!(lines.len(),5);assert_eq!(lines[3].iter().map(|cell|cell.0).collect::<String>(),"pause       ");
-    assert_eq!(lines[4].iter().map(|cell|cell.0).collect::<String>(),"stop        ");
+    assert_eq!(lines.len(),5);assert_eq!(lines[3].iter().map(|cell|cell.0).collect::<String>(),"online      ");
+    assert_eq!(lines[4].iter().map(|cell|cell.0).collect::<String>(),"pause       ");
     let grown=make(6,&history,1).rendered_lines();
     assert_eq!(grown[3].iter().map(|cell|cell.0).collect::<String>(),"online      ");
     let blank=make(5,&[],1);let patches=update::build_updates(&snapshot,&blank,&[]);
@@ -203,17 +203,17 @@ fn matrix_transcripts_render_tail_and_clear_when_selection_changes() {
 }
 
 #[test]
-fn large_resize_paints_text_only_and_limits_matrix_to_ten_lines() {
+fn large_resize_paints_text_only_and_fills_matrix_viewport() {
     let title=[MetaFmtStr::new("TrueOS § 12:34")];let legend=[MetaFmtStr::new("[online peer dl]")];
     let prompt=[MetaFmtStr::new("#")];
     let history=(0..20).map(|index|format!("cmd{} pause stop",index)).collect::<Vec<_>>();
     let snapshot=update::Snapshot::new((640,196),0,[(&title,&legend),(&[],&[]),(&prompt,&[])],640).with_matrix(&history,1);
-    let lines=snapshot.rendered_lines();assert_eq!(lines.len(),13);
-    assert_eq!(lines[3].iter().take(5).map(|cell|cell.0).collect::<String>(),"cmd10");
+    let lines=snapshot.rendered_lines();assert_eq!(lines.len(),196);
+    assert_eq!(lines[3].iter().take(4).map(|cell|cell.0).collect::<String>(),"cmd0");
     let updates=update::diff_rendered_lines(None,&lines);
     let cells=updates.iter().map(|patch|patch.text.chars().count()).sum::<usize>();
     let occupied=lines.iter().flatten().filter(|cell|cell.0!=' ').count();
-    assert_eq!(cells,occupied);assert!(cells<200);assert!(cells.div_ceil(64)<=4);
+    assert_eq!(cells,occupied);assert!(cells<400);assert!(cells.div_ceil(64)<=7);
     assert!(updates.iter().all(|patch|!patch.text.contains(' ')));
     let empty=update::Snapshot::new((640,196),0,[(&title,&legend),(&[],&[]),(&prompt,&[])],640).with_matrix(&[],2).rendered_lines();
     assert!(update::diff_rendered_lines(None,&empty).iter().all(|patch|!matches!(patch.row,SpecialRows::MatrixRow(_))));

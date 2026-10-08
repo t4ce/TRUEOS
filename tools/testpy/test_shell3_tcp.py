@@ -32,7 +32,7 @@ mod service {pub static RELEASED:std::sync::Mutex<Vec<u32>>=std::sync::Mutex::ne
 const OPERATOR: char = '§';
 const SpecialSeperator:char='│';
 struct RowStrips {left:Vec<MetaFmtStr>}
-struct Shell3 { pointer:Vec<(Option<usize>,bool)>, size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
+struct Shell3 { history:Vec<String>, matrix_scroll:usize, notices:Vec<String>, pointer:Vec<(Option<usize>,bool)>, size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal_reserved(_:u32,_:Option<u16>)->Self {Self::new_terminal().unwrap()}
     fn new_terminal_sized_reserved(_:u32,_:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal().unwrap()}
@@ -43,13 +43,22 @@ impl Shell3 {
         let right=[MetaFmtStr::new("RIGHT").underline()];
         update::Snapshot::new(self.size,0,[(&title,&right),(&status,&right),(&prompt,&right)],self.size.0)
     }
+    fn capture_matrix_snapshot(&self)->update::Snapshot {
+        self.capture_controls_snapshot().with_matrix_offset(&self.history,0,self.matrix_scroll)
+    }
+    fn scroll_matrix(&mut self,rows:i32)->bool {
+        let old=self.matrix_scroll;let max=self.history.len().saturating_sub(self.size.1-3);
+        self.matrix_scroll=if rows>=0 {old.saturating_add(rows as usize).min(max)} else {old.saturating_sub(rows.unsigned_abs() as usize)};
+        old!=self.matrix_scroll
+    }
+    fn record_terminal_notice(&mut self,text:&str) {self.notices.push(text.into());}
     fn handle_status_pointer(&mut self,column:Option<usize>,pressed:bool)->bool {
         self.pointer.push((column,pressed));true
     }
     fn get_size(&self)->(usize,usize) {self.size}
     fn set(&mut self,cols:usize,rows:usize) {self.size=(cols,rows);}
     fn new_terminal() -> Result<Self, ()> {
-        Ok(Self { pointer:Vec::new(), size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
+        Ok(Self { history:Vec::new(), matrix_scroll:0, notices:Vec::new(), pointer:Vec::new(), size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
@@ -121,6 +130,35 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
             tty.output.clear();tty.input(exit);
             assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1003l\\x1b[?1006l\\x1b[?1006r\\x1b[?1003r"));assert!(tty.closing);
         }
+    }
+    #[test] fn ssh_reserves_matrix_rows_and_routes_notices_into_the_buffer() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[4;25r"));
+        tty.output.clear();tty.resize(60,10);
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[4;10r"));
+        tty.output.clear();tty.input(b"help\\r");
+        assert!(tty.shell.notices[0].contains("UTF-8 line input"));
+        assert!(!String::from_utf8_lossy(&tty.output).contains("UTF-8 line input"));
+        tty.output.clear();tty.input(b"exit\\r");
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[r"));
+    }
+    #[test] fn ssh_scroll_shifts_only_matrix_and_sends_exposed_rows() {
+        let mut shell=Shell3::new_terminal().unwrap();shell.size=(12,6);
+        shell.history=(0..6).map(|n|format!("line{n}")).collect();
+        let mut tty=Terminal::new_ssh(shell);tty.output.clear();
+        tty.input(b"\\x1b[<65;2;4M");
+        let out=String::from_utf8_lossy(&tty.output);
+        assert!(out.contains("\\x1b[1S"));assert!(out.contains("\\x1b[6;1Hline3"));
+        assert!(!out.contains("line1"));assert!(!out.contains("line2"));assert!(!out.contains("TrueOS"));
+        tty.output.clear();tty.input(b"\\x1b[<64;2;4M");
+        let out=String::from_utf8_lossy(&tty.output);
+        assert!(out.contains("\\x1b[1T"));assert!(out.contains("\\x1b[4;1Hline0"));
+        tty.output.clear();tty.shell.history.insert(0,"newest".into());tty.reconcile_matrix_selection();
+        let out=String::from_utf8_lossy(&tty.output);
+        assert!(out.contains("\\x1b[1T"));assert!(out.contains("\\x1b[4;1Hnewest"));
+        tty.output.clear();tty.shell.history.clear();tty.reconcile_matrix_selection();
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[4;1H      "));
+        assert!(tty.line.is_empty());
     }
     #[test] fn adapter_starts_in_adm_and_enter_reuses_the_existing_prompt() {
         let mut tty=terminal();assert_eq!(tty.shell.get_mode(),3);

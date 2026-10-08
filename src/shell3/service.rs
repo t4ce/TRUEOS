@@ -587,7 +587,11 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                         let column = (event.local_x >= 0 && event.local_y >= 0
                             && event.local_y as usize / (microfont::FHEIGHT * scale) == 1)
                             .then_some(event.local_x.max(0) as usize / (microfont::FWIDTH * scale));
-                        if shell.handle_status_pointer(column, event.buttons_pressed & 1 != 0) {
+                        let matrix_area = event.local_x >= 0 && event.local_y >= 0
+                            && event.local_x as usize / (microfont::FWIDTH * scale) < shell.columns
+                            && (3..shell.rows_count).contains(&(event.local_y as usize / (microfont::FHEIGHT * scale)));
+                        let scrolled = matrix_area && event.wheel != 0 && shell.scroll_matrix(-(event.wheel as i32));
+                        if shell.handle_status_pointer(column, event.buttons_pressed & 1 != 0) || scrolled {
                             if let Err(error) = shell.present().await {
                                 crate::log_warn!(target: "service"; "shell3 pointer present failed on executor_slot={}: {}", expected_slot, error);
                             }

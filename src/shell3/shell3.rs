@@ -510,6 +510,7 @@ pub struct Shell3 {
     active_matrix_slot: Option<String>,
     active_matrix_lifetime: Option<u64>,
     matrix_selection_dirty: bool,
+    matrix_scroll: usize,
     prompt: PromptState,
     rows: SpecialRowsState,
     aka_names: Vec<String>,
@@ -650,6 +651,7 @@ impl Shell3 {
             active_matrix_slot: None,
             active_matrix_lifetime: None,
             matrix_selection_dirty: false,
+            matrix_scroll: 0,
             prompt,
             rows: rows_state,
             aka_names,
@@ -823,6 +825,7 @@ impl Shell3 {
             self.active_matrix_slot = None;
             self.active_matrix_lifetime = None;
             self.matrix_selection_dirty = true;
+            self.matrix_scroll = 0;
             service::notify_work();
             return true;
         }
@@ -839,6 +842,7 @@ impl Shell3 {
         self.active_matrix_slot = Some(name);
         self.active_matrix_lifetime = lifetime;
         self.matrix_selection_dirty = true;
+        self.matrix_scroll = 0;
         service::notify_work();
         true
     }
@@ -855,6 +859,7 @@ impl Shell3 {
         self.active_matrix_slot = Some(name.to_string());
         self.active_matrix_lifetime = lifetime;
         self.matrix_selection_dirty = true;
+        self.matrix_scroll = 0;
         service::notify_work();
         true
     }
@@ -1020,6 +1025,7 @@ impl Shell3 {
                 self.active_matrix_slot = Some(app.slot.clone());
                 self.active_matrix_lifetime = Some(lifetime);
                 self.matrix_selection_dirty = true;
+                self.matrix_scroll = 0;
                 let mut slots = matrix_slots().lock();
                 slots.vmx_apps.retain(|existing| existing.slot != app.slot);
                 slots.vmx_apps.push(app);
@@ -1178,18 +1184,10 @@ impl Shell3 {
 
     pub fn get_strip(&self, row: SpecialRows, side: StripSide) -> String {
         if let SpecialRows::MatrixRow(index) = row {
-            return if side == StripSide::Left {
-                MatrixSlots::view_echo_snapshot(
-                    self.active_matrix_slot.as_deref(),
-                    self.active_matrix_lifetime,
-                )
-                .1
-                .get(index)
-                .cloned()
-                .unwrap_or_default()
-            } else {
-                String::new()
-            };
+            if side != StripSide::Left { return String::new(); }
+            let (_, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
+            let offset = self.matrix_scroll.min(lines.len().saturating_sub(self.rows_count.saturating_sub(3)));
+            return lines.get(offset.saturating_add(index)).cloned().unwrap_or_default();
         }
         if row == SpecialRows::StatusRow && side == StripSide::Left {
             return current_matrix_slots_text();
@@ -1230,6 +1228,31 @@ impl Shell3 {
             .collect()
     }
 
+    /// Move this view through the shared newest-first transcript. Positive
+    /// rows move down toward older entries; each Shell3 owns its own offset.
+    pub(super) fn scroll_matrix(&mut self, rows: i32) -> bool {
+        let (_, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
+        let maximum = lines.len().saturating_sub(self.rows_count.saturating_sub(3));
+        let previous = self.matrix_scroll.min(maximum);
+        self.matrix_scroll = if rows >= 0 {
+            previous.saturating_add(rows as usize).min(maximum)
+        } else {
+            previous.saturating_sub(rows.unsigned_abs() as usize)
+        };
+        self.matrix_scroll != previous
+    }
+
+    fn capture_matrix_snapshot(&self) -> update::Snapshot {
+        let (generation, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
+        self.capture_controls_snapshot().with_matrix_offset(&lines, generation, self.matrix_scroll)
+    }
+
+    fn record_terminal_notice(&mut self, text: &str) {
+        for line in text.lines().rev() {
+            MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line.into());
+        }
+    }
+
     // Shared character composition boundary, before either pixel or ANSI drawing.
     fn capture_controls_snapshot(&self) -> update::Snapshot {
         let title = self.row_for_render(SpecialRows::TitleRow);
@@ -1248,13 +1271,7 @@ impl Shell3 {
         if let Some(lines) = tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
             return update::Snapshot::terminal((self.columns, self.rows_count), self.layout_generation, lines, revision);
         }
-        let (matrix_generation, matrix_lines) = MatrixSlots::view_echo_snapshot(
-            self.active_matrix_slot.as_deref(),
-            self.active_matrix_lifetime,
-        );
-        self.capture_controls_snapshot()
-            .with_matrix(&matrix_lines, matrix_generation)
-            .with_tui_revision(revision)
+        self.capture_matrix_snapshot().with_tui_revision(revision)
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
@@ -1325,6 +1342,7 @@ impl Shell3 {
         self.active_matrix_slot = Some(name.to_string());
         self.active_matrix_lifetime = Some(lifetime);
         self.matrix_selection_dirty = true;
+        self.matrix_scroll = 0;
         tui::select(self.tui_frontend(), Some(name));
         service::notify_work();
         true

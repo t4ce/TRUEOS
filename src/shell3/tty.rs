@@ -3,7 +3,8 @@ use super::{MetaFmtStr, RgbaColor, Shell3, SpecialRows};
 use alloc::{format, string::String, vec::Vec};
 
 const LINE_LIMIT: usize = 1024;
-pub(super) const OUTPUT_LIMIT: usize = 16 * 1024;
+// Bounded queue large enough for the maximum accepted SSH frame (512 × 256).
+pub(super) const OUTPUT_LIMIT: usize = 1024 * 1024;
 
 pub(super) struct Terminal {
     shell: Shell3,
@@ -51,6 +52,7 @@ impl Terminal {
         if controls {
             // SGR coordinates, including hover, button, drag and wheel reports.
             terminal.write(b"\x1b[?1003s\x1b[?1006s\x1b[?1006h\x1b[?1003h\x1b[?25l");
+            terminal.set_matrix_region();
             terminal.refresh_controls();
             return terminal;
         }
@@ -92,19 +94,55 @@ impl Terminal {
         self.write(b"\x1b[0m");
     }
 
+    // One-based inclusive terminal rows; all rows below the controls belong
+    // to the selected Matrix buffer. Cursor addressing still uses screen rows.
+    fn set_matrix_region(&mut self) {
+        let (_, rows) = self.shell.get_size();
+        self.write(format!("\x1b[4;{rows}r").as_bytes());
+    }
+
+    fn notice(&mut self, text: &str) {
+        if self.controls.is_some() {
+            self.shell.record_terminal_notice(text);
+        } else {
+            self.write(b"\r\n");
+            self.write(text.as_bytes());
+            self.write(b"\r\n");
+        }
+    }
+
     fn refresh_controls(&mut self) {
         let Some(previous) = self.controls.as_ref() else { return };
         if self.closing { return; }
-        let current = self.shell.capture_controls_snapshot().rendered_lines();
+        let current = self.shell.capture_matrix_snapshot().rendered_lines();
+        let mut previous = previous.clone();
+        if previous.len() == current.len() && previous.len() > 4
+            && previous[3..] != current[3..]
+            && previous[3].len() == current[3].len()
+        {
+            let height = current.len() - 3;
+            for count in 1..height {
+                let up = previous[3 + count..] == current[3..current.len() - count];
+                let down = previous[3..previous.len() - count] == current[3 + count..];
+                if up || down {
+                    self.write(format!("\x1b[0m\x1b[4;1H\x1b[{count}{}", if up { 'S' } else { 'T' }).as_bytes());
+                    let matrix = &mut previous[3..];
+                    if up { matrix.rotate_left(count); } else { matrix.rotate_right(count); }
+                    let exposed = if up { height - count..height } else { 0..count };
+                    for row in exposed { matrix[row] = alloc::vec![(' ', None); current[3].len()]; }
+                    break;
+                }
+            }
+        }
         let updates = super::update::diff_rendered_lines(
-            if previous.is_empty() { None } else { Some(previous) }, &current,
+            if previous.is_empty() { None } else { Some(&previous) }, &current,
         );
         for update in updates {
             let row = match update.row {
                 SpecialRows::TitleRow => 1,
                 SpecialRows::StatusRow => 2,
                 SpecialRows::PromtRow => 3,
-                _ => continue,
+                SpecialRows::MatrixRow(index) => index + 4,
             };
             self.write(format!("\x1b[{row};{}H", update.offset + 1).as_bytes());
             // Group equal styles, so ordinary text needs no per-cell escapes.
@@ -151,20 +189,20 @@ impl Terminal {
         let line = core::mem::take(&mut self.line);
         let command = line.trim();
         if core::mem::take(&mut self.line_overflow) {
-            self.write(b"\r\nInput exceeded 1024 bytes; line discarded.\r\n");
+            self.notice("Input exceeded 1024 bytes; line discarded.");
             self.shell.set_prompt("");
             self.reset_input();
             return;
         }
         match command {
-            "help" => { if self.controls.is_some() { self.write(b"\x1b[4;1H"); } self.write(b"\r\nUTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"); if let Some(lines) = self.controls.as_mut() { lines.clear(); } },
+            "help" => self.notice("UTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter."),
             // The remote terminal interprets these bytes; TCP only carries them.
             "clear" => { self.write(b"\x1b[2J\x1b[H"); if let Some(lines) = self.controls.as_mut() { lines.clear(); } else { self.prompt(); } },
             "tab" => {
                 self.shell.set_mode(self.shell.get_mode() % 3 + 1);
             }
             "exit" => {
-                if self.controls.is_some() { self.write(b"\x1b[?1003l\x1b[?1006l\x1b[?1006r\x1b[?1003r\x1b[?25h"); }
+                if self.controls.is_some() { self.write(b"\x1b[r\x1b[?1003l\x1b[?1006l\x1b[?1006r\x1b[?1003r\x1b[?25h"); }
                 self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
                 self.closing = true;
             }
@@ -198,8 +236,9 @@ impl Terminal {
             self.shell.set(columns, rows);
             if let Some(lines) = self.controls.as_mut() {
                 lines.clear();
-                self.write(b"\x1b[0m\x1b[1;1H\x1b[2K\x1b[2;1H\x1b[2K\x1b[3;1H\x1b[2K");
+                self.write(b"\x1b[0m\x1b[2J\x1b[H");
             }
+            if self.controls.is_some() { self.set_matrix_region(); }
             self.refresh_controls();
         }
     }
@@ -220,6 +259,9 @@ impl Terminal {
         let [button, column, row] = values;
         let (columns, rows) = self.shell.get_size();
         if button > 255 || column == 0 || row == 0 || column > columns || row > rows { return; }
+        if row >= 4 && final_byte == b'M' && button & (128 | 32 | 64) == 64 && button & 3 <= 1 {
+            self.shell.scroll_matrix(if button & 1 == 0 { -1 } else { 1 });
+        }
         // The shared UI4 handler owns hover and link actions. Motion, release,
         // other buttons and wheel reports must never repeat a left-click action.
         let pressed = final_byte == b'M' && button & (128 | 64 | 32 | 3) == 0;
@@ -279,7 +321,7 @@ impl Terminal {
                         self.reset_input();
                     }
                     4 if self.line.is_empty() => {
-                        if self.controls.is_some() { self.write(b"\x1b[?1003l\x1b[?1006l\x1b[?1006r\x1b[?1003r\x1b[?25h"); }
+                        if self.controls.is_some() { self.write(b"\x1b[r\x1b[?1003l\x1b[?1006l\x1b[?1006r\x1b[?1003r\x1b[?25h"); }
                         self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007r\r\nBye.\r\n");
                         self.closing = true;
                     }

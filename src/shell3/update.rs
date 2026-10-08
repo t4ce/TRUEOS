@@ -63,10 +63,14 @@ impl Snapshot {
         }
     }
 
-    pub(super) fn with_matrix(mut self, lines: &[String], generation: u64) -> Self {
+    pub(super) fn with_matrix(self, lines: &[String], generation: u64) -> Self {
+        self.with_matrix_offset(lines, generation, 0)
+    }
+
+    pub(super) fn with_matrix_offset(mut self, lines: &[String], generation: u64, offset: usize) -> Self {
         self.matrix_generation = generation;
-        let count = self.size.1.saturating_sub(3).min(10);
-        let first = lines.len().saturating_sub(count);
+        let count = self.size.1.saturating_sub(3);
+        let first = offset.min(lines.len().saturating_sub(count));
         for index in 0..count {
             let text = lines.get(first + index).map(String::as_str).unwrap_or("");
             self.rows.push(VisibleRow {

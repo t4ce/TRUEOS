@@ -91,18 +91,18 @@ impl Rows {fn row(&self,row:SpecialRows)->&Row {match row {SpecialRows::TitleRow
 #[derive(Clone)] struct RowStrips {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
 impl RowStrips {fn new(left:&str,right:&str)->Self {Self {left:vec![MetaFmtStr::new(left)],right:vec![MetaFmtStr::new(right)]}}}
 
-struct Shell3 {layout_generation:usize,status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
+struct Shell3 {matrix_scroll:usize,layout_generation:usize,status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
 impl Shell3 {
-fn new(columns:usize)->Self {Self {layout_generation:0,status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
+fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('capture_controls_snapshot','launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
+    for name in ('scroll_matrix','capture_matrix_snapshot','record_terminal_notice','capture_controls_snapshot','launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += 'fn get_size(&self)->(usize,usize) {(self.columns,self.rows_count)} fn set(&mut self,cols:usize,rows:usize) {self.columns=cols;self.rows_count=rows;} }\n'
     source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//') + '\n'
     source += r'''
 #[cfg(test)] mod replay_tests {
     use super::*;
-    use crate::{MatrixSlots, matrix_slots, service, Mode};
+    use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide};
     #[test] fn ssh_mouse_uses_real_status_hover_slot_and_alias_actions() {
         MatrixSlots::set(&["id","123"]);service::LAUNCHES.lock().unwrap().clear();
         let mut shell=Shell3::new(40);shell.aka_names=vec!["héllo".into()];
@@ -118,6 +118,20 @@ fn new(columns:usize)->Self {Self {layout_generation:0,status_hover:None,tui_fro
         tty.input(b"\x1b[<35;36;3M");
         assert!(tty.shell.status_hover.is_none());
         service::LAUNCHES.lock().unwrap().clear();MatrixSlots::set(&[] as &[&str]);
+    }
+    #[test] fn shared_matrix_viewport_scrolls_newest_first_and_resets_on_selection() {
+        MatrixSlots::set(&["history"]);
+        let mut s=Shell3::new(40);s.rows_count=6;s.select_matrix_slot_name("history");
+        for n in (0..7).rev() {MatrixSlots::echo(Some("history"),s.active_matrix_lifetime,format!("entry{n}"));}
+        assert_eq!(s.get_strip(SpecialRows::MatrixRow(0),StripSide::Left),"entry0");
+        assert!(s.scroll_matrix(1));assert_eq!(s.get_strip(SpecialRows::MatrixRow(0),StripSide::Left),"entry1");
+        assert!(s.scroll_matrix(100));assert_eq!(s.matrix_scroll,4);assert!(!s.scroll_matrix(1));
+        assert!(s.scroll_matrix(-100));assert_eq!(s.matrix_scroll,0);
+        s.scroll_matrix(2);let mut tty=Terminal::new_ssh(s);tty.input(b"\x1b[<65;2;4M");
+        assert_eq!(tty.shell.matrix_scroll,3);assert_eq!(tty.shell.get_strip(SpecialRows::MatrixRow(0),StripSide::Left),"entry3");
+        tty.input(b"\x1b[<64;2;2M");assert_eq!(tty.shell.matrix_scroll,3);
+        tty.shell.select_matrix_slot_index(0);assert_eq!(tty.shell.matrix_scroll,0);
+        MatrixSlots::set(&[] as &[&str]);
     }
     #[test] fn network_defers_until_enter_and_first_latch_discards_tail() {
         MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
