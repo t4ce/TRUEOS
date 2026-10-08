@@ -28,9 +28,9 @@ fn entries(ids: &[String], active: Option<&str>, aliases: &[String]) -> (Vec<Ent
         .collect();
     let mut right = Vec::new();
     if !aliases.is_empty() {
-        right.push((MetaFmtStr::new("[Aka"), None));
-        for alias in aliases {
-            right.push((MetaFmtStr::new(" "), None));
+        right.push((MetaFmtStr::new("Aka["), None));
+        for (index, alias) in aliases.iter().enumerate() {
+            if index != 0 { right.push((MetaFmtStr::new(" "), None)); }
             right.push((MetaFmtStr::new(alias), Some(Target::Alias(alias.clone()))));
         }
         right.push((MetaFmtStr::new("]"), None));

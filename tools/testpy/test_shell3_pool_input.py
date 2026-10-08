@@ -245,7 +245,7 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
         assert!(key(&mut a,2,2,'\\t')); assert_eq!(a.mode,mode);
         assert_eq!(a.rows.title.left[0].text,"TrueOS § 12:34");
         let legend:String=a.rows.title.right.iter().map(|run|run.text.as_str()).collect();
-        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"[Capture img vid aud vaud] [AppDB]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
+        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"Capture[img vid aud vaud] AppDB[]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
     }
     assert_eq!(b.mode,Mode::HV); assert_eq!(b.prompt.text,"y");
     assert!(!key(&mut a,2,3,'\\r')); assert!(!key(&mut a,1,0,'\\n'));
@@ -336,7 +336,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     s.set_appdb_names(&["Demo".into()]);
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
     s.set_mode(2);
-    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Capture img vid aud vaud] [AppDB Demo]");
+    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"Capture[img vid aud vaud] AppDB[Demo]");
     for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render(),"#");s.select_matrix_slot_index(0);}
     assert_eq!(MatrixSlots::echo_lines(None),vec!["img"]);
     s.set_mode(3); let admin=s.rows.title.right.clone();
@@ -349,7 +349,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     MatrixSlots::set(&["id","123"]);
     service::LAUNCHES.lock().unwrap().clear();
     let mut s=Shell3::new(40);s.aka_names=vec!["héllo".into()];s.set_prompt("draft");
-    assert_eq!(s.get_strip(SpecialRows::StatusRow,StripSide::Right),"[Aka héllo]");
+    assert_eq!(s.get_strip(SpecialRows::StatusRow,StripSide::Right),"Aka[héllo]");
     assert!(s.handle_status_pointer(Some(3),false));
     let status=s.row_for_render(SpecialRows::StatusRow);
     assert!(status.left[2].underline && status.left[3].underline);
@@ -357,7 +357,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     s.handle_status_pointer(Some(3),true);assert_eq!(s.active_matrix_slot_name(),Some("id".into()));
     s.handle_status_pointer(Some(0),true);assert_eq!(s.active_matrix_slot_name(),None);
     assert!(s.handle_status_pointer(Some(35),false));
-    assert!(s.row_for_render(SpecialRows::StatusRow).right[2].underline);
+    assert!(s.row_for_render(SpecialRows::StatusRow).right[1].underline);
     s.handle_status_pointer(Some(35),true);
     assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("alias:héllo".into(),"".into())]);
     assert_eq!(s.active_matrix_slot_name(),Some("td0".into()));assert_eq!(s.prompt.text,"draft");
@@ -369,7 +369,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert_eq!(status::hit(&ids,&aliases,40,29),Some(status::Target::Alias("héllo".into())));
     assert_eq!(status::hit(&ids,&aliases,40,33),None); // space between aliases
     assert_eq!(status::hit(&ids,&aliases,10,4),None); // clipped-strip separator
-    assert_eq!(status::hit(&ids,&aliases,10,9),None); // alias is entirely clipped
+    assert_eq!(status::hit(&ids,&aliases,10,9),Some(status::Target::Alias("héllo".into()))); // first alias cell fits
     assert_eq!(status::hit(&ids,&aliases,12,11),Some(status::Target::Alias("héllo".into())));
     assert_eq!(status::hit(&ids,&aliases,10,10),None);
     assert_eq!(status::hit(&ids,&aliases,0,0),None);

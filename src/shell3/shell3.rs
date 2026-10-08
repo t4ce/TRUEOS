@@ -1391,19 +1391,21 @@ fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) ->
         if !runs.is_empty() {
             runs.push(MetaFmtStr::new(" "));
         }
-        runs.push(MetaFmtStr::new(names::GROUP_OPEN.to_string()));
         if !group.name.is_empty() {
             runs.push(MetaFmtStr::new(group.name));
         }
+        runs.push(MetaFmtStr::new(names::GROUP_OPEN.to_string()));
         for (index, entry) in group.names.iter().enumerate() {
-            if !group.name.is_empty() || index != 0 {
+            if index != 0 {
                 runs.push(MetaFmtStr::new(" "));
             }
             runs.push(MetaFmtStr::new(entry.name).color(entry.color));
         }
         if let Some(entries) = dynamic {
-            for entry in entries {
-                runs.push(MetaFmtStr::new(" "));
+            for (index, entry) in entries.iter().enumerate() {
+                if !group.names.is_empty() || index != 0 {
+                    runs.push(MetaFmtStr::new(" "));
+                }
                 runs.push(MetaFmtStr::new(entry));
             }
         }
