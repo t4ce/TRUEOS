@@ -2448,6 +2448,11 @@ async fn run_shell2(
                     continue;
                 }
                 EscState::Ss3 => {
+                    if matches!(b, b'A' | b'B') {
+                        if let Some(entry) = cycle_live_history(b == b'A', &mut live_history_cursor) {
+                            set_input_line(&out, output_mask, &mut line, entry.as_str());
+                        }
+                    }
                     esc = EscState::None;
                     continue;
                 }

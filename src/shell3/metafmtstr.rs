@@ -10,6 +10,7 @@ pub struct MetaFmtStr {
     pub color: Option<RgbaColor>,
     pub bold: bool,
     pub underline: bool,
+    pub blink: bool,
 }
 
 impl MetaFmtStr {
@@ -19,6 +20,7 @@ impl MetaFmtStr {
             color: None,
             bold: false,
             underline: false,
+            blink: false,
         }
     }
 
@@ -29,6 +31,11 @@ impl MetaFmtStr {
 
     pub fn bold(mut self) -> Self {
         self.bold = true;
+        self
+    }
+
+    pub fn blink(mut self) -> Self {
+        self.blink = true;
         self
     }
 

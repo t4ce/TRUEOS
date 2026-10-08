@@ -26,6 +26,11 @@ use std::cell::{Cell, RefCell};
     source += f'\n#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
     source += f'\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
     source += '''
+mod r {pub mod keyboard {
+    pub const KEYBOARD_OUTPUT_KIND_TEXT:u8=1;pub const KEYBOARD_OUTPUT_KIND_KEY:u8=2;
+    pub const KEYBOARD_KEY_TAB:u16=2;pub const KEYBOARD_KEY_ENTER:u16=3;pub const KEYBOARD_KEY_BACKSPACE:u16=1;pub const KEYBOARD_OUTPUT_FLAG_PRESS:u32=1;
+    #[derive(Default)] pub struct TrueosKeyboardOutputEvent {pub kind:u8,pub key_code:u16,pub codepoint:u32,pub flags:u32,pub utf8:[u8;4],pub utf8_len:u8}
+}}
 static SSH_LOGS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
 #[macro_export] macro_rules! log_info { (target: $target:literal; $($args:tt)*) => {crate::SSH_LOGS.lock().unwrap().push(format!($($args)*));}; }
 mod service {pub static RELEASED:std::sync::Mutex<Vec<u32>>=std::sync::Mutex::new(Vec::new());pub fn release_shell_on_executor(slot:u32){RELEASED.lock().unwrap().push(slot);}}
@@ -39,7 +44,7 @@ impl Shell3 {
     fn capture_controls_snapshot(&self)->update::Snapshot {
         let title=[MetaFmtStr::new("TrueOS § 12:34")];
         let status=[MetaFmtStr::new("§sh1").color(RgbaColor::Pink)];
-        let prompt=[MetaFmtStr::new(format!("{}#",self.prompt))];
+        let prompt=[MetaFmtStr::new(self.prompt.clone()),MetaFmtStr::new(" ").color(RgbaColor::Terminal {foreground:[0,0,0,255],background:[255,255,255,255],underline:false}).blink()];
         let right=[MetaFmtStr::new("RIGHT").underline()];
         update::Snapshot::new(self.size,0,[(&title,&right),(&status,&right),(&prompt,&right)],self.size.0)
     }
@@ -72,6 +77,16 @@ impl Shell3 {
     fn set_cursor(&mut self, cursor: usize) { self.cursor = cursor; }
     fn parse_operator(&mut self,text:&str)->bool {self.parsed.borrow_mut().push(text.into());text.starts_with(OPERATOR)}
     fn prompt(&self) -> &str { &self.prompt }
+    fn handle_keyboard_with_latch(&mut self,event:&r::keyboard::TrueosKeyboardOutputEvent)->(bool,bool) {
+        use r::keyboard::*;
+        if event.kind==KEYBOARD_OUTPUT_KIND_TEXT {self.prompt.push(char::from_u32(event.codepoint).unwrap());self.cursor=self.prompt.chars().count();}
+        else {match event.key_code {
+            KEYBOARD_KEY_TAB=>{self.mode=self.mode%3+1;},
+            KEYBOARD_KEY_BACKSPACE=>{self.prompt.pop();self.cursor=self.prompt.chars().count();},
+            KEYBOARD_KEY_ENTER=>{let line=self.prompt.clone();self.replay_terminal_line(&line);},_=>{}
+        }}
+        (true,false)
+    }
     fn replay_terminal_line(&mut self, text: &str) {
         if text != "stop" || !self.stop_active_vmx() { self.parsed.borrow_mut().push(text.into()); }
         self.prompt.clear();self.cursor=0;
@@ -94,7 +109,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         for row in 1..=3 {assert!(output.contains(&format!("\\x1b[{row};96H\\x1b[0m\\x1b[38;2;255;255;255m\\x1b[4mRIGHT")));}
         assert!(output.contains("TrueOS"));assert!(output.contains("12:34"));assert!(output.contains("§sh1"));
         tty.output.clear();tty.input(b"abc");
-        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1Habc#"));
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1Habc"));
         assert!(!tty.output.windows(2).any(|w|w==b"\\x1b8"));
         tty.output.clear();tty.reconcile_matrix_selection();assert!(tty.output.is_empty());
         tty.resize(60,20);
@@ -102,7 +117,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         tty.output.clear();
         tty.input(b"\\r");assert_eq!(tty.shell.prompt,"");
         assert_eq!(&*tty.shell.parsed.borrow(), &["abc"]);
-        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1H#   "));
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1H   "));
     }
     #[test] fn ssh_mouse_reports_are_ignored_at_every_packet_split() {
         let input=b"\\x1b[<35;4;2M\\x1b[<0;4;2M\\x1b[<0;4;2m\\x1b[<32;6;2M\\x1b[<64;6;2M\\x1b[<65;6;2M\\x1b[<2;6;2M\\x1b[<35;6;3M";
@@ -138,8 +153,8 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         tty.output.clear();tty.resize(60,10);
         assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[4;10r"));
         tty.output.clear();tty.input(b"help\\r");
-        assert!(tty.shell.notices[0].contains("UTF-8 line input"));
-        assert!(!String::from_utf8_lossy(&tty.output).contains("UTF-8 line input"));
+        assert!(tty.shell.notices[0].contains("SSH types directly"));
+        assert!(!String::from_utf8_lossy(&tty.output).contains("SSH types directly"));
         tty.output.clear();tty.input(b"exit\\r");
         assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[r"));
     }
@@ -160,6 +175,17 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         tty.output.clear();tty.shell.history.clear();tty.reconcile_matrix_selection();
         assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[4;1H      "));
         assert!(tty.line.is_empty());
+    }
+    #[test] fn ssh_native_cursor_blinks_on_the_blank_cell_and_tracks_editing() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        let out=String::from_utf8_lossy(&tty.output);
+        assert!(out.contains("\\x1b[1 q\\x1b[?25h"));assert!(out.ends_with("\\x1b[3;1H"));
+        assert!(!out.contains('#'));
+        tty.output.clear();tty.input("éx".as_bytes());
+        assert!(String::from_utf8_lossy(&tty.output).ends_with("\\x1b[3;3H"));
+        tty.input(b"\\x7f");assert!(String::from_utf8_lossy(&tty.output).ends_with("\\x1b[3;2H"));
+        tty.output.clear();tty.input(b"\\x15exit\\r");assert!(tty.closing);
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[0 q"));
     }
     #[test] fn adapter_starts_in_adm_and_enter_reuses_the_existing_prompt() {
         let mut tty=terminal();assert_eq!(tty.shell.get_mode(),3);
@@ -239,6 +265,36 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         assert_eq!(second.shell.prompt, "second");
         second.input(b"\\x15"); assert_eq!(second.shell.prompt, "");
     }
+    #[test] fn ssh_recall_csi_ss3_packet_splits_and_enter_only() {
+        for arrow in [b"\\x1b[A".as_slice(), b"\\x1bOA".as_slice()] {
+            for split in 0..=arrow.len() {
+                let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+                tty.input(b"first\\rsecond\\rdraft");
+                tty.input(&arrow[..split]);tty.input(&arrow[split..]);
+                assert_eq!(tty.line,"second");assert_eq!(tty.shell.prompt,"second");
+                assert_eq!(tty.submitted(),vec!["first","second"]);
+                tty.input(arrow);assert_eq!(tty.line,"first");
+                tty.input(arrow);assert_eq!(tty.line,"first");
+                tty.input(b"\\x1bOB");assert_eq!(tty.line,"second");
+                tty.input(b"\\x1b[B");assert_eq!(tty.line,"draft");
+                tty.input(arrow);tty.input(b"\\r");
+                assert_eq!(tty.submitted(),vec!["first","second","second"]);
+                assert!(tty.line.is_empty());
+            }
+        }
+    }
+    #[test] fn ssh_recall_filters_secrets_is_bounded_and_connection_local() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        tty.input(b"cry login 123456\\rcry unlock t4ce secret\\rcry ssh add 123456 key\\r123456\\r");
+        assert!(tty.history.is_empty());
+        for n in 0..70 {tty.input(format!("command{n}\\r").as_bytes());}
+        assert_eq!(tty.history.len(),64);assert_eq!(tty.history[0],"command6");
+        let mut other=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        other.input(b"\\x1b[A");assert!(other.line.is_empty());
+        let mut plain=terminal();plain.input(b"first\\r\\x1b[A");assert!(plain.history.is_empty());
+        tty.input(b"\\x1b[A\\x7fX");assert_eq!(tty.line,"command6X");
+        tty.input(b"\\x03\\x1b[B");assert!(tty.line.is_empty());
+    }
     #[test] fn escape_sequences_and_invalid_utf8_never_enter_commands() {
         let mut tty = terminal();
         tty.input(b"\\x1b["); tty.input(b"D\\xc2A\\xffB\\x1bOC\\xc0\\xaf\\n");
@@ -257,7 +313,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         assert_eq!(&*tty.shell.parsed.borrow(), &["known"]);
         assert!(tty.closing);
         assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1049l\\x1b[?1007r"));
-        assert!(String::from_utf8_lossy(&tty.output).contains("Enter replays the line"));
+        assert!(String::from_utf8_lossy(&tty.output).contains("plain TCP replays on Enter"));
         let mut eof = terminal(); eof.input(b"x\\x04"); assert!(!eof.closing);
         eof.input(b"\\x7f\\x04"); assert!(eof.closing);
         assert!(String::from_utf8_lossy(&eof.output).contains("\\x1b[?1049l\\x1b[?1007r"));

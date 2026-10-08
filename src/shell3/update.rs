@@ -40,6 +40,7 @@ pub(super) struct Snapshot {
     matrix_generation: u64,
     tui_revision: u64,
     terminal_active: bool,
+    blink_phase: Option<bool>,
 }
 
 impl Snapshot {
@@ -55,6 +56,7 @@ impl Snapshot {
             matrix_generation: 0,
             tui_revision: 0,
             terminal_active: false,
+            blink_phase: None,
             rows: strips
                 .map(|(left, right)| VisibleRow {
                     rendered: fit_meta_strips(left, right, columns),
@@ -81,11 +83,29 @@ impl Snapshot {
     }
 
     pub(super) fn terminal(size: (usize, usize), layout_generation: usize, lines: Vec<RenderedLine>, revision: u64) -> Self {
-        Self {size, layout_generation, rows: lines.into_iter().map(|rendered| VisibleRow {rendered}).collect(), matrix_generation: 0, tui_revision: revision, terminal_active: true}
+        Self {size, layout_generation, rows: lines.into_iter().map(|rendered| VisibleRow {rendered}).collect(), matrix_generation: 0, tui_revision: revision, terminal_active: true, blink_phase: None}
     }
     pub(super) fn with_tui_revision(mut self, revision: u64) -> Self { self.tui_revision = revision; self }
     pub(super) fn tui_revision(&self) -> u64 { self.tui_revision }
     pub(super) fn terminal_active(&self) -> bool { self.terminal_active }
+
+    pub(super) fn blink_phase(&self) -> Option<bool> { self.blink_phase }
+
+    pub(super) fn with_blink_phase(mut self, visible: bool) -> Self {
+        for row in &mut self.rows {
+            for (_, style) in &mut row.rendered {
+                if let Some(color) = *style && color.blink() {
+                    self.blink_phase = Some(visible);
+                    *style = Some(super::RgbaColor::Terminal {
+                        foreground: if visible { color.rgba() } else { super::RgbaColor::BlackTransparent.rgba() },
+                        background: if visible { color.background().unwrap_or(super::RgbaColor::BlackTransparent.rgba()) } else { super::RgbaColor::BlackTransparent.rgba() },
+                        underline: visible && color.underline(),
+                    });
+                }
+            }
+        }
+        self
+    }
 
     pub(super) fn matrix_generation(&self) -> u64 {
         self.matrix_generation
@@ -208,13 +228,12 @@ pub(super) fn fit_meta_strips(
                 run.text.chars().map(|ch| {
                     (
                         ch,
-                        if run.underline {
-                            Some(RgbaColor::Underlined {
-                                foreground: run.color.unwrap_or(RgbaColor::White).rgba(),
-                            })
-                        } else {
-                            run.color
-                        },
+                        if run.blink {
+                            let color = run.color.unwrap_or(RgbaColor::White);
+                            Some(RgbaColor::Blinking {foreground: color.rgba(), background: color.background(), underline: run.underline || color.underline()})
+                        } else if run.underline {
+                            Some(RgbaColor::Underlined {foreground: run.color.unwrap_or(RgbaColor::White).rgba()})
+                        } else { run.color }
                     )
                 })
             })

@@ -185,6 +185,19 @@ fn each_back_buffer_gets_its_own_color_diff() {
 }
 
 #[test]
+fn blank_cursor_carries_blink_and_only_its_cell_changes_per_phase() {
+    let cursor=[MetaFmtStr::new(" ").color(RgbaColor::Terminal {foreground:[0,0,0,255],background:[255,255,255,255],underline:false}).blink()];
+    let raw=update::Snapshot::new((12,5),0,[(&[],&[]),(&[],&[]),(&cursor,&[])],12);
+    assert!(raw.rendered_lines()[2][0].1.unwrap().blink());
+    let on=raw.clone().with_blink_phase(true);let off=raw.with_blink_phase(false);
+    assert_eq!(on.blink_phase(),Some(true));assert_eq!(off.blink_phase(),Some(false));
+    assert_eq!(on.rendered_lines()[2][0].1.unwrap().background(),Some([255,255,255,255]));
+    let changes=update::build_updates(&on,&off,&[]);
+    assert_eq!(changes.segments.len(),1);assert_eq!(changes.segments[0].row,SpecialRows::PromtRow);
+    assert_eq!(changes.segments[0].offset,0);assert_eq!(changes.segments[0].text," ");
+}
+
+#[test]
 fn matrix_transcripts_render_newest_first_and_clear_when_selection_changes() {
     let title=[MetaFmtStr::new("TrueOS §")];let prompt=[MetaFmtStr::new("#")];
     let make=|rows,lines:&[String],generation|update::Snapshot::new((12,rows),0,[(&title,&[]),(&[],&[]),(&prompt,&[])],12).with_matrix(lines,generation);

@@ -32,7 +32,7 @@ mod r {pub mod readiness {pub fn mask()->u32 {0}} pub mod keyboard {
     pub const KEYBOARD_OUTPUT_FLAG_PRESS:u32=1;
     #[derive(Default)] pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32,pub flags:u32,pub utf8:[u8;4],pub utf8_len:u8 }
 } }
-const PROMPT_CURSOR:char='#';
+const PROMPT_CURSOR:char=' ';
 const SpecialSeperator:char='│';
 const OPERATOR:char='§';
 '''
@@ -102,7 +102,7 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
     source += r'''
 #[cfg(test)] mod replay_tests {
     use super::*;
-    use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide};
+    use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide, key, type_text};
     #[test] fn ssh_mouse_reports_do_not_hover_select_or_launch() {
         MatrixSlots::set(&["id","123"]);service::LAUNCHES.lock().unwrap().clear();
         let mut shell=Shell3::new(40);shell.aka_names=vec!["héllo".into()];
@@ -132,6 +132,28 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
         tty.input(b"\x1b[<64;2;2M");assert_eq!(tty.shell.matrix_scroll,2);
         tty.shell.select_matrix_slot_index(0);assert_eq!(tty.shell.matrix_scroll,0);
         MatrixSlots::set(&[] as &[&str]);
+    }
+    #[test] fn ssh_typing_tab_and_operator_share_ui4_keyboard_semantics() {
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
+        let mut tty=Terminal::new_ssh(Shell3::new(100));
+        let mut ui=Shell3::new(100);ui.set_mode(3);
+        tty.input(b"\t");key(&mut ui,2,2,'\0');
+        assert_eq!(tty.shell.get_mode(),ui.get_mode());
+        tty.input(b"online");type_text(&mut ui,"online");
+        assert_eq!(MatrixSlots::echo_lines(None),vec!["online","online"]);
+        assert_eq!(tty.history,vec!["online"]);
+        assert_eq!(tty.line,"");assert_eq!(tty.shell.prompt(),ui.prompt());
+        tty.input("§fresh".as_bytes());type_text(&mut ui,"§fresh");
+        assert_eq!(tty.shell.active_matrix_slot_name(),None);
+        assert_eq!(tty.shell.prompt(),ui.prompt());
+        tty.input(b"\r");key(&mut ui,2,3,'\r');
+        assert_eq!(tty.shell.active_matrix_slot_name(),ui.active_matrix_slot_name());
+        assert_eq!(tty.shell.prompt(),ui.prompt());
+        tty.input("éx\x7f".as_bytes());type_text(&mut ui,"éx");key(&mut ui,2,1,'\0');
+        assert_eq!(tty.shell.prompt(),ui.prompt());
+        // An unmatched ordinary Enter preserves text, exactly as UI4 does.
+        tty.input(b"\r");key(&mut ui,2,3,'\r');assert_eq!(tty.shell.prompt(),ui.prompt());
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
     }
     #[test] fn network_defers_until_enter_and_first_latch_discards_tail() {
         MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
@@ -246,11 +268,11 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
     let mut s=Shell3::new(5);
     for ch in "aé😀z".chars() {assert!(key(&mut s,1,0,ch));}
     assert_eq!(s.prompt.cursor,4); assert!(!key(&mut s,1,0,'q'));
-    assert_eq!(s.prompt.render(),"aé😀z#");
+    assert_eq!(s.prompt.render(),"aé😀z ");
     assert!(key(&mut s,2,1,'\\0')); assert_eq!(s.prompt.text,"aé😀");
-    assert!(key(&mut s,1,0,'q')); assert_eq!(s.prompt.render(),"aé😀q#");
+    assert!(key(&mut s,1,0,'q')); assert_eq!(s.prompt.render(),"aé😀q ");
     for _ in 0..4 {assert!(key(&mut s,2,1,'\\0'));}
-    assert!(!key(&mut s,2,1,'\\0')); assert_eq!(s.prompt.render(),"#");
+    assert!(!key(&mut s,2,1,'\\0')); assert_eq!(s.prompt.render()," ");
 }
 #[test] fn tab_updates_title_per_instance_and_enter_is_inert() {
     let mut a=Shell3::new(20); let mut b=Shell3::new(20);
@@ -270,7 +292,7 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
     for ch in "aéz".chars() {assert!(key(&mut s,1,0,ch));}
     assert!(!key(&mut s,1,0,'!'));
     s.prompt.cursor=2; assert!(key(&mut s,2,1,'\\0')); assert_eq!(s.prompt.text,"az");
-    assert!(key(&mut s,1,0,'😀')); assert_eq!(s.prompt.render(),"a😀#z");
+    assert!(key(&mut s,1,0,'😀')); assert_eq!(s.prompt.render(),"a😀 z");
 }
 '''
     source += '''
@@ -294,7 +316,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     let mut a=Shell3::new(80); let mut b=Shell3::new(80);
     assert!(a.select_matrix_slot_name("id")); assert!(b.select_matrix_slot_name("123"));
     type_text(&mut a,"onlin"); assert_eq!(a.prompt.text,"onlin"); assert!(MatrixSlots::echo_lines(Some("id")).is_empty());
-    type_text(&mut a,"e"); assert_eq!(a.prompt.render(),"#"); assert_eq!(a.prompt.cursor,0);
+    type_text(&mut a,"e"); assert_eq!(a.prompt.render()," "); assert_eq!(a.prompt.cursor,0);
     assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["online"]);
     type_text(&mut b,"pause"); assert_eq!(MatrixSlots::echo_lines(Some("123")),vec!["pause"]);
     assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["online"]);
@@ -351,7 +373,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
     s.set_mode(2);
     assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"Capture[img vid aud vaud] AppDB[Demo]");
-    for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render(),"#");s.select_matrix_slot_index(0);}
+    for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render()," ");s.select_matrix_slot_index(0);}
     assert_eq!(MatrixSlots::echo_lines(None),vec!["img"]);
     s.set_mode(3); let admin=s.rows.title.right.clone();
     assert_eq!(admin[0].color,Some(RgbaColor::Pink));assert_eq!(admin[2].color,Some(RgbaColor::Pink));
@@ -454,7 +476,7 @@ fn submit(shell:&mut Shell3,input:&str)->bool {shell.set_prompt("");type_text(sh
     a.set_mode(2);a.aka_names=vec!["§abc".into()];
     type_text(&mut a,"§abc");assert_eq!(a.prompt.text,"§abc");assert_eq!(a.active_matrix_slot_name(),None);
     assert!(!MatrixSlots::slot_ids().iter().any(|id|id=="abc"));assert!(MatrixSlots::echo_lines(None).is_empty());
-    assert!(key(&mut a,2,3,'\\r'));assert_eq!(a.active_matrix_slot_name(),Some("abc".into()));assert_eq!(a.prompt.render(),"#");
+    assert!(key(&mut a,2,3,'\\r'));assert_eq!(a.active_matrix_slot_name(),Some("abc".into()));assert_eq!(a.prompt.render()," ");
     assert_eq!(a.prompt.cursor,0);assert_eq!(a.mode,Mode::CMD);assert_eq!(b.active_matrix_slot_name(),None);
     assert!(submit(&mut b,"§abc"));assert_eq!(MatrixSlots::slot_ids().iter().filter(|id|id.as_str()=="abc").count(),1);
     assert!(submit(&mut a,"§"));assert_eq!(a.active_matrix_slot_index(),0);assert_eq!(b.active_matrix_slot_name(),Some("abc".into()));
@@ -484,7 +506,7 @@ fn submit(shell:&mut Shell3,input:&str)->bool {shell.set_prompt("");type_text(sh
     assert!(submit(&mut b,"§§"));assert_eq!(b.active_matrix_slot_name(),Some("id".into()));
     assert!(MatrixSlots::echo_lines(None).is_empty());assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["pause"]);
     type_text(&mut a,"stop");assert_eq!(MatrixSlots::echo_lines(None),vec!["stop"]);
-    assert!(submit(&mut a,"§§"));assert_eq!(a.prompt.render(),"#");assert_eq!(a.active_matrix_slot_index(),0);
+    assert!(submit(&mut a,"§§"));assert_eq!(a.prompt.render()," ");assert_eq!(a.active_matrix_slot_index(),0);
     assert!(MatrixSlots::echo_lines(None).is_empty());type_text(&mut a,"dl");assert_eq!(MatrixSlots::echo_lines(None),vec!["dl"]);
 }
 #[test] fn malformed_operator_and_ordinary_enter_are_inert() {

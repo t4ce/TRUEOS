@@ -27,7 +27,7 @@ use spin::Once;
 pub const MAX_SHELL3_INSTANCES: usize = 256;
 pub const OPERATOR: char = '§';
 pub const MODESTEP: char = '\t';
-pub const PROMPT_CURSOR: char = '#';
+pub const PROMPT_CURSOR: char = ' ';
 pub const Default_COLUMNS: usize = 100;
 pub const Default_ROWS: usize = 25;
 pub const MIN_COLUMNS: usize = 20;
@@ -52,13 +52,14 @@ pub enum RgbaColor {
     Orange = 0xFB8C00FF,
     BlackTransparent = 0x00000080,
     Underlined { foreground: [u8;4] },
+    Blinking { foreground: [u8;4], background: Option<[u8;4]>, underline: bool },
     Terminal { foreground: [u8;4], background: [u8;4], underline: bool },
 }
 
 impl RgbaColor {
     pub const fn rgba(self) -> [u8; 4] {
         let value: u32 = match self {
-            Self::Terminal {foreground, ..} | Self::Underlined {foreground} => return foreground,
+            Self::Terminal {foreground, ..} | Self::Underlined {foreground} | Self::Blinking {foreground, ..} => return foreground,
             Self::Gray => 0x808080FF,
             Self::White => 0xFFFFFFFF,
             Self::Pink => 0xFF69B4FF,
@@ -75,10 +76,12 @@ impl RgbaColor {
         ]
     }
     pub const fn background(self) -> Option<[u8;4]> {
-        match self { Self::Terminal {background, ..} => Some(background), _ => None }
+        match self { Self::Terminal {background, ..} => Some(background), Self::Blinking {background, ..} => background, _ => None }
     }
+    pub const fn blink(self) -> bool { matches!(self, Self::Blinking {..}) }
+
     pub const fn underline(self) -> bool {
-        matches!(self, Self::Terminal {underline: true, ..} | Self::Underlined {..})
+        matches!(self, Self::Terminal {underline: true, ..} | Self::Underlined {..} | Self::Blinking {underline: true, ..})
     }
 
 }
@@ -435,7 +438,7 @@ impl SpecialRowsState {
             title: RowStrips::new(&title_left_text(time), ""),
             // StatusRow/Left is read from the shared MatrixSlots system.
             status: RowStrips::new("", ""),
-            promt: RowStrips::new(prompt_left, ""),
+            promt: RowStrips {left: vec![MetaFmtStr::new(prompt_left).color(RgbaColor::Terminal {foreground: [0,0,0,255], background: RgbaColor::White.rgba(), underline: false}).blink()], right: vec![]},
         }
     }
 
@@ -1075,6 +1078,7 @@ impl Shell3 {
 
     pub(super) fn matrix_output_needed(&self) -> bool {
         self.matrix_selection_dirty
+            || self.update_baseline.blink_phase().is_some_and(|phase| phase != Self::cursor_blink_phase())
             || tui::revision(self.tui_frontend) != self.update_baseline.tui_revision()
             || (!self.update_baseline.terminal_active()
                 && matrix_slots().lock().generation != self.update_baseline.matrix_generation())
@@ -1116,11 +1120,15 @@ impl Shell3 {
             .render()
             .chars()
             .zip(colors)
-            .map(|(ch, color)| MetaFmtStr {
+            .enumerate()
+            .map(|(index, (ch, color))| MetaFmtStr {
                 text: ch.to_string(),
-                color,
+                color: if index == self.prompt.cursor {
+                    Some(RgbaColor::Terminal {foreground: [0,0,0,255], background: RgbaColor::White.rgba(), underline: false})
+                } else { color },
                 bold: false,
                 underline: false,
+                blink: index == self.prompt.cursor,
             })
             .collect();
     }
@@ -1266,12 +1274,14 @@ impl Shell3 {
         )
     }
 
+    fn cursor_blink_phase() -> bool { trueos_time::Instant::now().as_millis() / 500 % 2 == 0 }
+
     fn capture_update_snapshot(&self) -> update::Snapshot {
         let revision = tui::revision(self.tui_frontend);
         if let Some(lines) = tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
             return update::Snapshot::terminal((self.columns, self.rows_count), self.layout_generation, lines, revision);
         }
-        self.capture_matrix_snapshot().with_tui_revision(revision)
+        self.capture_matrix_snapshot().with_tui_revision(revision).with_blink_phase(Self::cursor_blink_phase())
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
