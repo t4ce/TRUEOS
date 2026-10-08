@@ -6729,7 +6729,7 @@ async fn vmx_launch_once_with_ept_vpid(
                 guest_efer
             ));
             let regs = crate::hv::vmx::guest_registers();
-            hvlogf(format_args!(
+            hverrorf(format_args!(
                 "hv: vm{} fault-regs rip=0x{:016X} rsp=0x{:016X} rsi=0x{:016X} rdi=0x{:016X} rcx=0x{:016X} qual=0x{:016X}",
                 current_vm_id_for_log(),
                 lr.guest_rip,

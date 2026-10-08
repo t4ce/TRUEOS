@@ -191,6 +191,7 @@ fn cleanup_cached_single(rendered: Result<ResidentSceneFrameResult, &'static str
     let phys = 0x1000; let bytes = 4096;
     let mesh = TestMesh(1); let draw = TestDraw { retain_texture };
     let sampled_texture = Some(Box::new(TestTexture));
+    let figure_state: Option<()> = None;
 '''
 retirement += broker[single_busy_start:single_busy_end]
 retirement += broker[single_start:single_end]

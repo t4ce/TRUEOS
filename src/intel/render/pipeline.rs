@@ -2955,7 +2955,8 @@ fn encode_triangle_probe_batch(
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
     let raster_dw1 = if draw.voxy_figure {
-        native_raster_dw1(false, false)
+        // The negative framebuffer Y scale maps authored CCW to screen CW.
+        native_raster_dw1(false, true)
     } else if let Some(state) = draw.fixed_gl {
         native_raster_dw1(state[4] == 0, true) | (1 << 1)
     } else if artifact_native_fixed_function {

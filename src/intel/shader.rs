@@ -324,7 +324,7 @@ pub(crate) fn voxy_headless_supports_physical_device(vendor: u16, device: u16, r
 mod voxy_headless_tests;
 
 // Keep this exact figure pair separate from the headless float4 contract.
-#[expect(dead_code, reason = "figure native draw contract is not submitted yet")]
+#[expect(dead_code, reason = "captured push ranges retained for shader ABI verification")]
 #[path = "../../crates/trueos-shader/generated_voxy_figure_gen12.rs"]
 mod voxy_figure_gen12;
 const _: () = assert!(voxy_figure_gen12::PACKAGE_FNV1A64 == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64);

@@ -2837,6 +2837,14 @@ pub(crate) fn destroy_shader_module(
 }
 
 // The figure pair reads two packed Uint32 attributes, not float3 positions.
+fn figure_position_transforms_finite(state: &[u8; v::vgpu::VOXY_FIGURE_STATE_BYTES]) -> bool {
+    [128..192, 640..652].into_iter().chain(
+        (672..v::vgpu::VOXY_FIGURE_STATE_BYTES).step_by(128)
+            .map(|offset| offset..offset + 64)
+    ).all(|range| state[range].chunks_exact(4)
+        .all(|value| f32::from_le_bytes(value.try_into().unwrap()).is_finite()))
+}
+
 fn render_vertex_layout_supported(package: u64, stride: u32, position_offset: u32) -> bool {
     if package == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64 {
         return stride == 8 && position_offset == 0;
@@ -3258,7 +3266,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             )
         };
         let copied = (|| {
-            let depth = if draw.depth_flags & v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH != 0 {
+            let depth = if !figure && draw.depth_flags & v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH != 0 {
                 let existing = device
                     .drawable_depths
                     .iter()
@@ -3411,10 +3419,11 @@ pub(crate) fn submit_ui4_indexed_draw(
                 };
                 let mut state = [0u8; v::vgpu::VOXY_FIGURE_STATE_BYTES];
                 state.copy_from_slice(unsafe { core::slice::from_raw_parts(virt, v::vgpu::VOXY_FIGURE_STATE_BYTES) });
-                for range in [128..192, 640..652, 672..v::vgpu::VOXY_FIGURE_STATE_BYTES] {
-                    if state[range].chunks_exact(4).any(|v| !f32::from_le_bytes(v.try_into().unwrap()).is_finite()) {
-                        return Err(unsupported("figure-pose-nonfinite"));
-                    }
+                // Original animation normalizes zero-scaled hidden bones,
+                // producing NaNs in their unused normal matrices. Validate
+                // position transforms; retain the authored normal payload.
+                if !figure_position_transforms_finite(&state) {
+                    return Err(unsupported("figure-pose-nonfinite"));
                 }
                 Some(state)
             } else { None };
@@ -3446,7 +3455,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             // Voxy's mutable atlas is staged after dropping BROKER: resident
             // mapping takes the Render0 execution lease and must not invert
             // that executor's broker lock order.
-            let texture = if voxy_textured {
+            let texture = if voxy_textured || figure {
                 None
             } else if textured && !geometry_clear {
                 let shape = [
@@ -3544,8 +3553,8 @@ pub(crate) fn submit_ui4_indexed_draw(
                 .collect::<Vec<_>>();
             canonicalize_ui4_single_indexed_winding(&legacy, &mut indices, draw.topology);
         }
-        device.voxy_stream_in_flight = voxy_camera.is_some();
-        if voxy_camera.is_some() {
+        device.voxy_stream_in_flight = voxy_camera.is_some() || figure_state.is_some();
+        if device.voxy_stream_in_flight {
             device.voxy_stream_owner = Some((queue_handle, draw.surface));
             lookup_buffer_mut(device, draw.vertex_buffer)?.in_flight += 1;
             lookup_buffer_mut(device, draw.index_buffer)?.in_flight += 1;
@@ -3589,6 +3598,21 @@ pub(crate) fn submit_ui4_indexed_draw(
         return Err(unsupported("surface-shape"));
     };
     let cached_voxy_mesh = voxy_camera.is_some();
+    let figure_prepare_diagnostic = figure_state.is_some() && {
+        static LIMIT: crate::log_os::LogRateLimitState = crate::log_os::LogRateLimitState::new();
+        LIMIT.observe(1, 128).should_emit()
+    };
+    let drawable_depth = if figure_state.is_some() {
+        if figure_prepare_diagnostic { crate::log_important!(target: "render"; "voxy-figure: phase=depth-prepare\n"); }
+        match prepare_figure_depth(principal, device_handle, window_id, width, height) {
+            Ok(depth) => Some(depth),
+            Err(error) => {
+                rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
+                return Err(error);
+            }
+        }
+    } else { drawable_depth };
+    if figure_prepare_diagnostic { crate::log_important!(target: "render"; "voxy-figure: phase=mesh-prepare\n"); }
     let mesh = if let Some(update) = voxy_update.as_ref() {
         match prepare_voxy_stream_mesh_raw(principal, device_handle, update) {
             Ok(mesh) => mesh,
@@ -3629,10 +3653,14 @@ pub(crate) fn submit_ui4_indexed_draw(
             }
         }
     };
-    let sampled_texture = if voxy_camera.is_some() && draw.sampled_texture.raw() != 0 {
+    let sampled_texture = if (voxy_camera.is_some() || figure_state.is_some()) && draw.sampled_texture.raw() != 0 {
+        if figure_prepare_diagnostic { crate::log_important!(target: "render"; "voxy-figure: phase=atlas-prepare\n"); }
         match prepare_voxy_atlas(principal, device_handle, &draw) {
             Ok(texture) => Some(texture),
             Err(error) => {
+                if !cached_voxy_mesh {
+                    let _ = crate::intel::render::release_resident_triangle_mesh(&mesh);
+                }
                 rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
                 return Err(error);
             }
@@ -3685,7 +3713,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     // Keep Voxygen's first draw and sparse retirement receipts visible under
     // the current bring-up profile, which suppresses Render/Info.
-    let voxy_diagnostic = if voxy_camera.is_some() {
+    let voxy_diagnostic = if voxy_camera.is_some() || figure_state.is_some() {
         static DIAGNOSTICS: crate::log_os::LogRateLimitState =
             crate::log_os::LogRateLimitState::new();
         let observation = DIAGNOSTICS.observe(3, 128);
@@ -3781,7 +3809,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     // The buffer owns the immutable resident texture. The staged Arc pins it
     // through completion; writes and destruction invalidate only after retirement.
     let released_texture = (release.is_some() || transient_busy)
-        && (draw.retain_texture || cached_voxy_mesh
+        && (draw.retain_texture || cached_voxy_mesh || figure_state.is_some()
             || sampled_texture
                 .as_deref()
                 .is_none_or(crate::intel::render::release_resident_sampled_texture));
@@ -5325,6 +5353,63 @@ pub(crate) fn submit_ui4_retained_frame(
 
 /// Keep mutable sampled pixels at one resident address. A staged render Arc
 /// makes CPU updates Busy; device loss keeps the allocation pinned until reset.
+// The active indexed operation pins the device while Render0 mappings are
+// created outside BROKER, matching the atlas allocation lock order.
+fn prepare_figure_depth(
+    principal: Principal, device_handle: DeviceHandle,
+    window_id: u32, width: u32, height: u32,
+) -> Result<Arc<crate::intel::render::DrawableDepth>, VgpuError> {
+    let bytes = crate::intel::render::drawable_depth_bytes(width, height)
+        .ok_or(VgpuError::Unsupported)?;
+    let old = {
+        let mut broker = BROKER.lock();
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        if !device.voxy_stream_in_flight { return Err(VgpuError::Busy); }
+        let existing = device.drawable_depths.iter().position(|(id, _)| *id == window_id);
+        if let Some(index) = existing {
+            let depth = &device.drawable_depths[index].1;
+            if depth.matches(width, height) { return Ok(Arc::clone(depth)); }
+            if Arc::strong_count(depth) != 1 { return Err(VgpuError::Busy); }
+        }
+        let old_bytes = existing.map_or(0, |index| device.drawable_depths[index].1.bytes());
+        let used = device.memory_used.saturating_sub(old_bytes);
+        if (existing.is_none() && device.drawable_depths.len() >= 16)
+            || used.saturating_add(bytes) > device.quota.memory_bytes {
+            return Err(VgpuError::QuotaExceeded);
+        }
+        let old = existing.map(|index| device.drawable_depths.swap_remove(index).1);
+        device.memory_used = used + bytes;
+        old
+    };
+    if let Some(old) = old {
+        if !crate::intel::render::release_drawable_depth(&old) {
+            let mut broker = BROKER.lock();
+            let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+            device.memory_used = device.memory_used.saturating_sub(bytes) + old.bytes();
+            device.drawable_depths.push((window_id, old));
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+    }
+    let created = crate::intel::render::create_drawable_depth(width, height);
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    match created {
+        Ok(depth) => {
+            let depth = Arc::new(depth);
+            device.drawable_depths.push((window_id, Arc::clone(&depth)));
+            Ok(depth)
+        }
+        Err(reason) => {
+            device.memory_used = device.memory_used.saturating_sub(bytes);
+            crate::log_warn!(target: "vgpu";
+                "vgpu-indexed: resource-failed resource=figure-depth reason={} target={}x{}\n", reason, width, height);
+            Err(VgpuError::OutOfMemory)
+        }
+    }
+}
+
 fn prepare_voxy_atlas(
     principal: Principal,
     device_handle: DeviceHandle,

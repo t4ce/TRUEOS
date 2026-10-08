@@ -16,8 +16,11 @@ def main():
     shader = (ROOT / 'src/intel/shader.rs').read_text()
     types = shader[:shader.index('#[path =')]
     broker = (ROOT / 'src/gpu/vgpu.rs').read_text()
-    begin = broker.index('fn render_vertex_layout_supported(')
+    begin = broker.index('fn figure_position_transforms_finite(')
     layout = broker[begin:broker.index('\npub(crate) fn create_render_pipeline(', begin)]
+    pipeline = (ROOT / 'src/intel/render/pipeline.rs').read_text()
+    packets = pipeline[pipeline.index('fn figure_uniform_gpu_base('):]
+    mocs = re.search(r'^const RENDER_MOCS: u32 = .*?;', (ROOT / 'src/intel/render/constants.rs').read_text(), re.M)[0]
     constants = []
     for path in [ROOT / 'crates/trueos-v/src/vgpu.rs',
                  ROOT.parent / 'TRUEOS-Blueprints/crates/trueos-v/src/vgpu.rs']:
@@ -26,8 +29,22 @@ def main():
     source = f'''#![allow(dead_code)]
 {types}
 #[path = "{GENERATED}"] mod figure;
-mod v {{ pub mod vgpu {{ pub const SHADER_PACKAGE_VOXY_FIGURE_FNV1A64: u64 = {constants[0]}; }} }}
+mod v {{ pub mod vgpu {{ pub const SHADER_PACKAGE_VOXY_FIGURE_FNV1A64: u64 = {constants[0]}; pub const VOXY_FIGURE_STATE_BYTES: usize = 2720; }} }}
 {layout}
+{mocs}
+{packets}
+#[test] fn original_hidden_bone_normals_are_admitted() {{
+    let mut state = [0u8; 2720];
+    for offset in (672..2720).step_by(128) {{
+        state[offset + 64..offset + 68].copy_from_slice(&f32::NAN.to_le_bytes());
+    }}
+    assert!(figure_position_transforms_finite(&state));
+    for offset in [128, 640, 672, 672 + 15 * 128] {{
+        state[offset..offset + 4].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert!(!figure_position_transforms_finite(&state));
+        state[offset..offset + 4].fill(0);
+    }}
+}}
 #[test] fn sealed_physical_target() {{
     assert!(figure::supports(0x8086, 0x4680, 0x0c));
     assert!(figure::supports(0x8086, 0x9a49, 1));
@@ -45,6 +62,20 @@ mod v {{ pub mod vgpu {{ pub const SHADER_PACKAGE_VOXY_FIGURE_FNV1A64: u64 = {co
     assert!(!render_vertex_layout_supported(0, 8, 0));
     assert!(render_vertex_layout_supported(0, 12, 0));
     assert!(!render_vertex_layout_supported(0, 12, 4));
+}}
+#[test] fn constant_ranges_survive_high_gpu_addresses_and_reject_bad_alignment() {{
+    let base = 0x1_0000_0000u64;
+    let [vs, ps] = figure_constant_packets(base, 64).unwrap();
+    assert_eq!(vs[0], 0x7815_0409);
+    assert_eq!(vs[2], 3 | (1 << 16));
+    assert_eq!((vs[7], vs[8]), (64 + 128, 1));
+    assert_eq!((vs[9], vs[10]), (64 + 512 + 128, 1));
+    assert_eq!(ps[0], 0x7817_0409);
+    assert_eq!(ps[2], 2 << 16);
+    assert_eq!((ps[9], ps[10]), (64 + 224, 1));
+    for (address, bytes) in [(0, 64), (1, 64), (base, 8), (base, 0), (u64::MAX & !31, 64)] {{
+        assert!(figure_constant_packets(address, bytes).is_err());
+    }}
 }}
 #[test] fn original_pair_and_native_bytes_match() {{
     let mut hash = 0xcbf29ce484222325u64;
