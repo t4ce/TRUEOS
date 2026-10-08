@@ -433,6 +433,16 @@ and TLS cleanup followed by the ECS probe in the same OS instance.
 
 ## Slot retirement and forced termination
 
+Shared async waits own a unique registration for each future, rather than
+using task-waker identity as a lifetime. Completion, timeout and cancellation
+remove that registration. Otherwise a discarded waiter can remain at the
+front of `notify_one`, consume the scheduling wake and leave a live waiter
+parked indefinitely. Separate waits from the same task retain independent
+registrations. Async completion-cell joins use the same owned wait contract.
+`wait_for_event_timeout` registers the timer-backed wait for nonzero durations;
+checking the current clock alone cannot wake a suspended executor task.
+Its existing zero-duration meaning remains an unbounded notification wait.
+
 When Apps `status` sees a pending stop, it also prints the shutdown stage
 (`hull`, `native-drain`, or the host resource being released), force/cleanup
 flags and native job count. Each surviving job has a host-owned diagnostic

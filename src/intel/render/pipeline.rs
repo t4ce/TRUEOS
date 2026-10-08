@@ -387,7 +387,7 @@ fn write_pbr_sampler_cache_line(samplers: &mut [u32], nearest: bool) {
 const fn ordinary_vf_vertex_element_count(vertex_format: TriangleVertexFormat) -> usize {
     match vertex_format {
         TriangleVertexFormat::Float2 | TriangleVertexFormat::Float3 => 1,
-        TriangleVertexFormat::PosUv | TriangleVertexFormat::VoxyHeadless => 2,
+        TriangleVertexFormat::PosUv | TriangleVertexFormat::VoxyHeadless | TriangleVertexFormat::VoxyFigure => 2,
         TriangleVertexFormat::FixedGl => 4,
         TriangleVertexFormat::PosNormal | TriangleVertexFormat::PosNormalUv => 3,
         TriangleVertexFormat::PosNormalUvTangent => 5,
@@ -404,7 +404,8 @@ fn cmd_3dstate_vertex_elements(count: usize) -> Result<u32, &'static str> {
 }
 
 const fn mesa_vf_component_packing(vertex_format: TriangleVertexFormat) -> [u32; 4] {
-    if matches!(vertex_format, TriangleVertexFormat::VoxyHeadless) { [0xff, 0, 0, 0] }
+    if matches!(vertex_format, TriangleVertexFormat::VoxyFigure) { [0x11, 0, 0, 0] }
+    else if matches!(vertex_format, TriangleVertexFormat::VoxyHeadless) { [0xff, 0, 0, 0] }
     else if matches!(vertex_format, TriangleVertexFormat::FixedGl) { [0xffff, 0, 0, 0] }
     else if matches!(vertex_format, TriangleVertexFormat::PosUv) {
         // SIMD8 VS payload: xyz from element 0, then uv from element 1.
@@ -1105,7 +1106,7 @@ fn write_triangle_probe_state_with_flush(
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
     let native_pbr = native_sampled && draw.pbr_material.is_some();
     let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
-    let binding_table_entries = if fixed_gl { 2usize } else if draw.voxy_headless {
+    let binding_table_entries = if draw.voxy_figure { 5usize } else if fixed_gl { 2usize } else if draw.voxy_headless {
         voxy_headless_shared_binding_table_entries(draw.sampled_texture.is_some())
     } else if draw.native.is_some() {
         4usize
@@ -1255,6 +1256,18 @@ fn write_triangle_probe_state_with_flush(
         }
     }
 
+    if draw.voxy_figure {
+        let uniforms = figure_uniform_gpu_base(draw.vertex_gpu_addr, draw.vertex_buffer_bytes)?;
+        // RT1 is unused in BareMinimum; the original compiler reserves it.
+        let null = &mut dwords[surface_state_offset / 4 + 16..surface_state_offset / 4 + 32];
+        null.fill(0);
+        null[0] = SURFTYPE_NULL << 29;
+        for (entry, offset, bytes) in [(2, 0, 512), (4, 672, 2048)] {
+            let start = surface_state_offset / 4 + entry * 16;
+            write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16],
+                TriangleStorageBufferBinding { gpu_addr: uniforms + offset, byte_len: bytes })?;
+        }
+    }
     if draw.voxy_headless {
         let start = surface_state_offset / 4 + 16;
         write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16], TriangleStorageBufferBinding {
@@ -1410,7 +1423,7 @@ fn write_triangle_probe_state_with_flush(
             )?;
         }
     } else if let Some(texture) = draw.sampled_texture {
-        let start = surface_state_offset / 4 + 2 * 16;
+        let start = surface_state_offset / 4 + (if draw.voxy_figure { 3 } else { 2 }) * 16;
         write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
     }
 
@@ -1425,7 +1438,7 @@ fn write_triangle_probe_state_with_flush(
             m.parameters[12] & v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST != 0));
     }
     if let Some(texture) = draw.sampled_texture
-        && !resident_scene_sampler_flags_valid(draw.voxy_headless, texture.sampler_flags)
+        && !resident_scene_sampler_flags_valid(draw.voxy_headless || draw.voxy_figure, texture.sampler_flags)
     {
         return Err("probe-sampler-mode");
     }
@@ -2115,6 +2128,7 @@ mod retained_native_matrix_draw_contract_tests {
             vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
             vertex_count: 108,
             vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
             vertex_buffer_bytes: 108 * trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
@@ -2788,7 +2802,7 @@ fn encode_triangle_probe_batch(
     // id (source attribute 1).  Xe-LP's enabled SBE swizzle packet must spell
     // that identity routing out; an all-zero payload aliases both inputs to
     // attribute 0.
-    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function || draw.fixed_gl.is_some() || draw.voxy_headless, pipeline.ps.meta.num_varying_inputs);
+    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function || draw.fixed_gl.is_some() || draw.voxy_headless || draw.voxy_figure, pipeline.ps.meta.num_varying_inputs);
     let sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (u32::from(sbe_attr_swizzle_enable) << 21)
         | ((sbe_num_sf_attrs as u32) << 22)
@@ -2940,7 +2954,9 @@ fn encode_triangle_probe_batch(
     // Mirror Mesa's simple-shader path here as literally as possible: cull
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
-    let raster_dw1 = if let Some(state) = draw.fixed_gl {
+    let raster_dw1 = if draw.voxy_figure {
+        native_raster_dw1(false, false)
+    } else if let Some(state) = draw.fixed_gl {
         native_raster_dw1(state[4] == 0, true) | (1 << 1)
     } else if artifact_native_fixed_function {
         native_raster_dw1(
@@ -3487,7 +3503,7 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        if artifact_native_fixed_function || draw.voxy_headless {
+        if artifact_native_fixed_function || draw.voxy_headless || draw.voxy_figure {
             binding_table_pointer_offset
         } else {
             0
@@ -3745,6 +3761,13 @@ fn encode_triangle_probe_batch(
                         VFCOMP_STORE_0, VFCOMP_STORE_0)?;
                 }
             },
+            TriangleVertexFormat::VoxyFigure => {
+                for offset in [0, 4] {
+                    push_vertex_element_state(batch_dwords, &mut cursor, 0, offset,
+                        SURFACE_FORMAT_R32_UINT, VFCOMP_STORE_SRC, VFCOMP_STORE_0,
+                        VFCOMP_STORE_0, VFCOMP_STORE_0)?;
+                }
+            }
             TriangleVertexFormat::VoxyHeadless => {
                 for offset in [0, 16] {
                     push_vertex_element_state(batch_dwords, &mut cursor, 0, offset,
@@ -3967,7 +3990,7 @@ fn encode_triangle_probe_batch(
     // insert system values into the sampled shader's fetched attributes.
     let ordinary_pos_uv = draw.native.is_none()
         && !vf_synthesized_vue
-        && matches!(draw.vertex_format, TriangleVertexFormat::PosUv | TriangleVertexFormat::FixedGl | TriangleVertexFormat::VoxyHeadless);
+        && matches!(draw.vertex_format, TriangleVertexFormat::PosUv | TriangleVertexFormat::FixedGl | TriangleVertexFormat::VoxyHeadless | TriangleVertexFormat::VoxyFigure);
     let vf_sgvs_dw1 = if let Some(native) = draw.native {
         native.vf_sgvs_dw1
     } else if ordinary_pos_uv {
@@ -5026,6 +5049,11 @@ fn encode_triangle_probe_batch(
         )?;
         for word in &vs_tail[..vs_tail_len] {
             push(batch_dwords, &mut cursor, *word)?;
+        }
+        if draw.voxy_figure {
+            for packet in figure_constant_packets(draw.vertex_gpu_addr, draw.vertex_buffer_bytes)? {
+                for word in packet { push(batch_dwords, &mut cursor, word)?; }
+            }
         }
         push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
         push(batch_dwords, &mut cursor, ps_binding_table_pointer_offset)?;
@@ -6748,4 +6776,29 @@ mod voxy_headless_constant_tests {
         assert!(voxy_headless_constant_vs_packet(1, 96).is_err());
         assert!(voxy_headless_constant_vs_packet(u64::MAX & !31, 96).is_err());
     }
+}
+
+fn figure_uniform_gpu_base(vertex_gpu: u64, vertex_bytes: u32) -> Result<u64, &'static str> {
+    if vertex_gpu == 0 || vertex_gpu & 31 != 0 || vertex_bytes == 0 || vertex_bytes % 32 != 0 {
+        return Err("voxy-figure-uniform-alignment");
+    }
+    vertex_gpu.checked_add(u64::from(vertex_bytes)).ok_or("voxy-figure-uniform-address")
+}
+
+/// Captured original ranges, packed into ANV's highest constant buffer slots.
+fn figure_constant_packets(vertex_gpu: u64, vertex_bytes: u32) -> Result<[[u32; 11]; 2], &'static str> {
+    let base = figure_uniform_gpu_base(vertex_gpu, vertex_bytes)?;
+    let globals_vs = base.checked_add(128).ok_or("voxy-figure-constant-address")?;
+    let locals_vs = base.checked_add(512 + 128).ok_or("voxy-figure-constant-address")?;
+    let globals_ps = base.checked_add(224).ok_or("voxy-figure-constant-address")?;
+    let mut vs = [0u32; 11];
+    vs[0] = 0x7815_0009 | (RENDER_MOCS << 8);
+    vs[2] = 3 | (1 << 16);
+    vs[7] = globals_vs as u32; vs[8] = (globals_vs >> 32) as u32;
+    vs[9] = locals_vs as u32; vs[10] = (locals_vs >> 32) as u32;
+    let mut ps = [0u32; 11];
+    ps[0] = 0x7817_0009 | (RENDER_MOCS << 8);
+    ps[2] = 2 << 16;
+    ps[9] = globals_ps as u32; ps[10] = (globals_ps >> 32) as u32;
+    Ok([vs, ps])
 }

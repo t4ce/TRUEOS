@@ -123,14 +123,65 @@ pub fn spin_until_timeout_no_exec<F: FnMut() -> bool>(timeout_ms: u64, mut condi
 /// A minimal wait-queue for task-context wakeups.
 pub struct WaitQueue {
     seq: AtomicU32,
-    wakers: Mutex<Vec<Waker>>,
+    next_waiter: core::sync::atomic::AtomicU64,
+    wakers: Mutex<Vec<QueuedWaker>>,
+}
+
+struct QueuedWaker {
+    waiter: u64,
+    waker: Waker,
+}
+
+/// Own exactly this future's registration, including cancellation. Waker
+/// identity is insufficient: several waits can belong to the same task, and
+/// a completed old future must not remove a newer registration for that task.
+struct WaitRegistration<'a> {
+    queue: &'a WaitQueue,
+    waiter: u64,
+}
+
+impl<'a> WaitRegistration<'a> {
+    fn new(queue: &'a WaitQueue) -> Self {
+        let waiter = queue.next_waiter.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(waiter, 0, "wait registration identity exhausted");
+        Self { queue, waiter }
+    }
+
+    fn register(&mut self, waker: &Waker) {
+        let mut wakers = self.queue.wakers.lock();
+        if let Some(entry) = wakers.iter_mut().find(|entry| entry.waiter == self.waiter) {
+            if !entry.waker.will_wake(waker) { entry.waker = waker.clone(); }
+        } else {
+            crate::allocators::with_host_alloc_domain_strong(|| {
+                wakers.push(QueuedWaker { waiter: self.waiter, waker: waker.clone() });
+            });
+        }
+    }
+}
+
+impl Drop for WaitRegistration<'_> {
+    fn drop(&mut self) {
+        self.queue.wakers.lock().retain(|entry| entry.waiter != self.waiter);
+    }
 }
 
 impl WaitQueue {
     pub const fn new() -> Self {
         Self {
             seq: AtomicU32::new(0),
+            next_waiter: core::sync::atomic::AtomicU64::new(1),
             wakers: Mutex::new(Vec::new()),
+        }
+    }
+
+    // Compatibility for a manually polled completion cell. Its completion
+    // broadcasts to all registrations; asynchronous joins use owned waits.
+    fn register_poll_waker(&self, waker: &Waker) {
+        let mut wakers = self.wakers.lock();
+        if !wakers.iter().any(|entry| entry.waiter == 0 && entry.waker.will_wake(waker)) {
+            crate::allocators::with_host_alloc_domain_strong(|| {
+                wakers.push(QueuedWaker { waiter: 0, waker: waker.clone() });
+            });
         }
     }
 
@@ -152,17 +203,14 @@ impl WaitQueue {
     /// callers must always loop and recheck their own queue after this returns.
     #[inline]
     pub async fn wait_after(&self, observed: u32) {
+        let mut registration = WaitRegistration::new(self);
         core::future::poll_fn(|cx: &mut Context<'_>| {
             if self.seq.load(Ordering::Acquire) != observed {
                 return Poll::Ready(());
             }
 
             {
-                let mut wakers = self.wakers.lock();
-                if self.seq.load(Ordering::Acquire) != observed {
-                    return Poll::Ready(());
-                }
-                register_waker_list(&mut wakers, cx.waker());
+                registration.register(cx.waker());
             }
 
             if self.seq.load(Ordering::Acquire) != observed {
@@ -191,17 +239,14 @@ impl WaitQueue {
         }
 
         let mut timeout = core::pin::pin!(trueos_time::Timer::after_millis(timeout_ms));
+        let mut registration = WaitRegistration::new(self);
         core::future::poll_fn(|cx: &mut Context<'_>| {
             if self.seq.load(Ordering::Acquire) != observed {
                 return Poll::Ready(true);
             }
 
             {
-                let mut wakers = self.wakers.lock();
-                if self.seq.load(Ordering::Acquire) != observed {
-                    return Poll::Ready(true);
-                }
-                register_waker_list(&mut wakers, cx.waker());
+                registration.register(cx.waker());
             }
 
             if self.seq.load(Ordering::Acquire) != observed {
@@ -209,16 +254,7 @@ impl WaitQueue {
             }
 
             match timeout.as_mut().poll(cx) {
-                Poll::Ready(()) => {
-                    let mut wakers = self.wakers.lock();
-                    if let Some(index) = wakers
-                        .iter()
-                        .position(|registered| registered.will_wake(cx.waker()))
-                    {
-                        wakers.swap_remove(index);
-                    }
-                    Poll::Ready(false)
-                }
+                Poll::Ready(()) => Poll::Ready(false),
                 Poll::Pending => Poll::Pending,
             }
         })
@@ -237,7 +273,7 @@ impl WaitQueue {
             }
         };
         if let Some(waker) = waker {
-            waker.wake();
+            waker.waker.wake();
             return true;
         }
         false
@@ -252,7 +288,7 @@ impl WaitQueue {
         };
         let count = wakers.len();
         for waker in wakers {
-            waker.wake();
+            waker.waker.wake();
         }
         count
     }
@@ -265,44 +301,15 @@ impl WaitQueue {
 
     #[inline]
     pub async fn wait_for_event_timeout(&self, timeout_ms: u64) -> bool {
-        let hz = TICK_HZ;
-        let ticks = if hz == 0 || timeout_ms == 0 {
-            0
+        let observed = self.observe();
+        // Preserve this API's zero-as-unbounded contract. Bounded waits must
+        // actually poll a timer; checking now() alone supplies no wakeup.
+        if timeout_ms == 0 {
+            self.wait_after(observed).await;
+            true
         } else {
-            timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
-        };
-        let deadline = if ticks == 0 {
-            0
-        } else {
-            now().saturating_add(ticks)
-        };
-        let mut observed = self.seq.load(Ordering::Acquire);
-
-        core::future::poll_fn(|cx: &mut Context<'_>| {
-            if ticks != 0 && now() >= deadline {
-                return Poll::Ready(false);
-            }
-
-            let current = self.seq.load(Ordering::Acquire);
-            if current != observed {
-                observed = current;
-                return Poll::Ready(true);
-            }
-
-            {
-                let mut wakers = self.wakers.lock();
-                register_waker_list(&mut wakers, cx.waker());
-            }
-
-            let current = self.seq.load(Ordering::Acquire);
-            if current != observed {
-                observed = current;
-                return Poll::Ready(true);
-            }
-
-            Poll::Pending
-        })
-        .await
+            self.wait_after_timeout(observed, timeout_ms).await
+        }
     }
 
     #[inline]
@@ -418,8 +425,7 @@ impl<T> CompletionCell<T> {
         }
 
         {
-            let mut wakers = self.wait.wakers.lock();
-            register_waker_list(&mut wakers, cx.waker());
+            self.wait.register_poll_waker(cx.waker());
         }
 
         if let Some(value) = self.try_take() {
@@ -430,7 +436,11 @@ impl<T> CompletionCell<T> {
     }
 
     pub async fn join(&self) -> T {
-        core::future::poll_fn(|cx| self.poll_take(cx)).await
+        loop {
+            let observed = self.wait.observe();
+            if let Some(value) = self.try_take() { return value; }
+            self.wait.wait_after(observed).await;
+        }
     }
 
     pub fn join_blocking_parked(&self) -> T {
@@ -511,7 +521,96 @@ fn platform_wait_after_parked(queue: &WaitQueue, observed: u32, timeout_ms: u64)
 
 #[cfg(test)]
 mod native_completion_tests {
+    extern crate std;
     use super::*;
+
+    #[derive(Default)]
+    struct WakeCount(core::sync::atomic::AtomicUsize);
+    impl std::task::Wake for WakeCount {
+        fn wake(self: Arc<Self>) { self.0.fetch_add(1, Ordering::Relaxed); }
+        fn wake_by_ref(self: &Arc<Self>) { self.0.fetch_add(1, Ordering::Relaxed); }
+    }
+
+    #[test]
+    fn cancelled_wait_does_not_steal_a_live_waiters_notification() {
+        let queue = WaitQueue::new();
+        let old = Arc::new(WakeCount::default());
+        let live = Arc::new(WakeCount::default());
+        let old_waker = Waker::from(old.clone());
+        let live_waker = Waker::from(live.clone());
+        let mut cancelled = Box::pin(queue.wait_after(queue.observe()));
+        let mut waiting = Box::pin(queue.wait_after(queue.observe()));
+        assert!(cancelled.as_mut().poll(&mut Context::from_waker(&old_waker)).is_pending());
+        assert!(waiting.as_mut().poll(&mut Context::from_waker(&live_waker)).is_pending());
+        drop(cancelled);
+        assert!(queue.notify_one());
+        assert_eq!(old.0.load(Ordering::Relaxed), 0, "cancelled waiter was still registered");
+        assert_eq!(live.0.load(Ordering::Relaxed), 1, "live waiter never scheduled");
+        assert!(waiting.as_mut().poll(&mut Context::from_waker(&live_waker)).is_ready());
+    }
+
+    #[test]
+    fn generation_completion_unregisters_the_waiter_not_chosen_by_notify_one() {
+        let queue = WaitQueue::new();
+        let first = Arc::new(WakeCount::default());
+        let second = Arc::new(WakeCount::default());
+        let third = Arc::new(WakeCount::default());
+        let a = Waker::from(first.clone());
+        let b = Waker::from(second.clone());
+        let c = Waker::from(third.clone());
+        let mut one = Box::pin(queue.wait_after(queue.observe()));
+        let mut two = Box::pin(queue.wait_after_timeout(queue.observe(), 60_000));
+        assert!(one.as_mut().poll(&mut Context::from_waker(&a)).is_pending());
+        assert!(two.as_mut().poll(&mut Context::from_waker(&b)).is_pending());
+        let second_wakes_before_notify = second.0.load(Ordering::Relaxed);
+        queue.notify_one();
+        // A timer/spurious poll can observe the new generation even when
+        // another waiter received the notification's actual scheduling wake.
+        assert!(two.as_mut().poll(&mut Context::from_waker(&b)).is_ready());
+        drop(two);
+        let mut three = Box::pin(queue.wait_after(queue.observe()));
+        assert!(three.as_mut().poll(&mut Context::from_waker(&c)).is_pending());
+        queue.notify_one();
+        assert_eq!(second.0.load(Ordering::Relaxed), second_wakes_before_notify);
+        assert_eq!(third.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn completed_registration_cannot_remove_a_new_wait_with_the_same_task_waker() {
+        let queue = WaitQueue::new();
+        let count = Arc::new(WakeCount::default());
+        let waker = Waker::from(count.clone());
+        let mut old = Box::pin(queue.wait_after(queue.observe()));
+        assert!(old.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        queue.notify_one();
+        let mut new = Box::pin(queue.wait_after(queue.observe()));
+        assert!(new.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        drop(old);
+        queue.notify_one();
+        assert_eq!(count.0.load(Ordering::Relaxed), 2);
+        assert!(new.as_mut().poll(&mut Context::from_waker(&waker)).is_ready());
+    }
+
+    #[test]
+    fn event_timeout_has_a_timer_wake_and_zero_remains_unbounded() {
+        let queue = WaitQueue::new();
+        let count = Arc::new(WakeCount::default());
+        let waker = Waker::from(count.clone());
+        let mut bounded = Box::pin(queue.wait_for_event_timeout(3));
+        assert!(bounded.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        // The host timer supplies a scheduling wake on poll. The old wrapper
+        // merely checked now(), with no deadline registered to wake it again.
+        #[cfg(thread_scheduler_harness)]
+        assert!(count.0.load(Ordering::Relaxed) > 0);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert_eq!(bounded.as_mut().poll(&mut Context::from_waker(&waker)), Poll::Ready(false));
+        drop(bounded);
+        assert!(!queue.notify_one(), "completed timeout left a stale registration");
+        let mut unbounded = Box::pin(queue.wait_for_event_timeout(0));
+        assert!(unbounded.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        queue.notify_one();
+        assert_eq!(unbounded.as_mut().poll(&mut Context::from_waker(&waker)), Poll::Ready(true));
+    }
 
     #[test]
     fn completion_before_join_is_visible_without_parking() {

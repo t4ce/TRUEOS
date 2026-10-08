@@ -447,6 +447,21 @@ pub(crate) fn voxy_headless_target_active() -> bool {
     )
 }
 
+/// Original Voxy figure pair independently compiled for both physical Gen12 renderers.
+/// Inspect raw PCI identity, before any compatibility alias is applied.
+pub(crate) fn voxy_figure_target_active() -> bool {
+    let Some(dev) = claimed_device() else {
+        return false;
+    };
+    let identity = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x00);
+    let revision = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0x08) as u8;
+    shader::voxy_figure_supports_physical_device(
+        identity as u16,
+        (identity >> 16) as u16,
+        revision,
+    )
+}
+
 /// The atlas composition reuses a sampled fragment bake sealed to ADL-S.
 pub(crate) fn voxy_headless_texture_target_active() -> bool {
     let Some(dev) = claimed_device() else {

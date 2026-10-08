@@ -93,6 +93,8 @@ enum TriangleVertexFormat {
     FixedGl,
     /// Two float4 attributes: homogeneous position and authored RGBA.
     VoxyHeadless,
+    /// Two packed Uint32 attributes of the original Voxy figure mesh.
+    VoxyFigure,
     /// Helio Churn's immutable `@location(0) position` plus
     /// `@location(1) normal` input, both Float32x3.
     PosNormal,
@@ -165,6 +167,7 @@ struct TriangleDrawPrep {
     vue_capture: bool,
     fixed_gl: Option<[u32; 10]>,
     voxy_headless: bool,
+    voxy_figure: bool,
     vertex_count: u32,
     vertex_stride: u32,
     vertex_buffer_bytes: u32,

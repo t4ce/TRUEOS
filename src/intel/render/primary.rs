@@ -364,6 +364,7 @@ pub(crate) enum ResidentSceneFragmentContract {
     ClipPosition3UvTexture,
     VoxyHeadless,
     VoxyHeadlessTexture,
+    VoxyFigure,
     // scissor xyxy, cull enable, blend enable, then RGB/alpha source/dest factors.
     FixedGl([u32; 10]),
 }
@@ -389,6 +390,9 @@ fn resident_scene_shader_pipeline(
         (ResidentSceneFragmentContract::VoxyHeadlessTexture, true)
             if vertex_format == TriangleVertexFormat::VoxyHeadless && vertex_stride == 32 =>
                 Ok(crate::intel::shader::voxy_headless_texture_pipeline()),
+        (ResidentSceneFragmentContract::VoxyFigure, true)
+            if vertex_format == TriangleVertexFormat::VoxyFigure && vertex_stride == 8 =>
+                crate::intel::shader::voxy_figure_pipeline(),
         (ResidentSceneFragmentContract::FixedGl(_), true)
             if vertex_format == TriangleVertexFormat::FixedGl && vertex_stride == 64 =>
             Ok(crate::intel::shader::wc3_fixed_pipeline()),
@@ -1683,6 +1687,7 @@ fn stage_resident_scene_secondary(
         return Err("scene-point-width");
     }
     draw.state_gpu_addr = state_gpu;
+    draw.voxy_figure = matches!(fragment_contract, ResidentSceneFragmentContract::VoxyFigure);
     draw.voxy_headless = matches!(fragment_contract,
         ResidentSceneFragmentContract::VoxyHeadless | ResidentSceneFragmentContract::VoxyHeadlessTexture);
     if matches!(fragment_contract, ResidentSceneFragmentContract::VoxyHeadlessTexture) {
@@ -1710,7 +1715,7 @@ fn stage_resident_scene_secondary(
     let shader_layout = upload_triangle_shader_pipeline_at(
         state_warm,
         pipeline,
-        (sampled_texture.is_none() && !draw.voxy_headless).then_some(rgba),
+        (sampled_texture.is_none() && !draw.voxy_headless && !draw.voxy_figure).then_some(rgba),
         state_gpu,
         false,
     ).inspect_err(|reason| {
@@ -2940,6 +2945,8 @@ fn submit_resident_scene_geometry_batched(
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     let state = resident_scene_batch_state_for_carrier(warm, carrier)?;
 
+    let reverse_figure_depth = draws.iter().any(|draw|
+        matches!(draw.fragment_contract, ResidentSceneFragmentContract::VoxyFigure));
     let mut secondary_count = 0usize;
     if clear.is_some() || depth_clear {
         let clear_color = clear.unwrap_or([0; 4]);
@@ -2959,7 +2966,9 @@ fn submit_resident_scene_geometry_batched(
             target_width,
             target_height,
             "resident-scene-fullscreen-clear",
-            &CLEAR_TRIANGLE,
+            &if reverse_figure_depth {
+                [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]]
+            } else { CLEAR_TRIANGLE },
         )
         .ok_or("target-clear-resources")?
         .with_rt_surface_format(render_target_surface_format);
@@ -3027,6 +3036,7 @@ fn submit_resident_scene_geometry_batched(
             flags & (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR)
                 == (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR));
         let blend_mode = match scene_draw.fragment_contract {
+            ResidentSceneFragmentContract::VoxyFigure => TriangleBlendProbeMode::MesaZeroedState,
             ResidentSceneFragmentContract::FixedGl(_) if preserve_depth_clear_color =>
                 TriangleBlendProbeMode::StraightAlpha,
             ResidentSceneFragmentContract::FixedGl(state) if state[5] != 0 => {

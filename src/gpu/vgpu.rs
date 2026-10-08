@@ -2773,6 +2773,7 @@ pub(crate) fn create_shader_module(
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
         && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
         && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
+        && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64
     {
         return Err(VgpuError::Unsupported);
     }
@@ -2780,6 +2781,10 @@ pub(crate) fn create_shader_module(
         && !crate::intel::voxy_headless_target_active() { return Err(VgpuError::Unsupported); }
     if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
         && !crate::intel::voxy_headless_texture_target_active() { return Err(VgpuError::Unsupported); }
+    if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64
+        && !crate::intel::voxy_figure_target_active() {
+        return Err(VgpuError::Unsupported);
+    }
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
@@ -2831,6 +2836,17 @@ pub(crate) fn destroy_shader_module(
     Ok(())
 }
 
+// The figure pair reads two packed Uint32 attributes, not float3 positions.
+fn render_vertex_layout_supported(package: u64, stride: u32, position_offset: u32) -> bool {
+    if package == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64 {
+        return stride == 8 && position_offset == 0;
+    }
+    (12..=256).contains(&stride)
+        && stride.is_multiple_of(4)
+        && position_offset.is_multiple_of(4)
+        && position_offset.saturating_add(12) <= stride
+}
+
 pub(crate) fn create_render_pipeline(
     principal: Principal,
     device_handle: DeviceHandle,
@@ -2838,14 +2854,6 @@ pub(crate) fn create_render_pipeline(
     vertex_stride: u32,
     position_offset: u32,
 ) -> Result<RenderPipelineHandle, VgpuError> {
-    if vertex_stride < 12
-        || vertex_stride > 256
-        || !vertex_stride.is_multiple_of(4)
-        || !position_offset.is_multiple_of(4)
-        || position_offset.saturating_add(12) > vertex_stride
-    {
-        return Err(VgpuError::Unsupported);
-    }
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
@@ -2861,6 +2869,9 @@ pub(crate) fn create_render_pipeline(
     let shader = lookup_shader_module(device, shader_handle)?;
     if shader.epoch != device.epoch {
         return Err(VgpuError::InvalidHandle);
+    }
+    if !render_vertex_layout_supported(shader.package_digest, vertex_stride, position_offset) {
+        return Err(VgpuError::Unsupported);
     }
     if shader.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
         && (vertex_stride != 64 || position_offset != 0)
@@ -3154,6 +3165,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         sampled_texture,
         drawable_depth,
         fixed_state,
+        figure_state,
         voxy_camera,
         voxy_update,
     ) = {
@@ -3174,9 +3186,20 @@ pub(crate) fn submit_ui4_indexed_draw(
                 && pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
                 && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
                 && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
-                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64)
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64)
         {
             return Err(VgpuError::InvalidHandle);
+        }
+        let figure = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64;
+        if figure && (!crate::intel::voxy_figure_target_active() || geometry_clear
+            || draw.vertex_offset != v::vgpu::VOXY_FIGURE_STATE_BYTES
+            || draw.sampled_texture.raw() == 0
+            || draw.topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList
+            || draw.depth_flags & (v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH | v::vgpu::INDEXED_DRAW_DEPTH_TEST | v::vgpu::INDEXED_DRAW_DEPTH_WRITE)
+                != (v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH | v::vgpu::INDEXED_DRAW_DEPTH_TEST | v::vgpu::INDEXED_DRAW_DEPTH_WRITE)
+            || (draw.depth_flags & v::vgpu::INDEXED_DRAW_DEPTH_COMPARE_MASK) >> v::vgpu::INDEXED_DRAW_DEPTH_COMPARE_SHIFT != 6) {
+            return Err(unsupported("voxy-figure-layout"));
         }
         let fixed = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64;
         let voxy_textured = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64;
@@ -3193,7 +3216,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             return Err(unsupported("fixed-layout"));
         }
         let textured =
-            fixed || voxy_textured || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
+            figure || fixed || voxy_textured || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
         if (draw.retain_texture || voxy_textured)
             && textured
             && !geometry_clear
@@ -3203,7 +3226,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
         if textured
             && !geometry_clear
-            && draw.sampler_flags != if voxy_textured { 0 } else { SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT }
+            && draw.sampler_flags != if voxy_textured || figure { 0 } else { SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT }
         {
             return Err(unsupported("sampler-contract"));
         }
@@ -3358,7 +3381,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             let mut vertices = Vec::with_capacity(vertex_count);
             for vertex in 0..vertex_count {
                 let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
-                let attribute_bytes = if voxy {
+                let attribute_bytes = if figure {
+                    8
+                } else if voxy {
                     32
                 } else if fixed {
                     64
@@ -3377,6 +3402,22 @@ pub(crate) fn submit_ui4_indexed_draw(
             }
                 (vertices, indices, None, None)
             };
+            let figure_state = if figure {
+                let record = lookup_buffer(device, draw.vertex_buffer)?;
+                if record.bytes < v::vgpu::VOXY_FIGURE_STATE_BYTES { return Err(unsupported("figure-state-bounds")); }
+                let virt = match record.backing {
+                    BufferBacking::Dma { virt, .. } => virt,
+                    BufferBacking::GuestPages { .. } => return Err(unsupported("figure-state-backing")),
+                };
+                let mut state = [0u8; v::vgpu::VOXY_FIGURE_STATE_BYTES];
+                state.copy_from_slice(unsafe { core::slice::from_raw_parts(virt, v::vgpu::VOXY_FIGURE_STATE_BYTES) });
+                for range in [128..192, 640..652, 672..v::vgpu::VOXY_FIGURE_STATE_BYTES] {
+                    if state[range].chunks_exact(4).any(|v| !f32::from_le_bytes(v.try_into().unwrap()).is_finite()) {
+                        return Err(unsupported("figure-pose-nonfinite"));
+                    }
+                }
+                Some(state)
+            } else { None };
             let fixed_state = if fixed {
                 let vertex_virt = match lookup_buffer(device, draw.vertex_buffer)?.backing {
                     BufferBacking::Dma { virt, .. } => virt,
@@ -3486,9 +3527,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             } else {
                 None
             };
-            Ok((vertices, indices, texture, depth, fixed_state, voxy_camera, voxy_update))
+            Ok((vertices, indices, texture, depth, fixed_state, figure_state, voxy_camera, voxy_update))
         })();
-        let (vertices, mut indices, sampled_texture, drawable_depth, fixed_state, voxy_camera, voxy_update) = match copied {
+        let (vertices, mut indices, sampled_texture, drawable_depth, fixed_state, figure_state, voxy_camera, voxy_update) = match copied {
             Ok(copied) => copied,
             Err(error) => {
                 lookup_surface_mut(device, draw.surface)?.in_flight = 1;
@@ -3496,7 +3537,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 return Err(error);
             }
         };
-        if fixed_state.is_none() && voxy_camera.is_none() {
+        if fixed_state.is_none() && figure_state.is_none() && voxy_camera.is_none() {
             let legacy = vertices
                 .iter()
                 .map(|v| [v[0], v[1], v[2], v[3], v[4]])
@@ -3523,6 +3564,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             sampled_texture,
             drawable_depth,
             fixed_state,
+            figure_state,
             voxy_camera,
             voxy_update,
         )
@@ -3556,7 +3598,10 @@ pub(crate) fn submit_ui4_indexed_draw(
             }
         }
     } else {
-        match if let Some(state) = fixed_state.as_ref() {
+        match if let Some(state) = figure_state.as_ref() {
+            let packed: Vec<_> = vertices.iter().map(|v| [v[0].to_bits(), v[1].to_bits()]).collect();
+            crate::intel::render::create_resident_voxy_figure_mesh(&packed, &indices, state)
+        } else if let Some(state) = fixed_state.as_ref() {
             crate::intel::render::create_resident_fixed_gl_mesh(&vertices, &indices, state)
         } else if sampled_texture.is_some() && !geometry_clear {
             crate::intel::render::create_resident_textured_indexed_mesh(
@@ -3610,7 +3655,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         } else {
             sampled_texture.as_deref()
         },
-        fragment_contract: if voxy_camera.is_some() {
+        fragment_contract: if figure_state.is_some() {
+            crate::intel::render::ResidentSceneFragmentContract::VoxyFigure
+        } else if voxy_camera.is_some() {
             if sampled_texture.is_some() {
                 crate::intel::render::ResidentSceneFragmentContract::VoxyHeadlessTexture
             } else { crate::intel::render::ResidentSceneFragmentContract::VoxyHeadless }

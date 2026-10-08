@@ -50,6 +50,11 @@ pub const SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64: u64 = 0x2EAA72CFCA1B1C77;
 /// World-camera Voxygen vertices whose second float4 carries sampled atlas UV.
 /// Native VS is unchanged; the sampled fragment stage consumes location0.xy.
 pub const SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64: u64 = 0xF84DE655632EF102;
+/// Original Voxy bring-up figure pair, independently compiled for Intel 8086:4680 rev0C and 8086:9A49 rev01.
+/// Shader module admission is separate from the figure draw submission contract.
+pub const SHADER_PACKAGE_VOXY_FIGURE_FNV1A64: u64 = 0x7FC293E6AD8FF894;
+/// Prefix in figure vertex uploads: Globals(512), Locals(144 + 16 padding), Bones(2048).
+pub const VOXY_FIGURE_STATE_BYTES: usize = 2720;
 pub const VOXY_HEADLESS_CAMERA_BYTES: usize = 80;
 pub const VOXY_HEADLESS_VERTEX_STRIDE: usize = 32;
 const VVIDEO_PAGE_BYTES: usize = 4096;

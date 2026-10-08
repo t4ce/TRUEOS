@@ -618,6 +618,7 @@ fn prepare_triangle_draw_resources_for_geometry(
         vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -741,6 +742,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
         vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -827,6 +829,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
         vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
         vertex_count: u32::try_from(indices.len()).ok()?,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -3126,6 +3129,7 @@ fn prepare_resident_churn_forward_draw(
         vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
         vertex_count: resident.vertex_count,
         vertex_stride: resident.vertex_stride,
         vertex_buffer_bytes: resident.vertex_bytes,
@@ -3207,6 +3211,7 @@ fn prepare_resident_churn_expanded_draw(
         vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
         vertex_count: resident.expanded_index_count,
         vertex_stride: core::mem::size_of::<[f32; 3]>() as u32,
         vertex_buffer_bytes: resident.expanded_vertex_bytes,
@@ -3693,6 +3698,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
         vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
         vertex_count: mesh.index_count,
         vertex_stride: mesh.vertex_stride,
         vertex_buffer_bytes: mesh.vertex_bytes,
@@ -3752,6 +3758,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -4182,6 +4189,7 @@ fn prepare_vf_streamout_proof_resources(
         vue_capture: false,
         fixed_gl: None,
         voxy_headless: false,
+        voxy_figure: false,
         vertex_count: TRIANGLE_DRAW_VERTICES as u32,
         vertex_stride: vertex_stride as u32,
         vertex_buffer_bytes: u32::try_from(TRIANGLE_DRAW_VERTICES * vertex_stride).ok()?,
@@ -4728,4 +4736,25 @@ mod voxy_headless_streaming_tests {
         assert!(update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &camera).is_err());
         assert_eq!(storage, original);
     }
+}
+
+/// Append the original uniform blocks to the packed mesh. One resident
+/// allocation pins geometry and pose through the exact Render0 completion.
+pub(crate) fn create_resident_voxy_figure_mesh(
+    vertices: &[[u32; 2]], indices: &[u32], state: &[u8; v::vgpu::VOXY_FIGURE_STATE_BYTES],
+) -> Result<ResidentTriangleMesh, &'static str> {
+    if !crate::intel::voxy_figure_target_active() { return Err("voxy-figure-target"); }
+    if vertices.is_empty() || vertices.len() % 4 != 0 || indices.is_empty()
+        || indices.len() % 3 != 0 || indices.iter().any(|i| *i as usize >= vertices.len()) {
+        return Err("voxy-figure-mesh-shape");
+    }
+    let mut upload = vertices.to_vec();
+    for raw in state.chunks_exact(8) {
+        upload.push([u32::from_le_bytes(raw[..4].try_into().unwrap()),
+                     u32::from_le_bytes(raw[4..].try_into().unwrap())]);
+    }
+    let mut mesh = create_resident_triangle_mesh_typed(&upload, indices, TriangleVertexFormat::VoxyFigure, None)?;
+    mesh.vertex_count = vertices.len() as u32;
+    mesh.vertex_bytes = (vertices.len() * 8) as u32;
+    Ok(mesh)
 }

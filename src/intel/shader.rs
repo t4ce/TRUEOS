@@ -322,3 +322,20 @@ pub(crate) fn voxy_headless_supports_physical_device(vendor: u16, device: u16, r
 #[cfg(test)]
 #[path = "voxy_headless_tests.rs"]
 mod voxy_headless_tests;
+
+// Keep this exact figure pair separate from the headless float4 contract.
+#[expect(dead_code, reason = "figure native draw contract is not submitted yet")]
+#[path = "../../crates/trueos-shader/generated_voxy_figure_gen12.rs"]
+mod voxy_figure_gen12;
+const _: () = assert!(voxy_figure_gen12::PACKAGE_FNV1A64 == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64);
+/// Select the original figure pair for native command construction.
+pub(crate) fn voxy_figure_pipeline() -> Result<&'static TrianglePipeline, &'static str> {
+    if !crate::intel::voxy_figure_target_active() {
+        return Err("voxy-figure-target");
+    }
+    Ok(&voxy_figure_gen12::PIPELINE)
+}
+
+pub(crate) fn voxy_figure_supports_physical_device(vendor: u16, device: u16, revision: u8) -> bool {
+    voxy_figure_gen12::supports(vendor, device, revision)
+}
