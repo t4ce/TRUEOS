@@ -16,6 +16,7 @@ mod stack;
 #[cfg(test)]
 mod tests;
 use crate::r::blocking::{BlockingJobFn, GuestJobOwner};
+use crate::r::blocking::diagnostics;
 use crate::r::kernel_task_domain::{self, KernelTaskDomain};
 
 const THREAD_LIMIT: usize = 256;
@@ -110,6 +111,21 @@ pub(crate) fn current_errno() -> Option<&'static AtomicI32> {
     }
 }
 
+pub(crate) fn set_current_name(name: &str) {
+    let ptr = active();
+    if !ptr.is_null() {
+        if let Some(owner) = unsafe { &(*ptr)._admission._owner } {
+            owner.diagnostic.name(name);
+        }
+    }
+}
+
+fn diagnostic_phase(thread: &Thread, phase: usize, wait: usize, timeout: u64) {
+    if let Some(owner) = &thread._admission._owner {
+        owner.diagnostic.phase(phase, wait, timeout);
+    }
+}
+
 /// Suspend with an owned wait future. The future is polled on the carrier
 /// stack after restoring its realm, so no other task observes this thread's
 /// TLS or allocation-domain guards while the thread is parked.
@@ -119,6 +135,9 @@ fn suspend(wait: Option<Pin<Box<dyn Future<Output = ()> + Send>>>) -> bool {
         return false;
     }
     unsafe {
+        if wait.is_none() {
+            diagnostic_phase(&*ptr, diagnostics::YIELDED, 0, 0);
+        }
         (*ptr).wait = wait;
         context::swap(&mut (*ptr).child, &(*ptr).parent);
     }
@@ -136,6 +155,7 @@ pub(crate) fn sleep(ms: u64) -> bool {
     if ms == 0 {
         return yield_now();
     }
+    unsafe { diagnostic_phase(&*active(), diagnostics::SLEEPING, 0, ms); }
     let timer = crate::allocators::with_host_alloc_domain_strong(|| {
         Box::pin(async move {
             // Keep even very large std durations within the timer driver's
@@ -156,6 +176,7 @@ pub(crate) fn wait(queue: &crate::wait::WaitQueue, observed: u32, timeout_ms: u6
         return None;
     }
     let queue_ptr = queue as *const crate::wait::WaitQueue as usize;
+    unsafe { diagnostic_phase(&*active(), diagnostics::WAITING, queue_ptr, timeout_ms); }
     let result = crate::allocators::with_host_alloc_domain_strong(|| {
         alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false))
     });
@@ -212,6 +233,7 @@ impl Future for ThreadTask {
             // us or is consumed here. Never poll the ordinary wait or re-enter
             // guest code/destructors after this irreversible transition.
             if crate::hv::guest_kill_requested(vm_id) {
+                diagnostic_phase(thread, diagnostics::CANCELLING, 0, 0);
                 thread.wait = None;
                 if let Some(job) = thread.job.take() {
                     core::mem::forget(job);
@@ -227,6 +249,7 @@ impl Future for ThreadTask {
             thread.wait = None;
         }
         let ptr = thread as *mut Thread;
+        diagnostic_phase(thread, diagnostics::RUNNING, 0, 0);
         assert_eq!(
             crate::percpu::current_slot() as u32,
             thread.carrier,
@@ -256,6 +279,7 @@ impl Future for ThreadTask {
         thread.allocation = crate::allocators::replace_thread_context(parent_alloc);
         thread.domain = kernel_task_domain::replace_context(parent_domain);
         if thread.done {
+            diagnostic_phase(thread, diagnostics::COMPLETED, 0, 0);
             Poll::Ready(())
         } else {
             if thread.wait.is_none() {
@@ -310,6 +334,9 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
         Some(vm) => Some(crate::r::blocking::reserve_guest_job(vm).ok_or(11)?),
         None => None,
     };
+    if let Some(owner) = &owner {
+        owner.diagnostic.identify("std-thread", id, slot as usize);
+    }
     if THREAD_COUNT
         .try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < THREAD_LIMIT).then_some(n + 1))
         .is_err()

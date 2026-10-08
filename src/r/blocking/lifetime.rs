@@ -59,6 +59,7 @@ static STATES: [Mutex<State>; crate::allcaps::hv::VM_ID_LIMIT] =
 pub(crate) struct GuestJobOwner {
     vm_id: u8,
     generation: u64,
+    pub(crate) diagnostic: super::diagnostics::JobDiagnostic,
 }
 
 pub(crate) fn reserve(vm_id: u8) -> Option<GuestJobOwner> {
@@ -69,7 +70,10 @@ pub(crate) fn reserve(vm_id: u8) -> Option<GuestJobOwner> {
     }
     // Construct the RAII token only after reserving and releasing the lock.
     // Eager then_some(token) would drop a non-reservation on the failure path.
-    Some(GuestJobOwner { vm_id, generation })
+    Some(GuestJobOwner {
+        vm_id, generation,
+        diagnostic: super::diagnostics::JobDiagnostic::new(vm_id, generation),
+    })
 }
 
 impl Drop for GuestJobOwner {
@@ -110,9 +114,18 @@ pub(crate) async fn drain_guest_jobs(vm_id: u8) {
     if count != 0 {
         crate::log_warn!(target: "service";
             "native-worker: draining vm={} jobs={} resources=retained\n", vm_id, count);
+        super::diagnostics::report(vm_id);
     }
+    let mut report_ticks = 0u32;
     while guest_jobs_in_flight(vm_id) != 0 {
         trueos_time::Timer::after(trueos_time::Duration::from_millis(1)).await;
+        report_ticks += 1;
+        if report_ticks == 5000 {
+            report_ticks = 0;
+            crate::log_os::blueprint_important_line(format_args!(
+                "native-worker: drain pending vm={} jobs={}\n", vm_id, guest_jobs_in_flight(vm_id)));
+            super::diagnostics::report(vm_id);
+        }
     }
 }
 

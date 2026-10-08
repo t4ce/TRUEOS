@@ -125,7 +125,8 @@ mod wait {
     support += '''mod r {
     pub mod blocking {
         pub type BlockingJobFn = alloc::boxed::Box<dyn FnOnce() + Send + 'static>;
-        pub struct GuestJobOwner;
+        __DIAGNOSTICS__
+        pub struct GuestJobOwner { pub diagnostic: diagnostics::JobDiagnostic }
     }
     pub mod kernel_task_domain {
         pub enum KernelTaskDomain { HostService, VmGuestOwnedAlloc }
@@ -139,12 +140,24 @@ mod wait {
 '''
     scheduler = scheduler.replace("spin::Mutex", "crate::Mutex")
     support += scheduler + "\n}\n}\n"
+    support += '''
+mod log_os { pub fn blueprint_important_line(_: core::fmt::Arguments<'_>) {} }
+mod time_driver {
+    pub const TICK_HZ: u64 = 1000;
+    pub fn now() -> u64 {
+        static START: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
+        START.elapsed().as_millis() as u64
+    }
+}
+'''
+    diagnostic = (ROOT / 'src/r/blocking/diagnostics.rs').read_text().replace('embassy_time_driver::', 'crate::time_driver::')
+    support = support.replace('__DIAGNOSTICS__', 'pub mod diagnostics {\n' + diagnostic.replace('//!', '//') + '\n}')
     with tempfile.TemporaryDirectory(prefix="trueos-thread-scheduler-") as directory:
         folder = Path(directory)
         (folder / "src").mkdir()
         (folder / "Cargo.toml").write_text(
             '[package]\nname="thread-scheduler-tests"\nversion="0.1.0"\n'
-            'edition="2024"\n[workspace]\n'
+            'edition="2024"\n[dependencies]\nspin="0.10"\nheapless="0.9"\n[workspace]\n'
         )
         (folder / "src/lib.rs").write_text(support)
         subprocess.run([

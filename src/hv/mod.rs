@@ -4,6 +4,8 @@ pub mod blueprint;
 pub mod blueprint_net;
 pub mod control_kick;
 mod cooperative_stop;
+mod teardown_diagnostics;
+use teardown_diagnostics::Stage as TeardownStage;
 pub(crate) mod execution_policy;
 pub mod guest_run;
 pub mod guest_work;
@@ -1380,6 +1382,7 @@ fn reserve_blueprint_child_vm_id() -> Option<u8> {
         let _control = vm.lifecycle_control.lock();
         if !vm.running.load(Ordering::Acquire) && !vm.starting.load(Ordering::Acquire) {
             vm.cooperative_stop.reset();
+            teardown_diagnostics::set(vm_id, TeardownStage::Preparing);
             vm.stop_req.store(false, Ordering::Release);
             *vm.matrix_owner.lock() = None;
             vm.starting.store(true, Ordering::Release);
@@ -2048,6 +2051,25 @@ pub fn status() -> HvStatus {
     }
 }
 
+pub(crate) fn shutdown_diagnostic_lines(vm_id: u8) -> alloc::vec::Vec<AllocString> {
+    let Some(vm) = vm_slot(vm_id) else { return alloc::vec::Vec::new(); };
+    let (stage, age_ms) = teardown_diagnostics::describe(vm_id);
+    let mut lines = alloc::vec![alloc::format!(
+        "apps: vm{} shutdown forced={} cleanup_owner={} guest_ack={} stage={} age_ms={} native_jobs={}",
+        vm_id, vm.cooperative_stop.forced() as u8, vm.cooperative_stop.registered() as u8,
+        vm.clean_exit.load(Ordering::Acquire) as u8, stage, age_ms,
+        crate::r::blocking::guest_jobs_in_flight(vm_id),
+    )];
+    lines.extend(crate::r::blocking::diagnostics::lines(vm_id));
+    lines
+}
+
+fn report_shutdown_diagnostics(vm_id: u8) {
+    for line in shutdown_diagnostic_lines(vm_id) {
+        crate::log_os::blueprint_important_line(format_args!("{}\n", line));
+    }
+}
+
 pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<(), StartError> {
     let _ = spawner;
     start_with_mode(vm_id, VmBootMode::Hull, stack_mb, None, false)
@@ -2410,6 +2432,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
             vm_id, cooperative as u8, crate::r::blocking::guest_jobs_in_flight(vm_id)
         ));
         nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Stop, "stop");
+        report_shutdown_diagnostics(vm_id);
         Ok(true)
     } else {
         hvwarnf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
@@ -2457,6 +2480,7 @@ fn kill_matching_owner(vm_id: u8, owner: Option<&crate::shell2::MatrixSlotLease>
         vm_id, crate::r::blocking::guest_jobs_in_flight(vm_id)
     ));
     nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Stop, "kill");
+    report_shutdown_diagnostics(vm_id);
     Ok(true)
 }
 
@@ -6214,6 +6238,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     if immediate_stop_requested(vm) || vm.preserve_req.load(Ordering::Acquire) {
         crate::r::blocking::close_guest_jobs(vm_id);
     }
+    teardown_diagnostics::set(vm_id, TeardownStage::Hull);
     let launch_result = vmx_launch_once_with_ept(
         lineage_record,
         lane_lease.slot() as usize,
@@ -6225,6 +6250,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
     crate::log!("app-vm-run-queue: vm launch returned vm={} mode={:?}\n", vm_id, boot_mode);
     clear_current_vm_id();
+    teardown_diagnostics::set(vm_id, TeardownStage::NativeDrain);
     crate::r::blocking::drain_guest_jobs(vm_id).await;
     if vm.cooperative_stop.forced() {
         vm.pause_latched.store(false, Ordering::Release);
@@ -6301,12 +6327,14 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
 
     if !vm.pause_latched.load(Ordering::Acquire) {
+        teardown_diagnostics::set(vm_id, TeardownStage::Archive);
         let archive_released = crate::r::codec::release_owner(
             crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
         );
         if archive_released != 0 {
             hvlogf(format_args!("hv: vm{} lifecycle: archive cleanup released_operations={}", vm_id, archive_released));
         }
+        teardown_diagnostics::set(vm_id, TeardownStage::Gridpaper);
         let gridpaper_released =
             crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
         if gridpaper_released != 0 {
@@ -6315,6 +6343,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 vm_id, gridpaper_released
             ));
         }
+        teardown_diagnostics::set(vm_id, TeardownStage::Media);
         let media_released = crate::r::services::media_service::release_vm(vm_id);
         if media_released != 0 {
             hvlogf(format_args!(
@@ -6322,6 +6351,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 vm_id, media_released
             ));
         }
+        teardown_diagnostics::set(vm_id, TeardownStage::Ui4);
         let released = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
         if released != crate::ui4::OwnerReleaseSummary::default() {
             hvlogf(format_args!(
@@ -6333,6 +6363,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 released.context_menus,
             ));
         }
+        teardown_diagnostics::set(vm_id, TeardownStage::Input);
         let cursors = crate::r::services::mouse_motion_service::release_principal(
             crate::r::services::mouse_motion_service::MouseControlPrincipal::Vm(vm_id),
         );
@@ -6350,6 +6381,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         }
     }
 
+    teardown_diagnostics::set(vm_id, TeardownStage::Vgpu);
     let (vgpu_released, vgpu_quarantined, vgpu_epoch) = crate::gpu::vgpu::release_hull_guest(vm_id);
     if vgpu_released != 0 || vgpu_quarantined != 0 {
         hvlogf(format_args!(
@@ -6358,6 +6390,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         ));
     }
 
+    teardown_diagnostics::set(vm_id, TeardownStage::Net);
     let blueprint_net_closed = crate::hv::blueprint_net::release_vm(vm_id);
     let mio_closed = crate::mio_compat::close_sockets_for_vm(vm_id);
     let cabi_closed = crate::r::net::socket_cabi::close_sockets_for_vm(vm_id);
@@ -6376,6 +6409,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         vm_id,
         vm.pause_latched.load(Ordering::Acquire) as u8
     ));
+    teardown_diagnostics::set(vm_id, TeardownStage::State);
     let retained_for_resume = vm.pause_latched.load(Ordering::Acquire);
     blueprint_child_lifecycle_cleanup(
         vm_id,
@@ -6425,6 +6459,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
             cleanup.matrix_unbind_marker(),
         ));
     }
+    teardown_diagnostics::set(vm_id, TeardownStage::WaitQueues);
     let wait_queues_retired = if !vm.pause_latched.load(Ordering::Acquire)
         && !vm.preserve_exit.load(Ordering::Acquire)
     {
@@ -6438,6 +6473,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     vm.preserve_exit.store(false, Ordering::Release);
     vm.clean_exit.store(false, Ordering::Release);
     if let Some(pending) = pending_crash {
+        teardown_diagnostics::set(vm_id, TeardownStage::CrashReport);
         crate::hv::app_crash::write(vm_id, pending).await;
     }
     hvlogf(format_args!("hv: vm{} lifecycle: stopped", vm_id));
@@ -6445,6 +6481,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // This prevents F2/start from queueing a second Hull behind teardown on
     // the same AP while reporting the first VM as already offline.
     let native_jobs = crate::r::blocking::guest_jobs_in_flight(vm_id);
+    teardown_diagnostics::set(vm_id, TeardownStage::CarrierRelease);
     lane_lease.release_now();
     publish_vm_offline(vm_id, vm);
     crate::log_os::blueprint_important_line(format_args!(
@@ -6458,6 +6495,7 @@ fn publish_vm_offline(vm_id: u8, vm: &TrueosVmId) {
     // Serialize destruction with a new claim, including failed preparation.
     let _control = vm.lifecycle_control.lock();
     vm.running.store(false, Ordering::Release);
+    teardown_diagnostics::set(vm_id, TeardownStage::Offline);
     if vm.cooperative_stop.forced() {
         if let Err(error) = eject_offline_vm(vm_id, false) {
             hvwarnf(format_args!(

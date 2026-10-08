@@ -14,6 +14,7 @@ pub type BlockingJobFn = Box<dyn FnOnce() + Send + 'static>;
 type GuestComputeJob = Box<dyn FnMut() -> bool + Send + 'static>;
 
 mod lifetime;
+pub(crate) mod diagnostics;
 pub(crate) use lifetime::reserve as reserve_guest_job;
 pub(crate) use lifetime::{
     GuestJobOwner, close_guest_jobs, drain_guest_jobs, guest_jobs_in_flight, open_guest_jobs,
@@ -188,6 +189,10 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
         return;
     }
     let started_ms = now_ms();
+    if let Some(owner) = &owner {
+        owner.diagnostic.identify(purpose, id as usize, slot as usize);
+        owner.diagnostic.phase(diagnostics::RUNNING, 0, 0);
+    }
     let trace_each_job = purpose != "vmx-service-lane";
     service_lane_activity_begin(slot, id, vm_id, purpose);
     if trace_each_job {
@@ -227,6 +232,9 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
             // Do not invoke a guest destructor in the host allocation realm,
             // or publish its executable memory as reusable after losing the
             // realm. Retain the reservation for diagnosis/recovery.
+            if let Some(owner) = &owner {
+                owner.diagnostic.phase(diagnostics::RETAINED, 0, 0);
+            }
             core::mem::forget(pending_call);
             core::mem::forget(owner);
             crate::log_error!(target: "service";
@@ -428,6 +436,7 @@ fn service_lane_activity_finish(slot: u32) {
 }
 
 pub fn set_current_service_lane_pthread_name(name: &str) {
+    crate::r::threads::set_current_name(name);
     let slot = crate::percpu::current_slot();
     let Some(activity) = SERVICE_LANE_ACTIVITY.get(slot) else {
         return;
@@ -664,6 +673,9 @@ fn enqueue_blocking_job_with_rejection_policy(
         None
     };
     let id = NEXT_BLOCKING_JOB_ID.fetch_add(1, Ordering::AcqRel);
+    if let Some(owner) = &owner {
+        owner.diagnostic.identify(purpose, id as usize, usize::MAX);
+    }
     let policy_tag = if vm_id.is_some() {
         BLOCKING_JOB_TAG_VMX
     } else {
@@ -882,6 +894,7 @@ fn xpapp_compute_enqueue(vm_id: u8, job: GuestComputeJob) -> Result<(), GuestCom
     let Some(owner) = reserve_guest_job(vm_id) else {
         return Err(job);
     };
+    owner.diagnostic.identify("raster-compute", 0, XPAPP_COMPUTE_QUEUES[index].slot.load(Ordering::Acquire) as usize);
     let queue = &XPAPP_COMPUTE_QUEUES[index];
     let mut jobs = queue.jobs.lock();
     if jobs.len() >= XPAPP_COMPUTE_QUEUE_CAP {
@@ -944,6 +957,7 @@ async fn xpapp_compute_worker(
             continue;
         };
         queue.in_flight.fetch_add(1, Ordering::AcqRel);
+        entry.owner.diagnostic.phase(diagnostics::RUNNING, 0, 0);
         lane.set_vm_owner(entry.vm_id);
         let started = xpapp_compute_cycles();
         let slice_cycles = xpapp_compute_burst_cycles()
@@ -988,6 +1002,7 @@ async fn xpapp_compute_worker(
         lane.clear_vm_owner();
         let Some(more) = result else {
             let vm_id = entry.vm_id;
+            entry.owner.diagnostic.phase(diagnostics::RETAINED, 0, 0);
             core::mem::forget(entry);
             queue.in_flight.fetch_sub(1, Ordering::AcqRel);
             crate::log_error!(target: "service";
@@ -997,6 +1012,7 @@ async fn xpapp_compute_worker(
         burst_cycles = burst_cycles.saturating_add(xpapp_compute_cycles().wrapping_sub(started));
         queue.in_flight.fetch_sub(1, Ordering::AcqRel);
         if more {
+            entry.owner.diagnostic.phase(diagnostics::QUEUED, 0, 0);
             queue.jobs.lock().push_back(entry);
         }
         if burst_cycles >= xpapp_compute_burst_cycles() {

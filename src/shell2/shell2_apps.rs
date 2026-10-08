@@ -204,6 +204,15 @@ pub(crate) fn print_status(io: &'static dyn ShellBackend2) {
     }
     table.emit_footer(|text| print_shell_line(io, text));
     print_hv_status(io);
+    for idx in 0..visible_slots {
+        let vm_id = idx as u8;
+        let state = crate::hv::vm_state(vm_id);
+        if state.stop_requested && (state.running || state.starting) {
+            for text in crate::hv::shutdown_diagnostic_lines(vm_id) {
+                print_shell_line(io, &text);
+            }
+        }
+    }
 }
 
 fn replicatable_state_label(state: crate::hv::HvVmState, stored: bool) -> &'static str {
