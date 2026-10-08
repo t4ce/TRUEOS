@@ -24,20 +24,29 @@ use std::cell::{Cell, RefCell};
         source += extract.item('src/shell3/shell3.rs', name)
     source += re.search(r'^impl RgbaColor \{.*?^}', (ROOT/'src/shell3/shell3.rs').read_text(), re.M | re.S).group()
     source += f'\n#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
+    source += f'\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
     source += '''
 static SSH_LOGS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
 #[macro_export] macro_rules! log_info { (target: $target:literal; $($args:tt)*) => {crate::SSH_LOGS.lock().unwrap().push(format!($($args)*));}; }
 mod service {pub static RELEASED:std::sync::Mutex<Vec<u32>>=std::sync::Mutex::new(Vec::new());pub fn release_shell_on_executor(slot:u32){RELEASED.lock().unwrap().push(slot);}}
 const OPERATOR: char = '§';
+const SpecialSeperator:char='│';
 struct RowStrips {left:Vec<MetaFmtStr>}
-struct Shell3 { vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
+struct Shell3 { size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal_reserved(_:u32,_:Option<u16>)->Self {Self::new_terminal().unwrap()}
     fn new_terminal_sized_reserved(_:u32,_:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal().unwrap()}
-    fn get_size(&self)->(usize,usize) {(100,25)}
-    fn set(&mut self,_:usize,_:usize) {}
+    fn capture_controls_snapshot(&self)->update::Snapshot {
+        let title=[MetaFmtStr::new("TrueOS § 12:34")];
+        let status=[MetaFmtStr::new("§sh1").color(RgbaColor::Pink)];
+        let prompt=[MetaFmtStr::new(format!("{}#",self.prompt))];
+        let right=[MetaFmtStr::new("RIGHT").underline()];
+        update::Snapshot::new(self.size,0,[(&title,&right),(&status,&right),(&prompt,&right)],self.size.0)
+    }
+    fn get_size(&self)->(usize,usize) {self.size}
+    fn set(&mut self,cols:usize,rows:usize) {self.size=(cols,rows);}
     fn new_terminal() -> Result<Self, ()> {
-        Ok(Self { vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
+        Ok(Self { size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
@@ -66,6 +75,22 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
     fn terminal() -> Terminal {
         let mut tty = Terminal::new(Shell3::new_terminal().unwrap());
         tty.output.clear(); tty
+    }
+    #[test] fn ssh_controls_align_right_and_update_without_line_echo() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        let output=String::from_utf8_lossy(&tty.output);
+        for row in 1..=3 {assert!(output.contains(&format!("\\x1b[{row};96H\\x1b[0m\\x1b[38;2;255;255;255m\\x1b[4mRIGHT")));}
+        assert!(output.contains("TrueOS"));assert!(output.contains("12:34"));assert!(output.contains("§sh1"));
+        tty.output.clear();tty.input(b"abc");
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1Habc#"));
+        assert!(!tty.output.windows(2).any(|w|w==b"\\x1b8"));
+        tty.output.clear();tty.reconcile_matrix_selection();assert!(tty.output.is_empty());
+        tty.resize(60,20);
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[1;56H"));
+        tty.output.clear();
+        tty.input(b"\\r");assert_eq!(tty.shell.prompt,"");
+        assert_eq!(&*tty.shell.parsed.borrow(), &["abc"]);
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1H#   "));
     }
     #[test] fn adapter_starts_in_adm_and_enter_reuses_the_existing_prompt() {
         let mut tty=terminal();assert_eq!(tty.shell.get_mode(),3);

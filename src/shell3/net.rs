@@ -111,7 +111,7 @@ impl Connection {
             if self.terminal.is_none() && ssh.wants_shell() {
                 let pending = self.pending.take().unwrap();
                 let (columns, rows) = ssh.size().expect("SSH shell requires accepted PTY dimensions");
-                self.terminal = Some(Terminal::new(super::Shell3::new_terminal_sized_reserved(pending.slot, pending.peer_port, columns, rows)));
+                self.terminal = Some(Terminal::new_ssh(super::Shell3::new_terminal_sized_reserved(pending.slot, pending.peer_port, columns, rows)));
                 crate::log_info!(target: "service";
                     "shell3-tcp: protocol=ssh handle={:?} action=shell-authenticated plaintext=0\n", self.handle,
                 );

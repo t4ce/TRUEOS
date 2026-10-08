@@ -1,4 +1,4 @@
-//! Small UTF-8 line terminal. Socket framing and graphics stay outside it.
+//! UTF-8 terminal input and an ANSI sink for Shell3's three control rows.
 use super::{MetaFmtStr, RgbaColor, Shell3, SpecialRows};
 use alloc::{format, string::String, vec::Vec};
 
@@ -14,13 +14,18 @@ pub(super) struct Terminal {
     escape: u8,
     after_cr: bool,
     prompt_name: String,
+    controls: Option<Vec<super::update::RenderedLine>>,
     pub output: Vec<u8>,
     pub closing: bool,
     pub overflow: bool,
 }
 
 impl Terminal {
-    pub fn new(mut shell: Shell3) -> Self {
+    pub fn new(shell: Shell3) -> Self { Self::start(shell, false) }
+
+    pub fn new_ssh(shell: Shell3) -> Self { Self::start(shell, true) }
+
+    fn start(mut shell: Shell3, controls: bool) -> Self {
         shell.set_mode(3);
         let mut terminal = Self {
             shell,
@@ -31,6 +36,7 @@ impl Terminal {
             escape: 0,
             after_cr: false,
             prompt_name: String::new(),
+            controls: controls.then(Vec::new),
             output: Vec::new(),
             closing: false,
             overflow: false,
@@ -38,6 +44,11 @@ impl Terminal {
         // Save the local wheel mode and stop alternate-screen wheel events
         // from becoming arrow keys in nc's locally echoed input buffer.
         terminal.write(b"\x1b[?1007s\x1b[?1007l\x1b[?1049h\x1b[0m\x1b[2J\x1b[H");
+        if controls {
+            terminal.write(b"\x1b[?25l");
+            terminal.refresh_controls();
+            return terminal;
+        }
         let title = terminal.shell.row_for_render(SpecialRows::TitleRow);
         for run in &title.left {
             terminal.write_meta(run);
@@ -76,6 +87,39 @@ impl Terminal {
         self.write(b"\x1b[0m");
     }
 
+    fn refresh_controls(&mut self) {
+        let Some(previous) = self.controls.as_ref() else { return };
+        if self.closing { return; }
+        let current = self.shell.capture_controls_snapshot().rendered_lines();
+        let updates = super::update::diff_rendered_lines(
+            if previous.is_empty() { None } else { Some(previous) }, &current,
+        );
+        for update in updates {
+            let row = match update.row {
+                SpecialRows::TitleRow => 1,
+                SpecialRows::StatusRow => 2,
+                SpecialRows::PromtRow => 3,
+                _ => continue,
+            };
+            self.write(format!("\x1b[{row};{}H", update.offset + 1).as_bytes());
+            // Group equal styles, so ordinary text needs no per-cell escapes.
+            let mut run = MetaFmtStr::new("");
+            for (ch, color) in update.text.chars().zip(update.colors) {
+                if run.color != color {
+                    self.write_meta(&run);
+                    run.text.clear();
+                    run.color = color;
+                }
+                run.text.push(if ch.is_control() { ' ' } else { ch });
+            }
+            self.write_meta(&run);
+            if update.remove > update.text.chars().count() {
+                self.write(" ".repeat(update.remove - update.text.chars().count()).as_bytes());
+            }
+        }
+        self.controls = Some(current);
+    }
+
     fn prompt(&mut self) {
         let mut prompt = String::from("§");
         if let Some(name) = self.shell.active_matrix_slot_name() {
@@ -89,6 +133,7 @@ impl Terminal {
     }
 
     fn reset_input(&mut self) {
+        if self.controls.is_some() { return; }
         self.write(b"\x1b8\x1b[K");
         if self.prompt_name != self.shell.active_matrix_slot_name().unwrap_or_default() {
             self.write(b"\r\x1b[2K");
@@ -107,13 +152,14 @@ impl Terminal {
             return;
         }
         match command {
-            "help" => self.write(b"\r\nUTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"),
+            "help" => { if self.controls.is_some() { self.write(b"\x1b[4;1H"); } self.write(b"\r\nUTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"); if let Some(lines) = self.controls.as_mut() { lines.clear(); } },
             // The remote terminal interprets these bytes; TCP only carries them.
-            "clear" => { self.write(b"\x1b[2J\x1b[H"); self.prompt(); },
+            "clear" => { self.write(b"\x1b[2J\x1b[H"); if let Some(lines) = self.controls.as_mut() { lines.clear(); } else { self.prompt(); } },
             "tab" => {
                 self.shell.set_mode(self.shell.get_mode() % 3 + 1);
             }
             "exit" => {
+                if self.controls.is_some() { self.write(b"\x1b[?25h"); }
                 self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
                 self.closing = true;
             }
@@ -129,7 +175,7 @@ impl Terminal {
     }
 
     fn erase(&mut self) {
-        if self.line.pop().is_some() {
+        if self.line.pop().is_some() && self.controls.is_none() {
             self.write(b"\x1b8");
             let count = self.line.chars().count();
             if count > 0 { self.write(format!("\x1b[{count}C").as_bytes()); }
@@ -139,10 +185,18 @@ impl Terminal {
 
     pub(super) fn reconcile_matrix_selection(&mut self) {
         self.shell.reconcile_matrix_selection();
+        self.refresh_controls();
     }
 
     pub(super) fn resize(&mut self, columns: usize, rows: usize) {
-        if self.shell.get_size() != (columns, rows) { self.shell.set(columns, rows); }
+        if self.shell.get_size() != (columns, rows) {
+            self.shell.set(columns, rows);
+            if let Some(lines) = self.controls.as_mut() {
+                lines.clear();
+                self.write(b"\x1b[0m\x1b[1;1H\x1b[2K\x1b[2;1H\x1b[2K\x1b[3;1H\x1b[2K");
+            }
+            self.refresh_controls();
+        }
     }
 
     pub fn input(&mut self, bytes: &[u8]) {
@@ -184,7 +238,7 @@ impl Terminal {
                         self.shell.set_mode(self.shell.get_mode() % 3 + 1);
                         self.reset_input();
                         let line = self.line.clone();
-                        self.write(line.as_bytes());
+                        if self.controls.is_none() { self.write(line.as_bytes()); }
                     }
                     3 => {
                         self.line.clear();
@@ -192,6 +246,7 @@ impl Terminal {
                         self.reset_input();
                     }
                     4 if self.line.is_empty() => {
+                        if self.controls.is_some() { self.write(b"\x1b[?25h"); }
                         self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007r\r\nBye.\r\n");
                         self.closing = true;
                     }
@@ -221,11 +276,13 @@ impl Terminal {
                     }
                     if !ch.is_control() && !self.line_overflow {
                         self.line.push(ch);
-                        self.write(b"\x1b8");
-                        let offset = self.line.chars().count() - 1;
-                        if offset > 0 { self.write(format!("\x1b[{offset}C").as_bytes()); }
-                        let encoded = self.utf8;
-                        self.write(&encoded[..self.utf8_len]);
+                        if self.controls.is_none() {
+                            self.write(b"\x1b8");
+                            let offset = self.line.chars().count() - 1;
+                            if offset > 0 { self.write(format!("\x1b[{offset}C").as_bytes()); }
+                            let encoded = self.utf8;
+                            self.write(&encoded[..self.utf8_len]);
+                        }
                     } else {
                         self.write(b"\x07");
                     }
@@ -240,5 +297,6 @@ impl Terminal {
         }
         self.shell.set_prompt(&self.line);
         self.shell.set_cursor(self.line.chars().count());
+        self.refresh_controls();
     }
 }

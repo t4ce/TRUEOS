@@ -1230,31 +1230,31 @@ impl Shell3 {
             .collect()
     }
 
+    // Shared character composition boundary, before either pixel or ANSI drawing.
+    fn capture_controls_snapshot(&self) -> update::Snapshot {
+        let title = self.row_for_render(SpecialRows::TitleRow);
+        let status = self.row_for_render(SpecialRows::StatusRow);
+        let promt = self.row_for_render(SpecialRows::PromtRow);
+        update::Snapshot::new(
+            (self.columns, self.rows_count),
+            self.layout_generation,
+            [(&title.left, &title.right), (&status.left, &status.right), (&promt.left, &promt.right)],
+            self.columns,
+        )
+    }
+
     fn capture_update_snapshot(&self) -> update::Snapshot {
         let revision = tui::revision(self.tui_frontend);
         if let Some(lines) = tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
             return update::Snapshot::terminal((self.columns, self.rows_count), self.layout_generation, lines, revision);
         }
-        let title = self.row_for_render(SpecialRows::TitleRow);
-        let status = self.row_for_render(SpecialRows::StatusRow);
-        let promt = self.row_for_render(SpecialRows::PromtRow);
         let (matrix_generation, matrix_lines) = MatrixSlots::view_echo_snapshot(
             self.active_matrix_slot.as_deref(),
             self.active_matrix_lifetime,
         );
-
-        update::Snapshot::new(
-            (self.columns, self.rows_count),
-            self.layout_generation,
-            [
-                (&title.left, &title.right),
-                (&status.left, &status.right),
-                (&promt.left, &promt.right),
-            ],
-            self.columns,
-        )
-        .with_matrix(&matrix_lines, matrix_generation)
-        .with_tui_revision(revision)
+        self.capture_controls_snapshot()
+            .with_matrix(&matrix_lines, matrix_generation)
+            .with_tui_revision(revision)
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
