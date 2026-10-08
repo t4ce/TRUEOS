@@ -73,6 +73,7 @@ pub(super) struct Session {
     deadline: trueos_time::Instant,
     authenticated: bool,
     shell_requested: bool,
+    size: Option<(usize, usize)>,
     pub finished: bool,
     pub closed: bool,
 }
@@ -97,6 +98,7 @@ impl Session {
                 + trueos_time::Duration::from_millis(AUTH_TIMEOUT_MS),
             authenticated: false,
             shell_requested: false,
+            size: None,
             closed: false,
             finished: false,
         })
@@ -112,6 +114,10 @@ impl Session {
 
     pub fn wants_shell(&self) -> bool {
         self.shell_requested && !self.closed
+    }
+
+    pub fn size(&self) -> Option<(usize, usize)> {
+        self.size
     }
 
     pub fn pump(&mut self, terminal: Option<&mut Terminal>) {
@@ -196,11 +202,20 @@ impl Session {
                             }
                         }
                         ServEvent::SessionPty(h) => {
+                            let (columns, rows) = h.dimensions()?;
+                            let initial = h.is_initial_request()?;
                             if self
                                 .channel
                                 .as_ref()
                                 .is_some_and(|c| c.num() == h.channel())
+                                && (initial || self.size.is_some())
+                                && (20..=512).contains(&columns)
+                                && (5..=256).contains(&rows)
                             {
+                                self.size = Some((columns as usize, rows as usize));
+                                if let Some(tty) = terminal.as_deref_mut() {
+                                    tty.resize(columns as usize, rows as usize);
+                                }
                                 h.succeed()?;
                             } else {
                                 h.fail()?;
@@ -208,6 +223,7 @@ impl Session {
                         }
                         ServEvent::SessionShell(h) => {
                             if self.authenticated
+                                && self.size.is_some()
                                 && !self.shell_requested
                                 && self
                                     .channel

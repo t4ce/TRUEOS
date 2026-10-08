@@ -9,6 +9,7 @@ TRUEOS extensions:
   that event until `finish_deferred_auth()` resolves a durable verification.
   The application must not call `progress()` while authentication is deferred.
 - Public server authentication-method configuration and graceful session exit.
+- PTY dimensions and window-change notifications exposed to the server application.
 - Authentication responses redact Debug output; decoding errors omit raw bytes.
 
 The client implementation does not support keyboard-interactive authentication.

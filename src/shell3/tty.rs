@@ -141,6 +141,10 @@ impl Terminal {
         self.shell.reconcile_matrix_selection();
     }
 
+    pub(super) fn resize(&mut self, columns: usize, rows: usize) {
+        if self.shell.get_size() != (columns, rows) { self.shell.set(columns, rows); }
+    }
+
     pub fn input(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             if self.closing {

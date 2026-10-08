@@ -25,6 +25,7 @@ static DROPPED_2:AtomicU32=AtomicU32::new(0);
 static DROPPED_7:AtomicU32=AtomicU32::new(0);
 struct Shell3 {slot:u32,peer_port:Option<u16>}
 impl Shell3 {fn new_terminal_reserved(slot:u32,peer_port:Option<u16>)->Self {assert_eq!(CURRENT_SLOT.get(),slot);Self {slot,peer_port}}}
+impl Shell3 {fn new_terminal_sized_reserved(slot:u32,peer_port:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal_reserved(slot,peer_port)}}
 impl Drop for Shell3 {fn drop(&mut self) {assert_eq!(CURRENT_SLOT.get(),self.slot);if self.slot==2 {DROPPED_2.fetch_add(1,Ordering::Relaxed);} else {DROPPED_7.fetch_add(1,Ordering::Relaxed);}}}
 mod tty {
 use super::*;

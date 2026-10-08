@@ -33,6 +33,9 @@ struct RowStrips {left:Vec<MetaFmtStr>}
 struct Shell3 { vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal_reserved(_:u32,_:Option<u16>)->Self {Self::new_terminal().unwrap()}
+    fn new_terminal_sized_reserved(_:u32,_:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal().unwrap()}
+    fn get_size(&self)->(usize,usize) {(100,25)}
+    fn set(&mut self,_:usize,_:usize) {}
     fn new_terminal() -> Result<Self, ()> {
         Ok(Self { vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }

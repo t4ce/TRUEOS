@@ -530,14 +530,19 @@ impl Drop for Shell3 {
 impl Shell3 {
     /// Construct a previously admitted terminal on its permanent AP owner.
     pub(super) fn new_terminal_reserved(slot: u32, peer_port: Option<u16>) -> Self {
+        Self::new_terminal_sized_reserved(slot, peer_port, Default_COLUMNS, Default_ROWS)
+    }
+
+    /// SSH supplies its accepted PTY size before model construction or drawing.
+    pub(super) fn new_terminal_sized_reserved(slot: u32, peer_port: Option<u16>, columns: usize, rows: usize) -> Self {
         debug_assert_eq!(crate::percpu::current_slot() as u32, slot);
         let mut shell = Self::new_inner(
             &TitleTime::current(),
             crate::r::restart::startup_alias_names(),
             service::appdb_names_snapshot().1,
             Vec::new(),
-            Default_COLUMNS,
-            Default_ROWS,
+            columns,
+            rows,
             slot,
         );
         shell.set_show_backend(ShowBackend::Network);

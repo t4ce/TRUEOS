@@ -34,6 +34,7 @@ const HTTPS_IDLE_SLEEP_MS: u64 = 100;
 const HTTPS_CLIENT_WAIT_MS: u64 = 10;
 const HTTPS_CLIENT_FENCE_TIMEOUT_MS: u64 = 1_000;
 const HTTPS_REQUEST_CANCELLED: &str = "cancelled";
+pub(crate) const DEFAULT_USER_AGENT: &str = "TRUEOS net-fetch";
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult>> =
     Mutex::new(BTreeMap::new());
@@ -642,7 +643,9 @@ fn build_http_request(target: &FetchTarget, request: &HttpsRequest<'_>) -> Resul
         request.method, target.path_and_query, host_header
     );
     if !request_has_header(request, "User-Agent") {
-        req.push_str("User-Agent: TRUEOS net-fetch\r\n");
+        req.push_str("User-Agent: ");
+        req.push_str(DEFAULT_USER_AGENT);
+        req.push_str("\r\n");
     }
     if !request_has_header(request, "Accept") {
         req.push_str("Accept: */*\r\n");
@@ -1486,16 +1489,17 @@ pub(crate) async fn get_media_bytes_profile_shared(
     timeout_ms: u32,
     max_bytes: usize,
     cancellation: &MediaFetchCancellation,
+    user_agent: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let target = parse_fetch_url(url).map_err(String::from)?;
     if target.scheme != "https" {
         return Err(String::from("unsupported scheme"));
     }
-    let chrome_ua = String::from(
+    let agent = String::from(user_agent.unwrap_or(
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    );
+    ));
     let mut headers = vec![
-        (String::from("User-Agent"), chrome_ua),
+        (String::from("User-Agent"), agent),
         (String::from("Accept-Encoding"), String::from("identity")),
         (String::from("Connection"), String::from("close")),
     ];

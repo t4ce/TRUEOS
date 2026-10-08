@@ -928,7 +928,7 @@ impl Channel {
             ChannelReqType::Subsystem(_) => {
                 Ok(DispatchEvent::ServEvent(ServEventId::SessionSubsystem { num }))
             }
-            ChannelReqType::Pty(_) => {
+            ChannelReqType::Pty(_) | ChannelReqType::WinChange(_) => {
                 Ok(DispatchEvent::ServEvent(ServEventId::SessionPty { num }))
             }
             ChannelReqType::Environment(_) => {

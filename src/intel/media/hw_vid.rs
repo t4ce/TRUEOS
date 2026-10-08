@@ -533,6 +533,7 @@ pub(crate) async fn run_online_ui4_framed_video_playback(
         options,
         "online-ui4-framed-video",
         "online-ui4-framed-video",
+        None,
     )
     .await?;
     if session.is_cancelled() && report.presented == 0 {
@@ -556,6 +557,9 @@ pub(crate) async fn run_resolved_ui4_framed_video_playback(
         H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true),
         "website-ui4-video",
         "website-ui4-video",
+        // Signed sources can bind the User-Agent used to resolve the player.
+        // Match the browser's kernel GET identity rather than the demo profile.
+        Some(crate::r::net::https::DEFAULT_USER_AGENT),
     )
     .await?;
     if report.presented == 0 {
@@ -571,11 +575,12 @@ async fn run_media_url_playback(
     options: H264PlaybackOptions,
     log_scope: &'static str,
     playback_path: &'static str,
+    user_agent: Option<&str>,
 ) -> Result<H264PlaybackReport, &'static str> {
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
-    let mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope).await?;
+    let mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope, user_agent).await?;
     if session.is_cancelled() {
         return Err("playback cancelled");
     }
@@ -639,6 +644,7 @@ async fn h264_fetch_media_url_bytes(
     session: crate::ui4::VideoPlaybackSession,
     url: &str,
     log_scope: &'static str,
+    user_agent: Option<&str>,
 ) -> Result<Vec<u8>, &'static str> {
     let profiles = [
         "media-range",
@@ -666,6 +672,7 @@ async fn h264_fetch_media_url_bytes(
             H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS as u32,
             H264_ONLINE_MEDIA_FETCH_MAX_BYTES,
             &cancellation,
+            user_agent,
         );
         let watch = async {
             while !session.is_cancelled() {
@@ -706,13 +713,12 @@ async fn h264_fetch_media_url_bytes(
                 return Ok(bytes);
             }
             Err(err) => {
-                crate::log!(
-                    "intel/hw_vid: {} fetch failed profile={} err={} waited_ms={} url={}\n",
+                crate::log_warn!(target: "intel-media";
+                    "intel/hw_vid: {} fetch failed profile={} err={} waited_ms={}\n",
                     log_scope,
                     profile,
                     err,
                     started.elapsed().as_millis(),
-                    url
                 );
             }
         }

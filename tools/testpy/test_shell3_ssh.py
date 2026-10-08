@@ -8,6 +8,12 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
+import pty
+import fcntl
+import termios
+import struct
+import signal
+import select
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -58,6 +64,7 @@ mod shell3 {
         impl Terminal {
             pub fn new()->Self {Self {output:b"AUTHENTICATED-SHELL3\r\n".to_vec(),closing:false,overflow:false}}
             pub fn input(&mut self,bytes:&[u8]) {if bytes.iter().any(|b|*b==b'\n'||*b==b'\r'||*b==4) {self.closing=true;}}
+            pub fn resize(&mut self,cols:usize,rows:usize) {self.output.extend_from_slice(format!("RESIZE:{cols}x{rows}\r\n").as_bytes());}
         }
     }
     #[path="__SSH_PATH__"] pub mod ssh;
@@ -191,7 +198,12 @@ fn main() {
             Ok(0)=>break,Ok(n)=>ssh.input(&bytes[..n]),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock=>{},Err(e)=>panic!("{e}"),
         }
         ssh.pump(terminal.as_mut());ready(shell3::ssh::service_auth());
-        if terminal.is_none()&&ssh.wants_shell() {terminal=Some(shell3::tty::Terminal::new());}
+        if terminal.is_none()&&ssh.wants_shell() {
+            let (cols,rows)=ssh.size().expect("confirmed PTY dimensions before shell");
+            let mut tty=shell3::tty::Terminal::new();
+            tty.output.extend_from_slice(format!("SIZE:{cols}x{rows}\r\n").as_bytes());
+            terminal=Some(tty);
+        }
         let bytes=ssh.output();let count=match socket.write(bytes) {
             Ok(n)=>n,Err(e) if e.kind()==std::io::ErrorKind::WouldBlock=>0,Err(_)=>break,
         };ssh.consume_output(count);
@@ -256,8 +268,14 @@ getrandom_02={{package="getrandom",version="0.2"}}
                  ('disk-failure','alice','keyboard-interactive',False),
                  ('wrong-user','mallory','keyboard-interactive',False),
                  ('password-disabled','alice','password',False)]
+        cases += [('missing-pty','alice','publickey',False), ('zero-pty','alice','publickey',False)]
+        cases += [('resize','alice','publickey',True)]
         for mode, user, method, expected in cases:
             agent = None
+            master, slave = pty.openpty()
+            cols, rows = (0, 0) if mode == 'zero-pty' else (132, 43)
+            fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',rows,cols,0,0))
+            if mode != 'resize': os.write(master,b'\n')
             server = subprocess.Popen([str(binary),mode], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 env=dict(os.environ,TRUEOS_TEST_PUBLIC_KEY=public))
             try:
@@ -271,21 +289,48 @@ getrandom_02={{package="getrandom",version="0.2"}}
                     assert agent.stdout.readline().strip() == 'agent-ready'
                     ssh_env['SSH_AUTH_SOCK'] = str(socket)
                     identity = trusted.with_suffix('.pub')
-                client = subprocess.run(['ssh','-F','/dev/null','-tt' if mode == 'success-pty' else '-T','-p',port,'-o','StrictHostKeyChecking=no',
+                command = ['ssh','-F','/dev/null','-T' if mode == 'missing-pty' else '-tt','-p',port,'-o','StrictHostKeyChecking=no',
                     '-o','UserKnownHostsFile=/dev/null','-o','ConnectTimeout=5',
                     '-o','IdentitiesOnly=yes','-i',str(identity),
                     '-o','NumberOfPasswordPrompts=1','-o',f'PreferredAuthentications={method}',
-                    f'{user}@127.0.0.1'],input=b'\n',capture_output=True,env=ssh_env,timeout=15)
+                    f'{user}@127.0.0.1']
+                if mode == 'resize':
+                    process = subprocess.Popen(command,stdin=slave,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=ssh_env,bufsize=0)
+                    prefix = b''
+                    def read_until(marker):
+                        nonlocal prefix
+                        while marker not in prefix:
+                            assert select.select([process.stdout],[],[],5)[0], 'SSH resize test timed out'
+                            byte = process.stdout.read(1)
+                            assert byte, 'SSH ended before expected size report'
+                            prefix += byte
+                    try:
+                        read_until(b'SIZE:132x43')
+                        fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',51,142,0,0))
+                        process.send_signal(signal.SIGWINCH)
+                        read_until(b'RESIZE:142x51')
+                        os.write(master,b'\n')
+                        stdout, stderr = process.communicate(timeout=15)
+                        client = subprocess.CompletedProcess(command,process.returncode,prefix+stdout,stderr)
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.communicate()
+                else:
+                    client = subprocess.run(command,stdin=slave,capture_output=True,env=ssh_env,timeout=15)
                 output, errors = server.communicate(timeout=15)
                 assert server.returncode == 0, errors
                 assert (b'AUTHENTICATED-SHELL3' in client.stdout) == expected, (mode,client.stdout,client.stderr,errors)
                 assert f'shell-created={str(expected).lower()}' in output, (mode,output,client.stderr)
                 if expected:
+                    assert b'SIZE:132x43' in client.stdout, client.stdout
                     assert client.returncode == 0, client.stderr
                 else:
                     assert client.returncode != 0, client.stderr
                 print(f'{mode}: passed')
             finally:
+                os.close(master)
+                os.close(slave)
                 if agent is not None:
                     agent.terminate()
                     agent.communicate(timeout=5)

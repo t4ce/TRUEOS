@@ -788,7 +788,7 @@ impl Drop for ServExecRequest<'_, '_> {
 
 /// A PTY request
 ///
-/// Placeholder, doesn't yet return the PTY information.
+/// Also emitted for a client window-change notification.
 pub struct ServPtyRequest<'g, 'a> {
     runner: &'g mut Runner<'a, Server>,
     num: ChanNum,
@@ -800,7 +800,24 @@ impl<'g, 'a> ServPtyRequest<'g, 'a> {
         Self { runner, num, done: false }
     }
 
-    // TODO return PTY information to the caller
+    /// Character columns and rows supplied by pty-req or window-change.
+    pub fn dimensions(&self) -> Result<(u32, u32)> {
+        match self.runner.packet()? {
+            Some(Packet::ChannelRequest(request)) => match request.req {
+                packets::ChannelReqType::Pty(pty) => Ok((pty.cols, pty.rows)),
+                packets::ChannelReqType::WinChange(size) => Ok((size.cols, size.rows)),
+                _ => Err(Error::msg("not a PTY size request")),
+            },
+            _ => Err(Error::msg("missing PTY size request")),
+        }
+    }
+
+    pub fn is_initial_request(&self) -> Result<bool> {
+        match self.runner.packet()? {
+            Some(Packet::ChannelRequest(request)) => Ok(matches!(request.req, packets::ChannelReqType::Pty(_))),
+            _ => Err(Error::msg("missing PTY request")),
+        }
+    }
 
     /// Indicate that the request succeeded.
     ///
