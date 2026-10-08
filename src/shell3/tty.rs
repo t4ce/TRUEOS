@@ -13,8 +13,6 @@ pub(super) struct Terminal {
     utf8: [u8; 4],
     utf8_len: usize,
     escape: u8,
-    escape_bytes: Vec<u8>,
-    escape_overflow: bool,
     after_cr: bool,
     prompt_name: String,
     controls: Option<Vec<super::update::RenderedLine>>,
@@ -37,8 +35,6 @@ impl Terminal {
             utf8: [0; 4],
             utf8_len: 0,
             escape: 0,
-            escape_bytes: Vec::new(),
-            escape_overflow: false,
             after_cr: false,
             prompt_name: String::new(),
             controls: controls.then(Vec::new),
@@ -50,8 +46,8 @@ impl Terminal {
         // from becoming arrow keys in nc's locally echoed input buffer.
         terminal.write(b"\x1b[?1007s\x1b[?1007l\x1b[?1049h\x1b[0m\x1b[2J\x1b[H");
         if controls {
-            // SGR coordinates, including hover, button, drag and wheel reports.
-            terminal.write(b"\x1b[?1003s\x1b[?1006s\x1b[?1006h\x1b[?1003h\x1b[?25l");
+            // Leave mouse handling to the client terminal (selection and menus).
+            terminal.write(b"\x1b[?25l");
             terminal.set_matrix_region();
             terminal.refresh_controls();
             return terminal;
@@ -202,7 +198,7 @@ impl Terminal {
                 self.shell.set_mode(self.shell.get_mode() % 3 + 1);
             }
             "exit" => {
-                if self.controls.is_some() { self.write(b"\x1b[r\x1b[?1003l\x1b[?1006l\x1b[?1006r\x1b[?1003r\x1b[?25h"); }
+                if self.controls.is_some() { self.write(b"\x1b[r\x1b[?25h"); }
                 self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
                 self.closing = true;
             }
@@ -243,31 +239,6 @@ impl Terminal {
         }
     }
 
-    fn mouse_report(&mut self, final_byte: u8) {
-        if self.controls.is_none() || self.escape_overflow { return; }
-        let Some(parameters) = self.escape_bytes.strip_prefix(b"[<") else { return; };
-        let Ok(parameters) = core::str::from_utf8(parameters) else { return; };
-        let mut fields = parameters.split(';');
-        let mut values = [0usize; 3];
-        for value in &mut values {
-            let Some(field) = fields.next() else { return; };
-            if field.is_empty() || !field.bytes().all(|byte| byte.is_ascii_digit()) { return; }
-            let Ok(number) = field.parse() else { return; };
-            *value = number;
-        }
-        if fields.next().is_some() { return; }
-        let [button, column, row] = values;
-        let (columns, rows) = self.shell.get_size();
-        if button > 255 || column == 0 || row == 0 || column > columns || row > rows { return; }
-        if row >= 4 && final_byte == b'M' && button & (128 | 32 | 64) == 64 && button & 3 <= 1 {
-            self.shell.scroll_matrix(if button & 1 == 0 { -1 } else { 1 });
-        }
-        // The shared UI4 handler owns hover and link actions. Motion, release,
-        // other buttons and wheel reports must never repeat a left-click action.
-        let pressed = final_byte == b'M' && button & (128 | 64 | 32 | 3) == 0;
-        self.shell.handle_status_pointer((row == 2).then_some(column - 1), pressed);
-    }
-
     pub fn input(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             if self.closing {
@@ -279,25 +250,18 @@ impl Terminal {
                 continue;
             }
             self.after_cr = byte == b'\r';
-            // Accumulate bounded CSI/SS3 sequences across arbitrary TCP packets.
+            // Consume CSI/SS3 sequences across arbitrary TCP packets.
             // Unsupported or malformed reports are consumed, never typed.
             if self.escape != 0 {
                 if self.escape == 1 {
                     if byte == b'[' || byte == b'O' {
                         self.escape = 2;
-                        self.escape_bytes.push(byte);
                         continue;
                     }
                     self.escape = 0;
                 } else if (0x40..=0x7e).contains(&byte) {
-                    if byte == b'M' || byte == b'm' { self.mouse_report(byte); }
                     self.escape = 0;
                 } else if byte >= 0x20 {
-                    if self.escape_bytes.len() < 64 {
-                        self.escape_bytes.push(byte);
-                    } else {
-                        self.escape_overflow = true;
-                    }
                     continue;
                 } else {
                     self.escape = 0;
@@ -321,7 +285,7 @@ impl Terminal {
                         self.reset_input();
                     }
                     4 if self.line.is_empty() => {
-                        if self.controls.is_some() { self.write(b"\x1b[r\x1b[?1003l\x1b[?1006l\x1b[?1006r\x1b[?1003r\x1b[?25h"); }
+                        if self.controls.is_some() { self.write(b"\x1b[r\x1b[?25h"); }
                         self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007r\r\nBye.\r\n");
                         self.closing = true;
                     }
@@ -333,8 +297,6 @@ impl Terminal {
                     }
                     27 => {
                         self.escape = 1;
-                        self.escape_bytes.clear();
-                        self.escape_overflow = false;
                     },
                     _ => {}
                 }

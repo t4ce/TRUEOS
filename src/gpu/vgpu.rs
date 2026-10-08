@@ -2774,9 +2774,12 @@ pub(crate) fn create_shader_module(
         && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
         && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
         && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64
+        && package_digest != v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64
     {
         return Err(VgpuError::Unsupported);
     }
+    if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64
+        && !crate::intel::voxy_headless_texture_target_active() { return Err(VgpuError::Unsupported); }
     if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
         && !crate::intel::voxy_headless_target_active() { return Err(VgpuError::Unsupported); }
     if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
@@ -2846,6 +2849,9 @@ fn figure_position_transforms_finite(state: &[u8; v::vgpu::VOXY_FIGURE_STATE_BYT
 }
 
 fn render_vertex_layout_supported(package: u64, stride: u32, position_offset: u32) -> bool {
+    if package == v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64 {
+        return stride == 20 && position_offset == 0;
+    }
     if package == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64 {
         return stride == 8 && position_offset == 0;
     }
@@ -3176,6 +3182,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         figure_state,
         voxy_camera,
         voxy_update,
+        flat_clouds,
     ) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
@@ -3195,10 +3202,13 @@ pub(crate) fn submit_ui4_indexed_draw(
                 && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
                 && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
                 && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
-                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64)
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64)
         {
             return Err(VgpuError::InvalidHandle);
         }
+        let flat_clouds = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64;
+        if flat_clouds && (!crate::intel::voxy_headless_texture_target_active() || geometry_clear || draw.sampled_texture.raw() == 0) { return Err(unsupported("flat-cloud-contract")); }
         let figure = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64;
         if figure && (!crate::intel::voxy_figure_target_active() || geometry_clear
             || draw.vertex_offset != v::vgpu::VOXY_FIGURE_STATE_BYTES
@@ -3224,7 +3234,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             return Err(unsupported("fixed-layout"));
         }
         let textured =
-            figure || fixed || voxy_textured || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
+            flat_clouds || figure || fixed || voxy_textured || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
         if (draw.retain_texture || voxy_textured)
             && textured
             && !geometry_clear
@@ -3576,6 +3586,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             figure_state,
             voxy_camera,
             voxy_update,
+            flat_clouds,
         )
     };
     let vertex_count = voxy_update.as_ref().map_or(vertices.len(), |update| update.vertex_count);
@@ -3683,7 +3694,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         } else {
             sampled_texture.as_deref()
         },
-        fragment_contract: if figure_state.is_some() {
+        fragment_contract: if flat_clouds {
+            crate::intel::render::ResidentSceneFragmentContract::VoxyFlatCloud
+        } else if figure_state.is_some() {
             crate::intel::render::ResidentSceneFragmentContract::VoxyFigure
         } else if voxy_camera.is_some() {
             if sampled_texture.is_some() {

@@ -103,17 +103,17 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
 #[cfg(test)] mod replay_tests {
     use super::*;
     use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide};
-    #[test] fn ssh_mouse_uses_real_status_hover_slot_and_alias_actions() {
+    #[test] fn ssh_mouse_reports_do_not_hover_select_or_launch() {
         MatrixSlots::set(&["id","123"]);service::LAUNCHES.lock().unwrap().clear();
         let mut shell=Shell3::new(40);shell.aka_names=vec!["héllo".into()];
         let mut tty=Terminal::new_ssh(shell);tty.input(b"draft");tty.output.clear();
         tty.input(b"\x1b[<35;4;2M");
-        assert!(tty.shell.row_for_render(SpecialRows::StatusRow).left[2].underline);
-        assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[4m"));
+        assert!(!tty.shell.row_for_render(SpecialRows::StatusRow).left[2].underline);
+        assert!(tty.output.is_empty());
         tty.input(b"\x1b[<0;4;2M\x1b[<0;4;2m");
-        assert_eq!(tty.shell.active_matrix_slot_name(),Some("id".into()));
+        assert_eq!(tty.shell.active_matrix_slot_name(),None);
         tty.input(b"\x1b[<0;36;2M\x1b[<32;36;2M\x1b[<0;36;2m\x1b[<64;36;2M");
-        assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("alias:héllo".into(),"id".into())]);
+        assert!(service::LAUNCHES.lock().unwrap().is_empty());
         assert_eq!(tty.line,"draft");assert_eq!(tty.shell.prompt(),"draft");
         tty.input(b"\x1b[<35;36;3M");
         assert!(tty.shell.status_hover.is_none());
@@ -128,8 +128,8 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
         assert!(s.scroll_matrix(100));assert_eq!(s.matrix_scroll,4);assert!(!s.scroll_matrix(1));
         assert!(s.scroll_matrix(-100));assert_eq!(s.matrix_scroll,0);
         s.scroll_matrix(2);let mut tty=Terminal::new_ssh(s);tty.input(b"\x1b[<65;2;4M");
-        assert_eq!(tty.shell.matrix_scroll,3);assert_eq!(tty.shell.get_strip(SpecialRows::MatrixRow(0),StripSide::Left),"entry3");
-        tty.input(b"\x1b[<64;2;2M");assert_eq!(tty.shell.matrix_scroll,3);
+        assert_eq!(tty.shell.matrix_scroll,2);assert_eq!(tty.shell.get_strip(SpecialRows::MatrixRow(0),StripSide::Left),"entry2");
+        tty.input(b"\x1b[<64;2;2M");assert_eq!(tty.shell.matrix_scroll,2);
         tty.shell.select_matrix_slot_index(0);assert_eq!(tty.shell.matrix_scroll,0);
         MatrixSlots::set(&[] as &[&str]);
     }

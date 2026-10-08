@@ -339,3 +339,13 @@ pub(crate) fn voxy_figure_pipeline() -> Result<&'static TrianglePipeline, &'stat
 pub(crate) fn voxy_figure_supports_physical_device(vendor: u16, device: u16, revision: u8) -> bool {
     voxy_figure_gen12::supports(vendor, device, revision)
 }
+
+#[path = "../../crates/trueos-shader/generated_voxy_flat_cloud.rs"]
+mod voxy_flat_cloud;
+const _: () = assert!(voxy_flat_cloud::PACKAGE == v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64);
+pub(crate) fn voxy_flat_cloud_pipeline() -> Result<&'static TrianglePipeline, &'static str> {
+    if !crate::intel::voxy_headless_texture_target_active() {
+        return Err("voxy-flat-cloud-target");
+    }
+    Ok(&voxy_flat_cloud::PIPELINE)
+}

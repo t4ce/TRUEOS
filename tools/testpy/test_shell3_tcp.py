@@ -104,12 +104,12 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         assert_eq!(&*tty.shell.parsed.borrow(), &["abc"]);
         assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1H#   "));
     }
-    #[test] fn ssh_mouse_reports_survive_every_packet_split_and_do_not_type() {
+    #[test] fn ssh_mouse_reports_are_ignored_at_every_packet_split() {
         let input=b"\\x1b[<35;4;2M\\x1b[<0;4;2M\\x1b[<0;4;2m\\x1b[<32;6;2M\\x1b[<64;6;2M\\x1b[<65;6;2M\\x1b[<2;6;2M\\x1b[<35;6;3M";
         for split in 0..=input.len() {
             let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
             tty.output.clear();tty.input(&input[..split]);tty.input(&input[split..]);
-            assert_eq!(tty.shell.pointer, vec![(Some(3),false),(Some(3),true),(Some(3),false),(Some(5),false),(Some(5),false),(Some(5),false),(Some(5),false),(None,false)],"split {split}");
+            assert!(tty.shell.pointer.is_empty(),"split {split}");
             assert!(tty.line.is_empty());assert!(tty.shell.prompt.is_empty());
             assert!(tty.shell.parsed.borrow().is_empty());
         }
@@ -120,15 +120,16 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         let mut oversized=b"\\x1b[<".to_vec();oversized.extend_from_slice(&[b'9';100]);oversized.extend_from_slice(b";4;2M");tty.input(&oversized);
         assert!(tty.shell.pointer.is_empty());assert!(tty.line.is_empty());
         tty.input(b"\\x1b[<0;100;25Mx");
-        assert_eq!(tty.shell.pointer,vec![(None,true)]);assert_eq!(tty.line,"x");
+        assert!(tty.shell.pointer.is_empty());assert_eq!(tty.line,"x");
         let mut nc=terminal();nc.input(b"\\x1b[<0;4;2M");assert!(nc.shell.pointer.is_empty());assert!(nc.line.is_empty());
     }
-    #[test] fn ssh_mouse_modes_enable_on_connect_and_restore_on_exit() {
+    #[test] fn ssh_never_enables_mouse_reporting() {
         for exit in [b"exit\\r".as_slice(),b"\\x04".as_slice()] {
             let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
-            assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1006h\\x1b[?1003h"));
+            assert!(!String::from_utf8_lossy(&tty.output).contains("1003"));
+            assert!(!String::from_utf8_lossy(&tty.output).contains("1006"));
             tty.output.clear();tty.input(exit);
-            assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1003l\\x1b[?1006l\\x1b[?1006r\\x1b[?1003r"));assert!(tty.closing);
+            assert!(!String::from_utf8_lossy(&tty.output).contains("1003"));assert!(tty.closing);
         }
     }
     #[test] fn ssh_reserves_matrix_rows_and_routes_notices_into_the_buffer() {
@@ -146,11 +147,11 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         let mut shell=Shell3::new_terminal().unwrap();shell.size=(12,6);
         shell.history=(0..6).map(|n|format!("line{n}")).collect();
         let mut tty=Terminal::new_ssh(shell);tty.output.clear();
-        tty.input(b"\\x1b[<65;2;4M");
+        tty.shell.history.remove(0);tty.reconcile_matrix_selection();
         let out=String::from_utf8_lossy(&tty.output);
         assert!(out.contains("\\x1b[1S"));assert!(out.contains("\\x1b[6;1Hline3"));
         assert!(!out.contains("line1"));assert!(!out.contains("line2"));assert!(!out.contains("TrueOS"));
-        tty.output.clear();tty.input(b"\\x1b[<64;2;4M");
+        tty.output.clear();tty.shell.history.insert(0,"line0".into());tty.reconcile_matrix_selection();
         let out=String::from_utf8_lossy(&tty.output);
         assert!(out.contains("\\x1b[1T"));assert!(out.contains("\\x1b[4;1Hline0"));
         tty.output.clear();tty.shell.history.insert(0,"newest".into());tty.reconcile_matrix_selection();

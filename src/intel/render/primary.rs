@@ -365,6 +365,7 @@ pub(crate) enum ResidentSceneFragmentContract {
     VoxyHeadless,
     VoxyHeadlessTexture,
     VoxyFigure,
+    VoxyFlatCloud,
     // scissor xyxy, cull enable, blend enable, then RGB/alpha source/dest factors.
     FixedGl([u32; 10]),
 }
@@ -390,6 +391,9 @@ fn resident_scene_shader_pipeline(
         (ResidentSceneFragmentContract::VoxyHeadlessTexture, true)
             if vertex_format == TriangleVertexFormat::VoxyHeadless && vertex_stride == 32 =>
                 Ok(crate::intel::shader::voxy_headless_texture_pipeline()),
+        (ResidentSceneFragmentContract::VoxyFlatCloud, true)
+            if vertex_format == TriangleVertexFormat::PosUv && vertex_stride == 20 =>
+                crate::intel::shader::voxy_flat_cloud_pipeline(),
         (ResidentSceneFragmentContract::VoxyFigure, true)
             if vertex_format == TriangleVertexFormat::VoxyFigure && vertex_stride == 8 =>
                 crate::intel::shader::voxy_figure_pipeline(),
