@@ -3135,6 +3135,49 @@ fn record_fixed_draw_times(phases: [u64; 5], total_ns: u64) {
     }
 }
 
+// Cloud-only successful submission wall times. GPU polling is included in
+// render time; these are not hardware GPU timestamps or producer upload time.
+#[derive(Default)]
+struct CloudDrawTimes {
+    extent: (u32, u32),
+    samples: u64,
+    phases: [u64; 5],
+    total_ns: u64,
+    max_total_ns: u64,
+    max_render_ns: u64,
+}
+static CLOUD_DRAW_TIMES: spin::Mutex<CloudDrawTimes> = spin::Mutex::new(CloudDrawTimes {
+    extent: (0, 0), samples: 0, phases: [0; 5], total_ns: 0,
+    max_total_ns: 0, max_render_ns: 0,
+});
+fn record_cloud_draw_times(extent: (u32, u32), phases: [u64; 5], total_ns: u64) {
+    let report = {
+        let mut totals = CLOUD_DRAW_TIMES.lock();
+        if totals.extent != extent {
+            *totals = CloudDrawTimes { extent, ..Default::default() };
+        }
+        totals.samples += 1;
+        for (sum, value) in totals.phases.iter_mut().zip(phases) {
+            *sum = sum.saturating_add(value);
+        }
+        totals.total_ns = totals.total_ns.saturating_add(total_ns);
+        totals.max_total_ns = totals.max_total_ns.max(total_ns);
+        totals.max_render_ns = totals.max_render_ns.max(phases[2]);
+        if totals.samples >= 128 {
+            Some(core::mem::replace(&mut *totals, CloudDrawTimes { extent, ..Default::default() }))
+        } else { None }
+    };
+    if let Some(t) = report {
+        let average_us = |ns: u64| ns / t.samples / 1000;
+        crate::log_important!(target: "render";
+            "voxy-clouds: phase=timing samples={} target={}x{} avg_prepare_us={} avg_mesh_us={} avg_render_us={} avg_retire_us={} avg_gpu_poll_us={} avg_total_us={} max_render_us={} max_total_us={} scope=successful-cloud-submissions-wall-time-poll-nested-in-render\n",
+            t.samples, extent.0, extent.1,
+            average_us(t.phases[0]), average_us(t.phases[1]), average_us(t.phases[2]),
+            average_us(t.phases[3]), average_us(t.phases[4]), average_us(t.total_ns),
+            t.max_render_ns / 1000, t.max_total_ns / 1000);
+    }
+}
+
 /// Resolve one bounded WGPU indexed draw into the existing authenticated
 /// Render frontier. The broker understands only byte layouts, opaque handles,
 /// and the admitted shader-package interface.
@@ -3931,6 +3974,16 @@ pub(crate) fn submit_ui4_indexed_draw(
         physical_serial: release.sequence(),
         physical_publish_sequence: release.sequence(),
     };
+    if flat_clouds {
+        let end = crate::chronos::monotonic_nanos();
+        record_cloud_draw_times((width, height), [
+            timing_prepared.saturating_sub(timing_start),
+            timing_mesh.saturating_sub(timing_prepared),
+            timing_rendered.saturating_sub(timing_mesh),
+            end.saturating_sub(timing_rendered),
+            rendered.as_ref().map_or(0, |r| r.gpu_poll_us.saturating_mul(1000)),
+        ], end.saturating_sub(timing_start));
+    }
     if fixed_state.is_some() {
         let end = crate::chronos::monotonic_nanos();
         record_fixed_draw_times(
@@ -3949,7 +4002,9 @@ pub(crate) fn submit_ui4_indexed_draw(
     crate::log_info!(target: "vgpu";
         "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} topology={:?} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
         principal,
-        if voxy_camera.is_some() {
+        if flat_clouds {
+            v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64
+        } else if voxy_camera.is_some() {
             if sampled_texture.is_some() {
                 v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64
             } else { v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64 }

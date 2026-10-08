@@ -52,6 +52,8 @@ mod spin {
 use spin::Once;
 static MATRIX_SLOTS:Once<spin::Mutex<MatrixSlotsState>>=Once::new();
 mod tui {
+pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<crate::update::RenderedLine>> {None}
+pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
 #[derive(Clone,Copy)] pub struct Frontend {pub id:u64,pub cols:usize,pub rows:usize}
 pub fn select(_:Frontend,_:Option<&str>)->bool {true}
 pub fn park(_:u64)->bool {true}

@@ -37,7 +37,11 @@ mod service {pub static RELEASED:std::sync::Mutex<Vec<u32>>=std::sync::Mutex::ne
 const OPERATOR: char = '§';
 const SpecialSeperator:char='│';
 struct RowStrips {left:Vec<MetaFmtStr>}
-struct Shell3 { history:Vec<String>, matrix_scroll:usize, notices:Vec<String>, pointer:Vec<(Option<usize>,bool)>, size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
+mod tui {
+    pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<super::update::RenderedLine>> {None}
+    pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
+}
+struct Shell3 { tui_frontend:u64, history:Vec<String>, matrix_scroll:usize, notices:Vec<String>, pointer:Vec<(Option<usize>,bool)>, size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal_reserved(_:u32,_:Option<u16>)->Self {Self::new_terminal().unwrap()}
     fn new_terminal_sized_reserved(_:u32,_:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal().unwrap()}
@@ -63,7 +67,7 @@ impl Shell3 {
     fn get_size(&self)->(usize,usize) {self.size}
     fn set(&mut self,cols:usize,rows:usize) {self.size=(cols,rows);}
     fn new_terminal() -> Result<Self, ()> {
-        Ok(Self { history:Vec::new(), matrix_scroll:0, notices:Vec::new(), pointer:Vec::new(), size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
+        Ok(Self { tui_frontend:1, history:Vec::new(), matrix_scroll:0, notices:Vec::new(), pointer:Vec::new(), size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }

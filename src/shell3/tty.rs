@@ -20,6 +20,7 @@ pub(super) struct Terminal {
     prompt_name: String,
     controls: Option<Vec<super::update::RenderedLine>>,
     cursor_column: Option<usize>,
+    terminal_active: bool,
     pub output: Vec<u8>,
     pub closing: bool,
     pub overflow: bool,
@@ -46,6 +47,7 @@ impl Terminal {
             prompt_name: String::new(),
             controls: controls.then(Vec::new),
             cursor_column: None,
+            terminal_active: false,
             output: Vec::new(),
             closing: false,
             overflow: false,
@@ -103,7 +105,8 @@ impl Terminal {
     // to the selected Matrix buffer. Cursor addressing still uses screen rows.
     fn set_matrix_region(&mut self) {
         let (_, rows) = self.shell.get_size();
-        self.write(format!("\x1b[4;{rows}r").as_bytes());
+        if self.terminal_active { self.write(b"\x1b[r"); }
+        else { self.write(format!("\x1b[4;{rows}r").as_bytes()); }
     }
 
     fn notice(&mut self, text: &str) {
@@ -117,16 +120,24 @@ impl Terminal {
     }
 
     fn refresh_controls(&mut self) {
-        let Some(previous) = self.controls.as_ref() else { return };
-        if self.closing { return; }
-        let mut current = self.shell.capture_matrix_snapshot().rendered_lines();
+        if self.controls.is_none() || self.closing { return; }
+        let app = super::tui::snapshot(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref());
+        let active = app.is_some();
+        if active != self.terminal_active {
+            self.terminal_active = active;
+            self.write(b"\x1b[0m\x1b[2J\x1b[H");
+            self.set_matrix_region();
+            self.controls.as_mut().unwrap().clear();
+        }
+        let mut current = app.unwrap_or_else(|| self.shell.capture_matrix_snapshot().rendered_lines());
+        let previous = self.controls.as_ref().unwrap();
         // The native cursor supplies the blinking block; its underlying cell
         // remains a plain blank, carrying no printable cursor glyph.
-        let cursor = current.get(2).and_then(|row| row.iter().position(|(_, color)| color.is_some_and(RgbaColor::blink)));
+        let cursor = if active { None } else { current.get(2).and_then(|row| row.iter().position(|(_, color)| color.is_some_and(RgbaColor::blink))) };
         if let Some(column) = cursor { current[2][column].1 = None; }
         let mut previous = previous.clone();
         let mut shifted = false;
-        if previous.len() == current.len() && previous.len() > 4
+        if !active && previous.len() == current.len() && previous.len() > 4
             && previous[3..] != current[3..]
             && previous[3].len() == current[3].len()
         {
@@ -334,6 +345,16 @@ impl Terminal {
         for &byte in bytes {
             if self.closing {
                 break;
+            }
+            // A leased crossterm app receives terminal bytes directly, including
+            // arrows, Tab, Enter and Ctrl-C/D. Decode UTF-8 through the shared
+            // keyboard path so § can still park the lease as it does in UI4.
+            if self.controls.is_some() && self.utf8_len == 0 && byte.is_ascii()
+                && super::tui::input(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref(), &[byte])
+            {
+                self.escape = 0;
+                self.after_cr = false;
+                continue;
             }
             // CRLF can straddle packets; a lone CR or LF also submits once.
             if byte == b'\n' && self.after_cr {

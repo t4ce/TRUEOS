@@ -12,11 +12,13 @@ extract.ROOT = ROOT
 def main():
     shell = (ROOT / 'src/shell3/shell3.rs').read_text()
     source = '#![allow(dead_code)]\nextern crate alloc;\nuse alloc::{string::String,vec::Vec};\n'
-    source += extract.item('src/shell3/shell3.rs', 'RgbaColor')
+    for name in ('RgbaColor','SpecialRows','StripSide'):
+        source += extract.item('src/shell3/shell3.rs', name)
     source += re.search(r'^impl RgbaColor \{.*?^}', shell, re.M | re.S).group()
+    source += f'#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;use metafmtstr::MetaFmtStr;\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
     source += '''
+const SpecialSeperator:char='│';
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
-mod update {pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>;}
 mod service {pub fn notify_work(){}}
 struct MatrixSlots;
 impl MatrixSlots {fn drop_slot(name:Option<&str>)->bool {if let Some(name)=name {shell2::free_name(name);}true}}
@@ -120,6 +122,60 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     let pointer=ui4::Ui4PointerEvent {source:0,window:1,x:0,y:0,local_x:6,local_y:11,dx:0,dy:0,wheel:0,buttons_down:1,buttons_pressed:1,buttons_released:0,combo_id:0,vcursor:false};
     tui::pointer(f.id,Some("keys"),&pointer,1);assert_eq!(*hv::INPUT.lock().unwrap(),b"\\x1b[<0;2;2M");
     tui::release(&t,4);hv::INPUT.lock().unwrap().clear();assert!(!tui::keyboard(f.id,Some("keys"),&e));tui::pointer(f.id,Some("keys"),&pointer,1);assert!(hv::INPUT.lock().unwrap().is_empty());
+}
+'''
+    source += r'''
+struct RowStrips {left:Vec<MetaFmtStr>}
+struct Shell3 {tui_frontend:u64,name:String,size:(usize,usize),prompt:String,mode:u8}
+impl Shell3 {
+    fn row_for_render(&self,_:SpecialRows)->RowStrips {RowStrips {left:vec![MetaFmtStr::new("TrueOS")]}}
+    fn active_matrix_slot_name(&self)->Option<String>{Some(self.name.clone())}
+    fn set_mode(&mut self,mode:u8){self.mode=mode;}
+    fn get_mode(&self)->u8{self.mode}
+    fn get_size(&self)->(usize,usize){self.size}
+    fn set(&mut self,cols:usize,rows:usize){self.size=(cols,rows);tui::select(tui::Frontend {id:self.tui_frontend,cols,rows},Some(&self.name));}
+    fn prompt(&self)->&str{&self.prompt}
+    fn set_prompt(&mut self,text:&str){self.prompt=text.into();}
+    fn set_cursor(&mut self,_:usize){}
+    fn reconcile_matrix_selection(&mut self){}
+    fn record_terminal_notice(&mut self,_:&str){}
+    fn replay_terminal_line(&mut self,_:&str){}
+    fn capture_matrix_snapshot(&self)->update::Snapshot{
+        let title=[MetaFmtStr::new("TrueOS")];let prompt=[MetaFmtStr::new(self.prompt.clone()),MetaFmtStr::new(" ").blink()];
+        update::Snapshot::new(self.size,0,[(&title,&[]),(&[],&[]),(&prompt,&[])],self.size.0).with_matrix(&[],0)
+    }
+    fn handle_keyboard_with_latch(&mut self,e:&r::keyboard::TrueosKeyboardOutputEvent)->(bool,bool){
+        let operator=e.kind==r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT && e.codepoint=='§' as u32;
+        if operator {tui::park(self.tui_frontend);}
+        else if tui::keyboard(self.tui_frontend,Some(&self.name),e){return (true,false);}
+        if e.kind==r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT{self.prompt.push(char::from_u32(e.codepoint).unwrap());}
+        (true,false)
+    }
+}
+'''
+    source += 'mod tty {\n'+(ROOT/'src/shell3/tty.rs').read_text().replace('//!','//')+'\n}\n'
+    source += r'''
+#[test] fn ssh_shares_tui_frames_raw_input_resize_park_release_and_reentry(){
+    let (f,t)=session("ssh-tui",7,12,5);
+    let shell=Shell3 {tui_frontend:f.id,name:"ssh-tui".into(),size:(12,5),prompt:String::new(),mode:3};
+    let mut tty=tty::Terminal::new_ssh(shell);tty.output.clear();
+    assert_eq!(tui::claim(&t,7),Some(true));
+    tui::write(&t,7,b"\x1b[?25l\x1b[2J\x1b[2;3H\x1b[38;2;1;2;3mAPP");
+    tty.reconcile_matrix_selection();let out=String::from_utf8_lossy(&tty.output);
+    assert!(out.contains("\x1b[r"));assert!(out.contains("APP"));assert!(out.contains("38;2;1;2;3m"));assert!(!out.contains("TrueOS"));
+    hv::INPUT.lock().unwrap().clear();let keys=b"\x1b[A\x1b[B\x1b[D\x1b[C\x1b[3~\t\r\x03\x04";
+    for byte in keys {tty.input(&[*byte]);}
+    tty.input("é".as_bytes());let mut expected=keys.to_vec();expected.extend("é".as_bytes());
+    assert_eq!(*hv::INPUT.lock().unwrap(),expected);assert!(!tty.closing);
+    tty.output.clear();tty.resize(16,7);assert_eq!(tui::snapshot(f.id,Some("ssh-tui")).unwrap().len(),7);
+    assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[r"));
+    tty.output.clear();tty.input(b"\xc2");assert!(tui::active(f.id,Some("ssh-tui")));tty.input(b"\xa7");
+    assert!(!tui::active(f.id,Some("ssh-tui")));let out=String::from_utf8_lossy(&tty.output);
+    assert!(out.contains("TrueOS"));assert!(out.contains("\x1b[4;7r"));
+    tui::request(tui::Frontend {cols:16,rows:7,..f},"ssh-tui").unwrap();assert_eq!(tui::claim(&t,7),Some(true));
+    tty.output.clear();tty.reconcile_matrix_selection();assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[r"));
+    assert_eq!(tui::release(&t,7),Some(true));tty.output.clear();tty.reconcile_matrix_selection();
+    assert!(String::from_utf8_lossy(&tty.output).contains("TrueOS"));
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-tui-') as directory:
