@@ -31,7 +31,8 @@ use super::*;
 pub struct Terminal {pub shell:Shell3,pub input_bytes:Vec<u8>,pub output:Vec<u8>,pub overflow:bool,pub closing:bool}
 impl Terminal {pub fn reconcile_matrix_selection(&mut self) {} pub fn new(shell:Shell3)->Self {Self {shell,input_bytes:Vec::new(),output:Vec::new(),overflow:false,closing:false}} pub fn input(&mut self,data:&[u8]) {assert_eq!(CURRENT_SLOT.get(),self.shell.slot);self.input_bytes.extend_from_slice(data);self.output.extend_from_slice(data);}}
 }
-mod service {}
+mod service {pub fn release_shell_on_executor(slot:u32){assert_eq!(crate::CURRENT_SLOT.get(),slot);if slot==2 {crate::DROPPED_2.fetch_add(1,crate::Ordering::Relaxed);}else {crate::DROPPED_7.fetch_add(1,crate::Ordering::Relaxed);}}}
+#[macro_export] macro_rules! log_info {(target: $target:literal; $($args:tt)*)=>{let _=format!($($args)*);};}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] struct NetHandle(u32);
 enum NetEvent {TcpData {handle:NetHandle,data:Vec<u8>},TcpSent {handle:NetHandle,len:usize},Closed {handle:NetHandle}}
 enum NetCommand {SendTcp {handle:NetHandle,data:Vec<u8>},Close {handle:NetHandle},FinishTcp {handle:NetHandle}}
@@ -43,6 +44,7 @@ impl core::ops::Add<Duration> for Instant {type Output=Self;fn add(self,d:Durati
     source+=extract.item('src/net/adapter.rs','NetQueue')
     adapter=(ROOT/'src/net/adapter.rs').read_text()
     source+=re.search(r'^impl<T> NetQueue<T> \{.*?^}',adapter,re.M|re.S).group()
+    source+=(ROOT/'tools/testpy/shell3_ssh_unavailable.rs').read_text()
     net=(ROOT/'src/shell3/net.rs').read_text()
     source+='mod net {use super::*;use super::tty::Terminal;\n'
     source+=net[net.index('const WRITE_TIMEOUT_MS'):net.index('#[trueos_executor::task]')]
@@ -58,9 +60,10 @@ impl core::ops::Add<Duration> for Instant {type Output=Self;fn add(self,d:Durati
     assert!(a.has_events()); assert!(b.has_events());
     CURRENT_SLOT.set(2); a.poll();
     assert_eq!(a.connections.len(),2); assert!(b.connections.is_empty());
-    assert_eq!(a.connections[0].terminal.as_ref().unwrap().shell.peer_port,Some(49152));
+    assert!(a.connections[0].terminal.is_none());
+    assert_eq!(a.connections[0].pending.as_ref().unwrap().peer_port,Some(49152));
     assert_eq!(a.connections[1].terminal.as_ref().unwrap().shell.peer_port,Some(65535));
-    assert!(a.connections[0].terminal.as_ref().unwrap().input_bytes.is_empty());
+
     assert_eq!(a.connections[1].terminal.as_ref().unwrap().input_bytes,b"second");
     CURRENT_SLOT.set(7); b.poll();
     assert_eq!(b.connections[0].terminal.as_ref().unwrap().input_bytes,b"other AP");

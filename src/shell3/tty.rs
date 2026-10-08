@@ -13,13 +13,15 @@ pub(super) struct Terminal {
     utf8_len: usize,
     escape: u8,
     after_cr: bool,
+    prompt_name: String,
     pub output: Vec<u8>,
     pub closing: bool,
     pub overflow: bool,
 }
 
 impl Terminal {
-    pub fn new(shell: Shell3) -> Self {
+    pub fn new(mut shell: Shell3) -> Self {
+        shell.set_mode(3);
         let mut terminal = Self {
             shell,
             line: String::new(),
@@ -28,11 +30,14 @@ impl Terminal {
             utf8_len: 0,
             escape: 0,
             after_cr: false,
+            prompt_name: String::new(),
             output: Vec::new(),
             closing: false,
             overflow: false,
         };
-        terminal.write(b"\x1b[?1049h\x1b[0m\x1b[2J\x1b[H");
+        // Save the local wheel mode and stop alternate-screen wheel events
+        // from becoming arrow keys in nc's locally echoed input buffer.
+        terminal.write(b"\x1b[?1007s\x1b[?1007l\x1b[?1049h\x1b[0m\x1b[2J\x1b[H");
         let title = terminal.shell.row_for_render(SpecialRows::TitleRow);
         for run in &title.left {
             terminal.write_meta(run);
@@ -79,26 +84,37 @@ impl Terminal {
         // Match the selected Matrix slot's UI4 highlight.
         self.write_meta(&MetaFmtStr::new(prompt).color(RgbaColor::Pink));
         self.write(b" ");
+        self.prompt_name = self.shell.active_matrix_slot_name().unwrap_or_default();
+        self.write(b"\x1b7");
+    }
+
+    fn reset_input(&mut self) {
+        self.write(b"\x1b8\x1b[K");
+        if self.prompt_name != self.shell.active_matrix_slot_name().unwrap_or_default() {
+            self.write(b"\r\x1b[2K");
+            self.prompt();
+        }
     }
 
     fn submit(&mut self) {
-        self.write(b"\r\n");
+        self.reset_input();
         let line = core::mem::take(&mut self.line);
         let command = line.trim();
         if core::mem::take(&mut self.line_overflow) {
-            self.write(b"Input exceeded 1024 bytes; line discarded.\r\n");
-            self.prompt();
+            self.write(b"\r\nInput exceeded 1024 bytes; line discarded.\r\n");
+            self.shell.set_prompt("");
+            self.reset_input();
             return;
         }
         match command {
-            "help" => self.write(b"UTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"),
+            "help" => self.write(b"\r\nUTF-8 line input; Enter replays the line as Shell3 typing; Backspace erases.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nThe first name match consumes the line; remaining characters are discarded.\r\nReplay stops at an impossible name prefix; Matrix operators are submitted with Enter.\r\n"),
             // The remote terminal interprets these bytes; TCP only carries them.
-            "clear" => self.write(b"\x1b[2J\x1b[H"),
+            "clear" => { self.write(b"\x1b[2J\x1b[H"); self.prompt(); },
             "tab" => {
                 self.shell.set_mode(self.shell.get_mode() % 3 + 1);
             }
             "exit" => {
-                self.write(b"\x1b[0m\x1b[?1049lBye.\r\n");
+                self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
                 self.closing = true;
             }
             _ => {
@@ -108,13 +124,16 @@ impl Terminal {
         // Enter consumes this submission, including any unmatched prefix.
         self.shell.set_prompt("");
         if !self.closing {
-            self.prompt();
+            self.reset_input();
         }
     }
 
     fn erase(&mut self) {
         if self.line.pop().is_some() {
-            self.write(b"\x08 \x08");
+            self.write(b"\x1b8");
+            let count = self.line.chars().count();
+            if count > 0 { self.write(format!("\x1b[{count}C").as_bytes()); }
+            self.write(b"\x1b[K");
         }
     }
 
@@ -159,19 +178,17 @@ impl Terminal {
                     8 | 127 => self.erase(),
                     b'\t' => {
                         self.shell.set_mode(self.shell.get_mode() % 3 + 1);
-                        self.write(b"\r\n");
-                        self.prompt();
+                        self.reset_input();
                         let line = self.line.clone();
                         self.write(line.as_bytes());
                     }
                     3 => {
                         self.line.clear();
                         self.line_overflow = false;
-                        self.write(b"^C\r\n");
-                        self.prompt();
+                        self.reset_input();
                     }
                     4 if self.line.is_empty() => {
-                        self.write(b"\x1b[0m\x1b[?1049l\r\nBye.\r\n");
+                        self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007r\r\nBye.\r\n");
                         self.closing = true;
                     }
                     21 => {
@@ -200,6 +217,9 @@ impl Terminal {
                     }
                     if !ch.is_control() && !self.line_overflow {
                         self.line.push(ch);
+                        self.write(b"\x1b8");
+                        let offset = self.line.chars().count() - 1;
+                        if offset > 0 { self.write(format!("\x1b[{offset}C").as_bytes()); }
                         let encoded = self.utf8;
                         self.write(&encoded[..self.utf8_len]);
                     } else {

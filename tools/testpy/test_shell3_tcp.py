@@ -25,10 +25,14 @@ use std::cell::{Cell, RefCell};
     source += re.search(r'^impl RgbaColor \{.*?^}', (ROOT/'src/shell3/shell3.rs').read_text(), re.M | re.S).group()
     source += f'\n#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
     source += '''
+static SSH_LOGS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+#[macro_export] macro_rules! log_info { (target: $target:literal; $($args:tt)*) => {crate::SSH_LOGS.lock().unwrap().push(format!($($args)*));}; }
+mod service {pub static RELEASED:std::sync::Mutex<Vec<u32>>=std::sync::Mutex::new(Vec::new());pub fn release_shell_on_executor(slot:u32){RELEASED.lock().unwrap().push(slot);}}
 const OPERATOR: char = '§';
 struct RowStrips {left:Vec<MetaFmtStr>}
 struct Shell3 { vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
+    fn new_terminal_reserved(_:u32,_:Option<u16>)->Self {Self::new_terminal().unwrap()}
     fn new_terminal() -> Result<Self, ()> {
         Ok(Self { vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
@@ -53,11 +57,21 @@ mod tty {
 '''
     source += (ROOT/'src/shell3/tty.rs').read_text().replace('//!', '//')
     source += '''
+impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.borrow().clone()}}
 #[cfg(test)] mod tests {
     use super::*;
     fn terminal() -> Terminal {
         let mut tty = Terminal::new(Shell3::new_terminal().unwrap());
         tty.output.clear(); tty
+    }
+    #[test] fn adapter_starts_in_adm_and_enter_reuses_the_existing_prompt() {
+        let mut tty=terminal();assert_eq!(tty.shell.get_mode(),3);
+        // A canonical nc client sends this after locally echoing '.' and Enter.
+        tty.input(b".\\r");tty.input(b"\\n");
+        assert_eq!(tty.output,b"\\x1b8.\\x1b8\\x1b[K\\x1b8\\x1b[K");
+        assert!(tty.line.is_empty());assert!(tty.shell.prompt.is_empty());
+        tty.output.clear();tty.input(b"tab\\n");assert_eq!(tty.shell.get_mode(),1);
+        assert!(!String::from_utf8_lossy(&tty.output).contains("§sh1"));
     }
     #[test] fn metadata_emits_foreground_background_underline_and_resets() {
         let mut tty=terminal();
@@ -75,13 +89,16 @@ mod tty {
     }
     #[test] fn connection_banner_contains_only_title_and_slot_prompt() {
         let tty=Terminal::new(Shell3::new_terminal().unwrap());
-        assert_eq!(tty.output, "\\x1b[?1049h\\x1b[0m\\x1b[2J\\x1b[HTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m ".as_bytes());
+        assert_eq!(tty.output, "\\x1b[?1007s\\x1b[?1007l\\x1b[?1049h\\x1b[0m\\x1b[2J\\x1b[HTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m \\x1b7".as_bytes());
     }
     #[test] fn clear_screen_returns_to_active_slot_prompt() {
         let mut tty=terminal();
         tty.input(b"\\t");tty.output.clear();
         tty.input(b"clear\\r");tty.input(b"\\n");
-        assert_eq!(tty.output, "clear\\r\\n\\x1b[2J\\x1b[H\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m ".as_bytes());
+        let output=String::from_utf8_lossy(&tty.output);
+        assert_eq!(output.matches("\\x1b[2J").count(),1);
+        assert_eq!(output.matches("§sh1").count(),1);
+        assert!(output.ends_with("\\x1b7\\x1b8\\x1b[K"));
         assert!(tty.shell.parsed.borrow().is_empty());
         assert_eq!(tty.shell.prompt, "");assert!(!tty.closing);
         tty.input(b"known\\n");
@@ -95,7 +112,7 @@ mod tty {
         assert_eq!(tty.shell.prompt, "");assert_eq!(tty.shell.cursor,0);
         let output=String::from_utf8_lossy(&tty.output);
         assert!(!output.contains("unknown name"));assert!(!output.contains("not wired"));
-        assert_eq!(output.matches("§sh1").count(),1);
+        assert_eq!(output.matches("§sh1").count(),0);
     }
     #[test] fn fragmented_unicode_crlf_and_backspace() {
         let mut tty = terminal();
@@ -104,7 +121,7 @@ mod tty {
         assert_eq!(tty.shell.prompt, "§"); assert_eq!(tty.shell.cursor, 1);
         tty.input(b"\\r"); tty.input(b"\\n");
         assert_eq!(&*tty.shell.parsed.borrow(), &["§"]);
-        assert_eq!(String::from_utf8_lossy(&tty.output).matches("§sh1").count(), 1);
+        assert_eq!(String::from_utf8_lossy(&tty.output).matches("§sh1").count(), 0);
     }
     #[test] fn every_packet_split_produces_identical_results() {
         let input = "§é😀\\x7f\\tknown\\r\\nnext\\n".as_bytes();
@@ -119,7 +136,7 @@ mod tty {
     #[test] fn independent_modes_and_prompts() {
         let mut first = terminal(); let mut second = terminal();
         first.input(b"\\tfirst"); second.input(b"second");
-        assert_eq!(first.shell.get_mode(), 2); assert_eq!(second.shell.get_mode(), 1);
+        assert_eq!(first.shell.get_mode(), 1); assert_eq!(second.shell.get_mode(), 3);
         assert_eq!(first.shell.prompt, "first"); assert_eq!(second.shell.prompt, "second");
         first.input(b"\\x03"); assert_eq!(first.shell.prompt, "");
         assert_eq!(second.shell.prompt, "second");
@@ -142,11 +159,11 @@ mod tty {
         let mut tty = terminal(); tty.input(b"known\\nhelp\\nexit\\nignored\\n");
         assert_eq!(&*tty.shell.parsed.borrow(), &["known"]);
         assert!(tty.closing);
-        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1049l"));
+        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1049l\\x1b[?1007r"));
         assert!(String::from_utf8_lossy(&tty.output).contains("Enter replays the line"));
         let mut eof = terminal(); eof.input(b"x\\x04"); assert!(!eof.closing);
         eof.input(b"\\x7f\\x04"); assert!(eof.closing);
-        assert!(String::from_utf8_lossy(&eof.output).contains("\\x1b[?1049l"));
+        assert!(String::from_utf8_lossy(&eof.output).contains("\\x1b[?1049l\\x1b[?1007r"));
     }
 }
 }
@@ -170,14 +187,49 @@ mod net {
 use super::*;
 use super::tty::Terminal;
 '''
+    source = source[:source.rindex('mod net {')] + (ROOT/'tools/testpy/shell3_ssh_unavailable.rs').read_text() + source[source.rindex('mod net {'):]
     net = (ROOT/'src/shell3/net.rs').read_text()
     source += net[net.index('const WRITE_TIMEOUT_MS'):net.index('enum WorkerEvent')]
     source += '''
 #[cfg(test)] mod tests {
     use super::*;
+    fn connection(handle:NetHandle)->Connection {
+        let mut connection=Connection::new(handle,0,None,Instant(0));
+        connection.open_plaintext();connection
+    }
     fn queue() -> NetQueue<NetCommand> { NetQueue { full: Cell::new(false), commands: RefCell::new(Vec::new()) } }
+    #[test] fn ssh_with_unavailable_credential_is_logged_and_rejected_at_every_packet_split() {
+        let identification=b"SSH-2.0-OpenSSH_9.9\\r\\n";
+        for split in 0..=identification.len() {
+            let queue=queue();let mut c=Connection::new(NetHandle(77),7107,Some(49152),Instant(0));
+            assert!(c.flush(&queue,Instant(0)));assert!(queue.commands.borrow().is_empty());
+            c.input(&identification[..split]);c.input(&identification[split..]);
+            assert!(c.rejected);assert!(c.terminal.is_none());
+            queue.full.set(true);assert!(c.flush(&queue,Instant(10)));
+            queue.full.set(false);assert!(!c.flush(&queue,Instant(11)));
+            assert!(matches!(&queue.commands.borrow()[0],NetCommand::Close {handle:NetHandle(77)}));
+        }
+        assert!(crate::SSH_LOGS.lock().unwrap().iter().any(|line|line.contains("protocol=ssh")&&line.contains("plaintext=0")));
+        assert!(crate::service::RELEASED.lock().unwrap().contains(&7107));
+    }
+    #[test] fn probe_preserves_plaintext_prefix_and_delays_silent_greeting() {
+        let queue=queue();let mut c=Connection::new(NetHandle(88),0,None,Instant(0));
+        assert!(c.flush(&queue,Instant(999)));assert!(queue.commands.borrow().is_empty());
+        assert!(c.flush(&queue,Instant(1000)));assert!(c.terminal.is_some());
+        assert!(matches!(&queue.commands.borrow()[0],NetCommand::SendTcp {..}));
+        let mut c=Connection::new(NetHandle(89),0,None,Instant(0));
+        c.input(b"S");assert!(c.terminal.is_none());
+        c.input(b"how\\n");assert!(!c.rejected);
+        assert_eq!(c.terminal.as_ref().unwrap().submitted(),vec!["Show"]);
+    }
+    #[test] fn partial_ssh_prefix_times_out_without_starting_plaintext() {
+        let queue=queue();let mut c=Connection::new(NetHandle(90),7108,None,Instant(0));
+        c.input(b"SSH");assert!(!c.flush(&queue,Instant(1000)));
+        assert!(c.rejected);assert!(c.terminal.is_none());
+        assert!(matches!(&queue.commands.borrow()[0],NetCommand::Close {..}));
+    }
     #[test] fn queue_rejection_preserves_bytes_and_one_write_is_in_flight() {
-        let queue = queue(); let mut connection = Connection::new(NetHandle(1), Shell3::new_terminal().unwrap());
+        let queue = queue(); let mut connection = connection(NetHandle(1));
         let banner = connection.terminal.as_ref().unwrap().output.clone();
         queue.full.set(true); assert!(connection.flush(&queue, Instant(0)));
         assert_eq!(connection.terminal.as_ref().unwrap().output, banner);
@@ -189,10 +241,10 @@ use super::tty::Terminal;
         connection.in_flight = 0; connection.deadline = None;
         assert!(connection.flush(&queue, Instant(3)));
         assert_eq!(queue.commands.borrow().len(), 2);
-        assert!(matches!(&queue.commands.borrow()[1], NetCommand::SendTcp { handle: NetHandle(1), data } if data == b"x"));
+        assert!(matches!(&queue.commands.borrow()[1], NetCommand::SendTcp { handle: NetHandle(1), data } if data == b"\\x1b8x"));
     }
     #[test] fn graceful_finish_waits_for_output_and_has_teardown_deadline() {
-        let queue = queue(); let mut connection = Connection::new(NetHandle(2), Shell3::new_terminal().unwrap());
+        let queue = queue(); let mut connection = connection(NetHandle(2));
         connection.terminal.as_mut().unwrap().input(b"exit\\n");
         assert!(connection.flush(&queue, Instant(0)));
         assert!(matches!(&queue.commands.borrow()[0], NetCommand::SendTcp { .. }));
@@ -203,8 +255,8 @@ use super::tty::Terminal;
         assert!(!connection.flush(&queue, Instant(5002)));
     }
     #[test] fn stalled_peer_does_not_block_another_session() {
-        let queue = queue(); let mut first = Connection::new(NetHandle(1), Shell3::new_terminal().unwrap());
-        let mut second = Connection::new(NetHandle(2), Shell3::new_terminal().unwrap());
+        let queue = queue(); let mut first = connection(NetHandle(1));
+        let mut second = connection(NetHandle(2));
         first.flush(&queue, Instant(0)); second.flush(&queue, Instant(10));
         assert_eq!(queue.commands.borrow().len(), 2);
         queue.full.set(true); assert!(first.flush(&queue, Instant(30000)));

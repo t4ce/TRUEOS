@@ -392,6 +392,16 @@ pub(crate) fn begin_totp_enrollment() -> Result<CryTotpEnrollment, CryError> {
 }
 
 pub(crate) fn prepare_login(code: &str, scope_id: u8) -> Result<CryLoginReport, CryError> {
+    prepare_login_inner(code, scope_id, None)
+}
+
+/// Remote login requires an already enrolled, unlocked, durably sealed account.
+/// It shares the local validator's clock, replay counter, and attempt budget.
+pub(crate) fn prepare_remote_login(username: &str, code: &str) -> Result<CryLoginReport, CryError> {
+    prepare_login_inner(code, 0, Some(username))
+}
+
+fn prepare_login_inner(code: &str, scope_id: u8, remote_username: Option<&str>) -> Result<CryLoginReport, CryError> {
     let code = parse_totp_code(code).ok_or(CryError::InvalidTotpCode)?;
     let unix_seconds = totp_unix_seconds()?;
     let mut nonce = [0u8; 32];
@@ -408,6 +418,12 @@ pub(crate) fn prepare_login(code: &str, scope_id: u8) -> Result<CryLoginReport, 
     }
     let credential = state.credential.ok_or(CryError::NotConfigured)?;
     let username = state.username.clone().ok_or(CryError::NotConfigured)?;
+    if let Some(requested) = remote_username {
+        if requested != username || state.durable.is_none()
+            || !state.totp.as_ref().is_some_and(|factor| factor.active) {
+            return Err(CryError::NotAuthenticated);
+        }
+    }
     let machine = state.machine.ok_or(CryError::NotConfigured)?;
     let boot = state.boot.ok_or(CryError::NotConfigured)?;
     if state.signing_key.is_none() {
@@ -538,7 +554,7 @@ pub(crate) fn prepare_login(code: &str, scope_id: u8) -> Result<CryLoginReport, 
     };
     // A verified proof is not yet a session. The accepted TOTP step must be
     // durably sealed before command recording or other session gates open.
-    state.session = None;
+    if remote_username.is_none() { state.session = None; }
     state.pending_login = Some(PendingLogin {
         session,
         report: report.clone(),
@@ -622,9 +638,15 @@ pub(crate) fn prepare_persistence(challenge_sequence: u64) -> Result<CryPersiste
     })
 }
 
-pub(crate) fn complete_persisted_login(
-    plan: CryPersistencePlan,
-) -> Result<CryLoginReport, CryError> {
+pub(crate) fn complete_persisted_login(plan: CryPersistencePlan) -> Result<CryLoginReport, CryError> {
+    complete_persisted_login_inner(plan, true)
+}
+
+pub(crate) fn complete_persisted_remote_login(plan: CryPersistencePlan) -> Result<CryLoginReport, CryError> {
+    complete_persisted_login_inner(plan, false)
+}
+
+fn complete_persisted_login_inner(plan: CryPersistencePlan, local: bool) -> Result<CryLoginReport, CryError> {
     let mut state = CRY_STATE.lock();
     let pending = state
         .pending_login
@@ -655,7 +677,7 @@ pub(crate) fn complete_persisted_login(
         .pending_login
         .take()
         .ok_or(CryError::PersistenceStateChanged)?;
-    state.session = Some(pending.session);
+    if local { state.session = Some(pending.session); }
     Ok(pending.report)
 }
 
@@ -961,4 +983,17 @@ fn append_hex(output: &mut String, bytes: &[u8]) {
     for byte in bytes {
         let _ = write!(output, "{byte:02x}");
     }
+}
+
+/// Stable, domain-separated SSH host identity backed by the encrypted cry seed.
+/// No host identity is available before the account is unlocked and sealed.
+pub(crate) fn ssh_host_seed() -> Result<Zeroizing<[u8; 32]>, CryError> {
+    let state = CRY_STATE.lock();
+    if state.durable.is_none() { return Err(CryError::NotAuthenticated); }
+    let key = state.signing_key.as_ref().ok_or(CryError::NotConfigured)?;
+    let seed = Zeroizing::new(key.to_bytes());
+    let mut hash = Sha256::new();
+    hash.update(b"TRUEOS/ssh-host/ed25519/v1\0");
+    hash.update(seed.as_slice());
+    Ok(Zeroizing::new(hash.finalize().into()))
 }

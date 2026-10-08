@@ -33,6 +33,7 @@ struct Stream {
     session: VideoPlaybackSession,
     bytes: Vec<u8>,
     received: usize,
+    url: Option<alloc::string::String>,
     queued: bool,
     running: bool,
     looping: bool,
@@ -51,14 +52,32 @@ fn principal(owner: u32) -> Principal {
         Principal::HostRuntime
     }
 }
-/// V1 command protocol: begin/write/commit/acquire/release/close. All integers
-/// are little endian. Frame payload is texture:u64, sequence:u64, width:u32,
+/// V1 commands 0..=5: begin/write/commit/acquire/release/close; 6 opens an
+/// HTTPS URL (a=device, b=looping, input=URL); 7 pauses (a=stream, b=paused).
+/// All integers are little endian. Frame payload is texture:u64, sequence:u64, width:u32,
 /// height:u32. Acquire: 0 pending, 1 leased frame, 2 end, negative error.
 pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &mut [u8]) -> i32 {
-    if command == 0 {
-        if input.len() != 1 || input[0] > 1 || b == 0 || b > MAX_ENCODED as u64 {
-            return INVALID;
-        }
+    if command == 0 || command == 6 {
+        let url = if command == 6 {
+            let Ok(url) = core::str::from_utf8(input) else {
+                return INVALID;
+            };
+            if b > 1
+                || !url.starts_with("https://")
+                || url.len() > 3072
+                || url
+                    .bytes()
+                    .any(|c| c.is_ascii_control() || c.is_ascii_whitespace())
+            {
+                return INVALID;
+            }
+            Some(alloc::string::String::from(url))
+        } else {
+            if input.len() != 1 || input[0] > 1 || b == 0 || b > MAX_ENCODED as u64 {
+                return INVALID;
+            }
+            None
+        };
         // Validate owner/device before occupying a global decoder slot.
         if let Err(e) = vgpu::device_info(principal(owner), DeviceHandle::from_raw(a)) {
             return e.errno();
@@ -69,10 +88,12 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
             return BUSY;
         };
         let mut bytes = Vec::new();
-        if bytes.try_reserve_exact(b as usize).is_err() {
-            return FAILED;
+        if url.is_none() {
+            if bytes.try_reserve_exact(b as usize).is_err() {
+                return FAILED;
+            }
+            bytes.resize(b as usize, 0);
         }
-        bytes.resize(b as usize, 0);
         let Some(session) = crate::ui4::begin_texture_video_player(id) else {
             return BUSY;
         };
@@ -83,9 +104,10 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
             session,
             bytes,
             received: 0,
-            queued: false,
+            queued: url.is_some(),
+            url,
             running: false,
-            looping: input[0] != 0,
+            looping: if command == 6 { b != 0 } else { input[0] != 0 },
             closed: false,
             ended: false,
             error: 0,
@@ -107,7 +129,7 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
         return -1;
     };
     match command {
-        1 if !s.closed && !s.running && !s.queued && !input.is_empty() => {
+        1 if !s.closed && !s.running && !s.queued && s.url.is_none() && !input.is_empty() => {
             if b != s.received as u64 || input.len() > s.bytes.len() - s.received {
                 return INVALID;
             }
@@ -115,7 +137,13 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
             s.received += input.len();
             0
         }
-        2 if input.is_empty() && b == 0 && !s.closed && !s.running && !s.queued => {
+        2 if input.is_empty()
+            && b == 0
+            && !s.closed
+            && !s.running
+            && !s.queued
+            && s.url.is_none() =>
+        {
             if s.received != s.bytes.len() {
                 return INVALID;
             }
@@ -152,6 +180,10 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
                 return INVALID;
             };
             slot.state = SlotState::Free;
+            0
+        }
+        7 if input.is_empty() && b <= 1 && !s.closed => {
+            s.session.set_paused(b != 0);
             0
         }
         5 if input.is_empty() && b == 0 => {
@@ -402,10 +434,10 @@ pub async fn worker_task() {
                 .map(|s| {
                     s.queued = false;
                     s.running = true;
-                    (s.id, s.session, s.looping, core::mem::take(&mut s.bytes))
+                    (s.id, s.session, s.looping, core::mem::take(&mut s.bytes), s.url.clone())
                 })
         };
-        let Some((id, session, looping, bytes)) = request else {
+        let Some((id, session, looping, bytes, url)) = request else {
             Timer::after(Duration::from_millis(5)).await;
             continue;
         };
@@ -413,11 +445,18 @@ pub async fn worker_task() {
             if session.is_cancelled() {
                 break;
             }
-            let result = crate::intel::media::hw_vid::run_memory_texture_video_playback(
-                session,
-                bytes.clone(),
-            )
-            .await;
+            let result = if let Some(url) = url.as_deref() {
+                // The session's texture target routes the existing URL decoder
+                // into this owner's texture ring instead of a Shell2 window.
+                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback(session, url)
+                    .await
+            } else {
+                crate::intel::media::hw_vid::run_memory_texture_video_playback(
+                    session,
+                    bytes.clone(),
+                )
+                .await
+            };
             if let Err(reason) = result {
                 if !session.is_cancelled() {
                     crate::log_warn!(target: "service"; "vmedia-video: stream={} failed reason={}\n", id, reason);

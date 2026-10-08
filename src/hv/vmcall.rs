@@ -3453,7 +3453,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            if payload.len() < 8 || payload.len() > 3080 || arg0 > 5 {
+            // Commands 6 (URL stream) and 7 (pause) use the same bounded,
+            // owner-scoped transport as uploaded video commands 0..=5.
+            if payload.len() < 8 || payload.len() > 3080 || arg0 > 7 {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }

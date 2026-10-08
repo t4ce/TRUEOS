@@ -1,0 +1,45 @@
+# This is a minimal wrapper around ci.sh
+# ci.sh is intended to be usable locally without github.
+name: ci
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  all:
+    strategy:
+      matrix:
+        # 1.95 is an arbitrary minimum, tested to notice when it bumps
+        rust_version: [stable, 1.95]
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.rust_version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache Rust files
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/
+            ~/.rustup/
+            testing/target
+          # Save a unique cache each time
+          # (https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache)
+          key: rust-cache1-${{ matrix.rust_version }}-${{ github.run_id }}
+          # Load from the most recent match
+          restore-keys: |
+            rust-cache1-${{ matrix.rust_version }}
+
+      - name: build ${{ matrix.rust_version }}
+        run: ./testing/ci.sh
+
+      - name: picow bloat
+        uses: actions/upload-artifact@v7
+        with:
+          name: picow-bloat-${{ matrix.rust_version }}
+          path: ci_out/picow-bloat.txt

@@ -798,6 +798,11 @@ impl VideoPlaybackSession {
             || state.cancelled.load(Ordering::Acquire)
             || !state.occupied.load(Ordering::Acquire)
     }
+    pub(crate) fn set_paused(self, paused: bool) {
+        if !self.is_cancelled() {
+            self.state().paused.store(paused, Ordering::Release);
+        }
+    }
     pub(crate) async fn wait_until_playing(self) -> bool {
         loop {
             poll_decoded_video_player_input();

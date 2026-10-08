@@ -1,0 +1,8 @@
+max_width = 85
+use_small_heuristics = "Max"
+edition = "2024"
+
+## perhaps use once stabilised
+
+# trailing_semicolon = false
+# overflow_delimited_expr  = true

@@ -1,6 +1,7 @@
 mod metafmtstr;
 mod names;
 pub mod net;
+mod ssh;
 mod tty;
 mod status;
 pub(crate) mod tui;

@@ -53,6 +53,32 @@ impl Video {
         }
         Ok(Self { stream })
     }
+    /// Stream a browser-resolved HTTPS AVC MP4 through the kernel's existing
+    /// online decoder into this owner's GPU texture ring. No Shell2 window.
+    pub fn open_url(device: Device, url: &str, looping: bool) -> Result<Self, i32> {
+        if !url.starts_with("https://")
+            || url.len() > 3072
+            || url
+                .bytes()
+                .any(|c| c.is_ascii_control() || c.is_ascii_whitespace())
+        {
+            return Err(-3);
+        }
+        let id = command(6, device.raw(), looping as u64, url.as_bytes(), &mut []);
+        if id <= 0 {
+            return Err(if id == 0 { -3 } else { id });
+        }
+        Ok(Self {
+            stream: Arc::new(Stream { id: id as u32 }),
+        })
+    }
+
+    /// Pause/resume without releasing the current texture or decoder slot.
+    pub fn set_paused(&mut self, paused: bool) -> Result<(), i32> {
+        let rc = command(7, self.stream.id as u64, paused as u64, &[], &mut []);
+        if rc == 0 { Ok(()) } else { Err(rc) }
+    }
+
     /// Nonblocking acquisition. Keep the current frame while Pending; replace
     /// it only after obtaining another frame. Holding every ring slot applies
     /// backpressure to decoding. Drop a frame after its render submission retires.
