@@ -36,7 +36,7 @@ _ecdsa = [
     "dep:ecdsa",
     "ssh-key/ecdsa",
 ]
-alloc = ["ssh-key/alloc"]
+alloc = ["ssh-key?/alloc"]
 arbitrary = [
     "dep:arbitrary",
     "std",
@@ -58,7 +58,7 @@ rsa = [
 ]
 std = [
     "snafu/std",
-    "ssh-key/alloc",
+    "ssh-key?/alloc",
     "larger",
     "mlkem",
     "alloc",

@@ -33,6 +33,7 @@ mod r {pub mod readiness {pub fn mask()->u32 {0}} pub mod keyboard {
     #[derive(Default)] pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32,pub flags:u32,pub utf8:[u8;4],pub utf8_len:u8 }
 } }
 const PROMPT_CURSOR:char='#';
+const SpecialSeperator:char='│';
 const OPERATOR:char='§';
 '''
     for name in ('Mode', 'RgbaColor', 'SpecialRows', 'StripSide', 'PromptState', 'vmx_hash_text', 'vmx_title_meta', 'title_left_text', 'mode_title_meta', 'MatrixSlotsState', 'matrix_slots', 'matrix_slots_meta', 'matrix_slots_text', 'current_matrix_slots_text'):
@@ -90,21 +91,37 @@ impl Rows {fn row(&self,row:SpecialRows)->&Row {match row {SpecialRows::TitleRow
 #[derive(Clone)] struct RowStrips {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
 impl RowStrips {fn new(left:&str,right:&str)->Self {Self {left:vec![MetaFmtStr::new(left)],right:vec![MetaFmtStr::new(right)]}}}
 
-struct Shell3 {status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
+struct Shell3 {layout_generation:usize,status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
 impl Shell3 {
-fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
+fn new(columns:usize)->Self {Self {layout_generation:0,status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
+    for name in ('capture_controls_snapshot','launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
-    source += '}\n'
+    source += 'fn get_size(&self)->(usize,usize) {(self.columns,self.rows_count)} fn set(&mut self,cols:usize,rows:usize) {self.columns=cols;self.rows_count=rows;} }\n'
     source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//') + '\n'
     source += r'''
 #[cfg(test)] mod replay_tests {
     use super::*;
     use crate::{MatrixSlots, matrix_slots, service, Mode};
+    #[test] fn ssh_mouse_uses_real_status_hover_slot_and_alias_actions() {
+        MatrixSlots::set(&["id","123"]);service::LAUNCHES.lock().unwrap().clear();
+        let mut shell=Shell3::new(40);shell.aka_names=vec!["héllo".into()];
+        let mut tty=Terminal::new_ssh(shell);tty.input(b"draft");tty.output.clear();
+        tty.input(b"\x1b[<35;4;2M");
+        assert!(tty.shell.row_for_render(SpecialRows::StatusRow).left[2].underline);
+        assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[4m"));
+        tty.input(b"\x1b[<0;4;2M\x1b[<0;4;2m");
+        assert_eq!(tty.shell.active_matrix_slot_name(),Some("id".into()));
+        tty.input(b"\x1b[<0;36;2M\x1b[<32;36;2M\x1b[<0;36;2m\x1b[<64;36;2M");
+        assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("alias:héllo".into(),"id".into())]);
+        assert_eq!(tty.line,"draft");assert_eq!(tty.shell.prompt(),"draft");
+        tty.input(b"\x1b[<35;36;3M");
+        assert!(tty.shell.status_hover.is_none());
+        service::LAUNCHES.lock().unwrap().clear();MatrixSlots::set(&[] as &[&str]);
+    }
     #[test] fn network_defers_until_enter_and_first_latch_discards_tail() {
         MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
-        let mut tty=Terminal::new(Shell3::new(100));
+        let mut tty=Terminal::new(Shell3::new(100));tty.shell.set_mode(1);
         tty.input(b"onlinepause");
         assert!(MatrixSlots::echo_lines(None).is_empty());
         tty.input(b"\r");tty.input(b"\n");
@@ -117,7 +134,7 @@ fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:2
     #[test] fn replay_launches_once_and_discards_vme_tail() {
         MatrixSlots::set(&[] as &[&str]);service::LAUNCHES.lock().unwrap().clear();
         let mut shell=Shell3::new(100);shell.set_appdb_names(&["termdir".into()]);
-        let mut tty=Terminal::new(shell);
+        let mut tty=Terminal::new(shell);tty.shell.set_mode(1);
         tty.input(b"tab\n");assert_eq!(tty.shell.mode,Mode::CMD);
         tty.input(b"termdirescstop\n");
         assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("termdir".into(),"".into())]);
@@ -130,7 +147,7 @@ fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:2
     #[test] fn unicode_latch_discards_tail_and_operator_still_waits_for_enter() {
         MatrixSlots::set(&[] as &[&str]);service::LAUNCHES.lock().unwrap().clear();
         let mut shell=Shell3::new(100);shell.set_mode(2);shell.aka_names=vec!["héllo".into()];
-        let mut tty=Terminal::new(shell);
+        let mut tty=Terminal::new(shell);tty.shell.set_mode(2);
         tty.input("hélloescrest\n".as_bytes());
         assert_eq!(service::LAUNCHES.lock().unwrap()[0].0,"alias:héllo");
         assert!(tty.shell.active_vmx_app().is_some());assert_eq!(tty.line,"");
@@ -140,7 +157,7 @@ fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:2
     }
     #[test] fn impossible_prefix_stops_before_later_names_or_operators() {
         MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
-        let mut tty=Terminal::new(Shell3::new(100));
+        let mut tty=Terminal::new(Shell3::new(100));tty.shell.set_mode(1);
         tty.input("onXonline§new\n".as_bytes());
         assert_eq!(tty.line,"");assert_eq!(tty.shell.prompt(),"");
         assert!(MatrixSlots::echo_lines(None).is_empty());
@@ -154,7 +171,7 @@ fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:2
         MatrixSlots::set(&[] as &[&str]);service::LAUNCHES.lock().unwrap().clear();
         let mut shell=Shell3::new(100);shell.set_mode(2);
         shell.aka_names=vec!["hé".into(),"héllo".into()];
-        let mut tty=Terminal::new(shell);tty.input("héllo\n".as_bytes());
+        let mut tty=Terminal::new(shell);tty.shell.set_mode(2);tty.input("héllo\n".as_bytes());
         assert_eq!(service::LAUNCHES.lock().unwrap()[0].0,"alias:hé");
         assert_eq!(service::LAUNCHES.lock().unwrap().len(),1);assert_eq!(tty.line,"");
         matrix_slots().lock().echoes.clear();
@@ -163,7 +180,7 @@ fn new(columns:usize)->Self {Self {status_hover:None,tui_frontend:1,rows_count:2
 }
 '''
     source += f'#[path="{ROOT}/src/shell3/status.rs"] mod status;\n'
-    source += 'mod update {use alloc::vec::Vec;\n' + extract.item('src/shell3/update.rs', 'fit_strips') + '}\n'
+    source += f'#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')
     source += re.search(r'^impl ShellOwnership \{.*?^}', service, re.M | re.S).group()
     source += extract.item('src/shell3/service.rs', 'advance_round_robin')
@@ -519,6 +536,7 @@ fn app_label_for_archive(a:&str)->&str {a}
 fn matrix_target_interrupted(_: &MatrixTarget)->bool {EXPIRED.load(Ordering::Relaxed)}
 mod matrix {
 use super::*;
+pub fn matrix_target_slot_lease(_: &MatrixTarget) {}
 pub fn bind_matrix_target_vm(_: &MatrixTarget,id:u8)->bool {assert_eq!(id,7);BINDS.fetch_add(1,Ordering::Relaxed);!matrix_target_interrupted(&MatrixTarget)}
 pub fn unbind_matrix_target_vm(_: &MatrixTarget,id:u8) {assert_eq!(id,7);UNBINDS.fetch_add(1,Ordering::Relaxed);}
 }
@@ -532,6 +550,7 @@ pub fn start_blueprint_app_vm(_:u8,_:&Spawner,_:String,_:Vec<u8>,_:Vec<String>,_
     assert_eq!(BINDS.load(Ordering::Relaxed),1);STARTS.fetch_add(1,Ordering::Relaxed);
     match CASE.load(Ordering::Relaxed) {2=>{EXPIRED.store(true,Ordering::Relaxed);Ok(())},3=>Err(()),_=>Ok(())}
 }
+pub fn kill_for_matrix_slot(id:u8,_:&())->Result<bool,()> {stop(id)}
 pub fn stop(id:u8)->Result<bool,()> {assert_eq!(id,7);STOPS.fetch_add(1,Ordering::Relaxed);Ok(true)}
 }
 '''

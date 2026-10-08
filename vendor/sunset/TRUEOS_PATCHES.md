@@ -2,6 +2,10 @@ Vendored from the crates.io `sunset` 0.5.0 release (0BSD; see LICENSE).
 
 TRUEOS extensions:
 
+- `alloc`/`std` forward allocation support to `ssh-key` only when that optional
+  dependency is already enabled; allocation alone does not enable the unused
+  OpenSSH key-file parser.
+
 - RFC 4256 server keyboard-interactive authentication with one non-echoed
   authenticator-code prompt and exactly one response. Ordinary password and
   public-key methods remain independently configurable.

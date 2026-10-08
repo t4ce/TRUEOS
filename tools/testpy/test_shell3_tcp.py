@@ -32,7 +32,7 @@ mod service {pub static RELEASED:std::sync::Mutex<Vec<u32>>=std::sync::Mutex::ne
 const OPERATOR: char = '§';
 const SpecialSeperator:char='│';
 struct RowStrips {left:Vec<MetaFmtStr>}
-struct Shell3 { size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
+struct Shell3 { pointer:Vec<(Option<usize>,bool)>, size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal_reserved(_:u32,_:Option<u16>)->Self {Self::new_terminal().unwrap()}
     fn new_terminal_sized_reserved(_:u32,_:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal().unwrap()}
@@ -43,10 +43,13 @@ impl Shell3 {
         let right=[MetaFmtStr::new("RIGHT").underline()];
         update::Snapshot::new(self.size,0,[(&title,&right),(&status,&right),(&prompt,&right)],self.size.0)
     }
+    fn handle_status_pointer(&mut self,column:Option<usize>,pressed:bool)->bool {
+        self.pointer.push((column,pressed));true
+    }
     fn get_size(&self)->(usize,usize) {self.size}
     fn set(&mut self,cols:usize,rows:usize) {self.size=(cols,rows);}
     fn new_terminal() -> Result<Self, ()> {
-        Ok(Self { size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
+        Ok(Self { pointer:Vec::new(), size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
@@ -91,6 +94,33 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         tty.input(b"\\r");assert_eq!(tty.shell.prompt,"");
         assert_eq!(&*tty.shell.parsed.borrow(), &["abc"]);
         assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1H#   "));
+    }
+    #[test] fn ssh_mouse_reports_survive_every_packet_split_and_do_not_type() {
+        let input=b"\\x1b[<35;4;2M\\x1b[<0;4;2M\\x1b[<0;4;2m\\x1b[<32;6;2M\\x1b[<64;6;2M\\x1b[<65;6;2M\\x1b[<2;6;2M\\x1b[<35;6;3M";
+        for split in 0..=input.len() {
+            let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+            tty.output.clear();tty.input(&input[..split]);tty.input(&input[split..]);
+            assert_eq!(tty.shell.pointer, vec![(Some(3),false),(Some(3),true),(Some(3),false),(Some(5),false),(Some(5),false),(Some(5),false),(Some(5),false),(None,false)],"split {split}");
+            assert!(tty.line.is_empty());assert!(tty.shell.prompt.is_empty());
+            assert!(tty.shell.parsed.borrow().is_empty());
+        }
+    }
+    #[test] fn mouse_bounds_malformed_reports_and_nc_are_ignored() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        tty.input(b"\\x1b[<0;0;2M\\x1b[<0;101;2M\\x1b[<0;4;26M\\x1b[<0;4;0M\\x1b[<999;4;2M\\x1b[<0;4M\\x1b[<0;4;2;3M\\x1b[<0;-1;2M");
+        let mut oversized=b"\\x1b[<".to_vec();oversized.extend_from_slice(&[b'9';100]);oversized.extend_from_slice(b";4;2M");tty.input(&oversized);
+        assert!(tty.shell.pointer.is_empty());assert!(tty.line.is_empty());
+        tty.input(b"\\x1b[<0;100;25Mx");
+        assert_eq!(tty.shell.pointer,vec![(None,true)]);assert_eq!(tty.line,"x");
+        let mut nc=terminal();nc.input(b"\\x1b[<0;4;2M");assert!(nc.shell.pointer.is_empty());assert!(nc.line.is_empty());
+    }
+    #[test] fn ssh_mouse_modes_enable_on_connect_and_restore_on_exit() {
+        for exit in [b"exit\\r".as_slice(),b"\\x04".as_slice()] {
+            let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+            assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1006h\\x1b[?1003h"));
+            tty.output.clear();tty.input(exit);
+            assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[?1003l\\x1b[?1006l\\x1b[?1006r\\x1b[?1003r"));assert!(tty.closing);
+        }
     }
     #[test] fn adapter_starts_in_adm_and_enter_reuses_the_existing_prompt() {
         let mut tty=terminal();assert_eq!(tty.shell.get_mode(),3);
