@@ -776,7 +776,7 @@ pub(crate) fn try_dispatch(
 
 const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film", "cam", "rec"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
-    "cry", "disc", "tlb", "xhci", "ram", "smp", "sh3", "net", "bios", "vgpu", "vcpy",
+    "cry", "disc", "tlb", "ram", "smp", "sh3", "net", "vgpu", "vcpy",
 ];
 /// Render Shell2's default aliases, media controls, and live app.db names.
 pub(crate) fn titlebar_right_default_names_text() -> AllocString {

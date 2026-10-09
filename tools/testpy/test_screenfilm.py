@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 from test_clip_position3_uv_texture import ROOT, item
+from capture_host import model
 
 HARNESS = r'''
 #![allow(dead_code)]
@@ -138,6 +139,7 @@ mod r { pub mod fs { pub mod trueosfs {
         let mut s = S.lock(); s.deletes += 1; Ok(s.paths.remove(path).is_some())
     }
 } } }
+@CAPTURE_MODEL@
 mod ui4 {
     #[path = "@ROOT@/src/ui4/h264_capture_session.rs"] mod h264_capture_session;
     mod screenshot {
@@ -197,6 +199,8 @@ mod parser_tests {
     }
 }
 '''
+HARNESS = HARNESS.replace("@CAPTURE_MODEL@", model())
+
 TESTS = r'''
 #[cfg(test)] mod tests {
     use super::*;
@@ -231,6 +235,19 @@ TESTS = r'''
         assert!(NOW.load(Ordering::SeqCst) < 60_010_000_000);
         assert!(s.lines.iter().filter(|s| s.contains("fps=")).count() >= 12);
         assert!(!WD.load(Ordering::SeqCst));
+    }
+    #[test] fn native_presets_use_seconds_and_keep_the_capture_slot() {
+        for seconds in [3,30,60,300,900] {
+            setup();
+            let recording=crate::shell3::capture::recording(1,seconds,"screenfilms/native.h264");
+            request_capture_film(MatrixTarget(1),recording.clone()).unwrap();
+            run(run_pending());
+            let status=recording.status.lock();assert!(status.finished && status.saved);
+            assert!(status.started_ns>=100_000_000);
+            let s=S.lock();assert_eq!(s.slot_claims,0);assert_eq!(s.active,0);
+            assert!(s.paths.contains_key("screenfilms/native.h264"));
+            assert!(crate::NOW.load(Ordering::SeqCst)>=u64::from(seconds)*1_000_000_000);
+        }
     }
     #[test] fn ten_minutes_is_bounded_and_uses_the_same_encoder() {
         setup(); record(10); verify_final();

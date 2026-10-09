@@ -21,6 +21,16 @@ pub(crate) fn try_parse(
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
     match args.clone().next() {
+        Some("bios") => {
+            let _ = args.next();
+            let rest = args.collect::<alloc::vec::Vec<_>>().join(" ");
+            super::bios::try_parse(io, &rest)
+        }
+        Some("xhci") => {
+            let _ = args.next();
+            let rest = args.collect::<alloc::vec::Vec<_>>().join(" ");
+            super::xhci::try_parse(spawner, io, &rest)
+        }
         Some("nct") => {
             let _ = args.next();
             match (args.next(), args.next()) {

@@ -18,14 +18,14 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|hfi|turbo|ucode|pmu|rapl [store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb [probe]|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|hfi|turbo|ucode|pmu|rapl [store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|bios [view]|x2apic|usb [probe]|xhci <command> [args]|dump]`";
 const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
 const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
 const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
 const ACPI_HEXDUMP_ROW_BYTES: usize = 16;
 const ACPI_AML_DUMP_MAX_BYTES: usize = 1024;
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const TLB_MENU_ROWS: [(&str, &str); 22] = [
+const TLB_MENU_ROWS: [(&str, &str); 24] = [
     ("pci", "List PCI devices"),
     ("pcibar", "List PCI BAR windows"),
     ("mem", "List memory map"),
@@ -45,8 +45,10 @@ const TLB_MENU_ROWS: [(&str, &str); 22] = [
     ("ssdt", "Show SSDT details"),
     ("uefi", "List UEFI tables"),
     ("smbios", "Decode complete SMBIOS hardware inventory"),
+    ("bios", "Inspect BIOS/UEFI control-plane state (`tlb bios [view]`)"),
     ("x2apic", "List x2APIC topology"),
     ("usb", "List USB controllers and ports (`tlb usb probe` for live state)"),
+    ("xhci", "Run xHCI register laboratory commands (`tlb xhci status`)"),
     ("dump", "Write all tables to trueos/pci/tlb.txt"),
 ];
 

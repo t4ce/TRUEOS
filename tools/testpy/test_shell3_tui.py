@@ -244,6 +244,48 @@ impl Shell3 {
     assert!(!tui::active(f.id,Some("mouse-batch")));
 }
 '''
+    source += r'''
+#[test] fn native_helpers_park_reenter_move_and_retire_with_their_exact_lease() {
+    let f=frontend(20,8);let t=shell2::target("native",1);
+    tui::attach_native(f,&t).unwrap();assert!(tui::native_slot("native"));
+    assert!(tui::attach_native(f,&t).is_err());
+    assert!(tui::active(f.id,Some("native")));
+    let competing=shell2::target("native-competing-vm",1);tui::attach(f,&competing).unwrap();hv::bind(14,&competing);
+    assert_eq!(tui::claim(&competing,14),Some(false));
+    tui::native_write(&t,b"\x1b[?25l\x1b[?1000h\x1b[?1006hPIC");
+    assert_eq!(tui::snapshot(f.id,Some("native")).unwrap()[0][0].0,'P');
+    tui::input(f.id,Some("native"),b"\x1b[B\r");
+    assert_eq!(tui::native_read(&t).unwrap().0,b"\x1b[B\r");
+    tui::native_notice(&t,"saved");assert_eq!(tui::native_read(&t).unwrap().1,vec![String::from("saved")]);
+    let other=frontend(30,10);assert!(!tui::select(other,Some("native")));
+    tui::native_return(&t);assert!(!tui::active(f.id,Some("native")));
+    assert!(tui::supports(&t));assert!(tui::take_native_return(f.id));assert!(!tui::take_native_return(f.id));
+    tui::select(f,None);assert!(tui::select(f,Some("native")));assert!(tui::active(f.id,Some("native")));
+    assert_eq!(tui::snapshot(f.id,Some("native")).unwrap()[0][0].0,'P');
+    tui::park(f.id);assert!(!tui::active(f.id,Some("native")));tui::select(f,Some("native"));assert!(!tui::active(f.id,Some("native")));
+    assert!(tui::select_for_navigation(f,"native"));assert!(tui::active(f.id,Some("native")));tui::park(f.id);
+    assert!(tui::select(other,Some("native")));
+    assert!(!tui::active(f.id,Some("native")));assert!(tui::active(other.id,Some("native")));
+    assert_eq!(tui::surface(&t).unwrap().cols,30);
+    shell2::free_name("native");let replacement=shell2::target("native",2);
+    assert!(tui::native_read(&t).is_none());assert!(!tui::supports(&replacement));
+}
+#[test] fn native_keyboard_mouse_and_exit_cleanup_use_the_same_terminal_encoding() {
+    use r::keyboard::*;
+    let f=frontend(20,8);let t=shell2::target("native-input",1);tui::attach_native(f,&t).unwrap();
+    tui::native_write(&t,b"\x1b[?1000h\x1b[?1006h");
+    let mut e=TrueosKeyboardOutputEvent::default();e.flags=KEYBOARD_OUTPUT_FLAG_PRESS;e.kind=KEYBOARD_OUTPUT_KIND_KEY;e.key_code=KEYBOARD_KEY_ENTER;e.codepoint=13;e.device_seq=7;
+    assert!(tui::keyboard(f.id,Some("native-input"),&e));e.kind=KEYBOARD_OUTPUT_KIND_TEXT;assert!(tui::keyboard(f.id,Some("native-input"),&e));
+    assert_eq!(tui::native_read(&t).unwrap().0,b"\r");
+    let pointer=ui4::Ui4PointerEvent {source:0,window:1,x:0,y:0,local_x:6,local_y:44,dx:0,dy:0,wheel:0,buttons_down:1,buttons_pressed:1,buttons_released:0,combo_id:0,vcursor:false};
+    tui::pointer(f.id,Some("native-input"),&pointer,1);
+    assert_eq!(tui::native_read(&t).unwrap().0,b"\x1b[<0;2;5M");
+    tui::input(f.id,Some("native-input"),b"stale");tui::native_return(&t);
+    assert!(tui::native_read(&t).unwrap().0.is_empty());
+    assert_eq!(tui::mouse_options(f.id,Some("native-input")).tracking,trueos_terminal::MouseTracking::Off);
+    tui::detach(f.id);assert!(!tui::native_slot("native-input"));
+}
+'''
     with tempfile.TemporaryDirectory(prefix='shell3-tui-') as directory:
         path = Path(directory)
         (path/'spin.rs').write_text('pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T> {pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<\'_,T>{self.0.lock().unwrap()}}')

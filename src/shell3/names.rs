@@ -98,7 +98,7 @@ const CMD_AKA_NAMES: [NameEntry; 0] = [];
 
 const CMD_MEDIA_NAMES: [NameEntry; 4] = [
     NameEntry {
-        name: "img",
+        name: "pic",
         color: RgbaColor::White,
     },
     NameEntry {
@@ -132,9 +132,13 @@ pub(super) const CMD_GROUPS: [NameGroup; 3] = [
     },
 ];
 
-pub(super) const ADM_NAMES: [NameEntry; 10] = [
+pub(super) const ADM_NAMES: &[NameEntry] = &[
     NameEntry {
         name: "cry",
+        color: RgbaColor::Pink,
+    },
+    NameEntry {
+        name: "sh3",
         color: RgbaColor::Pink,
     },
     NameEntry {
@@ -143,10 +147,6 @@ pub(super) const ADM_NAMES: [NameEntry; 10] = [
     },
     NameEntry {
         name: "tlb",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "xhci",
         color: RgbaColor::White,
     },
     NameEntry {
@@ -159,10 +159,6 @@ pub(super) const ADM_NAMES: [NameEntry; 10] = [
     },
     NameEntry {
         name: "net",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "bios",
         color: RgbaColor::White,
     },
     NameEntry {

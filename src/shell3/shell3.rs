@@ -1,3 +1,4 @@
+pub(crate) mod capture;
 mod metafmtstr;
 mod names;
 pub mod net;
@@ -307,8 +308,8 @@ impl MatrixSlots {
         slots.echoes.retain(|(id, _)| id.as_deref() != name);
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
-        if let Some(name) = vmx_slot {
-            service::drop_vmx_slot(&name);
+        if let Some(name) = vmx_slot.as_deref().or(name.filter(|name| tui::native_slot(name))) {
+            service::drop_vmx_slot(name);
         }
         service::notify_work();
         true
@@ -842,7 +843,7 @@ impl Shell3 {
         let name = name.clone();
         let lifetime = slots.lifetimes.iter().find(|(id,_)| id == &name).map(|(_,lifetime)| *lifetime);
         drop(slots);
-        if !tui::select(self.tui_frontend(), Some(&name)) {return false;}
+        if !tui::select_for_navigation(self.tui_frontend(), &name) {return false;}
         self.active_matrix_slot = Some(name);
         self.active_matrix_lifetime = lifetime;
         self.matrix_selection_dirty = true;
@@ -859,7 +860,7 @@ impl Shell3 {
 
         let lifetime = slots.lifetimes.iter().find(|(id,_)| id == name).map(|(_,lifetime)| *lifetime);
         drop(slots);
-        if !tui::select(self.tui_frontend(), Some(name)) {return false;}
+        if !tui::select_for_navigation(self.tui_frontend(), name) {return false;}
         self.active_matrix_slot = Some(name.to_string());
         self.active_matrix_lifetime = lifetime;
         self.matrix_selection_dirty = true;
@@ -893,7 +894,7 @@ impl Shell3 {
 
     /// Every owner reconciles deletion locally; no cross-AP model mutation.
     pub(super) fn reconcile_matrix_selection(&mut self) {
-        if self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none() {
+        if tui::take_native_return(self.tui_frontend) || (self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none()) {
             self.select_matrix_slot_index(0);
         }
     }
@@ -1053,7 +1054,12 @@ impl Shell3 {
         let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
         let is_app = can_launch && self.appdb_names.iter().any(|name| name == &text);
         let is_alias = self.aka_names.iter().any(|name| name == &text);
-        if is_alias {
+        if self.mode == Mode::CMD && capture::recognizes(&text) {
+            match capture::start(&text, self.tui_frontend()) {
+                Ok(()) => {MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text);},
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+            }
+        } else if is_alias {
             self.launch_named_app(&text, true);
         } else if text == "stop" && self.active_vmx_app().is_some() {
             self.stop_active_vmx();
@@ -1354,7 +1360,7 @@ impl Shell3 {
         self.active_matrix_lifetime = Some(lifetime);
         self.matrix_selection_dirty = true;
         self.matrix_scroll = 0;
-        tui::select(self.tui_frontend(), Some(name));
+        tui::select_for_navigation(self.tui_frontend(), name);
         service::notify_work();
         true
     }
@@ -1458,7 +1464,7 @@ fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) ->
             }
         }
         Mode::ADM => {
-            for entry in &ADM_NAMES {
+            for entry in ADM_NAMES {
                 if !runs.is_empty() {
                     runs.push(MetaFmtStr::new(" "));
                 }

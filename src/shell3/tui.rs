@@ -1,7 +1,7 @@
 //! Shell3 terminal leases. VM lifecycle stays in HV; bytes never reach Shell3's prompt.
 use super::{RgbaColor, update::RenderedLine};
 use crate::shell2::{MatrixSlotAttachment, MatrixSlotLease, MatrixTarget};
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 use trueos_terminal::{Terminal, TerminalColor};
@@ -17,7 +17,14 @@ struct Owner {
     vm: u8,
     run: u64,
 }
+struct Native {
+    active: bool,
+    return_to_default: bool,
+    input: VecDeque<u8>,
+    notices: VecDeque<String>,
+}
 struct Route {
+    native: Option<Native>,
     lease: MatrixSlotLease,
     frontend: u64,
     selected: bool,
@@ -26,6 +33,9 @@ struct Route {
     screen: Terminal,
     surface_generation: u64,
     suppressed_text: Option<(u32, u32, u32)>,
+}
+impl Route {
+    fn active(&self) -> bool { self.owner.is_some() || self.native.as_ref().is_some_and(|n| n.active) }
 }
 struct Registry {
     routes: Vec<Route>,
@@ -111,7 +121,9 @@ pub(crate) fn attach(
     let lease = crate::shell2::matrix_target_slot_lease(target);
     {
         let mut routes = ROUTES.lock();
+        if routes.routes.iter().any(|route| route.lease == lease) {return Err("tui: terminal target already attached".into());}
         routes.routes.push(Route {
+            native: None,
             lease: lease.clone(),
             frontend: frontend.id,
             selected: true,
@@ -165,7 +177,7 @@ pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
         || !routes.routes[index].selected
         || routes.routes[index].vm != Some(vm)
         || routes.routes.iter().any(|route| {
-            route.frontend == frontend && route.owner.is_some() && route.lease != lease
+            route.frontend == frontend && route.active() && route.lease != lease
         })
         || routes.routes[index]
             .owner
@@ -250,6 +262,77 @@ fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
     Some(bytes.len())
 }
 
+/// Host helpers share the same terminal surface and input routing as Blueprints.
+pub(super) fn attach_native(frontend: Frontend, target: &MatrixTarget) -> Result<(), String> {
+    if supports(target) {return Err("tui: terminal target already attached".into());}
+    if !park(frontend.id) {return Err("tui: could not release the previous terminal owner".into());}
+    attach(frontend, target)?;
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    if let Some(route) = ROUTES.lock().routes.iter_mut().find(|r| r.lease == lease) {
+        route.native = Some(Native {active: true, return_to_default: false, input: VecDeque::new(), notices: VecDeque::new()});
+    }
+    Ok(())
+}
+pub(super) fn cancel_native_attach(target: &MatrixTarget) {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let mut routes = ROUTES.lock();
+    if let Some(index) = routes.routes.iter().position(|r| r.lease == lease && r.native.is_some()) {
+        let route = routes.routes.remove(index);
+        routes.changed(route.frontend);
+    }
+}
+pub(super) fn native_slot(name: &str) -> bool {
+    ROUTES.lock().routes.iter().any(|r| r.lease.name() == name && r.native.is_some())
+}
+pub(super) fn native_read(target: &MatrixTarget) -> Option<(Vec<u8>, Vec<String>)> {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let mut routes = ROUTES.lock();
+    let native = routes.routes.iter_mut().find(|r| r.lease == lease)?.native.as_mut()?;
+    Some((native.input.drain(..).collect(), native.notices.drain(..).collect()))
+}
+pub(crate) fn native_notice(target: &MatrixTarget, message: &str) {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let mut routes = ROUTES.lock();
+    if let Some(native) = routes.routes.iter_mut().find(|r| r.lease == lease).and_then(|r| r.native.as_mut()) {
+        if native.notices.len() == 32 {native.notices.pop_front();}
+        native.notices.push_back(message.into());
+    }
+    super::service::notify_work();
+}
+pub(super) fn native_write(target: &MatrixTarget, bytes: &[u8]) {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let mut routes = ROUTES.lock();
+    if let Some(route) = routes.routes.iter_mut().find(|r| r.lease == lease && r.native.is_some()) {
+        route.screen.feed(bytes);
+        let frontend = route.frontend;
+        if route.active() {routes.changed(frontend);}
+    }
+    drop(routes);
+    super::service::notify_work();
+}
+pub(super) fn native_return(target: &MatrixTarget) {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let mut routes = ROUTES.lock();
+    if let Some(route) = routes.routes.iter_mut().find(|r| r.lease == lease) {
+        if let Some(native) = route.native.as_mut() {
+            native.active = false;
+            native.return_to_default = true;
+            native.input.clear();
+            route.suppressed_text = None;
+            let frontend = route.frontend;
+            routes.changed(frontend);
+        }
+    }
+    drop(routes);
+    super::service::notify_work();
+}
+pub(super) fn take_native_return(frontend: u64) -> bool {
+    let mut routes = ROUTES.lock();
+    routes.routes.iter_mut().filter(|r| r.frontend == frontend).fold(false, |exit, r| {
+        exit | r.native.as_mut().is_some_and(|n| core::mem::take(&mut n.return_to_default))
+    })
+}
+
 pub(super) fn revision(frontend: u64) -> u64 {
     ROUTES
         .lock()
@@ -259,6 +342,19 @@ pub(super) fn revision(frontend: u64) -> u64 {
         .map_or(0, |entry| entry.1)
 }
 pub(super) fn park(frontend: u64) -> bool {
+    {
+        let mut routes = ROUTES.lock();
+        let mut changed = false;
+        for route in routes.routes.iter_mut().filter(|r| r.frontend == frontend) {
+            if let Some(native) = route.native.as_mut() {
+                changed |= native.active;
+                native.active = false;
+                native.input.clear();
+                route.suppressed_text = None;
+            }
+        }
+        if changed {routes.changed(frontend);}
+    }
     let vm = ROUTES
         .lock()
         .routes
@@ -268,8 +364,21 @@ pub(super) fn park(frontend: u64) -> bool {
     vm.is_none_or(crate::hv::blueprint_console_return_to_cli)
 }
 pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
+    // A helper has one input owner. A parked helper may move to another shell.
+    {
+        let mut routes = ROUTES.lock();
+        if let Some(route) = routes.routes.iter_mut().find(|r| Some(r.lease.name()) == name && r.native.is_some()) {
+            if route.frontend != frontend.id {
+                if route.active() {return false;}
+                let old = route.frontend;
+                route.frontend = frontend.id;
+                route.selected = false;
+                routes.changed(old);
+            }
+        }
+    }
     let needs_park = ROUTES.lock().routes.iter().any(|route| {
-        route.frontend == frontend.id && route.owner.is_some() && Some(route.lease.name()) != name
+        route.frontend == frontend.id && route.active() && Some(route.lease.name()) != name
     });
     if needs_park && !park(frontend.id) {
         return false;
@@ -283,6 +392,17 @@ pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
     {
         let selected = Some(route.lease.name()) == name;
         changed |= route.selected != selected;
+        if let Some(native) = route.native.as_mut() {
+            if selected && !route.selected {
+                native.active = true;
+                native.return_to_default = false;
+                route.suppressed_text = None;
+            } else if !selected {
+                native.active = false;
+                native.input.clear();
+                native.return_to_default = false;
+            }
+        }
         route.selected = selected;
         if selected && route.screen.dimensions() != (frontend.cols, frontend.rows) {
             route.screen.resize(frontend.cols, frontend.rows);
@@ -295,7 +415,34 @@ pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
     }
     true
 }
+/// Explicit navigation reenters a parked host helper, including its current slot.
+/// Resize/repaint selection above never silently undoes an operator park.
+pub(super) fn select_for_navigation(frontend: Frontend, name: &str) -> bool {
+    if !select(frontend, Some(name)) {return false;}
+    let mut routes = ROUTES.lock();
+    if let Some(route) = routes.routes.iter_mut().find(|r| r.frontend == frontend.id && r.lease.name() == name) {
+        if let Some(native) = route.native.as_mut() {
+            if !native.active {
+                native.active = true;
+                native.return_to_default = false;
+                route.suppressed_text = None;
+                routes.changed(frontend.id);
+            }
+        }
+    }
+    true
+}
 pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str> {
+    if native_slot(name) {
+        if !select(frontend, Some(name)) {return Err("tui: terminal UI is owned by another Shell3");}
+        let mut routes = ROUTES.lock();
+        if let Some(route) = routes.routes.iter_mut().find(|r| r.frontend == frontend.id && r.lease.name() == name) {
+            if let Some(native) = route.native.as_mut() {native.active = true; native.return_to_default = false;}
+            route.suppressed_text = None;
+        }
+        routes.changed(frontend.id);
+        return Ok(());
+    }
     let vm = {
         let mut routes = ROUTES.lock();
         let index = routes
@@ -337,21 +484,21 @@ pub(super) fn detach(frontend: u64) {
 
 pub(super) fn active(frontend: u64, name: Option<&str>) -> bool {
     ROUTES.lock().routes.iter().any(|route| {
-        route.frontend == frontend && Some(route.lease.name()) == name && route.owner.is_some()
+        route.frontend == frontend && Some(route.lease.name()) == name && route.active()
     })
 }
 
 /// Only a currently owned lease may request mouse capture from the client.
 pub(super) fn mouse_options(frontend: u64, name: Option<&str>) -> trueos_terminal::MouseOptions {
     ROUTES.lock().routes.iter().find(|route| {
-        route.frontend == frontend && Some(route.lease.name()) == name && route.owner.is_some()
+        route.frontend == frontend && Some(route.lease.name()) == name && route.active()
     }).map(|route| route.screen.mouse_options()).unwrap_or_default()
 }
 
 pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<RenderedLine>> {
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|route| {
-        route.frontend == frontend && Some(route.lease.name()) == name && route.owner.is_some()
+        route.frontend == frontend && Some(route.lease.name()) == name && route.active()
     })?;
     let (cols, _) = route.screen.dimensions();
     let cursor = route.screen.cursor();
@@ -429,6 +576,16 @@ fn color(color: TerminalColor, default: [u8; 4]) -> [u8; 4] {
 }
 
 pub(super) fn input(frontend: u64, name: Option<&str>, bytes: &[u8]) -> bool {
+    {
+        let mut routes = ROUTES.lock();
+        if let Some(native) = routes.routes.iter_mut().find(|r| r.frontend == frontend && Some(r.lease.name()) == name).and_then(|r| r.native.as_mut()).filter(|n| n.active) {
+            // Bound untrusted transport bursts. Overflowed input is discarded.
+            if native.input.len() + bytes.len() <= 4096 {native.input.extend(bytes.iter().copied());}
+            drop(routes);
+            super::service::notify_work();
+            return true;
+        }
+    }
     let owner_target = {
         let routes = ROUTES.lock();
         routes
@@ -452,7 +609,7 @@ pub(super) fn pointer(
     let bytes = {
         let routes = ROUTES.lock();
         let Some(route) = routes.routes.iter().find(|route| {
-            route.frontend == frontend && Some(route.lease.name()) == name && route.owner.is_some()
+            route.frontend == frontend && Some(route.lease.name()) == name && route.active()
         }) else {
             return;
         };
@@ -514,7 +671,7 @@ pub(super) fn keyboard(
     let suppress = {
         let mut routes = ROUTES.lock();
         let Some(route) = routes.routes.iter_mut().find(|route| {
-            route.frontend == frontend && Some(route.lease.name()) == name && route.owner.is_some()
+            route.frontend == frontend && Some(route.lease.name()) == name && route.active()
         }) else {
             return false;
         };

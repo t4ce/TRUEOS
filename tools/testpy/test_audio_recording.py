@@ -15,7 +15,7 @@ pub mod services { pub mod hda_capture_lane {
     pub fn status() -> Status { Status { state: "offline" } }
     pub fn ensure_started_on_current_worker() -> bool { true }
     pub fn recording_cursor() -> Option<CaptureCursor> {
-        if crate::S.lock().no_root { None } else { Some(CaptureCursor { channels: 2, frames: 0 }) }
+        if crate::S.lock().no_root { None } else { Some(CaptureCursor { channels: 2, frames: crate::NOW.load(crate::Ordering::SeqCst)*48_000/1_000_000_000 }) }
     }
     pub fn copy_recording_i16(c: &mut CaptureCursor, out: &mut [i16]) -> Result<CaptureRead, &'static str> {
         let now = crate::NOW.load(crate::Ordering::SeqCst);
@@ -44,7 +44,7 @@ TESTS = r'''
     }
     fn record(minutes: Option<u8>) {
         shell2::set_matrix_target_active(&MatrixTarget(2), true);
-        run(record_task(RecordRequest { minutes, disk: crate::disc::block::DeviceHandle,
+        run(record_task(RecordRequest { capture: None, minutes, disk: crate::disc::block::DeviceHandle,
             path: "recordings/test.wav".into(), target: MatrixTarget(2), origin: MatrixTarget(1) }));
         assert_eq!(S.lock().active, 0);
         assert!(!CONTROL.lock().busy);
@@ -69,6 +69,16 @@ TESTS = r'''
         }
         assert_eq!(s.paths.len(), 1, "parts removed only after successful final save");
         assert!(s.max_chunk <= CHUNK_BYTES + 4*960);
+    }
+    #[test] fn native_three_seconds_has_exact_pcm_and_no_preroll() {
+        setup();
+        let recording=crate::shell3::capture::recording(2,3,"recordings/test.wav");
+        shell2::set_matrix_target_active(&MatrixTarget(2),true);
+        run(record_task(RecordRequest {capture:Some(recording.clone()),minutes:None,disk:crate::disc::block::DeviceHandle,path:recording.path.clone(),target:MatrixTarget(2),origin:MatrixTarget(2)}));
+        let status=recording.status.lock();assert!(status.finished && status.saved);assert_eq!(status.started_ns,100_000_000);
+        let s=S.lock();let bytes=&s.records[*s.paths.get("recordings/test.wav").unwrap()];
+        assert_eq!(bytes.len(),44+3*48000*4);assert_eq!(s.active,0);
+        assert_eq!(i16::from_le_bytes(bytes[44..46].try_into().unwrap()),4800);
     }
     #[test] fn duration_saves_exact_consecutive_pcm_in_playable_wav() {
         setup(); record(Some(1)); verify(60*48000);

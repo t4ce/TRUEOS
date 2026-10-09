@@ -57,10 +57,18 @@ pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<crate::update::RenderedLine>> 
 pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
 #[derive(Clone,Copy)] pub struct Frontend {pub id:u64,pub cols:usize,pub rows:usize}
 pub fn select(_:Frontend,_:Option<&str>)->bool {true}
+pub fn select_for_navigation(_:Frontend,_:&str)->bool {true}
 pub fn park(_:u64)->bool {true}
+pub fn native_slot(name:&str)->bool {matches!(name,"pic"|"vid"|"aud"|"vaud")}
+pub fn take_native_return(_:u64)->bool {false}
 pub fn keyboard(_:u64,_:Option<&str>,_:&crate::r::keyboard::TrueosKeyboardOutputEvent)->bool {false}
 pub static REQUESTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
 pub fn request(_:Frontend,name:&str)->Result<(),&'static str>{REQUESTS.lock().unwrap().push(name.into());Ok(())}
+}
+mod capture {
+    pub fn recognizes(name:&str)->bool {matches!(name,"pic"|"vid"|"aud"|"vaud")}
+    pub static STARTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+    pub fn start(name:&str,_:crate::tui::Frontend)->Result<(),String> {STARTS.lock().unwrap().push(name.into());Ok(())}
 }
 mod shell3 {pub mod tui {pub use crate::tui::Frontend;pub fn attach<T>(_:Frontend,_:&T)->Result<(),String>{Ok(())}}}
 mod shell2 { pub mod cmds { pub mod run {
@@ -106,6 +114,16 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
 #[cfg(test)] mod replay_tests {
     use super::*;
     use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide, key, type_text};
+    #[test] fn capture_names_launch_helpers_and_keep_their_slots_when_returning() {
+        MatrixSlots::set(&[] as &[&str]);crate::capture::STARTS.lock().unwrap().clear();
+        let mut shell=Shell3::new(100);shell.set_mode(2);
+        for name in ["pic","vid","aud","vaud"] {
+            type_text(&mut shell,name);assert_eq!(shell.active_matrix_slot_name().as_deref(),Some(name));assert!(shell.prompt().is_empty());
+            shell.select_matrix_slot_index(0);assert!(MatrixSlots::slot_ids().iter().any(|id|id==name));
+        }
+        assert_eq!(*crate::capture::STARTS.lock().unwrap(),vec!["pic","vid","aud","vaud"]);
+        for name in ["pic","vid","aud","vaud"] {assert!(MatrixSlots::drop_slot(Some(name)));}
+    }
     #[test] fn ssh_mouse_reports_do_not_hover_select_or_launch() {
         MatrixSlots::set(&["id","123"]);service::LAUNCHES.lock().unwrap().clear();
         let mut shell=Shell3::new(40);shell.aka_names=vec!["héllo".into()];
@@ -280,11 +298,12 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
 #[test] fn tab_updates_title_per_instance_and_enter_is_inert() {
     let mut a=Shell3::new(20); let mut b=Shell3::new(20);
     key(&mut a,1,0,'x'); key(&mut b,1,0,'y');
+    let admin_names=ADM_NAMES.iter().map(|entry|entry.name).collect::<Vec<_>>().join(" ");
     for mode in [Mode::CMD,Mode::ADM,Mode::HV] {
         assert!(key(&mut a,2,2,'\\t')); assert_eq!(a.mode,mode);
         assert_eq!(a.rows.title.left[0].text,"TrueOS § 12:34");
         let legend:String=a.rows.title.right.iter().map(|run|run.text.as_str()).collect();
-        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"Capture[img vid aud vaud] AppDB[]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
+        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"Capture[pic vid aud vaud] AppDB[]",Mode::ADM=>admin_names.as_str()});
     }
     assert_eq!(b.mode,Mode::HV); assert_eq!(b.prompt.text,"y");
     assert!(!key(&mut a,2,3,'\\r')); assert!(!key(&mut a,1,0,'\\n'));
@@ -382,9 +401,9 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     s.set_appdb_names(&["Demo".into()]);
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
     s.set_mode(2);
-    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"Capture[img vid aud vaud] AppDB[Demo]");
-    for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render()," ");s.select_matrix_slot_index(0);}
-    assert_eq!(MatrixSlots::echo_lines(None),vec!["img"]);
+    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"Capture[pic vid aud vaud] AppDB[Demo]");
+    for name in ["hello","pic","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render()," ");s.select_matrix_slot_index(0);}
+    assert!(MatrixSlots::echo_lines(None).is_empty());
     s.set_mode(3); let admin=s.rows.title.right.clone();
     assert_eq!(admin[0].color,Some(RgbaColor::Pink));assert_eq!(admin[2].color,Some(RgbaColor::Pink));
     s.set_appdb_names(&["Other".into()]);assert_eq!(s.rows.title.right,admin);

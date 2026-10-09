@@ -241,6 +241,7 @@ fn report_shot_result(
             (true, None) => String::from("Image was STORED"),
             (false, _) => String::from("Image was NOT STORED"),
         };
+        crate::shell3::tui::native_notice(target, message.as_str());
         crate::shell2::print_matrix_target_system_line(target, message.as_str());
     }
 }

@@ -106,7 +106,7 @@ pub(crate) use gpgpu_svg_probe_consumer::{
     request_gpgpu_svg_probe_start, request_gpgpu_svg_probe_stop,
 };
 #[cfg(feature = "trueos_h264_encode_stream")]
-pub(crate) use h264_encode_stream::film::request_film;
+pub(crate) use h264_encode_stream::film::{request_film, request_capture_film};
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
 #[cfg(feature = "trueos_h264_encode_stream")]

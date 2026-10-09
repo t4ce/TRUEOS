@@ -24,6 +24,7 @@ static CONTROL: Mutex<Control> = Mutex::new(Control {
 });
 
 struct RecordRequest {
+    capture: Option<crate::shell3::capture::Recording>,
     minutes: Option<u8>,
     disk: crate::disc::block::DeviceHandle,
     path: String,
@@ -64,20 +65,27 @@ pub(crate) fn try_parse(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str)
 }
 
 fn request_recording(minutes: Option<u8>, origin: MatrixTarget) -> Result<(), &'static str> {
+    request_recording_inner(minutes, origin, None)
+}
+pub(crate) fn request_capture(origin: MatrixTarget, recording: crate::shell3::capture::Recording) -> Result<(), &'static str> {
+    request_recording_inner(None, origin, Some(recording))
+}
+fn request_recording_inner(minutes: Option<u8>, origin: MatrixTarget, capture: Option<crate::shell3::capture::Recording>) -> Result<(), &'static str> {
     let mut control = CONTROL.lock();
     if control.busy {
         return Err("microphone recording is already running; use rec stop or §rec§");
     }
     let spawner =
         crate::workers::pick_background_spawner().ok_or("no background worker is ready")?;
-    let disk =
-        crate::ui4::writable_capture_root_handle().ok_or("no writable TRUEOSFS root is mounted")?;
-    let target = shell2::claim_matrix_target_for_named_app_slot(&origin, "rec", "rec")
+    let disk = match &capture {Some(recording) => recording.disk, None => crate::ui4::writable_capture_root_handle().ok_or("no writable TRUEOSFS root is mounted")?};
+    let target = (if capture.is_some() {Some(origin.clone())} else {shell2::claim_matrix_target_for_named_app_slot(&origin, "rec", "rec")})
         .ok_or("Matrix slot rec is occupied or the requesting shell has closed")?;
     let now = crate::chronos::monotonic_nanos();
     let wall = crate::chronos::best_effort_unix_time_seconds().unwrap_or(0);
-    let path = format!("{DIRECTORY}/microphone-{wall}-{now}.wav");
+    let path = capture.as_ref().map(|recording| recording.path.clone()).unwrap_or_else(|| format!("{DIRECTORY}/microphone-{wall}-{now}.wav"));
+    let capture_seconds = capture.as_ref().map(|c| c.seconds());
     let token = record_task(RecordRequest {
+        capture,
         minutes,
         disk,
         path: path.clone(),
@@ -88,12 +96,12 @@ fn request_recording(minutes: Option<u8>, origin: MatrixTarget) -> Result<(), &'
     control.busy = true;
     control.stop = false;
     shell2::set_matrix_target_active(&target, true);
-    let duration = minutes
-        .map(|m| format!("for {m} min"))
+    let duration = capture_seconds.map(|s| format!("for {s} sec")).or_else(|| minutes.map(|m| format!("for {m} min")))
         .unwrap_or_else(|| String::from("until stopped"));
+    let stop = if capture_seconds.is_some() {"stop and save from the capture menu"} else {"stop and save with rec stop or §rec§"};
     shell2::print_matrix_target_line(
         &target,
-        &format!("rec: armed {duration}; trueosfs:/{path}; stop and save with rec stop or §rec§"),
+        &format!("rec: armed {duration}; trueosfs:/{path}; {stop}"),
     );
     spawner.spawn(token);
     Ok(())
@@ -235,7 +243,7 @@ impl AudioSpool {
 
 #[trueos_executor::task]
 async fn record_task(request: RecordRequest) {
-    let result = run_recording(&request).await;
+    let (result, saved) = match run_recording(&request).await {Ok(message) => (message, true), Err(message) => (message, false)};
     shell2::print_matrix_target_line(&request.target, &result);
     if !shell2::matrix_targets_same_slot_lifetime(&request.target, &request.origin) {
         shell2::print_matrix_target_line(&request.origin, &result);
@@ -243,39 +251,45 @@ async fn record_task(request: RecordRequest) {
     crate::log_info!(target: "hda/recording"; "{}\n", result);
     shell2::set_matrix_target_active(&request.target, false);
     CONTROL.lock().busy = false;
+    if let Some(capture) = &request.capture {capture.finish(&result, saved);}
 }
 
-async fn run_recording(request: &RecordRequest) -> String {
+async fn run_recording(request: &RecordRequest) -> Result<String, String> {
     if !capture::ensure_started_on_current_worker() {
-        return String::from("rec: cannot start microphone capture on the background worker");
+        return Err(String::from("rec: cannot start microphone capture on the background worker"));
     }
     if !matches!(fs::dir_create_all_async(request.disk, DIRECTORY).await, Ok(true)) {
-        return String::from("rec: cannot create recordings directory");
+        return Err(String::from("rec: cannot create recordings directory"));
     }
     let waiting = crate::chronos::monotonic_nanos();
     let mut cursor = loop {
-        if stopped(&request.target) {
-            return String::from("rec: stopped before microphone became ready; no file saved");
+        if stopped(&request.target) || request.capture.as_ref().is_some_and(|c| c.stopped()) {
+            return Err(String::from("rec: stopped before microphone became ready; no file saved"));
         }
         if let Some(cursor) = capture::recording_cursor() {
             break cursor;
         }
         if crate::chronos::monotonic_nanos().saturating_sub(waiting) >= 10_000_000_000 {
-            return format!(
+            return Err(format!(
                 "rec: microphone did not become ready within 10 seconds; state={:?}; no file saved",
                 capture::status().state
-            );
+            ));
         }
         Timer::after(Duration::from_millis(20)).await;
     };
+    let epoch = if let Some(recording) = &request.capture {
+        let Some(epoch) = recording.ready().await else {return Err(String::from("rec: capture startup cancelled or timed out"));};
+        // Discard pre-roll so both tracks begin on the shared clock.
+        cursor = capture::recording_cursor().ok_or_else(|| String::from("rec: microphone stopped before recording began"))?;
+        recording.started(crate::chronos::monotonic_nanos(), cursor.channels);
+        Some(epoch)
+    } else {None};
     let channels = cursor.channels;
     let mut spool = AudioSpool::new(request, channels);
     // One full DMA ring lets stop drain the completed tail in a single copy.
     let mut pcm = vec![0i16; 128 * 1024];
     let started = crate::chronos::monotonic_nanos();
-    let deadline = request
-        .minutes
-        .map(|m| started + u64::from(m) * 60_000_000_000);
+    let deadline = epoch.map(|epoch| request.capture.as_ref().unwrap().deadline(epoch)).or_else(|| request.minutes.map(|m| started + u64::from(m) * 60_000_000_000));
     let mut next_progress = started + PROGRESS_NS;
     let mut reason = "duration complete";
     let mut frames = 0u64;
@@ -288,7 +302,7 @@ async fn run_recording(request: &RecordRequest) -> String {
     );
     loop {
         let now = crate::chronos::monotonic_nanos();
-        let stop = stopped(&request.target);
+        let stop = stopped(&request.target) || request.capture.as_ref().is_some_and(|c| c.stopped());
         let done = deadline.is_some_and(|d| now >= d);
         // Drain completed audio once on stop, preserving the tail.
         let read = match capture::copy_recording_i16(&mut cursor, &mut pcm) {
@@ -339,9 +353,10 @@ async fn run_recording(request: &RecordRequest) -> String {
         }
         Timer::after(Duration::from_millis(20)).await;
     }
+    if let Some(capture) = &request.capture {capture.stop();}
     shell2::print_matrix_target_line(&request.target, &format!("rec: {reason}; saving WAV"));
     match spool.finish(&request.target).await {
-        Ok(()) => format!(
+        Ok(()) => Ok(format!(
             "rec: saved trueosfs:/{}; {} frames ({} ms), {} channels, peak={} nonzero={} permille; {reason}",
             request.path,
             frames,
@@ -349,13 +364,13 @@ async fn run_recording(request: &RecordRequest) -> String {
             channels,
             peak,
             nonzero * 1000 / samples.max(1)
-        ),
-        Err(error) => format!(
+        )),
+        Err(error) => Err(format!(
             "rec: {reason}; {error}; retained {} PCM chunks ({} bytes) at trueosfs:/{}.part*; format=s16le-48000Hz-{}ch",
             spool.parts.len(),
             spool.saved_bytes,
             request.path,
             channels
-        ),
+        )),
     }
 }
