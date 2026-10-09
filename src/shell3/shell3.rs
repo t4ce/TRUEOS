@@ -1050,11 +1050,11 @@ impl Shell3 {
         }
         let text = core::mem::take(&mut self.prompt.text);
         let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
-        let is_app = can_launch
-            && self.appdb_names.iter().any(|name| name == &text);
-        let is_alias = can_launch
-            && self.aka_names.iter().any(|name| name == &text);
-        if text == "stop" && self.active_vmx_app().is_some() {
+        let is_app = can_launch && self.appdb_names.iter().any(|name| name == &text);
+        let is_alias = self.aka_names.iter().any(|name| name == &text);
+        if is_alias {
+            self.launch_named_app(&text, true);
+        } else if text == "stop" && self.active_vmx_app().is_some() {
             self.stop_active_vmx();
         } else if text == "tui" && self.active_vmx_app().is_some() {
             if let Err(error) = tui::request(self.tui_frontend(), self.active_matrix_slot.as_deref().unwrap_or("")) {
@@ -1062,8 +1062,8 @@ impl Shell3 {
             }
         } else if text == "esc" && self.active_vmx_app().is_some() {
             self.select_matrix_slot_index(0);
-        } else if is_app || is_alias {
-            self.launch_named_app(&text, is_alias);
+        } else if is_app {
+            self.launch_named_app(&text, false);
         } else {
             MatrixSlots::echo(
                 self.active_matrix_slot.as_deref(),
@@ -1381,6 +1381,8 @@ impl Shell3 {
 
     /// Exact recognition and prefix viability consult the same live registry.
     fn any_name_matching(&self, matches: impl Fn(&str) -> bool) -> bool {
+        // Aka remains visible and available independently of Tab/VM context.
+        if self.aka_names.iter().any(|alias| matches(alias)) { return true; }
         if self.active_vmx_app().is_some() {
             return names::VME_GROUP.names.iter().any(|entry| matches(entry.name));
         }
@@ -1392,7 +1394,6 @@ impl Shell3 {
                 CMD_GROUPS
                     .iter()
                     .any(|group| group.names.iter().any(|entry| matches(entry.name)))
-                    || self.aka_names.iter().any(|alias| matches(alias))
                     || self.appdb_names.iter().any(|entry| matches(entry))
             }
             Mode::ADM => ADM_NAMES.iter().any(|entry| matches(entry.name)),

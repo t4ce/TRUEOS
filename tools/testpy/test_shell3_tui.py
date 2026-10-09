@@ -55,6 +55,7 @@ use super::*;use std::sync::atomic::{AtomicU64,AtomicUsize,Ordering};
 pub static RUN:AtomicU64=AtomicU64::new(1);
 pub static REQUESTS:AtomicUsize=AtomicUsize::new(0);
 pub static INPUT:std::sync::Mutex<Vec<u8>>=std::sync::Mutex::new(Vec::new());
+pub static SUBMISSIONS:std::sync::Mutex<Vec<Vec<u8>>>=std::sync::Mutex::new(Vec::new());
 static TARGETS:std::sync::Mutex<Vec<(u8,shell2::MatrixTarget)>>=std::sync::Mutex::new(Vec::new());
 pub fn bind(vm:u8,target:&shell2::MatrixTarget) {TARGETS.lock().unwrap().retain(|e|e.0!=vm);TARGETS.lock().unwrap().push((vm,target.clone()));crate::tui::bind_vm(target,vm);}
 pub fn vm_run_generation(_:u8)->Option<u64> {Some(RUN.load(Ordering::Relaxed))}
@@ -63,6 +64,7 @@ pub fn blueprint_console_return_to_cli(vm:u8)->bool {let target=TARGETS.lock().u
 pub fn blueprint_console_submit_stdin_for_target(vm:u8,t:&shell2::MatrixTarget,run:u64,bytes:&[u8])->usize {blueprint_console_submit_stdin_for_lease(vm,&t.lease,run,bytes)}
 pub fn blueprint_console_submit_stdin_for_lease(_:u8,lease:&shell2::MatrixSlotLease,run:u64,bytes:&[u8])->usize {
     if !shell2::matrix_slot_is_live(lease) || vm_run_generation(0)!=Some(run) {return 0;}
+    SUBMISSIONS.lock().unwrap().push(bytes.to_vec());
     INPUT.lock().unwrap().extend_from_slice(bytes);bytes.len()
 }
 }
@@ -209,6 +211,21 @@ impl Shell3 {
     assert_eq!(tui::claim(&t,8),Some(true));tui::write(&t,8,b"\x1b[?1003h\x1b[?1006h");tty.reconcile_matrix_selection();tty.output.clear();
     shell2::free_name("mouse-scope");tty.reconcile_matrix_selection();
     assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[?1003l"));
+}
+
+#[test] fn ssh_does_not_split_mouse_reports_into_standalone_escape_submissions(){
+    let (f,t)=session("mouse-batch",9,120,40);
+    let shell=Shell3 {tui_frontend:f.id,name:"mouse-batch".into(),size:(120,40),prompt:String::new(),mode:3};
+    let mut tty=tty::Terminal::new_ssh(shell);assert_eq!(tui::claim(&t,9),Some(true));
+    hv::SUBMISSIONS.lock().unwrap().clear();
+    let reports=b"\x1b[<35;88;17M\x1b[<0;88;17M\x1b[<0;88;17m";
+    tty.input(reports);
+    assert_eq!(*hv::SUBMISSIONS.lock().unwrap(),vec![reports.to_vec()]);
+    assert!(tui::active(f.id,Some("mouse-batch")));
+    // Unicode still uses the shared handler; § parks before following bytes.
+    hv::SUBMISSIONS.lock().unwrap().clear();tty.input("\x1b[Aé\x1b[B§tail".as_bytes());
+    assert_eq!(*hv::SUBMISSIONS.lock().unwrap(),vec![b"\x1b[A".to_vec(),"é".as_bytes().to_vec(),b"\x1b[B".to_vec()]);
+    assert!(!tui::active(f.id,Some("mouse-batch")));
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-tui-') as directory:

@@ -169,27 +169,35 @@ impl Terminal {
         }
     }
 
-    pub fn input(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
+    pub fn input(&mut self, mut bytes: &[u8]) {
+        while let Some((&byte, rest)) = bytes.split_first() {
             if self.closing {
                 break;
             }
             // A leased crossterm app receives terminal bytes directly, including
-            // arrows, Tab, Enter and Ctrl-C/D. Decode UTF-8 through the shared
+            // arrows, Tab, Enter and Ctrl-C/D. Submit available ASCII together:
+            // waking the app for ESC alone can turn a mouse report into Esc.
+            // Decode UTF-8 through the shared
             // keyboard path so § can still park the lease as it does in UI4.
-            if self.view.lines.is_some()
-                && self.decoder.utf8_len == 0
-                && byte.is_ascii()
+            let ascii_len =
+                if self.view.lines.is_some() && self.decoder.utf8_len == 0 && byte.is_ascii() {
+                    bytes.iter().take_while(|byte| byte.is_ascii()).count()
+                } else {
+                    0
+                };
+            if ascii_len > 0
                 && tui::input(
                     self.shell.tui_frontend,
                     self.shell.active_matrix_slot_name().as_deref(),
-                    &[byte],
+                    &bytes[..ascii_len],
                 )
             {
                 self.decoder.escape = 0;
                 self.decoder.after_cr = false;
+                bytes = &bytes[ascii_len..];
                 continue;
             }
+            bytes = rest;
             // CRLF can straddle packets; a lone CR or LF also submits once.
             if byte == b'\n' && self.decoder.after_cr {
                 self.decoder.after_cr = false;

@@ -354,20 +354,27 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc stop");
     assert_eq!(s.prompt.text,"");
 }
-#[test] fn aka_name_launches_once_in_cmd_with_selected_slot() {
-    service::LAUNCHES.lock().unwrap().clear();
-    MatrixSlots::set(&["aka"]);
-    let mut s=Shell3::new(80); s.aka_names=vec!["hello".into()];
-    s.select_matrix_slot_name("aka");
-    type_text(&mut s,"hello"); assert!(service::LAUNCHES.lock().unwrap().is_empty());
-    s.set_prompt(""); s.set_mode(2);
-    type_text(&mut s,"hell"); assert!(service::LAUNCHES.lock().unwrap().is_empty());
-    type_text(&mut s,"o");
-    assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("alias:hello".into(),"aka".into())]);
-    assert!(MatrixSlots::echo_lines(Some("aka")).is_empty());
-    assert_eq!(s.active_matrix_slot_name(),Some("td0".into()));
-    assert!(s.get_strip(SpecialRows::TitleRow,StripSide::Left).contains("termdir"));
-    assert_eq!(s.prompt.text,"");
+#[test] fn aka_is_global_and_launches_once_in_each_mode_with_selected_slot() {
+    for mode in 1..=3 {
+        service::LAUNCHES.lock().unwrap().clear();MatrixSlots::set(&["aka"]);
+        let mut s=Shell3::new(80);s.aka_names=vec!["hello".into()];s.set_mode(mode);
+        s.select_matrix_slot_name("aka");
+        assert!(s.parse_name("hello"));assert!(s.any_name_matching(|name|name.starts_with("hell")));
+        type_text(&mut s,"hell");assert!(service::LAUNCHES.lock().unwrap().is_empty());
+        type_text(&mut s,"o");
+        assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("alias:hello".into(),"aka".into())]);
+        assert!(MatrixSlots::echo_lines(Some("aka")).is_empty());assert_eq!(s.prompt.text,"");
+        assert!(s.get_strip(SpecialRows::TitleRow,StripSide::Left).contains("termdir"));
+    }
+}
+#[test] fn aka_precedes_mode_and_vm_names() {
+    service::LAUNCHES.lock().unwrap().clear();MatrixSlots::set(&[] as &[&str]);
+    let mut s=Shell3::new(80);s.aka_names=vec!["online".into(),"stop".into()];
+    type_text(&mut s,"online");assert_eq!(service::LAUNCHES.lock().unwrap()[0].0,"alias:online");
+    assert!(s.active_vmx_app().is_some());assert!(s.parse_name("stop"));
+    type_text(&mut s,"stop");assert_eq!(service::LAUNCHES.lock().unwrap()[1].0,"alias:stop");
+    assert!(s.active_vmx_app().is_some());assert_eq!(s.prompt.text,"");
+    MatrixSlots::set(&[] as &[&str]);
 }
 #[test] fn command_legend_uses_live_names_and_preserves_admin_colors() {
     MatrixSlots::set(&["id","123"]); matrix_slots().lock().echoes.clear();
