@@ -150,6 +150,7 @@ jobs:
           # checkout alone contains no Cargo manifests for them.
           git -C "${blueprints_dir}" submodule update --init --recursive --depth 1 -- \
             apps/solara \
+            apps/RbGB \
             buildins/edit \
             buildins/termdir
           test -f "${blueprints_dir}/apps/solara/Cargo.toml"
