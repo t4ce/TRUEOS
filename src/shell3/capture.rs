@@ -216,7 +216,6 @@ pub(super) fn start(name: &str, frontend: Frontend) -> Result<(), String> {
             return Err("capture: helper task pool is full".into());
         }
     };
-    shell2::set_matrix_target_active(&target, true);
     spawner.spawn(token);
     Ok(())
 }
@@ -230,6 +229,8 @@ struct Menu {
     selected: usize,
     input: Input,
     pictures: Option<Pictures>,
+    pending_pictures: usize,
+    work: Option<helper::Work>,
     video: Option<Recording>,
     audio: Option<Recording>,
     message: String,
@@ -244,6 +245,8 @@ impl Menu {
             selected: 0,
             input: Input::default(),
             pictures: None,
+            pending_pictures: 0,
+            work: None,
             video: None,
             audio: None,
             message: String::new(),
@@ -257,6 +260,18 @@ impl Menu {
             || self.audio.is_some()
             || self.pictures.is_some()
             || self.muxing.is_some()
+    }
+    fn working(&self) -> bool {
+        self.busy() || self.pending_pictures != 0
+    }
+    fn sync_work(&mut self, target: &MatrixTarget) {
+        if self.working() {
+            if self.work.is_none() {
+                self.work = Some(helper::Work::new(target));
+            }
+        } else {
+            self.work = None;
+        }
     }
     fn labels(&self) -> Vec<&'static str> {
         if self.busy() {
@@ -372,8 +387,9 @@ impl Menu {
         self.message.clear();
     }
     fn notice(&mut self, notice: &str) {
+        self.pending_pictures = self.pending_pictures.saturating_sub(1);
         self.result = single_line(notice);
-        if self.pictures.is_none() {
+        if self.pictures.is_none() && self.pending_pictures == 0 {
             self.message.clear();
         }
     }
@@ -485,7 +501,11 @@ impl Menu {
         } else {
             self.message.clone()
         };
-        lines[status_row] = status;
+        lines[status_row] = if self.working() {
+            format!("{} {}", helper::spinner(now), status)
+        } else {
+            status
+        };
         lines[rows - 2] = self.result_line(cols);
         if rows >= 16 {
             for (index, recording) in self.video.iter().chain(self.audio.iter()).enumerate() {
@@ -531,6 +551,7 @@ impl Menu {
         }
         match crate::ui4::request_wd_postblend_capture(target.clone()) {
             Ok(()) => {
+                self.pending_pictures += 1;
                 self.message = "Picture armed; waiting for capture and save…".into();
                 pictures.remaining -= 1;
                 pictures.next = now + 3_000_000_000;
@@ -641,6 +662,7 @@ async fn menu_task(kind: Kind, target: MatrixTarget) {
         }
         menu.pictures(&target, now);
         menu.recordings(&target);
+        menu.sync_work(&target);
         let frame = menu.frame(surface.cols as usize, surface.rows as usize, now);
         screen.paint(&target, &frame, surface.cols as usize, surface.rows as usize);
         Timer::after(Duration::from_millis(20)).await;
@@ -648,7 +670,6 @@ async fn menu_task(kind: Kind, target: MatrixTarget) {
     for recording in menu.video.iter().chain(menu.audio.iter()) {
         recording.stop();
     }
-    shell2::set_matrix_target_active(&target, false);
 }
 
 #[trueos_executor::task(pool_size = 1)]

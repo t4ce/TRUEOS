@@ -3,6 +3,25 @@ use super::tui::{self, Frontend};
 use crate::shell2::{self, MatrixTarget};
 use alloc::{format, string::String, vec::Vec};
 
+const GO: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+pub(super) fn spinner(now: u64) -> char {
+    GO[(now / 100_000_000 % GO.len() as u64) as usize]
+}
+
+/// Count finite work, rather than the lifetime or selection of its menu.
+pub(super) struct Work(MatrixTarget);
+impl Work {
+    pub(super) fn new(target: &MatrixTarget) -> Self {
+        shell2::set_matrix_target_active(target, true);
+        Self(target.clone())
+    }
+}
+impl Drop for Work {
+    fn drop(&mut self) {
+        shell2::set_matrix_target_active(&self.0, false);
+    }
+}
+
 /// A parked helper is reused; only a new lease needs a worker task.
 pub(super) fn admit(
     name: &str,

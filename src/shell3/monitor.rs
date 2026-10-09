@@ -4,7 +4,7 @@ use super::{
     tui::{self, Frontend},
 };
 use crate::shell2::{
-    self, MatrixTarget,
+    MatrixTarget,
     cmds::{ram, smp},
 };
 use alloc::{format, string::String, vec::Vec};
@@ -48,7 +48,6 @@ pub(super) fn start(name: &str, frontend: Frontend) -> Result<(), String> {
             return Err("Monitor task pool is full.".into());
         }
     };
-    shell2::set_matrix_target_active(&target, true);
     spawner.spawn(token);
     Ok(())
 }
@@ -194,5 +193,4 @@ async fn monitor_task(kind: Kind, target: MatrixTarget) {
         }
         Timer::after(Duration::from_millis(20)).await;
     }
-    shell2::set_matrix_target_active(&target, false);
 }

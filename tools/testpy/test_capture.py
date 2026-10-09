@@ -86,6 +86,19 @@ TESTS = r'''
         for rows in [5,8,12,25]{for cols in [20,70,100]{assert!(menu.frame(cols,rows,0).iter().any(|line|line.contains("VID")));}}
         menu.choose(&target,0);assert!(menu.video.as_ref().unwrap().stopped());
     }
+    #[test] fn finite_capture_work_spins_until_the_async_result_even_when_parked(){
+        setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Pic);
+        menu.notice("Saved: previous.png");menu.sync_work(&target);assert_eq!(crate::S.lock().active,0);assert!(menu.frame(100,25,0)[22].is_empty());
+        menu.choose(&target,0);menu.sync_work(&target);assert_eq!(crate::S.lock().active,1);
+        assert!(menu.frame(100,25,0)[22].starts_with('⣿'));assert!(menu.frame(100,25,100_000_000)[22].starts_with('⣾'));assert!(menu.frame(100,25,900_000_000)[22].starts_with('⣿'));assert_eq!(menu.frame(100,25,100_000_000)[23],"Saved: previous.png");
+        menu.pictures(&target,0);menu.sync_work(&target);assert!(!menu.busy());assert!(menu.working());assert_eq!(crate::S.lock().active,1);
+        menu.action(Action::Quit,&target,25,0);menu.sync_work(&target);assert_eq!(crate::S.lock().active,1);
+        menu.notice("Saved: new.png");menu.sync_work(&target);assert_eq!(crate::S.lock().active,0);assert!(menu.frame(100,25,0)[22].is_empty());
+        menu.selected=1;menu.choose(&target,1_000_000_000);menu.sync_work(&target);assert_eq!(crate::S.lock().active,1);
+        menu.choose(&target,1_000_000_000);menu.sync_work(&target);assert_eq!(crate::S.lock().active,0);
+        menu.choose(&target,2_000_000_000);menu.sync_work(&target);crate::S.lock().no_root=true;menu.pictures(&target,2_000_000_000);menu.sync_work(&target);assert_eq!(crate::S.lock().active,0);assert!(menu.result.starts_with("Error:"));
+        crate::S.lock().no_root=false;menu.choose(&target,3_000_000_000);menu.sync_work(&target);assert_eq!(crate::S.lock().active,1);drop(menu);assert_eq!(crate::S.lock().active,0);
+    }
     #[test] fn screenshot_result_survives_scheduling_and_return_then_shows_a_short_failure(){
         setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Pic);
         crate::ui4::report_shot_result(Some(&target),Ok("screenshots/last-capture.png"));
