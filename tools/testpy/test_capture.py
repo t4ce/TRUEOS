@@ -18,10 +18,12 @@ extern crate self as trueos_executor;
 impl Spawner {pub fn spawn<T>(&self,_:T){}}
 mod workers {pub type WorkerSpawner=crate::Spawner;pub fn pick_background_spawner()->Option<crate::Spawner>{Some(crate::Spawner)}}
 mod ui4 {
+    @SHOT_REPORT@
     pub fn writable_capture_root_handle()->Option<crate::disc::block::DeviceHandle>{if crate::S.lock().no_root {None} else {Some(crate::disc::block::DeviceHandle)}}
     pub fn request_wd_postblend_capture(_:crate::shell2::MatrixTarget)->Result<(),&'static str>{crate::SHOTS.lock().push(crate::chronos::monotonic_nanos());Ok(())}
     pub fn request_capture_film(_:crate::shell2::MatrixTarget,r:crate::shell3::capture::Recording)->Result<(),&'static str>{crate::RECORDINGS.lock().push(r);Ok(())}
 }
+static NOTICES:Mutex<Vec<String>>=Mutex::new(Vec::new());
 static SHOTS:Mutex<Vec<u64>>=Mutex::new(Vec::new());
 static RECORDINGS:Mutex<Vec<shell3::capture::Recording>>=Mutex::new(Vec::new());
 static RETURNED:AtomicBool=AtomicBool::new(false);
@@ -37,6 +39,7 @@ mod shell3 {
         pub fn cancel_native_attach(_:&crate::shell2::MatrixTarget){}
         pub fn native_return(_:&crate::shell2::MatrixTarget){crate::RETURNED.store(true,crate::Ordering::SeqCst);}
         pub fn native_write(_:&crate::shell2::MatrixTarget,_:&[u8]){}
+        pub fn native_notice(_:&crate::shell2::MatrixTarget,message:&str){crate::NOTICES.lock().push(message.into());}
         pub fn native_read(_:&crate::shell2::MatrixTarget)->Option<(Vec<u8>,Vec<String>)>{None}
         pub fn surface(_:&crate::shell2::MatrixTarget)->Option<Surface>{Some(Surface{cols:100,rows:25})}
     }
@@ -52,7 +55,7 @@ mod shell3 {
 TESTS = r'''
 #[cfg(test)] mod tests {
     use super::*;
-    fn setup(){*crate::S.lock()=crate::State::default();crate::NOW.store(0,Ordering::SeqCst);crate::SHOTS.lock().clear();crate::RECORDINGS.lock().clear();crate::RETURNED.store(false,Ordering::SeqCst);LAST_SHOT.store(0,Ordering::SeqCst);}
+    fn setup(){*crate::S.lock()=crate::State::default();crate::NOW.store(0,Ordering::SeqCst);crate::SHOTS.lock().clear();crate::NOTICES.lock().clear();crate::RECORDINGS.lock().clear();crate::RETURNED.store(false,Ordering::SeqCst);LAST_SHOT.store(0,Ordering::SeqCst);}
     #[test] fn fragmented_escape_mouse_crlf_and_quit_are_unambiguous(){
         let mut input=Input::default();assert!(input.feed(b"\x1b",0).is_empty());assert!(input.timeout(74_000_000).is_none());
         assert_eq!(input.feed(b"[B\r\n",30_000_000),vec![Action::Down,Action::Choose]);
@@ -82,6 +85,35 @@ TESTS = r'''
         assert!(menu.action(Action::Quit,&target,25,0));assert!(crate::RETURNED.load(Ordering::SeqCst));assert!(!recording.stopped());
         for rows in [5,8,12,25]{for cols in [20,70,100]{assert!(menu.frame(cols,rows,0).iter().any(|line|line.contains("VID")));}}
         menu.choose(&target,0);assert!(menu.video.as_ref().unwrap().stopped());
+    }
+    #[test] fn screenshot_result_survives_scheduling_and_return_then_shows_a_short_failure(){
+        setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Pic);
+        crate::ui4::report_shot_result(Some(&target),Ok("screenshots/last-capture.png"));
+        let notice=crate::NOTICES.lock().pop().unwrap();menu.notice(&notice);
+        assert_eq!(menu.frame(100,25,0)[23],"Saved: last-capture.png");assert!(menu.message.is_empty());
+        menu.selected=1;menu.choose(&target,0);assert!(menu.frame(100,25,0)[22].contains("10 sec"));assert_eq!(menu.frame(100,25,0)[23],notice);
+        menu.action(Action::Quit,&target,25,0);assert_eq!(menu.result,notice);
+        crate::ui4::report_shot_result(Some(&target),Err("No space for screenshot."));menu.notice(&crate::NOTICES.lock().pop().unwrap());
+        assert_eq!(menu.result,"Error: No space for screenshot.");assert!(menu.frame(100,5,0)[3].starts_with("Error:"));
+        menu.problem("bad\nwrite\tresult");assert_eq!(menu.result,"Error: bad write result");assert_eq!(menu.result_line(12),"Error: bad …");
+    }
+    #[test] fn recording_results_keep_only_the_saved_filename_or_failure(){
+        for kind in [Kind::Vid,Kind::Aud] {
+            setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(kind);menu.record(&target,3).unwrap();
+            let recording=menu.video.as_ref().or(menu.audio.as_ref()).unwrap().clone();
+            recording.finish("film: saved /verbose/path; lots of diagnostic counters",true);menu.recordings(&target);
+            assert_eq!(menu.result,saved_result(&recording.path));assert!(menu.message.is_empty());assert!(!menu.busy());
+            let saved=menu.result.clone();menu.choose(&target,1_000_000_000);assert_eq!(menu.result,saved);
+            menu.video.as_ref().or(menu.audio.as_ref()).unwrap().finish("rec: final recording write failed; retained 9 chunks at /long/path",false);menu.recordings(&target);
+            assert_eq!(menu.result,"Error: final recording write failed");assert_eq!(menu.frame(100,25,0)[23],menu.result);
+        }
+        let mut menu=Menu::new(Kind::Pic);menu.notice("Saved: wd-postblend-xyuv709-123456789-123456789012-wd000001-capture000001.png");
+        assert_eq!(menu.result_line(30).chars().count(),30);assert!(menu.result_line(30).ends_with(".png"));assert!(menu.result_line(30).starts_with("Saved:"));
+    }
+    #[test] fn combined_recording_result_reports_the_final_mkv_or_mux_error(){
+        setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Vaud);
+        menu.muxing=Some(Arc::new(Mutex::new(Some(Ok("screenfilms/combined.mkv".into())))));menu.recordings(&target);assert_eq!(menu.result,"Saved: combined.mkv");
+        menu.muxing=Some(Arc::new(Mutex::new(Some(Err("final commit failed".into())))));menu.recordings(&target);assert_eq!(menu.result,"Error: final commit failed");assert!(menu.message.is_empty());
     }
     #[test] fn vaud_arms_two_tracks_on_one_clock_and_failed_audio_admission_stops_video(){
         setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Vaud);menu.record(&target,3).unwrap();
@@ -129,7 +161,8 @@ def main():
             wav.setnchannels(2);wav.setsampwidth(2);wav.setframerate(48000);wav.writeframes(pcm)
         base = HARNESS[:HARNESS.index('mod ui4 {')].replace(model(),'')
         base = base.replace('pub mod wd_xyuv8888 {','pub mod avc_encode_probe {pub const FRAME_WIDTH:usize=64;pub const FRAME_HEIGHT:usize=48;} pub mod wd_xyuv8888 {')
-        base = base.replace('    #[derive(Clone)] pub struct MatrixTarget', '''    pub const OUTPUT_SYSTEM_MASK:u16=1;
+        base = base.replace('    #[derive(Clone)] pub struct MatrixTarget', '''    pub fn print_matrix_target_system_line(target:&MatrixTarget,line:&str){print_matrix_target_line(target,line)}
+    pub const OUTPUT_SYSTEM_MASK:u16=1;
     pub fn matrix_target_for_slot_name(_:u16,_:&str)->MatrixTarget{MatrixTarget(1)}
     pub mod cmds {pub mod rec {
         pub fn request_capture(_:crate::shell2::MatrixTarget,r:crate::shell3::capture::Recording)->Result<(),&'static str>{if crate::S.lock().slot_busy{return Err("audio busy");}crate::RECORDINGS.lock().push(r);Ok(())}
@@ -140,7 +173,8 @@ def main():
         capture = re.sub(r'^#\[trueos_executor::task[^\n]*\n','',capture,flags=re.M)
         capture = capture.replace('async fn menu_task(', 'async fn menu_task_run(').replace('async fn mux_task(', 'async fn mux_task_run(')
         capture = capture.replace('mod mux;', f'#[path="{ROOT}/src/shell3/capture/mux.rs"] mod mux;')
-        source = base + STUBS.replace('@ROOT@',str(ROOT)).replace('@CAPTURE@',capture).replace('@TESTS@',TESTS)
+        shot_report = re.search(r'^fn report_shot_result\(.*?^}', (ROOT/'src/ui4/screenshot.rs').read_text(), re.M | re.S).group().replace('fn report_shot_result(', 'pub(crate) fn report_shot_result(')
+        source = base + STUBS.replace('@ROOT@',str(ROOT)).replace('@SHOT_REPORT@',shot_report).replace('@CAPTURE@',capture).replace('@TESTS@',TESTS)
         for key, value in [('VIDEO',video),('AUDIO',audio),('OUTPUT',output)]: source=source.replace('@'+key+'@',str(value))
         rust, binary = tmp/'tests.rs', tmp/'tests'
         rust.write_text(source)

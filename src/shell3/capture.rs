@@ -32,6 +32,26 @@ const PIC_LABELS: [&str; 3] = [
 const FOOTER: &str = "↑/↓ or j/k select   Enter choose   ←/h back   Esc/q quit   Mouse choose";
 static LAST_SHOT: AtomicU64 = AtomicU64::new(0);
 
+fn single_line(text: &str) -> String {
+    text.chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+pub(crate) fn saved_result(path: &str) -> String {
+    format!("Saved: {}", single_line(path.rsplit('/').next().unwrap_or(path)))
+}
+pub(crate) fn error_result(error: &str) -> String {
+    let error = error
+        .strip_prefix("film: ")
+        .or_else(|| error.strip_prefix("rec: "))
+        .unwrap_or(error);
+    let error = error.split("; retained ").next().unwrap_or(error);
+    format!("Error: {}", single_line(error))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Pic,
@@ -213,6 +233,7 @@ struct Menu {
     video: Option<Recording>,
     audio: Option<Recording>,
     message: String,
+    result: String,
     seconds: u32,
     muxing: Option<Arc<Mutex<Option<Result<String, String>>>>>,
 }
@@ -226,6 +247,7 @@ impl Menu {
             video: None,
             audio: None,
             message: String::new(),
+            result: String::new(),
             seconds: 0,
             muxing: None,
         }
@@ -261,7 +283,7 @@ impl Menu {
     fn layout(&self, rows: usize) -> (usize, usize, usize) {
         let first = if rows >= 12 { 4 } else { 1 };
         let visible = rows
-            .saturating_sub(first + 2)
+            .saturating_sub(first + 3)
             .max(1)
             .min(self.labels().len());
         let offset = self.selected.saturating_sub(visible - 1);
@@ -340,9 +362,45 @@ impl Menu {
             let seconds = DURATIONS[self.selected];
             match self.record(target, seconds) {
                 Ok(()) => self.message = "Arming recording…".into(),
-                Err(error) => self.message = error.into(),
+                Err(error) => self.problem(error),
             }
             self.selected = 0;
+        }
+    }
+    fn problem(&mut self, error: &str) {
+        self.result = error_result(error);
+        self.message.clear();
+    }
+    fn notice(&mut self, notice: &str) {
+        self.result = single_line(notice);
+        if self.pictures.is_none() {
+            self.message.clear();
+        }
+    }
+    fn result_line(&self, cols: usize) -> String {
+        let chars: Vec<char> = self.result.chars().collect();
+        if chars.len() <= cols {
+            return self.result.clone();
+        }
+        if cols == 0 {
+            return String::new();
+        }
+        let available = cols - 1;
+        if self.result.starts_with("Saved: ") {
+            // Keep both the filename's identifying prefix and its extension.
+            let tail = available / 2;
+            chars[..available - tail]
+                .iter()
+                .chain(core::iter::once(&'…'))
+                .chain(chars[chars.len() - tail..].iter())
+                .copied()
+                .collect()
+        } else {
+            chars[..available]
+                .iter()
+                .copied()
+                .chain(core::iter::once('…'))
+                .collect()
         }
     }
     fn record(&mut self, target: &MatrixTarget, seconds: u32) -> Result<(), &'static str> {
@@ -397,8 +455,8 @@ impl Menu {
             lines[first + i] =
                 format!("  {} {}", if index == self.selected { "›" } else { " " }, labels[index]);
         }
-        // One status row even in a five-row terminal; larger surfaces show paths.
-        let status_row = rows - 2;
+        // Progress never replaces the last saved filename or failure.
+        let status_row = rows - 3;
         let status = if let Some(pictures) = &self.pictures {
             format!(
                 "{} picture(s) remaining; next in {} sec. {}",
@@ -428,6 +486,7 @@ impl Menu {
             self.message.clone()
         };
         lines[status_row] = status;
+        lines[rows - 2] = self.result_line(cols);
         if rows >= 16 {
             for (index, recording) in self.video.iter().chain(self.audio.iter()).enumerate() {
                 let status = recording.status.lock();
@@ -454,14 +513,14 @@ impl Menu {
             return;
         }
         if crate::ui4::writable_capture_root_handle().is_none() {
-            self.message = "No writable TRUEOSFS root is mounted.".into();
             self.pictures = None;
+            self.problem("No writable TRUEOSFS root is mounted.");
             return;
         }
         let previous = LAST_SHOT.load(Ordering::Acquire);
         if previous != 0 && now.saturating_sub(previous - 1) < MIN_SHOT_NS {
-            self.message = "Please wait 250 ms between pictures.".into();
             self.pictures = None;
+            self.problem("Please wait 250 ms between pictures.");
             return;
         }
         if LAST_SHOT
@@ -480,8 +539,8 @@ impl Menu {
                 }
             }
             Err(error) => {
-                self.message = error.into();
                 self.pictures = None;
+                self.problem(error);
             }
         }
     }
@@ -491,8 +550,14 @@ impl Menu {
                 return;
             };
             self.message = match result {
-                Ok(path) => format!("Saved trueosfs:/{path}"),
-                Err(error) => format!("{error}; source H.264/WAV retained."),
+                Ok(path) => {
+                    self.result = saved_result(&path);
+                    format!("Saved trueosfs:/{path}")
+                }
+                Err(error) => {
+                    self.result = error_result(&error);
+                    format!("{error}; source H.264/WAV retained.")
+                }
             };
             self.muxing = None;
         } else {
@@ -521,24 +586,32 @@ impl Menu {
                         }
                     }
                     self.message = "Cannot start mux; source H.264/WAV retained.".into();
+                    self.result = error_result("Cannot start combined-file save.");
                 } else {
+                    let failed = self
+                        .video
+                        .iter()
+                        .chain(self.audio.iter())
+                        .find(|recording| !recording.status.lock().saved)
+                        .unwrap();
+                    self.result = error_result(&failed.status.lock().message);
                     self.message =
                         "Capture failed; available source files and recovery chunks retained."
                             .into();
                 }
             } else {
-                self.message = self
-                    .video
-                    .as_ref()
-                    .or(self.audio.as_ref())
-                    .unwrap()
-                    .status
-                    .lock()
-                    .message
-                    .clone();
+                let recording = self.video.as_ref().or(self.audio.as_ref()).unwrap();
+                let status = recording.status.lock();
+                self.result = if status.saved {
+                    saved_result(&recording.path)
+                } else {
+                    error_result(&status.message)
+                };
+                self.message = status.message.clone();
             }
         }
         shell2::print_matrix_target_line(target, &self.message);
+        self.message.clear();
         self.video = None;
         self.audio = None;
         self.selected = 0;
@@ -564,7 +637,7 @@ async fn menu_task(kind: Kind, target: MatrixTarget) {
             }
         }
         for notice in notices {
-            menu.message = notice;
+            menu.notice(&notice);
         }
         menu.pictures(&target, now);
         menu.recordings(&target);

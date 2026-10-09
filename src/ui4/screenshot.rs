@@ -232,16 +232,20 @@ pub(crate) fn request_wd_postblend_capture(
 
 fn report_shot_result(
     target: Option<&crate::shell2::MatrixTarget>,
-    stored: bool,
-    path: Option<&str>,
+    result: Result<&str, &str>,
 ) {
     if let Some(target) = target {
-        let message = match (stored, path) {
-            (true, Some(path)) => alloc::format!("Image was STORED: trueosfs:/{path}"),
-            (true, None) => String::from("Image was STORED"),
-            (false, _) => String::from("Image was NOT STORED"),
+        let (notice, message) = match result {
+            Ok(path) => (
+                crate::shell3::capture::saved_result(path),
+                alloc::format!("Image was STORED: trueosfs:/{path}"),
+            ),
+            Err(error) => (
+                crate::shell3::capture::error_result(error),
+                alloc::format!("Image was NOT STORED: {error}"),
+            ),
         };
-        crate::shell3::tui::native_notice(target, message.as_str());
+        crate::shell3::tui::native_notice(target, notice.as_str());
         crate::shell2::print_matrix_target_system_line(target, message.as_str());
     }
 }
@@ -556,7 +560,7 @@ fn take_wd_postblend_capture() -> Option<CapturedComposition> {
                 xyuv.len(),
                 expected,
             );
-            report_shot_result(shot_target.as_ref(), false, None);
+            report_shot_result(shot_target.as_ref(), Err("Invalid screenshot layout."));
             return None;
         }
         let mut rgba = alloc::vec![0u8; expected];
@@ -1099,7 +1103,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
         drive_manual_wd_capture_if_needed().await;
         if crate::intel::media::wd_xyuv8888::take_failed_screenshot() {
             let target = SHOT_TARGETS.lock().pop_front();
-            report_shot_result(target.as_ref(), false, None);
+            report_shot_result(target.as_ref(), Err("Screenshot copy failed."));
         }
         if let Some(capture) = take_wd_postblend_capture() {
             let wd_sequence = match capture.scope {
@@ -1117,7 +1121,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
                 );
                 queue.push_back(capture);
             } else {
-                report_shot_result(capture.shot_target.as_ref(), false, None);
+                report_shot_result(capture.shot_target.as_ref(), Err("Screenshot save queue is full."));
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: wd snapshot dropped wd_sequence={} reason=encode-queue-full\n",
                     wd_sequence,
@@ -1143,7 +1147,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
             if queue.len() < MAX_CAPTURE_QUEUE {
                 queue.push_front(capture);
             } else {
-                report_shot_result(capture.shot_target.as_ref(), false, None);
+                report_shot_result(capture.shot_target.as_ref(), Err("No writable root; screenshot queue is full."));
                 release_interactive_capture_gate(&capture);
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: capture dropped sequence={} reason=no-root-and-queue-full\n",
@@ -1167,7 +1171,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
         ) {
             Ok(png) => png,
             Err(error) => {
-                report_shot_result(capture.shot_target.as_ref(), false, None);
+                report_shot_result(capture.shot_target.as_ref(), Err("PNG encoding failed."));
                 release_interactive_capture_gate(&capture);
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: PNG encode failed sequence={} error={:?} size={}x{}\n",
@@ -1189,7 +1193,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
         .await
         {
             Ok(true) => {
-                report_shot_result(capture.shot_target.as_ref(), true, Some(path.as_str()));
+                report_shot_result(capture.shot_target.as_ref(), Ok(path.as_str()));
                 crate::log_info!(target: "gfx";
                     "ui4/screenshot: saved path=trueosfs:/{} disk_id={} sequence={} format=png-rgba size={}x{} png_bytes={} encode_us={} write_us={}\n",
                     path,
@@ -1203,7 +1207,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
                 );
             }
             Ok(false) => {
-                report_shot_result(capture.shot_target.as_ref(), false, None);
+                report_shot_result(capture.shot_target.as_ref(), Err("No space for screenshot."));
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} reason=no-space-or-root-placement\n",
                     path,
@@ -1212,7 +1216,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
                 );
             }
             Err(error) => {
-                report_shot_result(capture.shot_target.as_ref(), false, None);
+                report_shot_result(capture.shot_target.as_ref(), Err("Screenshot write failed."));
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} error={:?}\n",
                     path,
