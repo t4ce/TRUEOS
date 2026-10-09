@@ -1,4 +1,6 @@
 pub(crate) mod capture;
+mod helper;
+mod monitor;
 mod metafmtstr;
 mod names;
 pub mod net;
@@ -1058,6 +1060,20 @@ impl Shell3 {
             match capture::start(&text, self.tui_frontend()) {
                 Ok(()) => {MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text);},
                 Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+            }
+        } else if self.mode == Mode::ADM && monitor::recognizes(&text) {
+            match monitor::start(&text, self.tui_frontend()) {
+                Ok(()) => {MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text);},
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+            }
+        } else if self.mode == Mode::ADM && text == "sh3" {
+            if let Err(error) = service::request_shell3() {
+                let message = match error {
+                    Shell3Error::NoExecutor => "sh3: no Shell3 AP executor is available".into(),
+                    Shell3Error::InstanceLimit => "sh3: Shell3 instance limit reached".into(),
+                    other => format!("sh3: {other:?}"),
+                };
+                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, message);
             }
         } else if is_alias {
             self.launch_named_app(&text, true);

@@ -113,12 +113,11 @@ fn memory_speed_summary(devices: &[crate::efi::smbios::MemoryDevice<'_>]) -> Str
     }
 }
 
-fn emit_memory_modules(io: &'static dyn ShellBackend2) {
+fn collect_memory_modules(width: usize, mut emit: impl FnMut(&str)) {
     let smbios = match crate::efi::smbios::discover() {
         Ok(table) => table,
         Err(error) => {
-            print_shell_line(
-                io,
+            emit(
                 alloc::format!("ram: physical_modules=unavailable | smbios={}", error.label())
                     .as_str(),
             );
@@ -136,8 +135,7 @@ fn emit_memory_modules(io: &'static dyn ShellBackend2) {
             }
             Ok(None) => break,
             Err(error) => {
-                print_shell_line(
-                    io,
+                emit(
                     alloc::format!("ram: physical_modules=incomplete | smbios={error:?}").as_str(),
                 );
                 break;
@@ -145,7 +143,7 @@ fn emit_memory_modules(io: &'static dyn ShellBackend2) {
         }
     }
     if devices.is_empty() {
-        print_shell_line(io, "ram: physical_modules=unavailable | smbios=no_type17_records");
+        emit("ram: physical_modules=unavailable | smbios=no_type17_records");
         return;
     }
 
@@ -168,8 +166,7 @@ fn emit_memory_modules(io: &'static dyn ShellBackend2) {
     } else {
         format_bytes(installed_bytes)
     };
-    print_shell_line(
-        io,
+    emit(
         alloc::format!(
             "ram: memory_speed={} | physical_modules={}/{} | installed={}",
             memory_speed_summary(devices.as_slice()),
@@ -181,9 +178,9 @@ fn emit_memory_modules(io: &'static dyn ShellBackend2) {
     );
 
     const HEADERS: [&str; 4] = ["physical module", "size", "speed", "installed share"];
-    let table = TlbTable::with_width(&HEADERS, line_width_for_backend(io).saturating_sub(2))
+    let table = TlbTable::with_width(&HEADERS, width.saturating_sub(2))
         .with_max_col_widths(&[28, 9, 12, 0]);
-    table.emit_header(|text| print_shell_line(io, text));
+    table.emit_header(|text| emit(text));
     for device in &devices {
         let label = module_label(device);
         let (size, share) = match device.size {
@@ -208,51 +205,111 @@ fn emit_memory_modules(io: &'static dyn ShellBackend2) {
             memory_speed(device)
         };
         let row = [label, size, speed, share];
-        table.emit_row(&row, |text| print_shell_line(io, text));
+        table.emit_row(&row, |text| emit(text));
     }
-    table.emit_footer(|text| print_shell_line(io, text));
+    table.emit_footer(|text| emit(text));
 }
 
-fn emit_pmm_row(table: &TlbTable<'_>, io: &'static dyn ShellBackend2) -> bool {
-    let Some(stats) = crate::phys::pmm_stats() else {
-        return false;
-    };
+pub(crate) fn memory_modules_snapshot(width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    collect_memory_modules(width, |line| lines.push(line.into()));
+    lines
+}
+
+fn pmm_row() -> Option<[String; 7]> {
+    let stats = crate::phys::pmm_stats()?;
     let used = stats.total_bytes.saturating_sub(stats.free_bytes);
     let percent = crate::ram_usage::use_percent(used, stats.total_bytes);
-    let row = [
-        alloc::string::String::from("pmm"),
+    Some([
+        String::from("pmm"),
         format_bytes(used),
         format_bytes(stats.total_bytes),
         format_bytes(stats.free_bytes),
         format_bytes(stats.largest_free_region),
         alloc::format!("{}", stats.free_regions),
-        crate::ram_usage::chart_text(percent, crate::ram_usage::pmm_history_text().as_str()),
-    ];
-    table.emit_row(&row, |text| print_shell_line(io, text));
-    true
+        crate::ram_usage::chart_text(percent, &crate::ram_usage::pmm_history_text()),
+    ])
 }
-
-fn emit_heap_row(
-    table: &TlbTable<'_>,
-    io: &'static dyn ShellBackend2,
-    scope: alloc::string::String,
-    stats: crate::allocators::HeapStats,
-    history: alloc::string::String,
-) {
+fn heap_row(scope: String, stats: crate::allocators::HeapStats, history: String) -> [String; 7] {
     let total = stats.usable_total as u64;
     let free = stats.free_bytes as u64;
     let used = total.saturating_sub(free);
     let percent = crate::ram_usage::use_percent(used, total);
-    let row = [
+    [
         scope,
         format_bytes(used),
         format_bytes(total),
         format_bytes(free),
         format_bytes(stats.largest_free_block as u64),
         alloc::format!("{}", stats.free_blocks),
-        crate::ram_usage::chart_text(percent, history.as_str()),
-    ];
+        crate::ram_usage::chart_text(percent, &history),
+    ]
+}
+fn emit_pmm_row(table: &TlbTable<'_>, io: &'static dyn ShellBackend2) -> bool {
+    let Some(row) = pmm_row() else {
+        return false;
+    };
     table.emit_row(&row, |text| print_shell_line(io, text));
+    true
+}
+fn emit_heap_row(
+    table: &TlbTable<'_>,
+    io: &'static dyn ShellBackend2,
+    scope: String,
+    stats: crate::allocators::HeapStats,
+    history: String,
+) {
+    table.emit_row(&heap_row(scope, stats, history), |text| print_shell_line(io, text));
+}
+fn usage_rows() -> Vec<[String; 7]> {
+    let mut rows = Vec::new();
+    if let Some(row) = pmm_row() {
+        rows.push(row);
+    }
+    let host = crate::allocators::heap_stats();
+    if host.initialized && host.usable_total != 0 {
+        rows.push(heap_row(String::from("host"), host, crate::ram_usage::host_history_text()));
+    }
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        if let Some(stats) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8) {
+            rows.push(heap_row(
+                vm_scope(vm_id as u8),
+                stats,
+                crate::ram_usage::vm_history_text(vm_id as u8),
+            ));
+        }
+    }
+    rows
+}
+const USAGE_HEADERS: [&str; 7] = [
+    "scope",
+    "used",
+    "total",
+    "free",
+    "largest",
+    "chunks",
+    "use / recent",
+];
+fn usage_table(width: usize) -> TlbTable<'static> {
+    TlbTable::with_width(&USAGE_HEADERS, width.saturating_sub(2))
+        .with_max_col_widths(&[18, 9, 9, 9, 9, 6, 0])
+}
+/// Read the live counters and existing history without adding an extra sample.
+pub(crate) fn usage_snapshot(width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(alloc::format!(
+        "PMM = reserved physical; heap use is nested. History: {} × {} ms; samples={}",
+        crate::ram_usage::HISTORY_LEN,
+        crate::ram_usage::SAMPLE_MS,
+        crate::ram_usage::sample_count()
+    ));
+    let table = usage_table(width);
+    table.emit_header(|line| lines.push(line.into()));
+    for row in usage_rows() {
+        table.emit_row(&row, |line| lines.push(line.into()));
+    }
+    table.emit_footer(|line| lines.push(line.into()));
+    lines
 }
 
 fn parse_selection(
@@ -311,47 +368,18 @@ pub(crate) fn try_parse(
     );
 
     if matches!(selection, Selection::All | Selection::Pmm) {
-        emit_memory_modules(io);
+        for line in memory_modules_snapshot(line_width_for_backend(io)) {
+            print_shell_line(io, &line);
+        }
     }
 
-    const HEADERS: [&str; 7] = [
-        "scope",
-        "used",
-        "total",
-        "free",
-        "largest",
-        "chunks",
-        "use / recent",
-    ];
-    let table = TlbTable::with_width(&HEADERS, line_width_for_backend(io).saturating_sub(2))
-        .with_max_col_widths(&[18, 9, 9, 9, 9, 6, 0]);
+    let table = usage_table(line_width_for_backend(io));
     table.emit_header(|text| print_shell_line(io, text));
 
     match selection {
         Selection::All => {
-            let _ = emit_pmm_row(&table, io);
-            let host = crate::allocators::heap_stats();
-            if host.initialized && host.usable_total != 0 {
-                emit_heap_row(
-                    &table,
-                    io,
-                    alloc::string::String::from("host"),
-                    host,
-                    crate::ram_usage::host_history_text(),
-                );
-            }
-            for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
-                let Some(stats) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
-                else {
-                    continue;
-                };
-                emit_heap_row(
-                    &table,
-                    io,
-                    vm_scope(vm_id as u8),
-                    stats,
-                    crate::ram_usage::vm_history_text(vm_id as u8),
-                );
+            for row in usage_rows() {
+                table.emit_row(&row, |text| print_shell_line(io, text));
             }
         }
         Selection::Pmm => {

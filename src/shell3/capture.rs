@@ -3,7 +3,10 @@
 #[cfg(feature = "trueos_h264_encode_stream")]
 mod mux;
 
-use super::tui::{self, Frontend};
+use super::{
+    helper::{self, Action, Input, Screen},
+    tui::{self, Frontend},
+};
 use crate::shell2::{self, MatrixTarget};
 use alloc::{format, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
@@ -183,15 +186,9 @@ pub(super) fn recognizes(name: &str) -> bool {
 }
 pub(super) fn start(name: &str, frontend: Frontend) -> Result<(), String> {
     let kind = Kind::parse(name).ok_or("capture: unknown helper")?;
-    if tui::native_slot(name) {
-        return tui::request(frontend, name).map_err(String::from);
-    }
-    let spawner = crate::workers::pick_background_spawner()
-        .ok_or("capture: no background worker is ready")?;
-    let origin = shell2::matrix_target_for_slot_name(shell2::OUTPUT_SYSTEM_MASK, "");
-    let target = shell2::claim_matrix_target_for_named_app_slot(&origin, name, name)
-        .ok_or("capture: slot is occupied")?;
-    tui::attach_native(frontend, &target)?;
+    let Some((target, spawner)) = helper::admit(name, frontend)? else {
+        return Ok(());
+    };
     let token = match menu_task(kind, target.clone()) {
         Ok(token) => token,
         Err(_) => {
@@ -202,101 +199,6 @@ pub(super) fn start(name: &str, frontend: Frontend) -> Result<(), String> {
     shell2::set_matrix_target_active(&target, true);
     spawner.spawn(token);
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
-    Up,
-    Down,
-    Choose,
-    Quit,
-    Click(usize),
-}
-#[derive(Default)]
-struct Input {
-    sequence: Vec<u8>,
-    escape_at: u64,
-    after_cr: bool,
-}
-impl Input {
-    fn feed(&mut self, bytes: &[u8], now: u64) -> Vec<Action> {
-        let mut actions = Vec::new();
-        for &byte in bytes {
-            if !self.sequence.is_empty() {
-                if self.sequence.len() == 1 && !matches!(byte, b'[' | b'O') {
-                    self.sequence.clear();
-                    actions.push(Action::Quit);
-                    continue;
-                }
-                self.sequence.push(byte);
-                if self.sequence.len() > 2 && (0x40..=0x7e).contains(&byte) {
-                    if let Some(action) = decode_sequence(&self.sequence) {
-                        actions.push(action);
-                    }
-                    self.sequence.clear();
-                } else if self.sequence.len() > 64 {
-                    self.sequence.clear();
-                }
-                continue;
-            }
-            if byte == b'\n' && self.after_cr {
-                self.after_cr = false;
-                continue;
-            }
-            self.after_cr = byte == b'\r';
-            let action = match byte {
-                27 => {
-                    self.sequence.push(byte);
-                    self.escape_at = now;
-                    None
-                }
-                b'k' => Some(Action::Up),
-                b'j' => Some(Action::Down),
-                b'\r' | b'\n' => Some(Action::Choose),
-                b'q' | b'h' | 3 => Some(Action::Quit),
-                _ => None,
-            };
-            if let Some(action) = action {
-                actions.push(action);
-            }
-        }
-        actions
-    }
-    fn timeout(&mut self, now: u64) -> Option<Action> {
-        if !self.sequence.is_empty() && now.saturating_sub(self.escape_at) >= 75_000_000 {
-            let lone_escape = self.sequence.len() == 1;
-            self.sequence.clear();
-            return lone_escape.then_some(Action::Quit);
-        }
-        None
-    }
-}
-fn decode_sequence(bytes: &[u8]) -> Option<Action> {
-    match bytes {
-        b"\x1b[A" | b"\x1bOA" => Some(Action::Up),
-        b"\x1b[B" | b"\x1bOB" => Some(Action::Down),
-        b"\x1b[D" | b"\x1bOD" => Some(Action::Quit),
-        _ => {
-            let report = bytes.strip_prefix(b"\x1b[<")?;
-            if report.last() != Some(&b'M') {
-                return None;
-            } // no release/double trigger
-            let text = core::str::from_utf8(&report[..report.len() - 1]).ok()?;
-            let mut fields = text.split(';');
-            let button = fields.next()?.parse::<u16>().ok()?;
-            let _col = fields.next()?.parse::<usize>().ok()?;
-            let row = fields.next()?.parse::<usize>().ok()?.checked_sub(1)?;
-            if fields.next().is_some() {
-                return None;
-            }
-            match button & !28 {
-                0 => Some(Action::Click(row)),
-                64 => Some(Action::Up),
-                65 => Some(Action::Down),
-                _ => None,
-            }
-        }
-    }
 }
 
 struct Pictures {
@@ -311,7 +213,6 @@ struct Menu {
     video: Option<Recording>,
     audio: Option<Recording>,
     message: String,
-    last_frame: String,
     seconds: u32,
     muxing: Option<Arc<Mutex<Option<Result<String, String>>>>>,
 }
@@ -325,7 +226,6 @@ impl Menu {
             video: None,
             audio: None,
             message: String::new(),
-            last_frame: String::new(),
             seconds: 0,
             muxing: None,
         }
@@ -484,7 +384,7 @@ impl Menu {
         self.seconds = seconds;
         Ok(())
     }
-    fn frame(&self, cols: usize, rows: usize, now: u64) -> String {
+    fn frame(&self, cols: usize, rows: usize, now: u64) -> Vec<String> {
         let labels = self.labels();
         let (first, visible, offset) = self.layout(rows);
         let mut lines = alloc::vec![String::new(); rows];
@@ -543,17 +443,9 @@ impl Menu {
         } else {
             FOOTER.into()
         };
-        let mut out = String::from("\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[0m\x1b[2J\x1b[H");
-        for (row, line) in lines.iter().enumerate() {
-            out.push_str(&format!("\x1b[{};1H", row + 1));
-            out.extend(
-                line.chars()
-                    .map(|c| if c.is_control() { ' ' } else { c })
-                    .take(cols),
-            );
-        }
-        out
+        lines
     }
+
     fn pictures(&mut self, target: &MatrixTarget, now: u64) {
         let Some(pictures) = self.pictures.as_mut() else {
             return;
@@ -656,6 +548,7 @@ impl Menu {
 #[trueos_executor::task(pool_size = 4)]
 async fn menu_task(kind: Kind, target: MatrixTarget) {
     let mut menu = Menu::new(kind);
+    let mut screen = Screen::default();
     while let Some((bytes, notices)) = tui::native_read(&target) {
         let now = crate::chronos::monotonic_nanos();
         let Some(surface) = tui::surface(&target) else {
@@ -676,10 +569,7 @@ async fn menu_task(kind: Kind, target: MatrixTarget) {
         menu.pictures(&target, now);
         menu.recordings(&target);
         let frame = menu.frame(surface.cols as usize, surface.rows as usize, now);
-        if frame != menu.last_frame {
-            tui::native_write(&target, frame.as_bytes());
-            menu.last_frame = frame;
-        }
+        screen.paint(&target, &frame, surface.cols as usize, surface.rows as usize);
         Timer::after(Duration::from_millis(20)).await;
     }
     for recording in menu.video.iter().chain(menu.audio.iter()) {

@@ -284,6 +284,10 @@ pub(super) fn cancel_native_attach(target: &MatrixTarget) {
 pub(super) fn native_slot(name: &str) -> bool {
     ROUTES.lock().routes.iter().any(|r| r.lease.name() == name && r.native.is_some())
 }
+pub(super) fn native_visible(target: &MatrixTarget) -> bool {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    ROUTES.lock().routes.iter().any(|r| r.lease == lease && r.native.as_ref().is_some_and(|n| n.active))
+}
 pub(super) fn native_read(target: &MatrixTarget) -> Option<(Vec<u8>, Vec<String>)> {
     let lease = crate::shell2::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();

@@ -16,7 +16,7 @@ STUBS = r'''
 extern crate self as trueos_executor;
 #[derive(Clone,Copy)] pub struct Spawner;
 impl Spawner {pub fn spawn<T>(&self,_:T){}}
-mod workers {pub fn pick_background_spawner()->Option<crate::Spawner>{Some(crate::Spawner)}}
+mod workers {pub type WorkerSpawner=crate::Spawner;pub fn pick_background_spawner()->Option<crate::Spawner>{Some(crate::Spawner)}}
 mod ui4 {
     pub fn writable_capture_root_handle()->Option<crate::disc::block::DeviceHandle>{if crate::S.lock().no_root {None} else {Some(crate::disc::block::DeviceHandle)}}
     pub fn request_wd_postblend_capture(_:crate::shell2::MatrixTarget)->Result<(),&'static str>{crate::SHOTS.lock().push(crate::chronos::monotonic_nanos());Ok(())}
@@ -31,6 +31,7 @@ mod shell3 {
         #[derive(Clone,Copy)]pub struct Frontend {pub id:u64,pub cols:usize,pub rows:usize}
         pub struct Surface {pub cols:u32,pub rows:u32}
         pub fn native_slot(_:&str)->bool{false}
+        pub fn native_visible(_:&crate::shell2::MatrixTarget)->bool{true}
         pub fn request(_:Frontend,_:&str)->Result<(),&'static str>{Ok(())}
         pub fn attach_native(_:Frontend,_:&crate::shell2::MatrixTarget)->Result<(),String>{Ok(())}
         pub fn cancel_native_attach(_:&crate::shell2::MatrixTarget){}
@@ -39,6 +40,7 @@ mod shell3 {
         pub fn native_read(_:&crate::shell2::MatrixTarget)->Option<(Vec<u8>,Vec<String>)>{None}
         pub fn surface(_:&crate::shell2::MatrixTarget)->Option<Surface>{Some(Surface{cols:100,rows:25})}
     }
+    #[path="@ROOT@/src/shell3/helper.rs"] mod helper;
     pub mod capture {
         @CAPTURE@
         fn menu_task(_:Kind,_:crate::shell2::MatrixTarget)->Result<(),()>{Ok(())}
@@ -78,7 +80,7 @@ TESTS = r'''
         menu.action(Action::Click(8),&target,25,0);assert_eq!(menu.seconds,900);assert!(menu.busy());
         let recording=menu.video.as_ref().unwrap().clone();assert_eq!(recording.seconds(),900);assert!(!recording.stopped());
         assert!(menu.action(Action::Quit,&target,25,0));assert!(crate::RETURNED.load(Ordering::SeqCst));assert!(!recording.stopped());
-        for rows in [5,8,12,25]{for cols in [20,70,100]{assert!(menu.frame(cols,rows,0).contains("VID"));}}
+        for rows in [5,8,12,25]{for cols in [20,70,100]{assert!(menu.frame(cols,rows,0).iter().any(|line|line.contains("VID")));}}
         menu.choose(&target,0);assert!(menu.video.as_ref().unwrap().stopped());
     }
     #[test] fn vaud_arms_two_tracks_on_one_clock_and_failed_audio_admission_stops_video(){
@@ -138,7 +140,7 @@ def main():
         capture = re.sub(r'^#\[trueos_executor::task[^\n]*\n','',capture,flags=re.M)
         capture = capture.replace('async fn menu_task(', 'async fn menu_task_run(').replace('async fn mux_task(', 'async fn mux_task_run(')
         capture = capture.replace('mod mux;', f'#[path="{ROOT}/src/shell3/capture/mux.rs"] mod mux;')
-        source = base + STUBS.replace('@CAPTURE@',capture).replace('@TESTS@',TESTS)
+        source = base + STUBS.replace('@ROOT@',str(ROOT)).replace('@CAPTURE@',capture).replace('@TESTS@',TESTS)
         for key, value in [('VIDEO',video),('AUDIO',audio),('OUTPUT',output)]: source=source.replace('@'+key+'@',str(value))
         rust, binary = tmp/'tests.rs', tmp/'tests'
         rust.write_text(source)

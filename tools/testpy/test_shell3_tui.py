@@ -247,7 +247,7 @@ impl Shell3 {
     source += r'''
 #[test] fn native_helpers_park_reenter_move_and_retire_with_their_exact_lease() {
     let f=frontend(20,8);let t=shell2::target("native",1);
-    tui::attach_native(f,&t).unwrap();assert!(tui::native_slot("native"));
+    tui::attach_native(f,&t).unwrap();assert!(tui::native_slot("native"));assert!(tui::native_visible(&t));
     assert!(tui::attach_native(f,&t).is_err());
     assert!(tui::active(f.id,Some("native")));
     let competing=shell2::target("native-competing-vm",1);tui::attach(f,&competing).unwrap();hv::bind(14,&competing);
@@ -258,17 +258,17 @@ impl Shell3 {
     assert_eq!(tui::native_read(&t).unwrap().0,b"\x1b[B\r");
     tui::native_notice(&t,"saved");assert_eq!(tui::native_read(&t).unwrap().1,vec![String::from("saved")]);
     let other=frontend(30,10);assert!(!tui::select(other,Some("native")));
-    tui::native_return(&t);assert!(!tui::active(f.id,Some("native")));
+    tui::native_return(&t);assert!(!tui::active(f.id,Some("native")));assert!(!tui::native_visible(&t));
     assert!(tui::supports(&t));assert!(tui::take_native_return(f.id));assert!(!tui::take_native_return(f.id));
     tui::select(f,None);assert!(tui::select(f,Some("native")));assert!(tui::active(f.id,Some("native")));
     assert_eq!(tui::snapshot(f.id,Some("native")).unwrap()[0][0].0,'P');
     tui::park(f.id);assert!(!tui::active(f.id,Some("native")));tui::select(f,Some("native"));assert!(!tui::active(f.id,Some("native")));
-    assert!(tui::select_for_navigation(f,"native"));assert!(tui::active(f.id,Some("native")));tui::park(f.id);
+    assert!(tui::select_for_navigation(f,"native"));assert!(tui::active(f.id,Some("native")));assert!(tui::native_visible(&t));tui::park(f.id);
     assert!(tui::select(other,Some("native")));
     assert!(!tui::active(f.id,Some("native")));assert!(tui::active(other.id,Some("native")));
     assert_eq!(tui::surface(&t).unwrap().cols,30);
     shell2::free_name("native");let replacement=shell2::target("native",2);
-    assert!(tui::native_read(&t).is_none());assert!(!tui::supports(&replacement));
+    assert!(tui::native_read(&t).is_none());assert!(!tui::native_visible(&t));assert!(!tui::supports(&replacement));
 }
 #[test] fn native_keyboard_mouse_and_exit_cleanup_use_the_same_terminal_encoding() {
     use r::keyboard::*;

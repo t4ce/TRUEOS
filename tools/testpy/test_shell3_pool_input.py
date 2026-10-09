@@ -59,7 +59,7 @@ pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
 pub fn select(_:Frontend,_:Option<&str>)->bool {true}
 pub fn select_for_navigation(_:Frontend,_:&str)->bool {true}
 pub fn park(_:u64)->bool {true}
-pub fn native_slot(name:&str)->bool {matches!(name,"pic"|"vid"|"aud"|"vaud")}
+pub fn native_slot(name:&str)->bool {matches!(name,"pic"|"vid"|"aud"|"vaud"|"ram"|"smp")}
 pub fn take_native_return(_:u64)->bool {false}
 pub fn keyboard(_:u64,_:Option<&str>,_:&crate::r::keyboard::TrueosKeyboardOutputEvent)->bool {false}
 pub static REQUESTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
@@ -67,6 +67,11 @@ pub fn request(_:Frontend,name:&str)->Result<(),&'static str>{REQUESTS.lock().un
 }
 mod capture {
     pub fn recognizes(name:&str)->bool {matches!(name,"pic"|"vid"|"aud"|"vaud")}
+    pub static STARTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+    pub fn start(name:&str,_:crate::tui::Frontend)->Result<(),String> {STARTS.lock().unwrap().push(name.into());Ok(())}
+}
+mod monitor {
+    pub fn recognizes(name:&str)->bool {matches!(name,"ram"|"smp")}
     pub static STARTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
     pub fn start(name:&str,_:crate::tui::Frontend)->Result<(),String> {STARTS.lock().unwrap().push(name.into());Ok(())}
 }
@@ -79,6 +84,9 @@ use crate::shell2::cmds::run::QueuedBlueprint;
 pub static LAUNCHES:std::sync::Mutex<Vec<(String,String)>>=std::sync::Mutex::new(Vec::new());
 use alloc::{vec::Vec,string::String};
 pub fn notify_work(){}
+pub static SPAWNS:std::sync::Mutex<usize>=std::sync::Mutex::new(0);
+pub static SPAWN_ERROR:std::sync::Mutex<Option<crate::Shell3Error>>=std::sync::Mutex::new(None);
+pub fn request_shell3()->Result<u32,crate::Shell3Error> {if let Some(error)=SPAWN_ERROR.lock().unwrap().take(){return Err(error);}*SPAWNS.lock().unwrap()+=1;Ok(2)}
 pub static DROPS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
 pub fn drop_vmx_slot(name:&str) {DROPS.lock().unwrap().push(name.into());}
 fn launched(name:&str,slot:&str,app:&str)->Result<QueuedBlueprint,String> {
@@ -123,6 +131,18 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
         }
         assert_eq!(*crate::capture::STARTS.lock().unwrap(),vec!["pic","vid","aud","vaud"]);
         for name in ["pic","vid","aud","vaud"] {assert!(MatrixSlots::drop_slot(Some(name)));}
+    }
+    #[test] fn adm_monitors_reuse_named_slots_and_sh3_spawns_once_without_echo() {
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();crate::monitor::STARTS.lock().unwrap().clear();*service::SPAWNS.lock().unwrap()=0;
+        let mut shell=Shell3::new(100);shell.set_mode(3);
+        for name in ["ram","smp","ram"] {
+            type_text(&mut shell,name);assert_eq!(shell.active_matrix_slot_name().as_deref(),Some(name));assert!(shell.prompt().is_empty());shell.select_matrix_slot_index(0);
+        }
+        assert_eq!(*crate::monitor::STARTS.lock().unwrap(),vec!["ram","smp","ram"]);
+        assert_eq!(MatrixSlots::slot_ids().iter().filter(|id|id.as_str()=="ram").count(),1);
+        type_text(&mut shell,"sh3");assert_eq!(*service::SPAWNS.lock().unwrap(),1);assert!(shell.prompt().is_empty());assert!(MatrixSlots::echo_lines(None).is_empty());assert_eq!(shell.active_matrix_slot_name(),None);
+        *service::SPAWN_ERROR.lock().unwrap()=Some(crate::Shell3Error::InstanceLimit);type_text(&mut shell,"sh3");assert_eq!(*service::SPAWNS.lock().unwrap(),1);assert!(MatrixSlots::echo_lines(None)[0].contains("limit"));
+        for name in ["ram","smp"] {assert!(MatrixSlots::drop_slot(Some(name)));}matrix_slots().lock().echoes.clear();
     }
     #[test] fn ssh_mouse_reports_do_not_hover_select_or_launch() {
         MatrixSlots::set(&["id","123"]);service::LAUNCHES.lock().unwrap().clear();

@@ -101,7 +101,7 @@ fn slot_row(slot: usize) -> [alloc::string::String; 6] {
     ]
 }
 
-fn dump_slots(io: &'static dyn ShellBackend2, slots: core::ops::Range<usize>) {
+fn dump_slots(width: usize, slots: core::ops::Range<usize>, mut emit: impl FnMut(&str)) {
     const HEADERS: [&str; 6] = [
         "cpu",
         "on",
@@ -110,14 +110,32 @@ fn dump_slots(io: &'static dyn ShellBackend2, slots: core::ops::Range<usize>) {
         "service-lane job",
         "trace",
     ];
-    let table = TlbTable::with_width(&HEADERS, line_width_for_backend(io).saturating_sub(2))
+    let table = TlbTable::with_width(&HEADERS, width.saturating_sub(2))
         .with_max_col_widths(&[7, 3, 24, 38, 56, 0]);
-    table.emit_header(|text| print_shell_line(io, text));
+    table.emit_header(|text| emit(text));
     for slot in slots {
         let row = slot_row(slot);
-        table.emit_row(&row, |text| print_shell_line(io, text));
+        table.emit_row(&row, |text| emit(text));
     }
-    table.emit_footer(|text| print_shell_line(io, text));
+    table.emit_footer(|text| emit(text));
+}
+
+/// Reuse the shell table and the natural HLT history sampler unchanged.
+pub(crate) fn snapshot(width: usize) -> alloc::vec::Vec<alloc::string::String> {
+    let mut lines = alloc::vec::Vec::new();
+    if !crate::smp::is_init() {
+        lines.push("smp: not initialized".into());
+        return lines;
+    }
+    lines.push(alloc::format!(
+        "{} CPUs; HLT history {} × {} ms; samples={} (. idle, ! sampled active)",
+        crate::smp::cpu_count(),
+        crate::smp::HLT_HISTORY_LEN,
+        crate::smp::HLT_SAMPLE_MS,
+        crate::smp::hlt_sample_count()
+    ));
+    dump_slots(width, 0..crate::smp::cpu_count(), |line| lines.push(line.into()));
+    lines
 }
 
 pub(crate) fn try_parse(
@@ -153,11 +171,11 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
 
-        dump_slots(io, slot..slot + 1);
+        dump_slots(line_width_for_backend(io), slot..slot + 1, |line| print_shell_line(io, line));
         return ParseOutcome::Handled;
     }
 
-    dump_slots(io, 0..total);
+    dump_slots(line_width_for_backend(io), 0..total, |line| print_shell_line(io, line));
 
     ParseOutcome::Handled
 }
