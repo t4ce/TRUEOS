@@ -498,7 +498,11 @@ def _verify_lock(path: Path, fingerprint: dict[str, Any]) -> None:
                     if len(differences) >= 12:
                         return
             elif isinstance(want, list) and isinstance(got, list):
-                if want != got:
+                for index, (want_item, got_item) in enumerate(zip(want, got)):
+                    collect_differences(want_item, got_item, f"{key}[{index}]")
+                    if len(differences) >= 12:
+                        return
+                if len(want) != len(got):
                     differences.append(
                         f"{key}: expected {len(want)} item(s), got {len(got)}"
                     )
