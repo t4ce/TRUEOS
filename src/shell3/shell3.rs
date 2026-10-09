@@ -11,6 +11,7 @@ pub(crate) mod tui;
 mod update;
 
 pub mod service;
+pub(crate) mod startup;
 #[path = "show/show.rs"]
 pub mod show;
 
@@ -728,7 +729,7 @@ impl Shell3 {
             let lines = lines.clone();
             let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
             let (columns, rows) = snapshot.size();
-            self.show.present(&line_refs, columns, rows, &batch).await?;
+            self.show.present(&line_refs, columns, rows, &batch, snapshot.matrix_area()).await?;
             if let Some(window) = self.show.window() { tui::bind_ui4_window(self.tui_frontend, window); }
             self.pending_presentation = None;
             if self.capture_update_snapshot() == snapshot {
@@ -761,9 +762,10 @@ impl Shell3 {
             (width / (microfont::FWIDTH as u32 * self.show.font_scale())) as usize,
             (height / (microfont::FHEIGHT as u32 * self.show.font_scale())) as usize,
         );
-        let lines = self.capture_update_snapshot().rendered_lines();
+        let snapshot = self.capture_update_snapshot();
+        let lines = snapshot.rendered_lines();
         let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
-        self.show.resize_to_current(&line_refs).await
+        self.show.resize_to_current(&line_refs, snapshot.matrix_area()).await
     }
 
     pub(super) fn ui4_resize_needed(&self) -> bool {
@@ -1027,25 +1029,27 @@ impl Shell3 {
             service::launch_alias(text, slot, self.tui_frontend())
         };
         match result {
-            Ok(app) => {
-                let lifetime = MatrixSlots::ensure_named(&app.slot);
-                self.active_matrix_slot = Some(app.slot.clone());
-                self.active_matrix_lifetime = Some(lifetime);
-                self.matrix_selection_dirty = true;
-                self.matrix_scroll = 0;
-                let mut slots = matrix_slots().lock();
-                slots.vmx_apps.retain(|existing| existing.slot != app.slot);
-                slots.vmx_apps.push(app);
-                slots.generation = slots.generation.wrapping_add(1);
-                drop(slots);
-                service::notify_work();
-            }
+            Ok(app) => self.select_queued_app(app),
             Err(error) => MatrixSlots::echo(
                 self.active_matrix_slot.as_deref(),
                 self.active_matrix_lifetime,
                 error,
             ),
         }
+    }
+
+    fn select_queued_app(&mut self, app: crate::shell2::cmds::run::QueuedBlueprint) {
+        let lifetime = MatrixSlots::ensure_named(&app.slot);
+        self.active_matrix_slot = Some(app.slot.clone());
+        self.active_matrix_lifetime = Some(lifetime);
+        self.matrix_selection_dirty = true;
+        self.matrix_scroll = 0;
+        let mut slots = matrix_slots().lock();
+        slots.vmx_apps.retain(|existing| existing.slot != app.slot);
+        slots.vmx_apps.push(app);
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
     }
 
     fn echo_recognized_prompt(&mut self) -> bool {
@@ -1279,7 +1283,10 @@ impl Shell3 {
 
     fn capture_matrix_snapshot(&self) -> update::Snapshot {
         let (generation, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
-        self.capture_controls_snapshot().with_matrix_offset(&lines, generation, self.matrix_scroll)
+        self.capture_controls_snapshot()
+            .with_matrix_guard(&lines, generation, self.matrix_scroll,
+                crate::allcaps::shell3::PANBUFFER_GUARD_CELLS as usize)
+            .with_matrix_identity(self.active_matrix_slot.clone(), self.active_matrix_lifetime)
     }
 
     fn record_terminal_notice(&mut self, text: &str) {

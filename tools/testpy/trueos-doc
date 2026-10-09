@@ -36,7 +36,7 @@ COMMAND_DETAILS: dict[str, dict[str, Any]] = {
         "tui_controls": "Up/Down or j/k select; Enter/Right/l choose; Left/h back; Esc/q quit.",
         "power_actions": {
             "selection": [
-                "Press TAB twice, run os in Twice mode, then press Down twice for Shutdown TRUEOS or three times for Reboot TRUEOS.",
+                "Press TAB twice, run os in Twice mode, then press Down three times for Shutdown TRUEOS or four times for Reboot TRUEOS.",
                 "Each action opens one confirmation screen with Return selected by default; press Down then Enter to proceed.",
             ],
             "effect": "Shutdown enters ACPI S5; reboot requests the firmware reset register.",
@@ -48,8 +48,15 @@ COMMAND_DETAILS: dict[str, dict[str, Any]] = {
                 "On Confirm, press Down then Enter to select Proceed (or Discard apps and proceed when non-replicatable apps are listed).",
             ],
             "effect": "Fetch https://trueos.eu/TrueOS.7z and replace only the running kernel from RAM; no disk installation is performed.",
+            "lan_selection": "From Home, press Down twice, Enter, Down, Enter to live-update from http://192.168.178.111:8080/trueos.iso through the same RAM-only update path.",
             "expected_transition": "A single idle Shell2 TCP connection may resume when its scalar TCP/session capsule is strictly quiet (no queued, unacknowledged, received, or out-of-order bytes). Otherwise the connection closes and the new kernel falls back to a fresh listener; wait for 192.168.178.94:4245 before confirmation and do not issue a second update while transitioning.",
             "warning": "Any non-replicatable app still running at commit is discarded; the confirmation screen names affected VMs.",
+        },
+        "pxeproc": {
+            "selection": "Install TRUEOS to disk -> target disk -> Install pxeproc -> Local or Online -> Proceed.",
+            "effect": "The disk boot configuration persists pxeproc=1. On a cold disk boot, Blueprint autostart waits for IPv4 and launches os in a regular visible UI4 Shell3, using vFile:launch keys to select and confirm the LAN live-update. Warm kernel replacements do not repeat this cold-start script.",
+            "launch_script": "key down\nkey down\nkey enter\nkey down\nkey enter\n",
+            "lan_server": "tools/netboot/pxe2.js serves bld/trueos.iso over HTTP port 8080 after that PXE process is restarted.",
         },
         "sources": ["src/shell2/cmds/os.rs", "src/shell2/cmds/update.rs", "../TRUEOS-Blueprints/buildins/os/src/main.rs"],
     },

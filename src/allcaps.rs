@@ -4,6 +4,14 @@
 //! constants in their driver/protocol modules. Put tunable resource budgets,
 //! queue depths, ring sizes, stack sizes, retry limits, and service timing here.
 
+pub(crate) mod shell3 {
+    /// Optional pan rasters, including pitch/page padding, per Show instance.
+    /// UI4 display leases and the shared Matrix transcript are separate owners.
+    pub const SH3_PANBUFFER_CAP_BYTES: usize = 2 * 1024 * 1024;
+    /// Four cells per edge: eight extra columns and rows at full budget.
+    pub const PANBUFFER_GUARD_CELLS: u32 = 4;
+}
+
 pub mod boot {
     pub const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
 }

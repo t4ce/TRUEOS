@@ -1,0 +1,28 @@
+pxeproc disk boot mode
+
+OS -> Install TRUEOS to disk -> target disk -> Install pxeproc -> Local / Online -> Proceed.
+The ordinary GPT/ESP/TRUEOSFS installer writes pxeproc=1 into the disk's Limine
+command line. A regular reinstall clears the flag; both modes preserve an
+existing compatible TRUEOSFS partition.
+
+On a cold boot, the existing Blueprint autostart controller reads that flag,
+waits for IPv4, and requests one regular UI4 Shell3 window. It launches the
+built-in os.bp and supplies this one-shot vFile:launch script:
+
+key down
+key down
+key enter
+key down
+key enter
+
+The script selects Live update from LAN and explicitly confirms Proceed in the
+visible OS UI. Kernel download/staging progress stays in the same Matrix slot.
+Live-update warm boots use the existing VM restore policy, so they do not run
+the disk's cold-start script again.
+
+The shared live-update path accepts the online https://trueos.eu/TrueOS.7z or
+the LAN http://192.168.178.111:8080/trueos.iso. tools/netboot/pxe2.js serves the
+same bld/trueos.iso used by development boots at that HTTP endpoint. Restart
+that host PXE process after updating the script to enable the HTTP listener.
+If the image download or transition fails, the failure remains visible in
+the ordinary shell; the disk boot payload remains available for the next boot.

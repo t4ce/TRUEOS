@@ -37,6 +37,8 @@ const PROMPT_CURSOR:char=' ';
 const SpecialSeperator:char='│';
 const OPERATOR:char='§';
 '''
+    source += f'\n#[path = "{ROOT}/src/allcaps.rs"] mod allcaps;\n'
+    source += f'\n#[path = "{ROOT}/src/ui4/text_area.rs"] mod text_area;\n'
     for name in ('Mode', 'RgbaColor', 'SpecialRows', 'StripSide', 'PromptState', 'vmx_hash_text', 'vmx_title_meta', 'title_left_text', 'mode_title_meta', 'MatrixSlotsState', 'matrix_slots', 'matrix_slots_meta', 'matrix_slots_text', 'current_matrix_slots_text'):
         source += extract.item('src/shell3/shell3.rs', name)
     source += re.search(r'^impl RgbaColor \{.*?^}', shell, re.M | re.S).group()
@@ -77,7 +79,7 @@ mod monitor {
     pub static STARTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
     pub fn start(name:&str,_:crate::tui::Frontend)->Result<(),String> {STARTS.lock().unwrap().push(name.into());Ok(())}
 }
-mod shell3 {pub mod tui {pub use crate::tui::Frontend;pub fn attach<T>(_:Frontend,_:&T)->Result<(),String>{Ok(())}}}
+mod shell3 {pub mod startup {pub struct Startup {pub launch_script:alloc::string::String}} pub mod tui {pub use crate::tui::Frontend;pub fn attach<T>(_:Frontend,_:&T)->Result<(),String>{Ok(())}}}
 mod shell2 {
 pub static WORKING:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
 pub fn matrix_working_slot_names()->Vec<String>{WORKING.lock().unwrap().clone()}
@@ -119,14 +121,14 @@ struct Shell3 {update_baseline:update::Snapshot,matrix_scroll:usize,layout_gener
 impl Shell3 {
 fn new(columns:usize)->Self {Self {update_baseline:update::Snapshot::new((columns,25),0,[(&[],&[]),(&[],&[]),(&[],&[])],columns),matrix_scroll:0,layout_generation:0,status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('matrix_output_needed','scroll_matrix','capture_matrix_snapshot','record_terminal_notice','capture_controls_snapshot','launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
+    for name in ('matrix_output_needed','scroll_matrix','capture_matrix_snapshot','record_terminal_notice','capture_controls_snapshot','launch_named_app','select_queued_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += 'fn cursor_blink_phase()->bool {false} fn get_size(&self)->(usize,usize) {(self.columns,self.rows_count)} fn set(&mut self,cols:usize,rows:usize) {self.columns=cols;self.rows_count=rows;} }\n'
     source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//').replace('mod input;', f'#[path="{ROOT}/src/shell3/tty/input.rs"] mod input;').replace('mod ansi;', f'#[path="{ROOT}/src/shell3/tty/ansi.rs"] mod ansi;') + '\n'
     source += r'''
 #[cfg(test)] mod replay_tests {
     use super::*;
-    use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide, key, type_text};
+    use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide, key, type_text, text_area, allcaps};
     #[test] fn capture_names_launch_helpers_and_keep_their_slots_when_returning() {
         MatrixSlots::set(&[] as &[&str]);crate::capture::STARTS.lock().unwrap().clear();
         let mut shell=Shell3::new(100);shell.set_mode(2);
@@ -177,6 +179,37 @@ fn new(columns:usize)->Self {Self {update_baseline:update::Snapshot::new((column
         assert_eq!(tty.shell.matrix_scroll,2);assert_eq!(tty.shell.get_strip(SpecialRows::MatrixRow(0),StripSide::Left),"entry2");
         tty.input(b"\x1b[<64;2;2M");assert_eq!(tty.shell.matrix_scroll,2);
         tty.shell.select_matrix_slot_index(0);assert_eq!(tty.shell.matrix_scroll,0);
+        MatrixSlots::set(&[] as &[&str]);
+    }
+    #[test] fn dense_matrix_history_exercises_real_snapshot_and_pan_api() {
+        MatrixSlots::set(&["pan-cache"]);
+        let mut s=Shell3::new(80);assert!(s.select_matrix_slot_name("pan-cache"));
+        for n in 0..300 {MatrixSlots::echo(Some("pan-cache"),s.active_matrix_lifetime,
+            char::from_u32(65+n%26).unwrap().to_string().repeat(2048));}
+        let history=MatrixSlots::echo_lines(Some("pan-cache"));assert_eq!(history.len(),256);
+        assert_eq!(history.iter().map(|s|s.chars().count()).sum::<usize>(),524288);
+        let v=text_area::CellRect{x:0,y:0,columns:80,rows:22};
+        let l=text_area::RasterLayout::fit(v,(6,11),4,allcaps::shell3::SH3_PANBUFFER_CAP_BYTES).unwrap();
+        let mut cache=text_area::TextArea::new(l);
+        let snapshot=s.capture_matrix_snapshot();let area=snapshot.matrix_area().unwrap();
+        assert_eq!(cache.update(v,area.revision,|x,y|area.cell(x,y)).unwrap().produced,2640);
+        for (delta,offset) in [(1,1),(1,2),(-1,1),(1000,234),(1,234),(-1,233),(-1000,0),(-1,0),(i32::MAX,234),(i32::MIN,0)] {
+            let old=s.matrix_scroll; s.scroll_matrix(delta);assert_eq!(s.matrix_scroll,offset);
+            let snapshot=s.capture_matrix_snapshot();let area=snapshot.matrix_area().unwrap();
+            let v=text_area::CellRect{x:0,y:area.offset as i64,columns:80,rows:22};
+            let work=cache.update(v,area.revision,|x,y|area.cell(x,y)).unwrap();
+            let expected=if old==offset {0} else if old.abs_diff(offset)==1 {88} else {2640};
+            assert_eq!(work.produced,expected);assert_eq!(work.writes.len(),expected);
+            let visible=snapshot.rendered_lines();
+            for y in 0..22 {for x in 0..80 {
+                assert_eq!(area.cell(x as i64,(offset+y) as i64),visible[3+y][x]);
+            }}
+            assert!(cache.view_copies(v).unwrap().len()<=4);
+        }
+        s.scroll_matrix(i32::MAX);s.set(120,45);
+        let snapshot=s.capture_matrix_snapshot();let area=snapshot.matrix_area().unwrap();
+        assert_eq!((area.offset,area.columns,area.rows),(214,120,42));
+        assert!(area.cells.len()<=50);assert!(area.cells.iter().all(|r|r.len()==124));
         MatrixSlots::set(&[] as &[&str]);
     }
     #[test] fn ssh_typing_tab_and_operator_share_ui4_keyboard_semantics() {
@@ -302,7 +335,7 @@ struct Notify; impl Notify {fn notify_all(&self){}}
 static SHELL_WORK_AVAILABLE:Notify=Notify;
 fn refresh_appdb_names(){}
 """
-    for name in ('request_shell3','reserve_terminal_slot','reserve_shell_on_executor','release_shell_on_executor','take_pending_for_executor','warn_instance_limit'):
+    for name in ('request_shell3','request_shell3_with_startup','reserve_terminal_slot','reserve_shell_on_executor','release_shell_on_executor','take_pending_for_executor','warn_instance_limit'):
         source += extract.item('src/shell3/service.rs', name)
     source += """
 #[test] fn ui_pending_and_network_share_256_cap_and_release_on_owner() {

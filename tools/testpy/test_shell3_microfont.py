@@ -78,6 +78,7 @@ mod show {
     mod copy { use crate::FrameRgbaView;
 '''
     source += extract.item('src/shell3/show/copy.rs', 'glyphs_for_update')
+    source += extract.item('src/shell3/show/copy.rs', 'glyph_for_cell')
     source += '''
         #[test]
         fn mono_expansion_matches_cpu_pixels_colors_clipping_and_erasure() {
@@ -213,6 +214,36 @@ fn matrix_transcripts_render_newest_first_and_clear_when_selection_changes() {
     assert_eq!(patches.segments[1].row,SpecialRows::MatrixRow(1));
     assert!(patches.segments.iter().all(|patch|patch.text.chars().all(|ch|ch==' ')));
     let diff=update::diff_rendered_lines(Some(&lines),&blank.rendered_lines());assert_eq!(diff,patches.segments);
+}
+
+#[test]
+fn guarded_matrix_source_matches_visible_cells_clamps_and_keeps_identity() {
+    let history=(0..10).map(|i|format!("row{} abcdefghijklmnopqrstuvwxyz",i)).collect::<Vec<_>>();
+    let snapshot=update::Snapshot::new((12,8),0,[(&[],&[]),(&[],&[]),(&[],&[])],12)
+        .with_matrix_guard(&history,7,99,4).with_matrix_identity(Some("pan".into()),Some(42));
+    let area=snapshot.matrix_area().unwrap();let visible=snapshot.rendered_lines();
+    assert_eq!((area.offset,area.first,area.columns,area.rows),(5,1,12,5));
+    assert_eq!(area.identity,(Some("pan".into()),Some(42)));
+    assert_eq!(area.cells.len(),9);assert!(area.cells.iter().all(|r|r.len()==16));
+    for y in 0..5 {for x in 0..12 {assert_eq!(area.cell(x as i64,(5+y) as i64),visible[3+y][x]);}}
+    assert_eq!(area.cell(-1,5),(' ',None));assert_eq!(area.cell(0,0),(' ',None));
+    assert_eq!(area.cell(0,10),(' ',None));assert_ne!(area.cell(13,5).0,' ');
+    let empty=update::Snapshot::new((12,8),0,[(&[],&[]),(&[],&[]),(&[],&[])],12)
+        .with_matrix_guard(&[],8,99,4);
+    assert!(empty.matrix_area().unwrap().cells.is_empty());
+    assert_eq!(empty.matrix_area().unwrap().cell(1,1),(' ',None));
+}
+
+#[test]
+fn control_cursor_blink_does_not_change_matrix_source_revision() {
+    let cursor=[MetaFmtStr::new(" ").blink()];
+    let raw=update::Snapshot::new((12,5),0,[(&[],&[]),(&[],&[]),(&cursor,&[])],12)
+        .with_matrix_guard(&["row0".into()],7,0,4);
+    let on=raw.clone().with_blink_phase(true);let off=raw.with_blink_phase(false);
+    assert_eq!(on.matrix_area().unwrap().revision,7);
+    assert_eq!(off.matrix_area().unwrap().revision,7);
+    assert_eq!(on.matrix_area().unwrap().blink_phase,None);
+    assert_eq!(off.matrix_area().unwrap().blink_phase,None);
 }
 
 #[test]

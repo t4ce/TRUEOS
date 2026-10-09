@@ -13,6 +13,9 @@ pub(super) async fn present(
     lines: &[&[(char, Option<super::super::RgbaColor>)]],
     fallback_segments: &[super::super::SegmentUpdate],
     poisoned: &mut bool,
+    pan: &mut Option<super::pan::PanBuffer>,
+    budget: &crate::ui4::text_area::RasterBudget,
+    area: Option<&super::super::update::MatrixAreaSnapshot>,
 ) -> Result<Option<crate::ui4::DamageRect>, &'static str> {
     let lease =
         acquire_frame_buffer(surface.frame).map_err(|_| "shell3-show-mono-destination-busy")?;
@@ -27,8 +30,21 @@ pub(super) async fn present(
             return Err("shell3-show-mono-destination-view");
         }
     };
+    let using_pan =
+        match super::pan::PanBuffer::prepare(pan, budget, area, surface.scale, poisoned).await {
+            Ok(using_pan) => using_pan,
+            Err(error) => {
+                if !*poisoned {
+                    let _ = cancel_frame_buffer(lease);
+                }
+                return Err(error);
+            }
+        };
     let mut glyphs = Vec::new();
     for update in &updates {
+        if using_pan && matches!(update.row, super::super::SpecialRows::MatrixRow(_)) {
+            continue;
+        }
         glyphs_for_update(view, update, surface.scale, &mut glyphs);
     }
     // A later chunk can fail admission after earlier chunks changed pixels.
@@ -95,6 +111,25 @@ pub(super) async fn present(
         }
         *poisoned = false;
     }
+    if using_pan
+        && (clearing
+            || previous.is_none()
+            || updates
+                .iter()
+                .any(|update| matches!(update.row, super::super::SpecialRows::MatrixRow(_))))
+    {
+        if let Err(error) = pan
+            .as_mut()
+            .ok_or("shell3-pan-missing")?
+            .copy_view(bcs_surface(view), surface.scale, poisoned)
+            .await
+        {
+            if !*poisoned {
+                let _ = cancel_frame_buffer(lease);
+            }
+            return Err(error);
+        }
+    }
     crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
     if publish_frame_buffer(lease).is_err() {
         let _ = cancel_frame_buffer(lease);
@@ -154,47 +189,56 @@ fn glyphs_for_update(
             break;
         }
         let character = characters.next().unwrap_or(' ');
-        let atlas = microfont::glyph_byte(character);
-        let bits = microfont::glyph_cell_pixels(character);
-        let mut mask = [0u8; 64];
         let width = (microfont::FWIDTH as u32 * scale).min(view.width - x);
         let height = (microfont::FHEIGHT as u32 * scale).min(view.height - y);
-        // Match MicroFont's existing q placement. Each row is a 16-bit word,
-        // with its leftmost pixel in the MSB of the first byte.
-        let bias = usize::from(atlas == b'q');
-        for py in 0..height as usize {
-            for px in 0..width as usize {
-                let sx = px / scale as usize;
-                let sy = py / scale as usize;
-                let bit = sy * microfont::FWIDTH + sx.saturating_sub(bias);
-                let underline = update.colors.get(column).copied().flatten()
-                    .is_some_and(super::super::RgbaColor::underline) && sy == microfont::FHEIGHT - 1;
-                let cell_bits = microfont::FWIDTH * microfont::FHEIGHT;
-                let ink = sx >= bias && bit < cell_bits
-                    && bits & (1 << (cell_bits - 1 - bit)) != 0;
-                if ink || underline {
-                    mask[py * 2 + px / 8] |= 0x80 >> (px % 8);
-                }
-            }
-        }
-        output.push(crate::intel::GucBcs0MonoGlyph {
+        output.push(glyph_for_cell(
             x,
             y,
             width,
             height,
-            mask,
-            foreground: u32::from_le_bytes(
-                update
-                    .colors
-                    .get(column)
-                    .copied()
-                    .flatten()
-                    .unwrap_or(super::FOREGROUND)
-                    .rgba(),
-            ),
-            background: u32::from_le_bytes(update.colors.get(column).copied().flatten()
-                .and_then(super::super::RgbaColor::background).unwrap_or(super::BACKGROUND.rgba())),
-        });
+            (character, update.colors.get(column).copied().flatten()),
+            scale,
+        ));
+    }
+}
+
+pub(super) fn glyph_for_cell(
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    cell: (char, Option<super::super::RgbaColor>),
+    scale: u32,
+) -> crate::intel::GucBcs0MonoGlyph {
+    let bits = microfont::glyph_cell_pixels(cell.0);
+    let bias = usize::from(microfont::glyph_byte(cell.0) == b'q');
+    let mut mask = [0u8; 64];
+    for py in 0..height as usize {
+        for px in 0..width as usize {
+            let sx = px / scale as usize;
+            let sy = py / scale as usize;
+            let bit = sy * microfont::FWIDTH + sx.saturating_sub(bias);
+            let count = microfont::FWIDTH * microfont::FHEIGHT;
+            let ink = sx >= bias && bit < count && bits & (1 << (count - 1 - bit)) != 0;
+            let underline = cell.1.is_some_and(super::super::RgbaColor::underline)
+                && sy == microfont::FHEIGHT - 1;
+            if ink || underline {
+                mask[py * 2 + px / 8] |= 0x80 >> (px % 8);
+            }
+        }
+    }
+    crate::intel::GucBcs0MonoGlyph {
+        x,
+        y,
+        width,
+        height,
+        mask,
+        foreground: u32::from_le_bytes(cell.1.unwrap_or(super::FOREGROUND).rgba()),
+        background: u32::from_le_bytes(
+            cell.1
+                .and_then(super::super::RgbaColor::background)
+                .unwrap_or(super::BACKGROUND.rgba()),
+        ),
     }
 }
 

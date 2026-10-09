@@ -1395,6 +1395,7 @@ fn enqueue_transcript_line(io: &dyn ShellIo2, text: &str) {
 pub(crate) fn print_matrix_target_line(target: &MatrixTarget, line: &str) {
     let _ =
         matrix::record_line_in_live_slot(&target.slot_id, target.slot_lifetime_generation, line);
+    crate::shell3::startup::record_host_line(target, line);
 }
 
 pub(crate) fn print_matrix_target_progress_line(target: &MatrixTarget, line: &str) {

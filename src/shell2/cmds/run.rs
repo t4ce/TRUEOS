@@ -926,6 +926,7 @@ fn readiness_friendly_label(flag: u32, fallback: &'static str) -> &'static str {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
     loop {
+        super::os::poll_shell3_admin(&spawner);
         if super::vid::poll_blueprint_open(&spawner) {
             continue;
         }

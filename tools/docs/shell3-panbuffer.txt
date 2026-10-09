@@ -1,0 +1,137 @@
+Shell3 bounded pan raster: contract and comparison protocol
+
+Baseline: 4ccb2399b9645cd763ff2cb49ebcf7fcd5f42780, clean checkout.
+Baseline pre-test archive: /tmp/trueos-pan-baseline/PROTOCOL.txt.
+Source snapshots, SHA256 manifest and ready harnesses in that directory make
+the first pass reproducible even after the main checkout changes. Independent
+adapter review/fault reproductions: /tmp/trueos-pan-verify/REVIEW.txt.
+
+API boundary
+
+ui4::text_area owns document cell coordinates, bounded rectangular metadata,
+revision comparisons, ring slots and copy rectangles. It has no Shell3 parser,
+font, ANSI, transcript or mouse policy. ui4::text_area_raster owns the optional
+RGBA backing, BCS admission/retirement and its allocation reservation.
+shell3/show/pan.rs adapts one Matrix source and the existing MicroFont glyph
+builder once. The three fixed control rows use the existing renderer.
+The CPU renderer and app-owned TUI routes keep their existing rendering path.
+This is a kernel API; no new Blueprint wire operation or termdir pan hint is
+introduced. The existing Blueprint retained-document raster is a separate API.
+
+Typical producer usage (Rust pseudocode; error handling is required):
+
+  let budget = RasterBudget::new(SH3_PANBUFFER_CAP_BYTES);
+  let view = CellRect { x: camera_column, y: camera_row, columns, rows };
+  let layout = RasterLayout::fit(view, (glyph_width, glyph_height), 4, cap);
+  let mut area = BcsTextArea::new(layout?, &budget)?;
+  area.render(view, revision, |x,y| source.cell(x,y), make_glyph,
+              &mut poisoned).await?;
+  area.copy_view(view, writable_frame, pixel_origin, &mut poisoned).await?;
+  // Publish only after successful retirement. Retain the destination lease on
+  // uncertain work/cancellation. Keep source identity distinct from revision.
+
+A new camera view calls render then copy_view again. Same-revision overlapping
+cells do not call the producer or repaint. Revision changes compare cells and
+paint only differences. On source identity changes call invalidate. Glyph/font
+changes require a new layout. All areas of one instance clone the SAME budget;
+resize rejects a different budget owner. Six separate regions are supported by
+the common budget contract; Shell3 currently equips one region.
+
+Resizing uses area.resize(layout, view, &budget, &mut poisoned).await?. A true
+result preserves compatible overlap via transfers between separate allocations,
+then render produces new strips. False means allocation/peak-budget pressure:
+drop the retired old cache, then build the new one. Raster size changes cannot
+always preserve overlap while both allocations must fit the same cap.
+
+Policy and storage
+
+SH3_PANBUFFER_CAP_BYTES in src/allcaps.rs is 2,097,152 bytes per Show instance.
+It counts optional RGBA backing, 64-byte pitch padding, 4096-byte page padding,
+and both old/new allocations during resize. Mandatory UI4 double-buffer leases,
+bounded character metadata/snapshots and the shared transcript are separate.
+This is not a 2 MiB cap on the complete Shell3 process or transcript.
+
+Requested guards are four cells per edge (eight extra columns and rows).
+RasterLayout::fit reduces guards toward zero under pressure. If the viewport
+alone cannot fit, Shell3 uses direct glyph rendering; visible content is never
+truncated for the pan cache. The raster stays fixed between layout changes.
+Absolute document coordinates wrap in both axes. Entering cells overwrite ring
+slots; old off-window raster cells are discarded. No whole-history RGBA cache.
+
+Every pan recenters the guarded rectangle. Only newly exposed strips are
+produced; a stationary same-revision redraw produces zero cells. There is no
+in-place pixel shift: current BCS validation rejects overlapping allocations.
+One viewport copy submission carries one to four ring crop rectangles.
+Resize overlap may require more rectangles across both old/new ring boundaries.
+Show skips the crop when that destination buffer already has identical Matrix
+cells. Character history retains the existing 256-row drop-oldest policy.
+
+Evidence scenario
+
+1. Pre-test production MatrixSlots: select pan-baseline, insert 300 rows of
+   2,048 ASCII characters, deliberately differing in every adjacent row.
+   Retains 256 newest-first rows, 524,288 characters/payload bytes.
+2. At 80 columns x 25 total rows (22 Matrix rows), move
+   +1,+1,-1,+1000,+1,-1,-1000,-1,MAX,MIN.
+   Production offsets observed: 1,2,1,234,234,233,0,0,234,0.
+   Baseline real one-row movement: 22 patches / 1,760 glyph descriptors,
+   predicting 28 mono submissions of up to 64 glyphs.
+3. New API 80x22 Matrix viewport uses an 88x30 cell ring at scale1:
+   528x330 pixels, pitch2112, allocation700416 bytes.
+   Cold cache: 2,640 cell writes / 42 expected mono batches, plus crop.
+   Adjacent one-row pan either direction: 88 produced/written cells,
+   2,552 reused, 2 expected mono batches plus one crop batch.
+   A full jump beyond the ring repaints 2,640 cells. No-op: zero produced.
+   These figures include guards and blank cells; they exclude control rows.
+4. Resize to120x45 => 120x42 Matrix viewport, 128x50 ring at scale1:
+   768x550 pixels, pitch3072, allocation1691648 bytes. Old700416 plus
+   new1691648 exceeds2MiB; drop/rebuild rather than exceed the peak cap.
+   Smaller compatible resizes transfer overlap and paint only uncovered cells.
+5. 80x22 at scale2 reduces guards to one per edge: 82x24 cells,
+   984x528 pixels, pitch3968, exactly2097152 allocation bytes.
+   640x193 at scale1 exceeds the cap even without guards: direct fallback.
+6. Baseline resize, clamping, source selection and long-line retention passed.
+   A2,097,153-byte line remains permitted by the transcript's line-count cap.
+   The pan cache does not reinterpret or discard user transcript strings.
+
+Reproduce checked-in host verification:
+
+  python3 tools/testpy/test_text_area_pan.py --nocapture
+  python3 tools/testpy/test_text_area_raster.py
+  python3 tools/testpy/test_shell3_microfont.py
+  python3 tools/testpy/test_shell3_pool_input.py
+  cargo check --locked --offline --bin TRUEOS
+
+The first script emits per-step JSON with viewport/tile extents, raster bytes,
+character counts, producer/paint work and expected mono/copy counts. Tests use
+production code and independent cell/pixel models. They exercise both axes,
+negative coordinates, wrap, revision changes, glyph colors/underline/clipping,
+resize, exact/aggregate budgets and allocation pressure.
+
+Async fault tests model pending retirement, partial admission failure and retry,
+SubmitFailed, failed/invalid completion and cancellation during render/resize/
+copy. Pending backing cannot be freed or reused; uncertain work quarantines it
+and keeps its budget charged. The caller owns the destination frame lease and
+must not publish, cancel or free it while completion is uncertain. Shell3's
+poison gate retains those destination leases.
+
+Live observation markers (apps logging):
+
+  shell3/pan: view=... tile=... bytes=... budget_used=... produced=...
+              reused=... painted=... mono_batches=... resize_copies_retired=...
+  shell3/pan: copy_retired rectangles=... destination=...
+  shell3/pan: fallback=viewport-cap ... / fallback=allocation ...
+
+Success work/copy markers occur after observed completion, not mere admission.
+The copy marker reports rectangles within one submission. Cold control-row
+painting, display clears and shared BCS users add work outside these counters.
+
+Hardware evidence remains outstanding. The host pre-test observed descriptors
+and software-model pixels, not Intel submissions or retirement. Default QEMU
+uses virtio-gpu-gl-pci; it cannot establish BCS0 retirement. The existing ISO has
+a recorded hash but no verified source-HEAD mapping. No live rig was changed.
+For physical comparison first record the exact boot source/build fingerprint;
+repeat the above slot/scroll/resize scenario, preserve apps/BCS capture markers
+and screenshots of newest/oldest/clamped views. Confirm fixed controls, newest-
+first content, copy retirement and per-instance bytes. Host predictions must
+not be labeled hardware timings or observed GPU submission counts.

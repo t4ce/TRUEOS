@@ -32,6 +32,29 @@ struct VisibleRow {
     rendered: RenderedLine,
 }
 
+/// Bounded, styled source rectangle for the renderer's optional pan cache.
+/// The history stays with MatrixSlots; this carries visible rows plus guards.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MatrixAreaSnapshot {
+    pub offset: usize,
+    pub first: usize,
+    pub columns: usize,
+    pub rows: usize,
+    pub revision: u64,
+    pub blink_phase: Option<bool>,
+    pub identity: (Option<String>, Option<u64>),
+    pub cells: Vec<RenderedLine>,
+}
+
+impl MatrixAreaSnapshot {
+    pub fn cell(&self, x: i64, y: i64) -> (char, Option<RgbaColor>) {
+        usize::try_from(y).ok().and_then(|y| y.checked_sub(self.first))
+            .and_then(|y| self.cells.get(y))
+            .and_then(|row| usize::try_from(x).ok().and_then(|x| row.get(x)))
+            .copied().unwrap_or((' ', None))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Snapshot {
     size: (usize, usize),
@@ -41,6 +64,7 @@ pub(super) struct Snapshot {
     tui_revision: u64,
     terminal_active: bool,
     blink_phase: Option<bool>,
+    matrix_area: Option<MatrixAreaSnapshot>,
 }
 
 impl Snapshot {
@@ -57,6 +81,7 @@ impl Snapshot {
             tui_revision: 0,
             terminal_active: false,
             blink_phase: None,
+            matrix_area: None,
             rows: strips
                 .map(|(left, right)| VisibleRow {
                     rendered: fit_meta_strips(left, right, columns),
@@ -69,21 +94,43 @@ impl Snapshot {
         self.with_matrix_offset(lines, generation, 0)
     }
 
-    pub(super) fn with_matrix_offset(mut self, lines: &[String], generation: u64, offset: usize) -> Self {
+    pub(super) fn with_matrix_offset(self, lines: &[String], generation: u64, offset: usize) -> Self {
+        self.with_matrix_guard(lines, generation, offset, 0)
+    }
+
+    pub(super) fn with_matrix_guard(mut self, lines: &[String], generation: u64, offset: usize, guard: usize) -> Self {
         self.matrix_generation = generation;
         let count = self.size.1.saturating_sub(3);
         let first = offset.min(lines.len().saturating_sub(count));
+        let start = first.saturating_sub(guard);
+        let end = first.saturating_add(count).saturating_add(guard).min(lines.len());
+        let cells: Vec<_> = lines[start.min(end)..end].iter().map(|text| {
+            fit_meta_strips(&[MetaFmtStr::new(text)], &[], self.size.0.saturating_add(guard))
+        }).collect();
         for index in 0..count {
-            let text = lines.get(first + index).map(String::as_str).unwrap_or("");
+            let rendered = cells.get(first + index - start)
+                .map(|row| row[..self.size.0].to_vec())
+                .unwrap_or_else(|| fit_meta_strips(&[], &[], self.size.0));
             self.rows.push(VisibleRow {
-                rendered: fit_meta_strips(&[MetaFmtStr::new(text)], &[], self.size.0),
+                rendered,
             });
         }
+        self.matrix_area = Some(MatrixAreaSnapshot { offset: first, first: start,
+            columns: self.size.0, rows: count, revision: generation,
+            blink_phase: None,
+            identity: (None, None), cells });
         self
     }
 
+    pub(super) fn with_matrix_identity(mut self, name: Option<String>, lifetime: Option<u64>) -> Self {
+        if let Some(area) = &mut self.matrix_area { area.identity = (name, lifetime); }
+        self
+    }
+
+    pub(super) fn matrix_area(&self) -> Option<&MatrixAreaSnapshot> { self.matrix_area.as_ref() }
+
     pub(super) fn terminal(size: (usize, usize), layout_generation: usize, lines: Vec<RenderedLine>, revision: u64) -> Self {
-        Self {size, layout_generation, rows: lines.into_iter().map(|rendered| VisibleRow {rendered}).collect(), matrix_generation: 0, tui_revision: revision, terminal_active: true, blink_phase: None}
+        Self {size, layout_generation, rows: lines.into_iter().map(|rendered| VisibleRow {rendered}).collect(), matrix_generation: 0, tui_revision: revision, terminal_active: true, blink_phase: None, matrix_area: None}
     }
     pub(super) fn with_tui_revision(mut self, revision: u64) -> Self { self.tui_revision = revision; self }
     pub(super) fn tui_revision(&self) -> u64 { self.tui_revision }
@@ -101,6 +148,22 @@ impl Snapshot {
                         background: if visible { color.background().unwrap_or(super::RgbaColor::BlackTransparent.rgba()) } else { super::RgbaColor::BlackTransparent.rgba() },
                         underline: visible && color.underline(),
                     });
+                }
+            }
+        }
+        if let Some(area) = &mut self.matrix_area {
+            // Mirror the visible blink styling into the guarded source cells.
+            for row in &mut area.cells {
+                for (_, style) in row {
+                    if let Some(color) = *style && color.blink() {
+                        self.blink_phase = Some(visible);
+                        area.blink_phase = Some(visible);
+                        *style = Some(super::RgbaColor::Terminal {
+                            foreground: if visible { color.rgba() } else { super::RgbaColor::BlackTransparent.rgba() },
+                            background: if visible { color.background().unwrap_or(super::RgbaColor::BlackTransparent.rgba()) } else { super::RgbaColor::BlackTransparent.rgba() },
+                            underline: visible && color.underline(),
+                        });
+                    }
                 }
             }
         }

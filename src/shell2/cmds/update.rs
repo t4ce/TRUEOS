@@ -1,6 +1,9 @@
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
+pub(crate) const REMOTE_ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
+pub(crate) const LAN_ISO_URL: &str = "http://192.168.178.111:8080/trueos.iso";
+
 use crate::shell2::{
     MatrixTarget, matrix_target_interrupted, print_matrix_target_line, set_matrix_target_active,
 };
@@ -10,6 +13,20 @@ pub(crate) fn submit_online_install_to_target(
     target: MatrixTarget,
     disk: crate::disc::block::DeviceHandle,
 ) {
+    submit_online_install_mode_to_target(
+        spawner,
+        target,
+        disk,
+        crate::disc::install::pxeproc::InstallMode::Regular,
+    );
+}
+
+pub(crate) fn submit_online_install_mode_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    disk: crate::disc::block::DeviceHandle,
+    mode: crate::disc::install::pxeproc::InstallMode,
+) {
     let info = disk.info();
     print_matrix_target_line(
         &target,
@@ -18,7 +35,7 @@ pub(crate) fn submit_online_install_to_target(
     );
 
     set_matrix_target_active(&target, true);
-    match online_install_command_task(target.clone(), disk) {
+    match online_install_command_task(target.clone(), disk, mode) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
@@ -28,13 +45,21 @@ pub(crate) fn submit_online_install_to_target(
 }
 
 pub(crate) fn submit_live_update_to_target(spawner: &Spawner, target: MatrixTarget) {
+    submit_live_update_from_url_to_target(spawner, target, REMOTE_ISO_URL);
+}
+
+pub(crate) fn submit_live_update_from_url_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    url: &'static str,
+) {
     print_matrix_target_line(
         &target,
         "update live: step=01/20 command-accepted mode=RAM-only disk-install=disabled",
     );
 
     set_matrix_target_active(&target, true);
-    match live_update_command_task(target.clone(), *spawner) {
+    match live_update_command_task(target.clone(), *spawner, url) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
@@ -44,7 +69,11 @@ pub(crate) fn submit_live_update_to_target(spawner: &Spawner, target: MatrixTarg
 }
 
 #[trueos_executor::task(pool_size = 2)]
-async fn online_install_command_task(target: MatrixTarget, disk: crate::disc::block::DeviceHandle) {
+async fn online_install_command_task(
+    target: MatrixTarget,
+    disk: crate::disc::block::DeviceHandle,
+    mode: crate::disc::install::pxeproc::InstallMode,
+) {
     let task_target = target.clone();
     async move {
         const ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
@@ -201,10 +230,12 @@ async fn online_install_command_task(target: MatrixTarget, disk: crate::disc::bl
         }
 
         log("install online: installing onto selected disk");
-        match crate::disc::install::install_bootable_uefi_gpt_with_log(
+        log(alloc::format!("install online: boot mode={mode:?}").as_str());
+        match crate::disc::install::install_bootable_uefi_gpt_mode_with_log(
             disk,
             bootx64,
             kernel,
+            mode,
             &mut |line| log(line),
         )
         .await
@@ -222,11 +253,9 @@ async fn online_install_command_task(target: MatrixTarget, disk: crate::disc::bl
 }
 
 #[trueos_executor::task]
-async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
+async fn live_update_command_task(target: MatrixTarget, spawner: Spawner, url: &'static str) {
     let task_target = target.clone();
     async move {
-        const LIVE_ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
-
         Timer::after(EmbassyDuration::from_millis(1)).await;
 
         let log = |line: &str| {
@@ -242,9 +271,9 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
         }
         log("update live: step=02b/20 readiness-satisfied net=v4; checkpoint storage is conditional");
 
-        log(alloc::format!("update live: step=03/20 download-begin {}", LIVE_ISO_URL).as_str());
-        let payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
-            LIVE_ISO_URL,
+        log(alloc::format!("update live: step=03/20 download-begin {}", url).as_str());
+        let mut payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
+            url,
             120_000,
             128 * 1024 * 1024,
         )
@@ -260,26 +289,26 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
             log("update live: interrupted after download");
             return;
         }
-        if !crate::z7::looks_like_7z(payload.as_slice()) {
-            log("update live: refused (payload is not a 7z archive)");
-            return;
-        }
         log(alloc::format!(
-            "update live: step=04a/20 download-complete bytes={} archive=7z transport=https-rustls",
+            "update live: step=04a/20 download-complete bytes={}",
             payload.len(),
         )
         .as_str());
 
-        let iso = match crate::z7::extract_file_to_vec(payload.as_slice(), "trueos.iso") {
-            Ok(iso) => iso,
-            Err(error) => {
-                log(alloc::format!("update live: extract failed ({:?})", error).as_str());
-                return;
+        let iso = if crate::z7::looks_like_7z(payload.as_slice()) {
+            match crate::z7::extract_file_to_vec(payload.as_slice(), "trueos.iso") {
+                Ok(iso) => iso,
+                Err(error) => {
+                    log(alloc::format!("update live: extract failed ({:?})", error).as_str());
+                    return;
+                }
             }
+        } else {
+            core::mem::take(&mut payload)
         };
         drop(payload);
         if !crate::iso9660::looks_like_iso9660(iso.as_slice()) {
-            log("update live: refused (extracted data is not an ISO9660 image)");
+            log("update live: refused (payload is not an ISO9660 image or a 7z containing trueos.iso)");
             return;
         }
         log("update live: step=04b/20 ISO9660-verified");

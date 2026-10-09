@@ -5,6 +5,7 @@
 //! again after the terminal lease is released, and the existing install/live
 //! update implementation performs the operation.
 
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +24,57 @@ const OS_VM_START_TIMEOUT_MS: u64 = 30_000;
 const OS_VM_EXIT_TIMEOUT_MS: u64 = 5_000;
 
 static OS_INSTANCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static SHELL3_ADMIN_WATCHES: spin::Mutex<VecDeque<(MatrixTarget, String)>> =
+    spin::Mutex::new(VecDeque::new());
+
+/// Shell3 launches the same privileged administration controller as Shell2.
+pub(crate) fn enqueue_to_shell3(
+    frontend: crate::shell3::tui::Frontend,
+    launch_script: Option<String>,
+) -> Result<super::run::QueuedBlueprint, String> {
+    let mut args: Vec<String> = super::tlb_helper::collect_top_level_disk_choices()
+        .iter()
+        .map(disk_argument)
+        .collect();
+    args.extend(non_replicatable_vm_arguments());
+    let generation = OS_INSTANCE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
+    let instance_name = alloc::format!("os-admin-{generation}");
+    let bytes = crate::app_db::get(OS_ARCHIVE)?.ok_or("os: built-in archive unavailable")?;
+    let target = crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "");
+    let receipt = super::run::enqueue_blueprint_bytes_with_receipt(
+        target,
+        String::from(OS_ARCHIVE),
+        bytes,
+        args,
+        crate::hv::BlueprintInstanceRequest::named(instance_name.clone()),
+        launch_script,
+        &crate::shell3::MatrixSlots::slot_ids(),
+        Some(frontend),
+    )?;
+    let target = crate::shell2::matrix_target_for_slot_name(
+        crate::shell2::OUTPUT_SYSTEM_MASK,
+        &receipt.slot,
+    );
+    SHELL3_ADMIN_WATCHES
+        .lock()
+        .push_back((target, instance_name));
+    Ok(receipt)
+}
+
+pub(crate) fn poll_shell3_admin(spawner: &Spawner) {
+    let pending = SHELL3_ADMIN_WATCHES.lock().pop_front();
+    if let Some((target, instance)) = pending {
+        match shell3_admin_watch_task(*spawner, target.clone(), instance.clone()) {
+            Ok(token) => spawner.spawn(token),
+            Err(_) => SHELL3_ADMIN_WATCHES.lock().push_front((target, instance)),
+        }
+    }
+}
+
+#[task(pool_size = 4)]
+async fn shell3_admin_watch_task(spawner: Spawner, target: MatrixTarget, instance_name: String) {
+    watch_admin_action(spawner, target, instance_name, false).await;
+}
 
 fn disk_argument(choice: &super::tlb_helper::DiskChoice) -> String {
     let clean = |value: String| {
@@ -129,6 +181,15 @@ async fn os_admin_task(
         return;
     }
 
+    watch_admin_action(spawner, target, instance_name, true).await;
+}
+
+async fn watch_admin_action(
+    spawner: Spawner,
+    target: MatrixTarget,
+    instance_name: String,
+    return_to_root: bool,
+) {
     let start_deadline = Instant::now()
         .as_millis()
         .saturating_add(OS_VM_START_TIMEOUT_MS);
@@ -185,11 +246,13 @@ async fn os_admin_task(
         Timer::after(EmbassyDuration::from_millis(100)).await;
     }
 
-    // The TUI runs in its app-owned `os` slot, while privileged install/update
-    // progress belongs to the root shell transcript. Select and target root
-    // only after the Blueprint has returned its terminal lease, so the handoff
-    // cannot interfere with the TUI's own execution.
-    let action_target = switch_matrix_target_slot(&target, "");
+    // Shell2 returns progress to its root transcript. Shell3 keeps the selected
+    // OS slot visible after the Blueprint returns its terminal lease.
+    let action_target = if return_to_root {
+        switch_matrix_target_slot(&target, "")
+    } else {
+        target
+    };
     dispatch_admin_action(&spawner, &action_target, reason.as_str());
 }
 
@@ -221,6 +284,14 @@ fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str)
         super::update::submit_live_update_to_target(spawner, target.clone());
         return;
     }
+    if reason == "os:update:lan" {
+        super::update::submit_live_update_from_url_to_target(
+            spawner,
+            target.clone(),
+            super::update::LAN_ISO_URL,
+        );
+        return;
+    }
 
     let Some(rest) = reason.strip_prefix("os:install:") else {
         print_matrix_target_line(target, "os: rejected unknown administration action");
@@ -242,6 +313,18 @@ fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str)
     match source {
         "local" => super::install::submit_install_to_target(spawner, target.clone(), disk),
         "online" => super::update::submit_online_install_to_target(spawner, target.clone(), disk),
+        "pxeproc-local" => super::install::submit_install_mode_to_target(
+            spawner,
+            target.clone(),
+            disk,
+            crate::disc::install::pxeproc::InstallMode::Pxeproc,
+        ),
+        "pxeproc-online" => super::update::submit_online_install_mode_to_target(
+            spawner,
+            target.clone(),
+            disk,
+            crate::disc::install::pxeproc::InstallMode::Pxeproc,
+        ),
         _ => print_matrix_target_line(target, "os: rejected unknown install source"),
     }
 }

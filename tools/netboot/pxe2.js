@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const dgram = require("dgram");
+const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
@@ -9,6 +10,47 @@ const REPO_ROOT = path.resolve(__dirname, "../..");
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
 const TFTP_ROOT = path.join(REPO_ROOT, "bld");
 const TFTP_PORT = 69;
+const ISO_HTTP_PORT = 8080;
+
+// LAN live-update uses the existing HTTP downloader and the same build as PXE.
+function startIsoHttpServer(serverIp) {
+  const server = http.createServer((req, res) => {
+    if (req.url !== "/trueos.iso" || !["GET", "HEAD"].includes(req.method)) {
+      res.writeHead(404).end();
+      return;
+    }
+    let fd;
+    try {
+      fd = fs.openSync(path.join(TFTP_ROOT, "trueos.iso"), "r");
+      const stat = fs.fstatSync(fd);
+      res.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": stat.size,
+        "Cache-Control": "no-store",
+      });
+      if (req.method === "HEAD") {
+        fs.closeSync(fd);
+        res.end();
+      } else {
+        const stream = fs.createReadStream(null, { fd });
+        stream.on("error", () => res.destroy());
+        res.on("close", () => stream.destroy());
+        stream.pipe(res);
+      }
+    } catch {
+      if (fd !== undefined) fs.closeSync(fd);
+      res.writeHead(503).end();
+    }
+  });
+  server.on("error", (err) => {
+    process.stderr.write(`PXE ISO HTTP failed: ${err.message}\n`);
+    process.exit(1);
+  });
+  server.listen(ISO_HTTP_PORT, serverIp, () => {
+    process.stdout.write(`TRUEOS LAN ISO http://${serverIp}:${ISO_HTTP_PORT}/trueos.iso\n`);
+  });
+  return server;
+}
 
 function runJson(cmd, args, label) {
   const r = spawnSync(cmd, args, { encoding: "utf8" });
@@ -270,6 +312,7 @@ function buildDnsmasqArgs({ iface, serverIp, lanNetwork, lanNetmask }) {
       `TRUEOS PXE ProxyDHCP iface=${iface} ip=${serverIp}/${prefix} tftp=${TFTP_ROOT} boot=${BOOTFILE}\n`
     );
     startTftpServer(serverIp);
+    startIsoHttpServer(serverIp);
     const child = spawn("dnsmasq", args, { stdio: "inherit" });
     child.on("exit", (code, signal) => {
       process.exitCode = code ?? (signal ? 1 : 0);

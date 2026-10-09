@@ -33,6 +33,7 @@ struct ShellOwnership {
     worker_slots: Vec<u32>,
     shells_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
     pending_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
+    startup_requests: VecDeque<(u32, Option<crate::shell3::startup::Startup>)>,
     live_shells: usize,
     next_round_robin: usize,
     initial_assignments: usize,
@@ -58,6 +59,7 @@ impl ShellOwnership {
             worker_slots: Vec::new(),
             shells_by_slot: [0; crate::percpu::CPU_SLOT_LIMIT],
             pending_by_slot: [0; crate::percpu::CPU_SLOT_LIMIT],
+            startup_requests: VecDeque::new(),
             live_shells: 0,
             next_round_robin: 0,
             initial_assignments: 0,
@@ -86,6 +88,7 @@ static APPDB_NAMES: spin::Mutex<AppDbNames> = spin::Mutex::new(AppDbNames::new()
 
 /// Hand AppDB launches to the existing Matrix/VMX queue.
 pub(super) fn launch_appdb(name: &str, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
+    if name == "os" { return crate::shell2::cmds::os::enqueue_to_shell3(frontend, None); }
     let archive = alloc::format!("{name}.bp");
     launch_archive(archive, slot, frontend)
 }
@@ -172,6 +175,10 @@ pub fn next_executor_for_shell() -> Option<u32> {
 
 /// Queue a fresh Shell3 on the executor selected by the shell distribution policy.
 pub fn request_shell3() -> Result<u32, super::Shell3Error> {
+    request_shell3_with_startup(None)
+}
+
+pub(crate) fn request_shell3_with_startup(startup: Option<crate::shell3::startup::Startup>) -> Result<u32, super::Shell3Error> {
     refresh_appdb_names();
     let mut ownership = SHELL_OWNERSHIP.lock();
     if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
@@ -184,6 +191,7 @@ pub fn request_shell3() -> Result<u32, super::Shell3Error> {
         return Err(super::Shell3Error::NoExecutor);
     };
     ownership.pending_by_slot[slot as usize] += 1;
+    ownership.startup_requests.push_back((slot, startup));
     advance_round_robin(&mut ownership, slot);
     drop(ownership);
     SHELL_WORK_AVAILABLE.notify_all();
@@ -469,6 +477,12 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             shell.reconcile_matrix_selection();
         }
         while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
+            let startup = {
+                let mut ownership = SHELL_OWNERSHIP.lock();
+                ownership.startup_requests.iter().position(|(slot, _)| *slot == expected_slot)
+                    .and_then(|index| ownership.startup_requests.remove(index))
+                    .and_then(|(_, startup)| startup)
+            };
             let aka_names = crate::r::restart::startup_alias_names();
             let appdb_names = appdb_names_snapshot().1;
             let startup_time = super::TitleTime::current();
@@ -481,13 +495,14 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                 super::Default_ROWS,
             ) {
                 Ok(index) => {
-                    if let Some(shell) = owned_shells.get_mut(index)
-                        && let Err(error) = shell.present().await
-                    {
-                        crate::log_warn!(target: "service";
-                            "sh3srv: initial presentation failed slot={} shell={} error={}\n",
-                            expected_slot, index, error,
-                        );
+                    if let Some(shell) = owned_shells.get_mut(index) {
+                        match shell.present().await {
+                            Ok(()) => if let Some(startup) = startup { startup.launch(shell); },
+                            Err(error) => crate::log_warn!(target: "service";
+                                "sh3srv: initial presentation failed slot={} shell={} error={}\n",
+                                expected_slot, index, error,
+                            ),
+                        }
                     }
                 }
                 Err(error) => crate::log_warn!(target: "service";

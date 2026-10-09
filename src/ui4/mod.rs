@@ -27,6 +27,8 @@ mod screenshot;
 pub(crate) use screenshot::writable_capture_root_handle;
 mod slot4_service;
 mod start_button;
+pub(crate) mod text_area;
+pub(crate) mod text_area_raster;
 mod video_frame;
 pub(crate) mod window_arc;
 mod window_broker;

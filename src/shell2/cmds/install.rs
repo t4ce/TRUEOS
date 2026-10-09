@@ -10,6 +10,20 @@ pub(crate) fn submit_install_to_target(
     target: MatrixTarget,
     disk: crate::disc::block::DeviceHandle,
 ) {
+    submit_install_mode_to_target(
+        spawner,
+        target,
+        disk,
+        crate::disc::install::pxeproc::InstallMode::Regular,
+    );
+}
+
+pub(crate) fn submit_install_mode_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    disk: crate::disc::block::DeviceHandle,
+    mode: crate::disc::install::pxeproc::InstallMode,
+) {
     let Some(bootx64) = crate::limine::install_bootx64_bytes() else {
         print_matrix_target_line(
             &target,
@@ -29,7 +43,7 @@ pub(crate) fn submit_install_to_target(
     );
 
     set_matrix_target_active(&target, true);
-    match install_command_task(target.clone(), disk, bootx64, kernel) {
+    match install_command_task(target.clone(), disk, bootx64, kernel, mode) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
@@ -44,6 +58,7 @@ async fn install_command_task(
     disk: crate::disc::block::DeviceHandle,
     bootx64: &'static [u8],
     kernel: &'static [u8],
+    mode: crate::disc::install::pxeproc::InstallMode,
 ) {
     let task_target = target.clone();
     async move {
@@ -103,10 +118,12 @@ async fn install_command_task(
         }
 
         log("install: installing current local payload onto selected disk");
-        match crate::disc::install::install_bootable_uefi_gpt_with_log(
+        log(alloc::format!("install: boot mode={mode:?}").as_str());
+        match crate::disc::install::install_bootable_uefi_gpt_mode_with_log(
             disk,
             bootx64,
             kernel,
+            mode,
             &mut |line| log(line),
         )
         .await

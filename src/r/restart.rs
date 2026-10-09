@@ -123,6 +123,10 @@ pub(crate) async fn autostart_task(spawner: Spawner) {
 }
 
 async fn cold_start_blueprints(spawner: Spawner) {
+    if crate::disc::install::pxeproc::boot_enabled() {
+        crate::r::services::pxeproc_service::autostart().await;
+        return;
+    }
     crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
 
     let config: ColdStartConfiguration = match serde_json::from_slice(COLD_START_BLUEPRINTS_JSON) {

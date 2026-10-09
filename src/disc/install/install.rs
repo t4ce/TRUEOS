@@ -10,6 +10,23 @@ pub async fn install_bootable_uefi_gpt_with_log(
     kernel_elf: &[u8],
     log: &mut dyn FnMut(&str),
 ) -> Result<(), block::Error> {
+    install_bootable_uefi_gpt_mode_with_log(
+        disk,
+        bootx64_efi,
+        kernel_elf,
+        super::pxeproc::InstallMode::Regular,
+        log,
+    )
+    .await
+}
+
+pub async fn install_bootable_uefi_gpt_mode_with_log(
+    disk: block::DeviceHandle,
+    bootx64_efi: &[u8],
+    kernel_elf: &[u8],
+    mode: super::pxeproc::InstallMode,
+    log: &mut dyn FnMut(&str),
+) -> Result<(), block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
@@ -134,14 +151,7 @@ pub async fn install_bootable_uefi_gpt_with_log(
 
     // Generate an on-disk limine.conf that points to the files we write into the ESP.
     // Note: we use short 8.3 names in FAT32 to avoid long filename complexity.
-    let limine_conf = b"timeout: 0\n\
-default_entry: 1\n\
-\n\
-/TRUEOS\n\
-protocol: limine\n\
-kernel_path: boot():/TRUEOS.ELF\n\
-cmdline: timezone=Europe/Berlin keyboard=de\n\
-resolution: 2560x1440x32\n\n";
+    let limine_conf = mode.limine_conf();
 
     log("install: stage=format_esp_fat32");
     log(alloc::format!(
