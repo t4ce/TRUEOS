@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "tools/firmware-scout/**"
-      - "tools/check-bios-schema-boundary.py"
+      - "tools/testpy/check-bios-schema-boundary.py"
       - "src/shell2/cmds/bios_*.rs"
       - "src/shell2/cmds/bios_*/**"
       - "src/shell2/cmds/tlb_hfi_dump.rs"
@@ -16,7 +16,7 @@ on:
       - true
     paths:
       - "tools/firmware-scout/**"
-      - "tools/check-bios-schema-boundary.py"
+      - "tools/testpy/check-bios-schema-boundary.py"
       - "src/shell2/cmds/bios_*.rs"
       - "src/shell2/cmds/bios_*/**"
       - "src/shell2/cmds/tlb_hfi_dump.rs"
@@ -70,6 +70,6 @@ jobs:
           test -f \
             "${GITHUB_WORKSPACE}/../TRUEOS-Blueprints/crates/log-os/Cargo.toml"
       - name: Verify read-only BIOS schema boundary
-        run: python3 tools/check-bios-schema-boundary.py
+        run: python3 tools/testpy/check-bios-schema-boundary.py
       - name: Check TRUEOS kernel integration
         run: cargo +nightly-2026-07-10 check -p TRUEOS

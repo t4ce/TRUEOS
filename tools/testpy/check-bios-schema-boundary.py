@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BIOS_DUMP = ROOT / "src/shell2/cmds/bios_tlb_dump.rs"
 BIOS_DUMP_PARTS = sorted((ROOT / "src/shell2/cmds/bios_tlb_dump").glob("*.rs"))
 OBSERVED = ROOT / "src/shell2/cmds/bios_observed.rs"
