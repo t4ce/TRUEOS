@@ -107,7 +107,7 @@ pub(crate) use usb3 as usb2;
 // Imports
 use trueos_executor::{Spawner, raw::Executor};
 
-// Provide a known-good BSP stack and switch to it immediately in `_start` for bigger stack
+// The BSP claims this stack in `_start`, before any ordinary Rust code runs.
 const BSP_BOOT_STACK_BYTES: usize = crate::allcaps::boot::BSP_BOOT_STACK_BYTES;
 
 #[repr(align(16))]
@@ -120,18 +120,28 @@ static mut BSP_BOOT_STACK: BootStack = BootStack {
     _bytes: [0; BSP_BOOT_STACK_BYTES],
 };
 
-// only the person that deeply understands the root complex, is allowed to touch this fn
+/// Four instructions. One way in. No way back.
+///
+/// `naked` means no compiler-generated prologue or epilogue: we install our
+/// stack before the compiler gets to use it.
+///
+/// # Safety
+/// Enter only on the BSP, in 64-bit kernel mode, with interrupts disabled and
+/// the direction flag clear. The kernel image must be mapped for execution;
+/// `BSP_BOOT_STACK` must be mapped writable and exclusively owned by this CPU.
 #[unsafe(no_mangle)]
 #[unsafe(naked)]
 pub unsafe extern "C" fn _start() -> ! {
     core::arch::naked_asm!(
+        // Claim the high end of our stack. LEA computes an address, not a load;
+        // the first push will move RSP down into the storage.
         "lea rsp, [rip + {stack} + {stack_size}]",
-        // 16-byte align RSP for SysV ABI.
+        // Round down to a 16-byte boundary: RSP % 16 = 0.
         "and rsp, -16",
-        // Use `call` (not `jmp`) so the callee sees the expected stack
-        // alignment (RSP % 16 == 8 at function entry). Some Rust/C code
-        // assumes this and will fault on unaligned `movaps` spills.
+        // Enter Rust. CALL pushes an 8-byte return address, so kmain sees
+        // RSP % 16 = 8, as SysV requires (including for aligned MOVAPS spills).
         "call {main}",
+        // kmain promises never to return. Break that promise, get #UD.
         "ud2",
         stack = sym BSP_BOOT_STACK,
         stack_size = const BSP_BOOT_STACK_BYTES,
@@ -149,6 +159,7 @@ pub extern "C" fn kmain() -> ! {
     // symbols directly. Keep the Rust crate linked; build.rs retains and
     // publishes the native routines through the runtime import resolver.
     core::hint::black_box(&ring::digest::SHA256);
+    disc::install::pxeproc::init_boot_mode();
     live_update::log_boot_mode();
     crate::log_info!(
         target: "global";

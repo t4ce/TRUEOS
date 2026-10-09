@@ -19,17 +19,57 @@ def main():
     keys = keys[keys.index("pub fn parse_keys"):keys.index("pub async fn launch_keys")]
     restart = (ROOT / "src/r/restart.rs").read_text()
     restart_impl = re.search(r"^impl RestartPolicy \{.*?^}", restart, re.M | re.S).group()
+    readiness = "src/r/readiness.rs"
+    readiness_constants = "\n".join(constant(readiness, name) for name in (
+        "TRUEOSFS_ROOT_MOUNTED", "BACKGROUND_AP_WORKER_READY", "VTHREAD_HW_TAG_READY",
+        "RAYON_READY", "NET_ANY_CONFIGURED", "NET_SOCKET_READY", "TLS_SOCKET_SERVICE_READY",
+        "INTEL_HDA_READY",
+    ))
+    spirit = "src/spirit/response_window.rs"
     source = f'''#![allow(dead_code,unreachable_patterns)]
 extern crate alloc;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum KeyCode {{Up,Down,Enter,Left,Right,Esc,Char(char)}}
 struct KeyEvent {{code:KeyCode}}
-mod limine {{pub fn executable_cmdline()->Option<&'static str>{{None}}}}
+mod limine {{
+    pub static CMDLINE:std::sync::Mutex<Option<&'static str>>=std::sync::Mutex::new(None);
+    pub fn executable_cmdline()->Option<&'static str>{{*CMDLINE.lock().unwrap()}}
+}}
 mod live_update {{
     pub static WARM:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
     pub fn warm_boot_active()->bool {{WARM.load(std::sync::atomic::Ordering::Relaxed)}}
 }}
 #[path="{ROOT}/src/disc/install/pxeproc.rs"] mod mode;
+mod disc {{pub mod install {{pub(crate) use crate::mode as pxeproc;}}}}
+mod shell2 {{pub mod cmds {{pub mod update {{
+    {constant("src/shell2/cmds/update.rs", "LAN_ISO_URL")}
+}}}}}}
+mod r {{
+    pub mod readiness {{
+        {readiness_constants}
+        pub static MASK:std::sync::atomic::AtomicU32=std::sync::atomic::AtomicU32::new(0);
+        pub fn is_set(required:u32)->bool {{MASK.load(std::sync::atomic::Ordering::Relaxed)&required==required}}
+    }}
+    pub mod services {{pub mod pxeproc_service {{
+        use alloc::string::String;
+        {item("src/r/services/pxeproc_service.rs", "startup_text")}
+    }}}}
+}}
+{constant("src/r/services/spawn_service.rs", "BP_AUTOSTART_READY")}
+{item("src/r/services/spawn_service.rs", "bp_autostart_gate")}
+{item("src/r/services/spawn_service.rs", "html_shack_gate")}
+{item("src/hv/blueprint/prebind.rs", "prebind_import_readiness")}
+{item("src/hv/blueprint/prebind.rs", "is_rayon_import")}
+mod spirit_text {{
+    use alloc::{{string::String,vec::Vec}};
+    {constant(spirit, "SPIRIT_GRID_COLUMNS")}
+    {constant(spirit, "SPIRIT_GRID_ROWS")}
+    {constant(spirit, "STARTUP_WARMUP_TEXT")}
+    {item(spirit, "sanitize_response")}
+    {item(spirit, "sanitize_response_inner")}
+    {item(spirit, "startup_warmup_text")}
+    pub fn greeting(pxeproc:bool,ip:Option<[u8;4]>)->String {{startup_warmup_text(pxeproc,ip)}}
+}}
 {constant("src/r/services/pxeproc_service.rs", "LAUNCH_SCRIPT")}
 {item("src/r/restart.rs", "RestartPolicy")}
 {restart_impl}
@@ -101,6 +141,59 @@ fn key(app:&mut App,code:KeyCode)->Option<String>{{handle_key(app,KeyEvent {{cod
     assert_eq!(RestartPolicy::active(),RestartPolicy::ColdStart);
     live_update::WARM.store(true,Ordering::Relaxed);
     assert_eq!(RestartPolicy::active(),RestartPolicy::LiveUpdateRestore);
+}}
+#[test] fn bootloader_mode_is_captured_before_services_without_disk_access() {{
+    use std::sync::atomic::Ordering;
+    *limine::CMDLINE.lock().unwrap()=Some("keyboard=de pxeproc=1");
+    live_update::WARM.store(false,Ordering::Relaxed);
+    mode::init_boot_mode();
+    *limine::CMDLINE.lock().unwrap()=None; // Services consume the captured boot policy.
+    assert!(mode::boot_enabled());
+    assert!(mode::cold_boot_enabled());
+    live_update::WARM.store(true,Ordering::Relaxed);
+    assert!(!mode::cold_boot_enabled());
+    mode::init_boot_mode();
+    assert!(!mode::boot_enabled());
+}}
+#[test] fn pxeproc_autostart_and_downloader_can_start_before_trueosfs() {{
+    use std::sync::atomic::Ordering;
+    use r::readiness::*;
+    assert_eq!(BP_AUTOSTART_READY,BACKGROUND_AP_WORKER_READY|VTHREAD_HW_TAG_READY);
+    MASK.store(BP_AUTOSTART_READY,Ordering::Relaxed);
+    *limine::CMDLINE.lock().unwrap()=Some("pxeproc=1");
+    mode::init_boot_mode();
+    live_update::WARM.store(false,Ordering::Relaxed);
+    assert!(bp_autostart_gate());assert!(html_shack_gate());
+    live_update::WARM.store(true,Ordering::Relaxed);
+    assert!(!bp_autostart_gate());assert!(!html_shack_gate());
+    *limine::CMDLINE.lock().unwrap()=None;mode::init_boot_mode();
+    live_update::WARM.store(false,Ordering::Relaxed);
+    assert!(!bp_autostart_gate());assert!(!html_shack_gate());
+    MASK.store(BP_AUTOSTART_READY|TRUEOSFS_ROOT_MOUNTED,Ordering::Relaxed);
+    assert!(bp_autostart_gate());assert!(html_shack_gate());
+}}
+#[test] fn ram_vfile_imports_honor_the_blueprints_filesystem_independent_contract() {{
+    use r::readiness::*;
+    for import in ["trueos_cabi_async_fs_read_start","trueos_cabi_async_fs_status","trueos_cabi_async_fs_result_read"] {{
+        assert_eq!(prebind_import_readiness(import,true),0);
+        assert_eq!(prebind_import_readiness(import,false),TRUEOSFS_ROOT_MOUNTED);
+    }}
+    assert_eq!(prebind_import_readiness("trueos_cabi_archive_extract",true),TRUEOSFS_ROOT_MOUNTED|BACKGROUND_AP_WORKER_READY);
+    assert_eq!(prebind_import_readiness("trueos_cabi_net_fetch_start",true),NET_ANY_CONFIGURED|NET_SOCKET_READY|TLS_SOCKET_SERVICE_READY);
+}}
+#[test] fn spirit_netboot_status_fits_her_grid_and_keeps_the_ip_and_target() {{
+    for ip in [Some([192,168,178,94]),Some([255,255,255,255]),None] {{
+        let greeting=spirit_text::greeting(true,ip);
+        assert!(greeting.starts_with("Live Update -\\nContinue to TrueOS"));
+        assert!(!greeting.contains("Hello"));
+        assert!(!greeting.ends_with("..."));
+        assert!(greeting.lines().count()<=13);
+        assert!(greeting.lines().all(|line|line.chars().count()<=19));
+        assert!(greeting.replace('\\n',"").contains(shell2::cmds::update::LAN_ISO_URL));
+        if let Some([a,b,c,d])=ip {{assert!(greeting.contains(&format!("{{a}}.{{b}}.{{c}}.{{d}}")));}}
+        else {{assert!(greeting.contains("unavailable"));}}
+    }}
+    assert_eq!(spirit_text::greeting(false,None),"Hello from TrueOS §");
 }}
 #[test] fn malformed_launch_scripts_cannot_submit_an_action() {{
     assert!(parse_keys("key down\\ninstall 42").is_err());

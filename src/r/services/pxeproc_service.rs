@@ -5,6 +5,17 @@ use trueos_time::{Duration, Timer};
 
 pub(crate) const LAUNCH_SCRIPT: &str = "key down\nkey down\nkey enter\nkey down\nkey enter\n";
 
+pub(crate) fn startup_text(ip: Option<[u8; 4]>) -> String {
+    let ip = ip.map_or_else(
+        || String::from("unavailable"),
+        |[a, b, c, d]| alloc::format!("{a}.{b}.{c}.{d}"),
+    );
+    alloc::format!(
+        "Live Update - Continue to TrueOS\nIP: {ip}\nNetboot: {}",
+        crate::shell2::cmds::update::LAN_ISO_URL,
+    )
+}
+
 pub(crate) async fn autostart() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
     loop {

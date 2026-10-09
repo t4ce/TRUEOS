@@ -4,14 +4,16 @@ pub(crate) fn prebind_base_readiness() -> u32 {
     crate::r::readiness::BACKGROUND_AP_WORKER_READY
 }
 
-pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
+pub(crate) fn prebind_import_readiness(name: &str, filesystem_independent: bool) -> u32 {
     let mut mask = 0;
 
     if is_rayon_import(name) {
         mask |= crate::r::readiness::RAYON_READY;
     }
 
-    if name.starts_with("trueos_cabi_async_fs_") {
+    // Filesystem-independent apps can use async-FS for the RAM-only vFile
+    // streams. Their contract already skips the guest's disk bootstrap.
+    if name.starts_with("trueos_cabi_async_fs_") && !filesystem_independent {
         mask |= crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
     }
 
@@ -107,7 +109,7 @@ pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<u32, Str
         if let Some(err) = prebind_import_error(import.name) {
             return Err(alloc::format!("unsupported Blueprint import {}: {}", import.name, err));
         }
-        required |= prebind_import_readiness(import.name);
+        required |= prebind_import_readiness(import.name, module.is_filesystem_independent());
     }
     Ok(required)
 }

@@ -1,5 +1,9 @@
 //! Persistent disk boot mode; networking and live replacement remain ordinary OS operations.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static BOOT_ENABLED: AtomicBool = AtomicBool::new(false);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallMode {
     Regular,
@@ -21,6 +25,18 @@ pub(crate) fn enabled_in_cmdline(cmdline: &str) -> bool {
         .any(|arg| arg == "pxeproc=1")
 }
 
+/// Capture the ESP's bootloader flag on the BSP before any services start.
+pub(crate) fn init_boot_mode() {
+    BOOT_ENABLED.store(
+        crate::limine::executable_cmdline().is_some_and(enabled_in_cmdline),
+        Ordering::Release,
+    );
+}
+
 pub(crate) fn boot_enabled() -> bool {
-    crate::limine::executable_cmdline().is_some_and(enabled_in_cmdline)
+    BOOT_ENABLED.load(Ordering::Acquire)
+}
+
+pub(crate) fn cold_boot_enabled() -> bool {
+    boot_enabled() && !crate::live_update::warm_boot_active()
 }

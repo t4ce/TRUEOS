@@ -741,8 +741,10 @@ async fn preflight_blueprint_launch(
                         if let Some(err) = crate::hv::blueprint::prebind_import_error(import.name) {
                             return Err(String::from(err));
                         }
-                        required_readiness |=
-                            crate::hv::blueprint::prebind_import_readiness(import.name);
+                        required_readiness |= crate::hv::blueprint::prebind_import_readiness(
+                            import.name,
+                            module.is_filesystem_independent(),
+                        );
                         log_blueprint_import(import, log);
                     }
                 }

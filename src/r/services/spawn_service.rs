@@ -983,7 +983,13 @@ fn http_trueosfs_gate() -> bool {
 
 #[inline]
 fn html_shack_gate() -> bool {
-    crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
+    crate::disc::install::pxeproc::cold_boot_enabled()
+        || crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
+}
+
+fn bp_autostart_gate() -> bool {
+    crate::disc::install::pxeproc::cold_boot_enabled()
+        || crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
 }
 
 #[inline]
@@ -1412,9 +1418,8 @@ fn spawn_executor_realm_migration_smoke(spawner: Spawner) -> SpawnAttempt {
 
 const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::r::readiness::BACKGROUND_AP_WORKER_READY
-    | crate::r::readiness::VTHREAD_HW_TAG_READY;
+const BP_AUTOSTART_READY: u32 =
+    crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 const TASK_COUNT: usize = 79
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
@@ -1612,9 +1617,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     unix_fd_probe_task_spec(),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "bp-autostart",
         BP_AUTOSTART_READY,
+        bp_autostart_gate,
         &BP_AUTOSTART_STARTED,
         spawn_bp_autostart,
     ),

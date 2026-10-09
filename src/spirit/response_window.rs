@@ -7,6 +7,7 @@
 //! At boot the same real cursor/keyboard path visibly types and erases one
 //! short greeting before hiding the session. Hiding after that exercise or a
 //! response retains the Gridpaper GPU scene and document allocation.
+//! A pxeproc cold boot instead leaves the live-update IP and target visible.
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +48,14 @@ const GRID_TEXT_ACCEPT_TIMEOUT_MS: u64 = 5_000;
 const KEYBOARD_STROKE_MS: u32 = 48;
 const KEYBOARD_CHUNK_SCALARS: usize = 64;
 const SPIRIT_KEYBOARD_LABEL: &str = "Spirit/Lilly chat";
+
+fn startup_warmup_text(pxeproc: bool, ip: Option<[u8; 4]>) -> String {
+    if pxeproc {
+        sanitize_response(crate::r::services::pxeproc_service::startup_text(ip).as_str())
+    } else {
+        String::from(STARTUP_WARMUP_TEXT)
+    }
+}
 
 static RESPONSE_QUEUE: Mutex<VecDeque<ResponseRequest>> = Mutex::new(VecDeque::new());
 static RESPONSE_WAKE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
@@ -910,6 +919,8 @@ async fn wait_for_hidden_grid(
 async fn run_visible_startup_warmup(
     lease: KernelGridLease,
     keyboard: KeyboardControlDevice,
+    startup_text: &str,
+    retain_status: bool,
 ) -> Result<(), &'static str> {
     use crate::intel::gpu_font::GpuFontFace;
 
@@ -932,7 +943,7 @@ async fn run_visible_startup_warmup(
     let edit_published_base =
         crate::r::services::gridpaper_service::kernel_grid_published_keyboard_edits(lease)
             .ok_or("gridpaper-startup-publish-counter-missing")?;
-    let typed = type_response(keyboard, input_run, STARTUP_WARMUP_TEXT, true).await?;
+    let typed = type_response(keyboard, input_run, startup_text, true).await?;
     wait_for_grid_text_acceptance(lease, text_accepted_base, typed).await?;
     wait_for_grid_keyboard_edits(lease, edit_accepted_base, typed).await?;
     wait_for_grid_published_keyboard_edits(lease, edit_published_base, typed).await?;
@@ -940,18 +951,22 @@ async fn run_visible_startup_warmup(
         wait_for_grid_window_publish_after(presentation.window, greeting_publish_base).await?;
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: startup Gridpaper greeting typed window={} generation={} publish_serial={} text={:?} scalars={} dwell_ms={} path=lilly-cursor+paired-vkeyboard->ui4->gridpaper action=visible-warmup\n",
+        "trueos-spirit: startup Gridpaper greeting typed window={} generation={} publish_serial={} text={:?} scalars={} dwell_ms={} path=lilly-cursor+paired-vkeyboard->ui4->gridpaper post_startup={}\n",
         presentation.window.raw(),
         generation,
         greeting_publish_serial,
-        STARTUP_WARMUP_TEXT,
+        startup_text,
         typed,
         STARTUP_WARMUP_VISIBLE_MS,
+        if retain_status { "visible-netboot-status" } else { "type+backspace+hide" },
     );
 
+    if retain_status {
+        return Ok(());
+    }
     Timer::after(Duration::from_millis(STARTUP_WARMUP_VISIBLE_MS)).await;
     let mut backspaces = String::new();
-    for _ in STARTUP_WARMUP_TEXT.chars() {
+    for _ in startup_text.chars() {
         backspaces.push('\u{0008}');
     }
     let erase_edit_base =
@@ -1191,9 +1206,17 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     // Gridpaper lease. Dobby's UI4 capability is independent of whether that
     // presentation service is temporarily at capacity.
     let lease = request_spirit_grid().await;
+    let pxeproc = crate::disc::install::pxeproc::cold_boot_enabled();
+    if pxeproc {
+        crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
+    }
+    let startup_text = startup_warmup_text(
+        pxeproc,
+        crate::net::adapter::ipv4_at(crate::net::primary_device_index()),
+    );
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} frame_grid={}x{} response_grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard ingress=completed+coalesced-live-prefix wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 response_hide_after_ms={} startup=visible-type+backspace startup_text={:?} startup_visible_ms={} post_startup=hidden-retained no-blueprint-vm=1\n",
+        "trueos-spirit: response Gridpaper service online assigned_slot={} current_slot={} frame_grid={}x{} response_grid={}x{} cells={} scale={} ownership=kernel-dedicated cursor=Spirit/Lilly keyboard_slot={} input=cell-zero-click+paired-vkeyboard ingress=completed+coalesced-live-prefix wrap=whitespace-before-word style=rainbow-palette+cpp-scale-0.85..1.15 response_hide_after_ms={} startup_text={:?} startup_visible_ms={} post_startup={} no-blueprint-vm=1\n",
         expected_slot,
         crate::percpu::current_slot(),
         SPIRIT_FRAME_COLUMNS,
@@ -1204,11 +1227,13 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
         SPIRIT_GRID_SCALE_PERCENT,
         keyboard.slot_id,
         RESPONSE_READ_MS,
-        STARTUP_WARMUP_TEXT,
+        startup_text,
         STARTUP_WARMUP_VISIBLE_MS,
+        if pxeproc { "visible-netboot-status" } else { "hidden-retained" },
     );
     super::dobby_ui::acquire_response_io(keyboard).await;
-    let startup_result = run_visible_startup_warmup(lease, keyboard).await;
+    let startup_result =
+        run_visible_startup_warmup(lease, keyboard, startup_text.as_str(), pxeproc).await;
     super::dobby_ui::release_response_io(keyboard);
     if let Err(reason) = startup_result {
         cancel_response_keyboard(keyboard);
