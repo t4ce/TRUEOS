@@ -40,7 +40,7 @@ jobs:
       RUST_BACKTRACE: 1
       # Includes crates/log-os, the staged futures-family lock update, and
       # the ShaderToy inputs rebuilt by the C++ artifact reproducibility gate.
-      TRUEOS_BLUEPRINTS_REV: 90887c8369afb34fa2ee1614e8b1f64a2bc6a437
+      TRUEOS_BLUEPRINTS_REV: daca7948ee4fdb7bcef0e0be8947a36be611fd2a
       TRUEOS_MICROGAMES_REV: 24a88ca8cea2f1fafd6ec6e199e865e52df499b9
       TRUEOS_PICASSO_REV: bf187f06dbd3b3d62fa985121f75048092e3e501
 
