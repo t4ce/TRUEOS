@@ -70,6 +70,7 @@ jobs:
             vendor/CrabUSB \
             vendor/infer \
             vendor/limine \
+            vendor/microfont \
             vendor/tinyaudio
 
       - name: Install build dependencies
