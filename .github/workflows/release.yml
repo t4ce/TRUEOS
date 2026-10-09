@@ -27,12 +27,10 @@ permissions:
 jobs:
   build-sign-release:
     name: Build, sign, and publish
-    # Ubuntu 26.04 hosted runners are still a public preview and can remain
-    # unassigned until GitHub cancels the job. Use stable runner capacity and
-    # keep the compiler's required 26.04 userspace in a pinned container.
+    # Run directly on the hosted image so startup does not depend on pulling a
+    # job container from Docker Hub. The shader compiler itself stays pinned
+    # and checksum verified by the repository toolchain bootstrap.
     runs-on: ubuntu-24.04
-    container:
-      image: ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
     timeout-minutes: 120
 
     env:
@@ -50,8 +48,8 @@ jobs:
         run: |
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install -y --no-install-recommends \
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
             ca-certificates \
             git
 
@@ -78,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           export DEBIAN_FRONTEND=noninteractive
-          apt-get install -y --no-install-recommends \
+          sudo apt-get install -y --no-install-recommends \
             autoconf \
             automake \
             build-essential \
@@ -91,7 +89,7 @@ jobs:
             libasound2-dev \
             libedit2 \
             libffi8 \
-            libxml2-16 \
+            libxml2 \
             libzstd1 \
             linux-firmware \
             mtools \
