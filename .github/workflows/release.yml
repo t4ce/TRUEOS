@@ -41,6 +41,8 @@ jobs:
       # Includes crates/log-os, the staged futures-family lock update, and
       # the ShaderToy inputs rebuilt by the C++ artifact reproducibility gate.
       TRUEOS_BLUEPRINTS_REV: 90887c8369afb34fa2ee1614e8b1f64a2bc6a437
+      TRUEOS_MICROGAMES_REV: 24a88ca8cea2f1fafd6ec6e199e865e52df499b9
+      TRUEOS_PICASSO_REV: bf187f06dbd3b3d62fa985121f75048092e3e501
 
     steps:
       - name: Prepare checkout dependencies
@@ -154,6 +156,25 @@ jobs:
             buildins/edit \
             buildins/termdir
           test -f "${blueprints_dir}/apps/solara/Cargo.toml"
+
+          # The checked Blueprint workspace has path dependencies on these
+          # sibling repositories, even though this release builds only one app.
+          checkout_sibling() {
+            local directory="$1"
+            local repository="$2"
+            local revision="$3"
+            git init "${directory}"
+            git -C "${directory}" remote add origin "${repository}"
+            git -C "${directory}" fetch --depth 1 origin "${revision}"
+            git -C "${directory}" checkout --detach FETCH_HEAD
+            test "$(git -C "${directory}" rev-parse HEAD)" = "${revision}"
+          }
+
+          checkout_sibling bld/MicroGames \
+            https://github.com/t4ce/MicroGames.git "${TRUEOS_MICROGAMES_REV}"
+          checkout_sibling bld/TRUEOS-Picasso \
+            https://github.com/t4ce/TRUEOS-Picasso.git "${TRUEOS_PICASSO_REV}"
+
           # The Blueprint workspace's local TRUEOS dependencies expect both
           # repositories to be siblings. Keep the CI checkout itself under the
           # ignored bld/ tree while preserving that layout.
