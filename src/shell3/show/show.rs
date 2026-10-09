@@ -136,6 +136,10 @@ impl Show {
             .is_some_and(|surface| surface.window == window)
     }
 
+    pub(crate) fn window(&self) -> Option<WindowId> {
+        self.surface.as_ref().map(|surface| surface.window)
+    }
+
     pub(crate) fn resize_needed(&self) -> bool {
         let Some(surface) = self.surface.as_ref() else {
             return false;

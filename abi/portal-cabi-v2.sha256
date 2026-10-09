@@ -1,3 +1,4 @@
+# Additive cursor-scoped UI4 drag buffers v1. Existing symbol signatures unchanged.
 # Additive typed clipboard command v1. Existing symbol signatures unchanged.
 # Additive RAM-only LZ4 decode/result API v1. All existing signatures reviewed unchanged.
 # Additive disc-qualified TRUEOSFS video open v2. Existing symbol signatures unchanged.
@@ -10,4 +11,4 @@
 # Additive display fade v1 with owned gamma restoration. Existing signatures unchanged.
 # Additive winit single-UI/triple-scene frame contract v1. Existing signatures unchanged.
 # Additive region-limited GPU sprite begin v1. Existing signatures unchanged.
-9bf438aaddd4884c0d736761dc57b735489215cb3bc96e9db9e0e931b2a628c1
+827cd860ac52cedce1c1ae67aaa18652d4126f7741ce20c0a5ae5f84a69c5db1

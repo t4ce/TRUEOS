@@ -726,6 +726,7 @@ impl Shell3 {
             let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
             let (columns, rows) = snapshot.size();
             self.show.present(&line_refs, columns, rows, &batch).await?;
+            if let Some(window) = self.show.window() { tui::bind_ui4_window(self.tui_frontend, window); }
             self.pending_presentation = None;
             if self.capture_update_snapshot() == snapshot {
                 break;

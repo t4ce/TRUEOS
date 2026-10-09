@@ -48,6 +48,7 @@ pub mod vfetch;
 pub mod vfs;
 pub mod vfs_async;
 pub mod vgpu;
+pub mod vdrag;
 pub mod vhttp_srv;
 pub mod vinput;
 #[doc(hidden)]

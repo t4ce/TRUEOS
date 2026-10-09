@@ -24,6 +24,11 @@ pub(super) fn microfont_scale() -> u32 {
     MICROFONT_SCALE.load(core::sync::atomic::Ordering::Acquire) as u32
 }
 
+pub(crate) fn ui4_cell_extent() -> (i32, i32) {
+    let scale = microfont_scale() as i32;
+    (microfont::FWIDTH as i32 * scale, microfont::FHEIGHT as i32 * scale)
+}
+
 struct ShellOwnership {
     worker_slots: Vec<u32>,
     shells_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],

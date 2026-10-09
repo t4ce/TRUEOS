@@ -27,7 +27,11 @@ mod r {pub mod keyboard {
     keyboard = (ROOT/'src/r/keyboard.rs').read_text()
     source += '\n'.join(re.findall(r'^pub const KEYBOARD_(?:KEY_\w+|OUTPUT_\w+):[^\n]+', keyboard, re.M))
     source += extract.item('src/r/keyboard.rs', 'TrueosKeyboardOutputEvent')
-    source += '}}\nmod ui4 {type Ui4CursorSource=u8;type WindowId=u32;\n'
+    source += '''}}
+mod ui4 {type Ui4CursorSource=u8;pub type WindowId=u32;
+#[derive(Clone,Copy)]pub enum WindowOwner{Vm(u8)}
+pub mod drag_drop {pub fn release_terminal(_:super::WindowOwner,_:super::WindowId){}}
+'''
     source += extract.item('src/ui4/input_broker.rs', 'Ui4PointerEvent')
     source += '''
 }
@@ -96,6 +100,18 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     let resized=tui::surface(&t).unwrap();assert_eq!((resized.cols,resized.rows),(30,12));assert!(resized.generation>initial.generation);
     hv::INPUT.lock().unwrap().clear();tui::write(&t,2,b"\\x1b[6n");assert!(!hv::INPUT.lock().unwrap().is_empty());
     tui::detach(f.id);assert!(!tui::supports(&t));
+}
+#[test] fn ui4_drag_endpoints_follow_the_exact_live_terminal_owner() {
+    let (f,t)=session("drag-window",10,20,8);tui::bind_ui4_window(f.id,123);
+    assert_eq!(tui::window_for_vm(10),None);assert_eq!(tui::vm_for_window(123),None);
+    assert_eq!(tui::claim(&t,10),Some(true));
+    assert_eq!(tui::window_for_vm(10),Some(123));assert_eq!(tui::vm_for_window(123),Some(10));
+    assert_eq!(tui::window_for_vm(11),None);
+    hv::RUN.store(2,std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(tui::window_for_vm(10),None);assert_eq!(tui::vm_for_window(123),None);
+    hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
+    tui::release(&t,10);assert_eq!(tui::window_for_vm(10),None);assert_eq!(tui::vm_for_window(123),None);
+    tui::claim(&t,10);tui::detach(f.id);assert_eq!(tui::window_for_vm(10),None);assert_eq!(tui::vm_for_window(123),None);
 }
 #[test] fn exact_owner_run_and_slot_lifetime_prevent_cross_terminal_paint() {
     let (f,t)=session("own",3,10,4);assert_eq!(tui::claim(&t,3),Some(true));

@@ -656,6 +656,7 @@ pub(super) fn frame_opened(
 }
 
 pub(super) fn frame_closed(owner: WindowOwner, window: WindowId) {
+    super::drag_drop::frame_closed(CursorFrameKey::new(owner, window));
     if CURSOR_FRAME_RIG
         .lock()
         .frame_closed(CursorFrameKey::new(owner, window))
@@ -665,12 +666,19 @@ pub(super) fn frame_closed(owner: WindowOwner, window: WindowId) {
 }
 
 pub(super) fn session_closed(owner: WindowOwner, session: WindowSessionId) {
-    if CURSOR_FRAME_RIG.lock().session_closed(owner, session) {
+    let (frames, changed) = {
+        let mut rig = CURSOR_FRAME_RIG.lock();
+        let frames: AllocVec<_> = rig.frames.iter().filter(|frame| frame.key.owner == owner && frame.session == session).map(|frame| frame.key).collect();
+        (frames, rig.session_closed(owner, session))
+    };
+    for frame in frames { super::drag_drop::frame_closed(frame); }
+    if changed {
         signal_visual_change();
     }
 }
 
 pub(super) fn owner_closed(owner: WindowOwner) {
+    super::drag_drop::release_owner(owner);
     if CURSOR_FRAME_RIG.lock().owner_closed(owner) {
         signal_visual_change();
     }
@@ -725,6 +733,7 @@ pub(crate) fn center_snapped_frame_for_source(source: Ui4CursorSource) -> Option
 }
 
 pub(super) fn cursor_retired(source: Ui4CursorSource) {
+    super::drag_drop::cursor_retired(source);
     if CURSOR_FRAME_RIG.lock().cursor_retired(source) {
         signal_visual_change();
     }

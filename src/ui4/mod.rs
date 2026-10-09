@@ -9,6 +9,7 @@ mod compositor_service;
 mod context_menu;
 mod cursor_frame_inout;
 mod damage;
+pub(crate) mod drag_drop;
 pub(crate) mod emulator_paint;
 mod frame_pool;
 mod gpgpu_preview_consumer;

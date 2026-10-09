@@ -417,6 +417,9 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
     }
 
     for visual in &visuals {
+        if let Some(preview) = visual.drag_preview.as_deref() {
+            push_drag_preview(&mut rects, visual.x, visual.y, preview, screen_w, screen_h);
+        }
         if let Some(selection) = visual.selection {
             push_selection_outline(&mut rects, selection, visual.color);
         }
@@ -529,6 +532,40 @@ fn push_software_cursor_visual(
         visual.color,
         super::input_broker::software_cursor_scale(),
     );
+}
+
+fn push_drag_preview(
+    rects: &mut Slot4Rects,
+    cursor_x: u32,
+    cursor_y: u32,
+    preview: &super::drag_drop::DragPreview,
+    screen_w: u32,
+    screen_h: u32,
+) {
+    use crate::graphics::primitives::Rgba8;
+    let width = (preview.width * 2 + 8).min(screen_w);
+    let height = (preview.height * 2 + 8).min(screen_h);
+    let x = cursor_x
+        .saturating_add(16)
+        .min(screen_w.saturating_sub(width));
+    let y = cursor_y
+        .saturating_add(16)
+        .min(screen_h.saturating_sub(height));
+    push_overlay_rect(rects, x, y, width, height, Rgba8::new(22, 25, 33, 230));
+    for &(col, row, len) in &preview.runs {
+        let px = x + 4 + col * 2;
+        let py = y + 4 + row * 2;
+        if px < screen_w && py < screen_h {
+            push_overlay_rect(
+                rects,
+                px,
+                py,
+                (len * 2).min(screen_w - px),
+                2.min(screen_h - py),
+                Rgba8::new(255, 255, 255, 255),
+            );
+        }
+    }
 }
 
 /// Translate and clip registration-time RGBA8 row runs into the slot-4
@@ -1125,6 +1162,7 @@ mod tests {
     fn cell_outline_cursor_uses_the_route_color_on_slot_four() {
         let color = Rgba8::new(17, 91, 203, 255);
         let visual = super::super::input_broker::Ui4SoftwareCursorVisual {
+            drag_preview: None,
             x: 10,
             y: 20,
             color,
@@ -1191,6 +1229,7 @@ mod tests {
             ),
         });
         let visual = super::super::input_broker::Ui4SoftwareCursorVisual {
+            drag_preview: None,
             x: 1,
             y: 1,
             color: Rgba8::new(0, 0, 0, 0),

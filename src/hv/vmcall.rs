@@ -199,6 +199,9 @@ pub const OP_BP_UI4_SCENE_SPRITE_DRAW_FINISH: u32 = 0xE3; // arg0 window -> rc
 pub const OP_BP_VRAM_SNAPSHOT_READ: u32 = 0xE4; // arg0 offset, arg1 cap -> cached vGPU memory snapshot text
 pub const OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE: u32 = 0xE5; // arg0 window -> rc + ResizeEvent payload
 pub const OP_BP_UI4_SCENE_REGISTER_CURSOR_IMAGE_V1: u32 = 0x213;
+pub const OP_BP_UI4_DRAG_BEGIN_V1: u32 = 0x221;
+pub const OP_BP_UI4_DRAG_CANCEL_V1: u32 = 0x222;
+pub const OP_BP_UI4_DRAG_TAKE_V1: u32 = 0x223;
 pub const OP_BP_UI4_SCENE_SELECT_CURSOR_IMAGE_V1: u32 = 0x214;
 pub const OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR: u32 = 0xE6; // arg0 window,arg1 enabled -> rc
 pub const OP_BP_UI4_SCENE_SET_CURSOR_ICON: u32 = 0xE7; // arg0 window,arg1 icon,optional cursor-source payload -> rc
@@ -2989,6 +2992,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS => {
             let dimensions = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_output_dimensions();
             write_response(vm_id, seq, STATUS_OK, dimensions, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_DRAG_BEGIN_V1 => {
+            let payload = request_payload(vm_id, req_len).unwrap_or(&[]);
+            let label_len = payload.get(..4).map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) as usize).unwrap_or(usize::MAX);
+            let rc = if label_len <= 256 && payload.len() >= 4 + label_len {
+                unsafe { crate::ui4::blueprint_text::drag_drop_api::trueos_cabi_ui4_drag_begin_v1(arg0 as u32, arg1 as u32, payload[4..].as_ptr(), label_len, payload[4 + label_len..].as_ptr(), payload.len() - 4 - label_len) }
+            } else { -1 };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_DRAG_CANCEL_V1 => {
+            let rc = crate::ui4::blueprint_text::drag_drop_api::trueos_cabi_ui4_drag_cancel_v1(arg0 as i32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_DRAG_TAKE_V1 => {
+            let mut out = [0u8; 3088];
+            let rc = unsafe { crate::ui4::blueprint_text::drag_drop_api::trueos_cabi_ui4_drag_take_v1(arg0 as u32, out.as_mut_ptr(), (arg1 as usize).min(out.len())) };
+            let len = if rc > 0 { rc as usize } else { 0 };
+            if let Some(page) = host_ptr(vm_id) { unsafe { (&mut (*page).payload)[..len].copy_from_slice(&out[..len]); } }
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len as u32);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_REGISTER_CURSOR_IMAGE_V1 => {

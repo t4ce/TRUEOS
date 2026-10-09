@@ -208,6 +208,7 @@ pub(super) struct Ui4DockZone {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4SoftwareCursorVisual {
+    pub(crate) drag_preview: Option<Arc<super::drag_drop::DragPreview>>,
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
@@ -599,6 +600,14 @@ impl InputBroker {
             self.cursors[index].y,
         );
         let hit = snapped_window.or_else(|| topmost_window_at(x, y));
+        if released & PRIMARY_BUTTON_MASK != 0 {
+            let destination = hit.map(|window| {
+                let frame = WindowTarget::from(window).cursor_frame_key();
+                let recipient = super::drag_drop::recipient(frame);
+                (recipient, frame, signed_local(x, window.presentation_placement.x), signed_local(y, window.presentation_placement.y))
+            });
+            super::drag_drop::pointer_released(source, destination);
+        }
 
         // Own the complete rectangle gesture before menus, selection or app input.
         if let Some((target, armed_ms)) = self.cursors[index].resize_latch {
@@ -1614,6 +1623,7 @@ impl InputBroker {
             }
             let (x, y, icon, custom_cursor, stepped_cell) = cursor_visual_presentation(route);
             let _ = visuals.push(Ui4SoftwareCursorVisual {
+                drag_preview: super::drag_drop::cursor_preview(route.source),
                 x,
                 y,
                 color: route.color,
@@ -1950,6 +1960,21 @@ pub(crate) fn window_input_routes(
     INPUT_BROKER
         .lock()
         .window_input_routes(WindowTarget { owner, window })
+}
+
+/// Only a cursor with a live primary gesture in this frame may start a drag.
+pub(super) fn drag_source(frame: super::CursorFrameKey) -> Option<Ui4CursorSource> {
+    INPUT_BROKER
+        .lock()
+        .cursors
+        .iter()
+        .rev()
+        .find(|route| {
+            route.buttons_down & PRIMARY_BUTTON_MASK != 0
+                && super::selected_frame_for_source(route.source) == Some(frame)
+                && !route.absorb_select
+        })
+        .map(|route| route.source)
 }
 
 pub(crate) fn show_context_menu(

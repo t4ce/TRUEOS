@@ -889,6 +889,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_display_fade_v1(window_id: u32, amount: i32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_escape_key_action(window_id: u32, action: u32) -> i32;
+    // Cursor-scoped drag buffers. Window zero is the caller's Shell3 lease.
+    pub fn trueos_cabi_ui4_drag_begin_v1(window_id: u32, kind: u32, label: *const u8, label_len: usize, payload: *const u8, payload_len: usize) -> i32;
+    pub fn trueos_cabi_ui4_drag_cancel_v1(token: i32) -> i32;
+    pub fn trueos_cabi_ui4_drag_take_v1(window_id: u32, out: *mut u8, cap: usize) -> i32;
     pub fn trueos_cabi_ui4_scene_register_cursor_image_v1(
         window_id: u32,
         image: *const TrueosUi4CursorImageV1,

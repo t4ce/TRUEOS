@@ -29,6 +29,7 @@ struct Route {
 }
 struct Registry {
     routes: Vec<Route>,
+    ui4_windows: Vec<(u64, crate::ui4::WindowId)>,
     revisions: Vec<(u64, u64)>,
     next_revision: u64,
 }
@@ -36,6 +37,7 @@ impl Registry {
     const fn new() -> Self {
         Self {
             routes: Vec::new(),
+            ui4_windows: Vec::new(),
             revisions: Vec::new(),
             next_revision: 0,
         }
@@ -52,6 +54,41 @@ impl Registry {
 }
 static ROUTES: Mutex<Registry> = Mutex::new(Registry::new());
 static NEXT_FRONTEND: AtomicU64 = AtomicU64::new(1);
+pub(super) fn bind_ui4_window(frontend: u64, window: crate::ui4::WindowId) {
+    let mut routes = ROUTES.lock();
+    if let Some(entry) = routes
+        .ui4_windows
+        .iter_mut()
+        .find(|entry| entry.0 == frontend)
+    {
+        entry.1 = window;
+    } else {
+        routes.ui4_windows.push((frontend, window));
+    }
+}
+pub(crate) fn window_for_vm(vm: u8) -> Option<crate::ui4::WindowId> {
+    let run = crate::hv::vm_run_generation(vm)?;
+    let routes = ROUTES.lock();
+    let route = routes
+        .routes
+        .iter()
+        .find(|route| route.selected && route.owner == Some(Owner { vm, run }))?;
+    routes
+        .ui4_windows
+        .iter()
+        .find(|entry| entry.0 == route.frontend)
+        .map(|entry| entry.1)
+}
+pub(crate) fn vm_for_window(window: crate::ui4::WindowId) -> Option<u8> {
+    let routes = ROUTES.lock();
+    let frontend = routes.ui4_windows.iter().find(|entry| entry.1 == window)?.0;
+    let owner = routes
+        .routes
+        .iter()
+        .find(|route| route.frontend == frontend && route.selected)?
+        .owner?;
+    (crate::hv::vm_run_generation(owner.vm) == Some(owner.run)).then_some(owner.vm)
+}
 pub(super) fn new_frontend() -> u64 {
     NEXT_FRONTEND.fetch_add(1, Ordering::Relaxed)
 }
@@ -165,6 +202,9 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
     route.owner = None;
     route.suppressed_text = None;
     routes.changed(frontend);
+    let window = routes.ui4_windows.iter().find(|entry| entry.0 == frontend).map(|entry| entry.1);
+    drop(routes);
+    if let Some(window) = window { crate::ui4::drag_drop::release_terminal(crate::ui4::WindowOwner::Vm(vm), window); }
     Some(true)
 }
 pub(crate) fn surface(
@@ -281,6 +321,7 @@ pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str
     crate::hv::blueprint_terminal_request_reentry(vm)
 }
 pub(super) fn detach(frontend: u64) {
+    ROUTES.lock().ui4_windows.retain(|entry| entry.0 != frontend);
     let names: Vec<_> = ROUTES
         .lock()
         .routes
