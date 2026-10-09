@@ -1188,6 +1188,10 @@ pub(crate) fn set_matrix_target_active(target: &MatrixTarget, active: bool) {
     }
 }
 
+pub(crate) fn matrix_working_slot_names() -> Vec<AllocString> {
+    matrix::working_slot_names()
+}
+
 pub(crate) fn matrix_target_interrupted(target: &MatrixTarget) -> bool {
     matrix::live_slot_interrupt_generation(&target.slot_id, target.slot_lifetime_generation)
         != Some(target.interrupt_generation)

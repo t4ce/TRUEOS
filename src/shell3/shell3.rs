@@ -1105,6 +1105,10 @@ impl Shell3 {
             || tui::revision(self.tui_frontend) != self.update_baseline.tui_revision()
             || (!self.update_baseline.terminal_active()
                 && matrix_slots().lock().generation != self.update_baseline.matrix_generation())
+            || (!self.update_baseline.terminal_active() && {
+                let status = self.row_for_render(SpecialRows::StatusRow);
+                !self.update_baseline.status_matches(&status.left, &status.right)
+            })
     }
 
     pub fn set_prompt(&mut self, text: &str) {

@@ -1132,6 +1132,18 @@ pub(crate) fn slot_views(output_mask: super::OutputMask) -> Vec<MatrixSlotView> 
     out
 }
 
+/// Work can be in progress in several slots, regardless of frontend selection.
+/// Inspect only existing lifetimes; polling must never demand a new slot.
+pub(crate) fn working_slot_names() -> Vec<AllocString> {
+    state()
+        .lock()
+        .slots
+        .iter()
+        .filter(|slot| slot.running_count != 0)
+        .map(|slot| AllocString::from(slot.id.as_str()))
+        .collect()
+}
+
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn revision() -> u64 {
     state().lock().revision
@@ -1259,6 +1271,34 @@ mod tests {
             "late film output"
         ));
         assert_eq!(slot_transcript_text(&replacement.id), "");
+    }
+
+    #[test]
+    fn working_slots_are_independent_counted_and_expire_with_their_lease() {
+        let (a, _) = claim_named_app_slot_selected(1, "wrk1", "work-test").unwrap();
+        let (b, _) = claim_named_app_slot_selected(2, "wrk2", "work-test").unwrap();
+        assert!(
+            !working_slot_names().iter().any(|name| name == "wrk1" || name == "wrk2")
+        );
+        assert!(begin_live_slot_running(&a.id, a.lifetime_generation));
+        assert!(begin_live_slot_running(&a.id, a.lifetime_generation));
+        assert!(begin_live_slot_running(&b.id, b.lifetime_generation));
+        switch_active_slot(1, "");
+        let working = working_slot_names();
+        assert_eq!(working.iter().filter(|name| name.as_str() == "wrk1").count(), 1);
+        assert!(working.iter().any(|name| name == "wrk2"));
+        assert!(end_live_slot_running(&a.id, a.lifetime_generation));
+        assert!(working_slot_names().iter().any(|name| name == "wrk1"));
+        assert!(end_live_slot_running(&a.id, a.lifetime_generation));
+        assert!(!working_slot_names().iter().any(|name| name == "wrk1"));
+        free_slot("wrk2");
+        let (new_b, _) = claim_named_app_slot_selected(2, "wrk2", "work-test").unwrap();
+        assert!(begin_live_slot_running(&new_b.id, new_b.lifetime_generation));
+        assert!(!end_live_slot_running(&b.id, b.lifetime_generation));
+        assert!(working_slot_names().iter().any(|name| name == "wrk2"));
+        assert!(end_live_slot_running(&new_b.id, new_b.lifetime_generation));
+        free_slot("wrk1");
+        free_slot("wrk2");
     }
 
     #[test]

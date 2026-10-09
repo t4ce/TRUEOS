@@ -11,6 +11,12 @@ pub(super) enum Target {
 
 type Entry = (MetaFmtStr, Option<Target>);
 
+const GO2: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
+
+fn working_marker() -> char {
+    GO2[(crate::chronos::monotonic_nanos() / 100_000_000 % GO2.len() as u64) as usize]
+}
+
 fn entries(ids: &[String], active: Option<&str>, aliases: &[String]) -> (Vec<Entry>, Vec<Entry>) {
     let left = matrix_slots_meta(ids, active)
         .into_iter()
@@ -52,7 +58,19 @@ pub(super) fn runs(
     aliases: &[String],
     hover: Option<&Target>,
 ) -> RowStrips {
-    let (left, right) = entries(ids, active, aliases);
+    let (mut left, right) = entries(ids, active, aliases);
+    let working = crate::shell2::matrix_working_slot_names();
+    if !working.is_empty() {
+        let marker = working_marker();
+        if working.iter().any(|name| name.is_empty()) {
+            left[0].0.text = marker.into();
+        }
+        for (index, id) in ids.iter().enumerate() {
+            if working.contains(id) {
+                left[2 + index * 3].0.text = marker.into();
+            }
+        }
+    }
     let style = |entries: Vec<Entry>| {
         entries
             .into_iter()

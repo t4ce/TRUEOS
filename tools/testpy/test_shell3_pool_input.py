@@ -20,6 +20,7 @@ def main():
 extern crate alloc;
 use alloc::{string::{String,ToString},collections::VecDeque,vec,vec::Vec};
 mod percpu { pub const CPU_SLOT_LIMIT:usize = 32; }
+mod chronos {pub static NOW:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);pub fn monotonic_nanos()->u64 {NOW.load(std::sync::atomic::Ordering::SeqCst)}}
 mod hv { pub struct BlueprintInstanceRequest; impl BlueprintInstanceRequest {pub fn default()->Self {Self}}
 pub mod blueprint {pub fn prebind_required_readiness(_: &[u8])->Result<u32,String>{Ok(0)}} }
 mod r {pub mod readiness {pub fn mask()->u32 {0}} pub mod keyboard {
@@ -52,6 +53,7 @@ mod spin {
 use spin::Once;
 static MATRIX_SLOTS:Once<spin::Mutex<MatrixSlotsState>>=Once::new();
 mod tui {
+pub fn revision(_:u64)->u64 {0}
 pub fn mouse_options(_:u64,_:Option<&str>)->trueos_terminal::MouseOptions {Default::default()}
 pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<crate::update::RenderedLine>> {None}
 pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
@@ -76,7 +78,10 @@ mod monitor {
     pub fn start(name:&str,_:crate::tui::Frontend)->Result<(),String> {STARTS.lock().unwrap().push(name.into());Ok(())}
 }
 mod shell3 {pub mod tui {pub use crate::tui::Frontend;pub fn attach<T>(_:Frontend,_:&T)->Result<(),String>{Ok(())}}}
-mod shell2 { pub mod cmds { pub mod run {
+mod shell2 {
+pub static WORKING:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+pub fn matrix_working_slot_names()->Vec<String>{WORKING.lock().unwrap().clone()}
+pub mod cmds { pub mod run {
 #[derive(Clone,Debug)] pub struct QueuedBlueprint { pub slot:alloc::string::String,pub app:alloc::string::String,pub sha256:[u8;32] }
 } } }
 mod service {
@@ -110,13 +115,13 @@ impl Rows {fn row(&self,row:SpecialRows)->&Row {match row {SpecialRows::TitleRow
 #[derive(Clone)] struct RowStrips {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
 impl RowStrips {fn new(left:&str,right:&str)->Self {Self {left:vec![MetaFmtStr::new(left)],right:vec![MetaFmtStr::new(right)]}}}
 
-struct Shell3 {matrix_scroll:usize,layout_generation:usize,status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
+struct Shell3 {update_baseline:update::Snapshot,matrix_scroll:usize,layout_generation:usize,status_hover:Option<status::Target>,tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
 impl Shell3 {
-fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
+fn new(columns:usize)->Self {Self {update_baseline:update::Snapshot::new((columns,25),0,[(&[],&[]),(&[],&[]),(&[],&[])],columns),matrix_scroll:0,layout_generation:0,status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('scroll_matrix','capture_matrix_snapshot','record_terminal_notice','capture_controls_snapshot','launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
+    for name in ('matrix_output_needed','scroll_matrix','capture_matrix_snapshot','record_terminal_notice','capture_controls_snapshot','launch_named_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
-    source += 'fn get_size(&self)->(usize,usize) {(self.columns,self.rows_count)} fn set(&mut self,cols:usize,rows:usize) {self.columns=cols;self.rows_count=rows;} }\n'
+    source += 'fn cursor_blink_phase()->bool {false} fn get_size(&self)->(usize,usize) {(self.columns,self.rows_count)} fn set(&mut self,cols:usize,rows:usize) {self.columns=cols;self.rows_count=rows;} }\n'
     source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//').replace('mod input;', f'#[path="{ROOT}/src/shell3/tty/input.rs"] mod input;').replace('mod ansi;', f'#[path="{ROOT}/src/shell3/tty/ansi.rs"] mod ansi;') + '\n'
     source += r'''
 #[cfg(test)] mod replay_tests {
@@ -256,6 +261,28 @@ fn new(columns:usize)->Self {Self {matrix_scroll:0,layout_generation:0,status_ho
 }
 }
 '''
+    source += r"""
+#[test] fn working_slots_spin_independently_without_changing_selection_or_click_targets() {
+    MatrixSlots::set(&["pic","vid","ram"]);shell2::WORKING.lock().unwrap().clear();chronos::NOW.store(0,std::sync::atomic::Ordering::SeqCst);
+    let mut shell=Shell3::new(80);shell.select_matrix_slot_name("ram");shell.update_baseline=shell.capture_matrix_snapshot();shell.matrix_selection_dirty=false;assert!(!shell.matrix_output_needed());
+    *shell2::WORKING.lock().unwrap()=vec!["pic".into(),"vid".into()];assert!(shell.matrix_output_needed());
+    let row=shell.row_for_render(SpecialRows::StatusRow);assert_eq!(row.left[2].text,"⢈");assert_eq!(row.left[5].text,"⢈");assert_eq!(row.left[8].text,"§");assert_eq!(row.left[9].color,Some(RgbaColor::Pink));assert_eq!(shell.active_matrix_slot_name().as_deref(),Some("ram"));
+    assert_eq!(status::hit(&MatrixSlots::slot_ids(),&[],80,2),Some(status::Target::Slot("pic".into())));
+    shell.update_baseline=shell.capture_matrix_snapshot();assert!(!shell.matrix_output_needed());
+    chronos::NOW.store(99_999_999,std::sync::atomic::Ordering::SeqCst);assert!(!shell.matrix_output_needed());
+    chronos::NOW.store(100_000_000,std::sync::atomic::Ordering::SeqCst);assert!(shell.matrix_output_needed());
+    let next=shell.capture_matrix_snapshot();let batch=update::build_updates(&shell.update_baseline,&next,&[]);assert_eq!(batch.segments.len(),1);assert_eq!(batch.segments[0].row,SpecialRows::StatusRow);assert!(batch.segments[0].text.contains('⡈'));shell.update_baseline=next;
+    shell2::WORKING.lock().unwrap().clear();assert!(shell.matrix_output_needed());shell.update_baseline=shell.capture_matrix_snapshot();chronos::NOW.store(200_000_000,std::sync::atomic::Ordering::SeqCst);assert!(!shell.matrix_output_needed());
+    MatrixSlots::set(&[] as &[&str]);
+}
+#[test] fn ssh_status_animation_updates_only_changed_cells_and_restores_the_operator() {
+    MatrixSlots::set(&["pic"]);*shell2::WORKING.lock().unwrap()=vec!["pic".into(),"".into()];chronos::NOW.store(0,std::sync::atomic::Ordering::SeqCst);
+    let mut tty=tty::Terminal::new_ssh(Shell3::new(80));let mut screen=trueos_terminal::Terminal::new(80,25);screen.feed(&tty.output);assert!(String::from_utf8_lossy(&tty.output).contains('⢈'));tty.output.clear();tty.reconcile_matrix_selection();assert!(tty.output.is_empty());
+    chronos::NOW.store(100_000_000,std::sync::atomic::Ordering::SeqCst);tty.reconcile_matrix_selection();let bytes=String::from_utf8_lossy(&tty.output);assert!(bytes.contains('⡈'));assert!(!bytes.contains("TrueOS")&&!bytes.contains("2J"));
+    screen.feed(&tty.output);let cells=screen.render_rows();assert_eq!(cells[1].chars().next(),Some('⡈'));assert_eq!(cells[1].chars().nth(2),Some('⡈'));
+    tty.output.clear();shell2::WORKING.lock().unwrap().clear();tty.reconcile_matrix_selection();assert!(String::from_utf8_lossy(&tty.output).contains('§'));tty.output.clear();chronos::NOW.store(200_000_000,std::sync::atomic::Ordering::SeqCst);tty.reconcile_matrix_selection();assert!(tty.output.is_empty());MatrixSlots::set(&[] as &[&str]);
+}
+"""
     source += f'#[path="{ROOT}/src/shell3/status.rs"] mod status;\n'
     source += f'#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')

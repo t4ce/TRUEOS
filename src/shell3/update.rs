@@ -111,6 +111,12 @@ impl Snapshot {
         self.matrix_generation
     }
 
+    pub(super) fn status_matches(&self, left: &[MetaFmtStr], right: &[MetaFmtStr]) -> bool {
+        self.rows.get(1).is_some_and(|row| {
+            row.rendered == fit_meta_strips(left, right, self.size.0)
+        })
+    }
+
     pub(super) fn size(&self) -> (usize, usize) {
         self.size
     }
