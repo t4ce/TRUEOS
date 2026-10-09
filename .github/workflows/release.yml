@@ -28,9 +28,9 @@ jobs:
   build-sign-release:
     name: Build, sign, and publish
     # Run directly on the hosted image so startup does not depend on pulling a
-    # job container from Docker Hub. The shader compiler itself stays pinned
-    # and checksum verified by the repository toolchain bootstrap.
-    runs-on: ubuntu-24.04
+    # job container from Docker Hub. Ubuntu 26.04 provides the shader toolchain
+    # packages used by the release build.
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
 
     env:
@@ -89,7 +89,7 @@ jobs:
             libasound2-dev \
             libedit2 \
             libffi8 \
-            libxml2 \
+            libxml2-16 \
             libzstd1 \
             linux-firmware \
             mtools \
