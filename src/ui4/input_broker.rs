@@ -1622,8 +1622,16 @@ impl InputBroker {
                 continue;
             }
             let (x, y, icon, custom_cursor, stepped_cell) = cursor_visual_presentation(route);
+            let drag_preview = super::drag_drop::cursor_preview(route.source);
+            let selection = route
+                .selection_anchor
+                .filter(|_| drag_preview.is_none())
+                .and_then(|anchor| {
+                    (route.buttons_down & PRIMARY_BUTTON_MASK != 0)
+                        .then(|| selection_rect_between(anchor, (route.x, route.y)))
+                });
             let _ = visuals.push(Ui4SoftwareCursorVisual {
-                drag_preview: super::drag_drop::cursor_preview(route.source),
+                drag_preview,
                 x,
                 y,
                 color: route.color,
@@ -1633,10 +1641,7 @@ impl InputBroker {
                 context_menu: route.context_menu,
                 dock_fields_visible: route.dock_fields_visible,
                 dock_preview: route.dock_preview,
-                selection: route.selection_anchor.and_then(|anchor| {
-                    (route.buttons_down & PRIMARY_BUTTON_MASK != 0)
-                        .then(|| selection_rect_between(anchor, (route.x, route.y)))
-                }),
+                selection,
             });
         }
         visuals
@@ -1975,6 +1980,18 @@ pub(super) fn drag_source(frame: super::CursorFrameKey) -> Option<Ui4CursorSourc
                 && !route.absorb_select
         })
         .map(|route| route.source)
+}
+
+/// Drag-drop owns the rest of this primary gesture, even if it is cancelled.
+pub(super) fn claim_drag_gesture(source: Ui4CursorSource) {
+    if let Some(route) = INPUT_BROKER
+        .lock()
+        .cursors
+        .iter_mut()
+        .find(|route| route.source == source)
+    {
+        route.selection_anchor = None;
+    }
 }
 
 pub(crate) fn show_context_menu(

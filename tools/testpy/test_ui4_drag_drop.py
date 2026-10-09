@@ -25,7 +25,7 @@ impl WindowId {pub fn from_raw(id:u32)->Option<Self>{(id!=0).then_some(Self(id))
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]pub struct CursorFrameKey {pub owner:WindowOwner,pub window:WindowId}
 impl CursorFrameKey {pub fn new(owner:WindowOwner,window:WindowId)->Self{Self{owner,window}}}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]pub struct Ui4CursorSource {pub controller_id:u32,pub slot_id:u32,pub ep_target:u32,pub hid_kind:u8}
-mod input_broker {pub fn notify_slot4_visual_change(){}}
+mod input_broker {pub fn notify_slot4_visual_change(){} pub fn claim_drag_gesture(_:super::Ui4CursorSource){}}
 '''
     source += f'#[path="{ROOT}/src/ui4/drag_drop.rs"] mod drag_drop;\n'
     source += r'''

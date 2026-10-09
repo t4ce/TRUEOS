@@ -13,7 +13,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 
 use super::{Driver, DriverInfo, DriverStatus, NetworkDriver};
 use crate::net::core::VendorAdapter;
@@ -643,7 +643,8 @@ impl NetworkDriver for Rtl8169Driver {
 
         // Wait for descriptor to become available (OWN bit cleared by NIC)
         let mut timeout = 10_000;
-        while self.tx_descs[idx].opts1 & DESC_OWN != 0 {
+        let desc = unsafe { self.tx_descs.as_mut_ptr().add(idx) };
+        while unsafe { read_volatile(core::ptr::addr_of!((*desc).opts1)) } & DESC_OWN != 0 {
             timeout -= 1;
             if timeout == 0 {
                 self.tx_errors.fetch_add(1, Ordering::Relaxed);
@@ -652,22 +653,32 @@ impl NetworkDriver for Rtl8169Driver {
             core::hint::spin_loop();
         }
 
+        // Observe device completion before reusing the descriptor and buffer.
+        fence(Ordering::Acquire);
+
         // Copy packet data to TX buffer
         let buffer = &mut self.tx_buffers[idx];
         buffer[..data.len()].copy_from_slice(data);
 
         // Update descriptor physical address (buffer may have moved)
         let phys = Self::virt_to_phys(buffer.as_ptr() as u64);
-        self.tx_descs[idx].buf_lo = phys as u32;
-        self.tx_descs[idx].buf_hi = (phys >> 32) as u32;
+        unsafe {
+            write_volatile(core::ptr::addr_of_mut!((*desc).buf_lo), phys as u32);
+            write_volatile(core::ptr::addr_of_mut!((*desc).buf_hi), (phys >> 32) as u32);
+        }
 
         // Set descriptor flags: OWN + FS + LS + length (+ EOR if last)
         let mut flags = DESC_OWN | DESC_FS | DESC_LS | (data.len() as u32 & 0x3FFF);
         if idx == NUM_TX_DESC - 1 {
             flags |= DESC_EOR;
         }
-        self.tx_descs[idx].opts1 = flags;
-        self.tx_descs[idx].opts2 = 0;
+        unsafe {
+            write_volatile(core::ptr::addr_of_mut!((*desc).opts2), 0);
+            // Publish ownership only after packet bytes and descriptor fields.
+            fence(Ordering::Release);
+            write_volatile(core::ptr::addr_of_mut!((*desc).opts1), flags);
+        }
+        fence(Ordering::Release);
 
         // Notify NIC: poll TX normal priority queue
         self.write8(REG_TPPOLL, TPPOLL_NPQ);
@@ -688,12 +699,16 @@ impl NetworkDriver for Rtl8169Driver {
         }
 
         let idx = self.rx_cur;
-        let opts1 = self.rx_descs[idx].opts1;
+        let desc = unsafe { self.rx_descs.as_ptr().add(idx) };
+        let opts1 = unsafe { read_volatile(core::ptr::addr_of!((*desc).opts1)) };
 
         // Check if NIC has released this descriptor (OWN bit cleared)
         if opts1 & DESC_OWN != 0 {
             return None;
         }
+
+        // Read DMA packet bytes only after observing device completion.
+        fence(Ordering::Acquire);
 
         // Check for first+last segment (we only support single-segment packets)
         if opts1 & (DESC_FS | DESC_LS) != (DESC_FS | DESC_LS) {
@@ -756,8 +771,13 @@ impl Rtl8169Driver {
         if idx == NUM_RX_DESC - 1 {
             flags |= DESC_EOR;
         }
-        self.rx_descs[idx].opts1 = flags;
-        self.rx_descs[idx].opts2 = 0;
+        let desc = unsafe { self.rx_descs.as_mut_ptr().add(idx) };
+        unsafe {
+            write_volatile(core::ptr::addr_of_mut!((*desc).opts2), 0);
+            // Finish consuming the packet before returning ownership to the NIC.
+            fence(Ordering::Release);
+            write_volatile(core::ptr::addr_of_mut!((*desc).opts1), flags);
+        }
         self.rx_cur = (self.rx_cur + 1) % NUM_RX_DESC;
     }
 }

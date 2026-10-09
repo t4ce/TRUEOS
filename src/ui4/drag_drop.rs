@@ -200,6 +200,7 @@ pub(crate) fn begin(
     let token = REGISTRY
         .lock()
         .begin(producer, origin, source, kind, label, data)?;
+    super::input_broker::claim_drag_gesture(source);
     super::input_broker::notify_slot4_visual_change();
     Ok(token)
 }
