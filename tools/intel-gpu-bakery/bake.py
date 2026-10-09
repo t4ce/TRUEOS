@@ -483,9 +483,35 @@ def _verify_lock(path: Path, fingerprint: dict[str, Any]) -> None:
         raise ContractError(f"cannot read toolchain lock {path}: {error}") from error
     actual = _lock_projection(fingerprint)
     if expected != actual:
+        differences: list[str] = []
+
+        def collect_differences(want: Any, got: Any, key: str = "$") -> None:
+            if len(differences) >= 12:
+                return
+            if isinstance(want, dict) and isinstance(got, dict):
+                for child in sorted(want.keys() | got.keys()):
+                    collect_differences(
+                        want.get(child, "<missing>"),
+                        got.get(child, "<missing>"),
+                        f"{key}.{child}",
+                    )
+                    if len(differences) >= 12:
+                        return
+            elif isinstance(want, list) and isinstance(got, list):
+                if want != got:
+                    differences.append(
+                        f"{key}: expected {len(want)} item(s), got {len(got)}"
+                    )
+            elif want != got:
+                differences.append(
+                    f"{key}: expected {want!r}, got {got!r}"
+                )
+
+        collect_differences(expected, actual)
+        detail = "\n  " + "\n  ".join(differences) if differences else ""
         raise ContractError(
             f"toolchain does not match {path}; regenerate deliberately with "
-            "--write-toolchain-lock after reviewing compiler changes"
+            "--write-toolchain-lock after reviewing compiler changes" + detail
         )
 
 
