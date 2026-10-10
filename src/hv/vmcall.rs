@@ -5383,6 +5383,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 );
                 return DispatchOutcome::Resume;
             };
+            let path = if crate::r::io::async_fs_cabi::is_virtual_write(path) { alloc::string::String::from(path) } else {
             let Ok(path) = crate::r::path::FsPath::parse(path, false) else {
                 write_response(
                     vm_id,
@@ -5393,7 +5394,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 );
                 return DispatchOutcome::Resume;
             };
-            let path = path.to_relative_string();
+            path.to_relative_string()
+            };
             if !vm_mount_selector_allowed(vm_id, path.as_str()) {
                 write_response(
                     vm_id,

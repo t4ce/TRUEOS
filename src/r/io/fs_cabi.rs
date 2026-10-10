@@ -2684,7 +2684,6 @@ async fn launch_archive_task(target: crate::shell3::MatrixTarget, frontend: crat
                 let len = super::kfs::read_file_len(&path).map_err(|error| alloc::format!("apps: {error:?}"))?;
                 if len > 512 * 1024 * 1024 { return Err("apps: archive too large".into()); }
                 let bytes = super::kfs::read_file(&path).map_err(|error| alloc::format!("apps: {error:?}"))?;
-                crate::app_db::insert_download(&archive, &bytes)?;
                 bytes
             }
             None => crate::app_db::get(&archive)?.ok_or_else(|| alloc::format!("apps: missing {archive}"))?,

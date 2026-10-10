@@ -22,6 +22,10 @@ const DIR_LIST_HEADER_BYTES: usize = 12;
 /// input stream. `vFile:` is deliberately not a TrueOSFS pathname.
 const VMX_LAUNCH_SCRIPT_VFILE: &str = "vFile:launch";
 const STARTUP_MANIFEST_VFILE: &str = "vFile:startup";
+/// Write a downloaded archive pathname here to import it into volatile AppDB.
+/// Completion acknowledges the import; this operation never launches a VM.
+pub(crate) fn is_virtual_write(path: &str) -> bool { path == "vFile:appdb-install" }
+
 
 pub(crate) fn is_virtual_read(path: &str) -> bool {
     matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE)
@@ -610,6 +614,37 @@ fn mounted_roots_text() -> String {
 }
 
 async fn process(request: &Request) -> OperationState {
+    if let RequestKind::Write { path, bytes, .. } = &request.kind {
+        if is_virtual_write(path) {
+            let vm = request.owner & !0x8000_0000;
+            if request.owner & 0x8000_0000 == 0 || vm > u8::MAX as u32 { return OperationState::Failed(FS_ERR_BAD_PATH); }
+            let path = crate::hv::with_guest_broker_context(vm as u8, || {
+                if !super::env::trueosfs_scope_granted() { return None; }
+                let path = core::str::from_utf8(bytes).ok()?;
+                super::env::resolve_fs_path(path, false)
+            });
+            let Some(path) = path else { return OperationState::Failed(FS_ERR_BAD_PATH); };
+            let archive = path.rsplit('/').next().unwrap_or("");
+            if !archive.ends_with(".bp") { return OperationState::Failed(FS_ERR_BAD_PATH); }
+            let (disk, file) = match selected_disk(&path) { Ok(selected) => selected, Err(code) => return OperationState::Failed(code) };
+            let len = match crate::r::fs::trueosfs::file_info_async(disk, file).await {
+                Ok(Some(info)) => info.data_len,
+                Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => return OperationState::Failed(map_block_error(error)),
+            };
+            if len > 512 * 1024 * 1024 { return OperationState::Failed(FS_ERR_TOO_LARGE); }
+            let bytes = match crate::r::fs::trueosfs::file_out_async(disk, file).await {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => return OperationState::Failed(map_block_error(error)),
+            };
+            if crate::hv::blueprint::prebind_required_readiness(&bytes).is_err() { return OperationState::Failed(FS_ERR_BAD_PARAM); }
+            return match crate::app_db::insert_download(archive, &bytes) {
+                Ok(()) => OperationState::Unit,
+                Err(_) => OperationState::Failed(FS_ERR_IO),
+            };
+        }
+    }
     if matches!(request.kind, RequestKind::ListMounts) {
         return OperationState::Read(mounted_roots_text().into_bytes());
     }
@@ -925,6 +960,7 @@ fn parse_path(path_ptr: *const u8, path_len: usize, allow_empty: bool) -> Result
         unsafe { core::slice::from_raw_parts(path_ptr, path_len) }
     };
     let path = core::str::from_utf8(bytes).map_err(|_| FS_ERR_BAD_UTF8)?;
+    if is_virtual_write(path) { return Ok(String::from(path)); }
     super::env::resolve_fs_path(path, allow_empty).ok_or(FS_ERR_BAD_PATH)
 }
 
