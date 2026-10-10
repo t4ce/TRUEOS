@@ -49,6 +49,7 @@ struct Registry {
     revisions: Vec<(u64, u64)>,
     next_revision: u64,
     remote_frontends: Vec<(u64, remote::Output)>,
+    pending_launches: Vec<(u64, QueuedBlueprint)>,
 }
 impl Registry {
     const fn new() -> Self {
@@ -58,6 +59,7 @@ impl Registry {
             revisions: Vec::new(),
             next_revision: 0,
             remote_frontends: Vec::new(),
+            pending_launches: Vec::new(),
         }
     }
     fn changed(&mut self, id: u64) {
@@ -434,7 +436,11 @@ pub(super) fn native_launch(target: &MatrixTarget, app: QueuedBlueprint) {
 }
 
 pub(super) fn take_native_launch(frontend: u64) -> Option<QueuedBlueprint> {
-    ROUTES.lock().routes.iter_mut().filter(|r| r.frontend == frontend)
+    let mut routes = ROUTES.lock();
+    if let Some(index) = routes.pending_launches.iter().position(|entry| entry.0 == frontend) {
+        return Some(routes.pending_launches.remove(index).1);
+    }
+    routes.routes.iter_mut().filter(|r| r.frontend == frontend)
         .find_map(|r| r.native.as_mut()?.launch.take())
 }
 
@@ -874,4 +880,16 @@ fn named_key_sequence(key_code: u16) -> Option<&'static [u8]> {
         crate::r::keyboard::KEYBOARD_KEY_F12 => Some(b"\x1b[24~"),
         _ => None,
     }
+}
+
+pub(crate) fn frontend_for_target(target: &MatrixTarget) -> Option<Frontend> {
+    let lease = crate::shell3::matrix_target_slot_lease(target);
+    let routes = ROUTES.lock();
+    let route = routes.routes.iter().find(|route| route.lease == lease)?;
+    let (cols, rows) = route.screen.dimensions();
+    Some(Frontend { id: route.frontend, cols, rows })
+}
+pub(crate) fn queue_launch(frontend: u64, app: QueuedBlueprint) {
+    ROUTES.lock().pending_launches.push((frontend, app));
+    super::service::notify_work();
 }

@@ -2654,7 +2654,50 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_retarget_slot(
 
 /// Submit app name, NUL, then a one-shot UTF-8 start script to the regular launcher.
 pub(crate) fn blueprint_launch_script_payload(vm_id: u8, payload: &[u8]) -> i32 {
-    -38 // ENOSYS: removed shell integration.
+    crate::hv::with_guest_broker_context(vm_id, || launch_script_request(vm_id, payload))
+}
+fn launch_script_request(vm_id: u8, payload: &[u8]) -> i32 {
+    let Some(split) = payload.iter().position(|byte| *byte == 0) else { return -1; };
+    let Ok(app) = core::str::from_utf8(&payload[..split]) else { return -1; };
+    let Ok(script) = core::str::from_utf8(&payload[split + 1..]) else { return -1; };
+    if app.is_empty() || script.as_bytes().contains(&0) { return -1; }
+    let Some(target) = crate::hv::blueprint_console_target(vm_id) else { return -3; };
+    let Some(frontend) = crate::shell3::tui::frontend_for_target(&target) else { return -3; };
+    let path = if app.contains('/') {
+        if !super::env::trueosfs_scope_granted() { return -13; }
+        match super::env::resolve_fs_path(app, false) { Some(path) => Some(path), None => return -1 }
+    } else { None };
+    let archive = app.rsplit('/').next().unwrap_or(app);
+    let archive = if archive.ends_with(".bp") { String::from(archive) } else { alloc::format!("{archive}.bp") };
+    let script = (!script.is_empty()).then(|| String::from(script));
+    let Some(worker) = crate::workers::pick_background_spawner() else { return -3; };
+    match launch_archive_task(target, frontend, archive, path, script) {
+        Ok(task) => { worker.spawn(task); 0 }
+        Err(_) => -16,
+    }
+}
+#[trueos_executor::task(pool_size = 4)]
+async fn launch_archive_task(target: crate::shell3::MatrixTarget, frontend: crate::shell3::tui::Frontend, archive: String, path: Option<String>, script: Option<String>) {
+    let result = (|| {
+        let bytes = match path {
+            Some(path) => {
+                let len = super::kfs::read_file_len(&path).map_err(|error| alloc::format!("apps: {error:?}"))?;
+                if len > 512 * 1024 * 1024 { return Err("apps: archive too large".into()); }
+                let bytes = super::kfs::read_file(&path).map_err(|error| alloc::format!("apps: {error:?}"))?;
+                crate::app_db::insert_download(&archive, &bytes)?;
+                bytes
+            }
+            None => crate::app_db::get(&archive)?.ok_or_else(|| alloc::format!("apps: missing {archive}"))?,
+        };
+        crate::shell3::service::launch_bytes_with_script(archive, bytes, frontend, script)
+    })();
+    match result {
+        Ok(app) => crate::shell3::tui::queue_launch(frontend.id, app),
+        Err(error) => {
+            crate::shell3::service::report_launch_error(error.clone());
+            crate::log_os::blueprint_important_line(format_args!("{error}\n"));
+        }
+    }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_blueprint_launch_script_v1(

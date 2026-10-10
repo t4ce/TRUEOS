@@ -14,16 +14,7 @@ pub(super) struct NameGroup {
 pub const GROUP_OPEN: char = '[';
 pub const GROUP_CLOSE: char = ']';
 
-const HV_GROUP_1: [NameEntry; 2] = [
-    NameEntry {
-        name: "online",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "peer",
-        color: RgbaColor::White,
-    },
-];
+const HV_GROUP_1: [NameEntry; 1] = [NameEntry { name: "peer", color: RgbaColor::White }];
 
 const HV_GROUP_2: [NameEntry; 2] = [
     NameEntry {

@@ -1091,6 +1091,10 @@ impl Shell3 {
                 };
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, message);
             }
+        } else if self.mode == Mode::HV && text == "status" {
+            for line in service::hv_status_lines() {
+                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+            }
         } else if is_alias {
             self.launch_named_app(&text, true);
         } else if text == "stop" && self.active_vmx_app().is_some() {

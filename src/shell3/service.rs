@@ -99,18 +99,24 @@ pub(super) fn launch_appdb(name: &str, slot: &str, frontend: super::tui::Fronten
 }
 
 pub(super) fn launch_alias(name: &str, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
-    let archive = crate::r::restart::startup_alias_blueprint(name)
+    let mut archive = crate::r::restart::startup_alias_blueprint(name)
         .ok_or_else(|| alloc::string::String::from("apps: alias not configured"))?;
+    if !archive.ends_with(".bp") {
+        archive.push_str(".bp");
+    }
     launch_archive(archive, slot, frontend)
 }
 
 fn launch_archive(archive: alloc::string::String, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     let bytes = crate::app_db::get(&archive)?
-        .ok_or_else(|| alloc::string::String::from("apps: archive not found"))?;
+        .ok_or_else(|| alloc::format!("apps: archive not found in AppDB: {archive}"))?;
     launch_bytes(archive, bytes, slot, frontend)
 }
 
 pub(super) fn launch_bytes(archive: alloc::string::String, bytes: Vec<u8>, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
+    launch_bytes_with_script(archive, bytes, frontend, None)
+}
+pub(crate) fn launch_bytes_with_script(archive: alloc::string::String, bytes: Vec<u8>, frontend: super::tui::Frontend, script: Option<alloc::string::String>) -> Result<QueuedBlueprint, alloc::string::String> {
     use sha2::{Digest, Sha256};
     let required = crate::hv::blueprint::prebind_required_readiness(&bytes)?;
     let worker = crate::workers::pick_background_spawner().ok_or("apps: no background worker")?;
@@ -120,7 +126,7 @@ pub(super) fn launch_bytes(archive: alloc::string::String, bytes: Vec<u8>, slot:
         super::MatrixSlots::drop_slot(Some(&name)); return Err(error);
     }
     let receipt = QueuedBlueprint { slot: name.clone(), app: archive.clone(), sha256: Sha256::digest(&bytes).into() };
-    let task = match launch_task(archive, bytes, target, required) {
+    let task = match launch_task(archive, bytes, target, required, script) {
         Ok(task) => task,
         Err(_) => { super::MatrixSlots::drop_slot(Some(&name)); return Err("apps: launch task pool exhausted".into()); }
     };
@@ -733,7 +739,7 @@ pub fn start_pool() -> Result<usize, SpawnError> {
 static APP_LAUNCHES: spin::Mutex<Vec<(super::MatrixSlotLease, u8)>> = spin::Mutex::new(Vec::new());
 
 #[trueos_executor::task(pool_size = 64)]
-async fn launch_task(archive: alloc::string::String, bytes: Vec<u8>, target: super::MatrixTarget, required: u32) {
+async fn launch_task(archive: alloc::string::String, bytes: Vec<u8>, target: super::MatrixTarget, required: u32, script: Option<alloc::string::String>) {
     let lease = super::matrix_target_slot_lease(&target);
     let deadline = trueos_time::Instant::now() + Duration::from_secs(30);
     while crate::r::readiness::mask() & required != required {
@@ -752,7 +758,7 @@ async fn launch_task(archive: alloc::string::String, bytes: Vec<u8>, target: sup
             Some(vm) => {
                 super::tui::bind_vm(&target, vm);
                 let result = crate::hv::start_blueprint_app_vm(vm, &spawner, archive.clone(), bytes,
-                    Vec::new(), None, crate::hv::BlueprintInstanceRequest::default(), Some(target),
+                    Vec::new(), script, crate::hv::BlueprintInstanceRequest::default(), Some(target),
                     crate::hv::BlueprintConsoleSurface::Terminal);
                 if result.is_ok() { launches.push((lease.clone(), vm)); }
                 result.map(|()| vm).map_err(|error| alloc::format!("{error:?}"))
@@ -777,3 +783,23 @@ async fn launch_task(archive: alloc::string::String, bytes: Vec<u8>, target: sup
     APP_LAUNCHES.lock().retain(|(owner, id)| owner != &lease || *id != vm);
     if super::matrix_target::matrix_slot_is_live(&lease) { super::MatrixSlots::drop_slot(Some(lease.name())); }
 }
+
+pub(super) fn hv_status_lines() -> Vec<alloc::string::String> {
+    let s = crate::hv::status();
+    let mut lines = alloc::vec![alloc::format!("VMs: running={} starting={} limit={} snapshots={}", s.running_count, s.starting_count, s.vm_id_limit, s.stored_vm_count),
+        alloc::format!("VMX: intel={} supported={} locked={} outside_smx={}", s.vendor_intel, s.has_vmx, s.feature_control_locked, s.feature_control_vmx_outside_smx),
+        alloc::format!("Shared memory: total={} free={} stacks={} vmx={}", s.vm_shared_heap_total_bytes, s.vm_shared_heap_free_bytes, s.vm_shared_stack_bytes, s.vm_shared_vmx_bytes),
+        "vmid blueprint state store".into()];
+    for id in 0..s.vm_id_limit {
+        let id = id as u8;
+        let state = crate::hv::vm_state(id);
+        let label = crate::hv::app_vm_display_label(id);
+        let stored = crate::hv::store::has_committed_vm(id);
+        if label.is_none() && !stored && !state.running && !state.starting && !state.pause_latched { continue; }
+        let phase = if state.stop_requested { "stopping" } else if state.pause_latched { "paused" } else if state.starting { "starting" } else if state.running { "running" } else { "stopped" };
+        lines.push(alloc::format!("{} {} {} {}", id, label.as_deref().unwrap_or("-"), phase, if stored { "saved" } else { "-" }));
+    }
+    lines
+}
+
+pub(crate) fn report_launch_error(error: alloc::string::String) { super::MatrixSlots::echo(None, None, error); }

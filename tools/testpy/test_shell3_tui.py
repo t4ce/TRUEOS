@@ -306,6 +306,15 @@ impl Shell3 {
     assert!(tui::native_visible(&t));assert_eq!(tui::native_transport_scope(&t),Some(1));
     tty.input("§".as_bytes());assert!(!tui::native_visible(&t));
 }
+#[test] fn blueprint_launch_notices_stay_with_the_originating_frontend() {
+    let a=frontend(20,8);let b=frontend(40,12);let t=shell2::target("store-launch",1);
+    tui::attach(a,&t).unwrap();
+    let actual=tui::frontend_for_target(&t).unwrap();assert_eq!(actual.id,a.id);assert_eq!((actual.cols,actual.rows),(20,8));
+    tui::queue_launch(a.id,service::QueuedBlueprint {slot:"downloaded".into(),app:"gridpaper.bp".into(),sha256:[0;32]});
+    assert!(tui::take_native_launch(b.id).is_none());
+    let receipt=tui::take_native_launch(a.id).unwrap();assert_eq!(receipt.app,"gridpaper.bp");
+    assert!(tui::take_native_launch(a.id).is_none());
+}
 #[test] fn native_helpers_park_reenter_move_and_retire_with_their_exact_lease() {
     let f=frontend(20,8);let t=shell2::target("native",1);
     tui::attach_native(f,&t).unwrap();assert!(tui::native_slot("native"));assert!(tui::native_visible(&t));assert_eq!(tui::native_transport_scope(&t),Some(2));
