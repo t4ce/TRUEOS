@@ -23,15 +23,6 @@ mod spin {
 thread_local! {static CURRENT_SLOT:std::cell::Cell<u32>=const {std::cell::Cell::new(0)};}
 static DROPPED_2:AtomicU32=AtomicU32::new(0);
 static DROPPED_7:AtomicU32=AtomicU32::new(0);
-struct Shell3 {slot:u32,peer_port:Option<u16>}
-impl Shell3 {fn new_terminal_reserved(slot:u32,peer_port:Option<u16>)->Self {assert_eq!(CURRENT_SLOT.get(),slot);Self {slot,peer_port}}}
-impl Shell3 {fn new_terminal_sized_reserved(slot:u32,peer_port:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal_reserved(slot,peer_port)}}
-impl Drop for Shell3 {fn drop(&mut self) {assert_eq!(CURRENT_SLOT.get(),self.slot);if self.slot==2 {DROPPED_2.fetch_add(1,Ordering::Relaxed);} else {DROPPED_7.fetch_add(1,Ordering::Relaxed);}}}
-mod tty {
-use super::*;
-pub struct Terminal {pub shell:Shell3,pub input_bytes:Vec<u8>,pub output:Vec<u8>,pub overflow:bool,pub closing:bool}
-impl Terminal {pub fn new_ssh(shell:Shell3)->Self {Self::new(shell)} pub fn reconcile_matrix_selection(&mut self) {} pub fn new(shell:Shell3)->Self {Self {shell,input_bytes:Vec::new(),output:Vec::new(),overflow:false,closing:false}} pub fn input(&mut self,data:&[u8]) {assert_eq!(CURRENT_SLOT.get(),self.shell.slot);self.input_bytes.extend_from_slice(data);self.output.extend_from_slice(data);}}
-}
 mod service {pub fn release_shell_on_executor(slot:u32){assert_eq!(crate::CURRENT_SLOT.get(),slot);if slot==2 {crate::DROPPED_2.fetch_add(1,crate::Ordering::Relaxed);}else {crate::DROPPED_7.fetch_add(1,crate::Ordering::Relaxed);}}}
 #[macro_export] macro_rules! log_info {(target: $target:literal; $($args:tt)*)=>{let _=format!($($args)*);};}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] struct NetHandle(u32);
