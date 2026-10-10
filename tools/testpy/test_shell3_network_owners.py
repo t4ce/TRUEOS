@@ -45,38 +45,28 @@ impl core::ops::Add<Duration> for Instant {type Output=Self;fn add(self,d:Durati
     source+=extract.item('src/net/adapter.rs','NetQueue')
     adapter=(ROOT/'src/net/adapter.rs').read_text()
     source+=re.search(r'^impl<T> NetQueue<T> \{.*?^}',adapter,re.M|re.S).group()
-    source+=(ROOT/'tools/testpy/shell3_ssh_unavailable.rs').read_text()
     net=(ROOT/'src/shell3/net.rs').read_text()
-    source+='mod net {use super::*;use super::tty::Terminal;\n'
+    source+='mod net {use super::*;\n'
     source+=net[net.index('const WRITE_TIMEOUT_MS'):net.index('#[trueos_executor::task]')]
     source+='''
-#[test] fn sessions_are_created_executed_and_dropped_only_on_their_ap() {
+#[test] fn greeting_connections_finish_and_release_only_on_their_ap() {
     let commands=NetQueue::new_leaked("test-cmd",8); COMMANDS.call_once(||commands);
     let mut a=WorkerTerminals::new(2); let mut b=WorkerTerminals::new(7);
-    a.events.push(WorkerEvent::Accepted(NetHandle(1),Some(49152))).ok().unwrap();
-    a.events.push(WorkerEvent::Accepted(NetHandle(2),Some(65535))).ok().unwrap();
-    b.events.push(WorkerEvent::Accepted(NetHandle(3),None)).ok().unwrap();
-    a.events.push(WorkerEvent::Socket(NetEvent::TcpData {handle:NetHandle(2),data:b"second".to_vec()})).ok().unwrap();
-    b.events.push(WorkerEvent::Socket(NetEvent::TcpData {handle:NetHandle(3),data:b"other AP".to_vec()})).ok().unwrap();
-    assert!(a.has_events()); assert!(b.has_events());
-    CURRENT_SLOT.set(2); a.poll();
-    assert_eq!(a.connections.len(),2); assert!(b.connections.is_empty());
-    assert!(a.connections[0].terminal.is_none());
-    assert_eq!(a.connections[0].pending.as_ref().unwrap().peer_port,Some(49152));
-    assert_eq!(a.connections[1].terminal.as_ref().unwrap().shell.peer_port,Some(65535));
-
-    assert_eq!(a.connections[1].terminal.as_ref().unwrap().input_bytes,b"second");
-    CURRENT_SLOT.set(7); b.poll();
-    assert_eq!(b.connections[0].terminal.as_ref().unwrap().input_bytes,b"other AP");
-    assert!(!a.has_events()); assert!(!b.has_events());
+    a.events.push(WorkerEvent::Accepted(NetHandle(1))).ok().unwrap();
+    b.events.push(WorkerEvent::Accepted(NetHandle(2))).ok().unwrap();
+    a.events.push(WorkerEvent::Socket(NetEvent::TcpData {handle:NetHandle(1),data:b"SSH-2.0-client\\r\\nhelp\\n".to_vec()})).ok().unwrap();
+    CURRENT_SLOT.set(2); a.poll(); CURRENT_SLOT.set(7); b.poll();
     let sent=commands.drain(8); assert_eq!(sent.len(),2);
-    assert!(matches!(&sent[0],NetCommand::SendTcp {handle:NetHandle(2),data} if data==b"second"));
-    assert!(matches!(&sent[1],NetCommand::SendTcp {handle:NetHandle(3),data} if data==b"other AP"));
-    a.events.push(WorkerEvent::Socket(NetEvent::Closed {handle:NetHandle(2)})).ok().unwrap();
-    CURRENT_SLOT.set(2); a.poll(); assert_eq!(a.connections.len(),1); assert_eq!(DROPPED_2.load(Ordering::Relaxed),1);
+    assert!(matches!(&sent[0],NetCommand::SendTcp {handle:NetHandle(1),data} if data==b"hello from TrueOS\\r\\n"));
+    assert!(matches!(&sent[1],NetCommand::SendTcp {handle:NetHandle(2),data} if data==b"hello from TrueOS\\r\\n"));
+    a.events.push(WorkerEvent::Socket(NetEvent::TcpSent {handle:NetHandle(1),len:1})).ok().unwrap();
+    CURRENT_SLOT.set(2); a.poll(); assert!(commands.drain(8).is_empty());
+    a.events.push(WorkerEvent::Socket(NetEvent::TcpSent {handle:NetHandle(1),len:GREETING.len()-1})).ok().unwrap();
+    a.poll(); let finish=commands.drain(8); assert_eq!(finish.len(),1);
+    assert!(matches!(finish[0],NetCommand::FinishTcp {handle:NetHandle(1)}));
     a.events.push(WorkerEvent::Socket(NetEvent::Closed {handle:NetHandle(1)})).ok().unwrap();
-    a.poll(); assert!(a.is_empty()); assert_eq!(DROPPED_2.load(Ordering::Relaxed),2);
-    CURRENT_SLOT.set(7); b.events.push(WorkerEvent::Socket(NetEvent::Closed {handle:NetHandle(3)})).ok().unwrap();
+    a.poll(); assert!(a.is_empty()); assert_eq!(DROPPED_2.load(Ordering::Relaxed),1);
+    CURRENT_SLOT.set(7); b.events.push(WorkerEvent::Socket(NetEvent::Closed {handle:NetHandle(2)})).ok().unwrap();
     b.poll(); assert!(b.is_empty()); assert_eq!(DROPPED_7.load(Ordering::Relaxed),1);
 }
 }

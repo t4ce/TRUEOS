@@ -1,0 +1,122 @@
+Small native text blits: CPU cutoff and physical comparison
+
+Scope
+
+ui4::text_blit performs synchronous monochrome glyph expansion or rectangular
+RGBA8 copies into an existing, exclusively owned surface. Shell3's Copy backend
+and BcsTextArea call it before queuing their normal BCS0 work. No extra retained
+surface, pixel shift, driver, terminal protocol or termdir integration is added.
+The existing pan raster allocation cap and strip/crop rules still apply.
+
+Selection and ownership
+
+The complete operation must fit BOTH limits:
+
+  pixels <= CPU_{MONO,COPY}_MAX_PIXELS in src/allcaps.rs
+  pixels <= destination_width * character_row_height / 2
+
+The first limit is 54,067 pixels: floor(20% * 270,336), using the lower end of the
+measured copy crossover bracket. "80% less" means 20% remaining. Mono did not
+cross over in the measured range; it uses this smaller copy-derived ceiling as
+a conservative CPU budget, not as a claimed mono equilibrium.
+
+A 600-pixel-wide scale1 frame therefore allows at most 3,300 pixels / 50 glyphs
+(6x11). Scale2 allows 6,600 pixels / 25 glyphs (12x22). The current one-row Matrix
+refill paints 108 glyphs and stays on BCS0; its complete viewport copy also stays
+on BCS0. Selection considers the sum of all rectangles/glyphs, not each chunk.
+
+The caller must prove earlier GPU work retired, destination ownership is
+exclusive, and copy sources remain stable. The persistent backing's unretired
+and poison gates run before CPU selection. Shell3 holds its writable frame lease
+and retires any clear before trying the CPU path. CPU access never repairs an
+uncertain GPU submission or overrides quarantine. Validation checks every
+rectangle before any write and rejects overlapping source/destination backing.
+
+CPU painting uses the same glyph mask, foreground and background as BCS0. Both
+paths preserve byte-for-byte pixel semantics. CPU access invalidates touched
+cache-line spans before partial writes and flushes only those row spans after
+writing, with the existing DMA helper's final MFENCE. It does not flush the
+whole frame. A successful CPU operation has zero BCS0 submissions and no await.
+
+Physical evidence (2026-10-10)
+
+Rig: 192.168.178.94, Intel Alder Lake-S GT1 (device 0x4680), Shell3 AP5,
+600x275 frame, 2560x1440 display. Full receipts and raw captures:
+
+  bld/sh3-small-blit/baremetal-20261010/RESULTS.txt
+
+Primitive sweep: two warmups, seven retained samples, alternating CPU/GPU order,
+31 cases, complete destination readbacks equal in every case. Units below are
+median milliseconds. p95 in this seven-sample sweep is the largest sample.
+
+  operation               pixels      CPU       BCS0
+  one 6x11 glyph               66     0.0179     8.4955
+  half-row glyphs           3,300     0.1306     8.5824
+  4096 glyphs             270,336     9.1677   556.2448
+  RGBA copy               270,336     4.6125     6.7614
+  RGBA copy               540,672     8.4926     6.8104
+
+Copy crossover is bracketed between 270,336 and 540,672 pixels (1.03125 to
+2.0625 MiB of RGBA8), not an exact interpolated threshold. BCS0 submission/poll
+host time dominates the small cases. These are costs of the current complete
+software submission path, not isolated GPU execution times.
+
+The sweep uses cooperative ready-queue polling to establish the best-case BCS0
+bound. Earlier timer-based sweeps are also archived: occasional AP wake delays
+of one to two seconds obscured that bound. Production retirement retains the
+existing 1 ms timer polling. The native A/B comparison uses that production path
+in both builds, with the same diagnostic markers enabled in both.
+
+  successful native presents     baseline p50/p95     hybrid p50/p95 (ms)
+  isolated 1-4 glyph updates      11.068 / 11.586       0.442 / 0.529
+  one-row Matrix updates         36.158 / 37.404      26.086 / 26.686
+
+The first group excludes Matrix painting and viewport copies (49/51 samples).
+The second requires 108 newly produced/painted cells and a viewport copy (25/24
+samples). Its Matrix work remains two mono batches plus one copy submission;
+avoiding a coincident small control-row batch improves the observed present.
+These timings end at frame publication, not compositor completion or scanout.
+They are observations on this AP/hardware/load, not universal latency promises.
+
+Repeat the measurement
+
+1. In allcaps::text_blit, set both CPU limits to zero, BENCHMARK=true and
+   DIAGNOSTICS=true. Build with the normal make iso path and deploy using the
+   verified testrig-physical-reset-log target. Preserve source hashes, ELF/ISO
+   hashes, deployment receipt and a dedicated log directory.
+2. Launch one visible sh3 through Shell2. The one-shot sweep runs on its AP;
+   require "text-blit-bench: complete ... verified=31". Each sample record
+   contains CPU wall, BCS0 wall, BCS0 host time and Busy retries. Scratch uses
+   three temporary 1536x1408 surfaces (25,952,256 bytes total), separate from
+   the optional per-Show pan budget. It is freed only after exact retirement;
+   uncertain/cancelled work quarantines its backing. Normal builds allocate none.
+3. Run the existing Matrix scenario plus small input updates:
+
+     python3 tools/testpy/benchmark_shell3_native.py --output /path/to/baseline
+
+   It sends 300 recognized input rows, types/erases 20 characters, scrolls one row
+   both ways, visits both limits, changes font scale and restores it. Preserve
+   its events/protocol and the kernel capture together. Confirm 256-row
+   retention from the captured history limits; the sender does not assert it.
+4. Set the two limits to the chosen conservative cutoff; BENCHMARK=false,
+   DIAGNOSTICS=true. Rebuild, verify deployment and repeat the same scenario.
+   Compare shell3/present records with their preceding shell3/pan context.
+   Exclude failed/unfinished presents; preserve their warning records too.
+5. Set BENCHMARK=false and DIAGNOSTICS=false for normal use. Rebuild/deploy and
+   repeat a smoke scenario. Re-measure after hardware or BCS submission changes.
+
+Host checks
+
+  python3 tools/testpy/test_text_blit.py
+  python3 tools/testpy/test_text_area_raster.py
+  python3 tools/testpy/test_text_area_pan.py
+  python3 tools/testpy/test_shell3_microfont.py
+  python3 tools/testpy/test_shell3_pool_input.py
+  cargo check --locked --offline --bin TRUEOS
+
+79 host tests passed: CPU primitives 5, raster 18, pan 8, font 12, pool/input 36.
+The CPU-enabled raster tests cover synchronous completion without GPU admission
+and refusal to access backing pinned by a cancelled GPU operation. Physical
+pixel equality is established separately by the 31-case sweep. This comparison
+does not complete the earlier pan feature's arbitrary resize, dense Matrix
+fixture or hardware cap-fallback validation.

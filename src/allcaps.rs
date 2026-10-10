@@ -12,6 +12,17 @@ pub(crate) mod shell3 {
     pub const PANBUFFER_GUARD_CELLS: u32 = 4;
 }
 
+pub(crate) mod text_blit {
+    // Alder Lake-S/AP5 physical sweep: CPU wins at 270,336 copy pixels,
+    // BCS0 wins at 540,672. Use 20% of the lower bound, further capped at half
+    // a character row by the owner. Mono stayed CPU-faster through 270,336
+    // pixels; this deliberately uses the same smaller, verified ceiling.
+    pub const CPU_MONO_MAX_PIXELS: usize = 270_336 / 5;
+    pub const CPU_COPY_MAX_PIXELS: usize = 270_336 / 5;
+    pub const BENCHMARK: bool = false;
+    pub const DIAGNOSTICS: bool = false;
+}
+
 pub mod boot {
     pub const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
 }

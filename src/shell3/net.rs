@@ -1,6 +1,5 @@
-//! Shared port-22 listener for plaintext and authenticated kernel SSH terminals.
-//! The listener routes socket events; AP pool tasks own and execute each model.
-use super::tty::Terminal;
+//! Port-22 greeting listener. Send a greeting, then close without starting a shell.
+//! The listener routes socket events; AP pool tasks own each connection.
 use crate::allports::services::SHELL3_TCP_PORT;
 use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
@@ -10,165 +9,48 @@ use trueos_time::{Duration, Instant, Timer};
 
 const MAX_CONNECTIONS: usize = super::MAX_SHELL3_INSTANCES;
 const WRITE_TIMEOUT_MS: u64 = 30_000;
-const PROTOCOL_PROBE_MS: u64 = 1_000;
-const SSH_PREFIX: &[u8] = b"SSH-";
-
-struct PendingTerminal {
-    slot: u32,
-    peer_port: Option<u16>,
-    until: Instant,
-    prefix: Vec<u8>,
-}
+const GREETING: &[u8] = b"hello from TrueOS\r\n";
 
 struct Connection {
     handle: NetHandle,
-    terminal: Option<Terminal>,
-    ssh: Option<super::ssh::Session>,
-    pending: Option<PendingTerminal>,
-    rejected: bool,
+    slot: u32,
+    greeting_sent: bool,
     in_flight: usize,
     deadline: Option<Instant>,
     finishing: bool,
 }
 
 impl Connection {
-    fn new(handle: NetHandle, slot: u32, peer_port: Option<u16>, now: Instant) -> Self {
+    fn new(handle: NetHandle, slot: u32) -> Self {
         Self {
             handle,
-            terminal: None,
-            ssh: None,
-            pending: Some(PendingTerminal {slot, peer_port, until: now + Duration::from_millis(PROTOCOL_PROBE_MS), prefix: Vec::new()}),
-            rejected: false,
+            slot,
+            greeting_sent: false,
             in_flight: 0,
             deadline: None,
             finishing: false,
         }
     }
 
-    fn open_plaintext(&mut self) {
-        let pending = self.pending.take().unwrap();
-        let shell = super::Shell3::new_terminal_reserved(pending.slot, pending.peer_port);
-        let mut terminal = Terminal::new(shell);
-        terminal.input(&pending.prefix);
-        self.terminal = Some(terminal);
-    }
-
-    fn reject_ssh(&mut self, reason: &str) {
-        self.rejected = true;
-        crate::log_info!(target: "service";
-            "shell3-tcp: protocol=ssh handle={:?} peer_port={:?} action=reject reason={} plaintext=0\n",
-            self.handle, self.pending.as_ref().and_then(|pending| pending.peer_port), reason,
-        );
-    }
-
-    fn input(&mut self, bytes: &[u8]) {
-        if self.rejected { return; }
-        if let Some(ssh) = self.ssh.as_mut() {
-            ssh.input(bytes);
-            return;
-        }
-        if let Some(terminal) = self.terminal.as_mut() {
-            terminal.input(bytes);
-            return;
-        }
-        for (index, &byte) in bytes.iter().enumerate() {
-            let pending = self.pending.as_mut().unwrap();
-            pending.prefix.push(byte);
-            if !SSH_PREFIX.starts_with(&pending.prefix) {
-                self.open_plaintext();
-                self.terminal.as_mut().unwrap().input(&bytes[index + 1..]);
-                return;
-            }
-            if pending.prefix.len() == SSH_PREFIX.len() {
-                match super::ssh::Session::new() {
-                    Ok(mut ssh) => {
-                        ssh.input(&pending.prefix);
-                        ssh.input(&bytes[index + 1..]);
-                        self.ssh = Some(ssh);
-                        crate::log_info!(target: "service";
-                            "shell3-tcp: protocol=ssh handle={:?} action=authenticate plaintext=0\n", self.handle,
-                        );
-                    }
-                    Err(_) => self.reject_ssh("cry-credential-unavailable"),
-                }
-                return;
-            }
-        }
-    }
-
-    /// False means an immediate close was admitted and the model can be freed.
+    /// Wait for the greeting to reach the socket before sending FIN.
+    /// False means an immediate close was admitted and the reservation can go.
     fn flush(&mut self, commands: &NetQueue<NetCommand>, now: Instant) -> bool {
-        if !self.rejected && self.ssh.is_none() && self.pending.as_ref().is_some_and(|pending| now >= pending.until) {
-            if self.pending.as_ref().unwrap().prefix.is_empty() {
-                self.open_plaintext();
-            } else {
-                // A partial SSH prefix must never be replayed as Shell3 input.
-                self.reject_ssh("incomplete-identification");
-            }
-        }
-        if let Some(ssh) = self.ssh.as_mut() {
-            ssh.pump(self.terminal.as_mut());
-            if self.terminal.is_none() && ssh.wants_shell() {
-                let pending = self.pending.take().unwrap();
-                let (columns, rows) = ssh.size().expect("SSH shell requires accepted PTY dimensions");
-                self.terminal = Some(Terminal::new_ssh(super::Shell3::new_terminal_sized_reserved(pending.slot, pending.peer_port, columns, rows)));
-                crate::log_info!(target: "service";
-                    "shell3-tcp: protocol=ssh handle={:?} action=shell-authenticated plaintext=0\n", self.handle,
-                );
-            }
-        }
-        let force_close = self.rejected || self.terminal.as_ref().is_some_and(|tty| tty.overflow)
-            || self.ssh.as_ref().is_some_and(|ssh| ssh.closed)
-            || self.deadline.is_some_and(|deadline| now >= deadline);
-        if force_close {
-            return commands
-                .push(NetCommand::Close {
-                    handle: self.handle,
-                })
-                .is_err();
+        if self.deadline.is_some_and(|deadline| now >= deadline) {
+            return commands.push(NetCommand::Close { handle: self.handle }).is_err();
         }
         if self.finishing || self.in_flight != 0 {
             return true;
         }
-        if let Some(ssh) = self.ssh.as_mut() {
-            let bytes = ssh.output();
-            if !bytes.is_empty() {
-                let data = bytes.to_vec();
-                let len = data.len();
-                if commands.push(NetCommand::SendTcp { handle: self.handle, data }).is_ok() {
-                    ssh.consume_output(len);
-                    self.in_flight = len;
-                    self.deadline = Some(now + Duration::from_millis(WRITE_TIMEOUT_MS));
-                }
-            } else if ssh.finished
-                && commands.push(NetCommand::FinishTcp { handle: self.handle }).is_ok() {
-                self.finishing = true;
-                self.deadline = Some(now + Duration::from_millis(5_000));
-            }
-            return true;
-        }
-        let Some(tty) = self.terminal.as_mut() else { return true; };
-        if !tty.output.is_empty() {
-            let data = core::mem::take(&mut tty.output);
-            let len = data.len();
-            match commands.try_push(NetCommand::SendTcp {
+        if !self.greeting_sent {
+            if commands.push(NetCommand::SendTcp {
                 handle: self.handle,
-                data,
-            }) {
-                Ok(()) => {
-                    self.in_flight = len;
-                    self.deadline = Some(now + Duration::from_millis(WRITE_TIMEOUT_MS));
-                }
-                Err(NetCommand::SendTcp { data, .. }) => tty.output = data,
-                Err(_) => unreachable!(),
+                data: GREETING.to_vec(),
+            }).is_ok() {
+                self.greeting_sent = true;
+                self.in_flight = GREETING.len();
+                self.deadline = Some(now + Duration::from_millis(WRITE_TIMEOUT_MS));
             }
-        } else if tty.closing
-            && commands
-                .push(NetCommand::FinishTcp {
-                    handle: self.handle,
-                })
-                .is_ok()
-        {
+        } else if commands.push(NetCommand::FinishTcp { handle: self.handle }).is_ok() {
             self.finishing = true;
             self.deadline = Some(now + Duration::from_millis(5_000));
         }
@@ -178,15 +60,12 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        // Before plaintext starts, the admission has no Shell3 owner to free it.
-        if let Some(pending) = self.pending.take() {
-            super::service::release_shell_on_executor(pending.slot);
-        }
+        super::service::release_shell_on_executor(self.slot);
     }
 }
 
 enum WorkerEvent {
-    Accepted(NetHandle, Option<u16>),
+    Accepted(NetHandle),
     Socket(NetEvent),
 }
 
@@ -233,15 +112,8 @@ impl WorkerTerminals {
         };
         for event in self.events.drain(64) {
             match event {
-                WorkerEvent::Accepted(handle, peer_port) => {
-                    self.connections.push(Connection::new(handle, self.slot, peer_port, Instant::now()));
-                }
-                WorkerEvent::Socket(NetEvent::TcpData { handle, data }) => {
-                    if let Some(connection) =
-                        self.connections.iter_mut().find(|c| c.handle == handle)
-                    {
-                        connection.input(&data);
-                    }
+                WorkerEvent::Accepted(handle) => {
+                    self.connections.push(Connection::new(handle, self.slot));
                 }
                 WorkerEvent::Socket(NetEvent::TcpSent { handle, len }) => {
                     if let Some(connection) =
@@ -259,11 +131,6 @@ impl WorkerTerminals {
                 _ => {}
             }
         }
-        for connection in &mut self.connections {
-            if let Some(tty) = connection.terminal.as_mut() {
-                tty.reconcile_matrix_selection();
-            }
-        }
         let now = Instant::now();
         self.connections
             .retain_mut(|connection| connection.flush(commands, now));
@@ -272,12 +139,6 @@ impl WorkerTerminals {
 
 #[trueos_executor::task]
 pub async fn terminal_task() {
-    super::ssh::init();
-    let spawner = unsafe { trueos_executor::Spawner::for_current_executor().await };
-    match super::ssh::auth_task() {
-        Ok(task) => spawner.spawn(task),
-        Err(_) => crate::log_warn!(target: "service"; "shell3-ssh: authentication worker unavailable\n"),
-    }
     let commands = NetQueue::new_leaked("shell3-tcp-cmd", 128);
     let events = NetQueue::new_leaked("shell3-tcp-evt", 256);
     register_app_queues("shell3-tcp", commands, events);
@@ -285,7 +146,7 @@ pub async fn terminal_task() {
     let mut listener = None;
     let mut opening = false;
     let mut retry_at = Instant::now();
-    // Only transport routing lives here. Shell3 and Terminal never do.
+    // Only transport routing lives here; no Shell3 model is created.
     let mut routes: Vec<(NetHandle, u32)> = Vec::new();
     let mut deferred: Option<(u32, WorkerEvent)> = None;
     let mut rejected = None;
@@ -320,7 +181,7 @@ pub async fn terminal_task() {
                     listener = Some(handle);
                     opening = false;
                     crate::log_info!(target: "service";
-                        "shell3-tcp: listening port={} sessions={} plaintext=1\n",
+                        "shell3-tcp: listening port={} connections={} greeting=1\n",
                         SHELL3_TCP_PORT, routes.len(),
                     );
                 }
@@ -328,26 +189,11 @@ pub async fn terminal_task() {
                     if listener == Some(handle) =>
                 {
                     listener = None;
-                    let peer_port = match &event {
-                        NetEvent::TcpEstablished { peer, peer6, .. } => peer
-                            .as_ref().map(|endpoint| endpoint.port)
-                            .or_else(|| peer6.as_ref().map(|endpoint| endpoint.port)),
-                        _ => None,
-                    };
                     match super::service::reserve_terminal_slot() {
                         Ok(slot) => {
                             if let Some(queue) = queue_for(slot) {
-                                if queue.push(WorkerEvent::Accepted(handle, peer_port)).is_ok() {
+                                if queue.push(WorkerEvent::Accepted(handle)).is_ok() {
                                     routes.push((handle, slot));
-                                    // Established is informational; early data must follow
-                                    // Accepted in FIFO order on the same permanent owner.
-                                    if matches!(event, NetEvent::TcpData { .. }) {
-                                        if let Err(event) =
-                                            queue.try_push(WorkerEvent::Socket(event))
-                                        {
-                                            deferred = Some((slot, event));
-                                        }
-                                    }
                                     super::service::notify_work();
                                     continue;
                                 }
@@ -358,8 +204,7 @@ pub async fn terminal_task() {
                         Err(_) => rejected = Some(handle),
                     }
                 }
-                NetEvent::TcpData { handle, .. }
-                | NetEvent::TcpSent { handle, .. }
+                NetEvent::TcpSent { handle, .. }
                 | NetEvent::Closed { handle } => {
                     if listener == Some(handle) {
                         listener = None;

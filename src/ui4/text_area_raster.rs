@@ -32,6 +32,7 @@ pub(crate) struct RasterWork {
     pub reused: usize,
     pub painted: usize,
     pub mono_batches: usize,
+    pub cpu_glyphs: usize,
 }
 
 impl<C: Clone + PartialEq> BcsTextArea<C> {
@@ -159,15 +160,19 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             .into_iter()
             .map(|write| glyph(write, layout))
             .collect();
+        let paint_started = super::text_blit::stamp();
+        // Both the persistent backing and its destination are retired here.
+        let cpu_paint = unsafe { super::text_blit::try_mono(self.surface(), &glyphs) };
         let work = RasterWork {
             produced: update.produced,
             reused: update.reused,
             painted: glyphs.len(),
-            mono_batches: glyphs
+            cpu_glyphs: if cpu_paint {glyphs.len()} else {0},
+            mono_batches: if cpu_paint {0} else {glyphs
                 .len()
-                .div_ceil(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS),
+                .div_ceil(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS)},
         };
-        for chunk in glyphs.chunks(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS) {
+        for chunk in glyphs.chunks(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS).filter(|_| !cpu_paint) {
             let queued = crate::intel::queue_guc_bcs0_mono_glyphs(self.surface(), chunk);
             if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
                 self.invalidate();
@@ -177,6 +182,7 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
                 return Err(error);
             }
         }
+        super::text_blit::report("cache-mono", super::text_blit::mono_pixels(&glyphs),cpu_paint,work.mono_batches,paint_started);
         Ok(work)
     }
 
@@ -214,6 +220,13 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             return Ok(0);
         }
         let count = copies.len();
+        let started = super::text_blit::stamp();
+        // Caller holds the destination's writable frame lease; this cache has
+        // no unretired work and supplies stable pixels through the sync copy.
+        if unsafe { super::text_blit::try_copy(destination, &copies, layout.cell_height) } {
+            super::text_blit::report("viewport-copy",super::text_blit::copy_pixels(&copies),true,0,started);
+            return Ok(count);
+        }
         let queued = crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies);
         if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
             if *poisoned {
@@ -221,6 +234,7 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             }
             return Err(error);
         }
+        super::text_blit::report("viewport-copy",super::text_blit::copy_pixels(&copies),false,1,started);
         Ok(count)
     }
 }

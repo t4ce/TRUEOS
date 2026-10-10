@@ -17,6 +17,8 @@ pub(super) async fn present(
     budget: &crate::ui4::text_area::RasterBudget,
     area: Option<&super::super::update::MatrixAreaSnapshot>,
 ) -> Result<Option<crate::ui4::DamageRect>, &'static str> {
+    crate::ui4::text_blit::benchmark_once().await?;
+    let present_started = crate::ui4::text_blit::stamp();
     let lease =
         acquire_frame_buffer(surface.frame).map_err(|_| "shell3-show-mono-destination-busy")?;
     let index = lease.buffer_index as usize;
@@ -54,7 +56,7 @@ pub(super) async fn present(
     // Sparse fresh-frame painting requires a known background. If a later
     // chunk fails, the next attempt must clear any partially painted pixels.
     surface.clear_buffers[index] = true;
-    if clearing || !glyphs.is_empty() {
+    if clearing {
         crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
     }
     if clearing {
@@ -84,7 +86,15 @@ pub(super) async fn present(
         }
         *poisoned = false;
     }
-    for chunk in glyphs.chunks(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS) {
+    let paint_started = crate::ui4::text_blit::stamp();
+    // The frame lease is exclusively writable; clears above have retired.
+    let cpu_paint = !*poisoned && unsafe {
+        crate::ui4::text_blit::try_mono(bcs_surface(view), &glyphs)
+    };
+    if !cpu_paint && !glyphs.is_empty() {
+        crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
+    }
+    for chunk in glyphs.chunks(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS).filter(|_| !cpu_paint) {
         let submission = match crate::intel::queue_guc_bcs0_mono_glyphs(bcs_surface(view), chunk) {
             Ok(submission) => submission,
             Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
@@ -111,6 +121,8 @@ pub(super) async fn present(
         }
         *poisoned = false;
     }
+    crate::ui4::text_blit::report("frame-mono", crate::ui4::text_blit::mono_pixels(&glyphs),
+        cpu_paint, if cpu_paint {0} else {glyphs.len().div_ceil(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS)}, paint_started);
     if using_pan
         && (clearing
             || previous.is_none()
@@ -130,17 +142,24 @@ pub(super) async fn present(
             return Err(error);
         }
     }
-    crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
+    if !cpu_paint {
+        crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
+    }
     if publish_frame_buffer(lease).is_err() {
         let _ = cancel_frame_buffer(lease);
         return Err("shell3-show-frame-publish");
     }
     surface.frame_contents[index] = Some(current);
     surface.clear_buffers[index] = false;
-    if !glyphs.is_empty() {
+    if !glyphs.is_empty() && !cpu_paint {
         crate::log_once!(target: "apps";
             "shell3/show: bcs0-retired backend=legacy command=xy-mono-src-copy-blt rop=cc colors=metafmt bold=off cpu-rgba-paint=0 staging-frame=0\n"
         );
+    }
+    if crate::allcaps::text_blit::DIAGNOSTICS {
+        let ns = crate::ui4::text_blit::nanos(crate::ui4::text_blit::stamp().wrapping_sub(present_started));
+        crate::log_info!(target:"apps";"shell3/present: ap={} glyphs={} cpu_glyphs={} using_pan={} wall_ns={}\n",
+            crate::percpu::current_slot(),glyphs.len(),if cpu_paint {glyphs.len()} else {0},using_pan,ns);
     }
     let segments = if updates.is_empty() {
         fallback_segments

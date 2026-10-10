@@ -23,6 +23,22 @@ struct Nop;impl Wake for Nop {fn wake(self:Arc<Self>) {}}
 fn context()->Context<'static> {Context::from_waker(Box::leak(Box::new(Waker::from(Arc::new(Nop)))))}
 fn run<F:Future>(f:F)->F::Output {let mut f=std::pin::pin!(f);let mut cx=context();loop {if let Poll::Ready(v)=f.as_mut().poll(&mut cx) {return v;}}}
 mod ui4 {
+mod text_blit {
+pub fn stamp()->u64 {0}
+pub fn mono_pixels(_: &[crate::intel::GucBcs0MonoGlyph])->usize {0}
+pub fn copy_pixels(_: &[crate::intel::GucBcs0RgbaCopy])->usize {0}
+pub unsafe fn try_mono(d:crate::intel::GucBcs0RgbaSurface,g:&[crate::intel::GucBcs0MonoGlyph])->bool {
+    crate::intel::state(|s| {
+        if !s.cpu_enabled {return false;}
+        s.events.push("cpu-mono".into());
+        let pixels=s.memory.get_mut(&d.phys).unwrap();
+        for g in g {for y in g.y..g.y+g.height {for x in g.x..g.x+g.width {pixels[(y*d.width+x) as usize]=g.value;}}}
+        true
+    })
+}
+pub unsafe fn try_copy(_:crate::intel::GucBcs0RgbaSurface,_:&[crate::intel::GucBcs0RgbaCopy],_:u32)->bool {false}
+pub fn report(_: &str,_:usize,_:bool,_:usize,_:u64) {}
+}
 #[path="__TRUEOS_ROOT__/src/ui4/text_area.rs"] pub mod text_area;
 #[path="__TRUEOS_ROOT__/src/ui4/text_area_raster.rs"] pub mod text_area_raster;
 }
@@ -37,7 +53,7 @@ pub const GUC_BCS0_MONO_MAX_GLYPHS:usize=64;
 #[derive(Clone,Copy,Debug,PartialEq)]pub enum GucBcs0CopyCompletion {Pending,Complete,Failed,InvalidSubmission}
 #[derive(Clone,Copy,Debug)]pub enum Mode {Complete,Busy,SubmitFailed,Failed,Invalid}
 #[derive(Clone,Debug)]pub enum Op {Mono(GucBcs0RgbaSurface,Vec<GucBcs0MonoGlyph>),Copy(GucBcs0RgbaSurface,Vec<GucBcs0RgbaCopy>)}
-#[derive(Default)]pub struct State {pub modes:VecDeque<Mode>,pub events:Vec<String>,pub memory:HashMap<u64,Vec<u32>>,pending:HashMap<usize,(Op,Mode,bool)>,next:u64,pub fail_alloc:bool,pub size_mismatch:bool}
+#[derive(Default)]pub struct State {pub modes:VecDeque<Mode>,pub events:Vec<String>,pub memory:HashMap<u64,Vec<u32>>,pending:HashMap<usize,(Op,Mode,bool)>,next:u64,pub fail_alloc:bool,pub size_mismatch:bool,pub cpu_enabled:bool}
 pub static S:Mutex<Option<State>>=Mutex::new(None);
 pub fn reset() {*S.lock().unwrap()=Some(State::default());}
 pub fn state<R>(f:impl FnOnce(&mut State)->R)->R {f(S.lock().unwrap().as_mut().unwrap())}
@@ -93,6 +109,26 @@ fn dest(w:u32,h:u32)->intel::gpgpu::GpgpuOwnedRgba8Surface {intel::gpgpu::alloca
     assert_eq!(run(a.render(v,1,value,glyph,&mut p)).err(),Some("text-area-backing-pinned"));
     a.invalidate();assert_eq!(run(a.resize(l,v,&b,&mut p)),Err("text-area-backing-pinned"));
     drop(a);assert_eq!(b.used(),l.bytes);
+}
+#[test]fn cpu_render_is_synchronous_and_later_gpu_copy_observes_its_pixels() {
+    intel::reset();intel::state(|s|s.cpu_enabled=true);
+    let v=rect(0,0,13,7);let b=RasterBudget::new(2*1024*1024);
+    let mut a=BcsTextArea::new(layout(v),&b).unwrap();let mut p=false;
+    let work=run(a.render(v,1,value,glyph,&mut p)).unwrap();
+    assert_eq!(work.mono_batches,0);assert_eq!(work.cpu_glyphs,work.painted);assert!(!p);
+    assert!(!intel::state(|s|s.events.iter().any(|e|e.starts_with("queue"))));
+    let d=dest(13,7);run(a.copy_view(v,d.surface(),(0,0),&mut p)).unwrap();
+    intel::state(|s| {for y in 0..7 {for x in 0..13 {assert_eq!(s.memory[&d.surface().phys][y*13+x],value(x as i64,y as i64));}}});
+    drop(a);assert_eq!(b.used(),0);
+}
+#[test]fn cpu_render_cannot_bypass_a_cancelled_gpu_ownership_gate() {
+    intel::reset();let v=rect(0,0,13,7);let b=RasterBudget::new(2*1024*1024);
+    let mut a=BcsTextArea::new(layout(v),&b).unwrap();let mut p=false;
+    {let mut future=Box::pin(a.render(v,1,value,glyph,&mut p));assert!(matches!(future.as_mut().poll(&mut context()),Poll::Pending));drop(future);}
+    intel::state(|s|s.cpu_enabled=true);p=false;
+    assert_eq!(run(a.render(v,2,value,glyph,&mut p)).err(),Some("text-area-backing-pinned"));
+    assert!(!intel::state(|s|s.events.iter().any(|e|e=="cpu-mono")));
+    drop(a);assert!(b.used()>0);
 }
 '''
 

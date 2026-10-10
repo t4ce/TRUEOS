@@ -343,83 +343,35 @@ impl<T> NetQueue<T> {
 }
 mod net {
 use super::*;
-use super::tty::Terminal;
 '''
-    source = source[:source.rindex('mod net {')] + (ROOT/'tools/testpy/shell3_ssh_unavailable.rs').read_text() + source[source.rindex('mod net {'):]
     net = (ROOT/'src/shell3/net.rs').read_text()
     source += net[net.index('const WRITE_TIMEOUT_MS'):net.index('enum WorkerEvent')]
     source += '''
 #[cfg(test)] mod tests {
     use super::*;
-    fn connection(handle:NetHandle)->Connection {
-        let mut connection=Connection::new(handle,0,None,Instant(0));
-        connection.open_plaintext();connection
-    }
     fn queue() -> NetQueue<NetCommand> { NetQueue { full: Cell::new(false), commands: RefCell::new(Vec::new()) } }
-    #[test] fn ssh_with_unavailable_credential_is_logged_and_rejected_at_every_packet_split() {
-        let identification=b"SSH-2.0-OpenSSH_9.9\\r\\n";
-        for split in 0..=identification.len() {
-            let queue=queue();let mut c=Connection::new(NetHandle(77),7107,Some(49152),Instant(0));
-            assert!(c.flush(&queue,Instant(0)));assert!(queue.commands.borrow().is_empty());
-            c.input(&identification[..split]);c.input(&identification[split..]);
-            assert!(c.rejected);assert!(c.terminal.is_none());
-            queue.full.set(true);assert!(c.flush(&queue,Instant(10)));
-            queue.full.set(false);assert!(!c.flush(&queue,Instant(11)));
-            assert!(matches!(&queue.commands.borrow()[0],NetCommand::Close {handle:NetHandle(77)}));
-        }
-        assert!(crate::SSH_LOGS.lock().unwrap().iter().any(|line|line.contains("protocol=ssh")&&line.contains("plaintext=0")));
-        assert!(crate::service::RELEASED.lock().unwrap().contains(&7107));
+    #[test] fn greeting_retries_backpressure_without_duplicate_output() {
+        let queue=queue(); let mut c=Connection::new(NetHandle(1),0);
+        queue.full.set(true); assert!(c.flush(&queue,Instant(0)));
+        assert!(!c.greeting_sent); assert_eq!(c.in_flight,0);
+        queue.full.set(false); assert!(c.flush(&queue,Instant(1)));
+        assert!(matches!(&queue.commands.borrow()[0],NetCommand::SendTcp {handle:NetHandle(1),data} if data==b"hello from TrueOS\\r\\n"));
+        assert!(c.flush(&queue,Instant(2))); assert_eq!(queue.commands.borrow().len(),1);
+        c.in_flight=1; assert!(c.flush(&queue,Instant(3))); assert!(!c.finishing);
+        c.in_flight=0; c.deadline=None;
+        queue.full.set(true); assert!(c.flush(&queue,Instant(4))); assert!(!c.finishing);
+        queue.full.set(false); assert!(c.flush(&queue,Instant(5))); assert!(c.finishing);
+        assert!(matches!(&queue.commands.borrow()[1],NetCommand::FinishTcp {handle:NetHandle(1)}));
+        assert!(c.flush(&queue,Instant(6))); assert_eq!(queue.commands.borrow().len(),2);
+        assert!(!c.flush(&queue,Instant(5005)));
     }
-    #[test] fn probe_preserves_plaintext_prefix_and_delays_silent_greeting() {
-        let queue=queue();let mut c=Connection::new(NetHandle(88),0,None,Instant(0));
-        assert!(c.flush(&queue,Instant(999)));assert!(queue.commands.borrow().is_empty());
-        assert!(c.flush(&queue,Instant(1000)));assert!(c.terminal.is_some());
-        assert!(matches!(&queue.commands.borrow()[0],NetCommand::SendTcp {..}));
-        let mut c=Connection::new(NetHandle(89),0,None,Instant(0));
-        c.input(b"S");assert!(c.terminal.is_none());
-        c.input(b"how\\n");assert!(!c.rejected);
-        assert_eq!(c.terminal.as_ref().unwrap().submitted(),vec!["Show"]);
-    }
-    #[test] fn partial_ssh_prefix_times_out_without_starting_plaintext() {
-        let queue=queue();let mut c=Connection::new(NetHandle(90),7108,None,Instant(0));
-        c.input(b"SSH");assert!(!c.flush(&queue,Instant(1000)));
-        assert!(c.rejected);assert!(c.terminal.is_none());
-        assert!(matches!(&queue.commands.borrow()[0],NetCommand::Close {..}));
-    }
-    #[test] fn queue_rejection_preserves_bytes_and_one_write_is_in_flight() {
-        let queue = queue(); let mut connection = connection(NetHandle(1));
-        let banner = connection.terminal.as_ref().unwrap().output.clone();
-        queue.full.set(true); assert!(connection.flush(&queue, Instant(0)));
-        assert_eq!(connection.terminal.as_ref().unwrap().output, banner);
-        queue.full.set(false); assert!(connection.flush(&queue, Instant(1)));
-        assert_eq!(connection.in_flight, banner.len());
-        connection.terminal.as_mut().unwrap().input(b"x");
-        assert!(connection.flush(&queue, Instant(2)));
-        assert_eq!(queue.commands.borrow().len(), 1);
-        connection.in_flight = 0; connection.deadline = None;
-        assert!(connection.flush(&queue, Instant(3)));
-        assert_eq!(queue.commands.borrow().len(), 2);
-        assert!(matches!(&queue.commands.borrow()[1], NetCommand::SendTcp { handle: NetHandle(1), data } if data == b"\\x1b8x"));
-    }
-    #[test] fn graceful_finish_waits_for_output_and_has_teardown_deadline() {
-        let queue = queue(); let mut connection = connection(NetHandle(2));
-        connection.terminal.as_mut().unwrap().input(b"exit\\n");
-        assert!(connection.flush(&queue, Instant(0)));
-        assert!(matches!(&queue.commands.borrow()[0], NetCommand::SendTcp { .. }));
-        assert!(connection.flush(&queue, Instant(1))); assert!(!connection.finishing);
-        connection.in_flight = 0; connection.deadline = None;
-        assert!(connection.flush(&queue, Instant(2))); assert!(connection.finishing);
-        assert!(matches!(&queue.commands.borrow()[1], NetCommand::FinishTcp { handle: NetHandle(2) }));
-        assert!(!connection.flush(&queue, Instant(5002)));
-    }
-    #[test] fn stalled_peer_does_not_block_another_session() {
-        let queue = queue(); let mut first = connection(NetHandle(1));
-        let mut second = connection(NetHandle(2));
-        first.flush(&queue, Instant(0)); second.flush(&queue, Instant(10));
-        assert_eq!(queue.commands.borrow().len(), 2);
-        queue.full.set(true); assert!(first.flush(&queue, Instant(30000)));
-        queue.full.set(false); assert!(!first.flush(&queue, Instant(30001)));
-        assert!(second.flush(&queue, Instant(30001)));
+    #[test] fn stalled_peer_does_not_block_another_connection() {
+        let queue=queue(); let mut a=Connection::new(NetHandle(1),0); let mut b=Connection::new(NetHandle(2),0);
+        assert!(a.flush(&queue,Instant(0))); assert!(b.flush(&queue,Instant(10)));
+        queue.full.set(true); assert!(a.flush(&queue,Instant(30000)));
+        queue.full.set(false); assert!(!a.flush(&queue,Instant(30001)));
+        assert!(b.flush(&queue,Instant(30001)));
+        assert!(matches!(&queue.commands.borrow()[2],NetCommand::Close {handle:NetHandle(1)}));
     }
 }
 }
