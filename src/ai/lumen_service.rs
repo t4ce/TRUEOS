@@ -452,23 +452,7 @@ pub(crate) fn spirit_response_present(owner: u8, turn: u64, text: &[u8]) -> i32 
     if !crate::spirit::enqueue_reasoning_response(turn, text) {
         return ERROR_UNAVAILABLE;
     }
-    #[cfg(feature = "trueos_ttstt")]
-    match crate::shell2::cmds::ttstt::enqueue_lumen_tts(text) {
-        Ok(request) => crate::log_info!(
-            target: "r";
-            "lumen-bp: voice queued owner={} turn={} tts_request={}\n",
-            owner,
-            turn,
-            request,
-        ),
-        Err(reason) => crate::log_warn!(
-            target: "r";
-            "lumen-bp: voice unavailable owner={} turn={} reason={} text_presentation=retained\n",
-            owner,
-            turn,
-            reason,
-        ),
-    }
+
     #[cfg(not(feature = "trueos_ttstt"))]
     crate::log_info!(
         target: "r";
@@ -498,21 +482,7 @@ pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
     if !crate::spirit::enqueue_reasoning_response(turn, text) {
         return ERROR_UNAVAILABLE;
     }
-    #[cfg(feature = "trueos_ttstt")]
-    match crate::shell2::cmds::ttstt::enqueue_lumen_tts(text) {
-        Ok(request) => crate::log_info!(
-            target: "r";
-            "lumen-bp: voice queued owner=external turn={} tts_request={}\n",
-            turn,
-            request,
-        ),
-        Err(reason) => crate::log_warn!(
-            target: "r";
-            "lumen-bp: voice unavailable owner=external turn={} reason={} text_presentation=retained\n",
-            turn,
-            reason,
-        ),
-    }
+
     #[cfg(not(feature = "trueos_ttstt"))]
     crate::log_info!(
         target: "r";

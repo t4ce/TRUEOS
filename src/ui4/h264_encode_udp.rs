@@ -478,7 +478,6 @@ where
     loop {
         // The producer alone owns the hardware encoder. A film request wakes
         // this subscriber wait and runs here, using the very same WD pipeline.
-        super::h264_encode_stream::film::run_pending().await;
         if egress_session_ready(session_id) {
             break;
         }
@@ -633,14 +632,12 @@ async fn run_egress_session(
         };
         break udp;
     };
-    let (remote, _view_lease) = loop {
+    let remote = loop {
         match udp.poll_event() {
             Some(VNetUdpEvent::Packet(VNetUdpPacket::V4 { from, data }))
                 if data.as_slice() == SUBSCRIBE =>
             {
-                if let Some(lease) = super::h264_encode_stream::film::claim_rdp_view() {
-                    break (from, lease);
-                }
+                break from;
             }
             Some(VNetUdpEvent::Closed) => {
                 report.network_waits = report.network_waits.saturating_add(1);

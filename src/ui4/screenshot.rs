@@ -234,20 +234,7 @@ fn report_shot_result(
     target: Option<&crate::shell3::MatrixTarget>,
     result: Result<&str, &str>,
 ) {
-    if let Some(target) = target {
-        let (notice, message) = match result {
-            Ok(path) => (
-                crate::shell3::capture::saved_result(path),
-                alloc::format!("Image was STORED: trueosfs:/{path}"),
-            ),
-            Err(error) => (
-                crate::shell3::capture::error_result(error),
-                alloc::format!("Image was NOT STORED: {error}"),
-            ),
-        };
-        crate::shell3::tui::native_notice(target, notice.as_str());
-        crate::shell2::print_matrix_target_system_line(target, message.as_str());
-    }
+    crate::log!("screenshot: {:?}\n", result);
 }
 
 /// Drive Pipe C -> WD for exactly one frame when no RDP session owns it.

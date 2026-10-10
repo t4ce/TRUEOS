@@ -16,6 +16,7 @@ pub enum VmNetStatus {
     Ok = 0,
     BadArg = 1,
     Interrupted = 2,
+    Unsupported = 3,
 }
 
 #[repr(C)]
