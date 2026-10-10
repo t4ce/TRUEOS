@@ -812,7 +812,7 @@ fn blueprint_uses_local_terminal_handoff(
     console_surface: BlueprintConsoleSurface,
     console_target: Option<&MatrixTarget>,
 ) -> bool {
-    false
+    console_surface.is_terminal() && console_target.is_some_and(crate::shell3::tui::supports)
 }
 
 #[derive(Clone)]
@@ -4100,15 +4100,16 @@ fn blueprint_console_hunt_log(vm_id: u8, data: &[u8]) -> bool {
 
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     blueprint_console_text_lines(vm_id, None, data);
-    data.len()
+    blueprint_console_raw_write(vm_id, data)
 }
 
 pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
-    0
+    let Some(target) = blueprint_console_target(vm_id) else { return 0; };
+    crate::shell3::tui::write(&target, vm_id, data).unwrap_or(0)
 }
 
 pub(crate) fn blueprint_console_konsole_size(vm_id: u8) -> (u32, u32) {
-    (0, 0)
+    blueprint_console_target(vm_id).and_then(|target| crate::shell3::tui::surface(&target)).map(|s| (s.cols, s.rows)).unwrap_or((0, 0))
 }
 
 pub(crate) fn blueprint_console_konsole_begin_frame(
@@ -4117,7 +4118,7 @@ pub(crate) fn blueprint_console_konsole_begin_frame(
     rows: usize,
     terminal_handoff: bool,
 ) -> (u32, u32) {
-    (0, 0)
+    blueprint_console_konsole_size(vm_id)
 }
 
 pub(crate) fn blueprint_console_set_exit_reason(vm_id: u8, reason: &str) -> bool {
@@ -4164,20 +4165,49 @@ pub(crate) fn blueprint_terminal_lease_current(
     vm_id: u8,
     ready_epoch: u64,
 ) -> Result<u64, BlueprintTerminalLeaseError> {
-    Err(BlueprintTerminalLeaseError::Unsupported)
+    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?.lock();
+    let slot = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?;
+    let (target, epoch) = {
+        let guard = slot.lock(); let c = guard.as_ref().ok_or(BlueprintTerminalLeaseError::Detached)?;
+        if !c.console_attached { return Err(BlueprintTerminalLeaseError::Detached); }
+        match c.terminal_lease {
+            BlueprintTerminalLeaseState::Active { epoch, .. } => {
+                if ready_epoch != 0 && ready_epoch != epoch { return Err(BlueprintTerminalLeaseError::Stale); }
+                return Ok(epoch);
+            }
+            BlueprintTerminalLeaseState::Reserved if ready_epoch == 0 => (c.console_target.clone().ok_or(BlueprintTerminalLeaseError::Unsupported)?, 1),
+            _ => return Err(BlueprintTerminalLeaseError::NotActive),
+        }
+    };
+    if crate::shell3::tui::claim(&target, vm_id) != Some(true) { return Err(BlueprintTerminalLeaseError::Busy); }
+    let mut guard = slot.lock(); let c = guard.as_mut().ok_or(BlueprintTerminalLeaseError::Detached)?;
+    c.terminal_lease = BlueprintTerminalLeaseState::Active { epoch, observed: true, ready: true };
+    Ok(epoch)
 }
 
 pub(crate) fn blueprint_terminal_surface_snapshot(
     vm_id: u8,
 ) -> Result<BlueprintTerminalSurfaceSnapshot, BlueprintTerminalLeaseError> {
-    Err(BlueprintTerminalLeaseError::Unsupported)
+    blueprint_terminal_lease_current(vm_id, 0)?;
+    let target = blueprint_console_target(vm_id).ok_or(BlueprintTerminalLeaseError::Detached)?;
+    crate::shell3::tui::surface(&target).ok_or(BlueprintTerminalLeaseError::Unsupported)
 }
 
 pub(crate) fn blueprint_terminal_lease_release(
     vm_id: u8,
     expected_epoch: u64,
 ) -> Result<u64, BlueprintTerminalLeaseError> {
-    Err(BlueprintTerminalLeaseError::Unsupported)
+    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?.lock();
+    let slot = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?;
+    let (target, epoch) = {
+        let guard = slot.lock(); let c = guard.as_ref().ok_or(BlueprintTerminalLeaseError::Detached)?;
+        let BlueprintTerminalLeaseState::Active { epoch, .. } = c.terminal_lease else { return Err(BlueprintTerminalLeaseError::NotActive); };
+        if expected_epoch != 0 && expected_epoch != epoch { return Err(BlueprintTerminalLeaseError::Stale); }
+        (c.console_target.clone().ok_or(BlueprintTerminalLeaseError::Unsupported)?, epoch)
+    };
+    if crate::shell3::tui::release(&target, vm_id) != Some(true) { return Err(BlueprintTerminalLeaseError::Busy); }
+    if let Some(c) = slot.lock().as_mut() { c.terminal_lease = BlueprintTerminalLeaseState::Parked { ticket: epoch }; }
+    Ok(epoch)
 }
 
 pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
@@ -4270,7 +4300,20 @@ pub(crate) fn blueprint_terminal_lease_poll_reentry(
     vm_id: u8,
     ticket: u64,
 ) -> Result<BlueprintTerminalReentryPoll, BlueprintTerminalLeaseError> {
-    Err(BlueprintTerminalLeaseError::Unsupported)
+    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?.lock();
+    let slot = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?;
+    let (target, epoch) = {
+        let guard = slot.lock(); let c = guard.as_ref().ok_or(BlueprintTerminalLeaseError::Detached)?;
+        match c.terminal_lease {
+            BlueprintTerminalLeaseState::Parked { ticket: current } if current == ticket => return Ok(BlueprintTerminalReentryPoll::Pending),
+            BlueprintTerminalLeaseState::ReentryRequested { ticket: current, epoch } if current == ticket => (c.console_target.clone().ok_or(BlueprintTerminalLeaseError::Unsupported)?, epoch),
+            BlueprintTerminalLeaseState::Active { epoch, .. } if epoch == ticket.wrapping_add(1).max(1) => return Ok(BlueprintTerminalReentryPoll::Ready(epoch)),
+            _ => return Err(BlueprintTerminalLeaseError::Stale),
+        }
+    };
+    if crate::shell3::tui::claim(&target, vm_id) != Some(true) { return Ok(BlueprintTerminalReentryPoll::Pending); }
+    if let Some(c) = slot.lock().as_mut() { c.terminal_lease = BlueprintTerminalLeaseState::Active { epoch, observed: true, ready: true }; }
+    Ok(BlueprintTerminalReentryPoll::Ready(epoch))
 }
 
 fn blueprint_console_write_raw_to_target(
@@ -4656,11 +4699,19 @@ pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
 }
 
 pub(crate) fn blueprint_console_read(vm_id: u8, out: &mut [u8]) -> usize {
-    0
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else { return 0; };
+    let mut guard = slot.lock();
+    let Some(context) = guard.as_mut() else { return 0; };
+    if !context.console_attached || context.terminal_lease.suppresses_terminal_output() { return 0; }
+    let count = out.len().min(context.console_input.len());
+    for byte in &mut out[..count] { *byte = context.console_input.pop_front().unwrap(); }
+    count
 }
 
 pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
-    0
+    BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).and_then(|slot| {
+        slot.lock().as_ref().map(|c| if c.console_attached && !c.terminal_lease.suppresses_terminal_output() { c.console_input.len() } else { 0 })
+    }).unwrap_or(0)
 }
 
 pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
@@ -4677,6 +4728,7 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
 }
 
 fn clear_blueprint_process_context(vm_id: u8) -> BlueprintTerminalCleanup {
+    if let Some(target) = blueprint_console_target(vm_id) { let _ = crate::shell3::tui::release(&target, vm_id); }
     let mut cleanup = BlueprintTerminalCleanup::empty();
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         cleanup.context_present = slot.lock().take().is_some();

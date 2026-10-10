@@ -68,7 +68,7 @@ BUILDIN_BP_FILES := $(addprefix $(BLUEPRINTS_DIR)/dist/,$(addsuffix .bp,$(BUILDI
 # the prerequisites so a Mio/crossterm (or other vendor) change cannot leave a
 # previously packed Blueprint looking up-to-date.
 BUILDIN_COMMON_INPUTS := $(shell if [ -d "$(BLUEPRINTS_DIR)" ]; then find "$(BLUEPRINTS_DIR)/src" "$(BLUEPRINTS_DIR)/api" "$(BLUEPRINTS_DIR)/.cargo" "$(BLUEPRINTS_DIR)/vendor" -type f 2>/dev/null; fi) $(wildcard $(BLUEPRINTS_DIR)/Cargo.toml $(BLUEPRINTS_DIR)/rust-toolchain.toml $(BLUEPRINTS_DIR)/apps.json)
-ENABLE_BUILDINS ?= 0
+ENABLE_BUILDINS ?= 1
 ENABLE_BLUEPRINTS ?= 0
 ENABLE_WEAVE_HELLO ?= 0
 # When enabled, install FirmwareScout.efi as BOOTX64.EFI (preserving the

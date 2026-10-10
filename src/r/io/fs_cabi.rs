@@ -1786,7 +1786,8 @@ static KONSOLE_FRAME_STATES: spin::Mutex<BTreeMap<u32, KonsoleFrameState>> =
     spin::Mutex::new(BTreeMap::new());
 
 fn konsole_write_bytes(data: &[u8]) -> usize {
-    0
+    if crate::hv::current_hull_guest_context_vm_id().is_some() { return guest_shell_write_op(trueos_vm::vmcall::OP_BP_SHELL_RAW_WRITE, data); }
+    crate::hv::current_guest_execution_context_vm_id().map(|vm| crate::hv::blueprint_console_raw_write(vm, data)).unwrap_or(0)
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1848,6 +1849,27 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
 
 
 
+
+// Retired portal ABI signatures remain locked; there is no Shell2 backend.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell2_raw_write(_data_ptr: *const u8, _data_len: usize) -> usize { 0 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell2_frontend_attach_v1(_cols: u32, _rows: u32) -> i32 { -38 }
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell2_frontend_read_v1(
+    _read_seq: u64, _out_ptr: *mut u8, _out_cap: usize,
+    _out_next_seq: *mut u64, _out_epoch: *mut u64, _out_flags: *mut u32,
+) -> isize { -38 }
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell2_frontend_submit_input_v1(
+    _data_ptr: *const u8, _data_len: usize,
+) -> isize { -38 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell2_frontend_detach_v1() -> i32 { -38 }
 
 pub(crate) fn blueprint_img_open_payload(vm_id: u8, payload: &[u8]) -> i32 {
     -38 // ENOSYS: removed shell integration.
@@ -2378,11 +2400,26 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_surface_snapshot_v1(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_konsole_size(out_cols: *mut u32, out_rows: *mut u32) -> i32 {
-    -38 // ENOSYS: removed shell integration.
+    if out_cols.is_null() || out_rows.is_null() { return -1; }
+    let size = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, packed) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_KONSOLE_SIZE, 0, 0);
+        if status != trueos_vm::vmcall::STATUS_OK { return -3; }
+        ((packed >> 32) as u32, packed as u32)
+    } else if let Some(vm) = crate::hv::current_guest_execution_context_vm_id() { crate::hv::blueprint_console_konsole_size(vm) }
+    else { return -3; };
+    if size.0 == 0 || size.1 == 0 { return -3; }
+    unsafe { out_cols.write(size.0); out_rows.write(size.1); } 0
 }
 
 fn konsole_begin_frame_size(cols: u32, rows: u32, terminal_handoff: bool) -> Option<(u32, u32)> {
-    None
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let flags = u64::from(rows) | if terminal_handoff { 1 << 63 } else { 0 };
+        let (status, packed) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_KONSOLE_BEGIN_FRAME, u64::from(cols), flags);
+        return (status == trueos_vm::vmcall::STATUS_OK).then_some(((packed >> 32) as u32, packed as u32)).filter(|(c,r)| *c > 0 && *r > 0);
+    }
+    let vm = crate::hv::current_guest_execution_context_vm_id()?;
+    let size = crate::hv::blueprint_console_konsole_begin_frame(vm, cols as usize, rows as usize, terminal_handoff);
+    (size.0 > 0 && size.1 > 0).then_some(size)
 }
 
 #[unsafe(no_mangle)]
@@ -2533,12 +2570,21 @@ pub extern "C" fn trueos_cabi_shell_attached_read_byte() -> i32 {
 }
 
 pub fn read_attached_console_bytes(out: &mut [u8]) -> usize {
-    0
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let cap = out.len().min(trueos_vm::vmcall::PAYLOAD_CAP);
+        let (status, count) = trueos_vm::vmcall::call_with_payload(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ, cap as u64, 0, &[], &mut out[..cap]);
+        return if status == trueos_vm::vmcall::STATUS_OK { (count as usize).min(cap) } else { 0 };
+    }
+    crate::hv::current_guest_execution_context_vm_id().map(|vm| crate::hv::blueprint_console_read(vm, out)).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_shell_attached_readable_len() -> usize {
-    0
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, count) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READABLE_LEN, 0, 0);
+        return if status == trueos_vm::vmcall::STATUS_OK { count as usize } else { 0 };
+    }
+    crate::hv::current_guest_execution_context_vm_id().map(crate::hv::blueprint_console_readable_len).unwrap_or(0)
 }
 
 /// Claim a reserved Blueprint terminal when a conventional Unix stdin user
