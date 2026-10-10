@@ -1903,14 +1903,26 @@ pub unsafe extern "C" fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len
     blueprint_img_open_payload(vm_id, payload)
 }
 
+unsafe fn video_open(path_ptr: *const u8, path_len: usize, qualified: bool) -> i32 {
+    if path_ptr.is_null() || path_len == 0 || path_len > trueos_vm::vmcall::PAYLOAD_CAP { return -1; }
+    let payload = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let op = if qualified { trueos_vm::vmcall::OP_BP_VID_OPEN_V2 } else { trueos_vm::vmcall::OP_BP_VID_OPEN_V1 };
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(op, 0, 0, payload, &mut []);
+        return if status == trueos_vm::vmcall::STATUS_OK { vmcall_signed(rc) as i32 } else { -3 };
+    }
+    let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else { return -3; };
+    crate::r::services::video_open_service::enqueue(vm, payload, qualified)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vid_open_v2(path_ptr: *const u8, path_len: usize) -> i32 {
-    -38 // ENOSYS: removed shell integration.
+    unsafe { video_open(path_ptr, path_len, true) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vid_open_v1(path_ptr: *const u8, path_len: usize) -> i32 {
-    -38 // ENOSYS: removed shell integration.
+    unsafe { video_open(path_ptr, path_len, false) }
 }
 
 /// Spawn this Blueprint archive in a hidden child Hull.  The child receives

@@ -3514,6 +3514,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (i64::from(rc)) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_VID_OPEN_V1 | OP_BP_VID_OPEN_V2 => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|payload| crate::r::services::video_open_service::enqueue(vm_id, payload, op == OP_BP_VID_OPEN_V2))
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, i64::from(rc) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_IMG_OPEN_V1 => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);

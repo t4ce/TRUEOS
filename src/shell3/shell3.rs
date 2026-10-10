@@ -1,6 +1,6 @@
 pub(crate) mod capture;
 mod matrix_target;
-pub(crate) use matrix_target::{MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
+pub(crate) use matrix_target::{matrix_target_print_line, MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
 mod metafmtstr;
 mod names;
 pub mod net;

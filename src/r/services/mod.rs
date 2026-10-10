@@ -17,3 +17,4 @@ pub(crate) mod oceancache;
 pub mod spawn_service;
 pub mod vcpy_service;
 pub mod video_service;
+pub(crate) mod video_open_service;

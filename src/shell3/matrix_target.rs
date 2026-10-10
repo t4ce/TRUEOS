@@ -87,3 +87,8 @@ pub(super) fn retire_expired_attachments(slots: &mut super::MatrixSlotsState)
 
 pub(crate) const TRANSPORT_NET_TCP_SCOPE: u8 = 1;
 pub(crate) const TRANSPORT_LOCAL_SCOPE: u8 = 2;
+
+/// Report host-service output without changing terminal ownership.
+pub(crate) fn matrix_target_print_line(target: &MatrixTarget, text: &str) {
+    super::MatrixSlots::echo_output(&target.lease, text.into());
+}
