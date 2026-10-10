@@ -88,6 +88,7 @@ impl Terminal {
     }
 
     pub(super) fn reconcile_matrix_selection(&mut self) {
+        self.shell.refresh_clock();
         self.shell.reconcile_matrix_selection();
         self.refresh_controls();
     }

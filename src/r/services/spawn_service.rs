@@ -59,6 +59,7 @@ define_started_flags!(
     NET_CACHE_SERVICE_STARTED,
     NET_THROUGHPUT_BENCH_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
+    CLOCK_SIGNALS_STARTED,
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
     GRIDPAPER_SERVICE_STARTED,
@@ -585,6 +586,10 @@ fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_eff_worker(spawner, |_worker_spawner| {
         crate::net::tls_socket::tls_socket_service_task()
     })
+}
+
+fn spawn_clock_signals(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::chronos::signals::service_task())
 }
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
@@ -1513,6 +1518,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TLS_SOCKET_SERVICE_STARTED,
         spawn_tls_socket_service,
     ),
+    TaskSpec::enabled("clock-signals", 0, &CLOCK_SIGNALS_STARTED, spawn_clock_signals),
     TaskSpec::enabled(
         "ntp-sync",
         crate::r::readiness::NET_ANY_CONFIGURED,

@@ -605,12 +605,10 @@ pub unsafe extern "C" fn tcsetattr(
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     };
-    if fd == 0 {
-        // Raw-mode entry precedes alternate-screen rendering in Crossterm and
-        // most native TUIs.  Claim here so their very first frame, not merely
-        // their first key read, is routed through the direct Shell2 surface.
-        crate::r::io::fs_cabi::claim_attached_console_for_terminal_io();
-    }
+    // All three standard descriptors refer to the attached terminal. Edit
+    // configures raw mode through stdout, while Crossterm uses stdin. Claim
+    // before either application's first terminal queries or rendered frame.
+    crate::r::io::fs_cabi::claim_attached_console_for_terminal_io();
     STD_TERMIOS.lock()[fd as usize].copy_from_slice(input);
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0

@@ -537,6 +537,7 @@ pub struct Shell3 {
     rows_count: usize,
     layout_generation: usize,
     time: String,
+    clock: crate::chronos::signals::Subscription,
     mode: Mode,
     active_matrix_slot: Option<String>,
     active_matrix_lifetime: Option<u64>,
@@ -682,6 +683,7 @@ impl Shell3 {
             rows_count,
             layout_generation: 0,
             time,
+            clock: crate::chronos::signals::subscribe(crate::chronos::signals::Every::MINUTE),
             mode: Mode::HV,
             active_matrix_slot: None,
             active_matrix_lifetime: None,
@@ -823,6 +825,15 @@ impl Shell3 {
     /// CPU slot of the executor that created this shell.
     pub const fn executor_slot(&self) -> u32 {
         self.executor_slot
+    }
+
+    pub(super) fn refresh_clock(&mut self) -> bool {
+        let Some(tick) = self.clock.take() else { return false; };
+        let minutes = (tick.local_seconds / 60) % (24 * 60);
+        let time = alloc::format!("{:02}:{:02}", minutes / 60, minutes % 60);
+        if self.time == time { return false; }
+        self.set_time(&time);
+        true
     }
 
     pub fn set_time(&mut self, time: &str) {

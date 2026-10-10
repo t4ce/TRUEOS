@@ -179,3 +179,6 @@ pub(crate) extern "x86-interrupt" fn CHRONOS_TIMER(_stack_frame: InterruptStackF
         Msr::new(MSR_IA32_X2APIC_EOI).write(0);
     }
 }
+
+#[path = "chronos/signals.rs"]
+pub mod signals;
