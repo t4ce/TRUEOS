@@ -139,6 +139,7 @@ pub const OP_BP_CHILD_SEND_V1: u32 = 0x13D;
 pub const OP_BP_CHILD_RECEIVE_V1: u32 = 0x13E;
 pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F;
 pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140;
+pub const OP_BP_LAUNCH_SCRIPT_V1: u32 = 0x186;
 pub const OP_BP_IMG_OPEN_V1: u32 = 0x17B;
 pub const OP_BP_VID_OPEN_V1: u32 = 0x182;
 pub const OP_BP_VID_OPEN_V2: u32 = 0x183;

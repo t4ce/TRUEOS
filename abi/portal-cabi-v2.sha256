@@ -11,4 +11,5 @@
 # Additive display fade v1 with owned gamma restoration. Existing signatures unchanged.
 # Additive winit single-UI/triple-scene frame contract v1. Existing signatures unchanged.
 # Additive region-limited GPU sprite begin v1. Existing signatures unchanged.
-827cd860ac52cedce1c1ae67aaa18652d4126f7741ce20c0a5ae5f84a69c5db1
+# Additive Blueprint launch with one-shot script v1. All existing declarations unchanged.
+3b4195769feb596d0b080669849413118b869c3d0d65fd0cfc893acda53515e4

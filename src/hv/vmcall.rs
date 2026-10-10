@@ -159,6 +159,7 @@ pub const OP_BP_CHILD_SEND_V1: u32 = 0x13D; // arg0 handle, payload message -> b
 pub const OP_BP_CHILD_RECEIVE_V1: u32 = 0x13E; // arg0 handle -> one queued message
 pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F; // arg0 handle -> lifecycle state/rc
 pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
+pub const OP_BP_LAUNCH_SCRIPT_V1: u32 = 0x186;
 pub const OP_BP_IMG_OPEN_V1: u32 = 0x17B; // NUL-separated TRUEOSFS paths -> queued/rc
 pub const OP_BP_VID_OPEN_V1: u32 = 0x182; // primary-root video path -> queued/rc
 pub const OP_BP_VID_OPEN_V2: u32 = 0x183; // disc-qualified TRUEOSFS video path -> queued/rc
@@ -3558,6 +3559,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(|()| 0i64)
                 .unwrap_or_else(i64::from);
             write_response(vm_id, seq, STATUS_OK, result as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LAUNCH_SCRIPT_V1 => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|payload| crate::r::io::fs_cabi::blueprint_launch_script_payload(vm_id, payload))
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, (i64::from(rc)) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_IMG_OPEN_V1 => {

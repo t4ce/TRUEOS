@@ -20,7 +20,22 @@ pub(super) fn present(
     let current = rendered_lines(lines);
     let mut segments = super::super::update::diff_rendered_lines(previous.as_deref(), &current);
     if segments.is_empty() && previous.is_some() {
-        segments.extend_from_slice(fallback_segments);
+        // Snapshot updates carry source styles; use the presentation's cell
+        // styles so a fallback repaint preserves the UI4 control background.
+        segments.extend(fallback_segments.iter().cloned().map(|mut segment| {
+            let row = match segment.row {
+                super::super::SpecialRows::TitleRow => 0,
+                super::super::SpecialRows::StatusRow => 1,
+                super::super::SpecialRows::PromtRow => 2,
+                super::super::SpecialRows::MatrixRow(index) => index + 3,
+            };
+            for (index, color) in segment.colors.iter_mut().enumerate() {
+                if let Some(cell) = current.get(row).and_then(|line| line.get(segment.offset + index)) {
+                    *color = cell.1;
+                }
+            }
+            segment
+        }));
     }
     let view = match writable_rgba_view(lease) {
         Ok(view) => view,

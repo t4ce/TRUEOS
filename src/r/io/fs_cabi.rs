@@ -2945,3 +2945,58 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_retarget_slot(
         -1
     }
 }
+
+/// Submit app name, NUL, then a one-shot UTF-8 start script to the regular launcher.
+pub(crate) fn blueprint_launch_script_payload(vm_id: u8, payload: &[u8]) -> i32 {
+    let Some(split) = payload.iter().position(|byte| *byte == 0) else {
+        return -1;
+    };
+    let (Ok(app), Ok(script)) =
+        (core::str::from_utf8(&payload[..split]), core::str::from_utf8(&payload[split + 1..]))
+    else {
+        return -1;
+    };
+    if app.is_empty()
+        || !app
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c == b'.')
+        || script.as_bytes().contains(&0)
+    {
+        return -1;
+    }
+    crate::shell2::cmds::run::enqueue_script_from_blueprint(
+        vm_id,
+        String::from(app),
+        String::from(script),
+    )
+    .map(|()| 0)
+    .unwrap_or(-11)
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_launch_script_v1(
+    payload_ptr: *const u8,
+    payload_len: usize,
+) -> i32 {
+    if payload_ptr.is_null() || payload_len == 0 || payload_len > trueos_vm::vmcall::PAYLOAD_CAP {
+        return -1;
+    }
+    let payload = unsafe { core::slice::from_raw_parts(payload_ptr, payload_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_LAUNCH_SCRIPT_V1,
+            0,
+            0,
+            payload,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_signed(rc) as i32
+        } else {
+            -3
+        };
+    }
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
+        return -3;
+    };
+    blueprint_launch_script_payload(vm_id, payload)
+}

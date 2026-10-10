@@ -693,3 +693,16 @@ pub fn konsole_set_cursor(row: u32, col: u32, visible: bool) -> i32 {
 pub fn konsole_end_frame() -> i32 {
     unsafe { vcabi::trueos_cabi_konsole_end_frame() }
 }
+
+/// Launch an app with a one-shot UTF-8 start script on its own terminal target.
+pub fn launch_with_script(app: &str, script: &str) -> Result<(), i32> {
+    if app.is_empty() || app.as_bytes().contains(&0) || script.as_bytes().contains(&0) {
+        return Err(-1);
+    }
+    let mut payload = Vec::from(app.as_bytes());
+    payload.push(0);
+    payload.extend_from_slice(script.as_bytes());
+    let rc =
+        unsafe { vcabi::trueos_cabi_blueprint_launch_script_v1(payload.as_ptr(), payload.len()) };
+    if rc == 0 { Ok(()) } else { Err(rc) }
+}

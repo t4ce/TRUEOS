@@ -1753,6 +1753,7 @@ unsafe extern "C" {
         data_len: usize,
     ) -> isize;
     pub fn trueos_cabi_shell2_frontend_detach_v1() -> i32;
+    pub fn trueos_cabi_blueprint_launch_script_v1(payload_ptr: *const u8, payload_len: usize) -> i32;
     pub fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len: usize) -> i32;
     pub fn trueos_cabi_vid_open_v1(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_vid_open_v2(path_ptr: *const u8, path_len: usize) -> i32;

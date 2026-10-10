@@ -49,6 +49,20 @@ pub(crate) fn enqueue_img_open_from_blueprint(
     Ok(())
 }
 
+static BLUEPRINT_SCRIPT_QUEUE: Mutex<VecDeque<(u8, String, String)>> = Mutex::new(VecDeque::new());
+pub(crate) fn enqueue_script_from_blueprint(
+    origin: u8,
+    app: String,
+    script: String,
+) -> Result<(), &'static str> {
+    let mut queue = BLUEPRINT_SCRIPT_QUEUE.lock();
+    if queue.len() >= 16 {
+        return Err("launch script queue is full");
+    }
+    queue.push_back((origin, app, script));
+    Ok(())
+}
+
 fn preferred_slot_for_archive(archive: &str) -> String {
     if archive == "hello_world" || archive == "hello_world.bp" {
         return String::from("h_w");
@@ -930,6 +944,49 @@ pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
     loop {
         super::os::poll_shell3_admin(&spawner);
         if super::vid::poll_blueprint_open(&spawner) {
+            continue;
+        }
+        let script_request = BLUEPRINT_SCRIPT_QUEUE.lock().pop_front();
+        if let Some((origin, app, script)) = script_request {
+            let Some(target) = crate::hv::blueprint_console_target(origin) else {
+                crate::log_warn!(target: "apps"; "apps: script launch lost origin_vm={} reason=no-console-target\n", origin);
+                continue;
+            };
+            let archive = if app.ends_with(".bp") {
+                app.clone()
+            } else {
+                alloc::format!("{app}.bp")
+            };
+            match submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
+                target.clone(),
+                &archive,
+                Vec::new(),
+                crate::hv::BlueprintInstanceRequest::default(),
+                Some(script.clone()),
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(error) if error == "archive not found" => {
+                    if crate::shell2::submit_online_launch_script_to_target(
+                        &spawner,
+                        target,
+                        app.trim_end_matches(".bp"),
+                        &script,
+                    )
+                    .is_err()
+                    {
+                        crate::hv::blueprint_control_shell_line(
+                            origin,
+                            "LAUNCH FAILED · online launch task unavailable",
+                        );
+                    }
+                }
+                Err(error) => crate::hv::blueprint_control_shell_line(
+                    origin,
+                    alloc::format!("LAUNCH FAILED · {error}").as_str(),
+                ),
+            }
             continue;
         }
         if let Some(request) = BLUEPRINT_IMG_OPEN_QUEUE.lock().pop_front() {

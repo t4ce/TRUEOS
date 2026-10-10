@@ -187,6 +187,28 @@ impl Snapshot {
     pub(super) fn rendered_lines(&self) -> Vec<RenderedLine> {
         self.rows.iter().map(|row| row.rendered.clone()).collect()
     }
+
+    pub(super) fn rendered_ui4_lines(&self) -> Vec<RenderedLine> {
+        let mut lines = self.rendered_lines();
+        if !self.terminal_active {
+            // Black is already the default; extra opacity makes the controls
+            // slightly darker over the desktop, including their padded blanks.
+            let background = [0, 0, 0, 160];
+            for row in lines.iter_mut().take(3) {
+                for (_, style) in row {
+                    let color = style.unwrap_or(RgbaColor::White);
+                    if color.background().is_none_or(|bg| bg == RgbaColor::BlackTransparent.rgba()) {
+                        *style = Some(RgbaColor::Terminal {
+                            foreground: color.rgba(),
+                            background,
+                            underline: color.underline(),
+                        });
+                    }
+                }
+            }
+        }
+        lines
+    }
 }
 
 pub(super) fn take_updates(
