@@ -37,7 +37,7 @@ mod intel {{
 struct FrameRgbaView { virt: *const u8, byte_len: usize, width: u32, height: u32, pitch: u32, phys: u64, gpu: u64 }
 mod ui4 { pub fn set_window_placement(_:u32,_:u32,_:crate::show::Placement)->Result<(),()> { Ok(()) } }
 mod show {
-    const BACKGROUND: crate::RgbaColor = crate::RgbaColor::Gray;
+    const BACKGROUND: [u8;4] = crate::update::MATRIX_BACKGROUND;
     const FOREGROUND: crate::RgbaColor = crate::RgbaColor::White;
 '''
     source += """
@@ -226,12 +226,13 @@ fn guarded_matrix_source_matches_visible_cells_clamps_and_keeps_identity() {
     assert_eq!(area.identity,(Some("pan".into()),Some(42)));
     assert_eq!(area.cells.len(),9);assert!(area.cells.iter().all(|r|r.len()==16));
     for y in 0..5 {for x in 0..12 {assert_eq!(area.cell(x as i64,(5+y) as i64),visible[3+y][x]);}}
-    assert_eq!(area.cell(-1,5),(' ',None));assert_eq!(area.cell(0,0),(' ',None));
-    assert_eq!(area.cell(0,10),(' ',None));assert_ne!(area.cell(13,5).0,' ');
+    let blank=(' ',Some(update::cell_color(None,update::MATRIX_BACKGROUND)));
+    assert_eq!(area.cell(-1,5),blank);assert_eq!(area.cell(0,0),blank);
+    assert_eq!(area.cell(0,10),blank);assert_ne!(area.cell(13,5).0,' ');
     let empty=update::Snapshot::new((12,8),0,[(&[],&[]),(&[],&[]),(&[],&[])],12)
         .with_matrix_guard(&[],8,99,4);
     assert!(empty.matrix_area().unwrap().cells.is_empty());
-    assert_eq!(empty.matrix_area().unwrap().cell(1,1),(' ',None));
+    assert_eq!(empty.matrix_area().unwrap().cell(1,1),blank);
 }
 
 #[test]
@@ -243,8 +244,8 @@ fn horizontal_matrix_source_is_bounded_and_uses_character_coordinates() {
     assert_eq!((area.column_offset,area.first_column),(10,8));
     assert_eq!(area.cells[0].len(),8);
     assert_eq!(snapshot.rendered_lines()[3].iter().map(|c|c.0).collect::<String>(),"9abc");
-    assert_eq!(area.cell(10,0),('9',None));
-    assert_eq!(area.cell(7,0),(' ',None));
+    assert_eq!(area.cell(10,0),('9',Some(update::cell_color(None,update::MATRIX_BACKGROUND))));
+    assert_eq!(area.cell(7,0),(' ',Some(update::cell_color(None,update::MATRIX_BACKGROUND))));
 }
 
 #[test]
@@ -260,7 +261,7 @@ fn control_cursor_blink_does_not_change_matrix_source_revision() {
 }
 
 #[test]
-fn large_resize_paints_text_only_and_fills_matrix_viewport() {
+fn large_resize_paints_controls_but_keeps_blank_matrix_sparse() {
     let title=[MetaFmtStr::new("TrueOS § 12:34")];let legend=[MetaFmtStr::new("[online peer dl]")];
     let prompt=[MetaFmtStr::new("#")];
     let history=(0..20).map(|index|format!("cmd{} pause stop",index)).collect::<Vec<_>>();
@@ -268,15 +269,41 @@ fn large_resize_paints_text_only_and_fills_matrix_viewport() {
     let lines=snapshot.rendered_lines();assert_eq!(lines.len(),196);
     assert_eq!(lines[3].iter().take(4).map(|cell|cell.0).collect::<String>(),"cmd0");
     let updates=update::diff_rendered_lines(None,&lines);
-    let cells=updates.iter().map(|patch|patch.text.chars().count()).sum::<usize>();
-    let occupied=lines.iter().flatten().filter(|cell|cell.0!=' ').count();
+    let matrix=updates.iter().filter(|patch|matches!(patch.row,SpecialRows::MatrixRow(_))).collect::<Vec<_>>();
+    let cells=matrix.iter().map(|patch|patch.text.chars().count()).sum::<usize>();
+    let occupied=lines[3..].iter().flatten().filter(|cell|cell.0!=' ').count();
     assert_eq!(cells,occupied);assert!(cells<400);assert!(cells.div_ceil(64)<=7);
-    assert!(updates.iter().all(|patch|!patch.text.contains(' ')));
+    assert!(matrix.iter().all(|patch|!patch.text.contains(' ')));
+    assert_eq!(updates.iter().filter(|patch|!matches!(patch.row,SpecialRows::MatrixRow(_))).map(|patch|patch.text.chars().count()).sum::<usize>(),3*640);
     let empty=update::Snapshot::new((640,196),0,[(&title,&legend),(&[],&[]),(&prompt,&[])],640).with_matrix(&[],2).rendered_lines();
     assert!(update::diff_rendered_lines(None,&empty).iter().all(|patch|!matches!(patch.row,SpecialRows::MatrixRow(_))));
     assert!(update::diff_rendered_lines(Some(&lines),&empty).iter().any(|patch|matches!(patch.row,SpecialRows::MatrixRow(_))&&patch.remove>0));
     // Shorter current row lists must also erase old text, not leave it behind.
     assert!(update::diff_rendered_lines(Some(&lines),&empty[..3]).iter().any(|patch|matches!(patch.row,SpecialRows::MatrixRow(_))&&patch.remove>0));
+}
+
+#[test]
+fn shared_palette_covers_padding_pan_cells_and_preserves_explicit_styles() {
+    let explicit=RgbaColor::Terminal {foreground:[1,2,3,255],background:[4,5,6,255],underline:true};
+    let title=[MetaFmtStr::new("X").color(explicit),MetaFmtStr::new("Y").color(RgbaColor::Pink).underline()];
+    let prompt=[MetaFmtStr::new(" ").color(RgbaColor::Terminal {foreground:[0,0,0,255],background:[255,255,255,255],underline:false}).blink()];
+    let snapshot=update::Snapshot::new((8,5),0,[(&title,&[]),(&[],&[]),(&prompt,&[])],8)
+        .with_matrix_guard(&["row".into()],1,0,4);
+    let rows=snapshot.rendered_lines();
+    assert_eq!(rows[0][0].1,Some(explicit));
+    assert_eq!(rows[0][1].1.unwrap().rgba(),RgbaColor::Pink.rgba());
+    assert!(rows[0][1].1.unwrap().underline());
+    for row in &rows[..3] {for (_,style) in row.iter().skip(2) {assert_eq!(style.unwrap().background(),Some(update::CONTROL_BACKGROUND));}}
+    for row in &rows[3..] {for (_,style) in row {assert_eq!(style.unwrap().background(),Some(update::MATRIX_BACKGROUND));}}
+    let area=snapshot.matrix_area().unwrap();
+    for y in 0..2 {for x in 0..8 {assert_eq!(area.cell(x,y),rows[3+y as usize][x as usize]);}}
+    let on=snapshot.clone().with_blink_phase(true).rendered_lines();
+    let off=snapshot.with_blink_phase(false).rendered_lines();
+    assert_eq!(on[2][0].1.unwrap().background(),Some([255,255,255,255]));
+    assert_eq!(off[2][0].1.unwrap().background(),Some(update::CONTROL_BACKGROUND));
+    assert_eq!(off[2][0].1.unwrap().rgba(),update::CONTROL_BACKGROUND);
+    let app=vec![vec![('A',Some(explicit)),(' ',None)]];
+    assert_eq!(update::Snapshot::terminal((8,5),0,app.clone(),1).rendered_lines(),app);
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-microfont-') as temporary:

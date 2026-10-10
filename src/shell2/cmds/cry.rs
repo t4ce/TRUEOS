@@ -1,5 +1,6 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use core::fmt::Write;
+use spin::Mutex;
 
 use qrcodegen::{QrCode, QrCodeEcc, Version};
 use trueos_executor::Spawner;
@@ -890,6 +891,115 @@ pub(crate) fn full_hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+/// A separate enrollment can be parked or retried without touching CRY_STATE.
+pub(crate) struct AccountEnrollment {
+    disk: crate::disc::block::DeviceHandle,
+    draft: crypt::CryAccountDraft,
+    pub(crate) username: String,
+    payload: Zeroizing<String>,
+    plan: Mutex<Option<crypt::CryPersistencePlan>>,
+    writing: core::sync::atomic::AtomicBool,
+}
+impl AccountEnrollment {
+    pub(crate) fn qr_lines(&self) -> Result<Zeroizing<Vec<String>>, String> {
+        enrollment_qr_lines(&self.payload)
+    }
+    pub(crate) fn code_verified(&self) -> bool {
+        self.plan.lock().is_some()
+    }
+    pub(crate) async fn save(&self, code: &str) -> Result<Zeroizing<String>, String> {
+        let pending = self.plan.lock().take();
+        let plan = if let Some(plan) = pending {
+            plan
+        } else {
+            let proof = self.draft.prepare_login(code).map_err(error_text)?;
+            match self.draft.prepare_persistence(proof.challenge_sequence) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    self.draft.abort_pending(proof.challenge_sequence);
+                    return Err(error_text(error));
+                }
+            }
+        };
+        let recovery = Zeroizing::new(full_hex(plan.recovery_key_bytes()));
+        let result = async {
+            let disk = self.disk;
+            if crate::r::fs::trueosfs::primary_root_handle() != Some(disk) {
+                return Err(String::from("The TRUEOSFS root changed. Restore it before retrying."));
+            }
+            if !self.writing.load(core::sync::atomic::Ordering::Acquire) {
+                ensure_account_name_available(&self.username).await?;
+                self.writing
+                    .store(true, core::sync::atomic::Ordering::Release);
+            }
+            // Keep the temporary plaintext provider separate from the automatic
+            // boot blob, and save the recovery boundary before the envelope.
+            crate::machine_key::seal_saved_account(disk, &plan.username, plan.recovery_key_bytes())
+                .await?;
+            let secrets = alloc::format!("{}/secrets", plan.account_dir);
+            if !crate::r::fs::trueosfs::dir_create_all_async(disk, &secrets)
+                .await
+                .map_err(|error| alloc::format!("Directory error: {error:?}"))?
+            {
+                return Err(String::from("Directory allocation failed."));
+            }
+            write_and_verify(disk, &plan.secret_path, &plan.envelope).await?;
+            write_and_verify(disk, &plan.profile_path, &plan.profile).await?;
+            Ok::<_, String>(())
+        }
+        .await;
+        if let Err(error) = result {
+            *self.plan.lock() = Some(plan);
+            return Err(error);
+        }
+        self.draft.complete_persistence(plan).map_err(error_text)?;
+        Ok(recovery)
+    }
+}
+
+pub(crate) async fn ensure_account_name_available(username: &str) -> Result<(), String> {
+    let username = crypt::canonical_username(username).map_err(error_text)?;
+    if crypt::status().username.as_deref() == Some(username.as_str()) {
+        return Err(alloc::format!("Account {username} already exists. Choose Sign in."));
+    }
+    let disk =
+        crate::r::fs::trueosfs::primary_root_handle().ok_or("No TRUEOSFS root is mounted.")?;
+    for path in [
+        alloc::format!("users/{username}/account.v1"),
+        alloc::format!("users/{username}/secrets/cry.v1.aes256gcm"),
+        alloc::format!("users/{username}/secrets/uncrypted.blob"),
+    ] {
+        if crate::r::fs::trueosfs::file_out_async(disk, &path)
+            .await
+            .map_err(|error| alloc::format!("Account lookup failed: {error:?}"))?
+            .is_some()
+        {
+            return Err(alloc::format!(
+                "Account {username} is already saved. Choose another name."
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn create_account_enrollment(
+    username: &str,
+) -> Result<Arc<AccountEnrollment>, String> {
+    ensure_account_name_available(username).await?;
+    let disk =
+        crate::r::fs::trueosfs::primary_root_handle().ok_or("No TRUEOSFS root is mounted.")?;
+    let draft = crypt::CryAccountDraft::new(username).map_err(error_text)?;
+    let enrollment = draft.begin_enrollment().map_err(error_text)?;
+    Ok(Arc::new(AccountEnrollment {
+        disk,
+        draft,
+        username: enrollment.username,
+        payload: enrollment.qr_payload,
+        plan: Mutex::new(None),
+        writing: core::sync::atomic::AtomicBool::new(false),
+    }))
 }
 
 /// A failed or cancelled persistence future must release the pending proof.

@@ -62,7 +62,7 @@ pub(super) async fn present(
     if clearing {
         let submission = match crate::intel::queue_guc_bcs0_rgba_fill(
             bcs_surface(view),
-            u32::from_le_bytes(super::BACKGROUND.rgba()),
+            u32::from_le_bytes(super::BACKGROUND),
         ) {
             Ok(submission) => submission,
             Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
@@ -256,7 +256,7 @@ pub(super) fn glyph_for_cell(
         background: u32::from_le_bytes(
             cell.1
                 .and_then(super::super::RgbaColor::background)
-                .unwrap_or(super::BACKGROUND.rgba()),
+                .unwrap_or(super::BACKGROUND),
         ),
     }
 }

@@ -151,19 +151,33 @@ enum Page {
     SshKeys(Vec<[u8; 32]>),
     Enrollment(Zeroizing<Vec<String>>),
     Recovery(Zeroizing<String>),
+    SavedRecovery {
+        username: String,
+        key: Zeroizing<String>,
+    },
 }
 impl Page {
     fn sensitive(&self) -> bool {
-        matches!(self, Self::Enrollment(_) | Self::Recovery(_) | Self::Field(_))
+        matches!(
+            self,
+            Self::Enrollment(_) | Self::Recovery(_) | Self::SavedRecovery { .. } | Self::Field(_)
+        )
     }
 }
 struct Outcome {
     message: String,
     qr: Option<Zeroizing<Vec<String>>>,
+    draft: Option<Arc<cry::AccountEnrollment>>,
+    recovery: Option<(String, Zeroizing<String>)>,
 }
 impl Outcome {
     fn message(message: String) -> Self {
-        Self { message, qr: None }
+        Self {
+            message,
+            qr: None,
+            draft: None,
+            recovery: None,
+        }
     }
 }
 struct Job {
@@ -174,6 +188,10 @@ type Reply = Arc<Mutex<Job>>;
 enum Request {
     Setup(String),
     Enrollment,
+    SaveAccount {
+        draft: Arc<cry::AccountEnrollment>,
+        code: Zeroizing<String>,
+    },
     Login {
         scope: u8,
         code: Zeroizing<String>,
@@ -198,16 +216,54 @@ impl Request {
             Ok(Outcome {
                 message: "Scan the QR, then enter an authenticator code.".into(),
                 qr: Some(qr),
+                draft: None,
+                recovery: None,
             })
         };
         match self {
             Self::Setup(username) => {
-                match crypt::setup_root_key(&username) {
-                    Ok(_) | Err(crypt::CryError::AlreadyConfigured) => {}
-                    Err(error) => return Err(cry::error_text(error)),
-                };
-                enrollment()
+                if crypt::status().username.as_deref() == Some(username.as_str()) {
+                    return Ok(Outcome::message(format!(
+                        "Account {username} already exists. Choose Sign in."
+                    )));
+                }
+                if !crypt::status().configured {
+                    cry::ensure_account_name_available(&username).await?;
+                    match crypt::setup_root_key(&username) {
+                        Ok(_) => return enrollment(),
+                        Err(crypt::CryError::AlreadyConfigured) => {}
+                        Err(error) => return Err(cry::error_text(error)),
+                    }
+                }
+                let draft = cry::create_account_enrollment(&username).await?;
+                let qr = draft.qr_lines()?;
+                Ok(Outcome {
+                    message: format!("Enroll {username}; the automatic account stays active."),
+                    qr: Some(qr),
+                    draft: Some(draft),
+                    recovery: None,
+                })
             }
+            Self::SaveAccount { draft, code } => match draft.save(&code).await {
+                Ok(key) => Ok(Outcome {
+                    message: format!(
+                        "Saved account {}. Automatic account unchanged.",
+                        draft.username
+                    ),
+                    qr: None,
+                    draft: None,
+                    recovery: Some((draft.username.clone(), key)),
+                }),
+                Err(error) => {
+                    let qr = draft.qr_lines()?;
+                    Ok(Outcome {
+                        message: super::capture::error_result(&error),
+                        qr: Some(qr),
+                        draft: Some(draft),
+                        recovery: None,
+                    })
+                }
+            },
             Self::Enrollment => enrollment(),
             Self::Login { scope, code } => cry::login_for_scope(scope, &code)
                 .await
@@ -237,6 +293,7 @@ struct View {
     input: Input,
     form: Form,
     pending: Option<Reply>,
+    draft: Option<Arc<cry::AccountEnrollment>>,
     result: String,
     screen: Screen,
     geometry: (usize, usize),
@@ -252,6 +309,7 @@ impl View {
             input: Input::default(),
             form: Form::default(),
             pending: None,
+            draft: None,
             result: String::new(),
             screen: Screen::default(),
             geometry: (0, 0),
@@ -309,7 +367,13 @@ impl View {
         match result {
             Ok(outcome) => {
                 self.result = outcome.message;
-                if let Some(qr) = outcome.qr {
+                if let Some(draft) = outcome.draft {
+                    self.draft = Some(draft);
+                }
+                if let Some((username, key)) = outcome.recovery {
+                    self.draft = None;
+                    self.set_page(Page::SavedRecovery { username, key });
+                } else if let Some(qr) = outcome.qr {
                     self.set_page(Page::Enrollment(qr));
                 } else {
                     self.set_page(Page::Home);
@@ -328,7 +392,7 @@ impl View {
         let labels: &[&str] = match &self.page {
             Page::Home if self.kind == Kind::Cry => &[
                 "Account status",
-                "Set up account",
+                "Create account",
                 "Set up 2FA",
                 "Sign in",
                 "Unlock account",
@@ -347,7 +411,9 @@ impl View {
                 "Back",
                 "Return",
             ],
-            Page::Details(_) | Page::Recovery(_) => &["Back", "Return"],
+            Page::Details(_) | Page::Recovery(_) | Page::SavedRecovery { .. } => {
+                &["Back", "Return"]
+            }
             Page::SshKeys(_) => &["Add an SSH key", "Back", "Return"],
             Page::Field(_) | Page::Enrollment(_) => &[],
             Page::Disks { disks, .. } => {
@@ -368,6 +434,10 @@ impl View {
             }
         };
         let mut result: Vec<String> = labels.iter().map(|label| String::from(*label)).collect();
+        if matches!(self.page, Page::Home) && self.kind == Kind::Cry && self.draft.is_some() {
+            result[1] = "Resume account creation".into();
+            result.insert(result.len() - 1, "Close unfinished enrollment".into());
+        }
         if let Page::SshKeys(keys) = &self.page {
             for (index, key) in keys.iter().enumerate() {
                 result.insert(index, format!("Remove {}", crypt::ssh_key_fingerprint(key)));
@@ -379,7 +449,7 @@ impl View {
         let state = crypt::status();
         alloc::vec![
             format!(
-                "Account: {} · 2FA: {:?}",
+                "Automatic account: {} · 2FA: {:?}",
                 state.username.as_deref().unwrap_or("not set up"),
                 state.two_factor
             ),
@@ -444,6 +514,10 @@ impl View {
                 "Keep this recovery key outside TRUEOSFS:".into(),
                 key.to_string()
             ],
+            Page::SavedRecovery { username, key } => alloc::vec![
+                format!("Recovery key for saved account {username}:"),
+                key.to_string()
+            ],
             Page::Field(Field::SshCode { key, remove }) => alloc::vec![format!(
                 "{} SSH key {}",
                 if *remove { "Remove" } else { "Add" },
@@ -451,7 +525,15 @@ impl View {
             )],
             Page::Field(_) => alloc::vec!["Enter the value below.".into()],
             Page::Enrollment(_) => {
-                alloc::vec!["Scan with your authenticator, then enter its code.".into()]
+                alloc::vec![if let Some(draft) = &self.draft {
+                    if draft.code_verified() {
+                        "Code verified. Press Enter to retry saving this account.".into()
+                    } else {
+                        format!("Scan for {}, then enter its authenticator code.", draft.username)
+                    }
+                } else {
+                    "Scan with your authenticator, then enter its code.".into()
+                }]
             }
             _ => alloc::vec!["Choose an operation.".into()],
         }
@@ -476,8 +558,25 @@ impl View {
         match &self.page {
             Page::Home if self.kind == Kind::Cry => match self.selected {
                 0 => self.set_page(Page::Details(Self::account_lines(scope))),
-                1 => self.set_page(Page::Field(Field::SetupUsername)),
-                2 => self.submit(target, Request::Enrollment),
+                1 => {
+                    if let Some(draft) = &self.draft {
+                        match draft.qr_lines() {
+                            Ok(qr) => self.set_page(Page::Enrollment(qr)),
+                            Err(error) => self.problem(&error),
+                        }
+                    } else {
+                        self.set_page(Page::Field(Field::SetupUsername));
+                    }
+                }
+                2 => {
+                    if self.draft.is_some() {
+                        self.result = "Resume or close the unfinished enrollment first.".into();
+                    } else if crypt::status().two_factor == crypt::CryTwoFactorState::Active {
+                        self.result = "2FA is already active. Choose Sign in.".into();
+                    } else {
+                        self.submit(target, Request::Enrollment);
+                    }
+                }
                 3 => self.set_page(Page::Field(Field::LoginCode)),
                 4 => self.set_page(Page::Field(Field::UnlockUsername)),
                 5 => {
@@ -491,6 +590,11 @@ impl View {
                 7 => {
                     crypt::logout(scope);
                     self.result = "Signed out.".into();
+                }
+                8 if self.draft.is_some() => {
+                    self.draft = None;
+                    self.result = "Enrollment closed.".into();
+                    self.selected = 0;
                 }
                 _ => {}
             },
@@ -579,7 +683,23 @@ impl View {
                     self.set_page(Page::Field(Field::UnlockKey(username)));
                 }
             }
-            Page::Field(Field::LoginCode) | Page::Enrollment(_) => {
+            Page::Enrollment(qr) => {
+                let valid = value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_digit());
+                if let Some(draft) = self.draft.clone() {
+                    if valid || draft.code_verified() {
+                        self.submit(target, Request::SaveAccount { draft, code: value });
+                    } else {
+                        self.problem("Enter a 6-digit authenticator code.");
+                        self.set_page(Page::Enrollment(qr));
+                    }
+                } else if valid {
+                    self.submit(target, Request::Login { scope, code: value });
+                } else {
+                    self.problem("Enter a 6-digit authenticator code.");
+                    self.set_page(Page::Enrollment(qr));
+                }
+            }
+            Page::Field(Field::LoginCode) => {
                 if value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_digit()) {
                     self.submit(target, Request::Login { scope, code: value });
                 } else {
@@ -702,7 +822,10 @@ impl View {
     fn menu_start(&self, rows: usize) -> usize {
         let count = match &self.page {
             Page::Home if self.kind == Kind::Cry => 3,
-            Page::Disks { .. } | Page::Recovery(_) | Page::SshKeys(_) => 2,
+            Page::Disks { .. }
+            | Page::Recovery(_)
+            | Page::SavedRecovery { .. }
+            | Page::SshKeys(_) => 2,
             Page::Disk(_) | Page::Field(Field::FormatSure(_)) => 3,
             Page::Details(lines) => lines.len().min(4),
             _ => 1,
@@ -718,6 +841,7 @@ impl View {
             self.qr_painted = false;
         }
         if matches!(self.page, Page::Enrollment(_))
+            && self.draft.is_none()
             && crypt::status().two_factor != crypt::CryTwoFactorState::Pending
         {
             self.set_page(Page::Home);
@@ -776,7 +900,7 @@ impl View {
             "↑/↓ j/k select   Enter choose   Esc/q Return   Mouse choose".into()
         };
         let mut qr_fits = false;
-        if matches!(self.page, Page::Recovery(_)) && cols < 64 {
+        if matches!(self.page, Page::Recovery(_) | Page::SavedRecovery { .. }) && cols < 64 {
             lines[3] = "Resize to 64 columns to show the entire recovery key.".into();
         }
         if let Page::Enrollment(qr) = &self.page {

@@ -50,7 +50,8 @@ impl Terminal {
         };
         // Save the local wheel mode and stop alternate-screen wheel events
         // from becoming arrow keys in nc's locally echoed input buffer.
-        terminal.write(b"\x1b[?1007s\x1b[?1007l\x1b[?1049h\x1b[0m\x1b[2J\x1b[H");
+        terminal.write(b"\x1b[?1007s\x1b[?1007l\x1b[?1049h");
+        terminal.clear_screen();
         if controls {
             // Shell3 enables SGR drag reporting; apps take over mouse modes on claim.
             terminal.write(b"\x1b[1 q\x1b[?25h");
@@ -99,7 +100,7 @@ impl Terminal {
             if super::tui::remote_active(self.shell.tui_frontend) { return; }
             if let Some(lines) = self.view.lines.as_mut() {
                 lines.clear();
-                self.write(b"\x1b[0m\x1b[2J\x1b[H");
+                self.clear_screen();
             }
             if self.view.lines.is_some() {
                 self.set_matrix_region();

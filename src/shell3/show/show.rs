@@ -19,7 +19,7 @@ use crate::ui4::{
 };
 
 const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
-const BACKGROUND: RgbaColor = RgbaColor::BlackTransparent;
+const BACKGROUND: [u8; 4] = super::update::MATRIX_BACKGROUND;
 const FOREGROUND: RgbaColor = RgbaColor::White;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -490,10 +490,10 @@ fn create_surface_frames(
         width,
         height,
         base_color: Some(PremultipliedRgba8::from_straight_rgba(
-            BACKGROUND.rgba()[0],
-            BACKGROUND.rgba()[1],
-            BACKGROUND.rgba()[2],
-            BACKGROUND.rgba()[3],
+            BACKGROUND[0],
+            BACKGROUND[1],
+            BACKGROUND[2],
+            BACKGROUND[3],
         )),
     }) {
         Ok(frame) => frame,

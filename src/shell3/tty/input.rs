@@ -132,7 +132,7 @@ impl Terminal {
         match command {
             "help" => self.notice("SSH types directly into Shell3; plain TCP replays on Enter; Backspace erases. Up/Down recalls commands in authenticated SSH sessions.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nPlain TCP replay stops at the first name match or impossible prefix; Matrix operators are submitted with Enter."),
             // The remote terminal interprets these bytes; TCP only carries them.
-            "clear" => { self.write(b"\x1b[2J\x1b[H"); if let Some(lines) = self.view.lines.as_mut() { lines.clear(); } else { self.prompt(); } },
+            "clear" => { self.clear_screen(); if let Some(lines) = self.view.lines.as_mut() { lines.clear(); } else { self.prompt(); } },
             "tab" => {
                 if self.view.lines.is_some() { self.keyboard(Some(crate::r::keyboard::KEYBOARD_KEY_TAB), '\0'); }
                 else { self.shell.set_mode(self.shell.get_mode() % 3 + 1); }

@@ -77,13 +77,13 @@ mod crypt {
     use super::*;
     #[derive(Debug)]pub enum CryError {AlreadyConfigured,InvalidUsername,InvalidTotpCode}
     #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum CryTwoFactorState {Pending,Active}
-    pub struct Session {pub scope_id:u8}pub struct Status {pub username:Option<String>,pub two_factor:CryTwoFactorState,pub session:Option<Session>,pub totp_clock:Option<()> ,pub persistence:&'static str}
+    pub struct Session {pub scope_id:u8}pub struct Status {pub configured:bool,pub username:Option<String>,pub two_factor:CryTwoFactorState,pub session:Option<Session>,pub totp_clock:Option<()> ,pub persistence:&'static str}
     pub struct Enrollment {pub qr_payload:Zeroizing<String>}
     pub struct Proof {pub challenge_sequence:u64}pub struct Plan {pub envelope:Vec<u8>}pub struct Report {pub enrollment_activated:bool}
     pub fn canonical_username(name:&str)->Result<String,CryError>{if name.len()<3 {Err(CryError::InvalidUsername)}else{Ok(name.into())}}
     pub fn setup_root_key(_: &str)->Result<(),CryError>{Ok(())}
     pub fn begin_totp_enrollment()->Result<Enrollment,CryError>{Ok(Enrollment{qr_payload:Zeroizing::new("otpauth://totp/TRUEOS:alice?secret=JBSWY3DPEHPK3PXP&issuer=TRUEOS".into())})}
-    pub fn status()->Status {Status{username:Some("alice".into()),two_factor:if TWO_FACTOR.load(Ordering::SeqCst){CryTwoFactorState::Pending}else{CryTwoFactorState::Active},session:Some(Session{scope_id:SCOPE.load(Ordering::SeqCst)as u8}),totp_clock:Some(()),persistence:"sealed"}}
+    pub fn status()->Status {Status{configured:true,username:Some("alice".into()),two_factor:if TWO_FACTOR.load(Ordering::SeqCst){CryTwoFactorState::Pending}else{CryTwoFactorState::Active},session:Some(Session{scope_id:SCOPE.load(Ordering::SeqCst)as u8}),totp_clock:Some(()),persistence:"sealed"}}
     pub fn prepare_login(code:&str,scope:u8)->Result<Proof,CryError>{if code.len()!=6{return Err(CryError::InvalidTotpCode);}SCOPE.store(scope as usize,Ordering::SeqCst);LOGINS.fetch_add(1,Ordering::SeqCst);Ok(Proof{challenge_sequence:17})}
     pub fn prepare_ssh_key_change(code:&str,_:[u8;32],_:bool)->Result<Proof,CryError>{prepare_login(code,0)}
     pub fn prepare_persistence(_:u64)->Result<Plan,CryError>{Ok(Plan{envelope:vec![]})}
@@ -115,10 +115,23 @@ mod shell2 {
         pub mod disc {const RAMDISK_BLOCK_SIZE:u32=512;@PARSE_SIZE@ @CREATE_RAM@}
         pub mod format {use alloc::string::String;use crate::{Duration as EmbassyDuration,Timer,with_timeout};use crate::disc::block::{self,DeviceHandle};const FORMAT_OPERATION_TIMEOUT_MS:u64=6000;@FORMAT_DISK@}
         pub mod cry {
-            use alloc::{string::String,vec::Vec};use core::fmt::Write;use crate::crypt;use zeroize::Zeroizing;use qrcodegen::{QrCode,QrCodeEcc,Version};
+            use alloc::{string::String,sync::Arc,vec::Vec};use core::fmt::Write;use crate::crypt;use zeroize::Zeroizing;use qrcodegen::{QrCode,QrCodeEcc,Version};
             const QR_QUIET_ZONE:i32=4;const QR_MAX_VERSION:Version=Version::new(10);const QR_BUFFER_BYTES:usize=QR_MAX_VERSION.buffer_len();
             pub fn error_text(error:crypt::CryError)->String{format!("{error:?}")}
             pub async fn write_persistence(_: &crypt::Plan)->Result<(),String>{if crate::PERSIST_FAIL.load(crate::Ordering::SeqCst){Err("Disk write failed".into())}else{Ok(())}}
+            pub struct AccountEnrollment {pub username:String,verified:crate::AtomicBool}
+            impl AccountEnrollment {
+                pub fn qr_lines(&self)->Result<Zeroizing<Vec<String>>,String>{enrollment_qr_lines("otpauth://totp/test?secret=JBSWY3DPEHPK3PXP")}
+                pub fn code_verified(&self)->bool{self.verified.load(crate::Ordering::SeqCst)}
+                pub async fn save(&self,code:&str)->Result<Zeroizing<String>,String>{
+                    if !self.code_verified()&&code.len()!=6{return Err("Invalid code".into());}
+                    self.verified.store(true,crate::Ordering::SeqCst);
+                    if crate::PERSIST_FAIL.load(crate::Ordering::SeqCst){return Err("Save failed".into());}
+                    crate::IO.lock().push("saved-account");self.verified.store(false,crate::Ordering::SeqCst);Ok(Zeroizing::new("11".repeat(32)))
+                }
+            }
+            pub async fn ensure_account_name_available(_: &str)->Result<(),String>{Ok(())}
+            pub async fn create_account_enrollment(username:&str)->Result<Arc<AccountEnrollment>,String>{Ok(Arc::new(AccountEnrollment{username:username.into(),verified:crate::AtomicBool::new(false)}))}
             @HEX@ @NIBBLE@ @PARSE_RECOVERY@ @PENDING@ @PENDING_DROP@ @LOGIN@ @SSH_CHANGE@ @UNLOCK@ @QR@
         }
     }
@@ -151,6 +164,13 @@ mod shell3 {
             #[test]fn persistence_failure_releases_proof_and_preserves_transport_scope(){reset();SCOPE.store(1,Ordering::SeqCst);PERSIST_FAIL.store(true,Ordering::SeqCst);let mut view=View::new(Kind::Cry);view.set_page(Page::Field(Field::LoginCode));view.input(&MatrixTarget,b"123456\r",0,25);wait::drain();view.complete();assert_eq!(SCOPE.load(Ordering::SeqCst),1);assert_eq!(ABORTS.load(Ordering::SeqCst),1);assert!(view.result.contains("Disk write failed"));assert_eq!(WORK.load(Ordering::SeqCst),0);PERSIST_FAIL.store(false,Ordering::SeqCst);assert!(run(cry::login_for_scope(2,"123456")).is_ok());assert_eq!(SCOPE.load(Ordering::SeqCst),2);}
             #[test]fn qr_is_complete_colored_and_secret_pages_are_cleared_on_return(){reset();let qr=cry::enrollment_qr_lines("otpauth://totp/A?secret=JBSWY3DPEHPK3PXP").unwrap();let width=qr[0].chars().count();let count=qr.len();let mut view=View::new(Kind::Cry);view.set_page(Page::Enrollment(qr));let terminal=surface_frame(&mut view,100,50);let rows=terminal.render_rows();assert_eq!(rows[3].chars().take(width).collect::<String>().trim(),"");let style=terminal.cells()[300].style;assert_eq!(style.foreground,trueos_terminal::TerminalColor::Indexed(0));assert_eq!(style.background,trueos_terminal::TerminalColor::Indexed(7));assert!(view.qr_painted);view.leave(&MatrixTarget);assert!(matches!(view.page,Page::Home));assert!(view.form.value.is_empty());VISIBLE.store(true,Ordering::SeqCst);view.set_page(Page::Enrollment(cry::enrollment_qr_lines("otpauth://totp/A?secret=JBSWY3DPEHPK3PXP").unwrap()));let rows=frame(&mut view,20,10);assert!(!view.qr_painted);assert!(rows[3].starts_with("Resize"));assert!(count+6>10||width>20);}
             #[test]fn recovery_requires_authentication_and_secret_inputs_accept_literal_navigation_letters(){reset();let mut view=View::new(Kind::Cry);view.selected=5;view.choose(&MatrixTarget);assert!(matches!(view.page,Page::Recovery(_)));view.paint(&MatrixTarget,100,25,0);AUTH.store(false,Ordering::SeqCst);let rows=frame(&mut view,100,25);assert!(matches!(view.page,Page::Home));assert!(!rows.iter().any(|row|row.contains(&"01".repeat(32))));view.set_page(Page::Field(Field::SetupUsername));view.input(&MatrixTarget,b"hjqname",0,25);assert_eq!(view.form.value.as_str(),"hjqname");view.input(&MatrixTarget,b"\x1b",0,25);view.input(&MatrixTarget,b"",75_000_000,25);assert!(!VISIBLE.load(Ordering::SeqCst));}
+            #[test]fn additional_account_enrollment_can_park_resume_and_retry_without_swapping(){
+                reset();TWO_FACTOR.store(false,Ordering::SeqCst);let mut view=View::new(Kind::Cry);view.selected=1;view.choose(&MatrixTarget);view.input(&MatrixTarget,b"bob\r",0,50);wait::drain();view.complete();assert!(matches!(view.page,Page::Enrollment(_)));assert_eq!(view.draft.as_ref().unwrap().username,"bob");
+                frame(&mut view,100,50);assert!(matches!(view.page,Page::Enrollment(_)));view.input(&MatrixTarget,b"12\r",0,50);assert!(matches!(view.page,Page::Enrollment(_)));assert!(view.pending.is_none());
+                view.leave(&MatrixTarget);assert!(matches!(view.page,Page::Home));assert!(view.labels()[1].contains("Resume"));VISIBLE.store(true,Ordering::SeqCst);view.selected=1;view.choose(&MatrixTarget);assert!(matches!(view.page,Page::Enrollment(_)));
+                PERSIST_FAIL.store(true,Ordering::SeqCst);view.input(&MatrixTarget,b"123456\r",0,50);wait::drain();view.complete();assert!(view.result.contains("Save failed"));assert!(view.draft.as_ref().unwrap().code_verified());PERSIST_FAIL.store(false,Ordering::SeqCst);view.input(&MatrixTarget,b"\r",0,50);wait::drain();view.complete();assert!(matches!(view.page,Page::SavedRecovery { .. }));assert!(view.draft.is_none());assert_eq!(crypt::status().username.as_deref(),Some("alice"));assert_eq!(*IO.lock(),vec!["saved-account"]);assert_eq!(WORK.load(Ordering::SeqCst),0);
+            }
+            #[test]fn already_active_account_setup_guides_sign_in_and_never_reenrolls(){reset();TWO_FACTOR.store(false,Ordering::SeqCst);let mut view=View::new(Kind::Cry);view.selected=2;view.choose(&MatrixTarget);assert!(view.pending.is_none());assert!(view.result.contains("already active"));view.selected=1;view.choose(&MatrixTarget);view.input(&MatrixTarget,b"alice\r",0,25);wait::drain();view.complete();assert!(matches!(view.page,Page::Home));assert!(view.draft.is_none());assert!(view.result.contains("already exists"));}
             #[test]fn mouse_and_keyboard_share_scrolled_small_geometry_choices(){reset();for rows in [5,8,12,25] {let mut view=View::new(Kind::Disc);view.selected=2;let rendered=frame(&mut view,60,rows);assert!(rendered.iter().any(|row|row.contains("Create a RAM disk")));let row=view.menu_start(rows)+view.selected.min(rows.saturating_sub(view.menu_start(rows)+4));let click=format!("\x1b[<0;1;{}M",row+1);view.input(&MatrixTarget,click.as_bytes(),0,rows);assert!(matches!(view.page,Page::RamSizes));}}
         }
     }

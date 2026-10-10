@@ -265,6 +265,55 @@ impl CryState {
 
 static CRY_STATE: Mutex<CryState> = Mutex::new(CryState::new());
 
+/// Enrollment of an additional saved account, isolated from the automatic
+/// account and its live sessions. It never becomes the active boot account.
+pub(crate) struct CryAccountDraft {
+    state: Mutex<CryState>,
+}
+impl CryAccountDraft {
+    pub(crate) fn new(username: &str) -> Result<Self, CryError> {
+        let username = canonical_username(username)?;
+        if CRY_STATE.lock().username.as_deref() == Some(username.as_str()) {
+            return Err(CryError::AlreadyConfigured);
+        }
+        let mut state = CryState::new();
+        let mut seed = Zeroizing::new([0u8; 32]);
+        setup_root_key_inner(&mut state, username, &mut seed)?;
+        Ok(Self {
+            state: Mutex::new(state),
+        })
+    }
+    pub(crate) fn begin_enrollment(&self) -> Result<CryTotpEnrollment, CryError> {
+        let _ = totp_unix_seconds()?;
+        begin_totp_enrollment_for_state(&mut self.state.lock())
+    }
+    pub(crate) fn prepare_login(&self, code: &str) -> Result<CryLoginReport, CryError> {
+        prepare_login_for_state(&mut self.state.lock(), code, 0, None)
+    }
+    pub(crate) fn prepare_persistence(
+        &self,
+        sequence: u64,
+    ) -> Result<CryPersistencePlan, CryError> {
+        prepare_persistence_for_state(&self.state.lock(), sequence)
+    }
+    pub(crate) fn complete_persistence(
+        &self,
+        plan: CryPersistencePlan,
+    ) -> Result<CryLoginReport, CryError> {
+        complete_persisted_for_state(&mut self.state.lock(), plan, false)
+    }
+    pub(crate) fn abort_pending(&self, sequence: u64) {
+        let mut state = self.state.lock();
+        if state
+            .pending_login
+            .as_ref()
+            .is_some_and(|pending| pending.report.challenge_sequence == sequence)
+        {
+            state.pending_login = None;
+        }
+    }
+}
+
 pub(crate) fn canonical_username(input: &str) -> Result<String, CryError> {
     normalize_username(input).map_err(CryError::InvalidUsername)
 }
@@ -351,7 +400,10 @@ fn setup_root_key_inner(
 
 pub(crate) fn begin_totp_enrollment() -> Result<CryTotpEnrollment, CryError> {
     let _ = totp_unix_seconds()?;
-    let mut state = CRY_STATE.lock();
+    begin_totp_enrollment_for_state(&mut CRY_STATE.lock())
+}
+
+fn begin_totp_enrollment_for_state(state: &mut CryState) -> Result<CryTotpEnrollment, CryError> {
     if state.credential.is_none() {
         return Err(CryError::NotConfigured);
     }
@@ -414,6 +466,15 @@ fn prepare_login_inner(
     scope_id: u8,
     remote_username: Option<&str>,
 ) -> Result<CryLoginReport, CryError> {
+    prepare_login_for_state(&mut CRY_STATE.lock(), code, scope_id, remote_username)
+}
+
+fn prepare_login_for_state(
+    state: &mut CryState,
+    code: &str,
+    scope_id: u8,
+    remote_username: Option<&str>,
+) -> Result<CryLoginReport, CryError> {
     let code = parse_totp_code(code).ok_or(CryError::InvalidTotpCode)?;
     let unix_seconds = totp_unix_seconds()?;
     let mut nonce = [0u8; 32];
@@ -424,7 +485,6 @@ fn prepare_login_inner(
     let now = embassy_time_driver::now();
     let ttl = embassy_time_driver::TICK_HZ.saturating_mul(LOGIN_CHALLENGE_TTL_SECONDS);
     let expires = now.saturating_add(ttl.max(1));
-    let mut state = CRY_STATE.lock();
     if state.pending_login.is_some() {
         return Err(CryError::LoginPending);
     }
@@ -581,7 +641,13 @@ fn prepare_login_inner(
 }
 
 pub(crate) fn prepare_persistence(challenge_sequence: u64) -> Result<CryPersistencePlan, CryError> {
-    let state = CRY_STATE.lock();
+    prepare_persistence_for_state(&CRY_STATE.lock(), challenge_sequence)
+}
+
+fn prepare_persistence_for_state(
+    state: &CryState,
+    challenge_sequence: u64,
+) -> Result<CryPersistencePlan, CryError> {
     let pending = state
         .pending_login
         .as_ref()
@@ -676,7 +742,14 @@ fn complete_persisted_login_inner(
     plan: CryPersistencePlan,
     local: bool,
 ) -> Result<CryLoginReport, CryError> {
-    let mut state = CRY_STATE.lock();
+    complete_persisted_for_state(&mut CRY_STATE.lock(), plan, local)
+}
+
+fn complete_persisted_for_state(
+    state: &mut CryState,
+    plan: CryPersistencePlan,
+    local: bool,
+) -> Result<CryLoginReport, CryError> {
     let pending = state
         .pending_login
         .as_ref()

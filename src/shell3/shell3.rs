@@ -723,7 +723,7 @@ impl Shell3 {
                     snapshot.clone(),
                     &self.update_callbacks,
                 );
-                let lines = snapshot.rendered_ui4_lines();
+                let lines = snapshot.rendered_lines();
                 self.pending_presentation = Some((snapshot, batch, lines));
             }
             let Some((snapshot, batch, lines)) = self.pending_presentation.as_ref() else {
@@ -768,7 +768,7 @@ impl Shell3 {
             (height / (microfont::FHEIGHT as u32 * self.show.font_scale())) as usize,
         );
         let snapshot = self.capture_update_snapshot();
-        let lines = snapshot.rendered_ui4_lines();
+        let lines = snapshot.rendered_lines();
         let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
         self.show.resize_to_current(&line_refs, snapshot.matrix_area()).await
     }
@@ -1372,7 +1372,7 @@ impl Shell3 {
             current.clone(),
             &self.update_callbacks,
         );
-        let lines = current.rendered_ui4_lines();
+        let lines = current.rendered_lines();
         self.pending_presentation = Some((current, batch.clone(), lines));
         batch
     }

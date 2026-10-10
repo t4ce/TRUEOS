@@ -20,22 +20,7 @@ pub(super) fn present(
     let current = rendered_lines(lines);
     let mut segments = super::super::update::diff_rendered_lines(previous.as_deref(), &current);
     if segments.is_empty() && previous.is_some() {
-        // Snapshot updates carry source styles; use the presentation's cell
-        // styles so a fallback repaint preserves the UI4 control background.
-        segments.extend(fallback_segments.iter().cloned().map(|mut segment| {
-            let row = match segment.row {
-                super::super::SpecialRows::TitleRow => 0,
-                super::super::SpecialRows::StatusRow => 1,
-                super::super::SpecialRows::PromtRow => 2,
-                super::super::SpecialRows::MatrixRow(index) => index + 3,
-            };
-            for (index, color) in segment.colors.iter_mut().enumerate() {
-                if let Some(cell) = current.get(row).and_then(|line| line.get(segment.offset + index)) {
-                    *color = cell.1;
-                }
-            }
-            segment
-        }));
+        segments.extend_from_slice(fallback_segments);
     }
     let view = match writable_rgba_view(lease) {
         Ok(view) => view,
@@ -52,7 +37,7 @@ pub(super) fn present(
         let pixels =
             unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
         for pixel in pixels.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&super::BACKGROUND.rgba());
+            pixel.copy_from_slice(&super::BACKGROUND);
         }
     }
     if paint_segments(view, &segments, surface.scale).is_err() {
@@ -122,7 +107,7 @@ fn paint_segment(
                 .get_mut(offset..offset + 4)
                 .ok_or(())?
                 .copy_from_slice(&segment.colors.get((px-x) / glyph_width).copied().flatten()
-                    .and_then(super::super::RgbaColor::background).unwrap_or(super::BACKGROUND.rgba()));
+                    .and_then(super::super::RgbaColor::background).unwrap_or(super::BACKGROUND));
         }
     }
 

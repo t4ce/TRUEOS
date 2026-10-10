@@ -37,23 +37,46 @@ fn decode(blob: &[u8]) -> Result<(String, Zeroizing<[u8; 32]>), String> {
 }
 
 pub(crate) async fn seal(disk: DeviceHandle, username: &str, key: &[u8; 32]) -> Result<(), String> {
+    seal_at(disk, username, key, PATH, "trueos").await
+}
+
+/// Preserve another account for later selection without changing boot's PATH.
+pub(crate) async fn seal_saved_account(
+    disk: DeviceHandle,
+    username: &str,
+    key: &[u8; 32],
+) -> Result<(), String> {
+    let canonical = crate::crypt::canonical_username(username)
+        .map_err(|_| String::from("invalid machine-key account"))?;
+    let directory = alloc::format!("users/{canonical}/secrets");
+    let path = alloc::format!("{directory}/uncrypted.blob");
+    seal_at(disk, &canonical, key, &path, &directory).await
+}
+
+async fn seal_at(
+    disk: DeviceHandle,
+    username: &str,
+    key: &[u8; 32],
+    path: &str,
+    directory: &str,
+) -> Result<(), String> {
     let canonical = crate::crypt::canonical_username(username)
         .map_err(|_| String::from("invalid machine-key account"))?;
     let blob = encode(&canonical, key);
-    if !trueosfs::dir_create_all_async(disk, "trueos")
+    if !trueosfs::dir_create_all_async(disk, directory)
         .await
         .map_err(|e| alloc::format!("machine-key directory: {e:?}"))?
     {
         return Err(String::from("machine-key directory allocation failed"));
     }
-    if !trueosfs::file_write_all_async(disk, PATH, &blob)
+    if !trueosfs::file_write_all_async(disk, path, &blob)
         .await
         .map_err(|e| alloc::format!("machine-key write: {e:?}"))?
     {
         return Err(String::from("machine-key allocation failed"));
     }
     let readback = Zeroizing::new(
-        trueosfs::file_out_async(disk, PATH)
+        trueosfs::file_out_async(disk, path)
             .await
             .map_err(|e| alloc::format!("machine-key readback: {e:?}"))?
             .ok_or_else(|| String::from("machine-key readback missing"))?,

@@ -24,6 +24,11 @@ impl AnsiView {
 }
 
 impl Terminal {
+    pub(super) fn clear_screen(&mut self) {
+        let [r, g, b, _] = update::MATRIX_BACKGROUND;
+        self.write(format!("\x1b[0m\x1b[48;2;{r};{g};{b}m\x1b[2J\x1b[H\x1b[0m").as_bytes());
+    }
+
     fn apply_mouse_options(&mut self, options: MouseOptions) {
         // Encoding flags without tracking must not capture the host's mouse.
         let options = if options.tracking == MouseTracking::Off {
@@ -121,7 +126,7 @@ impl Terminal {
         self.apply_mouse_options(mouse);
         if active != self.view.terminal_active {
             self.view.terminal_active = active;
-            self.write(b"\x1b[0m\x1b[2J\x1b[H");
+            self.clear_screen();
             self.set_matrix_region();
             self.view.lines.as_mut().unwrap().clear();
         }
@@ -139,7 +144,7 @@ impl Terminal {
             })
         };
         if let Some(column) = cursor {
-            current[2][column].1 = None;
+            current[2][column].1 = Some(update::cell_color(None, update::CONTROL_BACKGROUND));
         }
         let mut previous = previous.clone();
         let mut shifted = false;

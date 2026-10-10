@@ -4,8 +4,33 @@ use alloc::{string::String, vec::Vec};
 
 use super::{MetaFmtStr, RgbaColor, SpecialRows, StripSide};
 
-/// One visible cell: Unicode character and optional MetaFmt foreground color.
+/// One visible cell: Unicode character and optional foreground/background style.
 pub(super) type RenderedLine = Vec<(char, Option<RgbaColor>)>;
+
+// Shell-owned cells share one opaque palette before pixel/ANSI rendering.
+pub(super) const MATRIX_BACKGROUND: [u8; 4] = [24, 24, 24, 255];
+pub(super) const CONTROL_BACKGROUND: [u8; 4] = [16, 16, 16, 255];
+
+pub(super) fn cell_color(style: Option<RgbaColor>, default: [u8; 4]) -> RgbaColor {
+    let color = style.unwrap_or(RgbaColor::White);
+    let background = color.background()
+        .filter(|bg| *bg != RgbaColor::BlackTransparent.rgba())
+        .unwrap_or(default);
+    if color.blink() {
+        RgbaColor::Blinking {
+            foreground: color.rgba(), background: Some(background), underline: color.underline(),
+        }
+    } else {
+        RgbaColor::Terminal {
+            foreground: color.rgba(), background, underline: color.underline(),
+        }
+    }
+}
+
+fn styled_line(mut line: RenderedLine, background: [u8; 4]) -> RenderedLine {
+    for (_, style) in &mut line { *style = Some(cell_color(*style, background)); }
+    line
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentUpdate {
@@ -54,7 +79,7 @@ impl MatrixAreaSnapshot {
         usize::try_from(y).ok().and_then(|y| y.checked_sub(self.first))
             .and_then(|y| self.cells.get(y))
             .and_then(|row| usize::try_from(x).ok().and_then(|x| x.checked_sub(self.first_column)).and_then(|x| row.get(x)))
-            .copied().unwrap_or((' ', None))
+            .copied().unwrap_or_else(|| (' ', Some(cell_color(None, MATRIX_BACKGROUND))))
     }
 }
 
@@ -87,7 +112,7 @@ impl Snapshot {
             matrix_area: None,
             rows: strips
                 .map(|(left, right)| VisibleRow {
-                    rendered: fit_meta_strips(left, right, columns),
+                    rendered: styled_line(fit_meta_strips(left, right, columns), CONTROL_BACKGROUND),
                 })
                 .into(),
         }
@@ -118,12 +143,12 @@ impl Snapshot {
         let cells: Vec<_> = lines[start.min(end)..end].iter().map(|text| {
             let mut row: RenderedLine = text.chars().skip(first_column).take(width).map(|ch| (ch, None)).collect();
             row.resize(width, (' ', None));
-            row
+            styled_line(row, MATRIX_BACKGROUND)
         }).collect();
         for index in 0..count {
             let rendered = cells.get(first + index - start)
                 .map(|row| row[column - first_column..column - first_column + self.size.0].to_vec())
-                .unwrap_or_else(|| fit_meta_strips(&[], &[], self.size.0));
+                .unwrap_or_else(|| styled_line(fit_meta_strips(&[], &[], self.size.0), MATRIX_BACKGROUND));
             self.rows.push(VisibleRow {
                 rendered,
             });
@@ -152,13 +177,15 @@ impl Snapshot {
     pub(super) fn blink_phase(&self) -> Option<bool> { self.blink_phase }
 
     pub(super) fn with_blink_phase(mut self, visible: bool) -> Self {
-        for row in &mut self.rows {
+        for (index, row) in self.rows.iter_mut().enumerate() {
+            let background = if self.terminal_active { RgbaColor::BlackTransparent.rgba() }
+                else if index < 3 { CONTROL_BACKGROUND } else { MATRIX_BACKGROUND };
             for (_, style) in &mut row.rendered {
                 if let Some(color) = *style && color.blink() {
                     self.blink_phase = Some(visible);
                     *style = Some(super::RgbaColor::Terminal {
-                        foreground: if visible { color.rgba() } else { super::RgbaColor::BlackTransparent.rgba() },
-                        background: if visible { color.background().unwrap_or(super::RgbaColor::BlackTransparent.rgba()) } else { super::RgbaColor::BlackTransparent.rgba() },
+                        foreground: if visible { color.rgba() } else { background },
+                        background: if visible { color.background().unwrap_or(background) } else { background },
                         underline: visible && color.underline(),
                     });
                 }
@@ -172,8 +199,8 @@ impl Snapshot {
                         self.blink_phase = Some(visible);
                         area.blink_phase = Some(visible);
                         *style = Some(super::RgbaColor::Terminal {
-                            foreground: if visible { color.rgba() } else { super::RgbaColor::BlackTransparent.rgba() },
-                            background: if visible { color.background().unwrap_or(super::RgbaColor::BlackTransparent.rgba()) } else { super::RgbaColor::BlackTransparent.rgba() },
+                            foreground: if visible { color.rgba() } else { MATRIX_BACKGROUND },
+                            background: if visible { color.background().unwrap_or(MATRIX_BACKGROUND) } else { MATRIX_BACKGROUND },
                             underline: visible && color.underline(),
                         });
                     }
@@ -189,7 +216,7 @@ impl Snapshot {
 
     pub(super) fn status_matches(&self, left: &[MetaFmtStr], right: &[MetaFmtStr]) -> bool {
         self.rows.get(1).is_some_and(|row| {
-            row.rendered == fit_meta_strips(left, right, self.size.0)
+            row.rendered == styled_line(fit_meta_strips(left, right, self.size.0), CONTROL_BACKGROUND)
         })
     }
 
@@ -199,28 +226,6 @@ impl Snapshot {
 
     pub(super) fn rendered_lines(&self) -> Vec<RenderedLine> {
         self.rows.iter().map(|row| row.rendered.clone()).collect()
-    }
-
-    pub(super) fn rendered_ui4_lines(&self) -> Vec<RenderedLine> {
-        let mut lines = self.rendered_lines();
-        if !self.terminal_active {
-            // Black is already the default; extra opacity makes the controls
-            // slightly darker over the desktop, including their padded blanks.
-            let background = [0, 0, 0, 160];
-            for row in lines.iter_mut().take(3) {
-                for (_, style) in row {
-                    let color = style.unwrap_or(RgbaColor::White);
-                    if color.background().is_none_or(|bg| bg == RgbaColor::BlackTransparent.rgba()) {
-                        *style = Some(RgbaColor::Terminal {
-                            foreground: color.rgba(),
-                            background,
-                            underline: color.underline(),
-                        });
-                    }
-                }
-            }
-        }
-        lines
     }
 }
 
@@ -289,14 +294,18 @@ pub(super) fn diff_rendered_lines(
         if previous.is_none() {
             // A fresh frame (or a cleared retry) already has its background.
             // Emit only occupied spans, never a blit per padded blank cell.
+            let blank_on_base = |cell: &(char, Option<RgbaColor>)| {
+                cell.0 == ' ' && !cell.1.is_some_and(RgbaColor::underline)
+                    && cell.1.and_then(RgbaColor::background).is_none_or(|bg| bg == MATRIX_BACKGROUND)
+            };
             let mut start = 0;
             while start < line.len() {
-                if line[start].0 == ' ' && line[start].1.and_then(RgbaColor::background).is_none() {
+                if blank_on_base(&line[start]) {
                     start += 1;
                     continue;
                 }
                 let mut end = start + 1;
-                while end < line.len() && (line[end].0 != ' ' || line[end].1.and_then(RgbaColor::background).is_some()) {
+                while end < line.len() && !blank_on_base(&line[end]) {
                     end += 1;
                 }
                 if let Some(mut update) =

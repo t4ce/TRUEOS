@@ -157,18 +157,47 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
     #[test] fn ssh_controls_align_right_and_update_without_line_echo() {
         let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
         let output=String::from_utf8_lossy(&tty.output);
-        for row in 1..=3 {assert!(output.contains(&format!("\\x1b[{row};96H\\x1b[0m\\x1b[38;2;255;255;255m\\x1b[4mRIGHT")));}
+        let mut screen=trueos_terminal::Terminal::new(100,25);screen.feed(&tty.output);
+        for row in 0..3 {let cells=&screen.cells()[row*100+95..row*100+100];
+            assert_eq!(cells.iter().map(|cell|cell.glyph).collect::<String>(),"RIGHT");
+            assert!(cells.iter().all(|cell|cell.style.underline));
+        }
         assert!(output.contains("TrueOS"));assert!(output.contains("12:34"));assert!(output.contains("§sh1"));
         tty.output.clear();tty.input(b"abc");
-        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1Habc"));
+        let output=String::from_utf8_lossy(&tty.output);assert!(output.contains("\\x1b[3;1H")&&output.contains("abc"));
         assert!(!tty.output.windows(2).any(|w|w==b"\\x1b8"));
         tty.output.clear();tty.reconcile_matrix_selection();assert!(tty.output.is_empty());
         tty.resize(60,20);
-        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[1;56H"));
+        screen.resize(60,20);screen.feed(&tty.output);
+        assert_eq!(screen.cells()[55..60].iter().map(|cell|cell.glyph).collect::<String>(),"RIGHT");
         tty.output.clear();
         tty.input(b"\\r");assert_eq!(tty.shell.prompt,"");
         assert_eq!(&*tty.shell.parsed.borrow(), &["abc"]);
-        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[3;1H   "));
+        let output=String::from_utf8_lossy(&tty.output);assert!(output.contains("\\x1b[3;1H")&&output.contains("   "));
+    }
+    #[test] fn ssh_wire_pixels_match_shared_palette_after_scroll_clear_and_resize() {
+        fn check(tty:&Terminal, screen:&trueos_terminal::Terminal) {
+            let rows=tty.shell.capture_matrix_snapshot().rendered_lines();
+            let (columns,height)=tty.shell.get_size();
+            assert_eq!(screen.dimensions(),(columns,height));
+            for (y,row) in rows.iter().enumerate() {for (x,(glyph,style)) in row.iter().enumerate() {
+                let actual=&screen.cells()[y*columns+x];let color=style.unwrap();
+                let [red,green,blue,alpha]=if color.blink() {crate::update::CONTROL_BACKGROUND} else {color.background().unwrap()};
+                assert_eq!(alpha,255);assert_eq!(actual.glyph,*glyph,"cell {x},{y}");
+                assert_eq!(actual.style.background,trueos_terminal::TerminalColor::Rgb {red,green,blue},"cell {x},{y}");
+                if *glyph!=' ' {let [red,green,blue,_]=color.rgba();assert_eq!(actual.style.foreground,trueos_terminal::TerminalColor::Rgb {red,green,blue});}
+                assert_eq!(actual.style.underline,color.underline());
+            }}
+        }
+        let mut shell=Shell3::new_terminal().unwrap();shell.size=(12,6);
+        shell.history=(0..6).map(|n|format!("line{n}")).collect();
+        let mut tty=Terminal::new_ssh(shell);let mut screen=trueos_terminal::Terminal::new(12,6);
+        screen.feed(&tty.output);check(&tty,&screen);
+        tty.output.clear();tty.shell.history.remove(0);tty.reconcile_matrix_selection();
+        screen.feed(&tty.output);check(&tty,&screen);
+        tty.output.clear();tty.input(b"clear\\r");screen.feed(&tty.output);check(&tty,&screen);
+        tty.output.clear();tty.resize(20,8);screen.resize(20,8);
+        screen.feed(&tty.output);check(&tty,&screen);
     }
     #[test] fn ssh_mouse_reports_are_ignored_at_every_packet_split() {
         let input=b"\\x1b[<35;4;2M\\x1b[<0;4;2M\\x1b[<0;4;2m\\x1b[<32;6;2M\\x1b[<64;6;2M\\x1b[<65;6;2M\\x1b[<2;6;2M\\x1b[<35;6;3M";
@@ -217,16 +246,16 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         let mut tty=Terminal::new_ssh(shell);tty.output.clear();
         tty.shell.history.remove(0);tty.reconcile_matrix_selection();
         let out=String::from_utf8_lossy(&tty.output);
-        assert!(out.contains("\\x1b[1S"));assert!(out.contains("\\x1b[6;1Hline3"));
+        assert!(out.contains("\\x1b[1S"));assert!(out.contains("\\x1b[6;1H")&&out.contains("line3"));
         assert!(!out.contains("line1"));assert!(!out.contains("line2"));assert!(!out.contains("TrueOS"));
         tty.output.clear();tty.shell.history.insert(0,"line0".into());tty.reconcile_matrix_selection();
         let out=String::from_utf8_lossy(&tty.output);
-        assert!(out.contains("\\x1b[1T"));assert!(out.contains("\\x1b[4;1Hline0"));
+        assert!(out.contains("\\x1b[1T"));assert!(out.contains("\\x1b[4;1H")&&out.contains("line0"));
         tty.output.clear();tty.shell.history.insert(0,"newest".into());tty.reconcile_matrix_selection();
         let out=String::from_utf8_lossy(&tty.output);
-        assert!(out.contains("\\x1b[1T"));assert!(out.contains("\\x1b[4;1Hnewest"));
+        assert!(out.contains("\\x1b[1T"));assert!(out.contains("\\x1b[4;1H")&&out.contains("newest"));
         tty.output.clear();tty.shell.history.clear();tty.reconcile_matrix_selection();
-        assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[4;1H      "));
+        let output=String::from_utf8_lossy(&tty.output);assert!(output.contains("\\x1b[4;1H")&&output.contains("      "));
         assert!(tty.line.is_empty());
     }
     #[test] fn ssh_native_cursor_blinks_on_the_blank_cell_and_tracks_editing() {
@@ -265,7 +294,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
     }
     #[test] fn connection_banner_contains_only_title_and_slot_prompt() {
         let tty=Terminal::new(Shell3::new_terminal().unwrap());
-        assert_eq!(tty.output, "\\x1b[?1007s\\x1b[?1007l\\x1b[?1049h\\x1b[0m\\x1b[2J\\x1b[HTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m \\x1b7".as_bytes());
+        assert_eq!(tty.output, "\\x1b[?1007s\\x1b[?1007l\\x1b[?1049h\\x1b[0m\\x1b[48;2;24;24;24m\\x1b[2J\\x1b[H\\x1b[0mTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m \\x1b7".as_bytes());
     }
     #[test] fn clear_screen_returns_to_active_slot_prompt() {
         let mut tty=terminal();
