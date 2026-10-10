@@ -867,3 +867,6 @@ pub(crate) fn emulator_windows() -> (u64, alloc::vec::Vec<WindowSnapshot>) {
 pub(crate) fn emulator_acknowledge(window: WindowSnapshot) {
     let _ = window_broker::acknowledge_window_surface(window);
 }
+
+#[cfg(feature = "trueos_h264_encode_stream")]
+pub(crate) use h264_encode_stream::film::request_capture_film;

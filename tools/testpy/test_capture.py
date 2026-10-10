@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 STUBS = r'''
 extern crate self as trueos_executor;
+#[macro_export] macro_rules! log {($($tt:tt)*)=>{{}}}
 #[derive(Clone,Copy)] pub struct Spawner;
 impl Spawner {pub fn spawn<T>(&self,_:T){}}
 mod workers {pub type WorkerSpawner=crate::Spawner;pub fn pick_background_spawner()->Option<crate::Spawner>{Some(crate::Spawner)}}
@@ -28,6 +29,9 @@ static SHOTS:Mutex<Vec<u64>>=Mutex::new(Vec::new());
 static RECORDINGS:Mutex<Vec<shell3::capture::Recording>>=Mutex::new(Vec::new());
 static RETURNED:AtomicBool=AtomicBool::new(false);
 mod shell3 {
+    pub use crate::shell2::MatrixTarget;
+    pub struct MatrixSlots;
+    impl MatrixSlots {pub fn drop_slot(_:Option<&str>)->bool {true}}
     pub mod service {pub fn notify_work(){}}
     pub mod tui {
         #[derive(Clone,Copy)]pub struct Frontend {pub id:u64,pub cols:usize,pub rows:usize}
@@ -43,7 +47,6 @@ mod shell3 {
         pub fn native_read(_:&crate::shell2::MatrixTarget)->Option<(Vec<u8>,Vec<String>)>{None}
         pub fn surface(_:&crate::shell2::MatrixTarget)->Option<Surface>{Some(Surface{cols:100,rows:25})}
     }
-    #[path="@ROOT@/src/shell3/helper.rs"] mod helper;
     pub mod capture {
         @CAPTURE@
         fn menu_task(_:Kind,_:crate::shell2::MatrixTarget)->Result<(),()>{Ok(())}
@@ -88,16 +91,16 @@ TESTS = r'''
     }
     #[test] fn finite_capture_work_spins_until_the_async_result_even_when_parked(){
         setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Pic);
-        menu.notice("Saved: previous.png");menu.sync_work(&target);assert_eq!(crate::S.lock().active,0);assert!(menu.frame(100,25,0)[22].is_empty());
-        menu.choose(&target,0);menu.sync_work(&target);assert_eq!(crate::S.lock().active,1);
+        menu.notice("Saved: previous.png");menu.sync_work(&target);assert!(menu.work.is_none());assert!(menu.frame(100,25,0)[22].is_empty());
+        menu.choose(&target,0);menu.sync_work(&target);assert!(menu.work.is_some());
         assert!(menu.frame(100,25,0)[22].starts_with('⣿'));assert!(menu.frame(100,25,100_000_000)[22].starts_with('⣾'));assert!(menu.frame(100,25,900_000_000)[22].starts_with('⣿'));assert_eq!(menu.frame(100,25,100_000_000)[23],"Saved: previous.png");
-        menu.pictures(&target,0);menu.sync_work(&target);assert!(!menu.busy());assert!(menu.working());assert_eq!(crate::S.lock().active,1);
-        menu.action(Action::Quit,&target,25,0);menu.sync_work(&target);assert_eq!(crate::S.lock().active,1);
-        menu.notice("Saved: new.png");menu.sync_work(&target);assert_eq!(crate::S.lock().active,0);assert!(menu.frame(100,25,0)[22].is_empty());
-        menu.selected=1;menu.choose(&target,1_000_000_000);menu.sync_work(&target);assert_eq!(crate::S.lock().active,1);
-        menu.choose(&target,1_000_000_000);menu.sync_work(&target);assert_eq!(crate::S.lock().active,0);
-        menu.choose(&target,2_000_000_000);menu.sync_work(&target);crate::S.lock().no_root=true;menu.pictures(&target,2_000_000_000);menu.sync_work(&target);assert_eq!(crate::S.lock().active,0);assert!(menu.result.starts_with("Error:"));
-        crate::S.lock().no_root=false;menu.choose(&target,3_000_000_000);menu.sync_work(&target);assert_eq!(crate::S.lock().active,1);drop(menu);assert_eq!(crate::S.lock().active,0);
+        menu.pictures(&target,0);menu.sync_work(&target);assert!(!menu.busy());assert!(menu.working());assert!(menu.work.is_some());
+        menu.action(Action::Quit,&target,25,0);menu.sync_work(&target);assert!(menu.work.is_some());
+        menu.notice("Saved: new.png");menu.sync_work(&target);assert!(menu.work.is_none());assert!(menu.frame(100,25,0)[22].is_empty());
+        menu.selected=1;menu.choose(&target,1_000_000_000);menu.sync_work(&target);assert!(menu.work.is_some());
+        menu.choose(&target,1_000_000_000);menu.sync_work(&target);assert!(menu.work.is_none());
+        menu.choose(&target,2_000_000_000);menu.sync_work(&target);crate::S.lock().no_root=true;menu.pictures(&target,2_000_000_000);menu.sync_work(&target);assert!(menu.work.is_none());assert!(menu.result.starts_with("Error:"));
+        crate::S.lock().no_root=false;menu.choose(&target,3_000_000_000);menu.sync_work(&target);assert!(menu.work.is_some());drop(menu);
     }
     #[test] fn screenshot_result_survives_scheduling_and_return_then_shows_a_short_failure(){
         setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Pic);
@@ -182,6 +185,11 @@ def main():
     }}
     #[derive(Clone)] pub struct MatrixTarget''')
         capture = (ROOT/'src/shell3/capture.rs').read_text()
+        capture = capture[:capture.index('/// Capture status belongs')]
+        capture += 'pub(crate) fn print_line(t:&MatrixTarget,s:&str){crate::shell2::print_matrix_target_line(t,s)}\nuse crate::shell2::cmds::rec as audio;\n'
+        helper = (ROOT/'src/shell3/capture.rs').read_text().split('mod helper {\n',1)[1].split('\n}\n\nmod audio {',1)[0]
+        helper = re.sub(r'pub\(super\) fn admit\(.*?^}', 'pub(super) fn admit(_: &str, _: Frontend) -> Result<Option<(MatrixTarget, crate::workers::WorkerSpawner)>, String> {Ok(Some((MatrixTarget(1),crate::Spawner)))}', helper, flags=re.M | re.S)
+        capture += '\nmod helper {\n' + helper + '\n}\n'
         capture = re.sub(r'^//!.*\n','',capture,flags=re.M)
         capture = re.sub(r'^#\[trueos_executor::task[^\n]*\n','',capture,flags=re.M)
         capture = capture.replace('async fn menu_task(', 'async fn menu_task_run(').replace('async fn mux_task(', 'async fn mux_task_run(')

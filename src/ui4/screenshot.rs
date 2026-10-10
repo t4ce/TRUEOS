@@ -234,6 +234,11 @@ fn report_shot_result(
     target: Option<&crate::shell3::MatrixTarget>,
     result: Result<&str, &str>,
 ) {
+    if let Some(target) = target {
+        let message = match result { Ok(path) => crate::shell3::capture::saved_result(path), Err(error) => crate::shell3::capture::error_result(error) };
+        crate::shell3::tui::native_notice(target, &message);
+        crate::shell3::capture::print_line(target, &message);
+    }
     crate::log!("screenshot: {:?}\n", result);
 }
 

@@ -1,3 +1,4 @@
+pub(crate) mod capture;
 mod matrix_target;
 pub(crate) use matrix_target::{MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
 mod metafmtstr;
@@ -1114,6 +1115,11 @@ impl Shell3 {
         } else if self.mode == Mode::HV && text == "status" {
             for line in service::hv_status_lines() {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+            }
+        } else if self.mode == Mode::CMD && capture::recognizes(&text) {
+            match capture::start(&text, self.tui_frontend()) {
+                Ok(()) => { self.select_matrix_slot_name(&text); }
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
             }
         } else if is_alias {
             self.launch_named_app(&text, true);
