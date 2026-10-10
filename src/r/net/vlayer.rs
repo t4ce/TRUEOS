@@ -187,11 +187,12 @@ pub fn system_services_snapshot_read_host(offset: usize, out: &mut [u8]) -> usiz
 }
 
 pub fn bios_schema_snapshot_len_host() -> usize {
-    crate::shell2::cmds::bios_blueprint::snapshot_len()
+    // BIOS command helpers are archived; expose an empty snapshot.
+    0
 }
 
-pub fn bios_schema_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
-    crate::shell2::cmds::bios_blueprint::snapshot_read(offset, out)
+pub fn bios_schema_snapshot_read_host(_offset: usize, _out: &mut [u8]) -> usize {
+    0
 }
 
 pub fn printer_snapshot_len_host() -> usize {

@@ -727,7 +727,7 @@ pub fn release_warm_aps() {
     }
 }
 
-pub fn spawn_post_boot(spawner: Spawner) {
+pub fn spawn_post_boot(_spawner: Spawner) {
     let Some(handoff) = warm_handoff().copied() else {
         return;
     };
@@ -743,12 +743,6 @@ pub fn spawn_post_boot(spawner: Spawner) {
     );
     if virtio_logo && !intel_display {
         crate::virtio_gpu_logo::request_live_update_stamp(handoff.generation);
-    } else {
-        // Deliberate exception to Blueprint autostart: every successful live
-        // boot gets a fresh proof instance. It waits for checkpoint uplift but
-        // is never deduplicated against restored img instances, so a proof
-        // which was not cleanly stopped can intentionally survive and stack.
-        crate::shell2::cmds::img::launch_live_update_notice(spawner, handoff.generation);
     }
 
     SHELL_NOTICE_PENDING.store(true, Ordering::Release);
@@ -1107,6 +1101,7 @@ async fn checkpoint_active_vms(
         let state = crate::hv::vm_state(vm_index as u8);
         state.supported
             && state.replicatable
+            && !state.stop_requested
             && (state.running || state.starting || state.pause_latched)
     });
     if has_checkpoint_vm {
@@ -1120,7 +1115,10 @@ async fn checkpoint_active_vms(
     for vm_index in 0..VM_ID_LIMIT {
         let vm_id = vm_index as u8;
         let state = crate::hv::vm_state(vm_id);
-        if !state.supported || !(state.running || state.starting || state.pause_latched) {
+        if !state.supported
+            || state.stop_requested
+            || !(state.running || state.starting || state.pause_latched)
+        {
             continue;
         }
 
@@ -1252,6 +1250,17 @@ async fn checkpoint_active_vms(
                 )
                 .await;
             }
+        }
+    }
+
+    // Closing an app while checkpoints are being written must not turn into
+    // a relaunch in the new kernel, even if its earlier snapshot still exists.
+    for vm_index in 0..VM_ID_LIMIT {
+        if crate::hv::vm_state(vm_index as u8).stop_requested {
+            let bit = !(1u64 << (vm_index % 64));
+            restore_mask[vm_index / 64] &= bit;
+            resume_mask[vm_index / 64] &= bit;
+            vm_heap_ranges[vm_index] = WarmReservedRange::EMPTY;
         }
     }
 

@@ -61,8 +61,6 @@ define_started_flags!(
     TLS_SOCKET_SERVICE_STARTED,
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
-    NET_SHELL_STARTED,
-    LOCAL_SHELL_SESSION_POOL_STARTED,
     GRIDPAPER_SERVICE_STARTED,
     SH3SRV_STARTED,
     SHELL3_TCP_STARTED,
@@ -110,7 +108,6 @@ define_started_flags!(
     BP_AUTOSTART_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
-    NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
     MICROFONT_LOG_STARTED,
     ATOMIC_BOMB_STARTED,
@@ -597,10 +594,6 @@ fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::sntp::sntp_service_task())
-}
-
-fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::shell2::backends::net_tcp_shell::net_shell_task())
 }
 
 fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
@@ -1218,41 +1211,13 @@ const fn unix_fd_probe_task_spec() -> TaskSpec {
 }
 
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
-    match crate::shell2::spawn_app_vm_run_queue(spawner) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
-fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| crate::r::restart::autostart_task(spawner))
-}
-
-fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
-        crate::shell2::task(spawner, &crate::shell2::NET_TCP_SHELL_BACKEND)
+        crate::shell3::cmds::run::app_vm_run_queue_task(spawner)
     })
 }
 
-#[trueos_executor::task]
-async fn local_shell_session_pool_bootstrap_task(spawner: Spawner) {
-    let spawned = crate::shell2::spawn_local_shell_session_workers(spawner);
-    if spawned == crate::shell2::LOCAL_SHELL_SESSION_CAP {
-        crate::log!(
-            "shell2-session: local executor pool ready workers={} host-shell-cap=10 tcp-reserved=1\n",
-            spawned
-        );
-    } else {
-        crate::log_error!(target: "shell2";
-            "shell2-session: local executor pool incomplete workers={} expected={} action=disable-admission\n",
-            spawned,
-            crate::shell2::LOCAL_SHELL_SESSION_CAP
-        );
-    }
-}
-
-fn spawn_local_shell_session_pool(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| local_shell_session_pool_bootstrap_task(spawner))
+fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| crate::r::restart::restart_apps_task(spawner))
 }
 
 #[trueos_executor::task]
@@ -1420,7 +1385,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 79
+const TASK_COUNT: usize = 76
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize;
@@ -1568,7 +1533,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SNTP_SERVICE_STARTED,
         spawn_sntp_service,
     ),
-    TaskSpec::enabled("net-shell-listener", 0, &NET_SHELL_STARTED, spawn_net_shell),
     TaskSpec::enabled(
         "shell3-tcp",
         crate::r::readiness::NET_ANY_CONFIGURED,
@@ -1888,13 +1852,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &USER_INPUT_RECORD_WRITER_STARTED,
         spawn_user_input_record_writer,
     ),
-    TaskSpec::enabled(
-        "local-shell-session-pool",
-        0,
-        &LOCAL_SHELL_SESSION_POOL_STARTED,
-        spawn_local_shell_session_pool,
-    ),
-    TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
 ];
 
@@ -2015,30 +1972,11 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 match (spec.spawn)(spawner) {
                     SpawnAttempt::Spawned => {
                         started_any = true;
-                        if spec.name == "net-shell-listener" {
-                            // Stable fresh-boot provenance for the physical log
-                            // collector. Routine service Info is intentionally
-                            // filtered in the normal profile, so this exact-once
-                            // milestone uses LogOs' sparse Important class.
-                            crate::log_os::service_important_line(format_args!(
-                                "spawn-svc: started {} (mask=0x{:08X})\n",
-                                spec.name, spec.required
-                            ));
-                            // Promote the FirmwareScout/TRBIOS1 handoff result into
-                            // the same first-visible window of the bare-metal log,
-                            // so hardware acceptance never depends on an
-                            // interactive `bios capture` or a screen photo.
-                            crate::log_important!(target: "boot";
-                                "[firmware] {}\n",
-                                crate::shell2::cmds::bios_capture::important_receipt_line()
-                            );
-                        } else {
-                            crate::log!(
-                                "spawn-svc: started {} (mask=0x{:08X})\n",
-                                spec.name,
-                                spec.required
-                            );
-                        }
+                        crate::log!(
+                            "spawn-svc: started {} (mask=0x{:08X})\n",
+                            spec.name,
+                            spec.required
+                        );
                         if matches!(
                             spec.name,
                             "gfx_loadscreen"
