@@ -1,10 +1,10 @@
 //! Live RAM/SMP views over the existing snapshot tables and natural samplers.
+use crate::shell3::MatrixTarget;
 use super::{
     helper::{self, Action, Input, Screen},
     tui::{self, Frontend},
 };
 use crate::shell2::{
-    MatrixTarget,
     cmds::{ram, smp},
 };
 use alloc::{format, string::String, vec::Vec};

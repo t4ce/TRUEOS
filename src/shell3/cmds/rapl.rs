@@ -1,9 +1,7 @@
 use trueos_executor::Spawner;
 
-use crate::shell2::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
-    print_shell_line, set_matrix_target_active,
-};
+use crate::shell3::{MatrixTarget};
+use crate::shell2::{ShellBackend2, matrix_target_for_backend, print_matrix_target_line, print_shell_line, set_matrix_target_active};
 
 pub(crate) fn store(spawner: &Spawner, io: &'static dyn ShellBackend2) {
     let target = matrix_target_for_backend(io);

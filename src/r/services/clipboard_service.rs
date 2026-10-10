@@ -41,10 +41,8 @@ use heapless::{Deque, String, Vec};
 use spin::Mutex;
 use zeroize::Zeroizing;
 
-use crate::shell2::{
-    MatrixSlotAttachment, MatrixSlotAttachmentError, MatrixSlotAttachmentId, MatrixSlotLease,
-    attach_matrix_slot_resource, detach_matrix_slot_resource, matrix_slot_is_live,
-};
+use crate::shell3::{MatrixSlotLease};
+use crate::shell2::{MatrixSlotAttachment, MatrixSlotAttachmentError, MatrixSlotAttachmentId, attach_matrix_slot_resource, detach_matrix_slot_resource, matrix_slot_is_live};
 
 pub(crate) const CLIPBOARD_HISTORY_CAPACITY: usize = 10;
 pub(crate) const CLIPBOARD_TEXT_MAX_UTF8_BYTES: usize = 512;

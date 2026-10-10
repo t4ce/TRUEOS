@@ -45,7 +45,7 @@ use x86_64::registers::model_specific::Msr;
 use x86_64::registers::rflags;
 use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
-use crate::shell2::MatrixTarget;
+use crate::shell3::MatrixTarget;
 
 use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
@@ -114,7 +114,7 @@ struct TrueosVmId {
     cooperative_stop: cooperative_stop::CooperativeStop,
     lifecycle_control: spin::Mutex<()>,
     lifecycle_generation: AtomicU64,
-    matrix_owner: spin::Mutex<Option<crate::shell2::MatrixSlotLease>>,
+    matrix_owner: spin::Mutex<Option<crate::shell3::MatrixSlotLease>>,
     preserve_req: AtomicBool,
     preserve_exit: AtomicBool,
     clean_exit: AtomicBool,
@@ -2193,7 +2193,7 @@ fn start_with_mode(
             vm.stop_req.store(false, Ordering::Release);
             if let Some(pending) = pending_blueprint.as_ref() {
                 *vm.matrix_owner.lock() = pending.console_target.as_ref()
-                    .map(crate::shell2::matrix_target_slot_lease);
+                    .map(crate::shell3::matrix_target_slot_lease);
             } else if !vm.pause_latched.load(Ordering::Acquire) {
                 *vm.matrix_owner.lock() = None;
             }
@@ -2470,11 +2470,11 @@ pub fn kill(vm_id: u8) -> Result<bool, EjectError> {
     kill_matching_owner(vm_id, None)
 }
 
-pub(crate) fn kill_for_matrix_slot(vm_id: u8, owner: &crate::shell2::MatrixSlotLease) -> Result<bool, EjectError> {
+pub(crate) fn kill_for_matrix_slot(vm_id: u8, owner: &crate::shell3::MatrixSlotLease) -> Result<bool, EjectError> {
     kill_matching_owner(vm_id, Some(owner))
 }
 
-fn kill_matching_owner(vm_id: u8, owner: Option<&crate::shell2::MatrixSlotLease>) -> Result<bool, EjectError> {
+fn kill_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease>) -> Result<bool, EjectError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(EjectError::UnsupportedVmId);
     };
@@ -3960,7 +3960,7 @@ pub(crate) fn blueprint_process_arg(vm_id: u8, index: usize) -> Option<AllocStri
     context.as_ref()?.args.get(index).cloned()
 }
 
-pub(crate) fn blueprint_console_target(vm_id: u8) -> Option<crate::shell2::MatrixTarget> {
+pub(crate) fn blueprint_console_target(vm_id: u8) -> Option<crate::shell3::MatrixTarget> {
     let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
     context.as_ref()?.console_target.clone()
 }
@@ -4432,7 +4432,7 @@ pub(crate) fn blueprint_terminal_lease_current(
         if !backend_claimed || !input_bound {
             let backend_rolled_back = if backend_claimed && local_handoff {
                 if let Some(target) = target.as_ref() {
-                    crate::shell2::release_matrix_target_terminal_handoff(target, vm_id)
+                    crate::shell3::release_matrix_target_terminal_handoff(target, vm_id)
                 } else {
                     false
                 }
@@ -4511,7 +4511,7 @@ pub(crate) fn blueprint_terminal_lease_current(
                 let _ = crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
             }
             if local_handoff && let Some(target) = target.as_ref() {
-                let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+                let _ = crate::shell3::release_matrix_target_terminal_handoff(target, vm_id);
             }
             if !direct && let Some(target) = target.as_ref() {
                 let _ = crate::shell2::unbind_matrix_target_vm(target, vm_id);
@@ -4685,7 +4685,7 @@ pub(crate) fn blueprint_terminal_lease_release(
         crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id)
     } else if was_local_handoff {
         target.as_ref().is_some_and(|target| {
-            crate::shell2::release_matrix_target_terminal_handoff(target, vm_id)
+            crate::shell3::release_matrix_target_terminal_handoff(target, vm_id)
         })
     } else {
         true
@@ -4956,7 +4956,7 @@ pub(crate) fn blueprint_terminal_lease_poll_reentry(
             .unwrap_or(true);
     if !input_bound {
         if local_handoff && let Some(target) = target.as_ref() {
-            let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+            let _ = crate::shell3::release_matrix_target_terminal_handoff(target, vm_id);
         }
         let failed = {
             let mut guard = slot.lock();
@@ -5021,7 +5021,7 @@ pub(crate) fn blueprint_terminal_lease_poll_reentry(
             let _ = crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
         }
         if local_handoff && let Some(target) = target.as_ref() {
-            let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+            let _ = crate::shell3::release_matrix_target_terminal_handoff(target, vm_id);
         }
         if !direct && let Some(target) = target.as_ref() {
             crate::shell2::unbind_matrix_target_vm(target, vm_id);
@@ -5604,14 +5604,14 @@ pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
 }
 
 pub(crate) fn blueprint_console_submit_stdin_for_target(vm_id: u8, target: &MatrixTarget, run: u64, data: &[u8]) -> usize {
-    blueprint_console_submit_stdin_for_lease(vm_id, &crate::shell2::matrix_target_slot_lease(target), run, data)
+    blueprint_console_submit_stdin_for_lease(vm_id, &crate::shell3::matrix_target_slot_lease(target), run, data)
 }
 
-pub(crate) fn blueprint_console_submit_stdin_for_lease(vm_id: u8, lease: &crate::shell2::MatrixSlotLease, run: u64, data: &[u8]) -> usize {
+pub(crate) fn blueprint_console_submit_stdin_for_lease(vm_id: u8, lease: &crate::shell3::MatrixSlotLease, run: u64, data: &[u8]) -> usize {
     blueprint_console_submit_stdin_inner(vm_id, data, Some((lease, run)))
 }
 
-fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option<(&crate::shell2::MatrixSlotLease, u64)>) -> usize {
+fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option<(&crate::shell3::MatrixSlotLease, u64)>) -> usize {
     const MAX_CONSOLE_INPUT: usize = 64 * 1024;
     if data.is_empty() {
         return 0;
@@ -5629,7 +5629,7 @@ fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option
     if let Some((lease, run)) = expected {
         if vm_run_generation(vm_id) != Some(run)
             || !matches!(context.terminal_lease, BlueprintTerminalLeaseState::Active { .. })
-            || context.console_target.as_ref().map(crate::shell2::matrix_target_slot_lease).as_ref() != Some(lease)
+            || context.console_target.as_ref().map(crate::shell3::matrix_target_slot_lease).as_ref() != Some(lease)
         { return 0; }
     }
     for &byte in data {
@@ -5835,7 +5835,7 @@ fn clear_blueprint_process_context(vm_id: u8) -> BlueprintTerminalCleanup {
             {
                 cleanup.backend_release_expected = true;
                 cleanup.backend_released =
-                    crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+                    crate::shell3::release_matrix_target_terminal_handoff(target, vm_id);
             }
             if ownership_may_be_inflight && let Some(target) = context.console_target.as_ref() {
                 cleanup.matrix_unbind_expected = true;
@@ -5919,7 +5919,7 @@ fn suspend_blueprint_process_context(vm_id: u8) {
         {
             cleanup.backend_release_expected = true;
             cleanup.backend_released =
-                crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+                crate::shell3::release_matrix_target_terminal_handoff(target, vm_id);
         }
         cleanup.matrix_unbind_expected = true;
         cleanup.matrix_unbind_result = Some(crate::shell2::unbind_matrix_target_vm(target, vm_id));
@@ -5995,7 +5995,7 @@ fn resume_blueprint_process_context(vm_id: u8) {
                 && local_handoff
                 && let Some(target) = presentation.3.as_ref()
             {
-                let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+                let _ = crate::shell3::release_matrix_target_terminal_handoff(target, vm_id);
             }
             (bound, bound && local_handoff, bound && presentation.3.is_some())
         };
@@ -6060,7 +6060,7 @@ fn resume_blueprint_process_context(vm_id: u8) {
         if presentation.1.is_net_shell_direct() {
             let _ = crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
         } else if let Some(target) = presentation.3.as_ref() {
-            let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+            let _ = crate::shell3::release_matrix_target_terminal_handoff(target, vm_id);
         }
     }
     if matrix_bound && let Some(target) = presentation.3.as_ref() {

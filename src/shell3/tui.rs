@@ -1,6 +1,7 @@
 //! Shell3 terminal leases. VM lifecycle stays in HV; bytes never reach Shell3's prompt.
 use super::{RgbaColor, update::RenderedLine};
-use crate::shell2::{MatrixSlotAttachment, MatrixSlotLease, MatrixTarget};
+use crate::shell3::{MatrixSlotLease, MatrixTarget};
+use crate::shell2::{MatrixSlotAttachment};
 use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -154,7 +155,7 @@ pub(crate) fn attach(
     frontend: Frontend,
     target: &MatrixTarget,
 ) -> Result<(), alloc::string::String> {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     {
         let mut routes = ROUTES.lock();
         if routes.routes.iter().any(|route| route.lease == lease) {return Err("tui: terminal target already attached".into());}
@@ -179,7 +180,7 @@ pub(crate) fn attach(
 }
 
 pub(crate) fn supports(target: &MatrixTarget) -> bool {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     crate::shell2::matrix_slot_is_live(&lease)
         && ROUTES
             .lock()
@@ -188,7 +189,7 @@ pub(crate) fn supports(target: &MatrixTarget) -> bool {
             .any(|route| route.lease == lease)
 }
 pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     if let Some(route) = ROUTES
         .lock()
         .routes
@@ -199,7 +200,7 @@ pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
     }
 }
 pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let run = crate::hv::vm_run_generation(vm)?;
     let live = crate::shell2::matrix_slot_is_live(&lease);
     let mut routes = ROUTES.lock();
@@ -235,7 +236,7 @@ pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
     Some(true)
 }
 pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let run = crate::hv::vm_run_generation(vm)?;
     let mut routes = ROUTES.lock();
     let route = routes
@@ -267,7 +268,7 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
 pub(crate) fn surface(
     target: &MatrixTarget,
 ) -> Option<crate::hv::BlueprintTerminalSurfaceSnapshot> {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|route| route.lease == lease)?;
     let (cols, rows) = route.screen.dimensions();
@@ -281,7 +282,7 @@ pub(crate) fn write(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize
     crate::allocators::with_host_alloc_domain(|| write_inner(target, vm, bytes))
 }
 fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let run = crate::hv::vm_run_generation(vm)?;
     let responses = {
         let mut routes = ROUTES.lock();
@@ -319,14 +320,14 @@ pub(super) fn attach_native(frontend: Frontend, target: &MatrixTarget) -> Result
     if supports(target) {return Err("tui: terminal target already attached".into());}
     if !park(frontend.id) {return Err("tui: could not release the previous terminal owner".into());}
     attach(frontend, target)?;
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     if let Some(route) = ROUTES.lock().routes.iter_mut().find(|r| r.lease == lease) {
         route.native = Some(Native {active: true, painted: false, return_to_default: false, launch: None, input: VecDeque::new(), notices: VecDeque::new()});
     }
     Ok(())
 }
 pub(super) fn cancel_native_attach(target: &MatrixTarget) {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();
     if let Some(index) = routes.routes.iter().position(|r| r.lease == lease && r.native.is_some()) {
         let route = routes.routes.remove(index);
@@ -337,7 +338,7 @@ pub(super) fn native_slot(name: &str) -> bool {
     ROUTES.lock().routes.iter().any(|r| r.lease.name() == name && r.native.is_some())
 }
 pub(super) fn native_visible(target: &MatrixTarget) -> bool {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     ROUTES.lock().routes.iter().any(|r| r.lease == lease && r.native.as_ref().is_some_and(|n| n.active))
 }
 pub(super) fn native_pending_frame(frontend: u64, name: Option<&str>) -> bool {
@@ -347,7 +348,7 @@ pub(super) fn native_pending_frame(frontend: u64, name: Option<&str>) -> bool {
     })
 }
 pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|route| route.lease == lease && route.native.is_some())?;
     Some(if routes.remote_frontends.iter().any(|entry| entry.0 == route.frontend) {
@@ -357,13 +358,13 @@ pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
     })
 }
 pub(super) fn native_read(target: &MatrixTarget) -> Option<(Vec<u8>, Vec<String>)> {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();
     let native = routes.routes.iter_mut().find(|r| r.lease == lease)?.native.as_mut()?;
     Some((native.input.drain(..).collect(), native.notices.drain(..).collect()))
 }
 pub(crate) fn native_notice(target: &MatrixTarget, message: &str) {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();
     if let Some(native) = routes.routes.iter_mut().find(|r| r.lease == lease).and_then(|r| r.native.as_mut()) {
         if native.notices.len() == 32 {native.notices.pop_front();}
@@ -372,7 +373,7 @@ pub(crate) fn native_notice(target: &MatrixTarget, message: &str) {
     super::service::notify_work();
 }
 pub(super) fn native_write(target: &MatrixTarget, bytes: &[u8]) {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();
     if let Some(route) = routes.routes.iter_mut().find(|r| r.lease == lease && r.native.is_some()) {
         route.screen.feed(bytes);
@@ -384,7 +385,7 @@ pub(super) fn native_write(target: &MatrixTarget, bytes: &[u8]) {
     super::service::notify_work();
 }
 pub(super) fn native_return(target: &MatrixTarget) {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();
     if let Some(route) = routes.routes.iter_mut().find(|r| r.lease == lease) {
         if let Some(native) = route.native.as_mut() {
@@ -408,7 +409,7 @@ pub(super) fn take_native_return(frontend: u64) -> bool {
 
 /// Resolve the current frontend on reentry, including a parked helper moved to SSH.
 pub(super) fn native_frontend(target: &MatrixTarget) -> Option<Frontend> {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|r| r.lease == lease && r.native.as_ref().is_some_and(|n| n.active))?;
     let (cols, rows) = route.screen.dimensions();
@@ -416,7 +417,7 @@ pub(super) fn native_frontend(target: &MatrixTarget) -> Option<Frontend> {
 }
 
 pub(super) fn native_launch(target: &MatrixTarget, app: crate::shell2::cmds::run::QueuedBlueprint) {
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();
     if let Some(route) = routes.routes.iter_mut().find(|r| r.lease == lease) {
         if let Some(native) = route.native.as_mut() {

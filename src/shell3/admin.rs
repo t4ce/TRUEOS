@@ -1,4 +1,5 @@
 //! Persistent account and disk menus over the existing OS services.
+use crate::shell3::MatrixTarget;
 use super::{
     helper::{self, Action, Input, Screen},
     tui::{self, Frontend},
@@ -7,7 +8,7 @@ use crate::disc::block::DeviceHandle;
 use crate::{
     crypt,
     shell2::{
-        self, MatrixTarget,
+        self,
         cmds::{cry, disc, format as disk_format, tlb_helper},
     },
 };

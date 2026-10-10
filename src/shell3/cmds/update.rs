@@ -4,9 +4,8 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 pub(crate) const REMOTE_ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
 pub(crate) const LAN_ISO_URL: &str = "http://192.168.178.111:8080/trueos.iso";
 
-use crate::shell2::{
-    MatrixTarget, matrix_target_interrupted, print_matrix_target_line, set_matrix_target_active,
-};
+use crate::shell3::{MatrixTarget};
+use crate::shell2::{matrix_target_interrupted, print_matrix_target_line, set_matrix_target_active};
 
 pub(crate) fn submit_online_install_to_target(
     spawner: &Spawner,

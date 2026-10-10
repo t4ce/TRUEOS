@@ -17,7 +17,7 @@ impl c::ClipboardDeliverySink for Sink {
 struct Gate {
     owner: WindowOwner,
     window: WindowId,
-    lease: crate::shell2::MatrixSlotLease,
+    lease: crate::shell3::MatrixSlotLease,
     kind: c::ClipboardKind,
     sink: Arc<Sink>,
 }
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn trueos_cabi_clipboard_command_v1(
     let Some(target) = crate::hv::blueprint_console_target(vm) else {
         return c::ClipboardError::MatrixSlotExpired.code();
     };
-    let lease = crate::shell2::matrix_target_slot_lease(&target);
+    let lease = crate::shell3::matrix_target_slot_lease(&target);
     let selected_kind = match kind {
         1 => c::ClipboardKind::Text,
         2 => c::ClipboardKind::Password,

@@ -2268,7 +2268,7 @@ pub(crate) fn invoke_host_rel(
     entry_flags: u16,
     process_args: Vec<String>,
     process_env: BTreeMap<String, String>,
-    console_target: Option<crate::shell2::MatrixTarget>,
+    console_target: Option<crate::shell3::MatrixTarget>,
     app_fs_root: Option<String>,
 ) -> Result<(), String> {
     let image = load_rel_image(unpacked)?;

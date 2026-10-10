@@ -244,7 +244,7 @@ pub mod kfs {
 
 pub mod env {
     use super::{BTreeMap, String, Vec};
-    use crate::shell2::MatrixTarget;
+    use crate::shell3::MatrixTarget;
     use core::{ffi::c_char, ptr, slice, str};
 
     const VM_CONTEXT_SLOTS: usize = crate::allcaps::hv::VM_ID_LIMIT;

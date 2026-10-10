@@ -1,10 +1,11 @@
 //! Online launch/download and live VM status/stop over the existing backends.
+use crate::shell3::MatrixTarget;
 use super::{
     helper::{self, Action, Input, Screen},
     tui::{self, Frontend},
 };
 use crate::shell2::{
-    self, MatrixTarget,
+    self,
     shell2_dl::{self, OnlineApp},
 };
 use alloc::{format, string::String, sync::Arc, vec::Vec};

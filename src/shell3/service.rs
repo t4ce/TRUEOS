@@ -2,7 +2,6 @@
 
 use alloc::{collections::VecDeque, vec::Vec};
 use trueos_executor::{SpawnError, SpawnToken};
-use crate::shell2::cmds::run::QueuedBlueprint;
 use trueos_time::{Duration, Timer};
 
 const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;

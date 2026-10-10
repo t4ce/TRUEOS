@@ -1,6 +1,7 @@
 //! Common admission, controls and changed-cell painting for host terminal UIs.
 use super::tui::{self, Frontend};
-use crate::shell2::{self, MatrixTarget};
+use crate::shell3::{MatrixTarget};
+use crate::shell2::{self};
 use alloc::{format, string::String, vec::Vec};
 
 const GO: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];

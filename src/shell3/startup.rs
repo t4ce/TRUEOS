@@ -23,11 +23,11 @@ impl Startup {
 }
 
 /// Preserve ordinary kernel progress after the Blueprint releases its terminal lease.
-pub(crate) fn record_host_line(target: &crate::shell2::MatrixTarget, line: &str) {
+pub(crate) fn record_host_line(target: &crate::shell3::MatrixTarget, line: &str) {
     if !super::tui::supports(target) {
         return;
     }
-    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let lease = crate::shell3::matrix_target_slot_lease(target);
     let lifetime = super::matrix_slots()
         .lock()
         .lifetimes

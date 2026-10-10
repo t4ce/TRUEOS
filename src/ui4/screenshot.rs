@@ -50,7 +50,7 @@ static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CAPTURE_REQUESTS: Mutex<VecDeque<CaptureRequest>> = Mutex::new(VecDeque::new());
 static CAPTURE_QUEUE: Mutex<VecDeque<CapturedComposition>> = Mutex::new(VecDeque::new());
-static SHOT_TARGETS: Mutex<VecDeque<crate::shell2::MatrixTarget>> = Mutex::new(VecDeque::new());
+static SHOT_TARGETS: Mutex<VecDeque<crate::shell3::MatrixTarget>> = Mutex::new(VecDeque::new());
 
 pub(super) enum CaptureError {
     NoScanout,
@@ -198,7 +198,7 @@ struct CapturedComposition {
     scope: CaptureScope,
     path_override: Option<String>,
     release_interactive_gate: bool,
-    shot_target: Option<crate::shell2::MatrixTarget>,
+    shot_target: Option<crate::shell3::MatrixTarget>,
 }
 
 /// Tight native premultiplied RGBA copied while holding one published-frame
@@ -215,7 +215,7 @@ struct CapturedWindowRgba {
 /// The screenshot worker consumes the next completed writeback frame, performs
 /// the diagnostic XYUV8888 -> RGBA conversion, and persists one PNG.
 pub(crate) fn request_wd_postblend_capture(
-    target: crate::shell2::MatrixTarget,
+    target: crate::shell3::MatrixTarget,
 ) -> Result<(), &'static str> {
     let mut targets = SHOT_TARGETS.lock();
     crate::intel::media::wd_xyuv8888::request_screenshot().map_err(|error| match error {
@@ -231,7 +231,7 @@ pub(crate) fn request_wd_postblend_capture(
 }
 
 fn report_shot_result(
-    target: Option<&crate::shell2::MatrixTarget>,
+    target: Option<&crate::shell3::MatrixTarget>,
     result: Result<&str, &str>,
 ) {
     if let Some(target) = target {

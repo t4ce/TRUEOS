@@ -1,3 +1,5 @@
+mod matrix_target;
+pub(crate) use matrix_target::{MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
 pub(crate) mod capture;
 mod helper;
 mod admin;

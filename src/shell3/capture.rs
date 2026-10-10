@@ -7,7 +7,8 @@ use super::{
     helper::{self, Action, Input, Screen},
     tui::{self, Frontend},
 };
-use crate::shell2::{self, MatrixTarget};
+use crate::shell3::{MatrixTarget};
+use crate::shell2::{self};
 use alloc::{format, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use spin::Mutex;

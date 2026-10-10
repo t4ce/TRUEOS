@@ -69,7 +69,6 @@ mod ram_usage;
 mod release_count;
 mod remote_work_wake;
 mod runtime;
-mod shell2;
 #[path = "shell3/shell3.rs"]
 mod shell3;
 mod smp;

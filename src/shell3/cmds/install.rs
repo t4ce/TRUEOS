@@ -1,9 +1,8 @@
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
-use crate::shell2::{
-    MatrixTarget, matrix_target_interrupted, print_matrix_target_line, set_matrix_target_active,
-};
+use crate::shell3::{MatrixTarget};
+use crate::shell2::{matrix_target_interrupted, print_matrix_target_line, set_matrix_target_active};
 
 pub(crate) fn submit_install_to_target(
     spawner: &Spawner,

@@ -2,7 +2,8 @@
 use crate::r::fs::trueosfs as fs;
 use crate::r::services::hda_capture_lane as capture;
 use crate::shell2::shell2_cmd::ParseOutcome;
-use crate::shell2::{self, MatrixTarget, ShellBackend2};
+use crate::shell3::{MatrixTarget};
+use crate::shell2::{self, ShellBackend2};
 use alloc::{format, string::String, vec, vec::Vec};
 use spin::Mutex;
 use trueos_executor::Spawner;
