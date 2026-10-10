@@ -1,7 +1,8 @@
 //! Shell3 terminal leases. VM lifecycle stays in HV; bytes never reach Shell3's prompt.
 use super::{RgbaColor, update::RenderedLine};
 use crate::shell3::{MatrixSlotLease, MatrixTarget};
-use crate::shell2::{MatrixSlotAttachment};
+use super::matrix_target::{MatrixSlotAttachment, attach_matrix_slot_resource, matrix_slot_is_live, TRANSPORT_NET_TCP_SCOPE, TRANSPORT_LOCAL_SCOPE};
+use super::service::QueuedBlueprint;
 use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -24,7 +25,7 @@ struct Native {
     active: bool,
     painted: bool,
     return_to_default: bool,
-    launch: Option<crate::shell2::cmds::run::QueuedBlueprint>,
+    launch: Option<QueuedBlueprint>,
     input: VecDeque<u8>,
     notices: VecDeque<String>,
 }
@@ -172,7 +173,7 @@ pub(crate) fn attach(
         });
         routes.changed(frontend.id);
     }
-    if crate::shell2::attach_matrix_slot_resource(&lease, Arc::new(Attachment)).is_err() {
+    if attach_matrix_slot_resource(&lease, Arc::new(Attachment)).is_err() {
         Attachment.on_matrix_slot_freed(&lease);
         return Err("tui: terminal target expired or attachments full".into());
     }
@@ -181,7 +182,7 @@ pub(crate) fn attach(
 
 pub(crate) fn supports(target: &MatrixTarget) -> bool {
     let lease = crate::shell3::matrix_target_slot_lease(target);
-    crate::shell2::matrix_slot_is_live(&lease)
+    matrix_slot_is_live(&lease)
         && ROUTES
             .lock()
             .routes
@@ -202,7 +203,7 @@ pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
 pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
     let run = crate::hv::vm_run_generation(vm)?;
-    let live = crate::shell2::matrix_slot_is_live(&lease);
+    let live = matrix_slot_is_live(&lease);
     let mut routes = ROUTES.lock();
     let index = routes
         .routes
@@ -352,9 +353,9 @@ pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|route| route.lease == lease && route.native.is_some())?;
     Some(if routes.remote_frontends.iter().any(|entry| entry.0 == route.frontend) {
-        crate::shell2::TRANSPORT_NET_TCP_SCOPE
+        TRANSPORT_NET_TCP_SCOPE
     } else {
-        crate::shell2::TRANSPORT_LOCAL_SCOPE
+        TRANSPORT_LOCAL_SCOPE
     })
 }
 pub(super) fn native_read(target: &MatrixTarget) -> Option<(Vec<u8>, Vec<String>)> {
@@ -416,7 +417,7 @@ pub(super) fn native_frontend(target: &MatrixTarget) -> Option<Frontend> {
     Some(Frontend { id: route.frontend, cols, rows })
 }
 
-pub(super) fn native_launch(target: &MatrixTarget, app: crate::shell2::cmds::run::QueuedBlueprint) {
+pub(super) fn native_launch(target: &MatrixTarget, app: QueuedBlueprint) {
     let lease = crate::shell3::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();
     if let Some(route) = routes.routes.iter_mut().find(|r| r.lease == lease) {
@@ -432,7 +433,7 @@ pub(super) fn native_launch(target: &MatrixTarget, app: crate::shell2::cmds::run
     super::service::notify_work();
 }
 
-pub(super) fn take_native_launch(frontend: u64) -> Option<crate::shell2::cmds::run::QueuedBlueprint> {
+pub(super) fn take_native_launch(frontend: u64) -> Option<QueuedBlueprint> {
     ROUTES.lock().routes.iter_mut().filter(|r| r.frontend == frontend)
         .find_map(|r| r.native.as_mut()?.launch.take())
 }

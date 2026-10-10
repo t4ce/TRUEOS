@@ -4,6 +4,14 @@ use alloc::{collections::VecDeque, vec::Vec};
 use trueos_executor::{SpawnError, SpawnToken};
 use trueos_time::{Duration, Timer};
 
+/// Reserved slot and archive identity captured before the VM worker runs.
+#[derive(Clone, Debug)]
+pub(crate) struct QueuedBlueprint {
+    pub slot: alloc::string::String,
+    pub app: alloc::string::String,
+    pub sha256: [u8; 32],
+}
+
 const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
 static SHELL_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static SHELL3_KEYBOARD_EVENTS: spin::Mutex<VecDeque<crate::ui4::Ui4KeyboardEvent>> =

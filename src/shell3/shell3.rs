@@ -151,14 +151,15 @@ fn title_left_text(time: &str) -> String {
 
 pub struct MatrixSlots;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct MatrixSlotsState {
     // Raw unique slot IDs only. The default bare § slot is implicit at index 0.
     ids: Vec<String>,
     lifetimes: Vec<(String, u64)>,
     next_lifetime: u64,
+    attachments: Vec<(MatrixSlotLease, alloc::sync::Arc<dyn matrix_target::MatrixSlotAttachment>)>,
     echoes: Vec<(Option<String>, VecDeque<String>)>,
-    vmx_apps: Vec<crate::shell2::cmds::run::QueuedBlueprint>,
+    vmx_apps: Vec<service::QueuedBlueprint>,
     generation: u64,
 }
 
@@ -168,6 +169,7 @@ impl MatrixSlotsState {
             ids: vec!["id".to_string(), "123".to_string()],
             lifetimes: vec![("id".to_string(), 1), ("123".to_string(), 2)],
             next_lifetime: 3,
+            attachments: Vec::new(),
             echoes: Vec::new(),
             vmx_apps: Vec::new(),
             generation: 0,
@@ -252,8 +254,10 @@ impl MatrixSlots {
             .retain(|(id, _)| id.as_ref().is_none_or(|id| ids.contains(id)));
         slots.vmx_apps.retain(|app| ids.contains(&app.slot));
         slots.ids = ids;
+        let retired = matrix_target::retire_expired_attachments(&mut slots);
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
+        for (lease, resource) in retired { resource.on_matrix_slot_freed(&lease); }
         service::notify_work();
     }
 
@@ -315,7 +319,9 @@ impl MatrixSlots {
         }
         slots.echoes.retain(|(id, _)| id.as_deref() != name);
         slots.generation = slots.generation.wrapping_add(1);
+        let retired = matrix_target::retire_expired_attachments(&mut slots);
         drop(slots);
+        for (lease, resource) in retired { resource.on_matrix_slot_freed(&lease); }
         if let Some(name) = vmx_slot.as_deref().or(name.filter(|name| tui::native_slot(name))) {
             service::drop_vmx_slot(name);
         }
@@ -1056,7 +1062,7 @@ impl Shell3 {
         }
     }
 
-    fn select_queued_app(&mut self, app: crate::shell2::cmds::run::QueuedBlueprint) {
+    fn select_queued_app(&mut self, app: service::QueuedBlueprint) {
         let lifetime = MatrixSlots::ensure_named(&app.slot);
         self.active_matrix_slot = Some(app.slot.clone());
         self.active_matrix_lifetime = Some(lifetime);
@@ -1464,7 +1470,7 @@ impl Shell3 {
         dropped
     }
 
-    fn active_vmx_app(&self) -> Option<crate::shell2::cmds::run::QueuedBlueprint> {
+    fn active_vmx_app(&self) -> Option<service::QueuedBlueprint> {
         let active = self.active_matrix_slot_name()?;
         matrix_slots()
             .lock()

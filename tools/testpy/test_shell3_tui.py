@@ -19,7 +19,7 @@ def main():
     source += '''
 const SpecialSeperator:char='│';
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
-mod service {pub fn notify_work(){}}
+mod service {pub use crate::shell2::cmds::run::QueuedBlueprint;pub fn notify_work(){}}
 struct MatrixSlots;
 impl MatrixSlots {fn drop_slot(name:Option<&str>)->bool {if let Some(name)=name {shell2::free_name(name);}true}}
 mod r {pub mod keyboard {
@@ -35,6 +35,8 @@ pub mod drag_drop {pub fn release_terminal(_:super::WindowOwner,_:super::WindowI
     source += extract.item('src/ui4/input_broker.rs', 'Ui4PointerEvent')
     source += '''
 }
+mod shell3 {pub use crate::shell2::{MatrixTarget,MatrixSlotLease,matrix_target_slot_lease};}
+mod matrix_target {pub use crate::shell2::{MatrixSlotAttachment,attach_matrix_slot_resource,matrix_slot_is_live,TRANSPORT_NET_TCP_SCOPE,TRANSPORT_LOCAL_SCOPE};}
 mod shell2 {
 pub mod cmds {pub mod run {#[derive(Clone,Debug)] pub struct QueuedBlueprint {pub slot:String,pub app:String,pub sha256:[u8;32]}}}
 pub const TRANSPORT_NET_TCP_SCOPE:u8=1;pub const TRANSPORT_LOCAL_SCOPE:u8=2;
