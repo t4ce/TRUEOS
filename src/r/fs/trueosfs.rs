@@ -1455,6 +1455,7 @@ async fn file_in_with_metadata_async(
     if !update_root_index_put(disk_id, name, record) {
         invalidate_root_index(disk_id);
     }
+    super::file_watch::changed(disk.id(), name);
     Ok(true)
 }
 
@@ -1724,6 +1725,7 @@ pub async fn file_write_finish_async(stream_handle: u32) -> Result<(), block::Er
     if !update_root_index_put(disk_id, entry.path.as_str(), record) {
         invalidate_root_index(disk_id);
     }
+    super::file_watch::changed(entry.disk.id(), &entry.path);
     Ok(())
 }
 
@@ -2319,12 +2321,13 @@ pub async fn file_delete_async(
         .await
         .map_err(map_engine_err)?;
     if ok {
-        bump_root_cache_gen(disk_id);
+            bump_root_cache_gen(disk_id);
         file_record_cache_invalidate_path(disk_id, name);
         if !update_root_index_delete(disk_id, name) {
             invalidate_root_index(disk_id);
         }
     }
+    if ok { super::file_watch::changed(disk_id, name); }
     Ok(ok)
 }
 
@@ -2430,6 +2433,7 @@ pub async fn file_rename_async(
         return Err(block::Error::Corrupted);
     };
     record_successful_content_commit(destination_record.content_type, false);
+    super::file_watch::changed(disk.id(), dst);
     bump_root_cache_gen(disk.id());
     file_record_cache_invalidate_path(disk.id(), dst);
     file_record_cache_insert(disk.id(), dst, destination_record);
@@ -3266,6 +3270,7 @@ pub async fn file_append_async(
         .await
         .map_err(map_engine_err)?;
     record_successful_content_commit(record.content_type, true);
+    super::file_watch::changed(disk.id(), name);
 
     bump_root_cache_gen(disk_id);
     file_record_cache_invalidate_path(disk_id, name);

@@ -85,28 +85,33 @@ struct ColdStartConfiguration {
 /// cold-start Blueprint launch. Returning owned data keeps the JSON parser's
 /// allocation independent from the caller's task lifetime.
 pub(crate) fn startup_alias_blueprint(alias: &str) -> Option<String> {
-    let config: ColdStartConfiguration = serde_json::from_slice(COLD_START_BLUEPRINTS_JSON).ok()?;
-    config
-        .aliases
-        .into_iter()
-        .find(|entry| entry.name == alias)
-        .map(|entry| entry.blueprint)
+    super::startup_config::blueprint(alias)
 }
+pub(crate) fn startup_alias_names() -> Vec<String> { super::startup_config::aliases() }
 
-pub(crate) fn startup_alias_names() -> Vec<String> {
-    let Ok(config) = serde_json::from_slice::<ColdStartConfiguration>(COLD_START_BLUEPRINTS_JSON)
-    else {
-        return Vec::new();
-    };
-    config.aliases.into_iter().map(|entry| entry.name).collect()
+pub(crate) fn embedded_startup_manifest() -> &'static [u8] { COLD_START_BLUEPRINTS_JSON }
+pub(crate) fn validate_startup_manifest(bytes: &[u8]) -> Result<Vec<(String, String)>, String> {
+    let config: ColdStartConfiguration = serde_json::from_slice(bytes).map_err(|e| alloc::format!("{e}"))?;
+    let mut aliases = Vec::new();
+    for alias in config.aliases {
+        if alias.name.is_empty() || alias.name == "Aka" || alias.name.chars().any(|c| c.is_whitespace() || c.is_control() || c == '§')
+            || alias.blueprint.is_empty() || alias.blueprint.chars().any(|c| c.is_whitespace() || c.is_control())
+            || aliases.iter().any(|(name,_)| name == &alias.name) {
+            return Err("invalid or duplicate alias".into());
+        }
+        aliases.push((alias.name, alias.blueprint));
+    }
+    Ok(aliases)
 }
 
 #[trueos_executor::task]
 pub(crate) async fn restart_apps_task(spawner: Spawner) {
     if RestartPolicy::active() == RestartPolicy::ColdStart {
         crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+        super::startup_config::reload().await;
+        let manifest = super::startup_config::manifest();
         let config: ColdStartConfiguration =
-            match serde_json::from_slice(COLD_START_BLUEPRINTS_JSON) {
+            match serde_json::from_slice(&manifest) {
                 Ok(config) => config,
                 Err(error) => {
                     crate::log!("restart: invalid startup configuration error={}\n", error);
@@ -379,6 +384,6 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
 }
 
 /// Public, read-only startup configuration for Blueprint application settings.
-pub(crate) fn startup_manifest() -> &'static [u8] {
-    COLD_START_BLUEPRINTS_JSON
+pub(crate) fn startup_manifest() -> alloc::sync::Arc<[u8]> {
+    super::startup_config::manifest()
 }

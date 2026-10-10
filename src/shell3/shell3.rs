@@ -547,6 +547,8 @@ pub struct Shell3 {
     prompt: PromptState,
     rows: SpecialRowsState,
     aka_names: Vec<String>,
+    aka_generation: u64,
+    appdb_generation: u64,
     appdb_names: Vec<String>,
     update_callbacks: Vec<UpdateCallback>,
     update_baseline: update::Snapshot,
@@ -690,6 +692,8 @@ impl Shell3 {
             prompt,
             rows: rows_state,
             aka_names,
+            aka_generation: crate::r::startup_config::generation(),
+            appdb_generation: service::appdb_names_snapshot().0,
             appdb_names,
             update_callbacks,
             update_baseline: initial,
@@ -716,6 +720,7 @@ impl Shell3 {
 
     /// Publish the current title, status, and prompt strips through UI4.
     pub async fn present(&mut self) -> Result<(), &'static str> {
+        self.sync_aka_names();
         let actual_slot = crate::percpu::current_slot() as u32;
         if actual_slot != self.executor_slot {
             return Err("shell3-show-wrong-executor");
@@ -1096,6 +1101,7 @@ impl Shell3 {
     }
 
     fn echo_recognized_prompt(&mut self) -> bool {
+        self.sync_aka_names();
         if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) {
             return false;
         }
@@ -1115,6 +1121,10 @@ impl Shell3 {
         } else if self.mode == Mode::HV && text == "status" {
             for line in service::hv_status_lines() {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+            }
+        } else if text == "Aka" {
+            if let Err(error) = service::edit_aka(self.tui_frontend()) {
+                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error);
             }
         } else if self.mode == Mode::CMD && capture::recognizes(&text) {
             match capture::start(&text, self.tui_frontend()) {
@@ -1146,15 +1156,17 @@ impl Shell3 {
     }
 
     pub(super) fn matrix_output_needed(&self) -> bool {
-        self.matrix_selection_dirty
+        self.aka_generation != crate::r::startup_config::generation()
+            || self.appdb_generation != service::appdb_names_snapshot().0
+            || self.matrix_selection_dirty
             || self.update_baseline.blink_phase().is_some_and(|phase| phase != Self::cursor_blink_phase())
             || tui::revision(self.tui_frontend) != self.update_baseline.tui_revision()
             || (!self.update_baseline.terminal_active()
                 && matrix_slots().lock().generation != self.update_baseline.matrix_generation())
-            || {
+            || (!self.update_baseline.terminal_active() && {
                 let status = self.row_for_render(SpecialRows::StatusRow);
                 !self.update_baseline.status_matches(&status.left, &status.right)
-            }
+            })
     }
 
     pub fn set_prompt(&mut self, text: &str) {
@@ -1395,6 +1407,7 @@ impl Shell3 {
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
+        self.sync_aka_names();
         if let Some((_, batch, _)) = &self.pending_presentation {
             return batch.clone();
         }
@@ -1411,6 +1424,21 @@ impl Shell3 {
 
     pub fn add_update_callback(&mut self, callback: UpdateCallback) {
         self.update_callbacks.push(callback);
+    }
+
+    fn sync_aka_names(&mut self) {
+        let (appdb_generation, appdb_names) = service::appdb_names_snapshot();
+        if self.appdb_generation != appdb_generation {
+            self.set_appdb_names(&appdb_names);
+            self.appdb_generation = appdb_generation;
+        }
+        let generation = crate::r::startup_config::generation();
+        if self.aka_generation != generation {
+            self.aka_names = crate::r::restart::startup_alias_names();
+            self.aka_generation = generation;
+            self.rows.status.right = status::alias_runs(&self.aka_names);
+            self.refresh_mode_title();
+        }
     }
 
     pub fn set_appdb_names(&mut self, names: &[String]) {
@@ -1501,7 +1529,7 @@ impl Shell3 {
     /// Exact recognition and prefix viability consult the same live registry.
     fn any_name_matching(&self, matches: impl Fn(&str) -> bool) -> bool {
         // Aka remains visible and available independently of Tab/VM context.
-        if self.aka_names.iter().any(|alias| matches(alias)) { return true; }
+        if matches("Aka") || self.aka_names.iter().any(|alias| matches(alias)) { return true; }
         if self.active_vmx_app().is_some() {
             return names::VME_GROUP.names.iter().any(|entry| matches(entry.name));
         }

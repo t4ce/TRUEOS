@@ -32,3 +32,5 @@ pub mod time;
 pub mod ui_cursor;
 pub mod ui_surface;
 pub mod video_cabi;
+
+pub(crate) mod startup_config;

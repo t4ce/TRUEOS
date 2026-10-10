@@ -130,6 +130,9 @@ pub(super) fn launch_bytes(archive: alloc::string::String, bytes: Vec<u8>, slot:
     launch_bytes_with_script(archive, bytes, frontend, None)
 }
 pub(crate) fn launch_bytes_with_script(archive: alloc::string::String, bytes: Vec<u8>, frontend: super::tui::Frontend, script: Option<alloc::string::String>) -> Result<QueuedBlueprint, alloc::string::String> {
+    launch_bytes_with_args(archive, bytes, frontend, script, Vec::new())
+}
+fn launch_bytes_with_args(archive: alloc::string::String, bytes: Vec<u8>, frontend: super::tui::Frontend, script: Option<alloc::string::String>, args: Vec<alloc::string::String>) -> Result<QueuedBlueprint, alloc::string::String> {
     use sha2::{Digest, Sha256};
     let (name, generation) = super::MatrixSlots::fresh_terminal_slot(None);
     let target = super::MatrixTarget::from_lease(super::MatrixSlotLease::from_identity(name.clone(), generation));
@@ -140,6 +143,7 @@ pub(crate) fn launch_bytes_with_script(archive: alloc::string::String, bytes: Ve
     let observer = ShellLaunch { target: target.clone() };
     let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
     request.script = script;
+    request.args = args;
     request.console_target = Some(target);
     request.console_surface = crate::hv::BlueprintConsoleSurface::Terminal;
     if let Err(error) = crate::hv::launcher::enqueue(request, Some(alloc::boxed::Box::new(observer))) {
@@ -741,6 +745,7 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
 
 /// Called once by the kernel boot registry after the complete topology registers.
 pub fn start_pool() -> Result<usize, SpawnError> {
+    crate::r::startup_config::start();
     refresh_appdb_names();
     let started = start(|worker_id, slot| shell_worker_task(worker_id, slot))?;
     crate::log_info!(target: "service";
@@ -804,3 +809,21 @@ pub(super) fn hv_status_lines() -> Vec<alloc::string::String> {
 }
 
 pub(crate) fn report_launch_error(error: alloc::string::String) { super::MatrixSlots::echo(None, None, error); }
+
+#[trueos_executor::task(pool_size = 4)]
+async fn edit_aka_task(frontend: super::tui::Frontend) {
+    let result = async {
+        let path = crate::r::startup_config::edit_path().await?;
+        let bytes = crate::app_db::get("edit.bp")?.ok_or("Aka: edit builtin unavailable")?;
+        launch_bytes_with_args("edit.bp".into(), bytes, frontend, None, alloc::vec![path])
+    }.await;
+    match result {
+        Ok(app) => super::tui::queue_launch(frontend.id, app),
+        Err(error) => report_launch_error(error),
+    }
+}
+pub(super) fn edit_aka(frontend: super::tui::Frontend) -> Result<(), alloc::string::String> {
+    let worker = crate::workers::pick_background_spawner().ok_or("Aka: no background worker")?;
+    let task = edit_aka_task(frontend).map_err(|_| alloc::string::String::from("Aka: editor request busy"))?;
+    worker.spawn(task); Ok(())
+}
