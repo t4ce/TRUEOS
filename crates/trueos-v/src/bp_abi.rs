@@ -1738,11 +1738,11 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_attached_read_byte() -> i32;
     pub fn trueos_cabi_shell_attached_retarget_slot(slot_ptr: *const u8, slot_len: usize) -> i32;
-    
-    
-    
-    
-    
+
+
+
+
+
     pub fn trueos_cabi_blueprint_launch_script_v1(payload_ptr: *const u8, payload_len: usize) -> i32;
     pub fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len: usize) -> i32;
     pub fn trueos_cabi_vid_open_v1(path_ptr: *const u8, path_len: usize) -> i32;

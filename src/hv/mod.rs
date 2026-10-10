@@ -795,39 +795,6 @@ enum BlueprintTerminalReentryRequest {
     Unsupported,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum BlueprintTuiDemoEscape {
-    None,
-    Escape,
-    Csi,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum BlueprintTuiDemoStatus {
-    Ready,
-    Inspected,
-    Reset,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct BlueprintTuiDemo {
-    selected: u8,
-    escape: BlueprintTuiDemoEscape,
-    escape_idle_ticks: u8,
-    status: BlueprintTuiDemoStatus,
-}
-
-impl BlueprintTuiDemo {
-    const fn new() -> Self {
-        Self {
-            selected: 0,
-            escape: BlueprintTuiDemoEscape::None,
-            escape_idle_ticks: 0,
-            status: BlueprintTuiDemoStatus::Ready,
-        }
-    }
-}
-
 impl BlueprintConsoleRoute {
     const fn is_net_shell_direct(self) -> bool {
         matches!(self, Self::NetShellDirect)
@@ -863,7 +830,6 @@ pub(crate) struct BlueprintProcessContext {
     terminal_surface_generation: u64,
     console_input: VecDeque<u8>,
     control_shell_line: AllocVec<u8>,
-    tui_demo: Option<BlueprintTuiDemo>,
     exit_reason: Option<AllocString>,
 }
 
@@ -3464,7 +3430,6 @@ pub fn stage_blueprint_launch(
         terminal_surface_generation: 1,
         console_input: VecDeque::new(),
         control_shell_line: AllocVec::new(),
-        tui_demo: None,
         exit_reason: None,
     };
     *launch_script_slot.lock() = state.launch_script.clone();
@@ -4335,80 +4300,19 @@ fn blueprint_control_shell_write_text(vm_id: u8, text: &str) {
     }
 }
 
-fn blueprint_tui_demo_status_text(status: BlueprintTuiDemoStatus) -> &'static str {
-    match status {
-        BlueprintTuiDemoStatus::Ready => "Ready: move the cursor and activate a button.",
-        BlueprintTuiDemoStatus::Inspected => {
-            "Inspect: vmx-shell owns this preview, not the Blueprint."
-        }
-        BlueprintTuiDemoStatus::Reset => "Reset: the demo cursor and state were restored.",
-    }
-}
 
-fn blueprint_tui_demo_button(selected: u8, index: u8, label: &str) -> AllocString {
-    if selected == index {
-        alloc::format!("▶ [ {} ] ◀", label)
-    } else {
-        alloc::format!("  [ {} ]  ", label)
-    }
-}
 
-fn blueprint_console_render_tui_demo(vm_id: u8) {
 
-}
 
-fn blueprint_console_start_tui_demo(vm_id: u8) -> bool {
-    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
-        return false;
-    };
-    {
-        let mut guard = slot.lock();
-        let Some(context) = guard.as_mut() else {
-            return false;
-        };
-        if !context.console_attached || context.console_target.is_none() {
-            return false;
-        }
-        context.tui_demo = Some(BlueprintTuiDemo::new());
-        context.control_shell_line.clear();
-    }
-    blueprint_console_render_tui_demo(vm_id);
-    true
-}
 
-fn blueprint_console_exit_tui_demo(vm_id: u8, message: &str) -> bool {
-    false
-}
 
-pub(crate) fn blueprint_console_submit_tui_demo_input(vm_id: u8, byte: u8) -> bool {
-    false
-}
 
-pub(crate) fn blueprint_console_tui_demo_idle(vm_id: u8) -> bool {
-    const ESCAPE_IDLE_TICKS: u8 = 5;
 
-    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
-        return false;
-    };
-    let should_exit = {
-        let mut guard = slot.lock();
-        let Some(context) = guard.as_mut() else {
-            return false;
-        };
-        let Some(demo) = context.tui_demo.as_mut() else {
-            return false;
-        };
-        if demo.escape != BlueprintTuiDemoEscape::Escape {
-            return true;
-        }
-        demo.escape_idle_ticks = demo.escape_idle_ticks.saturating_add(1);
-        demo.escape_idle_ticks >= ESCAPE_IDLE_TICKS
-    };
-    if should_exit {
-        let _ = blueprint_console_exit_tui_demo(vm_id, "vmx-shell: tui demo exited");
-    }
-    true
-}
+
+
+
+
+
 
 fn blueprint_app_command_passthrough_enabled(vm_id: u8) -> bool {
     BLUEPRINT_PROCESS_CONTEXTS
@@ -4520,12 +4424,8 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
                     vm_id,
                     "vmx-shell: terminal TUI disabled for this launch; use Blueprint commands directly",
                 );
-            } else if argument == Some("demo") && !has_extra_arguments {
-                if !blueprint_console_start_tui_demo(vm_id) {
-                    blueprint_control_shell_line(vm_id, "vmx-shell: tui demo is not available");
-                }
             } else if argument.is_some() {
-                blueprint_control_shell_line(vm_id, "usage: vmx_tui [demo]");
+                blueprint_control_shell_line(vm_id, "usage: vmx_tui");
             } else {
                 match blueprint_console_request_tui(vm_id) {
                     BlueprintTerminalReentryRequest::Requested { epoch, .. } => {

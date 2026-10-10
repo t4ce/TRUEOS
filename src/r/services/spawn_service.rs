@@ -106,7 +106,6 @@ define_started_flags!(
     USER_INPUT_RECORD_WRITER_STARTED,
     TRUEOSFS_RW_PROBE_STARTED,
     BP_AUTOSTART_STARTED,
-    APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     LOGTOTCP_STARTED,
     MICROFONT_LOG_STARTED,
@@ -980,10 +979,7 @@ fn html_shack_gate() -> bool {
         || crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
 }
 
-fn bp_autostart_gate() -> bool {
-    crate::disc::install::pxeproc::cold_boot_enabled()
-        || crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
-}
+
 
 #[inline]
 #[cfg(feature = "trueos_ttstt")]
@@ -1210,10 +1206,7 @@ const fn unix_fd_probe_task_spec() -> TaskSpec {
     }
 }
 
-fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
-}
+
 
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::r::restart::restart_apps_task(spawner))

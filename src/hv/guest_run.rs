@@ -1,25 +1,10 @@
-//! Guest-side shell2 instance driven over the vmcall I/O bridge.
-//!
-//! The guest kernel shares physical memory with the host via an identity EPT
-//! (guest PA == host PA for all of 4 GB), so the heap, time driver, and all
-//! kernel statics are already live when `trueos_hv_guest_shell_run` is called.
-//! We only need a fresh Embassy executor and the thin `VmcallShellBackend`.
-//!
-//! I/O path:
-//!   nc <host>:4245  <->  NET_SHELL_STATE  <->  vmcall bridge  <->  VmcallShellBackend
-//!
-//! Caveat: the host's net-tcp shell2 task and the guest's shell2 task both
-//! route through the same `NET_SHELL_STATE` queues.  Bytes will be stolen by
-//! whichever side polls first.  This tension is intentional – we are
-//! rediscovering the original network/architecture block by running it live.
+//! Guest Blueprint execution and container command helpers over vmcall.
 
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 use core::mem::ManuallyDrop;
 
-use trueos_executor::raw::Executor as RawExecutor;
 use trueos_vm::vmcall;
 
 
@@ -248,11 +233,7 @@ fn create_blueprint_dir_all_async(path: &str) -> Result<(), alloc::string::Strin
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
-    vmcall::net_tcp_write(b"guest shell unavailable in kernel baseline\r\n");
-    loop { core::hint::spin_loop(); }
-}
+
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {
