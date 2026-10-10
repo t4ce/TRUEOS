@@ -231,7 +231,7 @@ fn glyphs_for_update(
         let character = characters.next().unwrap_or(' ');
         let cell_column = update.offset + column;
         if reveals.iter().any(|input| input.row == row as usize && cached[input.row]
-            && cell_column >= input.start + input.hidden && cell_column < input.start + input.cells.len()) {
+            && cell_column >= input.start && input.spans.iter().any(|span| span.contains(&(cell_column - input.start)))) {
             continue;
         }
         let width = (microfont::FWIDTH as u32 * scale).min(view.width - x);

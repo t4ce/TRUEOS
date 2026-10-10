@@ -193,16 +193,27 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         origin: (u32, u32),
         poisoned: &mut bool,
     ) -> Result<usize, &'static str> {
+        self.copy_views(&[(view, origin)], destination, poisoned).await
+    }
+
+    /// Copy disjoint pieces of one cached area in bounded batches.
+    pub async fn copy_views(
+        &mut self,
+        views: &[(CellRect, (u32, u32))],
+        destination: GucBcs0RgbaSurface,
+        poisoned: &mut bool,
+    ) -> Result<usize, &'static str> {
         if self.unretired || *poisoned {
             return Err("text-area-backing-pinned");
         }
         let layout = self.layout();
-        let copies = self.cells.view_copies(view).ok_or("text-area-copy-view")?;
-        let converted = copies
-            .into_iter()
-            .map(|copy| rgba_copy(copy, self.surface(), layout, origin))
-            .collect::<Option<Vec<_>>>()
-            .ok_or("text-area-copy-origin")?;
+        let mut converted = Vec::new();
+        for &(view, origin) in views {
+            let pieces = self.cells.view_copies(view).ok_or("text-area-copy-view")?;
+            for piece in pieces {
+                converted.push(rgba_copy(piece, self.surface(), layout, origin).ok_or("text-area-copy-origin")?);
+            }
+        }
         let copies: Vec<_> = converted
             .into_iter()
             .filter_map(|mut copy| {
@@ -227,14 +238,15 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             super::text_blit::report("viewport-copy",super::text_blit::copy_pixels(&copies),true,0,started);
             return Ok(count);
         }
-        let queued = crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies);
-        if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
-            if *poisoned {
-                self.quarantine();
+        // Stay below BCS0's 160-copy admission limit, including ring wraps.
+        for chunk in copies.chunks(128) {
+            let queued = crate::intel::queue_guc_bcs0_rgba_copies(destination, chunk);
+            if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
+                if *poisoned { self.quarantine(); }
+                return Err(error);
             }
-            return Err(error);
         }
-        super::text_blit::report("viewport-copy",super::text_blit::copy_pixels(&copies),false,1,started);
+        super::text_blit::report("viewport-copy",super::text_blit::copy_pixels(&copies),false,copies.len().div_ceil(128),started);
         Ok(count)
     }
 }

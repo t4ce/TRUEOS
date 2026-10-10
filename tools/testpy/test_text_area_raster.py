@@ -75,6 +75,19 @@ fn layout(v:CellRect)->RasterLayout {RasterLayout::fit(v,(1,1),4,2*1024*1024).un
 fn glyph(w:CellWrite<u32>,l:RasterLayout)->intel::GucBcs0MonoGlyph {intel::GucBcs0MonoGlyph{x:w.x*l.cell_width,y:w.y*l.cell_height,width:l.cell_width,height:l.cell_height,value:w.cell}}
 fn value(x:i64,y:i64)->u32 {((x+10000) as u32).wrapping_add(((y+10000) as u32)*100000)}
 fn dest(w:u32,h:u32)->intel::gpgpu::GpgpuOwnedRgba8Surface {intel::gpgpu::allocate_font_instance_rgba8_surface(w,h).unwrap()}
+#[test]fn disjoint_word_spans_are_batched_and_leave_gaps_untouched() {
+    intel::reset(); let v=rect(0,0,520,1); let b=RasterBudget::new(2*1024*1024);
+    let mut a=BcsTextArea::new(layout(v),&b).unwrap(); let mut p=false;
+    run(a.render(v,1,value,glyph,&mut p)).unwrap(); let d=dest(520,1);
+    let views:Vec<_>=(0..260).map(|i|(rect(2*i,0,1,1),(2*i as u32,0))).collect();
+    let before=intel::state(|s|s.events.iter().filter(|e|e.starts_with("queue")).count());
+    assert_eq!(run(a.copy_views(&views,d.surface(),&mut p)),Ok(260));
+    let after=intel::state(|s|s.events.iter().filter(|e|e.starts_with("queue")).count());
+    assert_eq!(after-before,3);
+    intel::state(|s|for x in 0..520 {
+        assert_eq!(s.memory[&d.surface().phys][x],if x%2==0 {value(x as i64,0)} else {0xdeadbeef});
+    });
+}
 #[test]fn cap_and_allocation_failures_release_reservations() {intel::reset();let v=rect(0,0,80,22);let l=layout(v);let b=RasterBudget::new(l.bytes*2);let a=BcsTextArea::<u32>::new(l,&b).unwrap();let c=BcsTextArea::<u32>::new(l,&b).unwrap();assert!(BcsTextArea::<u32>::new(l,&b).is_none());assert_eq!(b.used(),l.bytes*2);drop(a);drop(c);assert_eq!(b.used(),0);intel::state(|s|s.fail_alloc=true);assert!(BcsTextArea::<u32>::new(l,&b).is_none());assert_eq!(b.used(),0);intel::state(|s|{s.fail_alloc=false;s.size_mismatch=true;});assert!(BcsTextArea::<u32>::new(l,&b).is_none());assert_eq!(b.used(),0);}
 #[test]fn pan_copy_wrap_resize_and_pending_lifetime() {intel::reset();let v=rect(-7,-5,80,22);let l=layout(v);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(l,&b).unwrap();let mut p=false;let work=run(a.render(v,1,value,glyph,&mut p)).unwrap();assert_eq!(work.produced,88*30);let same=run(a.render(v,1,|_,_|panic!("unexpected producer"),glyph,&mut p)).unwrap();assert_eq!(same.produced,0);let v2=rect(-7,-4,80,22);assert_eq!(run(a.render(v2,1,value,glyph,&mut p)).unwrap().produced,88);let d=dest(80,22);assert!(run(a.copy_view(v2,d.surface(),(0,0),&mut p)).unwrap()<=4);intel::state(|s|{for y in 0..22 {for x in 0..80 {assert_eq!(s.memory[&d.surface().phys][y*80+x],value(v2.x+x as i64,v2.y+y as i64));}}});let v3=rect(-9,-9,95,35);let l2=layout(v3);{let mut future=std::pin::pin!(a.resize(l2,v3,&b,&mut p));assert!(matches!(future.as_mut().poll(&mut context()),Poll::Pending));assert_eq!(b.used(),l.bytes+l2.bytes);assert!(!intel::state(|s|s.events.iter().any(|e|e=="free 1")));assert_eq!(run(future),Ok(true));}assert_eq!(b.used(),l2.bytes);assert!(intel::state(|s|s.events.iter().any(|e|e=="free 1")));run(a.render(v3,1,value,glyph,&mut p)).unwrap();let d2=dest(95,35);run(a.copy_view(v3,d2.surface(),(0,0),&mut p)).unwrap();intel::state(|s|{for y in 0..35 {for x in 0..95 {assert_eq!(s.memory[&d2.surface().phys][y*95+x],value(v3.x+x as i64,v3.y+y as i64));}}});drop(a);assert_eq!(b.used(),0);}
 #[test]fn partial_admission_failure_invalidates_and_retries() {intel::reset();let v=rect(0,0,80,22);let l=layout(v);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(l,&b).unwrap();let mut p=false;intel::state(|s|s.modes.extend([intel::Mode::Complete,intel::Mode::Busy]));assert_eq!(run(a.render(v,1,value,glyph,&mut p)).err(),Some("text-area-admission"));assert!(!p);let work=run(a.render(v,1,value,glyph,&mut p)).unwrap();assert_eq!(work.produced,2640);assert_eq!(work.painted,2640);drop(a);assert_eq!(b.used(),0);}

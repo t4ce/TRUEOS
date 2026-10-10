@@ -532,8 +532,9 @@ impl PromptState {
 }
 
 pub struct Shell3 {
-    title_transition: transition::RetractReveal,
-    aka_transition: transition::RetractReveal,
+    tab_from_right: bool,
+    title_transition: transition::TokenSteps,
+    aka_transition: transition::TokenSteps,
     status_hover: Option<status::Target>,
     tui_frontend: u64,
     executor_slot: u32,
@@ -680,8 +681,9 @@ impl Shell3 {
         .with_matrix(&matrix_lines, matrix_generation);
 
         Self {
-            title_transition: transition::RetractReveal::default(),
-            aka_transition: transition::RetractReveal::default(),
+            tab_from_right: false,
+            title_transition: transition::TokenSteps::default(),
+            aka_transition: transition::TokenSteps::default(),
             status_hover: None,
             tui_frontend: tui::new_frontend(),
             executor_slot,
@@ -858,19 +860,21 @@ impl Shell3 {
         if self.active_vmx_app().is_some() {
             return false;
         }
-        self.mode = match mode {
+        let mode = match mode {
             1 => Mode::HV,
             2 => Mode::CMD,
             3 => Mode::ADM,
             _ => return false,
         };
+        if mode != self.mode { self.tab_from_right = !self.tab_from_right; }
+        self.mode = mode;
         self.refresh_mode_title();
         true
     }
 
     fn refresh_mode_title(&mut self) {
         let target = mode_title_meta(self.mode, &self.aka_names, &self.appdb_names);
-        self.title_transition.start(&self.rows.title.right, &target, crate::chronos::monotonic_nanos());
+        self.title_transition.start(&self.rows.title.right, &target, crate::chronos::monotonic_nanos(), self.tab_from_right);
         self.rows.title.right = target;
     }
 
@@ -1492,7 +1496,7 @@ impl Shell3 {
             self.aka_names = crate::r::restart::startup_alias_names();
             self.aka_generation = generation;
             let target = status::alias_runs(&self.aka_names);
-            self.aka_transition.start(&self.rows.status.right, &target, crate::chronos::monotonic_nanos());
+            self.aka_transition.start(&self.rows.status.right, &target, crate::chronos::monotonic_nanos(), self.tab_from_right);
             self.rows.status.right = target;
             self.refresh_mode_title();
         }

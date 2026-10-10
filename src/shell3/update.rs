@@ -89,7 +89,7 @@ impl MatrixAreaSnapshot {
 pub(super) struct StripReveal {
     pub row: usize,
     pub start: usize,
-    pub hidden: usize,
+    pub spans: Vec<core::ops::Range<usize>>,
     pub cells: RenderedLine,
 }
 
@@ -143,10 +143,18 @@ impl Snapshot {
         let Some(start) = tags.iter().position(|tag| *tag) else { return self; };
         let mut source = styled_line(fit_meta_strips(left, &frame.source, columns), CONTROL_BACKGROUND);
         let cells = source[start..].to_vec();
-        let hidden = cells.len() - cells.len() * frame.visible / 3;
-        source[start..start + hidden].fill((' ', Some(RgbaColor::Terminal { foreground: RgbaColor::White.rgba(), background: CONTROL_BACKGROUND, underline: false })));
+        let mut spans: Vec<core::ops::Range<usize>> = Vec::new();
+        for index in 0..cells.len() {
+            if frame.visible[index] {
+                if let Some(last) = spans.last_mut().filter(|last| last.end == index) {
+                    last.end += 1;
+                } else { spans.push(index..index + 1); }
+            } else {
+                source[start + index] = (' ', Some(cell_color(None, CONTROL_BACKGROUND)));
+            }
+        }
         self.rows[row].rendered = source;
-        self.reveals.push(StripReveal { row, start, hidden, cells });
+        self.reveals.push(StripReveal { row, start, spans, cells });
         self
     }
 

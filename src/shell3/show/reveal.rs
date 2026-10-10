@@ -12,7 +12,7 @@ pub(super) struct StripCache {
 impl StripCache {
     pub async fn prepare(slot: &mut Option<Self>, input: &StripReveal, scale: u32,
         budget: &RasterBudget, poisoned: &mut bool) -> Result<bool, &'static str> {
-        if input.hidden == input.cells.len() { return Ok(false); }
+        if input.spans.is_empty() { return Ok(false); }
         let view = CellRect { x: 0, y: 0, columns: input.cells.len() as u32, rows: 1 };
         if slot.as_ref().is_some_and(|cache| cache.cells.len() != input.cells.len() || cache.scale != scale) {
             *slot = None;
@@ -36,11 +36,12 @@ impl StripCache {
     }
     pub async fn copy(&mut self, input: &StripReveal, destination: crate::intel::GucBcs0RgbaSurface,
         poisoned: &mut bool) -> Result<(), &'static str> {
-        let view = CellRect { x: input.hidden as i64, y: 0,
-            columns: (input.cells.len() - input.hidden) as u32, rows: 1 };
-        self.raster.copy_view(view, destination,
-            (((input.start + input.hidden) * microfont::FWIDTH * self.scale as usize) as u32,
-             (input.row * microfont::FHEIGHT * self.scale as usize) as u32), poisoned).await?;
+        let views: alloc::vec::Vec<_> = input.spans.iter().map(|span| {
+            (CellRect { x: span.start as i64, y: 0, columns: span.len() as u32, rows: 1 },
+             (((input.start + span.start) * microfont::FWIDTH * self.scale as usize) as u32,
+              (input.row * microfont::FHEIGHT * self.scale as usize) as u32))
+        }).collect();
+        self.raster.copy_views(&views, destination, poisoned).await?;
         Ok(())
     }
 }
