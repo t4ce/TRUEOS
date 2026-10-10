@@ -55,6 +55,10 @@ mod spin {
 use spin::Once;
 static MATRIX_SLOTS:Once<spin::Mutex<MatrixSlotsState>>=Once::new();
 mod tui {
+pub struct RemoteDrain {pub bytes:Vec<u8>,pub pending:bool,pub repaint:bool,pub failed:bool,pub active:bool}
+pub fn bind_remote_frontend(_:u64) {}
+pub fn remote_active(_:u64)->bool {false}
+pub fn take_remote_output(_:u64,_:usize)->Option<RemoteDrain> {None}
 pub fn revision(_:u64)->u64 {0}
 pub fn mouse_options(_:u64,_:Option<&str>)->trueos_terminal::MouseOptions {Default::default()}
 pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<crate::update::RenderedLine>> {None}

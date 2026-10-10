@@ -170,6 +170,12 @@ impl Terminal {
     }
 
     pub fn input(&mut self, mut bytes: &[u8]) {
+        if tui::remote_active(self.shell.tui_frontend)
+            && tui::input(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref(), bytes)
+        {
+            self.refresh_controls();
+            return;
+        }
         while let Some((&byte, rest)) = bytes.split_first() {
             if self.closing {
                 break;

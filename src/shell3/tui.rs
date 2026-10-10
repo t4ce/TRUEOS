@@ -5,6 +5,8 @@ use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 use trueos_terminal::{Terminal, TerminalColor};
+mod remote;
+pub(crate) use remote::Drain as RemoteDrain;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Frontend {
@@ -42,6 +44,7 @@ struct Registry {
     ui4_windows: Vec<(u64, crate::ui4::WindowId)>,
     revisions: Vec<(u64, u64)>,
     next_revision: u64,
+    remote_frontends: Vec<(u64, remote::Output)>,
 }
 impl Registry {
     const fn new() -> Self {
@@ -50,6 +53,7 @@ impl Registry {
             ui4_windows: Vec::new(),
             revisions: Vec::new(),
             next_revision: 0,
+            remote_frontends: Vec::new(),
         }
     }
     fn changed(&mut self, id: u64) {
@@ -103,12 +107,38 @@ pub(super) fn new_frontend() -> u64 {
     NEXT_FRONTEND.fetch_add(1, Ordering::Relaxed)
 }
 
+/// SSH renders on the peer terminal. Local UI4 frontends keep the cell parser.
+pub(super) fn bind_remote_frontend(frontend: u64) {
+    let mut routes = ROUTES.lock();
+    if !routes.remote_frontends.iter().any(|entry| entry.0 == frontend) {
+        routes.remote_frontends.push((frontend, remote::Output::new()));
+    }
+}
+
+pub(super) fn remote_active(frontend: u64) -> bool {
+    let routes = ROUTES.lock();
+    routes.remote_frontends.iter().any(|entry| entry.0 == frontend)
+        && routes.routes.iter().any(|route| route.frontend == frontend && route.owner.is_some())
+}
+
+pub(super) fn take_remote_output(frontend: u64, available: usize) -> Option<RemoteDrain> {
+    let mut routes = ROUTES.lock();
+    let active = routes.routes.iter().any(|route| route.frontend == frontend && route.owner.is_some());
+    let output = &mut routes.remote_frontends.iter_mut().find(|entry| entry.0 == frontend)?.1;
+    Some(output.take(available, active))
+}
+
 struct Attachment;
 impl MatrixSlotAttachment for Attachment {
     fn on_matrix_slot_freed(&self, lease: &MatrixSlotLease) {
         let mut routes = ROUTES.lock();
         if let Some(index) = routes.routes.iter().position(|route| route.lease == *lease) {
             let route = routes.routes.remove(index);
+            if route.owner.is_some() {
+                if let Some((_, output)) = routes.remote_frontends.iter_mut().find(|entry| entry.0 == route.frontend) {
+                    output.end();
+                }
+            }
             routes.changed(route.frontend);
         }
     }
@@ -185,8 +215,11 @@ pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
     {
         return Some(false);
     }
-    let route = &mut routes.routes[index];
-    if route.owner.is_none() {
+    if routes.routes[index].owner.is_none() {
+        if let Some((_, output)) = routes.remote_frontends.iter_mut().find(|entry| entry.0 == frontend) {
+            if !output.begin() { return Some(false); }
+        }
+        let route = &mut routes.routes[index];
         route.screen.reset();
         route.suppressed_text = None;
         route.owner = Some(owner);
@@ -211,8 +244,14 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
         return Some(false);
     }
     let frontend = route.frontend;
+    let was_owned = route.owner.is_some();
     route.owner = None;
     route.suppressed_text = None;
+    if was_owned {
+        if let Some((_, output)) = routes.remote_frontends.iter_mut().find(|entry| entry.0 == frontend) {
+            output.end();
+        }
+    }
     routes.changed(frontend);
     let window = routes.ui4_windows.iter().find(|entry| entry.0 == frontend).map(|entry| entry.1);
     drop(routes);
@@ -247,9 +286,16 @@ fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
         if route.owner != Some(Owner { vm, run }) {
             return Some(0);
         }
+        let frontend = route.frontend;
+        if let Some((_, output)) = routes.remote_frontends.iter_mut().find(|entry| entry.0 == frontend) {
+            let written = output.write(bytes);
+            drop(routes);
+            super::service::notify_work();
+            return Some(written);
+        }
+        let route = routes.routes.iter_mut().find(|route| route.lease == lease)?;
         route.screen.feed(bytes);
         let responses = route.screen.take_responses();
-        let frontend = route.frontend;
         if route.screen.take_dirty() {
             routes.changed(frontend);
         }
@@ -484,6 +530,7 @@ pub(super) fn detach(frontend: u64) {
         super::MatrixSlots::drop_slot(Some(&name));
     }
     ROUTES.lock().revisions.retain(|entry| entry.0 != frontend);
+    ROUTES.lock().remote_frontends.retain(|entry| entry.0 != frontend);
 }
 
 pub(super) fn active(frontend: u64, name: Option<&str>) -> bool {
@@ -504,6 +551,9 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
     let route = routes.routes.iter().find(|route| {
         route.frontend == frontend && Some(route.lease.name()) == name && route.active()
     })?;
+    if route.owner.is_some() && routes.remote_frontends.iter().any(|entry| entry.0 == frontend) {
+        return None;
+    }
     let (cols, _) = route.screen.dimensions();
     let cursor = route.screen.cursor();
     Some(

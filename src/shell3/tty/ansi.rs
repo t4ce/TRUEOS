@@ -86,6 +86,27 @@ impl Terminal {
         if self.view.lines.is_none() || self.closing {
             return;
         }
+        if let Some(drain) = tui::take_remote_output(
+            self.shell.tui_frontend, super::OUTPUT_LIMIT.saturating_sub(self.output.len()),
+        ) {
+            self.write(&drain.bytes);
+            if drain.failed && !drain.pending {
+                self.overflow = true;
+                self.closing = true;
+                return;
+            }
+            if drain.active || drain.pending {
+                self.view.terminal_active = true;
+                return;
+            }
+            if drain.repaint {
+                self.view.terminal_active = false;
+                self.view.mouse = MouseOptions::default();
+                self.view.cursor_column = None;
+                self.view.lines.as_mut().unwrap().clear();
+                self.set_matrix_region();
+            }
+        }
         let app =
             tui::snapshot(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref());
         let active = app.is_some();

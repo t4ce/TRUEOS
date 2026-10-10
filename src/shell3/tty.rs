@@ -34,6 +34,7 @@ impl Terminal {
     }
 
     fn start(mut shell: Shell3, controls: bool) -> Self {
+        if controls { super::tui::bind_remote_frontend(shell.tui_frontend); }
         shell.set_mode(3);
         let mut terminal = Self {
             shell,
@@ -93,6 +94,9 @@ impl Terminal {
     pub(super) fn resize(&mut self, columns: usize, rows: usize) {
         if self.shell.get_size() != (columns, rows) {
             self.shell.set(columns, rows);
+            // PTY geometry reaches the app through the lease's surface query.
+            // It alone decides how to repaint its remote terminal on resize.
+            if super::tui::remote_active(self.shell.tui_frontend) { return; }
             if let Some(lines) = self.view.lines.as_mut() {
                 lines.clear();
                 self.write(b"\x1b[0m\x1b[2J\x1b[H");

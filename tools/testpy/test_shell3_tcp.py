@@ -38,9 +38,20 @@ const OPERATOR: char = '§';
 const SpecialSeperator:char='│';
 struct RowStrips {left:Vec<MetaFmtStr>}
 mod tui {
+#[path="__REMOTE_PATH__"] mod remote;
+pub(crate) use remote::Drain as RemoteDrain;
+#[derive(Default)] struct State {output:Option<remote::Output>,active:bool,input:Vec<u8>}
+std::thread_local! {static STATE:std::cell::RefCell<State>=std::cell::RefCell::new(State::default());}
+pub fn bind_remote_frontend(_:u64) {STATE.with(|s|*s.borrow_mut()=State {output:Some(remote::Output::new()),..Default::default()});}
+pub fn remote_active(_:u64)->bool {STATE.with(|s|s.borrow().active)}
+pub fn take_remote_output(_:u64,available:usize)->Option<RemoteDrain> {STATE.with(|s| {let mut s=s.borrow_mut();let active=s.active;s.output.as_mut().map(|o|o.take(available,active))})}
+pub fn claim() {STATE.with(|s| {let mut s=s.borrow_mut();assert!(s.output.as_mut().unwrap().begin());s.active=true;});}
+pub fn release() {STATE.with(|s| {let mut s=s.borrow_mut();s.output.as_mut().unwrap().end();s.active=false;});}
+pub fn write(bytes:&[u8]) {STATE.with(|s|assert_eq!(s.borrow_mut().output.as_mut().unwrap().write(bytes),bytes.len()));}
+pub fn received()->Vec<u8> {STATE.with(|s|s.borrow().input.clone())}
 pub fn mouse_options(_:u64,_:Option<&str>)->trueos_terminal::MouseOptions {Default::default()}
-    pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<super::update::RenderedLine>> {None}
-    pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
+pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<super::update::RenderedLine>> {assert!(!remote_active(1),"direct output must not snapshot the screen");None}
+pub fn input(_:u64,_:Option<&str>,bytes:&[u8])->bool {STATE.with(|s| {let mut s=s.borrow_mut();if !s.active {return false;}s.input.extend_from_slice(bytes);true})}
 }
 struct Shell3 { tui_frontend:u64, history:Vec<String>, matrix_scroll:usize, notices:Vec<String>, pointer:Vec<(Option<usize>,bool)>, size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
@@ -104,9 +115,43 @@ mod tty {
 impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.borrow().clone()}}
 #[cfg(test)] mod tests {
     use super::*;
+    use crate::tui;
     fn terminal() -> Terminal {
         let mut tty = Terminal::new(Shell3::new_terminal().unwrap());
         tty.output.clear(); tty
+    }
+    #[test] fn remote_app_bytes_and_unicode_input_bypass_shell_renderer() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());tty.output.clear();
+        tui::claim();tty.reconcile_matrix_selection();tty.output.clear();
+        let payload="\x1b[38;5;8m🗺 §\x1b[6n".as_bytes();
+        tui::write(payload);tty.reconcile_matrix_selection();
+        assert_eq!(tty.output,payload);
+        tty.output.clear();tty.input("§\x1b[1;3R\x1b[<65;2;3M".as_bytes());
+        assert_eq!(tui::received(),"§\x1b[1;3R\x1b[<65;2;3M".as_bytes());
+        assert!(tty.output.is_empty() && tty.submitted().is_empty());
+    }
+    #[test] fn remote_pty_resize_does_not_emit_shell_paint_or_erase_app() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        tui::claim();tty.reconcile_matrix_selection();tty.output.clear();
+        tty.resize(150,45);
+        assert_eq!(tty.shell.get_size(),(150,45));assert!(tty.output.is_empty());
+    }
+    #[test] fn remote_release_orders_last_app_bytes_before_shell_redraw() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        tui::claim();tty.reconcile_matrix_selection();tty.output.clear();
+        tui::write(b"LAST-FRAME");tui::release();tty.reconcile_matrix_selection();
+        assert!(tty.output.starts_with(b"LAST-FRAME"));
+        let output=String::from_utf8_lossy(&tty.output);
+        assert!(output.contains("TrueOS") && output.contains("\x1b[4;25r"));
+    }
+    #[test] fn remote_release_waits_for_transport_capacity_before_shell_redraw() {
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        tui::claim();tty.reconcile_matrix_selection();tty.output=vec![b'x';OUTPUT_LIMIT];
+        tui::write(b"LAST-FRAME");tui::release();tty.reconcile_matrix_selection();
+        assert_eq!(tty.output.len(),OUTPUT_LIMIT);assert!(!tty.closing);
+        tty.output.clear();tty.reconcile_matrix_selection();
+        assert!(tty.output.starts_with(b"LAST-FRAME"));
+        assert!(String::from_utf8_lossy(&tty.output).contains("TrueOS"));
     }
     #[test] fn ssh_controls_align_right_and_update_without_line_echo() {
         let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
@@ -343,41 +388,90 @@ impl<T> NetQueue<T> {
 }
 mod net {
 use super::*;
+use super::tty::Terminal;
 '''
+    source = source[:source.rindex('mod net {')] + (ROOT/'tools/testpy/shell3_ssh_unavailable.rs').read_text() + source[source.rindex('mod net {'):]
     net = (ROOT/'src/shell3/net.rs').read_text()
     source += net[net.index('const WRITE_TIMEOUT_MS'):net.index('enum WorkerEvent')]
     source += '''
 #[cfg(test)] mod tests {
     use super::*;
-    fn queue() -> NetQueue<NetCommand> { NetQueue { full: Cell::new(false), commands: RefCell::new(Vec::new()) } }
-    #[test] fn greeting_retries_backpressure_without_duplicate_output() {
-        let queue=queue(); let mut c=Connection::new(NetHandle(1),0);
-        queue.full.set(true); assert!(c.flush(&queue,Instant(0)));
-        assert!(!c.greeting_sent); assert_eq!(c.in_flight,0);
-        queue.full.set(false); assert!(c.flush(&queue,Instant(1)));
-        assert!(matches!(&queue.commands.borrow()[0],NetCommand::SendTcp {handle:NetHandle(1),data} if data==b"hello from TrueOS\\r\\n"));
-        assert!(c.flush(&queue,Instant(2))); assert_eq!(queue.commands.borrow().len(),1);
-        c.in_flight=1; assert!(c.flush(&queue,Instant(3))); assert!(!c.finishing);
-        c.in_flight=0; c.deadline=None;
-        queue.full.set(true); assert!(c.flush(&queue,Instant(4))); assert!(!c.finishing);
-        queue.full.set(false); assert!(c.flush(&queue,Instant(5))); assert!(c.finishing);
-        assert!(matches!(&queue.commands.borrow()[1],NetCommand::FinishTcp {handle:NetHandle(1)}));
-        assert!(c.flush(&queue,Instant(6))); assert_eq!(queue.commands.borrow().len(),2);
-        assert!(!c.flush(&queue,Instant(5005)));
+    fn connection(handle:NetHandle)->Connection {
+        let mut connection=Connection::new(handle,0,None,Instant(0));
+        connection.open_plaintext();connection
     }
-    #[test] fn stalled_peer_does_not_block_another_connection() {
-        let queue=queue(); let mut a=Connection::new(NetHandle(1),0); let mut b=Connection::new(NetHandle(2),0);
-        assert!(a.flush(&queue,Instant(0))); assert!(b.flush(&queue,Instant(10)));
-        queue.full.set(true); assert!(a.flush(&queue,Instant(30000)));
-        queue.full.set(false); assert!(!a.flush(&queue,Instant(30001)));
-        assert!(b.flush(&queue,Instant(30001)));
-        assert!(matches!(&queue.commands.borrow()[2],NetCommand::Close {handle:NetHandle(1)}));
+    fn queue() -> NetQueue<NetCommand> { NetQueue { full: Cell::new(false), commands: RefCell::new(Vec::new()) } }
+    #[test] fn ssh_with_unavailable_credential_is_logged_and_rejected_at_every_packet_split() {
+        let identification=b"SSH-2.0-OpenSSH_9.9\\r\\n";
+        for split in 0..=identification.len() {
+            let queue=queue();let mut c=Connection::new(NetHandle(77),7107,Some(49152),Instant(0));
+            assert!(c.flush(&queue,Instant(0)));assert!(queue.commands.borrow().is_empty());
+            c.input(&identification[..split]);c.input(&identification[split..]);
+            assert!(c.rejected);assert!(c.terminal.is_none());
+            queue.full.set(true);assert!(c.flush(&queue,Instant(10)));
+            queue.full.set(false);assert!(!c.flush(&queue,Instant(11)));
+            assert!(matches!(&queue.commands.borrow()[0],NetCommand::Close {handle:NetHandle(77)}));
+        }
+        assert!(crate::SSH_LOGS.lock().unwrap().iter().any(|line|line.contains("protocol=ssh")&&line.contains("plaintext=0")));
+        assert!(crate::service::RELEASED.lock().unwrap().contains(&7107));
+    }
+    #[test] fn probe_preserves_plaintext_prefix_and_delays_silent_greeting() {
+        let queue=queue();let mut c=Connection::new(NetHandle(88),0,None,Instant(0));
+        assert!(c.flush(&queue,Instant(999)));assert!(queue.commands.borrow().is_empty());
+        assert!(c.flush(&queue,Instant(1000)));assert!(c.terminal.is_some());
+        assert!(matches!(&queue.commands.borrow()[0],NetCommand::SendTcp {..}));
+        let mut c=Connection::new(NetHandle(89),0,None,Instant(0));
+        c.input(b"S");assert!(c.terminal.is_none());
+        c.input(b"how\\n");assert!(!c.rejected);
+        assert_eq!(c.terminal.as_ref().unwrap().submitted(),vec!["Show"]);
+    }
+    #[test] fn partial_ssh_prefix_times_out_without_starting_plaintext() {
+        let queue=queue();let mut c=Connection::new(NetHandle(90),7108,None,Instant(0));
+        c.input(b"SSH");assert!(!c.flush(&queue,Instant(1000)));
+        assert!(c.rejected);assert!(c.terminal.is_none());
+        assert!(matches!(&queue.commands.borrow()[0],NetCommand::Close {..}));
+    }
+    #[test] fn queue_rejection_preserves_bytes_and_one_write_is_in_flight() {
+        let queue = queue(); let mut connection = connection(NetHandle(1));
+        let banner = connection.terminal.as_ref().unwrap().output.clone();
+        queue.full.set(true); assert!(connection.flush(&queue, Instant(0)));
+        assert_eq!(connection.terminal.as_ref().unwrap().output, banner);
+        queue.full.set(false); assert!(connection.flush(&queue, Instant(1)));
+        assert_eq!(connection.in_flight, banner.len());
+        connection.terminal.as_mut().unwrap().input(b"x");
+        assert!(connection.flush(&queue, Instant(2)));
+        assert_eq!(queue.commands.borrow().len(), 1);
+        connection.in_flight = 0; connection.deadline = None;
+        assert!(connection.flush(&queue, Instant(3)));
+        assert_eq!(queue.commands.borrow().len(), 2);
+        assert!(matches!(&queue.commands.borrow()[1], NetCommand::SendTcp { handle: NetHandle(1), data } if data == b"\\x1b8x"));
+    }
+    #[test] fn graceful_finish_waits_for_output_and_has_teardown_deadline() {
+        let queue = queue(); let mut connection = connection(NetHandle(2));
+        connection.terminal.as_mut().unwrap().input(b"exit\\n");
+        assert!(connection.flush(&queue, Instant(0)));
+        assert!(matches!(&queue.commands.borrow()[0], NetCommand::SendTcp { .. }));
+        assert!(connection.flush(&queue, Instant(1))); assert!(!connection.finishing);
+        connection.in_flight = 0; connection.deadline = None;
+        assert!(connection.flush(&queue, Instant(2))); assert!(connection.finishing);
+        assert!(matches!(&queue.commands.borrow()[1], NetCommand::FinishTcp { handle: NetHandle(2) }));
+        assert!(!connection.flush(&queue, Instant(5002)));
+    }
+    #[test] fn stalled_peer_does_not_block_another_session() {
+        let queue = queue(); let mut first = connection(NetHandle(1));
+        let mut second = connection(NetHandle(2));
+        first.flush(&queue, Instant(0)); second.flush(&queue, Instant(10));
+        assert_eq!(queue.commands.borrow().len(), 2);
+        queue.full.set(true); assert!(first.flush(&queue, Instant(30000)));
+        queue.full.set(false); assert!(!first.flush(&queue, Instant(30001)));
+        assert!(second.flush(&queue, Instant(30001)));
     }
 }
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-tcp-') as directory:
         path = Path(directory)
+        source = source.replace('__REMOTE_PATH__', str(ROOT/'src/shell3/tui/remote.rs'))
         (path/'test.rs').write_text(source)
         subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name','trueos_terminal',str(ROOT/'crates/trueos-terminal/src/lib.rs'),'-o',str(path/'libtrueos_terminal.rlib')],check=True)
         subprocess.run(['rustc', '--edition=2024', '--test', str(path/'test.rs'), '-o', str(path/'tests'),'--extern',f'trueos_terminal={path}/libtrueos_terminal.rlib'], check=True)
