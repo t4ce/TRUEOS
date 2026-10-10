@@ -12,6 +12,7 @@ pub struct SegmentUpdate {
     pub row: SpecialRows,
     pub side: StripSide,
     pub offset: usize,
+
     pub remove: usize,
     pub text: String,
     pub colors: Vec<Option<RgbaColor>>,
@@ -37,6 +38,8 @@ struct VisibleRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MatrixAreaSnapshot {
     pub offset: usize,
+    pub column_offset: usize,
+    pub first_column: usize,
     pub first: usize,
     pub columns: usize,
     pub rows: usize,
@@ -50,7 +53,7 @@ impl MatrixAreaSnapshot {
     pub fn cell(&self, x: i64, y: i64) -> (char, Option<RgbaColor>) {
         usize::try_from(y).ok().and_then(|y| y.checked_sub(self.first))
             .and_then(|y| self.cells.get(y))
-            .and_then(|row| usize::try_from(x).ok().and_then(|x| row.get(x)))
+            .and_then(|row| usize::try_from(x).ok().and_then(|x| x.checked_sub(self.first_column)).and_then(|x| row.get(x)))
             .copied().unwrap_or((' ', None))
     }
 }
@@ -98,24 +101,34 @@ impl Snapshot {
         self.with_matrix_guard(lines, generation, offset, 0)
     }
 
-    pub(super) fn with_matrix_guard(mut self, lines: &[String], generation: u64, offset: usize, guard: usize) -> Self {
+    pub(super) fn with_matrix_guard(self, lines: &[String], generation: u64, offset: usize, guard: usize) -> Self {
+        self.with_matrix_pan(lines, generation, 0, offset, guard)
+    }
+
+    pub(super) fn with_matrix_pan(mut self, lines: &[String], generation: u64, column: usize, offset: usize, guard: usize) -> Self {
         self.matrix_generation = generation;
         let count = self.size.1.saturating_sub(3);
         let first = offset.min(lines.len().saturating_sub(count));
         let start = first.saturating_sub(guard);
         let end = first.saturating_add(count).saturating_add(guard).min(lines.len());
+        let maximum_column = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0).saturating_sub(self.size.0);
+        let column = column.min(maximum_column);
+        let first_column = column.saturating_sub(guard);
+        let width = column - first_column + self.size.0.saturating_add(guard);
         let cells: Vec<_> = lines[start.min(end)..end].iter().map(|text| {
-            fit_meta_strips(&[MetaFmtStr::new(text)], &[], self.size.0.saturating_add(guard))
+            let mut row: RenderedLine = text.chars().skip(first_column).take(width).map(|ch| (ch, None)).collect();
+            row.resize(width, (' ', None));
+            row
         }).collect();
         for index in 0..count {
             let rendered = cells.get(first + index - start)
-                .map(|row| row[..self.size.0].to_vec())
+                .map(|row| row[column - first_column..column - first_column + self.size.0].to_vec())
                 .unwrap_or_else(|| fit_meta_strips(&[], &[], self.size.0));
             self.rows.push(VisibleRow {
                 rendered,
             });
         }
-        self.matrix_area = Some(MatrixAreaSnapshot { offset: first, first: start,
+        self.matrix_area = Some(MatrixAreaSnapshot { offset: first, column_offset: column, first_column, first: start,
             columns: self.size.0, rows: count, revision: generation,
             blink_phase: None,
             identity: (None, None), cells });

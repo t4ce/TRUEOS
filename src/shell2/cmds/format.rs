@@ -94,121 +94,60 @@ fn submit_format(
     }
 }
 
+/// Shared formatting operation; the caller owns confirmation and work activity.
+pub(crate) async fn format_disk(
+    disk: DeviceHandle,
+    mut log: impl FnMut(&str),
+) -> Result<String, String> {
+    with_timeout(EmbassyDuration::from_millis(FORMAT_OPERATION_TIMEOUT_MS), async {
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+        let live = super::tlb_helper::select_top_level_disk(disk.id().raw())
+            .ok_or("Selected disk disappeared.")?;
+        if live != disk {
+            return Err(String::from("Selected disk was replaced."));
+        }
+        if !disk.info().writable {
+            return Err(String::from("Selected disk is read-only."));
+        }
+        log("Creating GPT partition…");
+        let parts = [crate::disc::install::gpt::GptPartitionSpec {
+            type_guid: crate::r::disc::partition::GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+            name: "TRUEOS",
+            size: crate::disc::install::gpt::PartitionSize::Remaining,
+            attributes: 0,
+        }];
+        crate::disc::install::gpt::write_gpt_layout_with_log(disk, &parts, &mut log)
+            .await
+            .map_err(|error| alloc::format!("GPT write failed: {error:?}"))?;
+        let registered = crate::r::disc::partition::register_gpt_partitions(disk)
+            .await
+            .map_err(|error| alloc::format!("Partition registration failed: {error:?}"))?;
+        let partition = registered
+            .first()
+            .and_then(|first| block::device_handle(first.id))
+            .ok_or("No partition is available after registration.")?;
+        log("Creating TRUEOSFS…");
+        crate::r::fs::trueosfs::format_blank_partition_async(partition)
+            .await
+            .map_err(|error| alloc::format!("TRUEOSFS format failed: {error:?}"))?;
+        log("Mounting TRUEOSFS…");
+        crate::r::fs::trueosfs::remount_root_async(disk)
+            .await
+            .map_err(|error| alloc::format!("Remount failed: {error:?}"))?
+            .ok_or("TRUEOSFS was not found after formatting.")?;
+        Ok(alloc::format!("Formatted disc{} as TRUEOSFS.", disk.id().raw()))
+    })
+    .await
+    .map_err(|_| alloc::format!("Disk I/O timed out after {} ms.", FORMAT_OPERATION_TIMEOUT_MS))?
+}
+
 #[trueos_executor::task(pool_size = 2)]
 async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
-    let task_target = target.clone();
-    let result =
-        with_timeout(EmbassyDuration::from_millis(FORMAT_OPERATION_TIMEOUT_MS), async move {
-            Timer::after(EmbassyDuration::from_millis(1)).await;
-
-            let log = |line: &str| {
-                print_matrix_target_line(&task_target, line);
-            };
-
-            let info = disk.info();
-            log(alloc::format!(
-                "format: target id={} ({}) blocks={} bs={} writable={} label={:?}",
-                info.id.raw(),
-                info.id,
-                info.block_count,
-                info.block_size,
-                info.writable,
-                info.label,
-            )
-            .as_str());
-
-            log("format: creating 1 partition + TRUEOSFS...");
-            let parts = [crate::disc::install::gpt::GptPartitionSpec {
-                type_guid: crate::r::disc::partition::GPT_TYPE_LINUX_FILESYSTEM_BYTES,
-                name: "TRUEOS",
-                size: crate::disc::install::gpt::PartitionSize::Remaining,
-                attributes: 0,
-            }];
-
-            let mut step_log = |msg: &str| log(msg);
-            match crate::disc::install::gpt::write_gpt_layout_with_log(disk, &parts, &mut step_log)
-                .await
-            {
-                Ok(_) => match crate::r::disc::partition::register_gpt_partitions(disk).await {
-                    Ok(reg) => {
-                        if let Some(first) = reg.first() {
-                            match block::device_handle(first.id) {
-                                Some(part_handle) => {
-                                    match crate::r::fs::trueosfs::format_blank_partition_async(
-                                        part_handle,
-                                    )
-                                    .await
-                                    {
-                                        Ok(()) => {
-                                            match crate::r::fs::trueosfs::remount_root_async(disk)
-                                                .await
-                                            {
-                                                Ok(Some(_)) => {
-                                                    let (status, err) =
-                                                    crate::r::disc::detect::detect_physical_disk_detail(
-                                                        disk,
-                                                    )
-                                                    .await;
-                                                    log(alloc::format!(
-                                                        "format: ok (status now: {}{})",
-                                                        status.short(),
-                                                        match (&status, err) {
-                                                            (
-                                                                crate::r::disc::detect::DiscStatus::Unknown,
-                                                                Some(err),
-                                                            ) => alloc::format!("; err={:?}", err),
-                                                            _ => String::new(),
-                                                        }
-                                                    )
-                                                    .as_str());
-                                                }
-                                                Ok(None) => {
-                                                    log("format: remount failed (TRUEOSFS not found after format)");
-                                                }
-                                                Err(err) => {
-                                                    log(alloc::format!(
-                                                        "format: remount failed ({:?})",
-                                                        err
-                                                    )
-                                                    .as_str());
-                                                }
-                                            }
-                                        }
-                                        Err(err) => {
-                                            log(alloc::format!(
-                                                "format: TRUEOSFS failed ({:?})",
-                                                err
-                                            )
-                                            .as_str());
-                                        }
-                                    }
-                                }
-                                None => log("format: partition disappeared after registration"),
-                            }
-                        } else {
-                            log("format: no partition registered");
-                        }
-                    }
-                    Err(err) => {
-                        log(alloc::format!("format: partition register failed ({:?})", err)
-                            .as_str());
-                    }
-                },
-                Err(err) => log(alloc::format!("format: GPT write failed ({:?})", err).as_str()),
-            }
-        })
-        .await;
-
-    if result.is_err() {
-        print_matrix_target_line(
-            &target,
-            alloc::format!(
-                "format: cancelled after timeout ({}ms) while waiting for disk I/O/probe",
-                FORMAT_OPERATION_TIMEOUT_MS
-            )
-            .as_str(),
-        );
-    }
-
+    let result = format_disk(disk, |line| print_matrix_target_line(&target, line)).await;
+    let message = match result {
+        Ok(message) => message,
+        Err(error) => alloc::format!("Error: {error}"),
+    };
+    print_matrix_target_line(&target, &message);
     set_matrix_target_active(&target, false);
 }

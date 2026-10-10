@@ -52,7 +52,7 @@ impl Terminal {
         // from becoming arrow keys in nc's locally echoed input buffer.
         terminal.write(b"\x1b[?1007s\x1b[?1007l\x1b[?1049h\x1b[0m\x1b[2J\x1b[H");
         if controls {
-            // Leave mouse handling to the client terminal (selection and menus).
+            // Shell3 enables SGR drag reporting; apps take over mouse modes on claim.
             terminal.write(b"\x1b[1 q\x1b[?25h");
             terminal.set_matrix_region();
             terminal.refresh_controls();

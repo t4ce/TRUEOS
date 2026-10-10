@@ -55,6 +55,9 @@ pub(super) struct Input {
     after_cr: bool,
 }
 impl Input {
+    pub(super) fn in_sequence(&self) -> bool {
+        !self.sequence.is_empty()
+    }
     pub(super) fn feed(&mut self, bytes: &[u8], now: u64) -> Vec<Action> {
         let mut actions = Vec::new();
         for &byte in bytes {
@@ -141,6 +144,12 @@ pub(super) struct Screen {
     geometry: (usize, usize),
 }
 impl Screen {
+    pub(super) fn invalidate(&mut self) {
+        for row in &mut self.previous {
+            row.fill(' ');
+        }
+        self.geometry = (0, 0);
+    }
     /// Blank padding erases shrinking text. ANSI positions use glyph columns,
     /// so UTF-8 bars and arrows never turn byte offsets into cursor positions.
     pub(super) fn diff(&mut self, lines: &[String], cols: usize, rows: usize) -> String {

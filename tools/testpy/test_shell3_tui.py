@@ -36,6 +36,7 @@ pub mod drag_drop {pub fn release_terminal(_:super::WindowOwner,_:super::WindowI
     source += '''
 }
 mod shell2 {
+pub const TRANSPORT_NET_TCP_SCOPE:u8=1;pub const TRANSPORT_LOCAL_SCOPE:u8=2;
 use super::*;use alloc::sync::Arc;
 #[derive(Clone,Debug,PartialEq,Eq)] pub struct MatrixSlotLease {pub name:String,pub lifetime:u64}
 impl MatrixSlotLease {pub fn name(&self)->&str {&self.name}}
@@ -156,6 +157,7 @@ impl Shell3 {
     fn set_prompt(&mut self,text:&str){self.prompt=text.into();}
     fn set_cursor(&mut self,_:usize){}
     fn reconcile_matrix_selection(&mut self){}
+    fn drag_matrix(&mut self,_:(i32,i32),_:bool,_:bool,_:bool,_:(i32,i32))->bool{false}
     fn record_terminal_notice(&mut self,_:&str){}
     fn replay_terminal_line(&mut self,_:&str){}
     fn capture_matrix_snapshot(&self)->update::Snapshot{
@@ -185,9 +187,10 @@ impl Shell3 {
     for byte in keys {tty.input(&[*byte]);}
     tty.input("é".as_bytes());let mut expected=keys.to_vec();expected.extend("é".as_bytes());
     assert_eq!(*hv::INPUT.lock().unwrap(),expected);assert!(!tty.closing);
-    tty.output.clear();tty.resize(16,7);assert_eq!(tui::snapshot(f.id,Some("ssh-tui")).unwrap().len(),7);
-    assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[r"));
-    tty.output.clear();tty.input(b"\xc2");assert!(tui::active(f.id,Some("ssh-tui")));tty.input(b"\xa7");
+    tty.output.clear();tty.resize(16,7);assert!(tui::snapshot(f.id,Some("ssh-tui")).is_none());
+    assert_eq!(tui::surface(&t).unwrap().rows,7);assert!(tty.output.is_empty());
+    tty.output.clear();tty.input("§".as_bytes());assert!(tui::active(f.id,Some("ssh-tui")));
+    tui::park(f.id);tty.reconcile_matrix_selection();
     assert!(!tui::active(f.id,Some("ssh-tui")));let out=String::from_utf8_lossy(&tty.output);
     assert!(out.contains("TrueOS"));assert!(out.contains("\x1b[4;7r"));
     tui::request(tui::Frontend {cols:16,rows:7,..f},"ssh-tui").unwrap();assert_eq!(tui::claim(&t,7),Some(true));
@@ -198,7 +201,7 @@ impl Shell3 {
 '''
     source += r'''
 #[test] fn ssh_app_mouse_preferences_are_scoped_to_the_live_lease(){
-    use trueos_terminal::{MouseTracking,MouseEncoding};
+    use trueos_terminal::MouseTracking;
     let (f,t)=session("mouse-scope",8,12,5);
     let shell=Shell3 {tui_frontend:f.id,name:"mouse-scope".into(),size:(12,5),prompt:String::new(),mode:3};
     let mut tty=tty::Terminal::new_ssh(shell);
@@ -207,13 +210,14 @@ impl Shell3 {
     assert!(!String::from_utf8_lossy(&tty.output).contains("?1003h"));
     // Exact EnableMouseCapture sequence emitted by crossterm/termdir.
     tui::write(&t,8,b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h");
-    let options=tui::mouse_options(f.id,Some("mouse-scope"));assert_eq!(options.tracking,MouseTracking::Any);assert_eq!(options.encoding,MouseEncoding::Sgr);
+    // VM output remains opaque on SSH; the peer terminal owns mouse modes.
+    assert_eq!(tui::mouse_options(f.id,Some("mouse-scope")).tracking,MouseTracking::Off);
     tty.output.clear();tty.reconcile_matrix_selection();let out=String::from_utf8_lossy(&tty.output);
     assert!(out.contains("\x1b[?1003h"));assert!(out.contains("\x1b[?1006h"));
     hv::INPUT.lock().unwrap().clear();let mouse=b"\x1b[<35;2;2M\x1b[<0;2;2M\x1b[<32;3;2M\x1b[<0;3;2m\x1b[<64;3;2M\x1b[<65;3;2M";
     for byte in mouse {tty.input(&[*byte]);}assert_eq!(*hv::INPUT.lock().unwrap(),mouse);
-    // App forgets to disable capture. § still disables it at handoff.
-    tty.output.clear();tty.input("§".as_bytes());assert_eq!(tui::mouse_options(f.id,Some("mouse-scope")).tracking,MouseTracking::Off);
+    // App forgets to disable capture. Releasing the lease resets peer modes.
+    tty.output.clear();tui::park(f.id);tty.reconcile_matrix_selection();assert_eq!(tui::mouse_options(f.id,Some("mouse-scope")).tracking,MouseTracking::Off);
     assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[?1003l"));
     assert_eq!(tui::claim(&t,8),Some(true));tty.output.clear();tty.reconcile_matrix_selection();
     assert!(!String::from_utf8_lossy(&tty.output).contains("\x1b[?1003h"));
@@ -238,16 +242,32 @@ impl Shell3 {
     tty.input(reports);
     assert_eq!(*hv::SUBMISSIONS.lock().unwrap(),vec![reports.to_vec()]);
     assert!(tui::active(f.id,Some("mouse-batch")));
-    // Unicode still uses the shared handler; § parks before following bytes.
+    // Remote VM input remains byte-exact, including Unicode and §.
     hv::SUBMISSIONS.lock().unwrap().clear();tty.input("\x1b[Aé\x1b[B§tail".as_bytes());
-    assert_eq!(*hv::SUBMISSIONS.lock().unwrap(),vec![b"\x1b[A".to_vec(),"é".as_bytes().to_vec(),b"\x1b[B".to_vec()]);
-    assert!(!tui::active(f.id,Some("mouse-batch")));
+    assert_eq!(*hv::SUBMISSIONS.lock().unwrap(),vec!["\x1b[Aé\x1b[B§tail".as_bytes().to_vec()]);
+    assert!(tui::active(f.id,Some("mouse-batch")));
 }
 '''
     source += r'''
+#[test] fn native_admin_on_ssh_keeps_cell_frames_input_scope_and_reentry() {
+    let f=frontend(70,25);let t=shell2::target("native-admin-ssh",1);
+    let shell=Shell3 {tui_frontend:f.id,name:"native-admin-ssh".into(),size:(70,25),prompt:String::new(),mode:3};
+    let mut tty=tty::Terminal::new_ssh(shell);tty.output.clear();
+    tui::attach_native(f,&t).unwrap();assert_eq!(tui::native_transport_scope(&t),Some(1));
+    tui::native_write(&t,"\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[2JCRY  account & keys\x1b[23;1HAuthenticator code: ••••••".as_bytes());
+    tty.reconcile_matrix_selection();let out=String::from_utf8_lossy(&tty.output);
+    assert!(out.contains("CRY"));assert!(out.contains("••••••"));assert!(out.contains("?1000h"));
+    assert!(tui::snapshot(f.id,Some("native-admin-ssh")).is_some());
+    tty.input(b"123456\r");assert_eq!(tui::native_read(&t).unwrap().0,b"123456\r");
+    tui::native_return(&t);tty.output.clear();tty.reconcile_matrix_selection();
+    assert!(String::from_utf8_lossy(&tty.output).contains("TrueOS"));assert!(tui::supports(&t));
+    tui::select(f,None);assert!(tui::select_for_navigation(f,"native-admin-ssh"));
+    assert!(tui::native_visible(&t));assert_eq!(tui::native_transport_scope(&t),Some(1));
+    tty.input("§".as_bytes());assert!(!tui::native_visible(&t));
+}
 #[test] fn native_helpers_park_reenter_move_and_retire_with_their_exact_lease() {
     let f=frontend(20,8);let t=shell2::target("native",1);
-    tui::attach_native(f,&t).unwrap();assert!(tui::native_slot("native"));assert!(tui::native_visible(&t));
+    tui::attach_native(f,&t).unwrap();assert!(tui::native_slot("native"));assert!(tui::native_visible(&t));assert_eq!(tui::native_transport_scope(&t),Some(2));
     assert!(tui::attach_native(f,&t).is_err());
     assert!(tui::active(f.id,Some("native")));
     let competing=shell2::target("native-competing-vm",1);tui::attach(f,&competing).unwrap();hv::bind(14,&competing);
@@ -266,7 +286,7 @@ impl Shell3 {
     assert!(tui::select_for_navigation(f,"native"));assert!(tui::active(f.id,Some("native")));assert!(tui::native_visible(&t));tui::park(f.id);
     assert!(tui::select(other,Some("native")));
     assert!(!tui::active(f.id,Some("native")));assert!(tui::active(other.id,Some("native")));
-    assert_eq!(tui::surface(&t).unwrap().cols,30);
+    assert_eq!(tui::surface(&t).unwrap().cols,30);tui::bind_remote_frontend(other.id);assert_eq!(tui::native_transport_scope(&t),Some(1));
     shell2::free_name("native");let replacement=shell2::target("native",2);
     assert!(tui::native_read(&t).is_none());assert!(!tui::native_visible(&t));assert!(!tui::supports(&replacement));
 }
@@ -291,7 +311,9 @@ impl Shell3 {
         (path/'spin.rs').write_text('pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T> {pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<\'_,T>{self.0.lock().unwrap()}}')
         for name, file in [('spin', path/'spin.rs'), ('trueos_terminal', ROOT/'crates/trueos-terminal/src/lib.rs'), ('microfont', ROOT/'vendor/microfont/src/lib.rs')]:
             subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
-        (path/'test.rs').write_text(source)
+        tui_source=(ROOT/'src/shell3/tui.rs').read_text().replace('mod remote;', f'#[path="{ROOT}/src/shell3/tui/remote.rs"] mod remote;')
+        (path/'tui.rs').write_text(tui_source)
+        (path/'test.rs').write_text(source.replace(str(ROOT/'src/shell3/tui.rs'),str(path/'tui.rs')))
         args = ['rustc','--edition=2024','--test',str(path/'test.rs'),'-o',str(path/'tests')]
         for name in ('spin','trueos_terminal','microfont'):
             args += ['--extern',f'{name}={path}/lib{name}.rlib']

@@ -525,7 +525,13 @@ async fn unlock_task(target: MatrixTarget, username: String, recovery_key: Zeroi
         let report = crypt::unlock_persisted(username.as_str(), &recovery_key, envelope.as_slice())
             .map_err(|_| String::from("credential envelope rejected"))?;
         if let Err(error) = crate::machine_key::seal(disk, &username, &recovery_key).await {
-            print_matrix_target_line(&target, alloc::format!("cry unlock: boot-key save failed ({error}); automatic boot unlock unavailable").as_str());
+            print_matrix_target_line(
+                &target,
+                alloc::format!(
+                    "cry unlock: boot-key save failed ({error}); automatic boot unlock unavailable"
+                )
+                .as_str(),
+            );
         }
         Ok::<_, String>(report)
     }
@@ -583,7 +589,7 @@ fn show_recovery_key(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "cry recovery-key: keep outside TRUEOSFS");
 }
 
-fn parse_recovery_key(input: &str) -> Option<Zeroizing<[u8; 32]>> {
+pub(crate) fn parse_recovery_key(input: &str) -> Option<Zeroizing<[u8; 32]>> {
     if input.len() != 64 || !input.is_ascii() {
         return None;
     }
@@ -691,8 +697,8 @@ fn scope_name(scope_id: u8) -> &'static str {
     }
 }
 
-fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError) {
-    let detail = match error {
+pub(crate) fn error_text(error: CryError) -> String {
+    match error {
         CryError::AlreadyConfigured => "key already configured for this boot",
         CryError::NotConfigured => "run `cry key setup` first",
         CryError::TwoFactorAlreadyActive => "2fa is already active",
@@ -705,14 +711,7 @@ fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError)
         CryError::TotpRateLimited {
             retry_after_seconds,
         } => {
-            print_shell_line(
-                io,
-                alloc::format!(
-                    "cry {operation}: too many attempts; retry in {retry_after_seconds}s"
-                )
-                .as_str(),
-            );
-            return;
+            return alloc::format!("Too many attempts; retry in {retry_after_seconds}s");
         }
         CryError::Totp(_) => "TOTP computation failed",
         CryError::EntropyUnavailable => "strong entropy unavailable",
@@ -732,7 +731,12 @@ fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError)
         CryError::SshKeyAlreadyEnrolled => "SSH key is already enrolled",
         CryError::SshKeyNotFound => "SSH key is not enrolled",
         CryError::SshKeyLimit => "SSH authorized-key limit reached",
-    };
+    }
+    .into()
+}
+
+fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError) {
+    let detail = error_text(error);
     print_shell_line(io, alloc::format!("cry {operation}: {detail}").as_str());
     if matches!(error, CryError::InvalidTotpCode | CryError::WallClockUnavailable) {
         print_totp_clock(io, crypt::totp_clock_status());
@@ -880,10 +884,99 @@ fn short_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn full_hex(bytes: &[u8]) -> String {
+pub(crate) fn full_hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+/// A failed or cancelled persistence future must release the pending proof.
+struct PendingProof(u64);
+impl Drop for PendingProof {
+    fn drop(&mut self) {
+        crypt::abort_pending_login(self.0);
+    }
+}
+
+pub(crate) async fn login_for_scope(scope: u8, code: &str) -> Result<String, String> {
+    let proof = crypt::prepare_login(code, scope).map_err(error_text)?;
+    let _pending = PendingProof(proof.challenge_sequence);
+    let plan = crypt::prepare_persistence(proof.challenge_sequence).map_err(error_text)?;
+    write_persistence(&plan).await?;
+    let report = crypt::complete_persisted_login(plan).map_err(error_text)?;
+    Ok(if report.enrollment_activated {
+        "2FA confirmed; account saved and signed in."
+    } else {
+        "Signed in; account saved."
+    }
+    .into())
+}
+
+pub(crate) async fn change_ssh_key(
+    code: &str,
+    key: [u8; 32],
+    remove: bool,
+) -> Result<String, String> {
+    let proof = crypt::prepare_ssh_key_change(code, key, remove).map_err(error_text)?;
+    let _pending = PendingProof(proof.challenge_sequence);
+    let plan = crypt::prepare_persistence(proof.challenge_sequence).map_err(error_text)?;
+    write_persistence(&plan).await?;
+    crypt::complete_persisted_remote_login(plan).map_err(error_text)?;
+    Ok(alloc::format!("SSH key {}.", if remove { "removed" } else { "added" }))
+}
+
+pub(crate) async fn unlock_account(username: &str, encoded: &str) -> Result<String, String> {
+    let username = crypt::canonical_username(username).map_err(error_text)?;
+    let key = parse_recovery_key(encoded).ok_or("Recovery key must be 64 hexadecimal digits.")?;
+    let disk =
+        crate::r::fs::trueosfs::primary_root_handle().ok_or("No TRUEOSFS root is mounted.")?;
+    let path = alloc::format!("users/{username}/secrets/cry.v1.aes256gcm");
+    let envelope = crate::r::fs::trueosfs::file_out_async(disk, &path)
+        .await
+        .map_err(|_| String::from("Credential read failed."))?
+        .ok_or("Credential not found.")?;
+    crypt::unlock_persisted(&username, &key, &envelope).map_err(error_text)?;
+    if crate::machine_key::seal(disk, &username, &key)
+        .await
+        .is_err()
+    {
+        return Ok("Unlocked; boot-key save failed. Enter an authenticator code.".into());
+    }
+    Ok("Account unlocked. Enter an authenticator code to sign in.".into())
+}
+
+pub(crate) fn enrollment_qr_lines(payload: &str) -> Result<Zeroizing<Vec<String>>, String> {
+    let mut temp = Zeroizing::new([0u8; QR_BUFFER_BYTES]);
+    let mut output = Zeroizing::new([0u8; QR_BUFFER_BYTES]);
+    let qr = QrCode::encode_text(
+        payload,
+        &mut *temp,
+        &mut *output,
+        QrCodeEcc::Medium,
+        Version::MIN,
+        QR_MAX_VERSION,
+        None,
+        true,
+    )
+    .map_err(|_| String::from("QR payload did not fit."))?;
+    let first = -QR_QUIET_ZONE;
+    let last = qr.size() + QR_QUIET_ZONE;
+    let mut lines = Zeroizing::new(Vec::new());
+    let mut top = first;
+    while top < last {
+        let mut line = String::new();
+        for x in first..last {
+            line.push(match (qr.get_module(x, top), qr.get_module(x, top + 1)) {
+                (false, false) => ' ',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (true, true) => '█',
+            });
+        }
+        lines.push(line);
+        top += 2;
+    }
+    Ok(lines)
 }

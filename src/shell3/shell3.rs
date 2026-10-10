@@ -1,5 +1,6 @@
 pub(crate) mod capture;
 mod helper;
+mod admin;
 mod monitor;
 mod metafmtstr;
 mod names;
@@ -518,6 +519,8 @@ pub struct Shell3 {
     active_matrix_lifetime: Option<u64>,
     matrix_selection_dirty: bool,
     matrix_scroll: usize,
+    matrix_column: usize,
+    matrix_drag: Option<(i32, i32)>,
     prompt: PromptState,
     rows: SpecialRowsState,
     aka_names: Vec<String>,
@@ -659,6 +662,8 @@ impl Shell3 {
             active_matrix_lifetime: None,
             matrix_selection_dirty: false,
             matrix_scroll: 0,
+            matrix_column: 0,
+            matrix_drag: None,
             prompt,
             rows: rows_state,
             aka_names,
@@ -835,6 +840,8 @@ impl Shell3 {
             self.active_matrix_lifetime = None;
             self.matrix_selection_dirty = true;
             self.matrix_scroll = 0;
+            self.matrix_column = 0;
+            self.matrix_drag = None;
             service::notify_work();
             return true;
         }
@@ -852,6 +859,8 @@ impl Shell3 {
         self.active_matrix_lifetime = lifetime;
         self.matrix_selection_dirty = true;
         self.matrix_scroll = 0;
+        self.matrix_column = 0;
+        self.matrix_drag = None;
         service::notify_work();
         true
     }
@@ -869,6 +878,8 @@ impl Shell3 {
         self.active_matrix_lifetime = lifetime;
         self.matrix_selection_dirty = true;
         self.matrix_scroll = 0;
+        self.matrix_column = 0;
+        self.matrix_drag = None;
         service::notify_work();
         true
     }
@@ -1044,6 +1055,8 @@ impl Shell3 {
         self.active_matrix_lifetime = Some(lifetime);
         self.matrix_selection_dirty = true;
         self.matrix_scroll = 0;
+        self.matrix_column = 0;
+        self.matrix_drag = None;
         let mut slots = matrix_slots().lock();
         slots.vmx_apps.retain(|existing| existing.slot != app.slot);
         slots.vmx_apps.push(app);
@@ -1062,6 +1075,11 @@ impl Shell3 {
         let is_alias = self.aka_names.iter().any(|name| name == &text);
         if self.mode == Mode::CMD && capture::recognizes(&text) {
             match capture::start(&text, self.tui_frontend()) {
+                Ok(()) => {MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text);},
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+            }
+        } else if self.mode == Mode::ADM && admin::recognizes(&text) {
+            match admin::start(&text, self.tui_frontend()) {
                 Ok(()) => {MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text);},
                 Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
             }
@@ -1226,7 +1244,7 @@ impl Shell3 {
             if side != StripSide::Left { return String::new(); }
             let (_, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
             let offset = self.matrix_scroll.min(lines.len().saturating_sub(self.rows_count.saturating_sub(3)));
-            return lines.get(offset.saturating_add(index)).cloned().unwrap_or_default();
+            return lines.get(offset.saturating_add(index)).map(|line| line.chars().skip(self.matrix_column).collect()).unwrap_or_default();
         }
         if row == SpecialRows::StatusRow && side == StripSide::Left {
             return current_matrix_slots_text();
@@ -1270,6 +1288,10 @@ impl Shell3 {
     /// Move this view through the shared newest-first transcript. Positive
     /// rows move down toward older entries; each Shell3 owns its own offset.
     pub(super) fn scroll_matrix(&mut self, rows: i32) -> bool {
+        self.pan_matrix(0, rows)
+    }
+
+    pub(super) fn pan_matrix(&mut self, columns: i32, rows: i32) -> bool {
         let (_, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
         let maximum = lines.len().saturating_sub(self.rows_count.saturating_sub(3));
         let previous = self.matrix_scroll.min(maximum);
@@ -1278,13 +1300,35 @@ impl Shell3 {
         } else {
             previous.saturating_sub(rows.unsigned_abs() as usize)
         };
-        self.matrix_scroll != previous
+        let maximum_column = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0).saturating_sub(self.columns);
+        let previous_column = self.matrix_column.min(maximum_column);
+        self.matrix_column = if columns >= 0 {
+            previous_column.saturating_add(columns as usize).min(maximum_column)
+        } else { previous_column.saturating_sub(columns.unsigned_abs() as usize) };
+        self.matrix_scroll != previous || self.matrix_column != previous_column
+    }
+
+    /// Grab the transcript in cell-sized steps, retaining sub-cell movement.
+    pub(super) fn drag_matrix(&mut self, position: (i32, i32), pressed: bool, held: bool, inside: bool, cell: (i32, i32)) -> bool {
+        if !held || cell.0 <= 0 || cell.1 <= 0 {
+            self.matrix_drag = None;
+            return false;
+        }
+        if pressed && inside { self.matrix_drag = Some(position); }
+        let Some(anchor) = self.matrix_drag else { return false; };
+        let columns = (anchor.0 as i64 - position.0 as i64) / cell.0 as i64;
+        let rows = (anchor.1 as i64 - position.1 as i64) / cell.1 as i64;
+        if columns == 0 && rows == 0 { return false; }
+        self.matrix_drag = Some(((anchor.0 as i64 - columns * cell.0 as i64) as i32,
+            (anchor.1 as i64 - rows * cell.1 as i64) as i32));
+        self.pan_matrix(columns.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            rows.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
     }
 
     fn capture_matrix_snapshot(&self) -> update::Snapshot {
         let (generation, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
         self.capture_controls_snapshot()
-            .with_matrix_guard(&lines, generation, self.matrix_scroll,
+            .with_matrix_pan(&lines, generation, self.matrix_column, self.matrix_scroll,
                 crate::allcaps::shell3::PANBUFFER_GUARD_CELLS as usize)
             .with_matrix_identity(self.active_matrix_slot.clone(), self.active_matrix_lifetime)
     }
@@ -1387,6 +1431,8 @@ impl Shell3 {
         self.active_matrix_lifetime = Some(lifetime);
         self.matrix_selection_dirty = true;
         self.matrix_scroll = 0;
+        self.matrix_column = 0;
+        self.matrix_drag = None;
         tui::select_for_navigation(self.tui_frontend(), name);
         service::notify_work();
         true

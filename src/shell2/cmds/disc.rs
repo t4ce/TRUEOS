@@ -17,7 +17,7 @@ fn print_disc_table(io: &'static dyn ShellBackend2) {
     super::tlb_helper::print_disk_choice_table(io, "disc", "disk devices", choices.as_slice());
 }
 
-fn parse_size_bytes(raw: &str) -> Option<u64> {
+pub(crate) fn parse_size_bytes(raw: &str) -> Option<u64> {
     let text = raw.trim();
     if text.is_empty() {
         return None;
@@ -53,6 +53,19 @@ fn parse_size_bytes(raw: &str) -> Option<u64> {
     number.checked_mul(mul)
 }
 
+pub(crate) async fn create_ramdisc_bytes(
+    size_bytes: u64,
+) -> Result<crate::disc::block::DeviceHandle, alloc::string::String> {
+    let label = alloc::format!("ramdisc-{}mb", size_bytes / (1024 * 1024));
+    let disk = crate::r::disc::ramdisk::create_trueos_public(size_bytes, RAMDISK_BLOCK_SIZE, label)
+        .await
+        .map_err(|error| alloc::format!("Create/format failed: {error:?}"))?;
+    crate::r::fs::trueosfs::mount_root_async(disk)
+        .await
+        .map_err(|error| alloc::format!("Mount failed: {error:?}"))?;
+    Ok(disk)
+}
+
 fn create_ramdisc(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) -> ParseOutcome {
     let size_arg = args.next();
     if args.next().is_some() {
@@ -75,27 +88,11 @@ fn create_ramdisc(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
         print_shell_line(io, "disc ramdisc: using default size 128MiB");
     }
 
-    let label = alloc::format!("ramdisc-{}mb", size_bytes / (1024 * 1024));
     let output_target = matrix_target_for_backend(io);
     // Ramdisk creation formats and mounts TRUEOSFS, so it must yield to the
     // BSP executor instead of synchronously waiting inside the Shell2 task.
     crate::wait::spawn_local_detached(async move {
-        let out: Result<_, alloc::string::String> = async {
-            let disk = crate::r::disc::ramdisk::create_trueos_public(
-                size_bytes,
-                RAMDISK_BLOCK_SIZE,
-                label,
-            )
-            .await
-            .map_err(|err| alloc::format!("create/format failed: {:?}", err))?;
-
-            crate::r::fs::trueosfs::mount_root_async(disk)
-                .await
-                .map_err(|err| alloc::format!("mount failed: {:?}", err))?;
-
-            Ok(disk)
-        }
-        .await;
+        let out = create_ramdisc_bytes(size_bytes).await;
 
         match out {
             Ok(disk) => {

@@ -9,6 +9,8 @@ pub(super) struct InputDecoder {
     pub(super) utf8: [u8; 4],
     pub(super) utf8_len: usize,
     pub(super) escape: u8,
+    pub(super) csi: Vec<u8>,
+    pub(super) csi_overflow: bool,
     pub(super) after_cr: bool,
 }
 
@@ -137,7 +139,7 @@ impl Terminal {
             }
             "exit" => {
                 if self.view.lines.is_some() { self.write(b"\x1b[r\x1b[0 q\x1b[?25h"); }
-                self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
+                self.write(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
                 self.closing = true;
             }
             _ if self.view.lines.is_some() && !recalled => {
@@ -169,10 +171,27 @@ impl Terminal {
         }
     }
 
+    // SGR mouse coordinates are terminal cells, unlike UI4's pixel coordinates.
+    fn matrix_mouse(&mut self, final_byte: u8) {
+        if self.view.lines.is_none() || self.decoder.csi_overflow || !matches!(final_byte, b'M' | b'm') { return; }
+        let Some(parameters) = self.decoder.csi.strip_prefix(b"<") else { return; };
+        let Ok(parameters) = core::str::from_utf8(parameters) else { return; };
+        let mut fields = parameters.split(';');
+        let Some(button) = fields.next().and_then(|v| v.parse::<u32>().ok()) else { return; };
+        let Some(x) = fields.next().and_then(|v| v.parse::<i32>().ok()).filter(|v| *v > 0) else { return; };
+        let Some(y) = fields.next().and_then(|v| v.parse::<i32>().ok()).filter(|v| *v > 0) else { return; };
+        if fields.next().is_some() || button & 64 != 0 || button & 3 != 1 { return; }
+        let (columns, rows) = self.shell.get_size();
+        let inside = x as usize <= columns && (4..=rows).contains(&(y as usize));
+        self.shell.drag_matrix((x - 1, y - 1), final_byte == b'M' && button & 32 == 0,
+            final_byte == b'M', inside, (1, 1));
+    }
+
     pub fn input(&mut self, mut bytes: &[u8]) {
         if tui::remote_active(self.shell.tui_frontend)
             && tui::input(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref(), bytes)
         {
+            self.shell.drag_matrix((0, 0), false, false, false, (1, 1));
             self.refresh_controls();
             return;
         }
@@ -216,15 +235,20 @@ impl Terminal {
                 if self.decoder.escape == 1 {
                     if byte == b'[' || byte == b'O' {
                         self.decoder.escape = 2;
+                        self.decoder.csi.clear();
+                        self.decoder.csi_overflow = false;
                         continue;
                     }
                     self.decoder.escape = 0;
                 } else if (0x40..=0x7e).contains(&byte) {
+                    self.matrix_mouse(byte);
                     if self.decoder.escape == 2 && matches!(byte, b'A' | b'B') {
                         self.recall(byte == b'A');
                     }
                     self.decoder.escape = 0;
                 } else if byte >= 0x20 {
+                    if self.decoder.csi.len() < 48 { self.decoder.csi.push(byte); }
+                    else { self.decoder.csi_overflow = true; }
                     self.decoder.escape = 3;
                     continue;
                 } else {
@@ -264,7 +288,7 @@ impl Terminal {
                         if self.view.lines.is_some() {
                             self.write(b"\x1b[r\x1b[0 q\x1b[?25h");
                         }
-                        self.write(b"\x1b[0m\x1b[?1049l\x1b[?1007r\r\nBye.\r\n");
+                        self.write(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?1049l\x1b[?1007r\r\nBye.\r\n");
                         self.closing = true;
                     }
                     21 => {

@@ -235,6 +235,19 @@ fn guarded_matrix_source_matches_visible_cells_clamps_and_keeps_identity() {
 }
 
 #[test]
+fn horizontal_matrix_source_is_bounded_and_uses_character_coordinates() {
+    let history=vec!["§0123456789abcdefghijklmnop".into()];
+    let snapshot=update::Snapshot::new((4,4),0,[(&[],&[]),(&[],&[]),(&[],&[])],4)
+        .with_matrix_pan(&history,1,10,0,2);
+    let area=snapshot.matrix_area().unwrap();
+    assert_eq!((area.column_offset,area.first_column),(10,8));
+    assert_eq!(area.cells[0].len(),8);
+    assert_eq!(snapshot.rendered_lines()[3].iter().map(|c|c.0).collect::<String>(),"9abc");
+    assert_eq!(area.cell(10,0),('9',None));
+    assert_eq!(area.cell(7,0),(' ',None));
+}
+
+#[test]
 fn control_cursor_blink_does_not_change_matrix_source_revision() {
     let cursor=[MetaFmtStr::new(" ").blink()];
     let raw=update::Snapshot::new((12,5),0,[(&[],&[]),(&[],&[]),(&cursor,&[])],12)

@@ -338,6 +338,16 @@ pub(super) fn native_visible(target: &MatrixTarget) -> bool {
     let lease = crate::shell2::matrix_target_slot_lease(target);
     ROUTES.lock().routes.iter().any(|r| r.lease == lease && r.native.as_ref().is_some_and(|n| n.active))
 }
+pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let routes = ROUTES.lock();
+    let route = routes.routes.iter().find(|route| route.lease == lease && route.native.is_some())?;
+    Some(if routes.remote_frontends.iter().any(|entry| entry.0 == route.frontend) {
+        crate::shell2::TRANSPORT_NET_TCP_SCOPE
+    } else {
+        crate::shell2::TRANSPORT_LOCAL_SCOPE
+    })
+}
 pub(super) fn native_read(target: &MatrixTarget) -> Option<(Vec<u8>, Vec<String>)> {
     let lease = crate::shell2::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();

@@ -116,7 +116,7 @@ impl Terminal {
                 self.shell.active_matrix_slot_name().as_deref(),
             )
         } else {
-            MouseOptions::default()
+            MouseOptions { tracking: MouseTracking::Drag, encoding: MouseEncoding::Sgr }
         };
         self.apply_mouse_options(mouse);
         if active != self.view.terminal_active {

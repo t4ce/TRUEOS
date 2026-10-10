@@ -26,7 +26,7 @@ impl PanBuffer {
             return Ok(false);
         };
         let view = CellRect {
-            x: 0,
+            x: input.column_offset as i64,
             y: input.offset as i64,
             columns: u32::try_from(input.columns).map_err(|_| "shell3-pan-columns")?,
             rows: u32::try_from(input.rows).map_err(|_| "shell3-pan-rows")?,

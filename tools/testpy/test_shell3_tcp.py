@@ -67,6 +67,7 @@ impl Shell3 {
     fn capture_matrix_snapshot(&self)->update::Snapshot {
         self.capture_controls_snapshot().with_matrix_offset(&self.history,0,self.matrix_scroll)
     }
+    fn drag_matrix(&mut self,_:(i32,i32),_:bool,_:bool,_:bool,_:(i32,i32))->bool {false}
     fn scroll_matrix(&mut self,rows:i32)->bool {
         let old=self.matrix_scroll;let max=self.history.len().saturating_sub(self.size.1-3);
         self.matrix_scroll=if rows>=0 {old.saturating_add(rows as usize).min(max)} else {old.saturating_sub(rows.unsigned_abs() as usize)};
@@ -188,13 +189,15 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         assert!(tty.shell.pointer.is_empty());assert_eq!(tty.line,"x");
         let mut nc=terminal();nc.input(b"\\x1b[<0;4;2M");assert!(nc.shell.pointer.is_empty());assert!(nc.line.is_empty());
     }
-    #[test] fn ssh_never_enables_mouse_reporting() {
+    #[test] fn ssh_enables_sgr_drag_and_disables_reporting_on_exit() {
         for exit in [b"exit\\r".as_slice(),b"\\x04".as_slice()] {
             let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
-            assert!(!String::from_utf8_lossy(&tty.output).contains("1003"));
-            assert!(!String::from_utf8_lossy(&tty.output).contains("1006"));
+            assert!(!String::from_utf8_lossy(&tty.output).contains("1003h"));
+            assert!(String::from_utf8_lossy(&tty.output).contains("1006h"));
+            assert!(String::from_utf8_lossy(&tty.output).contains("1002h"));
             tty.output.clear();tty.input(exit);
-            assert!(!String::from_utf8_lossy(&tty.output).contains("1003"));assert!(tty.closing);
+            assert!(String::from_utf8_lossy(&tty.output).contains("1002l"));
+            assert!(String::from_utf8_lossy(&tty.output).contains("1006l"));assert!(tty.closing);
         }
     }
     #[test] fn ssh_reserves_matrix_rows_and_routes_notices_into_the_buffer() {
