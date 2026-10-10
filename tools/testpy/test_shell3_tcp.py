@@ -127,8 +127,8 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         let payload="\x1b[38;5;8m🗺 §\x1b[6n".as_bytes();
         tui::write(payload);tty.reconcile_matrix_selection();
         assert_eq!(tty.output,payload);
-        tty.output.clear();tty.input("§\x1b[1;3R\x1b[<65;2;3M".as_bytes());
-        assert_eq!(tui::received(),"§\x1b[1;3R\x1b[<65;2;3M".as_bytes());
+        tty.output.clear();tty.input("é\x1b[1;3R\x1b[<65;2;3M".as_bytes());
+        assert_eq!(tui::received(),"é\x1b[1;3R\x1b[<65;2;3M".as_bytes());
         assert!(tty.output.is_empty() && tty.submitted().is_empty());
     }
     #[test] fn remote_pty_resize_does_not_emit_shell_paint_or_erase_app() {

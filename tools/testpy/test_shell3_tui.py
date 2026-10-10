@@ -176,8 +176,17 @@ impl Shell3 {
     }
 }
 '''
-    source += 'mod tty {\n'+(ROOT/'src/shell3/tty.rs').read_text().replace('//!','//').replace('mod input;', f'#[path="{ROOT}/src/shell3/tty/input.rs"] mod input;').replace('mod ansi;', f'#[path="{ROOT}/src/shell3/tty/ansi.rs"] mod ansi;')+'\n}\n'
+    source += 'mod tty {\n'+(ROOT/'src/shell3/tty.rs').read_text().replace('//!','//').replace('mod input;', f'#[path="{ROOT}/src/shell3/tty/input.rs"] mod input;').replace('mod ansi;', f'#[path="{ROOT}/src/shell3/tty/ansi.rs"] mod ansi;')+'\nimpl Terminal { pub fn test_prompt(&self)->&str {self.shell.prompt()} }\n}\n'
     source += r'''
+#[test] fn ssh_global_operator_escapes_raw_input_even_across_utf8_packet_splits(){
+    let (f,t)=session("ssh-fastspawn",19,40,8);
+    let shell=Shell3 {tui_frontend:f.id,name:"ssh-fastspawn".into(),size:(40,8),prompt:String::new(),mode:3};
+    let mut tty=tty::Terminal::new_ssh(shell);assert_eq!(tui::claim(&t,19),Some(true));
+    hv::INPUT.lock().unwrap().clear();
+    tty.input(b"abc\xc2");assert_eq!(*hv::INPUT.lock().unwrap(),b"abc");assert!(tty.test_prompt().is_empty());
+    tty.input(b"\xa7\xc2");assert_eq!(tty.test_prompt(),"§");assert!(!tui::active(f.id,Some("ssh-fastspawn")));
+    tty.input(b"\xa7gridpaper");assert_eq!(tty.test_prompt(),"§§gridpaper");assert_eq!(*hv::INPUT.lock().unwrap(),b"abc");
+}
 #[test] fn ssh_shares_tui_frames_raw_input_resize_park_release_and_reentry(){
     let (f,t)=session("ssh-tui",7,12,5);
     let shell=Shell3 {tui_frontend:f.id,name:"ssh-tui".into(),size:(12,5),prompt:String::new(),mode:3};
@@ -192,8 +201,8 @@ impl Shell3 {
     assert_eq!(*hv::INPUT.lock().unwrap(),expected);assert!(!tty.closing);
     tty.output.clear();tty.resize(16,7);assert!(tui::snapshot(f.id,Some("ssh-tui")).is_none());
     assert_eq!(tui::surface(&t).unwrap().rows,7);assert!(tty.output.is_empty());
-    tty.output.clear();tty.input("§".as_bytes());assert!(tui::active(f.id,Some("ssh-tui")));
-    tui::park(f.id);tty.reconcile_matrix_selection();
+    tty.output.clear();tty.input("§".as_bytes());assert!(!tui::active(f.id,Some("ssh-tui")));
+    tty.reconcile_matrix_selection();
     assert!(!tui::active(f.id,Some("ssh-tui")));let out=String::from_utf8_lossy(&tty.output);
     assert!(out.contains("TrueOS"));assert!(out.contains("\x1b[4;7r"));
     tui::request(tui::Frontend {cols:16,rows:7,..f},"ssh-tui").unwrap();assert_eq!(tui::claim(&t,7),Some(true));
@@ -258,8 +267,8 @@ impl Shell3 {
     assert_eq!(*hv::SUBMISSIONS.lock().unwrap(),vec![reports.to_vec()]);
     assert!(tui::active(f.id,Some("mouse-batch")));
     // Remote VM input remains byte-exact, including Unicode and §.
-    hv::SUBMISSIONS.lock().unwrap().clear();tty.input("\x1b[Aé\x1b[B§tail".as_bytes());
-    assert_eq!(*hv::SUBMISSIONS.lock().unwrap(),vec!["\x1b[Aé\x1b[B§tail".as_bytes().to_vec()]);
+    hv::SUBMISSIONS.lock().unwrap().clear();tty.input("\x1b[Aé\x1b[Bñtail".as_bytes());
+    assert_eq!(*hv::SUBMISSIONS.lock().unwrap(),vec!["\x1b[Aé\x1b[Bñtail".as_bytes().to_vec()]);
     assert!(tui::active(f.id,Some("mouse-batch")));
 }
 '''

@@ -2,7 +2,8 @@
   "aliases": [
     { "name": "cub", "blueprint": "cubes.bp" },
     { "name": "grid", "blueprint": "gridpaper" },
-    { "name": "td", "blueprint": "termdir" }
+    { "name": "td", "blueprint": "termdir" },
+    { "name": "apps", "blueprint": "appstore.bp" }
   ],
   "solara": {
     "bookmarks": [

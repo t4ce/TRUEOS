@@ -104,7 +104,20 @@ pub(super) fn launch_alias(name: &str, slot: &str, frontend: super::tui::Fronten
     if !archive.ends_with(".bp") {
         archive.push_str(".bp");
     }
-    launch_archive(archive, slot, frontend)
+    if let Some(bytes) = crate::app_db::get(&archive)? {
+        return launch_bytes(archive, bytes, slot, frontend);
+    }
+    let selector = archive.strip_suffix(".bp").unwrap_or(&archive);
+    launch_appstore(selector, frontend)
+}
+
+pub(super) fn launch_appstore(selector: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
+    if selector.is_empty() || selector.chars().any(|ch| ch == '§' || ch.is_whitespace() || ch.is_control()) {
+        return Err("apps: invalid appstore selector".into());
+    }
+    let store = crate::app_db::get("appstore.bp")?
+        .ok_or_else(|| alloc::string::String::from("apps: appstore.bp is missing from AppDB"))?;
+    launch_bytes_with_script("appstore.bp".into(), store, frontend, Some(alloc::format!("pull {selector}\n")))
 }
 
 fn launch_archive(archive: alloc::string::String, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {

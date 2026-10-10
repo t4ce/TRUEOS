@@ -188,7 +188,10 @@ impl Terminal {
     }
 
     pub fn input(&mut self, mut bytes: &[u8]) {
-        if tui::remote_active(self.shell.tui_frontend)
+        // The locked § operator must pass through UTF-8 decoding, including
+        // when its C2 A7 bytes arrive in separate SSH packets.
+        if self.decoder.utf8_len == 0 && !bytes.contains(&0xc2)
+            && tui::remote_active(self.shell.tui_frontend)
             && tui::input(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref(), bytes)
         {
             self.shell.drag_matrix((0, 0), false, false, false, (1, 1));
@@ -205,7 +208,7 @@ impl Terminal {
             // Decode UTF-8 through the shared
             // keyboard path so § can still park the lease as it does in UI4.
             let ascii_len =
-                if self.view.lines.is_some() && self.decoder.utf8_len == 0 && byte.is_ascii() {
+                if (self.view.lines.is_some() || tui::remote_active(self.shell.tui_frontend)) && self.decoder.utf8_len == 0 && byte.is_ascii() {
                     bytes.iter().take_while(|byte| byte.is_ascii()).count()
                 } else {
                     0

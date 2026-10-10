@@ -1059,6 +1059,10 @@ impl Shell3 {
     }
 
     fn select_queued_app(&mut self, app: service::QueuedBlueprint) {
+        if !tui::select(self.tui_frontend(), Some(&app.slot)) {
+            tui::queue_launch(self.tui_frontend, app);
+            return;
+        }
         let lifetime = MatrixSlots::ensure_named(&app.slot);
         self.active_matrix_slot = Some(app.slot.clone());
         self.active_matrix_lifetime = Some(lifetime);
@@ -1399,8 +1403,15 @@ impl Shell3 {
         self.parse_name(input)
     }
 
-    /// Operator contract: §, §id, §id§, and §§, submitted explicitly.
+    /// Operator contract: §, §id, §id§, §§, and §§Appname, submitted by Enter.
     pub fn parse_operator(&mut self, input: &str) -> bool {
+        if let Some(name) = names::fastspawn_selector(input) {
+            match service::launch_appstore(name, self.tui_frontend()) {
+                Ok(app) => self.select_queued_app(app),
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+            }
+            return true;
+        }
         let Some(rest) = input.strip_prefix(OPERATOR) else {
             return false;
         };
