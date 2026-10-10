@@ -36,6 +36,7 @@ pub mod drag_drop {pub fn release_terminal(_:super::WindowOwner,_:super::WindowI
     source += '''
 }
 mod shell2 {
+pub mod cmds {pub mod run {#[derive(Clone,Debug)] pub struct QueuedBlueprint {pub slot:String,pub app:String,pub sha256:[u8;32]}}}
 pub const TRANSPORT_NET_TCP_SCOPE:u8=1;pub const TRANSPORT_LOCAL_SCOPE:u8=2;
 use super::*;use alloc::sync::Arc;
 #[derive(Clone,Debug,PartialEq,Eq)] pub struct MatrixSlotLease {pub name:String,pub lifetime:u64}
@@ -233,6 +234,18 @@ impl Shell3 {
     assert!(String::from_utf8_lossy(&tty.output).contains("\x1b[?1003l"));
 }
 
+#[test] fn native_launch_receipt_follows_current_frontend_and_exact_lease() {
+    let f=tui::Frontend{id:tui::new_frontend(),cols:80,rows:12};let moved=tui::Frontend{id:tui::new_frontend(),cols:60,rows:10};
+    let t=shell2::target("online-handoff",1);tui::attach_native(f,&t).unwrap();tui::native_return(&t);assert!(tui::take_native_return(f.id));
+    tui::request(moved,"online-handoff").unwrap();assert_eq!(tui::native_frontend(&t).unwrap().id,moved.id);
+    tui::native_launch(&t,shell2::cmds::run::QueuedBlueprint{slot:"app1".into(),app:"test.bp".into(),sha256:[9;32]});
+    assert!(!tui::native_visible(&t));assert!(tui::take_native_launch(f.id).is_none());
+    assert_eq!(tui::take_native_launch(moved.id).unwrap().slot,"app1");assert!(tui::take_native_launch(moved.id).is_none());
+    tui::request(moved,"online-handoff").unwrap();tui::native_launch(&t,shell2::cmds::run::QueuedBlueprint{slot:"stale".into(),app:"test.bp".into(),sha256:[0;32]});
+    shell2::free_name("online-handoff");assert!(tui::take_native_launch(moved.id).is_none());
+    let new=shell2::target("online-handoff",2);tui::attach_native(moved,&new).unwrap();
+    tui::native_launch(&t,shell2::cmds::run::QueuedBlueprint{slot:"old".into(),app:"test.bp".into(),sha256:[0;32]});assert!(tui::take_native_launch(moved.id).is_none());
+}
 #[test] fn ssh_does_not_split_mouse_reports_into_standalone_escape_submissions(){
     let (f,t)=session("mouse-batch",9,120,40);
     let shell=Shell3 {tui_frontend:f.id,name:"mouse-batch".into(),size:(120,40),prompt:String::new(),mode:3};

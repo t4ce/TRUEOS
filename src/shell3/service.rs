@@ -102,6 +102,10 @@ pub(super) fn launch_alias(name: &str, slot: &str, frontend: super::tui::Fronten
 fn launch_archive(archive: alloc::string::String, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     let bytes = crate::app_db::get(&archive)?
         .ok_or_else(|| alloc::string::String::from("apps: archive not found"))?;
+    launch_bytes(archive, bytes, slot, frontend)
+}
+
+pub(super) fn launch_bytes(archive: alloc::string::String, bytes: Vec<u8>, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     let target =
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, slot);
     let launch_script = if archive == "termdir.bp" {

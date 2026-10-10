@@ -23,6 +23,7 @@ struct Native {
     active: bool,
     painted: bool,
     return_to_default: bool,
+    launch: Option<crate::shell2::cmds::run::QueuedBlueprint>,
     input: VecDeque<u8>,
     notices: VecDeque<String>,
 }
@@ -320,7 +321,7 @@ pub(super) fn attach_native(frontend: Frontend, target: &MatrixTarget) -> Result
     attach(frontend, target)?;
     let lease = crate::shell2::matrix_target_slot_lease(target);
     if let Some(route) = ROUTES.lock().routes.iter_mut().find(|r| r.lease == lease) {
-        route.native = Some(Native {active: true, painted: false, return_to_default: false, input: VecDeque::new(), notices: VecDeque::new()});
+        route.native = Some(Native {active: true, painted: false, return_to_default: false, launch: None, input: VecDeque::new(), notices: VecDeque::new()});
     }
     Ok(())
 }
@@ -403,6 +404,36 @@ pub(super) fn take_native_return(frontend: u64) -> bool {
     routes.routes.iter_mut().filter(|r| r.frontend == frontend).fold(false, |exit, r| {
         exit | r.native.as_mut().is_some_and(|n| core::mem::take(&mut n.return_to_default))
     })
+}
+
+/// Resolve the current frontend on reentry, including a parked helper moved to SSH.
+pub(super) fn native_frontend(target: &MatrixTarget) -> Option<Frontend> {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let routes = ROUTES.lock();
+    let route = routes.routes.iter().find(|r| r.lease == lease && r.native.as_ref().is_some_and(|n| n.active))?;
+    let (cols, rows) = route.screen.dimensions();
+    Some(Frontend { id: route.frontend, cols, rows })
+}
+
+pub(super) fn native_launch(target: &MatrixTarget, app: crate::shell2::cmds::run::QueuedBlueprint) {
+    let lease = crate::shell2::matrix_target_slot_lease(target);
+    let mut routes = ROUTES.lock();
+    if let Some(route) = routes.routes.iter_mut().find(|r| r.lease == lease) {
+        if let Some(native) = route.native.as_mut() {
+            native.active = false;
+            native.input.clear();
+            native.launch = Some(app);
+            let frontend = route.frontend;
+            routes.changed(frontend);
+        }
+    }
+    drop(routes);
+    super::service::notify_work();
+}
+
+pub(super) fn take_native_launch(frontend: u64) -> Option<crate::shell2::cmds::run::QueuedBlueprint> {
+    ROUTES.lock().routes.iter_mut().filter(|r| r.frontend == frontend)
+        .find_map(|r| r.native.as_mut()?.launch.take())
 }
 
 pub(super) fn revision(frontend: u64) -> u64 {

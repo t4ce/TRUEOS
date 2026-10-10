@@ -2,6 +2,7 @@ pub(crate) mod capture;
 mod helper;
 mod admin;
 mod monitor;
+mod apps;
 mod metafmtstr;
 mod names;
 pub mod net;
@@ -909,6 +910,9 @@ impl Shell3 {
 
     /// Every owner reconciles deletion locally; no cross-AP model mutation.
     pub(super) fn reconcile_matrix_selection(&mut self) {
+        if let Some(app) = tui::take_native_launch(self.tui_frontend) {
+            self.select_queued_app(app);
+        }
         if tui::take_native_return(self.tui_frontend) || (self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none()) {
             self.select_matrix_slot_index(0);
         }
@@ -1099,6 +1103,11 @@ impl Shell3 {
             }
         } else if is_alias {
             self.launch_named_app(&text, true);
+        } else if self.mode == Mode::HV && apps::recognizes(&text) {
+            match apps::start(&text, self.tui_frontend()) {
+                Ok(()) => { MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text); },
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+            }
         } else if text == "stop" && self.active_vmx_app().is_some() {
             self.stop_active_vmx();
         } else if text == "tui" && self.active_vmx_app().is_some() {

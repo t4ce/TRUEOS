@@ -59,17 +59,24 @@ impl Input {
         !self.sequence.is_empty()
     }
     pub(super) fn feed(&mut self, bytes: &[u8], now: u64) -> Vec<Action> {
+        self.feed_cells(bytes, now)
+            .into_iter()
+            .map(|(action, _)| action)
+            .collect()
+    }
+    /// Column coordinates let a row expose a separate action tag.
+    pub(super) fn feed_cells(&mut self, bytes: &[u8], now: u64) -> Vec<(Action, Option<usize>)> {
         let mut actions = Vec::new();
         for &byte in bytes {
             if !self.sequence.is_empty() {
                 if self.sequence.len() == 1 && !matches!(byte, b'[' | b'O') {
                     self.sequence.clear();
-                    actions.push(Action::Quit);
+                    actions.push((Action::Quit, None));
                     continue;
                 }
                 self.sequence.push(byte);
                 if self.sequence.len() > 2 && (0x40..=0x7e).contains(&byte) {
-                    if let Some(action) = decode_sequence(&self.sequence) {
+                    if let Some(action) = decode_cell_sequence(&self.sequence) {
                         actions.push(action);
                     }
                     self.sequence.clear();
@@ -96,7 +103,7 @@ impl Input {
                 _ => None,
             };
             if let Some(action) = action {
-                actions.push(action);
+                actions.push((action, None));
             }
         }
         actions
@@ -110,11 +117,11 @@ impl Input {
         None
     }
 }
-fn decode_sequence(bytes: &[u8]) -> Option<Action> {
+fn decode_cell_sequence(bytes: &[u8]) -> Option<(Action, Option<usize>)> {
     match bytes {
-        b"\x1b[A" | b"\x1bOA" => Some(Action::Up),
-        b"\x1b[B" | b"\x1bOB" => Some(Action::Down),
-        b"\x1b[D" | b"\x1bOD" => Some(Action::Quit),
+        b"\x1b[A" | b"\x1bOA" => Some((Action::Up, None)),
+        b"\x1b[B" | b"\x1bOB" => Some((Action::Down, None)),
+        b"\x1b[D" | b"\x1bOD" => Some((Action::Quit, None)),
         _ => {
             let report = bytes.strip_prefix(b"\x1b[<")?;
             if report.last() != Some(&b'M') {
@@ -123,15 +130,15 @@ fn decode_sequence(bytes: &[u8]) -> Option<Action> {
             let text = core::str::from_utf8(&report[..report.len() - 1]).ok()?;
             let mut fields = text.split(';');
             let button = fields.next()?.parse::<u16>().ok()?;
-            let _col = fields.next()?.parse::<usize>().ok()?;
+            let col = fields.next()?.parse::<usize>().ok()?.checked_sub(1)?;
             let row = fields.next()?.parse::<usize>().ok()?.checked_sub(1)?;
             if fields.next().is_some() {
                 return None;
             }
             match button & !28 {
-                0 => Some(Action::Click(row)),
-                64 => Some(Action::Up),
-                65 => Some(Action::Down),
+                0 => Some((Action::Click(row), Some(col))),
+                64 => Some((Action::Up, None)),
+                65 => Some((Action::Down, None)),
                 _ => None,
             }
         }

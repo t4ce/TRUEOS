@@ -71,6 +71,7 @@ pub fn select_for_navigation(_:Frontend,_:&str)->bool {true}
 pub fn park(_:u64)->bool {true}
 pub fn native_slot(name:&str)->bool {matches!(name,"pic"|"vid"|"aud"|"vaud"|"ram"|"smp"|"cry"|"disc")}
 pub fn take_native_return(_:u64)->bool {false}
+pub fn take_native_launch(_:u64)->Option<crate::shell2::cmds::run::QueuedBlueprint>{None}
 pub fn keyboard(_:u64,_:Option<&str>,_:&crate::r::keyboard::TrueosKeyboardOutputEvent)->bool {false}
 pub static REQUESTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
 pub fn request(_:Frontend,name:&str)->Result<(),&'static str>{REQUESTS.lock().unwrap().push(name.into());Ok(())}
@@ -84,6 +85,12 @@ mod admin {
     pub fn recognizes(name: &str)->bool {matches!(name,"cry"|"disc")}
     pub static STARTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
     pub fn start(name: &str,_:crate::tui::Frontend)->Result<(),alloc::string::String>{STARTS.lock().unwrap().push(name.into());Ok(())}
+}
+mod apps {
+    pub static ENABLED:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+    pub fn recognizes(name:&str)->bool {ENABLED.load(std::sync::atomic::Ordering::SeqCst) && matches!(name,"online"|"status")}
+    pub static STARTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+    pub fn start(name:&str,_:crate::tui::Frontend)->Result<(),String>{STARTS.lock().unwrap().push(name.into());Ok(())}
 }
 mod monitor {
     pub fn recognizes(name:&str)->bool {matches!(name,"ram"|"smp")}
@@ -453,7 +460,7 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
         assert!(key(&mut a,2,2,'\\t')); assert_eq!(a.mode,mode);
         assert_eq!(a.rows.title.left[0].text,"TrueOS § 12:34");
         let legend:String=a.rows.title.right.iter().map(|run|run.text.as_str()).collect();
-        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"Capture[pic vid aud vaud] AppDB[]",Mode::ADM=>admin_names.as_str()});
+        assert_eq!(legend,match mode {Mode::HV=>"[online peer] [status pause] [snap preserve eject delete kick load store probe]",Mode::CMD=>"Capture[pic vid aud vaud] AppDB[]",Mode::ADM=>admin_names.as_str()});
     }
     assert_eq!(b.mode,Mode::HV); assert_eq!(b.prompt.text,"y");
     assert!(!key(&mut a,2,3,'\\r')); assert!(!key(&mut a,1,0,'\\n'));
@@ -483,6 +490,13 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     names.sort();names.dedup();assert_eq!(names.len(),8);
     assert_eq!(matrix_slots().lock().lifetimes.iter().find(|(id,_)|id==&name).unwrap().1,lifetime);
 }
+#[test] fn hv_online_and_status_open_persistent_helpers_and_remove_old_names() {
+    MatrixSlots::set::<&str>(&[]);apps::STARTS.lock().unwrap().clear();apps::ENABLED.store(true,std::sync::atomic::Ordering::SeqCst);
+    let mut s=Shell3::new(80);type_text(&mut s,"online");assert_eq!(s.active_matrix_slot_name(),Some("online".into()));
+    s.select_matrix_slot_index(0);type_text(&mut s,"status");assert_eq!(s.active_matrix_slot_name(),Some("status".into()));
+    assert_eq!(*apps::STARTS.lock().unwrap(),vec!["online","status"]);assert!(!s.parse_name("dl"));assert!(!s.parse_name("stop"));
+    apps::ENABLED.store(false,std::sync::atomic::Ordering::SeqCst);
+}
 #[test] fn exact_mode_names_echo_without_enter_and_clear_prompt() {
     MatrixSlots::set(&["id","123"]); matrix_slots().lock().echoes.clear();
     let mut a=Shell3::new(80); let mut b=Shell3::new(80);
@@ -497,7 +511,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     type_text(&mut a,"online"); assert_eq!(a.prompt.text,"online");
     assert!(MatrixSlots::echo_lines(None).is_empty());
     let mut c=Shell3::new(80); type_text(&mut c,"dl");
-    assert_eq!(MatrixSlots::echo_lines(None),vec!["dl"]);
+    assert_eq!(c.prompt.text,"dl");assert!(MatrixSlots::echo_lines(None).is_empty());
     assert_eq!(MatrixSlots::echo_lines(Some("123")),vec!["pause"]);
 }
 #[test] fn appdb_name_launches_once_in_fresh_slot_without_echo() {
@@ -684,9 +698,9 @@ fn submit(shell:&mut Shell3,input:&str)->bool {shell.set_prompt("");type_text(sh
     type_text(&mut a,"online");assert!(submit(&mut b,"§id"));type_text(&mut b,"pause");
     assert!(submit(&mut b,"§§"));assert_eq!(b.active_matrix_slot_name(),Some("id".into()));
     assert!(MatrixSlots::echo_lines(None).is_empty());assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["pause"]);
-    type_text(&mut a,"stop");assert_eq!(MatrixSlots::echo_lines(None),vec!["stop"]);
+    type_text(&mut a,"peer");assert_eq!(MatrixSlots::echo_lines(None),vec!["peer"]);
     assert!(submit(&mut a,"§§"));assert_eq!(a.prompt.render()," ");assert_eq!(a.active_matrix_slot_index(),0);
-    assert!(MatrixSlots::echo_lines(None).is_empty());type_text(&mut a,"dl");assert_eq!(MatrixSlots::echo_lines(None),vec!["dl"]);
+    assert!(MatrixSlots::echo_lines(None).is_empty());type_text(&mut a,"peer");assert_eq!(MatrixSlots::echo_lines(None),vec!["peer"]);
 }
 #[test] fn malformed_operator_and_ordinary_enter_are_inert() {
     MatrixSlots::set(&["id","123"]);matrix_slots().lock().echoes.clear();let mut s=Shell3::new(80);

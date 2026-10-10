@@ -105,7 +105,7 @@ fn line(io: &'static dyn ShellBackend2, text: &str) {
     print_shell_line(io, text);
 }
 
-fn vm_state_label(state: crate::hv::HvVmState) -> &'static str {
+pub(crate) fn vm_state_label(state: crate::hv::HvVmState) -> &'static str {
     if !state.supported {
         "unsupported"
     } else if state.restore_inflight {

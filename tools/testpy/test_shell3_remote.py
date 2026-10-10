@@ -27,6 +27,7 @@ mod tty {pub const OUTPUT_LIMIT:usize=1024*1024;}
 mod service {pub fn notify_work() {}}
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
 mod shell2 {
+    pub mod cmds {pub mod run {pub struct QueuedBlueprint;}}
     use super::*;
     #[derive(Clone,PartialEq,Eq)] pub struct MatrixSlotLease {pub name:String,pub generation:u64}
     impl MatrixSlotLease {pub fn name(&self)->&str {&self.name}}

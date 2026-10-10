@@ -15,10 +15,10 @@ use super::{
 };
 
 #[derive(Clone)]
-struct OnlineApp {
-    name: String,
-    archive_name: String,
-    sha256: String,
+pub(crate) struct OnlineApp {
+    pub(crate) name: String,
+    pub(crate) archive_name: String,
+    pub(crate) sha256: String,
     url: String,
 }
 
@@ -226,6 +226,18 @@ async fn online_apps(catalog: OnlineCatalog) -> Result<Vec<OnlineApp>, String> {
     let text = core::str::from_utf8(html.as_slice())
         .map_err(|_| alloc::format!("online {} list is not UTF-8", catalog.item()))?;
     Ok(parse_online_apps(text, catalog))
+}
+
+/// Shared, verified online transport for the Shell3 app browser.
+pub(crate) async fn catalog() -> Result<Vec<OnlineApp>, String> {
+    if !wait_for_online_ready().await { return Err("Network unavailable.".into()); }
+    online_apps(OnlineCatalog::Apps).await
+}
+pub(crate) async fn fetch_app(app: &OnlineApp) -> Result<Vec<u8>, String> {
+    if !wait_for_online_ready().await { return Err("Network unavailable.".into()); }
+    let bytes = fetch_url_bytes(app.url.clone(), ONLINE_APP_MAX_BYTES).await?;
+    if !online_app_sha256_matches(app, &bytes) { return Err("Blueprint SHA-256 mismatch.".into()); }
+    Ok(bytes)
 }
 
 fn short_sha256(value: &str) -> String {

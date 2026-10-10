@@ -113,6 +113,7 @@ struct TrueosVmId {
     stop_req: AtomicBool,
     cooperative_stop: cooperative_stop::CooperativeStop,
     lifecycle_control: spin::Mutex<()>,
+    lifecycle_generation: AtomicU64,
     matrix_owner: spin::Mutex<Option<crate::shell2::MatrixSlotLease>>,
     preserve_req: AtomicBool,
     preserve_exit: AtomicBool,
@@ -139,6 +140,7 @@ impl TrueosVmId {
             stop_req: AtomicBool::new(false),
             cooperative_stop: cooperative_stop::CooperativeStop::new(),
             lifecycle_control: spin::Mutex::new(()),
+            lifecycle_generation: AtomicU64::new(0),
             matrix_owner: spin::Mutex::new(None),
             preserve_req: AtomicBool::new(false),
             preserve_exit: AtomicBool::new(false),
@@ -1038,6 +1040,11 @@ pub(crate) fn vm_run_generation(vm_id: u8) -> Option<u64> {
     vm_slot(vm_id).map(|vm| vm.run_generation.load(Ordering::Acquire))
 }
 
+/// Identity of a start reservation, including the period before run setup.
+pub(crate) fn vm_lifecycle_generation(vm_id: u8) -> Option<u64> {
+    vm_slot(vm_id).map(|vm| vm.lifecycle_generation.load(Ordering::Acquire))
+}
+
 fn lifecycle_now_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
@@ -1385,6 +1392,7 @@ fn reserve_blueprint_child_vm_id() -> Option<u8> {
             teardown_diagnostics::set(vm_id, TeardownStage::Preparing);
             vm.stop_req.store(false, Ordering::Release);
             *vm.matrix_owner.lock() = None;
+            vm.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
             vm.starting.store(true, Ordering::Release);
             return Some(vm_id);
         }
@@ -2190,6 +2198,7 @@ fn start_with_mode(
                 *vm.matrix_owner.lock() = None;
             }
             teardown_diagnostics::set(vm_id, TeardownStage::Preparing);
+            vm.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
             vm.starting.store(true, Ordering::Release);
         }
     }
@@ -2415,11 +2424,23 @@ fn start_with_mode(
 }
 
 pub fn stop(vm_id: u8) -> Result<bool, StopError> {
+    stop_matching_generation(vm_id, None)
+}
+
+/// A displayed slot must not stop a different incarnation after vmid reuse.
+pub(crate) fn stop_for_generation(vm_id: u8, generation: u64) -> Result<bool, StopError> {
+    stop_matching_generation(vm_id, Some(generation))
+}
+
+fn stop_matching_generation(vm_id: u8, generation: Option<u64>) -> Result<bool, StopError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
     };
 
     let _control = vm.lifecycle_control.lock();
+    if generation.is_some_and(|run| vm.lifecycle_generation.load(Ordering::Acquire) != run) {
+        return Ok(false);
+    }
     if vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire) {
         let cooperative = vm.cooperative_stop.request();
         if !cooperative {
