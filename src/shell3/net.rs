@@ -246,20 +246,8 @@ impl WorkerTerminals {
 
 #[trueos_executor::task]
 pub async fn terminal_task() {
-    // Do not register queues or bind port 22 before durable account inspection.
-    let mut probe_errors = 0u64;
-    loop {
-        match super::ssh_boot::initialize().await {
-            Ok(()) => break,
-            Err(reason) => {
-                probe_errors += 1;
-                if probe_errors <= 2 || probe_errors.is_power_of_two() {
-                    crate::log_warn!(target: "service"; "shell3-ssh: listener=closed boot-account-probe={}\n", reason);
-                }
-                Timer::after(Duration::from_millis(100)).await;
-            }
-        }
-    }
+    crate::log_info!(target: "service";
+        "shell3-ssh: policy=development host-key=embedded-stable auth=none storage=independent\n");
     super::ssh::init();
     let spawner = unsafe { trueos_executor::Spawner::for_current_executor().await };
     match super::ssh::auth_task() {

@@ -108,9 +108,7 @@ fn emit_plain_stream_line(stream: ConsoleStream, line: &str) {
     );
 }
 
-fn emit_console_stream_line(stream: ConsoleStream, line: &str) {
-    emit_plain_stream_line(stream, line);
-}
+
 
 fn process_text_stream_impl(
     stream: ConsoleStream,
@@ -145,7 +143,6 @@ fn process_text_stream_impl(
 
 fn process_text_stream(stream: ConsoleStream, text: &str) {
     process_text_stream_impl(stream, text, |stream, line| {
-        emit_console_stream_line(stream, line);
         if let Some((source, level, message)) = parse_structured_guest_log(line) {
             emit_guest_log_line(source, level, message);
         } else {
@@ -158,9 +155,7 @@ fn guest_shell_attached_write(data: &[u8]) -> usize {
     guest_shell_write_op(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_WRITE, data)
 }
 
-fn guest_shell2_raw_write(data: &[u8]) -> usize {
-    guest_shell_write_op(trueos_vm::vmcall::OP_BP_SHELL_RAW_WRITE, data)
-}
+
 
 fn guest_shell_write_op(op: u32, data: &[u8]) -> usize {
     let mut written = 0usize;
@@ -1840,52 +1835,19 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
     if SHELL_ATTACHED_REJECTS.fetch_add(1, Ordering::Relaxed) == 0 {
         crate::log!("fs-cabi: shell attached write has no route\n");
     }
-    data_len
+    0
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_shell2_raw_write(
-    data_ptr: *const u8,
-    data_len: usize,
-) -> usize {
-    if data_ptr.is_null() || data_len == 0 {
-        return 0;
-    }
-    let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
-    konsole_write_bytes(data)
-}
 
-const SHELL2_FRONTEND_READ_HEADER_LEN: usize = 24;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_shell2_frontend_attach_v1(cols: u32, rows: u32) -> i32 {
-    -38 // ENOSYS: removed shell integration.
-}
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_shell2_frontend_read_v1(
-    read_seq: u64,
-    out_ptr: *mut u8,
-    out_cap: usize,
-    out_next_seq: *mut u64,
-    out_epoch: *mut u64,
-    out_flags: *mut u32,
-) -> isize {
-    -38 // ENOSYS: removed shell integration.
-}
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_shell2_frontend_submit_input_v1(
-    data_ptr: *const u8,
-    data_len: usize,
-) -> isize {
-    -38 // ENOSYS: removed shell integration.
-}
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_shell2_frontend_detach_v1() -> i32 {
-    -38 // ENOSYS: removed shell integration.
-}
+
+
+
+
+
 
 pub(crate) fn blueprint_img_open_payload(vm_id: u8, payload: &[u8]) -> i32 {
     -38 // ENOSYS: removed shell integration.

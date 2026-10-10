@@ -1,4 +1,6 @@
 bld/
+# Reusable local SSH identity for the development kernel; never commit its seed.
+/.local/ssh-host-seed.bin
 .limine/
 tgt/
 target/

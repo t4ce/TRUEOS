@@ -23,6 +23,49 @@ fn main() {
 
     generate_portal_imports(Path::new(&manifest_dir)).expect("generate portal imports");
     generate_app_buildins();
+    generate_development_ssh_identity(Path::new(&manifest_dir))
+        .expect("prepare stable development SSH identity");
+}
+
+/// Keep the development host identity outside build output so rebuilds and
+/// `make clean` do not rotate it. The kernel embeds it and never waits for a disk.
+fn generate_development_ssh_identity(manifest_dir: &Path) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let directory = manifest_dir.join(".local");
+    fs::create_dir_all(&directory)?;
+    let path = directory.join("ssh-host-seed.bin");
+    if !path.exists() {
+        let mut seed = [0u8; 32];
+        fs::File::open("/dev/urandom")?.read_exact(&mut seed)?;
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(&seed)?;
+                file.sync_all()?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let seed = fs::read(&path)?;
+    if seed.len() != 32 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "local SSH host seed must contain exactly 32 bytes; refusing to rotate it",
+        ));
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    println!("cargo:rerun-if-changed={}", path.display());
+    let generated =
+        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("ssh-dev-host-seed.bin");
+    fs::write(&generated, seed)?;
+    fs::set_permissions(generated, fs::Permissions::from_mode(0o600))
 }
 
 fn generate_ring_runtime_imports(
