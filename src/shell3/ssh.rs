@@ -80,7 +80,7 @@ pub(super) struct Session {
 
 impl Session {
     pub fn new() -> Result<Self, crate::crypt::CryError> {
-        let seed = crate::crypt::ssh_host_seed()?;
+        let seed = super::ssh_boot::host_seed()?;
         let mut runner = Runner::new_server_owned();
         runner
             .set_auth_methods(false, true)
@@ -155,8 +155,12 @@ impl Session {
                     match event {
                         ServEvent::Hostkeys(h) => h.hostkeys(&[&self.host_key])?,
                         ServEvent::FirstAuth(mut h) => {
-                            h.set_auth_methods(false, true)?;
-                            h.reject()?;
+                            if super::ssh_boot::allow_none() {
+                                h.allow()?;
+                            } else {
+                                h.set_auth_methods(false, true)?;
+                                h.reject()?;
+                            }
                         }
                         // Sunset's response event also carries the RFC 4256 code.
                         // Actual password authentication is disabled above.

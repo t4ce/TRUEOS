@@ -430,6 +430,7 @@ async fn persist_login_task(target: MatrixTarget, scope_id: u8, plan: crypt::Cry
 pub(crate) async fn write_persistence(plan: &crypt::CryPersistencePlan) -> Result<(), String> {
     let disk = crate::r::fs::trueosfs::primary_root_handle()
         .ok_or_else(|| String::from("no TRUEOSFS root mounted"))?;
+    crate::machine_key::mark_account_history(disk).await?;
     let secrets_dir = alloc::format!("{}/secrets", plan.account_dir);
     match crate::r::fs::trueosfs::dir_create_all_async(disk, secrets_dir.as_str()).await {
         Ok(true) => {}

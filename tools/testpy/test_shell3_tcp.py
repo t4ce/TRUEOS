@@ -420,15 +420,32 @@ impl<T> NetQueue<T> {
 }
 mod net {
 use super::*;
+use crate::tty::Terminal;
 '''
+    source = source[:source.rindex('mod net {')] + (ROOT/'tools/testpy/shell3_ssh_unavailable.rs').read_text() + source[source.rindex('mod net {'):]
     net = (ROOT/'src/shell3/net.rs').read_text()
     source += net[net.index('const WRITE_TIMEOUT_MS'):net.index('enum WorkerEvent')]
     source += '''
 #[cfg(test)] mod tests {
     use super::*;
+    fn connection(handle:NetHandle)->Connection {let mut c=Connection::new(handle,0,None,Instant(0));c.input(b"help\\n");c}
     fn queue() -> NetQueue<NetCommand> { NetQueue { full: Cell::new(false), commands: RefCell::new(Vec::new()) } }
+    #[test] fn silent_nc_gets_greeting_and_never_starts_a_shell() {
+        let queue=queue();let mut c=Connection::new(NetHandle(3),0,None,Instant(0));
+        assert!(c.flush(&queue,Instant(999)));assert!(queue.commands.borrow().is_empty());
+        assert!(c.flush(&queue,Instant(1000)));assert!(c.terminal.is_none());assert!(c.ssh.is_none());
+        assert!(matches!(&queue.commands.borrow()[0],NetCommand::SendTcp {data,..} if data==GREETING));
+        c.input(b"cry key setup intruder\\n");assert!(c.terminal.is_none());
+        c.in_flight=0;c.deadline=None;assert!(c.flush(&queue,Instant(1001)));assert!(c.finishing);
+    }
+    #[test] fn ssh_without_host_identity_never_falls_back_to_plaintext() {
+        let queue=queue();let mut c=Connection::new(NetHandle(4),0,None,Instant(0));
+        c.input(b"SSH-2.0-client\\r\\n");assert!(c.rejected);assert!(c.terminal.is_none());
+        assert!(!c.flush(&queue,Instant(1)));
+        assert!(matches!(&queue.commands.borrow()[0],NetCommand::Close {..}));
+    }
     #[test] fn greeting_retries_backpressure_without_duplicate_output() {
-        let queue=queue(); let mut c=Connection::new(NetHandle(1),0);
+        let queue=queue(); let mut c=connection(NetHandle(1));
         queue.full.set(true); assert!(c.flush(&queue,Instant(0)));
         assert!(!c.greeting_sent); assert_eq!(c.in_flight,0);
         queue.full.set(false); assert!(c.flush(&queue,Instant(1)));
@@ -443,7 +460,7 @@ use super::*;
         assert!(!c.flush(&queue,Instant(5005)));
     }
     #[test] fn stalled_peer_does_not_block_another_connection() {
-        let queue=queue(); let mut a=Connection::new(NetHandle(1),0); let mut b=Connection::new(NetHandle(2),0);
+        let queue=queue(); let mut a=connection(NetHandle(1)); let mut b=connection(NetHandle(2));
         assert!(a.flush(&queue,Instant(0))); assert!(b.flush(&queue,Instant(10)));
         queue.full.set(true); assert!(a.flush(&queue,Instant(30000)));
         queue.full.set(false); assert!(!a.flush(&queue,Instant(30001)));

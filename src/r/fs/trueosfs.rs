@@ -202,6 +202,15 @@ fn record_successful_content_commit(content_type: ContentTypeId, legacy: bool) {
 }
 
 static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static MOUNT_PROBING: AtomicBool = AtomicBool::new(true);
+static MOUNT_PROBE_FAILED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn mounts_settled() -> bool {
+    !MOUNT_PROBE_FAILED.load(Ordering::Acquire)
+        && !MOUNT_PROBING.load(Ordering::Acquire)
+        && !MOUNT_REQUESTED.load(Ordering::Acquire)
+        && MOUNT_QUEUE.lock().is_empty()
+}
 static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
 static INDEX_REQUESTED: AtomicBool = AtomicBool::new(false);
 static INDEX_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
@@ -257,7 +266,9 @@ pub fn request_mount_root(disk: block::DeviceHandle) {
         if q.iter().any(|d| d.id() == disk.id()) {
             return;
         }
-        let _ = q.push(disk);
+        if q.push(disk).is_err() {
+            MOUNT_PROBE_FAILED.store(true, Ordering::Release);
+        }
     }
 
     crate::log_info!(target: "trueosfs";
@@ -301,6 +312,7 @@ pub async fn mount_service_task() {
         request_mount_existing_visible_roots();
         loop {
             if MOUNT_REQUESTED.swap(false, Ordering::AcqRel) {
+                MOUNT_PROBING.store(true, Ordering::Release);
                 let mut local: heapless::Vec<block::DeviceHandle, 8> = heapless::Vec::new();
                 {
                     let mut q = MOUNT_QUEUE.lock();
@@ -325,6 +337,7 @@ pub async fn mount_service_task() {
                         }
                         Ok(None) => {}
                         Err(e) => {
+                            MOUNT_PROBE_FAILED.store(true, Ordering::Release);
                             crate::log_info!(target: "trueosfs";
                                 "trueosfs: diag phase=mount-error disk={} err={:?}\n",
                                 disk.id().raw(), e
@@ -335,6 +348,7 @@ pub async fn mount_service_task() {
                 }
             }
 
+            MOUNT_PROBING.store(false, Ordering::Release);
             Timer::after(EmbassyDuration::from_millis(50)).await;
         }
     }
@@ -3347,6 +3361,21 @@ pub fn root_index_paths(disk_id: block::DiscId, max_paths: usize) -> Option<Vec<
         }
     }
     Some(out)
+}
+
+/// Conservative account-history check over the complete durable index. Partial
+/// enrollment, corrupt credential contents, and a locked account all count.
+pub(crate) async fn has_persisted_account_async(disk: block::DeviceHandle) -> Result<bool, block::Error> {
+    let placement = placement_for_io_async(disk).await?.ok_or(block::Error::Corrupted)?;
+    ensure_index_async(disk, &placement).await?;
+    let roots = ROOTS.lock();
+    let index = roots.iter().find(|root| root.disk_id == disk.id())
+        .and_then(|root| root.index.as_ref()).ok_or(block::Error::Corrupted)?;
+    Ok(index.keys().any(|path| {
+        path.starts_with(b"users/")
+            || path.as_slice() == b"trueos/uncrypted.blob"
+            || path.as_slice() == b"trueos/users-ever-persisted"
+    }))
 }
 
 #[derive(Clone, Debug)]

@@ -7,6 +7,25 @@ use zeroize::Zeroizing;
 const PATH: &str = "trueos/uncrypted.blob";
 const MAGIC: &[u8; 8] = b"TRUNKEY1";
 
+/// Keep account history even if an account's files are later removed. Commit
+/// before any credential write; interrupted enrollment must not reopen SSH.
+pub(crate) async fn mark_account_history(disk: DeviceHandle) -> Result<(), String> {
+    const HISTORY: &str = "trueos/users-ever-persisted";
+    if !trueosfs::dir_create_all_async(disk, "trueos").await
+        .map_err(|e| alloc::format!("account history directory: {e:?}"))? {
+        return Err(String::from("account history directory allocation failed"));
+    }
+    if !trueosfs::file_write_all_async(disk, HISTORY, b"1\n").await
+        .map_err(|e| alloc::format!("account history write: {e:?}"))? {
+        return Err(String::from("account history allocation failed"));
+    }
+    if trueosfs::file_out_async(disk, HISTORY).await
+        .map_err(|e| alloc::format!("account history readback: {e:?}"))?.as_deref() != Some(b"1\n") {
+        return Err(String::from("account history readback failed"));
+    }
+    Ok(())
+}
+
 fn encode(username: &str, key: &[u8; 32]) -> Zeroizing<Vec<u8>> {
     let mut blob = Zeroizing::new(Vec::new());
     blob.extend_from_slice(MAGIC);
@@ -63,6 +82,7 @@ async fn seal_at(
     let canonical = crate::crypt::canonical_username(username)
         .map_err(|_| String::from("invalid machine-key account"))?;
     let blob = encode(&canonical, key);
+    mark_account_history(disk).await?;
     if !trueosfs::dir_create_all_async(disk, directory)
         .await
         .map_err(|e| alloc::format!("machine-key directory: {e:?}"))?

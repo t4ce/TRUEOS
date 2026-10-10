@@ -21,15 +21,25 @@ mod spin {
     impl<T> Once<T> {pub const fn new()->Self {Self(std::sync::OnceLock::new())} pub fn get(&self)->Option<&T> {self.0.get()} pub fn call_once(&self,f:impl FnOnce()->T)->&T {self.0.get_or_init(f)}}
 }
 thread_local! {static CURRENT_SLOT:std::cell::Cell<u32>=const {std::cell::Cell::new(0)};}
+static CLOCK:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
 static DROPPED_2:AtomicU32=AtomicU32::new(0);
 static DROPPED_7:AtomicU32=AtomicU32::new(0);
+struct Shell3 {slot:u32,peer_port:Option<u16>}
+impl Shell3 {fn new_terminal_reserved(_slot:u32,_peer_port:Option<u16>)->Self {panic!("nc must never create a Shell3 model")}}
+impl Shell3 {fn new_terminal_sized_reserved(slot:u32,peer_port:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal_reserved(slot,peer_port)}}
+impl Drop for Shell3 {fn drop(&mut self) {assert_eq!(CURRENT_SLOT.get(),self.slot);if self.slot==2 {DROPPED_2.fetch_add(1,Ordering::Relaxed);} else {DROPPED_7.fetch_add(1,Ordering::Relaxed);}}}
+mod tty {
+use super::*;
+pub struct Terminal {pub shell:Shell3,pub input_bytes:Vec<u8>,pub output:Vec<u8>,pub overflow:bool,pub closing:bool}
+impl Terminal {pub fn new_ssh(shell:Shell3)->Self {Self::new(shell)} pub fn reconcile_matrix_selection(&mut self) {} pub fn new(shell:Shell3)->Self {Self {shell,input_bytes:Vec::new(),output:Vec::new(),overflow:false,closing:false}} pub fn input(&mut self,data:&[u8]) {assert_eq!(CURRENT_SLOT.get(),self.shell.slot);self.input_bytes.extend_from_slice(data);self.output.extend_from_slice(data);}}
+}
 mod service {pub fn release_shell_on_executor(slot:u32){assert_eq!(crate::CURRENT_SLOT.get(),slot);if slot==2 {crate::DROPPED_2.fetch_add(1,crate::Ordering::Relaxed);}else {crate::DROPPED_7.fetch_add(1,crate::Ordering::Relaxed);}}}
 #[macro_export] macro_rules! log_info {(target: $target:literal; $($args:tt)*)=>{let _=format!($($args)*);};}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] struct NetHandle(u32);
 enum NetEvent {TcpData {handle:NetHandle,data:Vec<u8>},TcpSent {handle:NetHandle,len:usize},Closed {handle:NetHandle}}
 enum NetCommand {SendTcp {handle:NetHandle,data:Vec<u8>},Close {handle:NetHandle},FinishTcp {handle:NetHandle}}
 #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord)] struct Instant(u64);
-impl Instant {fn now()->Self {Self(0)}}
+impl Instant {fn now()->Self {Self(CLOCK.load(Ordering::Relaxed))}}
 struct Duration(u64); impl Duration {fn from_millis(ms:u64)->Self {Self(ms)}}
 impl core::ops::Add<Duration> for Instant {type Output=Self;fn add(self,d:Duration)->Self {Self(self.0+d.0)}}
 '''
@@ -37,16 +47,17 @@ impl core::ops::Add<Duration> for Instant {type Output=Self;fn add(self,d:Durati
     adapter=(ROOT/'src/net/adapter.rs').read_text()
     source+=re.search(r'^impl<T> NetQueue<T> \{.*?^}',adapter,re.M|re.S).group()
     net=(ROOT/'src/shell3/net.rs').read_text()
-    source+='mod net {use super::*;\n'
+    source+=(ROOT/'tools/testpy/shell3_ssh_unavailable.rs').read_text()
+    source+='mod net {use super::*;use crate::tty::Terminal;\n'
     source+=net[net.index('const WRITE_TIMEOUT_MS'):net.index('#[trueos_executor::task]')]
     source+='''
 #[test] fn greeting_connections_finish_and_release_only_on_their_ap() {
     let commands=NetQueue::new_leaked("test-cmd",8); COMMANDS.call_once(||commands);
     let mut a=WorkerTerminals::new(2); let mut b=WorkerTerminals::new(7);
-    a.events.push(WorkerEvent::Accepted(NetHandle(1))).ok().unwrap();
-    b.events.push(WorkerEvent::Accepted(NetHandle(2))).ok().unwrap();
-    a.events.push(WorkerEvent::Socket(NetEvent::TcpData {handle:NetHandle(1),data:b"SSH-2.0-client\\r\\nhelp\\n".to_vec()})).ok().unwrap();
-    CURRENT_SLOT.set(2); a.poll(); CURRENT_SLOT.set(7); b.poll();
+    a.events.push(WorkerEvent::Accepted(NetHandle(1),Some(49152))).ok().unwrap();
+    b.events.push(WorkerEvent::Accepted(NetHandle(2),Some(49153))).ok().unwrap();
+    a.events.push(WorkerEvent::Socket(NetEvent::TcpData {handle:NetHandle(1),data:b"help\\ncry key setup intruder\\n".to_vec()})).ok().unwrap();
+    CURRENT_SLOT.set(2); a.poll(); CURRENT_SLOT.set(7); b.poll(); CLOCK.store(1000,Ordering::Relaxed); b.poll();
     let sent=commands.drain(8); assert_eq!(sent.len(),2);
     assert!(matches!(&sent[0],NetCommand::SendTcp {handle:NetHandle(1),data} if data==b"hello from TrueOS\\r\\n"));
     assert!(matches!(&sent[1],NetCommand::SendTcp {handle:NetHandle(2),data} if data==b"hello from TrueOS\\r\\n"));
