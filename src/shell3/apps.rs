@@ -4,10 +4,6 @@ use super::{
     helper::{self, Action, Input, Screen},
     tui::{self, Frontend},
 };
-use crate::shell2::{
-    self,
-    shell2_dl::{self, OnlineApp},
-};
 use alloc::{format, string::String, sync::Arc, vec::Vec};
 use spin::Mutex;
 use trueos_time::{Duration, Timer};

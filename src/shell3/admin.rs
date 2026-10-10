@@ -5,13 +5,7 @@ use super::{
     tui::{self, Frontend},
 };
 use crate::disc::block::DeviceHandle;
-use crate::{
-    crypt,
-    shell2::{
-        self,
-        cmds::{cry, disc, format as disk_format, tlb_helper},
-    },
-};
+use crate::crypt;
 use alloc::{
     format,
     string::{String, ToString},

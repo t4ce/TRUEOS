@@ -22,7 +22,6 @@ use core::mem::ManuallyDrop;
 use trueos_executor::raw::Executor as RawExecutor;
 use trueos_vm::vmcall;
 
-use crate::shell2::{ShellBackend2, ShellIo2};
 
 fn attached_write(bytes: &[u8]) {
     let mut written = 0usize;

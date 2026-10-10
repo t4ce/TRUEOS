@@ -321,8 +321,9 @@ impl MatrixSlots {
         slots.generation = slots.generation.wrapping_add(1);
         let retired = matrix_target::retire_expired_attachments(&mut slots);
         drop(slots);
+        let drop_owner = vmx_slot.as_deref().or(name.filter(|name| tui::native_slot(name)));
         for (lease, resource) in retired { resource.on_matrix_slot_freed(&lease); }
-        if let Some(name) = vmx_slot.as_deref().or(name.filter(|name| tui::native_slot(name))) {
+        if let Some(name) = drop_owner {
             service::drop_vmx_slot(name);
         }
         service::notify_work();

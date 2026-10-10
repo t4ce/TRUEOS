@@ -4,9 +4,6 @@ use super::{
     helper::{self, Action, Input, Screen},
     tui::{self, Frontend},
 };
-use crate::shell2::{
-    cmds::{ram, smp},
-};
 use alloc::{format, string::String, vec::Vec};
 use trueos_time::{Duration, Timer};
 

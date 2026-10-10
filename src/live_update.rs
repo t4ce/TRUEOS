@@ -24,7 +24,6 @@ use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 use crate::shell3::{MatrixTarget};
-use crate::shell2::{matrix_target_interrupted, print_matrix_target_line};
 
 pub(crate) const RENDEZVOUS_VECTOR: u8 = 0x43;
 
