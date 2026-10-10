@@ -68,6 +68,7 @@ BUILDIN_BP_FILES := $(addprefix $(BLUEPRINTS_DIR)/dist/,$(addsuffix .bp,$(BUILDI
 # the prerequisites so a Mio/crossterm (or other vendor) change cannot leave a
 # previously packed Blueprint looking up-to-date.
 BUILDIN_COMMON_INPUTS := $(shell if [ -d "$(BLUEPRINTS_DIR)" ]; then find "$(BLUEPRINTS_DIR)/src" "$(BLUEPRINTS_DIR)/api" "$(BLUEPRINTS_DIR)/.cargo" "$(BLUEPRINTS_DIR)/vendor" -type f 2>/dev/null; fi) $(wildcard $(BLUEPRINTS_DIR)/Cargo.toml $(BLUEPRINTS_DIR)/rust-toolchain.toml $(BLUEPRINTS_DIR)/apps.json)
+ENABLE_BUILDINS ?= 0
 ENABLE_BLUEPRINTS ?= 0
 ENABLE_WEAVE_HELLO ?= 0
 # When enabled, install FirmwareScout.efi as BOOTX64.EFI (preserving the
@@ -190,8 +191,8 @@ trueos-ttstt-host:
 trueos-ttstt-ubuntu:
 	$(MAKE) --no-print-directory trueos-ttstt-host TRUEOS_TTSTT_HOST_TARGET=x86_64-unknown-linux-gnu
 
-kernel: buildins empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
-	TRUEOS_BLUEPRINTS_DIR="$(abspath $(BLUEPRINTS_DIR))" TRUEOS_REQUIRE_BUILDINS=1 cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
+kernel: $(if $(filter 1,$(ENABLE_BUILDINS)),buildins) empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
+	TRUEOS_BLUEPRINTS_DIR="$(abspath $(BLUEPRINTS_DIR))" TRUEOS_ENABLE_BUILDINS=$(ENABLE_BUILDINS) TRUEOS_REQUIRE_BUILDINS=$(ENABLE_BUILDINS) cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 	$(MAKE) --no-print-directory INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
 
 intel-gpu-bake-migrated-cpp:

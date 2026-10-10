@@ -1211,9 +1211,8 @@ const fn unix_fd_probe_task_spec() -> TaskSpec {
 }
 
 fn spawn_app_vm_run_queue(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| {
-        crate::shell3::cmds::run::app_vm_run_queue_task(spawner)
-    })
+    let _ = spawner;
+    SpawnAttempt::Disabled
 }
 
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
@@ -1580,11 +1579,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_trueosfs_rw_probe,
     ),
     unix_fd_probe_task_spec(),
-    TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
-        bp_autostart_gate,
         &BP_AUTOSTART_STARTED,
         spawn_bp_autostart,
     ),

@@ -95,46 +95,25 @@ static APPDB_NAMES: spin::Mutex<AppDbNames> = spin::Mutex::new(AppDbNames::new()
 
 /// Hand AppDB launches to the existing Matrix/VMX queue.
 pub(super) fn launch_appdb(name: &str, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
-    if name == "os" { return crate::shell2::cmds::os::enqueue_to_shell3(frontend, None); }
-    let archive = alloc::format!("{name}.bp");
-    launch_archive(archive, slot, frontend)
+    Err("Blueprint launching is unavailable in the kernel baseline".into())
 }
 
 pub(super) fn launch_alias(name: &str, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
-    let archive = crate::r::restart::startup_alias_blueprint(name)
-        .ok_or_else(|| alloc::string::String::from("apps: alias not configured"))?;
-    launch_archive(archive, slot, frontend)
+    Err("Blueprint launching is unavailable in the kernel baseline".into())
 }
 
 fn launch_archive(archive: alloc::string::String, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
-    let bytes = crate::app_db::get(&archive)?
-        .ok_or_else(|| alloc::string::String::from("apps: archive not found"))?;
-    launch_bytes(archive, bytes, slot, frontend)
+    Err("Blueprint launching is unavailable in the kernel baseline".into())
 }
 
 pub(super) fn launch_bytes(archive: alloc::string::String, bytes: Vec<u8>, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
-    let target =
-        crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, slot);
-    let launch_script = if archive == "termdir.bp" {
-        let backend = if super::tui::has_ui4_window(frontend.id) { "ui4" } else { "terminal" };
-        Some(alloc::format!("backend {backend}\n"))
-    } else { None };
-    crate::shell2::cmds::run::enqueue_blueprint_bytes_with_receipt(
-        target,
-        archive,
-        bytes,
-        Vec::new(),
-        crate::hv::BlueprintInstanceRequest::default(),
-        launch_script,
-        &super::MatrixSlots::slot_ids(),
-        Some(frontend),
-    )
+    Err("Blueprint launching is unavailable in the kernel baseline".into())
 }
 
 /// Retire the launch target too: queued work is cancelled by its expired
 /// lifetime, and a starting/running Blueprint is killed without guest cleanup.
 pub(super) fn drop_vmx_slot(name: &str) {
-    crate::shell2::free_matrix_slot(name);
+    let _ = name;
 }
 
 /// Read app names through the current app.db API, using the archive basename

@@ -1224,60 +1224,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
-        OP_BP_SHELL2_FRONTEND_ATTACH_V1 => {
-            let rc =
-                crate::shell2::backends::session_pool::attach(vm_id, arg0 as usize, arg1 as usize);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_SHELL2_FRONTEND_READ_V1 => {
-            const HEADER_LEN: usize = 24;
-            let Some(page) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let cap = (arg1 as usize).min(PAYLOAD_CAP.saturating_sub(HEADER_LEN));
-            let payload = unsafe { &mut (*page).payload };
-            match crate::shell2::backends::session_pool::read(
-                vm_id,
-                arg0,
-                &mut payload[HEADER_LEN..HEADER_LEN + cap],
-            ) {
-                Ok(read) => {
-                    payload[0..8].copy_from_slice(&read.next_seq.to_le_bytes());
-                    payload[8..16].copy_from_slice(&read.epoch.to_le_bytes());
-                    payload[16..20].copy_from_slice(&read.flags.to_le_bytes());
-                    payload[20..24].fill(0);
-                    write_response(
-                        vm_id,
-                        seq,
-                        STATUS_OK,
-                        read.len as u64,
-                        (HEADER_LEN + read.len) as u32,
-                    );
-                }
-                Err(rc) => {
-                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-                }
-            }
-            DispatchOutcome::Resume
-        }
-        OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1 => {
-            let rc = request_payload(vm_id, req_len)
-                .map(|bytes| {
-                    crate::shell2::backends::session_pool::submit_input(vm_id, bytes)
-                        .map(|written| written as isize)
-                        .unwrap_or_else(|error| error as isize)
-                })
-                .unwrap_or(-1);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_SHELL2_FRONTEND_DETACH_V1 => {
-            let rc = crate::shell2::backends::session_pool::detach(vm_id);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
+        
+        
+        
+        
         OP_PING => {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
             DispatchOutcome::Resume
@@ -3577,34 +3527,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (i64::from(rc)) as u64, 0);
             DispatchOutcome::Resume
         }
-        OP_BP_VID_OPEN_V2 => {
-            let rc = request_payload(vm_id, req_len)
-                .and_then(|bytes| core::str::from_utf8(bytes).ok())
-                .map(|path| {
-                    crate::shell2::cmds::vid::enqueue_qualified_from_blueprint(
-                        vm_id,
-                        alloc::string::String::from(path),
-                    )
-                })
-                .map(|result| if result.is_ok() { 0i64 } else { -11 })
-                .unwrap_or(-1);
-            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_VID_OPEN_V1 => {
-            let rc = request_payload(vm_id, req_len)
-                .and_then(|bytes| core::str::from_utf8(bytes).ok())
-                .map(|path| {
-                    crate::shell2::cmds::vid::enqueue_from_blueprint(
-                        vm_id,
-                        alloc::string::String::from(path),
-                    )
-                })
-                .map(|result| if result.is_ok() { 0i64 } else { -11 })
-                .unwrap_or(-1);
-            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
-            DispatchOutcome::Resume
-        }
+        
+        
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);

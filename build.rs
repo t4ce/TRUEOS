@@ -450,6 +450,7 @@ fn write_bundle(
 fn generate_app_buildins() {
     println!("cargo:rerun-if-env-changed=TRUEOS_BLUEPRINTS_DIR");
     println!("cargo:rerun-if-env-changed=TRUEOS_REQUIRE_BUILDINS");
+    println!("cargo:rerun-if-env-changed=TRUEOS_ENABLE_BUILDINS");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
@@ -459,6 +460,12 @@ fn generate_app_buildins() {
     let manifest = blueprints_dir.join("buildins.json");
     let required = env::var_os("TRUEOS_REQUIRE_BUILDINS").is_some_and(|value| value == "1");
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("app-buildins.bin");
+
+    if env::var_os("TRUEOS_ENABLE_BUILDINS").is_none_or(|value| value != "1") {
+        write_bundle(&out, build_timestamp(), &[]).unwrap();
+        println!("cargo:warning=Blueprint build-ins disabled; embedding an empty app.db seed");
+        return;
+    }
 
     if !manifest.is_file() {
         if required {

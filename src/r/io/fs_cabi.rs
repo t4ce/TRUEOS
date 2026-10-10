@@ -109,16 +109,7 @@ fn emit_plain_stream_line(stream: ConsoleStream, line: &str) {
 }
 
 fn emit_console_stream_line(stream: ConsoleStream, line: &str) {
-    let Some(target) = super::env::console_target() else {
-        return;
-    };
-    match stream {
-        ConsoleStream::Out => crate::shell2::print_matrix_target_line(&target, line),
-        ConsoleStream::Err => crate::shell2::print_matrix_target_line(
-            &target,
-            alloc::format!("error: {}", line).as_str(),
-        ),
-    }
+    emit_plain_stream_line(stream, line);
 }
 
 fn process_text_stream_impl(
@@ -1800,16 +1791,7 @@ static KONSOLE_FRAME_STATES: spin::Mutex<BTreeMap<u32, KonsoleFrameState>> =
     spin::Mutex::new(BTreeMap::new());
 
 fn konsole_write_bytes(data: &[u8]) -> usize {
-    if data.is_empty() {
-        return 0;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_shell2_raw_write(data);
-    }
-    if let Some(target) = super::env::console_target() {
-        return crate::shell2::raw_write_matrix_target(&target, data);
-    }
-    data.len()
+    0
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1855,9 +1837,6 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
     if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         return crate::hv::blueprint_console_write(vm_id, data);
     }
-    if let Some(target) = super::env::console_target() {
-        return crate::shell2::raw_write_matrix_target(&target, data);
-    }
     if SHELL_ATTACHED_REJECTS.fetch_add(1, Ordering::Relaxed) == 0 {
         crate::log!("fs-cabi: shell attached write has no route\n");
     }
@@ -1880,25 +1859,7 @@ const SHELL2_FRONTEND_READ_HEADER_LEN: usize = 24;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_shell2_frontend_attach_v1(cols: u32, rows: u32) -> i32 {
-    if cols == 0 || rows == 0 {
-        return -1;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, rc) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_SHELL2_FRONTEND_ATTACH_V1,
-            u64::from(cols),
-            u64::from(rows),
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            rc as i64 as i32
-        } else {
-            -3
-        };
-    }
-    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
-        return -3;
-    };
-    crate::shell2::backends::session_pool::attach(vm_id, cols as usize, rows as usize)
+    -38 // ENOSYS: removed shell integration.
 }
 
 #[unsafe(no_mangle)]
@@ -1910,72 +1871,7 @@ pub unsafe extern "C" fn trueos_cabi_shell2_frontend_read_v1(
     out_epoch: *mut u64,
     out_flags: *mut u32,
 ) -> isize {
-    if (out_cap != 0 && out_ptr.is_null())
-        || out_next_seq.is_null()
-        || out_epoch.is_null()
-        || out_flags.is_null()
-    {
-        return -1;
-    }
-
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let cap = out_cap
-            .min(trueos_vm::vmcall::PAYLOAD_CAP.saturating_sub(SHELL2_FRONTEND_READ_HEADER_LEN));
-        let mut response = alloc::vec![0u8; SHELL2_FRONTEND_READ_HEADER_LEN + cap];
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_SHELL2_FRONTEND_READ_V1,
-            read_seq,
-            cap as u64,
-            &[],
-            response.as_mut_slice(),
-        );
-        if status != trueos_vm::vmcall::STATUS_OK {
-            return -3;
-        }
-        let rc = vmcall_signed(rc);
-        if rc < 0 {
-            return rc;
-        }
-        let len = rc as usize;
-        if len > cap {
-            return -3;
-        }
-        let next_seq = u64::from_le_bytes(response[0..8].try_into().unwrap_or_default());
-        let epoch = u64::from_le_bytes(response[8..16].try_into().unwrap_or_default());
-        let flags = u32::from_le_bytes(response[16..20].try_into().unwrap_or_default());
-        unsafe {
-            out_next_seq.write(next_seq);
-            out_epoch.write(epoch);
-            out_flags.write(flags);
-            if len != 0 {
-                core::slice::from_raw_parts_mut(out_ptr, len).copy_from_slice(
-                    &response
-                        [SHELL2_FRONTEND_READ_HEADER_LEN..SHELL2_FRONTEND_READ_HEADER_LEN + len],
-                );
-            }
-        }
-        return len as isize;
-    }
-
-    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
-        return -3;
-    };
-    let out = if out_cap == 0 {
-        &mut [][..]
-    } else {
-        unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) }
-    };
-    match crate::shell2::backends::session_pool::read(vm_id, read_seq, out) {
-        Ok(read) => {
-            unsafe {
-                out_next_seq.write(read.next_seq);
-                out_epoch.write(read.epoch);
-                out_flags.write(read.flags);
-            }
-            read.len as isize
-        }
-        Err(rc) => rc as isize,
-    }
+    -38 // ENOSYS: removed shell integration.
 }
 
 #[unsafe(no_mangle)]
@@ -1983,69 +1879,16 @@ pub unsafe extern "C" fn trueos_cabi_shell2_frontend_submit_input_v1(
     data_ptr: *const u8,
     data_len: usize,
 ) -> isize {
-    if data_len == 0 {
-        return 0;
-    }
-    if data_ptr.is_null() || data_len > trueos_vm::vmcall::PAYLOAD_CAP {
-        return -1;
-    }
-    let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1,
-            0,
-            0,
-            data,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            vmcall_signed(rc)
-        } else {
-            -3
-        };
-    }
-    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
-        return -3;
-    };
-    crate::shell2::backends::session_pool::submit_input(vm_id, data)
-        .map(|written| written as isize)
-        .unwrap_or_else(|rc| rc as isize)
+    -38 // ENOSYS: removed shell integration.
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_shell2_frontend_detach_v1() -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, rc) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL2_FRONTEND_DETACH_V1, 0, 0);
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            rc as i64 as i32
-        } else {
-            -3
-        };
-    }
-    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
-        return -3;
-    };
-    crate::shell2::backends::session_pool::detach(vm_id)
+    -38 // ENOSYS: removed shell integration.
 }
 
 pub(crate) fn blueprint_img_open_payload(vm_id: u8, payload: &[u8]) -> i32 {
-    if payload.is_empty() || payload.last() == Some(&0) {
-        return -1;
-    }
-    let mut paths = Vec::new();
-    for raw in payload.split(|byte| *byte == 0) {
-        let Ok(path) = core::str::from_utf8(raw) else {
-            return -1;
-        };
-        if path.trim().is_empty() || paths.len() == 32 {
-            return -1;
-        }
-        paths.push(String::from(path));
-    }
-    crate::shell2::cmds::run::enqueue_img_open_from_blueprint(vm_id, paths)
-        .map(|()| 0)
-        .unwrap_or(-11)
+    -38 // ENOSYS: removed shell integration.
 }
 
 /// Queue one new resident img Blueprint. The payload is a non-empty,
@@ -2078,67 +1921,12 @@ pub unsafe extern "C" fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vid_open_v2(path_ptr: *const u8, path_len: usize) -> i32 {
-    if path_ptr.is_null() || path_len == 0 || path_len > trueos_vm::vmcall::PAYLOAD_CAP {
-        return -1;
-    }
-    let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_VID_OPEN_V2,
-            0,
-            0,
-            path,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            vmcall_signed(rc) as i32
-        } else {
-            -3
-        };
-    }
-    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
-        return -3;
-    };
-    let Ok(path) = core::str::from_utf8(path) else {
-        return -1;
-    };
-    crate::shell2::cmds::vid::enqueue_qualified_from_blueprint(
-        vm_id,
-        alloc::string::String::from(path),
-    )
-    .map(|()| 0)
-    .unwrap_or(-11)
+    -38 // ENOSYS: removed shell integration.
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vid_open_v1(path_ptr: *const u8, path_len: usize) -> i32 {
-    if path_ptr.is_null() || path_len == 0 || path_len > trueos_vm::vmcall::PAYLOAD_CAP {
-        return -1;
-    }
-    let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_VID_OPEN_V1,
-            0,
-            0,
-            path,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            vmcall_signed(rc) as i32
-        } else {
-            -3
-        };
-    }
-    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
-        return -3;
-    };
-    let Ok(path) = core::str::from_utf8(path) else {
-        return -1;
-    };
-    crate::shell2::cmds::vid::enqueue_from_blueprint(vm_id, alloc::string::String::from(path))
-        .map(|()| 0)
-        .unwrap_or(-11)
+    -38 // ENOSYS: removed shell integration.
 }
 
 /// Spawn this Blueprint archive in a hidden child Hull.  The child receives
@@ -2628,56 +2416,11 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_surface_snapshot_v1(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_konsole_size(out_cols: *mut u32, out_rows: *mut u32) -> i32 {
-    if out_cols.is_null() || out_rows.is_null() {
-        return -1;
-    }
-
-    let (cols, rows) = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, packed) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_KONSOLE_SIZE, 0, 0);
-        if status != trueos_vm::vmcall::STATUS_OK {
-            return -1;
-        }
-        ((packed >> 32) as u32, packed as u32)
-    } else if let Some(target) = super::env::console_target() {
-        let (cols, rows) = crate::shell2::konsole_viewport_size_for_target(&target);
-        (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32)
-    } else {
-        (180, 24)
-    };
-
-    unsafe {
-        *out_cols = cols.max(1);
-        *out_rows = rows.max(1);
-    }
-    0
+    -38 // ENOSYS: removed shell integration.
 }
 
 fn konsole_begin_frame_size(cols: u32, rows: u32, terminal_handoff: bool) -> Option<(u32, u32)> {
-    let cols = cols.min(512).max(1);
-    let rows = rows.min(512).max(1);
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let flags = if terminal_handoff { 1u64 << 63 } else { 0 };
-        let (status, packed) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_SHELL_KONSOLE_BEGIN_FRAME,
-            u64::from(cols),
-            u64::from(rows) | flags,
-        );
-        if status != trueos_vm::vmcall::STATUS_OK {
-            return None;
-        }
-        return Some(((packed >> 32) as u32, packed as u32));
-    }
-    if let Some(target) = super::env::console_target() {
-        let (cols, rows) = crate::shell2::konsole_begin_frame_for_target(
-            &target,
-            cols as usize,
-            rows as usize,
-            terminal_handoff,
-        );
-        return Some((cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32));
-    }
-    Some((cols, rows))
+    None
 }
 
 #[unsafe(no_mangle)]
@@ -2828,56 +2571,11 @@ pub extern "C" fn trueos_cabi_shell_attached_read_byte() -> i32 {
 }
 
 pub fn read_attached_console_bytes(out: &mut [u8]) -> usize {
-    if out.is_empty() {
-        return 0;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let want = core::cmp::min(out.len(), trueos_vm::vmcall::PAYLOAD_CAP);
-        let (status, read) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ,
-            want as u64,
-            0,
-            &[],
-            &mut out[..want],
-        );
-        if status == trueos_vm::vmcall::STATUS_OK {
-            return core::cmp::min(read as usize, want);
-        }
-        return 0;
-    }
-    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
-        return crate::hv::blueprint_console_read(vm_id, out);
-    }
-    if let Some(target) = super::env::console_target() {
-        let mut read = 0usize;
-        while read < out.len() {
-            let Some(byte) = crate::shell2::read_matrix_target_byte(&target) else {
-                break;
-            };
-            out[read] = byte;
-            read += 1;
-        }
-        return read;
-    }
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_shell_attached_readable_len() -> usize {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READABLE_LEN, 0, 0);
-        if status == trueos_vm::vmcall::STATUS_OK {
-            return data as usize;
-        }
-        return 0;
-    }
-    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
-        return crate::hv::blueprint_console_readable_len(vm_id);
-    }
-    if let Some(target) = super::env::console_target() {
-        return crate::shell2::read_matrix_target_pending_len(&target);
-    }
     0
 }
 
@@ -2948,29 +2646,7 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_retarget_slot(
 
 /// Submit app name, NUL, then a one-shot UTF-8 start script to the regular launcher.
 pub(crate) fn blueprint_launch_script_payload(vm_id: u8, payload: &[u8]) -> i32 {
-    let Some(split) = payload.iter().position(|byte| *byte == 0) else {
-        return -1;
-    };
-    let (Ok(app), Ok(script)) =
-        (core::str::from_utf8(&payload[..split]), core::str::from_utf8(&payload[split + 1..]))
-    else {
-        return -1;
-    };
-    if app.is_empty()
-        || !app
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c == b'.')
-        || script.as_bytes().contains(&0)
-    {
-        return -1;
-    }
-    crate::shell2::cmds::run::enqueue_script_from_blueprint(
-        vm_id,
-        String::from(app),
-        String::from(script),
-    )
-    .map(|()| 0)
-    .unwrap_or(-11)
+    -38 // ENOSYS: removed shell integration.
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_blueprint_launch_script_v1(

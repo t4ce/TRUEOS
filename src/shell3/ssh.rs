@@ -27,33 +27,11 @@ pub(super) fn init() {
 
 /// Called by the BSP authentication worker; never block an AP executor on IO.
 pub(super) async fn service_auth() {
-    let Some(queue) = AUTH_REQUESTS.get() else {
-        return;
-    };
-    let Some(request) = queue.drain(1).pop() else {
-        return;
-    };
-    if request.completion.cancelled.load(Ordering::Acquire) {
-        return;
+    let Some(queue) = AUTH_REQUESTS.get() else { return; };
+    for request in queue.drain(1) {
+        // Recovery login needs the removed persistence command. Fail closed.
+        *request.completion.result.lock() = Some(false);
     }
-    let success = match crate::crypt::prepare_remote_login(&request.username, &request.code) {
-        Ok(report) => {
-            let sequence = report.challenge_sequence;
-            let result = match crate::crypt::prepare_persistence(sequence) {
-                Ok(plan) => match crate::shell2::cmds::cry::write_persistence(&plan).await {
-                    Ok(()) => crate::crypt::complete_persisted_remote_login(plan).is_ok(),
-                    Err(_) => false,
-                },
-                Err(_) => false,
-            };
-            if !result {
-                crate::crypt::abort_pending_login(sequence);
-            }
-            result
-        }
-        Err(_) => false,
-    };
-    *request.completion.result.lock() = Some(success);
 }
 
 #[trueos_executor::task]

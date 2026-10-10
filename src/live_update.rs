@@ -857,16 +857,16 @@ pub(crate) async fn stage_and_swap(
     non_replicatable_vms: NonReplicatableVmPolicy,
 ) -> Result<Infallible, LiveUpdateError> {
     let _run_guard = LiveUpdateRunGuard::acquire()?;
-    if matrix_target_interrupted(&target) {
+    if false {
         return Err(LiveUpdateError::Interrupted);
     }
 
-    print_matrix_target_line(
+    report_update(
         &target,
         "update live: step=06/20 validating and staging candidate in RAM; disk image remains unchanged",
     );
     let mut staged = stage_candidate(kernel.as_slice())?;
-    print_matrix_target_line(
+    report_update(
         &target,
         format!(
             "update live: step=07/20 candidate-staged arena=0x{:016X}+{} MiB APs={}",
@@ -878,7 +878,7 @@ pub(crate) async fn stage_and_swap(
     );
     drop(kernel);
 
-    print_matrix_target_line(
+    report_update(
         &target,
         "update live: step=08/20 checkpointing active VMX apps to TRUEOSFS",
     );
@@ -889,13 +889,13 @@ pub(crate) async fn stage_and_swap(
         .map(|word| word.count_ones())
         .sum();
     staged.set_vm_plan(checkpoint.restore_mask, checkpoint.resume_mask, checkpoint.vm_heap_ranges);
-    print_matrix_target_line(
+    report_update(
         &target,
         format!("update live: step=09/20 VM checkpoints committed count={}", checkpoint_count,)
             .as_str(),
     );
 
-    if matrix_target_interrupted(&target) {
+    if false {
         resume_checkpointed_vms(&spawner, &target, checkpoint.paused_by_update.as_slice()).await;
         return Err(LiveUpdateError::Interrupted);
     }
@@ -903,7 +903,7 @@ pub(crate) async fn stage_and_swap(
     // Snapshot BDFs before APs are parked. The irreversible path uses this
     // immutable list and never takes the ordinary PCI registry/config locks.
     let pci_snapshot = crate::pci::fullforget_snapshot();
-    print_matrix_target_line(
+    report_update(
         &target,
         format!(
             "update live: step=10/20 PCI snapshot captured functions={} containment=lock-free",
@@ -912,7 +912,7 @@ pub(crate) async fn stage_and_swap(
         .as_str(),
     );
 
-    print_matrix_target_line(
+    report_update(
         &target,
         "update live: step=11/20 irreversible rendezvous next; TCP must disconnect; COM1 continues with steps 12-17",
     );
@@ -930,7 +930,7 @@ pub(crate) async fn stage_and_swap(
         "update live: step=12/20 transition-map-installed verified=1 APs-signaled=0 runtime=BSP+network drain-window-ms={}",
         PRE_RENDEZVOUS_DRAIN_MS,
     );
-    print_matrix_target_line(&target, step12.as_str());
+    report_update(&target, step12.as_str());
     crate::log_info!(target: "global"; "{}\n", step12);
     transition_marker(
         b"live-update: step=12/20 transition-map-installed verified=1 APs-signaled=0\n",
@@ -954,7 +954,7 @@ pub(crate) async fn stage_and_swap(
         "update live: step=12r/20 AP-preflight-all-complete count={} final-rendezvous-next strategy=cooperative-safe-point+sequential-arrival",
         staged.expected_aps,
     );
-    print_matrix_target_line(&target, final_rendezvous.as_str());
+    report_update(&target, final_rendezvous.as_str());
     crate::log_info!(target: "global"; "{}\n", final_rendezvous);
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
@@ -987,7 +987,7 @@ async fn preflight_ap_transitions(
             "update live: step=12p/20 AP-preflight-next slot={} of={} operation=park+VMX-contract+abort-return",
             slot, staged.expected_aps,
         );
-        print_matrix_target_line(target, next.as_str());
+        report_update(target, next.as_str());
         crate::log_info!(target: "global"; "{}\n", next);
         Timer::after(EmbassyDuration::from_millis(AP_PREFLIGHT_LOG_DRAIN_MS)).await;
 
@@ -1004,7 +1004,7 @@ async fn preflight_ap_transitions(
             slot,
             u8::from(vmxoff_executed),
         );
-        print_matrix_target_line(target, complete.as_str());
+        report_update(target, complete.as_str());
         crate::log_info!(target: "global"; "{}\n", complete);
         Timer::after(EmbassyDuration::from_millis(AP_PREFLIGHT_LOG_DRAIN_MS)).await;
     }
@@ -1104,7 +1104,7 @@ async fn checkpoint_active_vms(
             && (state.running || state.starting || state.pause_latched)
     });
     if has_checkpoint_vm {
-        print_matrix_target_line(
+        report_update(
             target,
             "update live: replicatable VM state found; waiting for TRUEOSFS checkpoint storage",
         );
@@ -1136,7 +1136,7 @@ async fn checkpoint_active_vms(
                     // It remains alive while the update is reversible. The
                     // rendezvous parks its CPU and VMXOFF discards it with the
                     // old kernel; it never enters either handoff mask.
-                    print_matrix_target_line(
+                    report_update(
                         target,
                         format!(
                             "update live: vm{} non-replicatable action=discard-at-commit confirmed=1 restore=none",
@@ -1157,7 +1157,7 @@ async fn checkpoint_active_vms(
                         paused_by_update.push(vm_id);
                     }
                     mask_insert(&mut resume_mask, vm_index);
-                    print_matrix_target_line(
+                    report_update(
                         target,
                         format!("update live: vm{} PreparePause snapshot requested", vm_id)
                             .as_str(),
@@ -1188,7 +1188,7 @@ async fn checkpoint_active_vms(
             .as_millis()
             .saturating_add(VM_CHECKPOINT_TIMEOUT_MS);
         loop {
-            if matrix_target_interrupted(target) {
+            if false {
                 return checkpoint_abort(
                     spawner,
                     target,
@@ -1226,7 +1226,7 @@ async fn checkpoint_active_vms(
                 // pointer-bearing guest heap.
                 vm_heap_ranges[vm_index] = WarmReservedRange::EMPTY;
                 mask_insert(&mut restore_mask, vm_index);
-                print_matrix_target_line(
+                report_update(
                     target,
                     format!(
                         "update live: vm{} application checkpointed as {} ({} bytes; fresh-Hull relaunch)",
@@ -1236,7 +1236,7 @@ async fn checkpoint_active_vms(
                 );
             }
             Err(error) => {
-                print_matrix_target_line(
+                report_update(
                     target,
                     format!("update live: vm{} persistent checkpoint failed ({:?})", vm_id, error)
                         .as_str(),
@@ -1305,7 +1305,7 @@ async fn resume_checkpointed_vms(spawner: &Spawner, target: &MatrixTarget, vm_id
 
         let state = crate::hv::vm_state(vm_id);
         if state.running || state.starting {
-            print_matrix_target_line(
+            report_update(
                 target,
                 format!(
                     "update live: vm{} abort recovery timed out while VM remained active",
@@ -1316,7 +1316,7 @@ async fn resume_checkpointed_vms(spawner: &Spawner, target: &MatrixTarget, vm_id
             continue;
         }
         if !crate::hv::store::has_committed_vm(vm_id) {
-            print_matrix_target_line(
+            report_update(
                 target,
                 format!("update live: vm{} abort recovery has no committed warm checkpoint", vm_id)
                     .as_str(),
@@ -1329,7 +1329,7 @@ async fn resume_checkpointed_vms(spawner: &Spawner, target: &MatrixTarget, vm_id
         // rejects a retained pause without that metadata. Cold-start policy
         // never reaches this path and therefore cannot consume this image.
         if let Err(error) = crate::hv::restore_snapshot_async(vm_id).await {
-            print_matrix_target_line(
+            report_update(
                 target,
                 format!("update live: vm{} warm restore after abort failed ({:?})", vm_id, error)
                     .as_str(),
@@ -1338,12 +1338,12 @@ async fn resume_checkpointed_vms(spawner: &Spawner, target: &MatrixTarget, vm_id
         }
 
         match crate::hv::start(vm_id, spawner, None) {
-            Ok(()) => print_matrix_target_line(
+            Ok(()) => report_update(
                 target,
                 format!("update live: vm{} resumed after pre-commit abort", vm_id).as_str(),
             ),
             Err(crate::hv::StartError::AlreadyRunning) => {}
-            Err(error) => print_matrix_target_line(
+            Err(error) => report_update(
                 target,
                 format!("update live: vm{} resume after abort failed ({:?})", vm_id, error)
                     .as_str(),
@@ -1419,7 +1419,7 @@ async fn rendezvous_aps(
             "update live: step=12s/20 AP-final-parked slot={} arrived={}/{} safe-point=1 runtime=BSP+network",
             slot, expected_arrivals, staged.expected_aps,
         );
-        print_matrix_target_line(target, parked.as_str());
+        report_update(target, parked.as_str());
         crate::log_info!(target: "global"; "{}\n", parked);
         Timer::after(EmbassyDuration::from_millis(AP_PREFLIGHT_LOG_DRAIN_MS)).await;
     }
@@ -1437,7 +1437,7 @@ async fn rendezvous_aps(
         staged.expected_aps,
         PRE_RENDEZVOUS_DRAIN_MS,
     );
-    print_matrix_target_line(target, complete.as_str());
+    report_update(target, complete.as_str());
     crate::log_info!(target: "global"; "{}\n", complete);
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
@@ -1452,7 +1452,7 @@ async fn switch_ap_transition_stacks(target: &MatrixTarget, staged: &StagedCandi
         "update live: step=17a/20 AP-stack-switch-next expected={} runtime=BSP+network drain-window-ms={}",
         staged.expected_aps, PRE_RENDEZVOUS_DRAIN_MS,
     );
-    print_matrix_target_line(target, begin.as_str());
+    report_update(target, begin.as_str());
     crate::log_info!(target: "global"; "{}\n", begin);
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
@@ -1470,7 +1470,7 @@ async fn switch_ap_transition_stacks(target: &MatrixTarget, staged: &StagedCandi
                 "update live: step=17s/20 AP-transition-stack-progress stacked={}/{} runtime=BSP+network",
                 stacked, staged.expected_aps,
             );
-            print_matrix_target_line(target, progress.as_str());
+            report_update(target, progress.as_str());
             crate::log_info!(target: "global"; "{}\n", progress);
             reported = stacked;
         }
@@ -1482,7 +1482,7 @@ async fn switch_ap_transition_stacks(target: &MatrixTarget, staged: &StagedCandi
                 "update live: fail-stop=AP-transition-stack-timeout stacked={}/{} runtime=BSP+network",
                 stacked, staged.expected_aps,
             );
-            print_matrix_target_line(target, timeout.as_str());
+            report_update(target, timeout.as_str());
             crate::log_info!(target: "global"; "{}\n", timeout);
             Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
             loop {
@@ -1496,7 +1496,7 @@ async fn switch_ap_transition_stacks(target: &MatrixTarget, staged: &StagedCandi
         "update live: step=17b/20 AP-transition-stacks-ready stacked={}/{} runtime=BSP+network drain-window-ms={}",
         reported, staged.expected_aps, PRE_RENDEZVOUS_DRAIN_MS,
     );
-    print_matrix_target_line(target, complete.as_str());
+    report_update(target, complete.as_str());
     crate::log_info!(target: "global"; "{}\n", complete);
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 }
@@ -1531,7 +1531,7 @@ async fn quiesce_pci_for_commit(
         "update live: step=15a/20 PCI-early-quiesce-next functions={} display-deferred={} network-deferred={} bridges-preserved={} runtime=BSP+display+network drain-window-ms={}",
         early_count, display_count, network_count, bridge_count, PRE_RENDEZVOUS_DRAIN_MS,
     );
-    print_matrix_target_line(target, begin.as_str());
+    report_update(target, begin.as_str());
     crate::log_info!(target: "global"; "{}\n", begin);
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
@@ -1545,7 +1545,7 @@ async fn quiesce_pci_for_commit(
             "update live: step=15p/20 PCI-function-quiesce-next bdf={:02x}:{:02x}.{} id={:04x}:{:04x} class={:02x}:{:02x} runtime=BSP+display+network",
             bus, slot, function_number, vendor, device, class, subclass,
         );
-        print_matrix_target_line(target, next.as_str());
+        report_update(target, next.as_str());
         crate::log_info!(target: "global"; "{}\n", next);
         Timer::after(EmbassyDuration::from_millis(10)).await;
 
@@ -1557,7 +1557,7 @@ async fn quiesce_pci_for_commit(
             "update live: step=15q/20 PCI-function-quiesce-complete bdf={:02x}:{:02x}.{} bus-master-still-enabled={} runtime=BSP+display+network",
             bus, slot, function_number, bus_master_still_enabled as u8,
         );
-        print_matrix_target_line(target, complete.as_str());
+        report_update(target, complete.as_str());
         crate::log_info!(target: "global"; "{}\n", complete);
         Timer::after(EmbassyDuration::from_millis(10)).await;
     }
@@ -1566,7 +1566,7 @@ async fn quiesce_pci_for_commit(
             "update live: fail-stop=PCI-early-bus-master-still-enabled failures={} functions={} runtime=BSP+display+network",
             failures, early_count,
         );
-        print_matrix_target_line(target, failure.as_str());
+        report_update(target, failure.as_str());
         crate::log_info!(target: "global"; "{}\n", failure);
         Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
         loop {
@@ -1578,7 +1578,7 @@ async fn quiesce_pci_for_commit(
         "update live: step=15b/20 PCI-early-quiesce-ok functions={} display-deferred={} network-deferred={} bridges-preserved={} runtime=BSP+display+network drain-window-ms={}",
         early_count, display_count, network_count, bridge_count, PRE_RENDEZVOUS_DRAIN_MS,
     );
-    print_matrix_target_line(target, non_network_complete.as_str());
+    report_update(target, non_network_complete.as_str());
     crate::log_info!(target: "global"; "{}\n", non_network_complete);
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
@@ -1597,7 +1597,7 @@ async fn quiesce_pci_for_commit(
             "update live: step=15c/20 PCI-observable-quiesce-next role={} bdf={:02x}:{:02x}.{} id={:04x}:{:04x} class={:02x}:{:02x} display-or-TCP-cutoff-after-drain=1",
             role, bus, slot, function_number, vendor, device, class, subclass,
         );
-        print_matrix_target_line(target, cutoff.as_str());
+        report_update(target, cutoff.as_str());
         crate::log_info!(target: "global"; "{}\n", cutoff);
     }
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
@@ -2586,3 +2586,5 @@ fn elf_string(table: &[u8], offset: usize) -> Result<&str, LiveUpdateError> {
     core::str::from_utf8(&tail[..end])
         .map_err(|_| LiveUpdateError::BadElf("section-name table is not UTF-8"))
 }
+
+fn report_update(_target: &MatrixTarget, line: &str) { crate::log!("{}\n", line); }

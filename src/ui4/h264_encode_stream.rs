@@ -7,8 +7,6 @@
 //! The same serialized capture/encoder also serves Shell2 `film` while no RDP
 //! viewer owns it. No CPU frame copy, RCS conversion, or software codec participates.
 
-#[path = "screenfilm.rs"]
-pub(super) mod film;
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -842,7 +840,6 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
     SOURCE_BYTES.store(avc_probe.source_dma_bytes, Ordering::Release);
     ENCODED_BYTES.store(probe_annex_b.len(), Ordering::Release);
     drop(probe_annex_b);
-    film::set_encoder_ready();
 
     let timestamp = crate::chronos::best_effort_unix_time_seconds();
     let mut stream_session_id = timestamp

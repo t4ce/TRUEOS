@@ -8,18 +8,9 @@ pub(crate) struct Startup {
 
 impl Startup {
     pub(super) fn launch(self, shell: &mut super::Shell3) {
-        match crate::shell2::cmds::os::enqueue_to_shell3(
-            shell.tui_frontend(),
-            Some(self.launch_script),
-        ) {
-            Ok(app) => shell.select_queued_app(app),
-            Err(error) => super::MatrixSlots::echo(
-                shell.active_matrix_slot.as_deref(),
-                shell.active_matrix_lifetime,
-                error,
-            ),
-        }
-    }
+    let _ = self;
+    super::MatrixSlots::echo(shell.active_matrix_slot.as_deref(), shell.active_matrix_lifetime, "Blueprint startup is disabled in the kernel baseline".into());
+}
 }
 
 /// Preserve ordinary kernel progress after the Blueprint releases its terminal lease.

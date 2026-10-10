@@ -430,20 +430,8 @@ pub mod env {
     }
 
     pub(crate) fn retarget_console_slot(requested: &str) -> bool {
-        let mut stack = context_stack().lock();
-        let Some(ctx) = stack.last_mut() else {
-            return false;
-        };
-        let next_target = match ctx.console_target.as_ref() {
-            Some(target) => crate::shell2::switch_matrix_target_slot(target, requested),
-            None => crate::shell2::matrix_target_for_slot_name(
-                crate::shell2::OUTPUT_NET_TCP_MASK,
-                requested,
-            ),
-        };
-        ctx.console_target = Some(next_target);
-        true
-    }
+        false
+}
 
     fn normalize_app_path(path: &str, allow_empty: bool) -> Option<String> {
         crate::r::path::FsPath::parse(path, allow_empty)

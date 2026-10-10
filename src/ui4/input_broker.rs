@@ -1824,65 +1824,10 @@ pub(super) fn request_desktop_shell_launch(source: Ui4CursorSource, x: u32, y: u
 #[trueos_executor::task(pool_size = 1)]
 async fn ui4_desktop_shell_launcher_task() {
     loop {
-        let request = loop {
-            let request = {
-                let mut requests = DESKTOP_SHELL_LAUNCH_REQUESTS.lock();
-                (!requests.is_empty()).then(|| requests.remove(0))
-            };
-            if let Some(request) = request {
-                break request;
-            }
-            DESKTOP_SHELL_LAUNCH_SIGNAL.wait().await;
-        };
-
-        let target =
-            crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "");
-        let token = DESKTOP_SHELL_LAUNCH_SEQUENCE
-            .fetch_add(1, Ordering::Relaxed)
-            .wrapping_add(1)
-            .max(1);
-        let instance_name = alloc::format!("ui4_shell_{token}");
-        {
-            let mut intents = DESKTOP_SHELL_LAUNCH_INTENTS.lock();
-            if intents.is_full() {
-                intents.remove(0);
-            }
-            let _ = intents.push(DesktopShellLaunchIntent {
-                token,
-                launch: DesktopShellLaunch {
-                    source: request.source,
-                    x: request.x,
-                    y: request.y,
-                },
-            });
-        }
-        match crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_instance_detached_ui_async(
-            target,
-            "shell.bp",
-            alloc::vec::Vec::new(),
-            crate::hv::BlueprintInstanceRequest::named(instance_name),
-        )
-        .await
-        {
-            Ok(_) => crate::log_info!(target: "ui4";
-                "ui4/input: desktop shell launched cursor={}:{}:{} source=app.db archive=shell.bp policy=local-builtin-best-effort\n",
-                request.source.controller_id,
-                request.source.slot_id,
-                request.source.ep_target,
-            ),
-            Err(error) => {
-                DESKTOP_SHELL_LAUNCH_INTENTS
-                    .lock()
-                    .retain(|intent| intent.token != token);
-                crate::log_warn!(target: "ui4";
-                    "ui4/input: desktop shell launch failed cursor={}:{}:{} source=app.db archive=shell.bp policy=local-builtin-best-effort error={}\n",
-                    request.source.controller_id,
-                    request.source.slot_id,
-                    request.source.ep_target,
-                    error,
-                );
-            }
-        }
+        let request = { let mut requests = DESKTOP_SHELL_LAUNCH_REQUESTS.lock();
+            (!requests.is_empty()).then(|| requests.remove(0)) };
+        if request.is_some() { let _ = crate::shell3::service::request_shell3(); }
+        else { DESKTOP_SHELL_LAUNCH_SIGNAL.wait().await; }
     }
 }
 

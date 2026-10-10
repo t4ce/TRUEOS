@@ -166,36 +166,5 @@ pub fn tcp_write(vm_id: u8, bytes: &[u8]) -> Result<usize, VmNetStatus> {
 }
 
 pub fn tcp_read(vm_id: u8, out: &mut [u8]) -> Result<usize, VmNetStatus> {
-    if out.is_empty() {
-        return Err(VmNetStatus::BadArg);
-    }
-    let Some(ctx_lock) = context(vm_id) else {
-        return Err(VmNetStatus::BadArg);
-    };
-
-    let mut got = 0usize;
-    while got < out.len() {
-        match crate::shell2::backends::net_tcp::net_shell_read_byte() {
-            Some(b) => {
-                out[got] = b;
-                got += 1;
-            }
-            None => break,
-        }
-    }
-
-    let mut ctx = crate::hv::sync::lock(vm_id, ctx_lock).map_err(|_| VmNetStatus::Interrupted)?;
-    ctx.vm_id = vm_id;
-    let seq =
-        record_request(&mut ctx, VM_NET_OP_TCP_READ, out.len().min(u32::MAX as usize) as u64, 0, 0);
-    for &b in &out[..got.min(VM_NET_INLINE_CAP)] {
-        if ctx.recent_rx.len() >= VM_NET_INLINE_CAP {
-            let _ = ctx.recent_rx.pop_front();
-        }
-        ctx.recent_rx.push_back(b);
-    }
-    ctx.rx_bytes = ctx.rx_bytes.saturating_add(got as u64);
-    let cpl = record_completion(&mut ctx, seq, VmNetStatus::Ok, got as u64, got as u32);
-    maybe_log(&ctx, &cpl);
-    Ok(got)
+    Err(VmNetStatus::Unsupported)
 }

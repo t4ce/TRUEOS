@@ -12,7 +12,7 @@ pub(crate) fn startup_text(ip: Option<[u8; 4]>) -> String {
     );
     alloc::format!(
         "Live Update - Continue to TrueOS\nIP: {ip}\nNetboot: {}",
-        crate::shell2::cmds::update::LAN_ISO_URL,
+        "unavailable in kernel baseline",
     )
 }
 

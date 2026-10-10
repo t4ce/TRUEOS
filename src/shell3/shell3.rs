@@ -1,10 +1,5 @@
 mod matrix_target;
 pub(crate) use matrix_target::{MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
-pub(crate) mod capture;
-mod helper;
-mod admin;
-mod monitor;
-mod apps;
 mod metafmtstr;
 mod names;
 pub mod net;
@@ -1087,22 +1082,7 @@ impl Shell3 {
         let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
         let is_app = can_launch && self.appdb_names.iter().any(|name| name == &text);
         let is_alias = self.aka_names.iter().any(|name| name == &text);
-        if self.mode == Mode::CMD && capture::recognizes(&text) {
-            match capture::start(&text, self.tui_frontend()) {
-                Ok(()) => {MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text);},
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
-            }
-        } else if self.mode == Mode::ADM && admin::recognizes(&text) {
-            match admin::start(&text, self.tui_frontend()) {
-                Ok(()) => {MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text);},
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
-            }
-        } else if self.mode == Mode::ADM && monitor::recognizes(&text) {
-            match monitor::start(&text, self.tui_frontend()) {
-                Ok(()) => {MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text);},
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
-            }
-        } else if self.mode == Mode::ADM && text == "sh3" {
+        if self.mode == Mode::ADM && text == "sh3" {
             if let Err(error) = service::request_shell3() {
                 let message = match error {
                     Shell3Error::NoExecutor => "sh3: no Shell3 AP executor is available".into(),
@@ -1113,11 +1093,6 @@ impl Shell3 {
             }
         } else if is_alias {
             self.launch_named_app(&text, true);
-        } else if self.mode == Mode::HV && apps::recognizes(&text) {
-            match apps::start(&text, self.tui_frontend()) {
-                Ok(()) => { MatrixSlots::ensure_named(&text); self.select_matrix_slot_name(&text); },
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
-            }
         } else if text == "stop" && self.active_vmx_app().is_some() {
             self.stop_active_vmx();
         } else if text == "tui" && self.active_vmx_app().is_some() {

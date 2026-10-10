@@ -1,6 +1,5 @@
 //! Long-lived kernel service authorities and worker control planes.
 
-pub mod clipboard_service;
 pub mod font_kernel_service;
 pub mod font_plan_service;
 pub mod font_producer_service;
