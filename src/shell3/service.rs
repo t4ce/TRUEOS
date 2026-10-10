@@ -20,15 +20,10 @@ static SHELL3_POINTER_EVENTS: spin::Mutex<VecDeque<crate::ui4::Ui4PointerEvent>>
 static SHELL3_RESIZE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4ResizeEvent, 256>> =
     spin::Mutex::new(heapless::Deque::new());
 
-static MICROFONT_SCALE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(1);
-
-pub(crate) fn set_global_microfont_size(large: bool) {
-    MICROFONT_SCALE.store(if large { 2 } else { 1 }, core::sync::atomic::Ordering::Release);
-    SHELL_WORK_AVAILABLE.notify_all();
-}
+pub(super) const DEFAULT_MICROFONT_SCALE: u32 = 2;
 
 pub(super) fn microfont_scale() -> u32 {
-    MICROFONT_SCALE.load(core::sync::atomic::Ordering::Acquire) as u32
+    DEFAULT_MICROFONT_SCALE
 }
 
 pub(crate) fn ui4_cell_extent() -> (i32, i32) {

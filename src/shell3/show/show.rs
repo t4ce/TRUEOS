@@ -79,7 +79,7 @@ impl Show {
             backend,
             surface: None,
             poisoned: false,
-            font_scale: 1,
+            font_scale: super::service::DEFAULT_MICROFONT_SCALE,
             pan: None,
             strips: [None, None],
             pan_budget: None,

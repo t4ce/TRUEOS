@@ -1713,10 +1713,9 @@ fn capture_software_cursor_size_hotkey(
 
     if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
         let fat = !FAT_SOFTWARE_CURSORS.fetch_xor(true, Ordering::AcqRel);
-        crate::shell3::service::set_global_microfont_size(fat);
         SLOT4_VISUAL_CHANGE.signal(());
         crate::log_info!(target: "ui4";
-            "ui4/input: F11 global software cursor size toggled mode={} scale={}x shell3=1x/2x key_delivery=consumed\n",
+            "ui4/input: F11 global software cursor size toggled mode={} scale={}x key_delivery=consumed\n",
             if fat { "fat" } else { "small" },
             if fat { 3 } else { 1 },
         );

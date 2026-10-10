@@ -19,6 +19,7 @@ extern crate alloc;
     source += f'''\n#[path = "{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;
 use metafmtstr::MetaFmtStr;
 #[path = "{ROOT}/src/shell3/update.rs"] mod update;
+#[path = "{ROOT}/src/shell3/transition.rs"] mod transition;
 use update::SegmentUpdate;
 const SpecialSeperator: char = '│';
 const OPERATOR: char = '§';
@@ -95,7 +96,7 @@ mod show {
                         offset: 1, remove: 8, text: text.into(), colors };
                     super::cpu::paint_segment(view, &update, scale).unwrap();
                     let mut glyphs = Vec::new();
-                    glyphs_for_update(view, &update, scale, &mut glyphs);
+                    glyphs_for_update(view, &update, scale, &mut glyphs, &[], &[false; 2]);
                     let expected_y = match row {crate::SpecialRows::MatrixRow(index)=>(index as u32 + 3)*11*scale,_=>22*scale};
                     assert_eq!(glyphs.is_empty(),expected_y>=height);
                     for glyph in &glyphs {
@@ -120,7 +121,7 @@ mod show {
             let update = crate::SegmentUpdate { row: crate::SpecialRows::TitleRow,
                 side: crate::StripSide::Left, offset: 0, remove: 1, text: "§".into(), colors: vec![] };
             let mut glyphs = Vec::new();
-            glyphs_for_update(view, &update, 2, &mut glyphs);
+            glyphs_for_update(view, &update, 2, &mut glyphs, &[], &[false; 2]);
             let glyph = &glyphs[0];
             assert_eq!((glyph.width, glyph.height), (12,22));
             let bits = microfont::font_pixels(microfont::glyph_byte('§'));
