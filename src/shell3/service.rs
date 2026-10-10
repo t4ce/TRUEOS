@@ -753,6 +753,15 @@ pub fn start_pool() -> Result<usize, SpawnError> {
 // UI ownership only; HV serializes admission and monitors each VM run.
 static APP_LAUNCHES: spin::Mutex<Vec<(super::MatrixSlotLease, u8)>> = spin::Mutex::new(Vec::new());
 
+// Snapshot before taking the Matrix lock: launch observers take these locks
+// in the opposite order while validating their slot lease.
+pub(super) fn working_vmx_slots() -> Vec<alloc::string::String> {
+    APP_LAUNCHES.lock().iter().filter_map(|(lease, vm)| {
+        let state = crate::hv::vm_state(*vm);
+        (state.running && !state.pause_latched).then(|| lease.name().into())
+    }).collect()
+}
+
 struct ShellLaunch { target: super::MatrixTarget }
 
 impl crate::hv::launcher::LaunchObserver for ShellLaunch {

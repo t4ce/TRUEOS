@@ -1151,10 +1151,10 @@ impl Shell3 {
             || tui::revision(self.tui_frontend) != self.update_baseline.tui_revision()
             || (!self.update_baseline.terminal_active()
                 && matrix_slots().lock().generation != self.update_baseline.matrix_generation())
-            || (!self.update_baseline.terminal_active() && {
+            || {
                 let status = self.row_for_render(SpecialRows::StatusRow);
                 !self.update_baseline.status_matches(&status.left, &status.right)
-            })
+            }
     }
 
     pub fn set_prompt(&mut self, text: &str) {
@@ -1295,8 +1295,9 @@ impl Shell3 {
         }
         if row == SpecialRows::StatusRow {
             let active = self.active_matrix_slot_name();
+            let working = service::working_vmx_slots();
             let slots = matrix_slots().lock();
-            strips = status::runs(&slots.ids, active.as_deref(), &self.aka_names, self.status_hover.as_ref());
+            strips = status::runs(&slots.ids, active.as_deref(), &self.aka_names, self.status_hover.as_ref(), &working);
         }
         strips
     }

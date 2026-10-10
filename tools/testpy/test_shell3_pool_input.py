@@ -109,6 +109,7 @@ use crate::shell2::cmds::run::QueuedBlueprint;
 pub static LAUNCHES:std::sync::Mutex<Vec<(String,String)>>=std::sync::Mutex::new(Vec::new());
 use alloc::{vec::Vec,string::String};
 pub fn notify_work(){}
+pub fn working_vmx_slots()->Vec<String>{Vec::new()}
 pub static SPAWNS:std::sync::Mutex<usize>=std::sync::Mutex::new(0);
 pub static SPAWN_ERROR:std::sync::Mutex<Option<crate::Shell3Error>>=std::sync::Mutex::new(None);
 pub fn request_shell3()->Result<u32,crate::Shell3Error> {if let Some(error)=SPAWN_ERROR.lock().unwrap().take(){return Err(error);}*SPAWNS.lock().unwrap()+=1;Ok(2)}
@@ -377,7 +378,7 @@ fn new(columns:usize)->Self {Self {update_baseline:update::Snapshot::new((column
     let mut shell=Shell3::new(80);shell.select_matrix_slot_name("ram");shell.update_baseline=shell.capture_matrix_snapshot();shell.matrix_selection_dirty=false;assert!(!shell.matrix_output_needed());
     *shell2::WORKING.lock().unwrap()=vec!["pic".into(),"vid".into()];assert!(shell.matrix_output_needed());
     let row=shell.row_for_render(SpecialRows::StatusRow);assert_eq!(row.left[2].text,"⢈");assert_eq!(row.left[5].text,"⢈");assert_eq!(row.left[8].text,"§");assert_eq!(row.left[9].color,Some(RgbaColor::Pink));assert_eq!(shell.active_matrix_slot_name().as_deref(),Some("ram"));
-    assert_eq!(status::hit(&MatrixSlots::slot_ids(),&[],80,2),Some(status::Target::Slot("pic".into())));
+    assert_eq!(status::hit(&MatrixSlots::slot_ids(),&[],80,2,&[]),Some(status::Target::Slot("pic".into())));
     shell.update_baseline=shell.capture_matrix_snapshot();assert!(!shell.matrix_output_needed());
     chronos::NOW.store(99_999_999,std::sync::atomic::Ordering::SeqCst);assert!(!shell.matrix_output_needed());
     chronos::NOW.store(100_000_000,std::sync::atomic::Ordering::SeqCst);assert!(shell.matrix_output_needed());
@@ -595,13 +596,23 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
 }
 #[test] fn status_targets_follow_right_alignment_and_clipping() {
     let ids=vec!["abcdef".into()];let aliases=vec!["héllo".into(),"other".into()];
-    assert_eq!(status::hit(&ids,&aliases,40,29),Some(status::Target::Alias("héllo".into())));
-    assert_eq!(status::hit(&ids,&aliases,40,33),None); // space between aliases
-    assert_eq!(status::hit(&ids,&aliases,10,4),None); // clipped-strip separator
-    assert_eq!(status::hit(&ids,&aliases,10,9),Some(status::Target::Alias("héllo".into()))); // first alias cell fits
-    assert_eq!(status::hit(&ids,&aliases,12,11),Some(status::Target::Alias("héllo".into())));
-    assert_eq!(status::hit(&ids,&aliases,10,10),None);
-    assert_eq!(status::hit(&ids,&aliases,0,0),None);
+    let working = vec![ids[0].clone()];
+    let strips = status::runs(&ids, None, &[], Some(&status::Target::Slot(ids[0].clone())), &working);
+    let suffix = strips.left.iter().find(|run| run.text == "⢈").unwrap();
+    assert!(!suffix.underline);
+    assert!(strips.left.iter().any(|run| run.text == ids[0] && run.underline));
+    let suffix_column = 2 + 1 + ids[0].chars().count();
+    assert_eq!(status::hit(&ids,&[],80,suffix_column,&working),None);
+    crate::chronos::NOW.store(100_000_000,std::sync::atomic::Ordering::SeqCst);
+    assert!(status::runs(&ids,None,&[],None,&working).left.iter().any(|run| run.text == "⡈"));
+    crate::chronos::NOW.store(0,std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(status::hit(&ids,&aliases,40,29,&[]),Some(status::Target::Alias("héllo".into())));
+    assert_eq!(status::hit(&ids,&aliases,40,33,&[]),None); // space between aliases
+    assert_eq!(status::hit(&ids,&aliases,10,4,&[]),None); // clipped-strip separator
+    assert_eq!(status::hit(&ids,&aliases,10,9,&[]),Some(status::Target::Alias("héllo".into()))); // first alias cell fits
+    assert_eq!(status::hit(&ids,&aliases,12,11,&[]),Some(status::Target::Alias("héllo".into())));
+    assert_eq!(status::hit(&ids,&aliases,10,10,&[]),None);
+    assert_eq!(status::hit(&ids,&aliases,0,0,&[]),None);
 }
 '''
     source += '''

@@ -17,11 +17,12 @@ fn working_marker() -> char {
     GO2[(crate::chronos::monotonic_nanos() / 100_000_000 % GO2.len() as u64) as usize]
 }
 
-fn entries(ids: &[String], active: Option<&str>, aliases: &[String]) -> (Vec<Entry>, Vec<Entry>) {
+fn entries(ids: &[String], active: Option<&str>, aliases: &[String], working: &[String]) -> (Vec<Entry>, Vec<Entry>) {
+    let marker = working_marker();
     let left = matrix_slots_meta(ids, active)
         .into_iter()
         .enumerate()
-        .map(|(index, run)| {
+        .flat_map(|(index, run)| {
             let target = if index == 0 {
                 Some(Target::Default)
             } else if (index - 1) % 3 == 0 {
@@ -29,7 +30,11 @@ fn entries(ids: &[String], active: Option<&str>, aliases: &[String]) -> (Vec<Ent
             } else {
                 Some(Target::Slot(ids[(index - 1) / 3].clone()))
             };
-            (run, target)
+            let suffix = if index > 0 && (index - 1) % 3 == 2
+                && working.contains(&ids[(index - 1) / 3]) {
+                Some((MetaFmtStr { color: run.color, ..MetaFmtStr::new(alloc::format!("{marker}")) }, None))
+            } else { None };
+            core::iter::once((run, target)).chain(suffix)
         })
         .collect();
     let mut right = Vec::new();
@@ -45,7 +50,7 @@ fn entries(ids: &[String], active: Option<&str>, aliases: &[String]) -> (Vec<Ent
 }
 
 pub(super) fn alias_runs(aliases: &[String]) -> Vec<MetaFmtStr> {
-    entries(&[], None, aliases)
+    entries(&[], None, aliases, &[])
         .1
         .into_iter()
         .map(|entry| entry.0)
@@ -57,8 +62,9 @@ pub(super) fn runs(
     active: Option<&str>,
     aliases: &[String],
     hover: Option<&Target>,
+    working: &[String],
 ) -> RowStrips {
-    let (mut left, right) = entries(ids, active, aliases);
+    let (left, right) = entries(ids, active, aliases, working);
     let style = |entries: Vec<Entry>| {
         entries
             .into_iter()
@@ -82,8 +88,9 @@ pub(super) fn hit(
     aliases: &[String],
     columns: usize,
     column: usize,
+    working: &[String],
 ) -> Option<Target> {
-    let (left, right) = entries(ids, None, aliases);
+    let (left, right) = entries(ids, None, aliases, working);
     let cells = |entries: Vec<Entry>| {
         entries
             .into_iter()
@@ -99,8 +106,9 @@ pub(super) fn hit(
 impl Shell3 {
     pub(super) fn handle_status_pointer(&mut self, column: Option<usize>, pressed: bool) -> bool {
         let target = column.and_then(|column| {
+            let working = super::service::working_vmx_slots();
             let slots = matrix_slots().lock();
-            hit(&slots.ids, &self.aka_names, self.columns, column)
+            hit(&slots.ids, &self.aka_names, self.columns, column, &working)
         });
         let changed = target != self.status_hover;
         self.status_hover = target.clone();
