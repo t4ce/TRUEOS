@@ -4101,7 +4101,8 @@ fn blueprint_console_hunt_log(vm_id: u8, data: &[u8]) -> bool {
 
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     blueprint_console_text_lines(vm_id, None, data);
-    blueprint_console_raw_write(vm_id, data)
+    let Some(target) = blueprint_console_target(vm_id) else { return data.len(); };
+    crate::shell3::tui::write_stdout(&target, vm_id, data)
 }
 
 pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {

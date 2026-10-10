@@ -39,6 +39,7 @@ struct Route {
     screen: Terminal,
     surface_generation: u64,
     suppressed_text: Option<(u32, u32, u32)>,
+    stdout_pending: Vec<u8>,
 }
 impl Route {
     fn active(&self) -> bool { self.owner.is_some() || self.native.as_ref().is_some_and(|n| n.active) }
@@ -172,6 +173,7 @@ pub(crate) fn attach(
             screen: Terminal::new(frontend.cols, frontend.rows),
             surface_generation: 1,
             suppressed_text: None,
+            stdout_pending: Vec::new(),
         });
         routes.changed(frontend.id);
     }
@@ -281,6 +283,39 @@ pub(crate) fn surface(
         rows: rows as u32,
     })
 }
+/// Ordinary stdout uses the slot transcript until an explicit terminal claim.
+/// Terminal owners retain byte-exact ANSI output through the existing path.
+pub(crate) fn write_stdout(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> usize {
+    crate::allocators::with_host_alloc_domain(|| {
+        let lease = crate::shell3::matrix_target_slot_lease(target);
+        let run = crate::hv::vm_run_generation(vm);
+        let mut routes = ROUTES.lock();
+        let Some(route) = routes.routes.iter_mut().find(|route| route.lease == lease && route.vm == Some(vm)) else { return 0; };
+        if route.owner.is_some_and(|owner| Some(owner.run) == run && owner.vm == vm) {
+            drop(routes);
+            return write_inner(target, vm, bytes).unwrap_or(0);
+        }
+        // Preserve split UTF-8 writes and cap unterminated lines at 16 KiB.
+        let mut lines = Vec::new();
+        for &byte in bytes {
+            if byte == b'\n' {
+                if route.stdout_pending.last() == Some(&b'\r') { route.stdout_pending.pop(); }
+                lines.push(String::from_utf8_lossy(&route.stdout_pending).into_owned());
+                route.stdout_pending.clear();
+            } else {
+                route.stdout_pending.push(byte);
+                if route.stdout_pending.len() >= 16 * 1024 {
+                    lines.push(String::from_utf8_lossy(&route.stdout_pending).into_owned());
+                    route.stdout_pending.clear();
+                }
+            }
+        }
+        drop(routes);
+        for line in lines { super::MatrixSlots::echo_output(&lease, line); }
+        bytes.len()
+    })
+}
+
 pub(crate) fn write(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
     crate::allocators::with_host_alloc_domain(|| write_inner(target, vm, bytes))
 }

@@ -355,6 +355,22 @@ impl MatrixSlots {
         service::notify_work();
     }
 
+    /// Append guest output only to the exact live slot, never the bare slot.
+    pub(crate) fn echo_output(lease: &MatrixSlotLease, text: String) {
+        let mut slots = matrix_slots().lock();
+        if !slots.lifetimes.iter().any(|(name, generation)|
+            name == lease.name() && *generation == lease.lifetime_generation()) { return; }
+        let id = Some(lease.name().to_string());
+        let index = slots.echoes.iter().position(|(name, _)| *name == id)
+            .unwrap_or_else(|| { slots.echoes.push((id, VecDeque::new())); slots.echoes.len() - 1 });
+        let lines = &mut slots.echoes[index].1;
+        if lines.len() == 256 { lines.pop_back(); }
+        lines.push_front(text);
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
+    }
+
     /// Transcript of one Matrix slot, independent of any shell's selection.
     pub fn echo_lines(active: Option<&str>) -> Vec<String> {
         Self::echo_snapshot(active).1

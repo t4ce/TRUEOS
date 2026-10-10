@@ -21,7 +21,10 @@ const SpecialSeperator:char='│';
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
 mod service {pub use crate::shell2::cmds::run::QueuedBlueprint;pub fn notify_work(){}}
 struct MatrixSlots;
-impl MatrixSlots {fn drop_slot(name:Option<&str>)->bool {if let Some(name)=name {shell2::free_name(name);}true}}
+static TRANSCRIPTS:std::sync::Mutex<Vec<(shell2::MatrixSlotLease,String)>>=std::sync::Mutex::new(Vec::new());
+impl MatrixSlots {
+fn echo_output(lease:&shell2::MatrixSlotLease,line:String) {if shell2::matrix_slot_is_live(lease) {TRANSCRIPTS.lock().unwrap().push((lease.clone(),line));}}
+fn drop_slot(name:Option<&str>)->bool {if let Some(name)=name {shell2::free_name(name);}true}}
 mod r {pub mod keyboard {
 '''
     keyboard = (ROOT/'src/r/keyboard.rs').read_text()
@@ -83,6 +86,21 @@ fn frontend(cols:usize,rows:usize)->tui::Frontend {tui::Frontend {id:tui::new_fr
 fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::MatrixTarget) {
     hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
     let f=frontend(cols,rows);let t=shell2::target(name,1);tui::attach(f,&t).unwrap();hv::bind(vm,&t);(f,t)
+}
+#[test] fn stdout_transcript_keeps_prompt_until_terminal_claim() {
+    let (f,t)=session("stdout-transcript",23,20,5);
+    assert_eq!(tui::write_stdout(&t,23,b"map: caf\\xc3"),9);
+    assert_eq!(tui::write_stdout(&t,23,b"\\xa9\\r\\nnext\\n"),8);
+    let lines=TRANSCRIPTS.lock().unwrap().iter().filter(|(lease,_)|lease==&t.lease).map(|(_,text)|text.clone()).collect::<Vec<_>>();
+    assert_eq!(lines,vec!["map: café","next"]);
+    assert!(tui::snapshot(f.id,Some("stdout-transcript")).is_none());
+    assert!(!tui::remote_active(f.id));
+    assert_eq!(tui::claim(&t,23),Some(true));
+    assert_eq!(tui::write_stdout(&t,23,b"terminal"),8);
+    assert!(tui::snapshot(f.id,Some("stdout-transcript")).is_some());
+    assert_eq!(TRANSCRIPTS.lock().unwrap().iter().filter(|(lease,_)|lease==&t.lease).count(),2);
+    shell2::free_name("stdout-transcript");
+    assert_eq!(tui::write_stdout(&t,23,b"stale\\n"),0);
 }
 #[test] fn startup_claim_raw_frame_park_and_reentry_use_one_live_vm() {
     let (f,t)=session("cycle",1,12,5);assert!(tui::supports(&t));assert!(tui::snapshot(f.id,Some("cycle")).is_none());

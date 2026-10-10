@@ -3331,13 +3331,8 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
         return -1;
     }
     if fd == 1 || fd == 2 {
-        if count != 0 {
-            // A terminal-surface Blueprint that only prints (rather than
-            // entering raw mode or reading stdin) still behaves like a normal
-            // foreground Unix process: its first user-visible output claims
-            // the reserved Shell2 terminal.
-            crate::r::io::fs_cabi::claim_attached_console_for_terminal_io();
-        }
+        // Printing is transcript output, not a request to own terminal input.
+        // Raw mode, stdin reads and explicit lease calls remain handoff points.
         unsafe { sys_write(fd as u32, buf.cast::<u8>(), count) };
         TRUEOS_ERRNO.store(0, Ordering::Relaxed);
         return count as isize;
