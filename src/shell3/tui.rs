@@ -115,6 +115,10 @@ pub(super) fn bind_remote_frontend(frontend: u64) {
     }
 }
 
+pub(super) fn has_ui4_window(frontend: u64) -> bool {
+    ROUTES.lock().ui4_windows.iter().any(|entry| entry.0 == frontend)
+}
+
 pub(super) fn remote_active(frontend: u64) -> bool {
     let routes = ROUTES.lock();
     routes.remote_frontends.iter().any(|entry| entry.0 == frontend)

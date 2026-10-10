@@ -104,13 +104,17 @@ fn launch_archive(archive: alloc::string::String, slot: &str, frontend: super::t
         .ok_or_else(|| alloc::string::String::from("apps: archive not found"))?;
     let target =
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, slot);
+    let launch_script = if archive == "termdir.bp" {
+        let backend = if super::tui::has_ui4_window(frontend.id) { "ui4" } else { "terminal" };
+        Some(alloc::format!("backend {backend}\n"))
+    } else { None };
     crate::shell2::cmds::run::enqueue_blueprint_bytes_with_receipt(
         target,
         archive,
         bytes,
         Vec::new(),
         crate::hv::BlueprintInstanceRequest::default(),
-        None,
+        launch_script,
         &super::MatrixSlots::slot_ids(),
         Some(frontend),
     )

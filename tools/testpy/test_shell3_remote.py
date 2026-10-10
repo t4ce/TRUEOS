@@ -75,6 +75,15 @@ mod tui {
         assert_eq!(claim(&target,7),Some(true));
         target
     }
+    #[test] fn launch_backend_uses_the_frontends_own_ui4_window() {
+        reset();
+        bind_remote_frontend(1);
+        assert!(!has_ui4_window(1));
+        assert!(!has_ui4_window(2));
+        bind_ui4_window(2,42);
+        assert!(has_ui4_window(2));
+        assert!(!has_ui4_window(1));
+    }
     #[test] fn remote_bytes_bypass_cell_parser_and_host_query_responses() {
         reset();let target=setup(1,"ssh",true);
         let bytes="\x1b[38;5;8m🗺 §\x1b[6n\x1b[?1006h".as_bytes();
