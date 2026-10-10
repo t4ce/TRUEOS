@@ -1356,6 +1356,13 @@ impl Shell3 {
 
     fn capture_update_snapshot(&self) -> update::Snapshot {
         let revision = tui::revision(self.tui_frontend);
+        // Admission owns input immediately; pixels change only once the helper
+        // has a complete first paint. Keep this window's current frame meanwhile.
+        if tui::native_pending_frame(self.tui_frontend, self.active_matrix_slot_name().as_deref())
+            && self.update_baseline.size() == (self.columns, self.rows_count)
+        {
+            return self.update_baseline.clone().with_tui_revision(revision);
+        }
         if let Some(lines) = tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
             return update::Snapshot::terminal((self.columns, self.rows_count), self.layout_generation, lines, revision);
         }

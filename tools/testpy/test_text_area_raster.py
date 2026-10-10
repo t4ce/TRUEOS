@@ -132,10 +132,64 @@ fn dest(w:u32,h:u32)->intel::gpgpu::GpgpuOwnedRgba8Surface {intel::gpgpu::alloca
 }
 '''
 
+
+# Compile Shell3's adapter too, so overlay/cache retention exercises its real
+# admission, identity, revision and resize decisions on the same raster backend.
+SHELL3_PAN = r"""
+extern crate self as microfont;
+pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;
+#[path="__TRUEOS_ROOT__/src/allcaps.rs"]mod allcaps;
+#[macro_export]macro_rules! log_info {(target:$target:literal;$($args:tt)*)=>{let _=format!($($args)*);};}
+mod shell3 {
+    #[derive(Clone,Copy,PartialEq)]pub struct RgbaColor;
+    pub mod update {
+        use super::RgbaColor;
+        pub struct MatrixAreaSnapshot {
+            pub column_offset:usize,pub offset:usize,pub columns:usize,pub rows:usize,
+            pub identity:(Option<String>,Option<u64>),pub revision:u64,pub blink_phase:Option<bool>,
+            pub cells:Vec<Vec<(char,Option<RgbaColor>)>>,
+        }
+        impl MatrixAreaSnapshot {pub fn cell(&self,x:i64,y:i64)->(char,Option<RgbaColor>){
+            usize::try_from(y).ok().and_then(|y|self.cells.get(y)).and_then(|row|usize::try_from(x).ok().and_then(|x|row.get(x))).copied().unwrap_or((' ',None))
+        }}
+    }
+    mod show {
+        mod copy {pub fn glyph_for_cell(x:u32,y:u32,width:u32,height:u32,cell:(char,Option<super::super::RgbaColor>),_:u32)->crate::intel::GucBcs0MonoGlyph {
+            crate::intel::GucBcs0MonoGlyph{x,y,width,height,value:cell.0 as u32}
+        }}
+        #[path="__TRUEOS_ROOT__/src/shell3/show/pan.rs"]mod pan;
+        use super::update::MatrixAreaSnapshot;
+        use crate::{intel,run,ui4::text_area::RasterBudget};
+        fn input()->MatrixAreaSnapshot {MatrixAreaSnapshot{column_offset:0,offset:0,columns:10,rows:4,identity:(None,None),revision:1,blink_phase:None,cells:vec![vec![('A',None);10];4]}}
+        fn allocations()->usize {intel::state(|s|s.events.iter().filter(|event|event.starts_with("alloc")).count())}
+        #[test]fn terminal_overlay_keeps_matrix_raster_and_reuses_pixels_on_return(){
+            intel::reset();let budget=RasterBudget::new(2*1024*1024);let mut cache=None;let mut poisoned=false;let mut area=input();
+            assert!(run(pan::PanBuffer::prepare(&mut cache,&budget,Some(&area),1,&mut poisoned)).unwrap());let bytes=budget.used();assert!(bytes>0);let events=intel::state(|s|s.events.clone());assert_eq!(allocations(),1);
+            for _ in 0..100 {assert!(!run(pan::PanBuffer::prepare(&mut cache,&budget,None,1,&mut poisoned)).unwrap());}
+            assert!(cache.is_some());assert_eq!(budget.used(),bytes);assert_eq!(intel::state(|s|s.events.clone()),events);
+            assert!(run(pan::PanBuffer::prepare(&mut cache,&budget,Some(&area),1,&mut poisoned)).unwrap());assert_eq!(intel::state(|s|s.events.clone()),events);
+            area.revision=2;area.cells[1][2]=('B',None);run(pan::PanBuffer::prepare(&mut cache,&budget,Some(&area),1,&mut poisoned)).unwrap();assert_eq!(allocations(),1);assert_eq!(budget.used(),bytes);
+            let destination=crate::dest(60,77);run(cache.as_mut().unwrap().copy_view(destination.surface(),1,&mut poisoned)).unwrap();
+            intel::state(|s|{let pixels=&s.memory[&destination.surface().phys];assert_eq!(pixels[33*60],u32::from('A'));assert_eq!(pixels[44*60+12],u32::from('B'));});
+            let allocations=allocations();area.identity=(Some("other-slot".into()),Some(2));area.cells=vec![vec![('C',None);10];4];
+            run(pan::PanBuffer::prepare(&mut cache,&budget,Some(&area),1,&mut poisoned)).unwrap();assert_eq!(self::allocations(),allocations);run(cache.as_mut().unwrap().copy_view(destination.surface(),1,&mut poisoned)).unwrap();
+            intel::state(|s|assert_eq!(s.memory[&destination.surface().phys][44*60+12],u32::from('C')));drop(cache);assert_eq!(budget.used(),0);
+        }
+        #[test]fn font_changes_during_overlay_resize_retained_raster_before_reuse(){
+            intel::reset();let budget=RasterBudget::new(2*1024*1024);let mut cache=None;let mut poisoned=false;let area=input();
+            run(pan::PanBuffer::prepare(&mut cache,&budget,Some(&area),1,&mut poisoned)).unwrap();let old_bytes=budget.used();
+            assert!(!run(pan::PanBuffer::prepare(&mut cache,&budget,None,2,&mut poisoned)).unwrap());assert_eq!(budget.used(),old_bytes);
+            run(pan::PanBuffer::prepare(&mut cache,&budget,Some(&area),2,&mut poisoned)).unwrap();assert_eq!(allocations(),2);assert!(budget.used()>old_bytes);
+            let destination=crate::dest(120,154);run(cache.as_mut().unwrap().copy_view(destination.surface(),2,&mut poisoned)).unwrap();intel::state(|s|assert_eq!(s.memory[&destination.surface().phys][66*120],u32::from('A')));drop(cache);assert_eq!(budget.used(),0);
+        }
+    }
+}
+"""
+
 def main():
     with tempfile.TemporaryDirectory(prefix='text-area-raster-') as directory:
         path = Path(directory)
-        (path / 'tests.rs').write_text(SOURCE.replace('__TRUEOS_ROOT__', str(ROOT)))
+        (path / 'tests.rs').write_text((SOURCE+SHELL3_PAN).replace('__TRUEOS_ROOT__', str(ROOT)))
         subprocess.run(['rustc', '--edition=2024', '--test', str(path / 'tests.rs'), '-o', str(path / 'tests')], check=True)
         subprocess.run([str(path / 'tests'), '--test-threads=1', '--nocapture'], check=True)
 

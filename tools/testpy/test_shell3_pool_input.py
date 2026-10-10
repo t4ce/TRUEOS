@@ -60,6 +60,8 @@ pub fn bind_remote_frontend(_:u64) {}
 pub fn remote_active(_:u64)->bool {false}
 pub fn take_remote_output(_:u64,_:usize)->Option<RemoteDrain> {None}
 pub fn revision(_:u64)->u64 {0}
+pub static NATIVE_PENDING:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+pub fn native_pending_frame(_:u64,_:Option<&str>)->bool {NATIVE_PENDING.load(std::sync::atomic::Ordering::SeqCst)}
 pub fn mouse_options(_:u64,_:Option<&str>)->trueos_terminal::MouseOptions {Default::default()}
 pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<crate::update::RenderedLine>> {None}
 pub fn input(_:u64,_:Option<&str>,_:&[u8])->bool {false}
@@ -130,14 +132,14 @@ struct Shell3 {update_baseline:update::Snapshot,matrix_scroll:usize,matrix_colum
 impl Shell3 {
 fn new(columns:usize)->Self {Self {update_baseline:update::Snapshot::new((columns,25),0,[(&[],&[]),(&[],&[]),(&[],&[])],columns),matrix_scroll:0,matrix_column:0,matrix_drag:None,layout_generation:0,status_hover:None,tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('matrix_output_needed','scroll_matrix','pan_matrix','drag_matrix','capture_matrix_snapshot','record_terminal_notice','capture_controls_snapshot','launch_named_app','select_queued_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
+    for name in ('matrix_output_needed','scroll_matrix','pan_matrix','drag_matrix','capture_matrix_snapshot','capture_update_snapshot','record_terminal_notice','capture_controls_snapshot','launch_named_app','select_queued_app','tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','handle_keyboard_with_latch','any_name_matching','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt','set_cursor','prompt','replay_terminal_line'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += 'fn cursor_blink_phase()->bool {false} fn get_size(&self)->(usize,usize) {(self.columns,self.rows_count)} fn set(&mut self,cols:usize,rows:usize) {self.columns=cols;self.rows_count=rows;} }\n'
     source += 'mod tty {\n' + (ROOT/'src/shell3/tty.rs').read_text().replace('//!','//').replace('mod input;', f'#[path="{ROOT}/src/shell3/tty/input.rs"] mod input;').replace('mod ansi;', f'#[path="{ROOT}/src/shell3/tty/ansi.rs"] mod ansi;') + '\n'
     source += r'''
 #[cfg(test)] mod replay_tests {
     use super::*;
-    use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide, key, type_text, text_area, allcaps};
+    use crate::{MatrixSlots, matrix_slots, service, Mode, StripSide, key, type_text, text_area, allcaps, tui, update};
     #[test] fn capture_names_launch_helpers_and_keep_their_slots_when_returning() {
         MatrixSlots::set(&[] as &[&str]);crate::capture::STARTS.lock().unwrap().clear();
         let mut shell=Shell3::new(100);shell.set_mode(2);
@@ -147,6 +149,15 @@ fn new(columns:usize)->Self {Self {update_baseline:update::Snapshot::new((column
         }
         assert_eq!(*crate::capture::STARTS.lock().unwrap(),vec!["pic","vid","aud","vaud"]);
         for name in ["pic","vid","aud","vaud"] {assert!(MatrixSlots::drop_slot(Some(name)));}
+    }
+    #[test] fn native_admission_keeps_existing_frame_until_the_first_paint() {
+        MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();let mut shell=Shell3::new(40);
+        MatrixSlots::echo(None,None,"Existing shell text".into());shell.update_baseline=shell.capture_matrix_snapshot();let original=shell.update_baseline.clone();
+        MatrixSlots::ensure_named("pic");assert!(shell.select_matrix_slot_name("pic"));tui::NATIVE_PENDING.store(true,std::sync::atomic::Ordering::SeqCst);
+        let awaiting=shell.capture_update_snapshot();assert_eq!(awaiting.rendered_lines(),original.rendered_lines());assert!(update::build_updates(&original,&awaiting,&[]).segments.is_empty());
+        shell.rows_count=26;let resized=shell.capture_update_snapshot();assert_eq!(resized.size(),(40,26));assert_ne!(resized.rendered_lines(),original.rendered_lines());
+        tui::NATIVE_PENDING.store(false,std::sync::atomic::Ordering::SeqCst);shell.rows_count=25;
+        assert_ne!(shell.capture_update_snapshot().rendered_lines(),original.rendered_lines());MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();
     }
     #[test] fn adm_account_and_disk_names_launch_persistent_helpers() {
         MatrixSlots::set(&[] as &[&str]);matrix_slots().lock().echoes.clear();crate::admin::STARTS.lock().unwrap().clear();

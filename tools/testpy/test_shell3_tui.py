@@ -249,6 +249,32 @@ impl Shell3 {
 }
 '''
     source += r'''
+#[test] fn native_helpers_inherit_shell_palette_and_preserve_explicit_qr_colors() {
+    let f=frontend(12,5);let t=shell2::target("native-palette",1);
+    tui::attach_native(f,&t).unwrap();assert!(tui::native_pending_frame(f.id,Some("native-palette")));
+    assert!(tui::snapshot(f.id,Some("native-palette")).is_none());
+    assert!(tui::input(f.id,Some("native-palette"),b"\r"));
+    tui::native_write(&t,b"\x1b[?25lPIC\x1b[2;1HChoose\x1b[4;1H\x1b[30;47mQR\x1b[0m");
+    assert!(!tui::native_pending_frame(f.id,Some("native-palette")));
+    let rows=tui::snapshot(f.id,Some("native-palette")).unwrap();
+    for cell in &rows[0] {assert_eq!(cell.1.unwrap().background(),Some(update::CONTROL_BACKGROUND));assert_eq!(cell.1.unwrap().rgba(),RgbaColor::White.rgba());}
+    for index in [1,2,4] {for cell in &rows[index] {assert_eq!(cell.1.unwrap().background(),Some(update::MATRIX_BACKGROUND));}}
+    assert_eq!(rows[3][0].1.unwrap().rgba(),[0,0,0,255]);assert_eq!(rows[3][0].1.unwrap().background(),Some([229,229,229,255]));
+    assert_eq!(rows[3][2].1.unwrap().background(),Some(update::MATRIX_BACKGROUND));
+    let title=[MetaFmtStr::new("TrueOS")];let shell=update::Snapshot::new((12,5),0,[(&title,&[]),(&[],&[]),(&[],&[])],12).with_matrix(&[],0).rendered_lines();
+    let patches=update::diff_rendered_lines(Some(&shell),&rows);assert!(!patches.iter().any(|patch|patch.row==SpecialRows::MatrixRow(1)),"unchanged body background must not be repainted");
+    assert_eq!(tui::native_read(&t).unwrap().0,b"\r");
+    tui::native_return(&t);assert!(!tui::native_pending_frame(f.id,Some("native-palette")));
+    assert!(tui::select_for_navigation(f,"native-palette"));assert_eq!(tui::snapshot(f.id,Some("native-palette")).unwrap(),rows);
+    let (vm_frontend,vm_target)=session("vm-palette",15,12,5);tui::claim(&vm_target,15);
+    tui::write(&vm_target,15,b"\x1b[?25lVM");let rows=tui::snapshot(vm_frontend.id,Some("vm-palette")).unwrap();assert_eq!(rows[0][0].1.unwrap().background(),Some([0,0,0,255]));
+}
+#[test] fn native_helpers_can_return_before_the_first_paint() {
+    let f=frontend(12,5);let t=shell2::target("native-unpainted",1);tui::attach_native(f,&t).unwrap();
+    tui::native_return(&t);assert!(!tui::native_pending_frame(f.id,Some("native-unpainted")));assert!(tui::supports(&t));
+    assert!(tui::select_for_navigation(f,"native-unpainted"));assert!(tui::native_pending_frame(f.id,Some("native-unpainted")));
+    tui::native_write(&t,b"\x1b[?25lCRY");assert!(tui::snapshot(f.id,Some("native-unpainted")).is_some());
+}
 #[test] fn native_admin_on_ssh_keeps_cell_frames_input_scope_and_reentry() {
     let f=frontend(70,25);let t=shell2::target("native-admin-ssh",1);
     let shell=Shell3 {tui_frontend:f.id,name:"native-admin-ssh".into(),size:(70,25),prompt:String::new(),mode:3};
@@ -256,7 +282,7 @@ impl Shell3 {
     tui::attach_native(f,&t).unwrap();assert_eq!(tui::native_transport_scope(&t),Some(1));
     tui::native_write(&t,"\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[2JCRY  account & keys\x1b[23;1HAuthenticator code: ••••••".as_bytes());
     tty.reconcile_matrix_selection();let out=String::from_utf8_lossy(&tty.output);
-    assert!(out.contains("CRY"));assert!(out.contains("••••••"));assert!(out.contains("?1000h"));
+    assert!(out.contains("CRY"));assert!(out.contains("••••••"));assert!(out.contains("?1000h"));assert!(out.contains("48;2;16;16;16m"));assert!(out.contains("48;2;24;24;24m"));
     assert!(tui::snapshot(f.id,Some("native-admin-ssh")).is_some());
     tty.input(b"123456\r");assert_eq!(tui::native_read(&t).unwrap().0,b"123456\r");
     tui::native_return(&t);tty.output.clear();tty.reconcile_matrix_selection();

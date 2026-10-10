@@ -53,7 +53,7 @@ impl Terminal {
         terminal.write(b"\x1b[?1007s\x1b[?1007l\x1b[?1049h");
         terminal.clear_screen();
         if controls {
-            // Shell3 enables SGR drag reporting; apps take over mouse modes on claim.
+            // Leave Shell3 mouse selection/paste to the peer terminal; apps own their mouse modes.
             terminal.write(b"\x1b[1 q\x1b[?25h");
             terminal.set_matrix_region();
             terminal.refresh_controls();

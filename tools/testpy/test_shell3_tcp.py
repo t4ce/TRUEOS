@@ -218,12 +218,12 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         assert!(tty.shell.pointer.is_empty());assert_eq!(tty.line,"x");
         let mut nc=terminal();nc.input(b"\\x1b[<0;4;2M");assert!(nc.shell.pointer.is_empty());assert!(nc.line.is_empty());
     }
-    #[test] fn ssh_enables_sgr_drag_and_disables_reporting_on_exit() {
+    #[test] fn ssh_keeps_shell_mouse_reporting_off_and_cleans_up_on_exit() {
         for exit in [b"exit\\r".as_slice(),b"\\x04".as_slice()] {
             let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
             assert!(!String::from_utf8_lossy(&tty.output).contains("1003h"));
-            assert!(String::from_utf8_lossy(&tty.output).contains("1006h"));
-            assert!(String::from_utf8_lossy(&tty.output).contains("1002h"));
+            assert!(!String::from_utf8_lossy(&tty.output).contains("1006h"));
+            assert!(!String::from_utf8_lossy(&tty.output).contains("1002h"));
             tty.output.clear();tty.input(exit);
             assert!(String::from_utf8_lossy(&tty.output).contains("1002l"));
             assert!(String::from_utf8_lossy(&tty.output).contains("1006l"));assert!(tty.closing);

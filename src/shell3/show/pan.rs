@@ -22,7 +22,9 @@ impl PanBuffer {
         poisoned: &mut bool,
     ) -> Result<bool, &'static str> {
         let Some(input) = input else {
-            *slot = None;
+            // A terminal overlay uses the existing frame buffers directly.
+            // Retain the retired Matrix raster (and its budget reservation)
+            // so returning to the shell can reuse its cached text pixels.
             return Ok(false);
         };
         let view = CellRect {

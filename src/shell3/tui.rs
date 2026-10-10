@@ -21,6 +21,7 @@ struct Owner {
 }
 struct Native {
     active: bool,
+    painted: bool,
     return_to_default: bool,
     input: VecDeque<u8>,
     notices: VecDeque<String>,
@@ -319,7 +320,7 @@ pub(super) fn attach_native(frontend: Frontend, target: &MatrixTarget) -> Result
     attach(frontend, target)?;
     let lease = crate::shell2::matrix_target_slot_lease(target);
     if let Some(route) = ROUTES.lock().routes.iter_mut().find(|r| r.lease == lease) {
-        route.native = Some(Native {active: true, return_to_default: false, input: VecDeque::new(), notices: VecDeque::new()});
+        route.native = Some(Native {active: true, painted: false, return_to_default: false, input: VecDeque::new(), notices: VecDeque::new()});
     }
     Ok(())
 }
@@ -337,6 +338,12 @@ pub(super) fn native_slot(name: &str) -> bool {
 pub(super) fn native_visible(target: &MatrixTarget) -> bool {
     let lease = crate::shell2::matrix_target_slot_lease(target);
     ROUTES.lock().routes.iter().any(|r| r.lease == lease && r.native.as_ref().is_some_and(|n| n.active))
+}
+pub(super) fn native_pending_frame(frontend: u64, name: Option<&str>) -> bool {
+    ROUTES.lock().routes.iter().any(|route| {
+        route.frontend == frontend && Some(route.lease.name()) == name
+            && route.native.as_ref().is_some_and(|native| native.active && !native.painted)
+    })
 }
 pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
     let lease = crate::shell2::matrix_target_slot_lease(target);
@@ -368,6 +375,7 @@ pub(super) fn native_write(target: &MatrixTarget, bytes: &[u8]) {
     let mut routes = ROUTES.lock();
     if let Some(route) = routes.routes.iter_mut().find(|r| r.lease == lease && r.native.is_some()) {
         route.screen.feed(bytes);
+        route.native.as_mut().unwrap().painted = true;
         let frontend = route.frontend;
         if route.active() {routes.changed(frontend);}
     }
@@ -568,6 +576,10 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
     if route.owner.is_some() && routes.remote_frontends.iter().any(|entry| entry.0 == frontend) {
         return None;
     }
+    // Keep the existing shell pixels until the helper supplies its first frame.
+    if route.native.as_ref().is_some_and(|native| !native.painted) {
+        return None;
+    }
     let (cols, _) = route.screen.dimensions();
     let cursor = route.screen.cursor();
     Some(
@@ -577,11 +589,15 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
             .chunks(cols)
             .enumerate()
             .map(|(row_index, row)| {
+                let default_background = if route.native.is_some() {
+                    if row_index == 0 { super::update::CONTROL_BACKGROUND }
+                    else { super::update::MATRIX_BACKGROUND }
+                } else { [0, 0, 0, 255] };
                 row.iter()
                     .enumerate()
                     .map(|(col, cell)| {
                         let mut foreground = color(cell.style.foreground, [255, 255, 255, 255]);
-                        let mut background = color(cell.style.background, [0, 0, 0, 255]);
+                        let mut background = color(cell.style.background, default_background);
                         if cursor.visible && cursor.row == row_index && cursor.col == col {
                             core::mem::swap(&mut foreground, &mut background);
                         }

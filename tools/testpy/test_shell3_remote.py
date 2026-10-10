@@ -22,7 +22,7 @@ use alloc::{string::String, vec::Vec};
 '''
     source += extract.item('src/shell3/shell3.rs', 'RgbaColor')
     source += r'''
-mod update {pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>;}
+mod update {pub const CONTROL_BACKGROUND:[u8;4]=[16,16,16,255];pub const MATRIX_BACKGROUND:[u8;4]=[24,24,24,255];pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>;}
 mod tty {pub const OUTPUT_LIMIT:usize=1024*1024;}
 mod service {pub fn notify_work() {}}
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
