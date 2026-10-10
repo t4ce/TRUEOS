@@ -1,5 +1,6 @@
 pub(crate) mod capture;
 mod matrix_target;
+mod log_tap;
 pub(crate) use matrix_target::{matrix_target_print_line, MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
 mod metafmtstr;
 mod names;
@@ -1134,7 +1135,16 @@ impl Shell3 {
         let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
         let is_app = can_launch && self.appdb_names.iter().any(|name| name == &text);
         let is_alias = self.aka_names.iter().any(|name| name == &text);
-        if text == "env" && (self.mode == Mode::ADM || self.active_vmx_app().is_some()) {
+        if self.mode == Mode::ADM && text == "log" {
+            if self.parse_operator("§log") {
+                if let Some(lifetime) = self.active_matrix_lifetime {
+                    let lease = MatrixSlotLease::from_identity("log".into(), lifetime);
+                    if let Err(error) = log_tap::start(lease) {
+                        MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error.into());
+                    }
+                }
+            }
+        } else if text == "env" && (self.mode == Mode::ADM || self.active_vmx_app().is_some()) {
             for line in service::environment_lines(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
             }
@@ -1192,9 +1202,8 @@ impl Shell3 {
             || tui::revision(self.tui_frontend) != self.update_baseline.tui_revision()
             || (!self.update_baseline.terminal_active()
                 && matrix_slots().lock().generation != self.update_baseline.matrix_generation())
-            || (!self.update_baseline.terminal_active() && {
-                !self.update_baseline.controls_match(&self.capture_controls_snapshot())
-            })
+            || (!self.update_baseline.terminal_active()
+                && !self.update_baseline.controls_match(&self.capture_controls_snapshot()))
     }
 
     pub fn set_prompt(&mut self, text: &str) {
@@ -1265,6 +1274,11 @@ impl Shell3 {
             }
         }
 
+        match row {
+            SpecialRows::TitleRow => self.title_transition.finish(),
+            SpecialRows::StatusRow => self.aka_transition.finish(),
+            _ => {}
+        }
         let strip = self.rows.row_mut(row);
         strip.right.clear();
         strip.right.push(MetaFmtStr::new(text));
@@ -1294,6 +1308,13 @@ impl Shell3 {
                 .collect();
             self.refresh_prompt_strip();
             return true;
+        }
+        if side == StripSide::Right {
+            match row {
+                SpecialRows::TitleRow => self.title_transition.finish(),
+                SpecialRows::StatusRow => self.aka_transition.finish(),
+                _ => {}
+            }
         }
         let strip = self.rows.row_mut(row);
         match side {

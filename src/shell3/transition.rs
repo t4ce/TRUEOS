@@ -1,8 +1,8 @@
-//! A six-step, 120 ms retract/reveal. Time sampling skips missed frames.
+//! A six-step, 240 ms retract/reveal. Time sampling skips missed frames.
 use super::MetaFmtStr;
 use alloc::{vec::Vec, string::String};
 
-const STEP_NS: u64 = 20_000_000;
+const STEP_NS: u64 = 40_000_000;
 #[derive(Default)]
 pub(super) struct RetractReveal { change: Option<Change> }
 struct Change { old: Vec<MetaFmtStr>, target: Vec<MetaFmtStr>, width: usize, started: u64 }

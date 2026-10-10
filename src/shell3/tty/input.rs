@@ -130,7 +130,7 @@ impl Terminal {
         }
         self.remember(&line);
         match command {
-            "help" => self.notice("SSH types directly into Shell3; plain TCP replays on Enter; Backspace erases. Up/Down recalls commands in authenticated SSH sessions.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nPlain TCP replay stops at the first name match or impossible prefix; Matrix operators are submitted with Enter."),
+            "help" => self.notice("SSH types directly into Shell3; plain TCP replays on Enter; Backspace erases. Up/Down recalls commands in authenticated SSH sessions. PageUp/PageDown scroll the Matrix; Home/End jump to its top/bottom.\r\ntab or Tab cycles HV/CMD/ADM; Ctrl-U clears the input line; Ctrl-C cancels.\r\nclear clears the screen (ANSI terminal required).\r\nexit or Ctrl-D on an empty line disconnects.\r\nPlain TCP replay stops at the first name match or impossible prefix; Matrix operators are submitted with Enter."),
             // The remote terminal interprets these bytes; TCP only carries them.
             "clear" => { self.clear_screen(); if let Some(lines) = self.view.lines.as_mut() { lines.clear(); } else { self.prompt(); } },
             "tab" => {
@@ -169,6 +169,21 @@ impl Terminal {
             }
             self.write(b"\x1b[K");
         }
+    }
+
+    // Scroll only Shell3's transcript. Leased apps receive their raw keys
+    // earlier in input(), and plain TCP retains its line-oriented behavior.
+    fn matrix_scroll_key(&mut self, final_byte: u8) {
+        if self.view.lines.is_none() || self.decoder.csi_overflow { return; }
+        let page = self.shell.get_size().1.saturating_sub(3).max(1).min(i32::MAX as usize) as i32;
+        let rows = match (final_byte, self.decoder.csi.as_slice()) {
+            (b'~', b"5") => -page,
+            (b'~', b"6") => page,
+            (b'H', b"") | (b'~', b"1" | b"7") => i32::MIN,
+            (b'F', b"") | (b'~', b"4" | b"8") => i32::MAX,
+            _ => return,
+        };
+        self.shell.scroll_matrix(rows);
     }
 
     // SGR mouse coordinates are terminal cells, unlike UI4's pixel coordinates.
@@ -245,6 +260,7 @@ impl Terminal {
                     self.decoder.escape = 0;
                 } else if (0x40..=0x7e).contains(&byte) {
                     self.matrix_mouse(byte);
+                    self.matrix_scroll_key(byte);
                     if self.decoder.escape == 2 && matches!(byte, b'A' | b'B') {
                         self.recall(byte == b'A');
                     }

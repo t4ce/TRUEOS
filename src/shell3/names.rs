@@ -156,6 +156,10 @@ pub(super) const ADM_NAMES: &[NameEntry] = &[
         name: "env",
         color: RgbaColor::White,
     },
+    NameEntry {
+        name: "log",
+        color: RgbaColor::White,
+    },
 ];
 
 /// Slot-specific VM environment controls; not a Tab mode.

@@ -24,7 +24,7 @@ use std::cell::{Cell, RefCell};
         source += extract.item('src/shell3/shell3.rs', name)
     source += re.search(r'^impl RgbaColor \{.*?^}', (ROOT/'src/shell3/shell3.rs').read_text(), re.M | re.S).group()
     source += f'\n#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
-    source += f'\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
+    source += f'\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n#[path="{ROOT}/src/shell3/transition.rs"] mod transition;\n'
     source += '''
 mod r {pub mod keyboard {
     pub const KEYBOARD_OUTPUT_KIND_TEXT:u8=1;pub const KEYBOARD_OUTPUT_KIND_KEY:u8=2;
@@ -77,6 +77,7 @@ impl Shell3 {
     fn handle_status_pointer(&mut self,column:Option<usize>,pressed:bool)->bool {
         self.pointer.push((column,pressed));true
     }
+    fn refresh_clock(&mut self) {}
     fn get_size(&self)->(usize,usize) {self.size}
     fn set(&mut self,cols:usize,rows:usize) {self.size=(cols,rows);}
     fn new_terminal() -> Result<Self, ()> {
@@ -346,6 +347,31 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         first.input(b"\\x03"); assert_eq!(first.shell.prompt, "");
         assert_eq!(second.shell.prompt, "second");
         second.input(b"\\x15"); assert_eq!(second.shell.prompt, "");
+    }
+    #[test] fn ssh_scroll_keys_preserve_prompt_at_every_packet_split() {
+        for (key, expected) in [
+            (b"\\x1b[5~".as_slice(), 3usize), (b"\\x1b[6~", 7),
+            (b"\\x1b[H", 0), (b"\\x1bOH", 0), (b"\\x1b[1~", 0), (b"\\x1b[7~", 0),
+            (b"\\x1b[F", 16), (b"\\x1bOF", 16), (b"\\x1b[4~", 16), (b"\\x1b[8~", 16),
+        ] {
+            for split in 0..=key.len() {
+                let mut shell=Shell3::new_terminal().unwrap();shell.size=(100,5);
+                shell.history=(0..18).map(|n|format!("line{n}")).collect();shell.matrix_scroll=5;
+                let mut tty=Terminal::new_ssh(shell);tty.input(b"draft");
+                tty.input(&key[..split]);tty.input(&key[split..]);
+                assert_eq!(tty.shell.matrix_scroll,expected,"{key:?}, split {split}");
+                assert_eq!(tty.line,"draft");assert_eq!(tty.shell.prompt,"draft");
+                assert!(tty.submitted().is_empty());
+            }
+        }
+    }
+    #[test] fn scroll_keys_pass_to_active_apps_and_are_inert_for_plain_tcp() {
+        let keys=b"\\x1b[5~\\x1b[6~\\x1b[H\\x1b[F";
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        tui::claim();tty.input(keys);assert_eq!(tui::received(),keys);
+        assert_eq!(tty.shell.matrix_scroll,0);tui::release();
+        let mut plain=terminal();plain.shell.history=(0..50).map(|n|format!("line{n}")).collect();
+        plain.input(keys);assert_eq!(plain.shell.matrix_scroll,0);assert!(plain.line.is_empty());
     }
     #[test] fn ssh_recall_csi_ss3_packet_splits_and_enter_only() {
         for arrow in [b"\\x1b[A".as_slice(), b"\\x1bOA".as_slice()] {

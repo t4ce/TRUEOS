@@ -15,7 +15,7 @@ def main():
     for name in ('RgbaColor','SpecialRows','StripSide'):
         source += extract.item('src/shell3/shell3.rs', name)
     source += re.search(r'^impl RgbaColor \{.*?^}', shell, re.M | re.S).group()
-    source += f'#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;use metafmtstr::MetaFmtStr;\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
+    source += f'#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;use metafmtstr::MetaFmtStr;\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n#[path="{ROOT}/src/shell3/transition.rs"] mod transition;\n'
     source += '''
 const SpecialSeperator:char='│';
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
@@ -172,6 +172,7 @@ impl Shell3 {
     fn active_matrix_slot_name(&self)->Option<String>{Some(self.name.clone())}
     fn set_mode(&mut self,mode:u8){self.mode=mode;}
     fn get_mode(&self)->u8{self.mode}
+    fn refresh_clock(&mut self){}
     fn get_size(&self)->(usize,usize){self.size}
     fn set(&mut self,cols:usize,rows:usize){self.size=(cols,rows);tui::select(tui::Frontend {id:self.tui_frontend,cols,rows},Some(&self.name));}
     fn prompt(&self)->&str{&self.prompt}
@@ -179,6 +180,7 @@ impl Shell3 {
     fn set_cursor(&mut self,_:usize){}
     fn reconcile_matrix_selection(&mut self){}
     fn drag_matrix(&mut self,_:(i32,i32),_:bool,_:bool,_:bool,_:(i32,i32))->bool{false}
+    fn scroll_matrix(&mut self,_:i32)->bool{false}
     fn record_terminal_notice(&mut self,_:&str){}
     fn replay_terminal_line(&mut self,_:&str){}
     fn capture_matrix_snapshot(&self)->update::Snapshot{

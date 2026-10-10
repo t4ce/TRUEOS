@@ -881,6 +881,11 @@ pub mod logtotcp {
         RING.lock().drain_bytes(max)
     }
 
+    /// Start an independent reader at the live end, without replaying boot logs.
+    pub(crate) fn live_cursor() -> u64 {
+        RING.lock().written
+    }
+
     /// Short nonblocking snapshot for the last-AP screen service. Formatting,
     /// acceptance and TCP draining are unchanged; drawing happens after unlock.
     pub(crate) fn copy_for_screen(cursor: &mut u64, out: &mut [u8]) -> Option<(usize, u64)> {
