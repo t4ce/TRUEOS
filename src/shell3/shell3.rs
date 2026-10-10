@@ -10,6 +10,7 @@ mod tty;
 mod status;
 pub(crate) mod tui;
 mod update;
+mod transition;
 
 pub mod service;
 pub(crate) mod startup;
@@ -123,7 +124,7 @@ pub fn live_shell3_instances() -> usize {
 pub struct TitleTime;
 
 impl TitleTime {
-    /// Capture the current civil time for a shell's startup title.
+    /// Capture the current civil time; live titles then follow minute signals.
     pub fn current() -> String {
         let utc_seconds = crate::chronos::best_effort_unix_time_seconds()
             .unwrap_or_else(crate::time::uptime_seconds);
@@ -162,9 +163,9 @@ struct MatrixSlotsState {
 impl MatrixSlotsState {
     fn new() -> Self {
         Self {
-            ids: vec!["id".to_string(), "123".to_string()],
-            lifetimes: vec![("id".to_string(), 1), ("123".to_string(), 2)],
-            next_lifetime: 3,
+            ids: Vec::new(),
+            lifetimes: Vec::new(),
+            next_lifetime: 1,
             attachments: Vec::new(),
             echoes: Vec::new(),
             vmx_apps: Vec::new(),
@@ -223,7 +224,7 @@ fn current_matrix_slots_text() -> String {
 }
 
 impl MatrixSlots {
-    pub const DEFAULT: &'static str = "§ §id §123";
+    pub const DEFAULT: &'static str = "§";
 
     /// Shared across every Shell3. Names are supplied without the § prefix.
     pub fn set<T: AsRef<str>>(names: &[T]) {
@@ -530,6 +531,8 @@ impl PromptState {
 }
 
 pub struct Shell3 {
+    title_transition: transition::RetractReveal,
+    aka_transition: transition::RetractReveal,
     status_hover: Option<status::Target>,
     tui_frontend: u64,
     executor_slot: u32,
@@ -676,6 +679,8 @@ impl Shell3 {
         .with_matrix(&matrix_lines, matrix_generation);
 
         Self {
+            title_transition: transition::RetractReveal::default(),
+            aka_transition: transition::RetractReveal::default(),
             status_hover: None,
             tui_frontend: tui::new_frontend(),
             executor_slot,
@@ -722,7 +727,7 @@ impl Shell3 {
 
     /// Publish the current title, status, and prompt strips through UI4.
     pub async fn present(&mut self) -> Result<(), &'static str> {
-        self.sync_aka_names();
+        self.reconcile_matrix_selection();
         let actual_slot = crate::percpu::current_slot() as u32;
         if actual_slot != self.executor_slot {
             return Err("shell3-show-wrong-executor");
@@ -764,7 +769,7 @@ impl Shell3 {
             let lines = lines.clone();
             let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
             let (columns, rows) = snapshot.size();
-            self.show.present(&line_refs, columns, rows, &batch, snapshot.matrix_area()).await?;
+            self.show.present(&line_refs, columns, rows, &batch, snapshot.reveals(), snapshot.matrix_area()).await?;
             if let Some(window) = self.show.window() { tui::bind_ui4_window(self.tui_frontend, window); }
             self.pending_presentation = None;
             if self.capture_update_snapshot() == snapshot {
@@ -808,6 +813,8 @@ impl Shell3 {
     }
 
     pub fn set(&mut self, columns: usize, rows: usize) {
+        self.title_transition.finish();
+        self.aka_transition.finish();
         self.columns = columns.max(MIN_COLUMNS);
         self.rows_count = rows.max(MIN_ROWS);
         self.layout_generation = self.layout_generation.wrapping_add(1);
@@ -861,7 +868,9 @@ impl Shell3 {
     }
 
     fn refresh_mode_title(&mut self) {
-        self.rows.title.right = mode_title_meta(self.mode, &self.aka_names, &self.appdb_names);
+        let target = mode_title_meta(self.mode, &self.aka_names, &self.appdb_names);
+        self.title_transition.start(&self.rows.title.right, &target, crate::chronos::monotonic_nanos());
+        self.rows.title.right = target;
     }
 
     pub fn mode(&self) -> Mode {
@@ -948,6 +957,11 @@ impl Shell3 {
 
     /// Every owner reconciles deletion locally; no cross-AP model mutation.
     pub(super) fn reconcile_matrix_selection(&mut self) {
+        self.sync_aka_names();
+        if tui::active(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
+            self.title_transition.finish();
+            self.aka_transition.finish();
+        }
         if let Some(app) = tui::take_native_launch(self.tui_frontend) {
             self.select_queued_app(app);
         }
@@ -1120,7 +1134,11 @@ impl Shell3 {
         let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
         let is_app = can_launch && self.appdb_names.iter().any(|name| name == &text);
         let is_alias = self.aka_names.iter().any(|name| name == &text);
-        if self.mode == Mode::ADM && text == "sh3" {
+        if text == "env" && (self.mode == Mode::ADM || self.active_vmx_app().is_some()) {
+            for line in service::environment_lines(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) {
+                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+            }
+        } else if self.mode == Mode::ADM && text == "sh3" {
             if let Err(error) = service::request_shell3() {
                 let message = match error {
                     Shell3Error::NoExecutor => "sh3: no Shell3 AP executor is available".into(),
@@ -1175,8 +1193,7 @@ impl Shell3 {
             || (!self.update_baseline.terminal_active()
                 && matrix_slots().lock().generation != self.update_baseline.matrix_generation())
             || (!self.update_baseline.terminal_active() && {
-                let status = self.row_for_render(SpecialRows::StatusRow);
-                !self.update_baseline.status_matches(&status.left, &status.right)
+                !self.update_baseline.controls_match(&self.capture_controls_snapshot())
             })
     }
 
@@ -1326,11 +1343,12 @@ impl Shell3 {
     }
 
     pub fn render_strips(&self, row: SpecialRows) -> String {
+        if !matches!(row, SpecialRows::MatrixRow(_)) {
+            let index = match row { SpecialRows::TitleRow => 0, SpecialRows::StatusRow => 1, _ => 2 };
+            return self.capture_controls_snapshot().rendered_lines()[index].iter().map(|cell| cell.0).collect();
+        }
         let strips = self.row_for_render(row);
-        update::fit_meta_strips(&strips.left, &strips.right, self.columns)
-            .iter()
-            .map(|cell| cell.0)
-            .collect()
+        update::fit_meta_strips(&strips.left, &strips.right, self.columns).iter().map(|cell| cell.0).collect()
     }
 
     /// Move this view through the shared newest-first transcript. Positive
@@ -1392,12 +1410,17 @@ impl Shell3 {
         let title = self.row_for_render(SpecialRows::TitleRow);
         let status = self.row_for_render(SpecialRows::StatusRow);
         let promt = self.row_for_render(SpecialRows::PromtRow);
-        update::Snapshot::new(
+        let snapshot = update::Snapshot::new(
             (self.columns, self.rows_count),
             self.layout_generation,
             [(&title.left, &title.right), (&status.left, &status.right), (&promt.left, &promt.right)],
             self.columns,
-        )
+        );
+        let now = crate::chronos::monotonic_nanos();
+        let snapshot = if self.active_vmx_app().is_none() {
+            snapshot.with_reveal(0, &title.left, self.title_transition.frame(now))
+        } else { snapshot };
+        snapshot.with_reveal(1, &status.left, self.aka_transition.frame(now))
     }
 
     fn cursor_blink_phase() -> bool { trueos_time::Instant::now().as_millis() / 500 % 2 == 0 }
@@ -1447,7 +1470,9 @@ impl Shell3 {
         if self.aka_generation != generation {
             self.aka_names = crate::r::restart::startup_alias_names();
             self.aka_generation = generation;
-            self.rows.status.right = status::alias_runs(&self.aka_names);
+            let target = status::alias_runs(&self.aka_names);
+            self.aka_transition.start(&self.rows.status.right, &target, crate::chronos::monotonic_nanos());
+            self.rows.status.right = target;
             self.refresh_mode_title();
         }
     }

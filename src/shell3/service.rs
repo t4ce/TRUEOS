@@ -791,6 +791,24 @@ impl crate::hv::launcher::LaunchObserver for ShellLaunch {
     }
 }
 
+/// Snapshot the selected slot's guest environment, or the host launch defaults.
+pub(super) fn environment_lines(slot: Option<&str>, lifetime: Option<u64>) -> Vec<alloc::string::String> {
+    let vm = match (slot, lifetime) {
+        (Some(slot), Some(lifetime)) => APP_LAUNCHES.lock().iter()
+            .find(|(lease, _)| lease.name() == slot && lease.lifetime_generation() == lifetime)
+            .map(|(_, vm)| *vm),
+        _ => None,
+    };
+    if let Some(vm) = vm {
+        return crate::hv::blueprint_process_env_text(vm)
+            .map(|text| text.lines().map(alloc::string::String::from).collect())
+            .unwrap_or_else(|| alloc::vec![alloc::string::String::from("env: unavailable")]);
+    }
+    crate::hv::blueprint::build_host_env().into_iter()
+        .map(|(key, value)| alloc::format!("{key}={value}"))
+        .collect()
+}
+
 pub(super) fn hv_status_lines() -> Vec<alloc::string::String> {
     let s = crate::hv::status();
     let mut lines = alloc::vec![alloc::format!("VMs: running={} starting={} limit={} snapshots={}", s.running_count, s.starting_count, s.vm_id_limit, s.stored_vm_count),

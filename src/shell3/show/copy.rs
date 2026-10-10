@@ -16,6 +16,8 @@ pub(super) async fn present(
     pan: &mut Option<super::pan::PanBuffer>,
     budget: &crate::ui4::text_area::RasterBudget,
     area: Option<&super::super::update::MatrixAreaSnapshot>,
+    strips: &mut [Option<super::reveal::StripCache>; 2],
+    reveals: &[super::super::update::StripReveal],
 ) -> Result<Option<crate::ui4::DamageRect>, &'static str> {
     crate::ui4::text_blit::benchmark_once().await?;
     let present_started = crate::ui4::text_blit::stamp();
@@ -42,12 +44,22 @@ pub(super) async fn present(
                 return Err(error);
             }
         };
+    let mut cached = [false; 2];
+    for input in reveals {
+        match super::reveal::StripCache::prepare(&mut strips[input.row], input, surface.scale, budget, poisoned).await {
+            Ok(ready) => cached[input.row] = ready,
+            Err(error) => {
+                if !*poisoned { let _ = cancel_frame_buffer(lease); }
+                return Err(error);
+            }
+        }
+    }
     let mut glyphs = Vec::new();
     for update in &updates {
         if using_pan && matches!(update.row, super::super::SpecialRows::MatrixRow(_)) {
             continue;
         }
-        glyphs_for_update(view, update, surface.scale, &mut glyphs);
+        glyphs_for_update(view, update, surface.scale, &mut glyphs, reveals, &cached);
     }
     // A later chunk can fail admission after earlier chunks changed pixels.
     // Any retry must then repaint this entire buffer, including erased cells.
@@ -123,6 +135,13 @@ pub(super) async fn present(
     }
     crate::ui4::text_blit::report("frame-mono", crate::ui4::text_blit::mono_pixels(&glyphs),
         cpu_paint, if cpu_paint {0} else {glyphs.len().div_ceil(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS)}, paint_started);
+    for input in reveals.iter().filter(|input| cached[input.row]) {
+        if let Err(error) = strips[input.row].as_mut().ok_or("shell3-strip-cache-missing")?
+            .copy(input, bcs_surface(view), poisoned).await {
+            if !*poisoned { let _ = cancel_frame_buffer(lease); }
+            return Err(error);
+        }
+    }
     if using_pan
         && (clearing
             || previous.is_none()
@@ -182,6 +201,8 @@ fn glyphs_for_update(
     update: &super::super::SegmentUpdate,
     scale: u32,
     output: &mut Vec<crate::intel::GucBcs0MonoGlyph>,
+    reveals: &[super::super::update::StripReveal],
+    cached: &[bool; 2],
 ) {
     let row = match update.row {
         super::super::SpecialRows::TitleRow => 0,
@@ -208,6 +229,11 @@ fn glyphs_for_update(
             break;
         }
         let character = characters.next().unwrap_or(' ');
+        let cell_column = update.offset + column;
+        if reveals.iter().any(|input| input.row == row as usize && cached[input.row]
+            && cell_column >= input.start + input.hidden && cell_column < input.start + input.cells.len()) {
+            continue;
+        }
         let width = (microfont::FWIDTH as u32 * scale).min(view.width - x);
         let height = (microfont::FHEIGHT as u32 * scale).min(view.height - y);
         output.push(glyph_for_cell(

@@ -1681,19 +1681,11 @@ pub(crate) fn build_process_args(archive: &str, app_args: &[String]) -> Vec<Stri
     args
 }
 
-pub(crate) fn build_process_env(
-    archive: &str,
-    app_fs_root: Option<&str>,
-    identity: Option<&crate::hv::BlueprintInstanceIdentity>,
-    launch_script: Option<&str>,
-    trueosfs_scope: bool,
-) -> BTreeMap<String, String> {
+/// Shared host defaults from which each Blueprint's environment is built.
+pub(crate) fn build_host_env() -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
-    let app_home = app_fs_root
-        .map(|root| alloc::format!("/{}", root.trim_matches('/')))
-        .unwrap_or_else(|| String::from("/"));
-    vars.insert(String::from("PWD"), app_home.clone());
-    vars.insert(String::from("HOME"), app_home.clone());
+    vars.insert(String::from("PWD"), String::from("/"));
+    vars.insert(String::from("HOME"), String::from("/"));
     vars.insert(String::from("LANG"), String::from(crate::locale::current_language_code()));
     vars.insert(String::from("LANGUAGE"), String::from(crate::locale::current_language_code()));
     vars.insert(
@@ -1773,6 +1765,22 @@ pub(crate) fn build_process_env(
     vars.insert(String::from("XDG_CACHE_HOME"), String::from("/cache"));
     vars.insert(String::from("BAT_CONFIG_DIR"), String::from("/config/bat"));
     vars.insert(String::from("BAT_CACHE_PATH"), String::from("/cache/bat"));
+    vars
+}
+
+pub(crate) fn build_process_env(
+    archive: &str,
+    app_fs_root: Option<&str>,
+    identity: Option<&crate::hv::BlueprintInstanceIdentity>,
+    launch_script: Option<&str>,
+    trueosfs_scope: bool,
+) -> BTreeMap<String, String> {
+    let mut vars = build_host_env();
+    let app_home = app_fs_root
+        .map(|root| alloc::format!("/{}", root.trim_matches('/')))
+        .unwrap_or_else(|| String::from("/"));
+    vars.insert(String::from("PWD"), app_home.clone());
+    vars.insert(String::from("HOME"), app_home.clone());
     let archive_stem = safe_archive_stem(archive);
     if archive_stem == "voxy" {
         // Settings, profiles and logs survive replacement of the container.

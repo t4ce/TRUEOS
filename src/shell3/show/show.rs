@@ -5,6 +5,7 @@ mod copy;
 #[path = "cpu.rs"]
 mod cpu;
 mod pan;
+mod reveal;
 
 use super::RgbaColor;
 use super::update::RenderedLine;
@@ -62,6 +63,7 @@ pub struct Show {
     poisoned: bool,
     font_scale: u32,
     pan: Option<pan::PanBuffer>,
+    strips: [Option<reveal::StripCache>; 2],
     pan_budget: Option<crate::ui4::text_area::RasterBudget>,
 }
 
@@ -79,6 +81,7 @@ impl Show {
             poisoned: false,
             font_scale: 1,
             pan: None,
+            strips: [None, None],
             pan_budget: None,
         }
     }
@@ -192,7 +195,7 @@ impl Show {
             Backend::Cpu => cpu::present(&mut staged, lines, &[]),
             Backend::Copy => copy::present(&mut staged, lines, &[], &mut self.poisoned,
                 &mut self.pan, self.pan_budget.get_or_insert_with(||
-                    crate::ui4::text_area::RasterBudget::new(crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES)), area).await,
+                    crate::ui4::text_area::RasterBudget::new(crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES)), area, &mut self.strips, &[]).await,
             _ => Err("shell3-show-backend-not-implemented"),
         };
         if let Err(error) = render_result {
@@ -261,6 +264,7 @@ impl Show {
         columns: usize,
         rows: usize,
         batch: &super::UpdateBatch,
+        reveals: &[super::update::StripReveal],
         area: Option<&super::update::MatrixAreaSnapshot>,
     ) -> Result<(), &'static str> {
         if !matches!(self.backend, Backend::Copy | Backend::Cpu) {
@@ -301,7 +305,7 @@ impl Show {
             Backend::Copy => {
                 copy::present(surface, lines, &batch.segments, &mut self.poisoned,
                     &mut self.pan, self.pan_budget.get_or_insert_with(||
-                        crate::ui4::text_area::RasterBudget::new(crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES)), area).await?
+                        crate::ui4::text_area::RasterBudget::new(crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES)), area, &mut self.strips, reveals).await?
             }
             _ => return Err("shell3-show-backend-not-implemented"),
         };

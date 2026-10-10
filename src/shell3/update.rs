@@ -83,6 +83,16 @@ impl MatrixAreaSnapshot {
     }
 }
 
+/// Unmasked source for a clipped strip copy; cells shown in snapshots remain
+/// authoritative for damage, SSH output, and the presentation baseline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct StripReveal {
+    pub row: usize,
+    pub start: usize,
+    pub hidden: usize,
+    pub cells: RenderedLine,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Snapshot {
     size: (usize, usize),
@@ -93,6 +103,7 @@ pub(super) struct Snapshot {
     terminal_active: bool,
     blink_phase: Option<bool>,
     matrix_area: Option<MatrixAreaSnapshot>,
+    reveals: Vec<StripReveal>,
 }
 
 impl Snapshot {
@@ -110,12 +121,33 @@ impl Snapshot {
             terminal_active: false,
             blink_phase: None,
             matrix_area: None,
+            reveals: Vec::new(),
             rows: strips
                 .map(|(left, right)| VisibleRow {
                     rendered: styled_line(fit_meta_strips(left, right, columns), CONTROL_BACKGROUND),
                 })
                 .into(),
         }
+    }
+
+    pub(super) fn controls_match(&self, current: &Self) -> bool {
+        self.rows.get(..3) == current.rows.get(..3)
+    }
+    pub(super) fn reveals(&self) -> &[StripReveal] { &self.reveals }
+    pub(super) fn with_reveal(mut self, row: usize, left: &[MetaFmtStr], frame: Option<super::transition::Frame>) -> Self {
+        let Some(frame) = frame else { return self; };
+        let columns = self.size.0;
+        let left_width = left.iter().map(|r| r.text.chars().count()).sum();
+        let right_width = frame.source.iter().map(|r| r.text.chars().count()).sum();
+        let tags = fit_strips(alloc::vec![false; left_width], alloc::vec![true; right_width], columns, false, false);
+        let Some(start) = tags.iter().position(|tag| *tag) else { return self; };
+        let mut source = styled_line(fit_meta_strips(left, &frame.source, columns), CONTROL_BACKGROUND);
+        let cells = source[start..].to_vec();
+        let hidden = cells.len() - cells.len() * frame.visible / 3;
+        source[start..start + hidden].fill((' ', Some(RgbaColor::Terminal { foreground: RgbaColor::White.rgba(), background: CONTROL_BACKGROUND, underline: false })));
+        self.rows[row].rendered = source;
+        self.reveals.push(StripReveal { row, start, hidden, cells });
+        self
     }
 
     pub(super) fn with_matrix(self, lines: &[String], generation: u64) -> Self {
@@ -168,7 +200,7 @@ impl Snapshot {
     pub(super) fn matrix_area(&self) -> Option<&MatrixAreaSnapshot> { self.matrix_area.as_ref() }
 
     pub(super) fn terminal(size: (usize, usize), layout_generation: usize, lines: Vec<RenderedLine>, revision: u64) -> Self {
-        Self {size, layout_generation, rows: lines.into_iter().map(|rendered| VisibleRow {rendered}).collect(), matrix_generation: 0, tui_revision: revision, terminal_active: true, blink_phase: None, matrix_area: None}
+        Self {size, layout_generation, rows: lines.into_iter().map(|rendered| VisibleRow {rendered}).collect(), matrix_generation: 0, tui_revision: revision, terminal_active: true, blink_phase: None, matrix_area: None, reveals: Vec::new()}
     }
     pub(super) fn with_tui_revision(mut self, revision: u64) -> Self { self.tui_revision = revision; self }
     pub(super) fn tui_revision(&self) -> u64 { self.tui_revision }

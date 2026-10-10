@@ -90,7 +90,17 @@ pub(super) fn hit(
     column: usize,
     working: &[String],
 ) -> Option<Target> {
-    let (left, right) = entries(ids, None, aliases, working);
+    hit_with_width(ids, aliases, columns, column, working, None)
+}
+
+fn hit_with_width(ids: &[String], aliases: &[String], columns: usize, column: usize,
+    working: &[String], animated_width: Option<usize>) -> Option<Target> {
+    let (left, mut right) = entries(ids, None, aliases, working);
+    if let Some(width) = animated_width {
+        // Retiring aliases cannot launch stale apps. Keep the same footprint as
+        // the animated snapshot so left-hand slot targets still clip correctly.
+        right = alloc::vec![(MetaFmtStr::new(" ".repeat(width)), None)];
+    }
     let cells = |entries: Vec<Entry>| {
         entries
             .into_iter()
@@ -108,7 +118,9 @@ impl Shell3 {
         let target = column.and_then(|column| {
             let working = super::service::working_vmx_slots();
             let slots = matrix_slots().lock();
-            hit(&slots.ids, &self.aka_names, self.columns, column, &working)
+            let width = self.aka_transition.frame(crate::chronos::monotonic_nanos())
+                .map(|frame| frame.source.iter().map(|run| run.text.chars().count()).sum());
+            hit_with_width(&slots.ids, &self.aka_names, self.columns, column, &working, width)
         });
         let changed = target != self.status_hover;
         self.status_hover = target.clone();
