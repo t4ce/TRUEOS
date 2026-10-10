@@ -1,5 +1,6 @@
 pub mod app_crash;
 pub mod blueprint;
+pub(crate) mod launcher;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
 pub mod control_kick;

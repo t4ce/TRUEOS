@@ -131,19 +131,21 @@ pub(super) fn launch_bytes(archive: alloc::string::String, bytes: Vec<u8>, slot:
 }
 pub(crate) fn launch_bytes_with_script(archive: alloc::string::String, bytes: Vec<u8>, frontend: super::tui::Frontend, script: Option<alloc::string::String>) -> Result<QueuedBlueprint, alloc::string::String> {
     use sha2::{Digest, Sha256};
-    let required = crate::hv::blueprint::prebind_required_readiness(&bytes)?;
-    let worker = crate::workers::pick_background_spawner().ok_or("apps: no background worker")?;
     let (name, generation) = super::MatrixSlots::fresh_terminal_slot(None);
     let target = super::MatrixTarget::from_lease(super::MatrixSlotLease::from_identity(name.clone(), generation));
     if let Err(error) = super::tui::attach(frontend, &target) {
         super::MatrixSlots::drop_slot(Some(&name)); return Err(error);
     }
     let receipt = QueuedBlueprint { slot: name.clone(), app: archive.clone(), sha256: Sha256::digest(&bytes).into() };
-    let task = match launch_task(archive, bytes, target, required, script) {
-        Ok(task) => task,
-        Err(_) => { super::MatrixSlots::drop_slot(Some(&name)); return Err("apps: launch task pool exhausted".into()); }
-    };
-    worker.spawn(task);
+    let observer = ShellLaunch { target: target.clone() };
+    let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
+    request.script = script;
+    request.console_target = Some(target);
+    request.console_surface = crate::hv::BlueprintConsoleSurface::Terminal;
+    if let Err(error) = crate::hv::launcher::enqueue(request, Some(alloc::boxed::Box::new(observer))) {
+        super::MatrixSlots::drop_slot(Some(&name));
+        return Err(error);
+    }
     Ok(receipt)
 }
 
@@ -748,53 +750,30 @@ pub fn start_pool() -> Result<usize, SpawnError> {
     Ok(started)
 }
 
-// Serializes VM admission; records only exact slot lifetimes owned by Shell3.
+// UI ownership only; HV serializes admission and monitors each VM run.
 static APP_LAUNCHES: spin::Mutex<Vec<(super::MatrixSlotLease, u8)>> = spin::Mutex::new(Vec::new());
 
-#[trueos_executor::task(pool_size = 64)]
-async fn launch_task(archive: alloc::string::String, bytes: Vec<u8>, target: super::MatrixTarget, required: u32, script: Option<alloc::string::String>) {
-    let lease = super::matrix_target_slot_lease(&target);
-    let deadline = trueos_time::Instant::now() + Duration::from_secs(30);
-    while crate::r::readiness::mask() & required != required {
-        if !super::matrix_target::matrix_slot_is_live(&lease) { return; }
-        if trueos_time::Instant::now() >= deadline {
-            super::MatrixSlots::echo(None, None, alloc::format!("apps: {archive}: readiness timeout mask=0x{required:x}"));
-            super::MatrixSlots::drop_slot(Some(lease.name())); return;
-        }
-        Timer::after(Duration::from_millis(25)).await;
+struct ShellLaunch { target: super::MatrixTarget }
+
+impl crate::hv::launcher::LaunchObserver for ShellLaunch {
+    fn is_live(&self) -> bool {
+        super::matrix_target::matrix_slot_is_live(&super::matrix_target_slot_lease(&self.target))
     }
-    let spawner = unsafe { trueos_executor::Spawner::for_current_executor().await };
-    let result = {
+    fn starting(&self, vm: u8) { super::tui::bind_vm(&self.target, vm); }
+    fn started(&self, vm: u8) {
+        let lease = super::matrix_target_slot_lease(&self.target);
         let mut launches = APP_LAUNCHES.lock();
-        if !super::matrix_target::matrix_slot_is_live(&lease) { return; }
-        match crate::hv::first_free_vm_id() {
-            Some(vm) => {
-                super::tui::bind_vm(&target, vm);
-                let result = crate::hv::start_blueprint_app_vm(vm, &spawner, archive.clone(), bytes,
-                    Vec::new(), script, crate::hv::BlueprintInstanceRequest::default(), Some(target),
-                    crate::hv::BlueprintConsoleSurface::Terminal);
-                if result.is_ok() { launches.push((lease.clone(), vm)); }
-                result.map(|()| vm).map_err(|error| alloc::format!("{error:?}"))
-            }
-            None => Err("no free VM".into()),
-        }
-    };
-    let vm = match result {
-        Ok(vm) => vm,
-        Err(error) => {
-            super::MatrixSlots::echo(None, None, alloc::format!("apps: {archive}: {error}"));
-            super::MatrixSlots::drop_slot(Some(lease.name())); return;
-        }
-    };
-    let run = crate::hv::vm_run_generation(vm);
-    loop {
-        if !super::matrix_target::matrix_slot_is_live(&lease) { return; }
-        let state = crate::hv::vm_state(vm);
-        if crate::hv::vm_run_generation(vm) != run || (!state.running && !state.starting) { break; }
-        Timer::after(Duration::from_millis(100)).await;
+        if self.is_live() { launches.push((lease, vm)); }
+        else { let _ = crate::hv::kill_for_matrix_slot(vm, &lease); }
     }
-    APP_LAUNCHES.lock().retain(|(owner, id)| owner != &lease || *id != vm);
-    if super::matrix_target::matrix_slot_is_live(&lease) { super::MatrixSlots::drop_slot(Some(lease.name())); }
+    fn finished(&self, vm: Option<u8>, error: Option<&str>) {
+        let lease = super::matrix_target_slot_lease(&self.target);
+        APP_LAUNCHES.lock().retain(|(owner, id)| owner != &lease || Some(*id) != vm);
+        if self.is_live() {
+            if let Some(error) = error { super::MatrixSlots::echo(None, None, alloc::format!("apps: {error}")); }
+            super::MatrixSlots::drop_slot(Some(lease.name()));
+        }
+    }
 }
 
 pub(super) fn hv_status_lines() -> Vec<alloc::string::String> {
