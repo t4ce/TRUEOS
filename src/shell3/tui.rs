@@ -561,10 +561,18 @@ pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
     }
     true
 }
-/// Explicit navigation reenters a parked host helper, including its current slot.
+/// Explicit navigation reenters a wired terminal, including its current slot.
 /// Resize/repaint selection above never silently undoes an operator park.
 pub(super) fn select_for_navigation(frontend: Frontend, name: &str) -> bool {
     if !select(frontend, Some(name)) {return false;}
+    let blueprint = ROUTES.lock().routes.iter().any(|route| {
+        route.lease.name() == name && route.native.is_none() && route.vm.is_some()
+    });
+    if blueprint {
+        // Reserved text programs remain text programs. Parked terminal apps
+        // receive the same reentry request as an explicit `tui` command.
+        return request(frontend, name).is_ok();
+    }
     let mut routes = ROUTES.lock();
     if let Some(route) = routes.routes.iter_mut().find(|r| r.frontend == frontend.id && r.lease.name() == name) {
         if let Some(native) = route.native.as_mut() {

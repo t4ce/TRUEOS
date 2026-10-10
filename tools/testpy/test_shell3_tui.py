@@ -123,6 +123,22 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     hv::INPUT.lock().unwrap().clear();tui::write(&t,2,b"\\x1b[6n");assert!(!hv::INPUT.lock().unwrap().is_empty());
     tui::detach(f.id);assert!(!tui::supports(&t));
 }
+#[test] fn explicit_slot_navigation_requests_blueprint_reentry_without_claiming_text_output() {
+    let (f,t)=session("navigation-reentry",24,20,8);
+    let before=hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(tui::select_for_navigation(f,"navigation-reentry"));
+    assert_eq!(hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed),before+1);
+    assert!(tui::snapshot(f.id,Some("navigation-reentry")).is_none());
+    assert_eq!(tui::claim(&t,24),Some(true));
+    assert!(tui::park(f.id));
+    let other=frontend(30,12);
+    assert!(tui::select_for_navigation(other,"navigation-reentry"));
+    assert_eq!(hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed),before+2);
+    assert_eq!(tui::claim(&t,24),Some(true));
+    assert!(tui::active(other.id,Some("navigation-reentry")));
+    assert!(!tui::select_for_navigation(f,"navigation-reentry"));
+    shell2::free_name("navigation-reentry");
+}
 #[test] fn ui4_drag_endpoints_follow_the_exact_live_terminal_owner() {
     let (f,t)=session("drag-window",10,20,8);tui::bind_ui4_window(f.id,123);
     assert_eq!(tui::window_for_vm(10),None);assert_eq!(tui::vm_for_window(123),None);

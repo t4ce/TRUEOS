@@ -3,7 +3,7 @@
 use super::MetaFmtStr;
 use alloc::vec::Vec;
 
-const STEP_NS: u64 = 50_000_000;
+const STEP_NS: u64 = 25_000_000;
 const CHARACTER_STEPS: usize = 4;
 #[derive(Default)]
 pub(super) struct TokenSteps { change: Option<Change> }

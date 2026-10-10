@@ -19,7 +19,7 @@ pub(crate) fn startup_text(ip: Option<[u8; 4]>) -> String {
 pub(crate) async fn autostart() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
     loop {
-        let startup = crate::shell3::startup::Startup {
+        let startup = crate::shell3::startup::Startup::Script {
             launch_script: String::from(LAUNCH_SCRIPT),
         };
         match crate::shell3::service::request_shell3_with_startup(Some(startup)) {

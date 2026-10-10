@@ -50,27 +50,27 @@ def main():
         let expected=["abcdef","abcde ","abcd  ","abc   ","ab    ","      ","     Z","    YZ","   XYZ","  WXYZ","UVWXYZ"];
         let mut previous=frame(&change,0,"clock",24);
         for (step,text) in expected.iter().enumerate() {
-            let snapshot=frame(&change,step as u64*50,"clock",24);
-            assert_eq!(&displayed(&change,step as u64*50),text);
+            let snapshot=frame(&change,step as u64*25,"clock",24);
+            assert_eq!(&displayed(&change,step as u64*25),text);
             let lines=snapshot.rendered_lines();
             assert_eq!(lines[1..],previous.rendered_lines()[1..]);
             let batch=update::build_updates(&previous,&snapshot,&[]);
             assert!(batch.segments.iter().all(|segment|segment.row==SpecialRows::TitleRow));
             previous=snapshot;
         }
-        assert!(change.frame(500_000_000).is_none());
+        assert!(change.frame(250_000_000).is_none());
         assert!(change.frame(9_000_000_000).is_none());
-        let clock_change=frame(&change,600,"newclock",24);
+        let clock_change=frame(&change,300,"newclock",24);
         assert!(!previous.controls_match(&clock_change));
     }
     #[test] fn words_move_together_in_both_directions() {
         for from_right in [false,true] {
             let mut change=transition::TokenSteps::default();
             change.start(&runs("abc defghi"),&runs("JKL MNOPQR"),0,from_right);
-            let snapshot=frame(&change,50,"clock",24);
+            let snapshot=frame(&change,25,"clock",24);
             let line:String=snapshot.rendered_lines()[0][14..].iter().map(|cell|cell.0).collect();
             assert_eq!(line,if from_right {"ab  defgh "} else {" bc  efghi"});
-            let snapshot=frame(&change,300,"clock",24);
+            let snapshot=frame(&change,150,"clock",24);
             let line:String=snapshot.rendered_lines()[0][14..].iter().map(|cell|cell.0).collect();
             assert_eq!(line,if from_right {"  L      R"} else {"J   M     "});
             assert_eq!(snapshot.reveals()[0].spans.len(),2);
@@ -79,11 +79,11 @@ def main():
     #[test] fn retarget_clipping_unicode_and_cancellation() {
         let mut change=transition::TokenSteps::default();
         change.start(&runs("abcdef"),&runs("UVWXYZ"),0,true);
-        let before=frame(&change,100,"clock",24).rendered_lines()[0].clone();
-        change.start(&runs("UVWXYZ"),&runs("123456"),100_000_000,false);
-        assert_eq!(frame(&change,100,"clock",24).rendered_lines()[0],before);
+        let before=frame(&change,50,"clock",24).rendered_lines()[0].clone();
+        change.start(&runs("UVWXYZ"),&runs("123456"),50_000_000,false);
+        assert_eq!(frame(&change,50,"clock",24).rendered_lines()[0],before);
         for columns in [0,1,3,7,24] {
-            for ms in [100,150,200,250,300,400,600] {
+            for ms in [50,75,100,125,150,200,300] {
                 let snapshot=frame(&change,ms,"long clock",columns);
                 assert!(snapshot.rendered_lines()[0].len()<=columns);
                 for reveal in snapshot.reveals() {
@@ -93,17 +93,17 @@ def main():
             }
         }
         change.finish();
-        assert!(change.frame(100_000_000).is_none());
+        assert!(change.frame(50_000_000).is_none());
         let styled=vec![MetaFmtStr::new("äβ😀def").underline()];
         change.start(&styled,&runs("UVWXYZ"),0,false);
-        let snapshot=frame(&change,50,"clock",24);
+        let snapshot=frame(&change,25,"clock",24);
         let lines=snapshot.rendered_lines();
         assert_eq!(lines[0][20].0,'😀');
         assert!(!lines[0][18].1.unwrap().underline());
         assert!(lines[0][20].1.unwrap().underline());
-        assert_eq!(snapshot.reveals()[0].cells,frame(&change,100,"clock",24).reveals()[0].cells);
-        change.start(&runs("x"),&runs("x"),700_000_000,true);
-        assert!(change.frame(700_000_000).is_none());
+        assert_eq!(snapshot.reveals()[0].cells,frame(&change,50,"clock",24).reveals()[0].cells);
+        change.start(&runs("x"),&runs("x"),350_000_000,true);
+        assert!(change.frame(350_000_000).is_none());
     }
 }
 }
