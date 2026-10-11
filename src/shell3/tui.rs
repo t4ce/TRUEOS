@@ -51,6 +51,7 @@ struct Registry {
     next_revision: u64,
     remote_frontends: Vec<(u64, remote::Output)>,
     pending_launches: Vec<(u64, QueuedBlueprint)>,
+    navigation_holds: Vec<u64>,
 }
 impl Registry {
     const fn new() -> Self {
@@ -61,6 +62,7 @@ impl Registry {
             next_revision: 0,
             remote_frontends: Vec::new(),
             pending_launches: Vec::new(),
+            navigation_holds: Vec::new(),
         }
     }
     fn changed(&mut self, id: u64) {
@@ -163,11 +165,12 @@ pub(crate) fn attach(
     {
         let mut routes = ROUTES.lock();
         if routes.routes.iter().any(|route| route.lease == lease) {return Err("tui: terminal target already attached".into());}
+        let selected = !routes.navigation_holds.contains(&frontend.id);
         routes.routes.push(Route {
             native: None,
             lease: lease.clone(),
             frontend: frontend.id,
-            selected: true,
+            selected,
             vm: None,
             owner: None,
             screen: Terminal::new(frontend.cols, frontend.rows),
@@ -360,7 +363,7 @@ pub(super) fn attach_native(frontend: Frontend, target: &MatrixTarget) -> Result
     attach(frontend, target)?;
     let lease = crate::shell3::matrix_target_slot_lease(target);
     if let Some(route) = ROUTES.lock().routes.iter_mut().find(|r| r.lease == lease) {
-        route.native = Some(Native {active: true, painted: false, return_to_default: false, launch: None, input: VecDeque::new(), notices: VecDeque::new()});
+        route.native = Some(Native {active: route.selected, painted: false, return_to_default: false, launch: None, input: VecDeque::new(), notices: VecDeque::new()});
     }
     Ok(())
 }
@@ -487,6 +490,16 @@ pub(super) fn revision(frontend: u64) -> u64 {
         .find(|entry| entry.0 == frontend)
         .map_or(0, |entry| entry.1)
 }
+/// Launches may prepare their routes while accepted-word feedback owns the UI.
+pub(super) fn hold_navigation(frontend: u64, hold: bool) {
+    let mut routes = ROUTES.lock();
+    if hold {
+        if !routes.navigation_holds.contains(&frontend) { routes.navigation_holds.push(frontend); }
+    } else {
+        routes.navigation_holds.retain(|id| *id != frontend);
+    }
+}
+
 pub(super) fn park(frontend: u64) -> bool {
     {
         let mut routes = ROUTES.lock();
@@ -588,6 +601,15 @@ pub(super) fn select_for_navigation(frontend: Frontend, name: &str) -> bool {
 }
 pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str> {
     if native_slot(name) {
+        {
+            let routes = ROUTES.lock();
+            if routes.navigation_holds.contains(&frontend.id) {
+                if routes.routes.iter().any(|route| route.lease.name() == name && route.frontend != frontend.id && route.active()) {
+                    return Err("tui: terminal UI is owned by another Shell3");
+                }
+                return Ok(());
+            }
+        }
         if !select(frontend, Some(name)) {return Err("tui: terminal UI is owned by another Shell3");}
         let mut routes = ROUTES.lock();
         if let Some(route) = routes.routes.iter_mut().find(|r| r.frontend == frontend.id && r.lease.name() == name) {
@@ -622,6 +644,7 @@ pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str
     crate::hv::blueprint_terminal_request_reentry(vm)
 }
 pub(super) fn detach(frontend: u64) {
+    hold_navigation(frontend, false);
     ROUTES.lock().ui4_windows.retain(|entry| entry.0 != frontend);
     let names: Vec<_> = ROUTES
         .lock()

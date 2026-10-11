@@ -5,7 +5,9 @@ mod input;
 use super::{MetaFmtStr, RgbaColor, Shell3, SpecialRows};
 use alloc::{string::String, vec::Vec};
 use ansi::AnsiView;
-use input::{CommandHistory, InputDecoder};
+use input::InputDecoder;
+use super::command_history::CommandHistory;
+use zeroize::Zeroize;
 
 const LINE_LIMIT: usize = 1024;
 // Bounded queue large enough for the maximum accepted SSH frame (512 × 256).
@@ -35,12 +37,15 @@ impl Terminal {
 
     fn start(mut shell: Shell3, controls: bool) -> Self {
         if controls { super::tui::bind_remote_frontend(shell.tui_frontend); }
+        shell.command_history.set_recording(false);
+        let mut history = CommandHistory::default();
+        history.set_scope(super::matrix_target::TRANSPORT_NET_TCP_SCOPE);
         shell.set_mode(3);
         let mut terminal = Self {
             shell,
             line: String::new(),
             line_overflow: false,
-            history: CommandHistory::default(),
+            history,
             decoder: InputDecoder::default(),
             prompt_name: String::new(),
             view: AnsiView::new(controls),
@@ -88,6 +93,11 @@ impl Terminal {
     }
 
     pub(super) fn reconcile_matrix_selection(&mut self) {
+        let recalled = self.history.cursor.is_some();
+        if self.history.sync() && recalled {
+            self.line.zeroize();
+            self.shell.set_prompt("");
+        }
         self.shell.refresh_clock();
         self.shell.reconcile_matrix_selection();
         self.refresh_controls();
@@ -110,3 +120,5 @@ impl Terminal {
         }
     }
 }
+
+impl Drop for Terminal { fn drop(&mut self) { self.line.zeroize(); self.decoder.utf8.zeroize(); self.decoder.csi.zeroize(); } }

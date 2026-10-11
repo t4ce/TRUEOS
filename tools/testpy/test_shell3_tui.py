@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import test_clip_position3_uv_texture as extract
+import shell3_history_support as history_support
 ROOT = Path(__file__).resolve().parents[2]
 extract.ROOT = ROOT
 
@@ -12,6 +13,8 @@ extract.ROOT = ROOT
 def main():
     shell = (ROOT / 'src/shell3/shell3.rs').read_text()
     source = '#![allow(dead_code)]\nextern crate alloc;\nuse alloc::{string::String,vec::Vec};\n'
+    source += history_support.auth_fixture(1).replace('mod matrix_target {pub const TRANSPORT_NET_TCP_SCOPE:u8=1;pub const TRANSPORT_LOCAL_SCOPE:u8=2;}', '')
+    source += f'#[path="{ROOT}/src/shell3/command_history.rs"] mod command_history;\n'
     for name in ('RgbaColor','SpecialRows','StripSide'):
         source += extract.item('src/shell3/shell3.rs', name)
     source += re.search(r'^impl RgbaColor \{.*?^}', shell, re.M | re.S).group()
@@ -86,6 +89,22 @@ fn frontend(cols:usize,rows:usize)->tui::Frontend {tui::Frontend {id:tui::new_fr
 fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::MatrixTarget) {
     hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
     let f=frontend(cols,rows);let t=shell2::target(name,1);tui::attach(f,&t).unwrap();hv::bind(vm,&t);(f,t)
+}
+#[test] fn accepted_word_hold_prepares_blueprint_before_terminal_handoff() {
+    hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
+    let f=frontend(20,5);tui::hold_navigation(f.id,true);
+    let t=shell2::target("latched-blueprint",1);tui::attach(f,&t).unwrap();hv::bind(24,&t);
+    assert!(tui::supports(&t));assert_eq!(tui::claim(&t,24),Some(false));
+    tui::hold_navigation(f.id,false);assert!(tui::select(f,Some("latched-blueprint")));
+    assert_eq!(tui::claim(&t,24),Some(true));tui::detach(f.id);
+}
+#[test] fn accepted_word_hold_keeps_new_and_resumed_native_helpers_parked() {
+    let f=frontend(20,5);let t=shell2::target("latched-native",1);
+    tui::hold_navigation(f.id,true);tui::attach_native(f,&t).unwrap();
+    assert!(!tui::active(f.id,Some("latched-native")));
+    tui::request(f,"latched-native").unwrap();assert!(!tui::active(f.id,Some("latched-native")));
+    tui::hold_navigation(f.id,false);assert!(tui::select_for_navigation(f,"latched-native"));
+    assert!(tui::active(f.id,Some("latched-native")));tui::detach(f.id);
 }
 #[test] fn stdout_transcript_keeps_prompt_until_terminal_claim() {
     let (f,t)=session("stdout-transcript",23,20,5);
@@ -182,7 +201,7 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
 '''
     source += r'''
 struct RowStrips {left:Vec<MetaFmtStr>}
-struct Shell3 {tui_frontend:u64,name:String,size:(usize,usize),prompt:String,mode:u8}
+struct Shell3 {command_history:command_history::CommandHistory,tui_frontend:u64,name:String,size:(usize,usize),prompt:String,mode:u8}
 impl Shell3 {
     fn row_for_render(&self,_:SpecialRows)->RowStrips {RowStrips {left:vec![MetaFmtStr::new("TrueOS")]}}
     fn active_matrix_slot_name(&self)->Option<String>{Some(self.name.clone())}
@@ -216,7 +235,7 @@ impl Shell3 {
     source += r'''
 #[test] fn ssh_global_operator_escapes_raw_input_even_across_utf8_packet_splits(){
     let (f,t)=session("ssh-fastspawn",19,40,8);
-    let shell=Shell3 {tui_frontend:f.id,name:"ssh-fastspawn".into(),size:(40,8),prompt:String::new(),mode:3};
+    let shell=Shell3 {command_history:Default::default(),tui_frontend:f.id,name:"ssh-fastspawn".into(),size:(40,8),prompt:String::new(),mode:3};
     let mut tty=tty::Terminal::new_ssh(shell);assert_eq!(tui::claim(&t,19),Some(true));
     hv::INPUT.lock().unwrap().clear();
     tty.input(b"abc\xc2");assert_eq!(*hv::INPUT.lock().unwrap(),b"abc");assert!(tty.test_prompt().is_empty());
@@ -225,7 +244,7 @@ impl Shell3 {
 }
 #[test] fn ssh_shares_tui_frames_raw_input_resize_park_release_and_reentry(){
     let (f,t)=session("ssh-tui",7,12,5);
-    let shell=Shell3 {tui_frontend:f.id,name:"ssh-tui".into(),size:(12,5),prompt:String::new(),mode:3};
+    let shell=Shell3 {command_history:Default::default(),tui_frontend:f.id,name:"ssh-tui".into(),size:(12,5),prompt:String::new(),mode:3};
     let mut tty=tty::Terminal::new_ssh(shell);tty.output.clear();
     assert_eq!(tui::claim(&t,7),Some(true));
     tui::write(&t,7,b"\x1b[?25l\x1b[2J\x1b[2;3H\x1b[38;2;1;2;3mAPP");
@@ -251,7 +270,7 @@ impl Shell3 {
 #[test] fn ssh_app_mouse_preferences_are_scoped_to_the_live_lease(){
     use trueos_terminal::MouseTracking;
     let (f,t)=session("mouse-scope",8,12,5);
-    let shell=Shell3 {tui_frontend:f.id,name:"mouse-scope".into(),size:(12,5),prompt:String::new(),mode:3};
+    let shell=Shell3 {command_history:Default::default(),tui_frontend:f.id,name:"mouse-scope".into(),size:(12,5),prompt:String::new(),mode:3};
     let mut tty=tty::Terminal::new_ssh(shell);
     assert!(!String::from_utf8_lossy(&tty.output).contains("?1003h"));
     assert_eq!(tui::claim(&t,8),Some(true));tty.output.clear();tty.reconcile_matrix_selection();
@@ -295,7 +314,7 @@ impl Shell3 {
 }
 #[test] fn ssh_does_not_split_mouse_reports_into_standalone_escape_submissions(){
     let (f,t)=session("mouse-batch",9,120,40);
-    let shell=Shell3 {tui_frontend:f.id,name:"mouse-batch".into(),size:(120,40),prompt:String::new(),mode:3};
+    let shell=Shell3 {command_history:Default::default(),tui_frontend:f.id,name:"mouse-batch".into(),size:(120,40),prompt:String::new(),mode:3};
     let mut tty=tty::Terminal::new_ssh(shell);assert_eq!(tui::claim(&t,9),Some(true));
     hv::SUBMISSIONS.lock().unwrap().clear();
     let reports=b"\x1b[<35;88;17M\x1b[<0;88;17M\x1b[<0;88;17m";
@@ -337,7 +356,7 @@ impl Shell3 {
 }
 #[test] fn native_admin_on_ssh_keeps_cell_frames_input_scope_and_reentry() {
     let f=frontend(70,25);let t=shell2::target("native-admin-ssh",1);
-    let shell=Shell3 {tui_frontend:f.id,name:"native-admin-ssh".into(),size:(70,25),prompt:String::new(),mode:3};
+    let shell=Shell3 {command_history:Default::default(),tui_frontend:f.id,name:"native-admin-ssh".into(),size:(70,25),prompt:String::new(),mode:3};
     let mut tty=tty::Terminal::new_ssh(shell);tty.output.clear();
     tui::attach_native(f,&t).unwrap();assert_eq!(tui::native_transport_scope(&t),Some(1));
     tui::native_write(&t,"\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[2JCRY  account & keys\x1b[23;1HAuthenticator code: ••••••".as_bytes());
@@ -406,11 +425,13 @@ impl Shell3 {
         (path/'spin.rs').write_text('pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T> {pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<\'_,T>{self.0.lock().unwrap()}}')
         for name, file in [('spin', path/'spin.rs'), ('trueos_terminal', ROOT/'crates/trueos-terminal/src/lib.rs'), ('microfont', ROOT/'vendor/microfont/src/lib.rs')]:
             subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
+        dependency_args = history_support.dependencies(path)
         tui_source=(ROOT/'src/shell3/tui.rs').read_text().replace('mod remote;', f'#[path="{ROOT}/src/shell3/tui/remote.rs"] mod remote;')
         (path/'tui.rs').write_text(tui_source)
         (path/'test.rs').write_text(source.replace(str(ROOT/'src/shell3/tui.rs'),str(path/'tui.rs')))
         args = ['rustc','--edition=2024','--test',str(path/'test.rs'),'-o',str(path/'tests')]
-        for name in ('spin','trueos_terminal','microfont'):
+        args += dependency_args
+        for name in ('trueos_terminal','microfont'):
             args += ['--extern',f'{name}={path}/lib{name}.rlib']
         subprocess.run(args,check=True)
         subprocess.run([str(path/'tests'),'--test-threads=1'],check=True)

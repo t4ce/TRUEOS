@@ -12,6 +12,8 @@ mod status;
 pub(crate) mod tui;
 mod update;
 mod transition;
+mod command_latch;
+mod command_history;
 
 pub mod service;
 pub(crate) mod startup;
@@ -30,6 +32,7 @@ use alloc::{
 };
 use names::{ADM_NAMES, CMD_GROUPS, HV_GROUPS};
 use spin::Once;
+use zeroize::Zeroize;
 
 pub const MAX_SHELL3_INSTANCES: usize = 256;
 pub const OPERATOR: char = '§';
@@ -487,6 +490,8 @@ struct PromptState {
     cursor: usize,
 }
 
+impl Drop for PromptState { fn drop(&mut self) { self.text.zeroize(); } }
+
 impl PromptState {
     fn new() -> Self {
         Self {
@@ -520,7 +525,17 @@ impl PromptState {
     }
 }
 
+enum LatchedNavigation {
+    Default,
+    Slot { name: String, lifetime: Option<u64> },
+    App { app: service::QueuedBlueprint, lifetime: u64 },
+    Resume { name: String, lifetime: Option<u64> },
+}
+
 pub struct Shell3 {
+    command_history: command_history::CommandHistory,
+    command_feedback: Option<command_latch::Feedback>,
+    latched_navigation: Option<LatchedNavigation>,
     tab_from_right: bool,
     title_transition: transition::TokenSteps,
     aka_transition: transition::TokenSteps,
@@ -576,6 +591,7 @@ impl Shell3 {
             rows,
             slot,
         );
+        shell.command_history.set_scope(matrix_target::TRANSPORT_NET_TCP_SCOPE);
         shell.set_show_backend(ShowBackend::Network);
         let (name, lifetime) = MatrixSlots::fresh_terminal_slot(peer_port);
         shell.active_matrix_slot = Some(name);
@@ -670,6 +686,9 @@ impl Shell3 {
         .with_matrix(&matrix_lines, matrix_generation);
 
         Self {
+            command_history: command_history::CommandHistory::default(),
+            command_feedback: None,
+            latched_navigation: None,
             tab_from_right: false,
             title_transition: transition::TokenSteps::default(),
             aka_transition: transition::TokenSteps::default(),
@@ -877,6 +896,10 @@ impl Shell3 {
 
     pub fn select_matrix_slot_index(&mut self, index: usize) -> bool {
         if index == 0 {
+            if self.command_feedback.is_some() {
+                self.latched_navigation = Some(LatchedNavigation::Default);
+                return true;
+            }
             if !tui::select(self.tui_frontend(), None) {return false;}
             self.active_matrix_slot = None;
             self.active_matrix_lifetime = None;
@@ -896,6 +919,10 @@ impl Shell3 {
         let name = name.clone();
         let lifetime = slots.lifetimes.iter().find(|(id,_)| id == &name).map(|(_,lifetime)| *lifetime);
         drop(slots);
+        if self.command_feedback.is_some() {
+            self.latched_navigation = Some(LatchedNavigation::Slot { name: name.to_string(), lifetime });
+            return true;
+        }
         if !tui::select_for_navigation(self.tui_frontend(), &name) {return false;}
         self.active_matrix_slot = Some(name);
         self.active_matrix_lifetime = lifetime;
@@ -915,6 +942,10 @@ impl Shell3 {
 
         let lifetime = slots.lifetimes.iter().find(|(id,_)| id == name).map(|(_,lifetime)| *lifetime);
         drop(slots);
+        if self.command_feedback.is_some() {
+            self.latched_navigation = Some(LatchedNavigation::Slot { name: name.to_string(), lifetime });
+            return true;
+        }
         if !tui::select_for_navigation(self.tui_frontend(), name) {return false;}
         self.active_matrix_slot = Some(name.to_string());
         self.active_matrix_lifetime = lifetime;
@@ -951,6 +982,9 @@ impl Shell3 {
 
     /// Every owner reconciles deletion locally; no cross-AP model mutation.
     pub(super) fn reconcile_matrix_selection(&mut self) {
+        self.finish_command_latch(false);
+        let recalled = self.command_history.cursor.is_some();
+        if self.command_history.sync() && recalled { self.set_prompt(""); }
         self.sync_aka_names();
         if tui::active(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
             self.title_transition.finish();
@@ -966,10 +1000,14 @@ impl Shell3 {
 
     /// Enter is reserved for operator submission; other prompt text is inert.
     fn submit_operator_prompt(&mut self) -> bool {
-        let input = self.prompt.text.clone();
+        let mut input = self.prompt.text.clone();
         if !self.parse_operator(&input) {
+            input.zeroize();
             return false;
         }
+        self.command_history.remember(&input);
+        input.zeroize();
+        self.command_history.end_recall();
         self.set_prompt("");
         true
     }
@@ -1023,6 +1061,7 @@ impl Shell3 {
     ) -> (bool, bool) {
         use crate::r::keyboard::*;
         if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 { return (false, false); }
+        self.finish_command_latch(true);
         let operator = event.kind == KEYBOARD_OUTPUT_KIND_TEXT && event.codepoint == OPERATOR as u32;
         if operator && !tui::park(self.tui_frontend) { return (false, false); }
         if !operator {
@@ -1030,9 +1069,24 @@ impl Shell3 {
         }
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
             match event.key_code {
-                KEYBOARD_KEY_ENTER => return (self.submit_operator_prompt(), false),
+                KEYBOARD_KEY_ARROW_UP | KEYBOARD_KEY_ARROW_DOWN => {
+                    let Some(text) = self.command_history.recall(event.key_code == KEYBOARD_KEY_ARROW_UP, &self.prompt.text) else { return (false, false); };
+                    self.set_prompt(&text);
+                    self.set_cursor(text.chars().count());
+                    return (true, false);
+                }
+                KEYBOARD_KEY_ENTER => {
+                    if self.command_history.cursor.is_some() {
+                        let input = self.prompt.text.clone();
+                        self.command_history.end_recall();
+                        self.replay_terminal_line(&input);
+                        return (true, true);
+                    }
+                    return (self.submit_operator_prompt(), false);
+                }
                 KEYBOARD_KEY_TAB => return (self.set_mode(self.get_mode() % 3 + 1), false),
                 KEYBOARD_KEY_BACKSPACE => {
+                    self.command_history.end_recall();
                     if self.prompt.cursor == 0 {
                         return (false, false);
                     }
@@ -1055,6 +1109,7 @@ impl Shell3 {
         let Some(ch) = char::from_u32(event.codepoint).filter(|ch| !ch.is_control()) else {
             return (false, false);
         };
+        self.command_history.end_recall();
         let right_len = self
             .rows
             .promt
@@ -1099,7 +1154,47 @@ impl Shell3 {
         }
     }
 
+    fn finish_command_latch(&mut self, force: bool) {
+        let now = crate::chronos::monotonic_nanos();
+        if !self.command_feedback.as_ref().is_some_and(|feedback| force || feedback.finished(now)) { return; }
+        self.command_feedback = None;
+        tui::hold_navigation(self.tui_frontend, false);
+        match self.latched_navigation.take() {
+            Some(LatchedNavigation::Default) => { self.select_matrix_slot_index(0); }
+            Some(LatchedNavigation::Slot { name, lifetime }) => {
+                // Do not navigate into a different slot that reused this name.
+                let live = matrix_slots().lock().lifetimes.iter().any(|(id, generation)| id == &name && Some(*generation) == lifetime);
+                if live { self.select_matrix_slot_name(&name); }
+            }
+            Some(LatchedNavigation::App { app, lifetime }) => {
+                let live = matrix_slots().lock().lifetimes.iter().any(|(name, generation)| name == &app.slot && *generation == lifetime);
+                if live { self.select_queued_app(app); }
+            }
+            Some(LatchedNavigation::Resume { name, lifetime }) => {
+                if self.active_matrix_slot.as_deref() == Some(&name) && self.active_matrix_lifetime == lifetime {
+                    if let Err(error) = tui::request(self.tui_frontend(), &name) {
+                        MatrixSlots::echo(Some(&name), lifetime, error.into());
+                    }
+                }
+            }
+            None => {}
+        }
+        self.matrix_selection_dirty = true;
+        service::notify_work();
+    }
+
     fn select_queued_app(&mut self, app: service::QueuedBlueprint) {
+        if self.command_feedback.is_some() {
+            let lifetime = MatrixSlots::ensure_named(&app.slot);
+            let mut slots = matrix_slots().lock();
+            slots.vmx_apps.retain(|existing| existing.slot != app.slot);
+            slots.vmx_apps.push(app.clone());
+            slots.generation = slots.generation.wrapping_add(1);
+            drop(slots);
+            self.latched_navigation = Some(LatchedNavigation::App { app, lifetime });
+            service::notify_work();
+            return;
+        }
         if !tui::select(self.tui_frontend(), Some(&app.slot)) {
             tui::queue_launch(self.tui_frontend, app);
             return;
@@ -1124,13 +1219,20 @@ impl Shell3 {
         if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) {
             return false;
         }
-        let text = core::mem::take(&mut self.prompt.text);
+        let mut text = core::mem::take(&mut self.prompt.text);
+        self.command_history.remember(&text);
+        self.command_history.end_recall();
+        self.command_feedback = Some(command_latch::Feedback::new(&text, crate::chronos::monotonic_nanos(), self.tab_from_right));
+        self.latched_navigation = None;
+        tui::hold_navigation(self.tui_frontend, true);
+        service::notify_work();
         let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
         let is_app = can_launch && self.appdb_names.iter().any(|name| name == &text);
         let is_alias = self.aka_names.iter().any(|name| name == &text);
         if self.mode == Mode::ADM && text == "log" {
             if self.parse_operator("§log") {
-                if let Some(lifetime) = self.active_matrix_lifetime {
+                let lifetime = matrix_slots().lock().lifetimes.iter().find(|(name, _)| name == "log").map(|(_, lifetime)| *lifetime);
+                if let Some(lifetime) = lifetime {
                     let lease = MatrixSlotLease::from_identity("log".into(), lifetime);
                     if let Err(error) = log_tap::start(lease) {
                         MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error.into());
@@ -1168,9 +1270,10 @@ impl Shell3 {
         } else if text == "stop" && self.active_vmx_app().is_some() {
             self.stop_active_vmx();
         } else if text == "tui" && self.active_vmx_app().is_some() {
-            if let Err(error) = tui::request(self.tui_frontend(), self.active_matrix_slot.as_deref().unwrap_or("")) {
-                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error.into());
-            }
+            self.latched_navigation = Some(LatchedNavigation::Resume {
+                name: self.active_matrix_slot.clone().unwrap_or_default(),
+                lifetime: self.active_matrix_lifetime,
+            });
         } else if text == "esc" && self.active_vmx_app().is_some() {
             self.select_matrix_slot_index(0);
         } else if is_app {
@@ -1179,9 +1282,10 @@ impl Shell3 {
             MatrixSlots::echo(
                 self.active_matrix_slot.as_deref(),
                 self.active_matrix_lifetime,
-                text,
+                text.clone(),
             );
         }
+        text.zeroize();
         self.prompt.colors.clear();
         self.prompt.cursor = 0;
         true
@@ -1200,7 +1304,7 @@ impl Shell3 {
     }
 
     pub fn set_prompt(&mut self, text: &str) {
-        self.prompt.text.clear();
+        self.prompt.text.zeroize();
         self.prompt.text.push_str(text);
         self.prompt.colors.clear();
         let text_len = self.prompt.char_len();
@@ -1364,6 +1468,12 @@ impl Shell3 {
                 strips.left.push(MetaFmtStr::new(format!(" {}", app.app)).bold());
                 strips.left.push(MetaFmtStr::new(format!(" {}", vmx_hash_text(&app.sha256))));
                 strips.right = vmx_title_meta();
+            }
+        }
+        if row == SpecialRows::PromtRow {
+            if let Some(feedback) = &self.command_feedback {
+                strips.left = feedback.runs(self.columns, crate::chronos::monotonic_nanos());
+                strips.right.clear();
             }
         }
         if row == SpecialRows::StatusRow {
@@ -1563,6 +1673,10 @@ impl Shell3 {
         }
         if !tui::park(self.tui_frontend) { return false; }
         let lifetime = MatrixSlots::ensure_named(name);
+        if self.command_feedback.is_some() {
+            self.latched_navigation = Some(LatchedNavigation::Slot { name: name.to_string(), lifetime: Some(lifetime) });
+            return true;
+        }
         self.active_matrix_slot = Some(name.to_string());
         self.active_matrix_lifetime = Some(lifetime);
         self.matrix_selection_dirty = true;

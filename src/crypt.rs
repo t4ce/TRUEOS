@@ -940,6 +940,14 @@ pub(crate) fn has_authenticated_two_factor_session(scope_id: u8) -> bool {
             .is_some_and(|session| session.scope_id == scope_id)
 }
 
+/// Non-secret account/session identity for Cry-gated shell recall.
+pub(crate) fn authenticated_history_identity(scope_id: u8) -> Option<(u64, u64)> {
+    let state = CRY_STATE.lock();
+    if !state.totp.as_ref().is_some_and(|factor| factor.active) { return None; }
+    let session = state.session.filter(|session| session.scope_id == scope_id)?;
+    Some((session.account.raw(), session.challenge_sequence))
+}
+
 pub(crate) fn authenticated_user_input_record_key(scope_id: u8) -> Option<CryUserInputRecordKey> {
     const DOMAIN: &[u8] = b"TRUEOS/user-input-record/chacha20-poly1305/v1";
 

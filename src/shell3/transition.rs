@@ -54,7 +54,7 @@ impl TokenSteps {
     }
 }
 impl Frame {
-    fn display(&self) -> Vec<MetaFmtStr> {
+    pub(super) fn display(&self) -> Vec<MetaFmtStr> {
         let mut index = 0;
         self.source.iter().flat_map(|run| run.text.chars().map(|ch| {
             let cell = if self.visible[index] { MetaFmtStr { text: ch.into(), ..run.clone() } }

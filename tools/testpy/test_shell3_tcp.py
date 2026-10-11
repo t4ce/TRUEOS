@@ -9,6 +9,7 @@ import re
 import subprocess
 import tempfile
 import test_clip_position3_uv_texture as extract
+import shell3_history_support as history_support
 
 ROOT = Path(__file__).resolve().parents[2]
 extract.ROOT = ROOT
@@ -20,8 +21,10 @@ extern crate alloc;
 use alloc::{string::String, vec::Vec};
 use std::cell::{Cell, RefCell};
 '''
+    source += history_support.auth_fixture(1)
     for name in ('Mode', 'SpecialRows', 'StripSide', 'RgbaColor'):
         source += extract.item('src/shell3/shell3.rs', name)
+    source += f'#[path="{ROOT}/src/shell3/command_history.rs"] mod command_history;\n'
     source += re.search(r'^impl RgbaColor \{.*?^}', (ROOT/'src/shell3/shell3.rs').read_text(), re.M | re.S).group()
     source += f'\n#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
     source += f'\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n#[path="{ROOT}/src/shell3/transition.rs"] mod transition;\n'
@@ -53,7 +56,7 @@ pub fn mouse_options(_:u64,_:Option<&str>)->trueos_terminal::MouseOptions {Defau
 pub fn snapshot(_:u64,_:Option<&str>)->Option<Vec<super::update::RenderedLine>> {assert!(!remote_active(1),"direct output must not snapshot the screen");None}
 pub fn input(_:u64,_:Option<&str>,bytes:&[u8])->bool {STATE.with(|s| {let mut s=s.borrow_mut();if !s.active {return false;}s.input.extend_from_slice(bytes);true})}
 }
-struct Shell3 { tui_frontend:u64, history:Vec<String>, matrix_scroll:usize, notices:Vec<String>, pointer:Vec<(Option<usize>,bool)>, size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
+struct Shell3 { command_history:command_history::CommandHistory, tui_frontend:u64, history:Vec<String>, matrix_scroll:usize, notices:Vec<String>, pointer:Vec<(Option<usize>,bool)>, size:(usize,usize), vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal_reserved(_:u32,_:Option<u16>)->Self {Self::new_terminal().unwrap()}
     fn new_terminal_sized_reserved(_:u32,_:Option<u16>,_:usize,_:usize)->Self {Self::new_terminal().unwrap()}
@@ -81,7 +84,7 @@ impl Shell3 {
     fn get_size(&self)->(usize,usize) {self.size}
     fn set(&mut self,cols:usize,rows:usize) {self.size=(cols,rows);}
     fn new_terminal() -> Result<Self, ()> {
-        Ok(Self { tui_frontend:1, history:Vec::new(), matrix_scroll:0, notices:Vec::new(), pointer:Vec::new(), size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
+        Ok(Self { command_history:Default::default(), tui_frontend:1, history:Vec::new(), matrix_scroll:0, notices:Vec::new(), pointer:Vec::new(), size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
@@ -374,7 +377,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         plain.input(keys);assert_eq!(plain.shell.matrix_scroll,0);assert!(plain.line.is_empty());
     }
     #[test] fn ssh_recall_csi_ss3_packet_splits_and_enter_only() {
-        for arrow in [b"\\x1b[A".as_slice(), b"\\x1bOA".as_slice()] {
+        for arrow in [b"\\x1b[A".as_slice(), b"\\x1bOA".as_slice(), b"\\x1b[1A".as_slice(), b"\\x1b[1;5A".as_slice()] {
             for split in 0..=arrow.len() {
                 let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
                 tty.input(b"first\\rsecond\\rdraft");
@@ -385,20 +388,21 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
                 tty.input(arrow);assert_eq!(tty.line,"first");
                 tty.input(b"\\x1bOB");assert_eq!(tty.line,"second");
                 tty.input(b"\\x1b[B");assert_eq!(tty.line,"draft");
+                tty.input(b"\\x1b[B");assert!(tty.line.is_empty());assert!(tty.shell.prompt.is_empty());
                 tty.input(arrow);tty.input(b"\\r");
                 assert_eq!(tty.submitted(),vec!["first","second","second"]);
                 assert!(tty.line.is_empty());
             }
         }
     }
-    #[test] fn ssh_recall_filters_secrets_is_bounded_and_connection_local() {
+    #[test] fn ssh_recall_redacts_secrets_is_bounded_and_shared_for_same_account() {
         let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
         tty.input(b"cry login 123456\\rcry unlock t4ce secret\\rcry ssh add 123456 key\\r123456\\r");
-        assert!(tty.history.entries.is_empty());
+        assert_eq!(tty.history.entries,vec!["cry login ******","cry unlock ******","cry ssh add ******","******"]);
         for n in 0..70 {tty.input(format!("command{n}\\r").as_bytes());}
-        assert_eq!(tty.history.entries.len(),64);assert_eq!(tty.history.entries[0],"command6");
+        assert_eq!(tty.history.entries.len(),10);assert_eq!(tty.history.entries[0],"command60");
         let mut other=Terminal::new_ssh(Shell3::new_terminal().unwrap());
-        other.input(b"\\x1b[A");assert!(other.line.is_empty());
+        other.input(b"\\x1b[A");assert_eq!(other.line,"command69");
         let mut plain=terminal();plain.input(b"first\\r\\x1b[A");assert!(plain.history.entries.is_empty());
         tty.input(b"\\x1b[A\\x7fX");assert_eq!(tty.line,"command6X");
         tty.input(b"\\x03\\x1b[B");assert!(tty.line.is_empty());
@@ -498,11 +502,12 @@ use crate::tty::Terminal;
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-tcp-') as directory:
         path = Path(directory)
+        dependency_args = history_support.dependencies(path)
         source = source.replace('__REMOTE_PATH__', str(ROOT/'src/shell3/tui/remote.rs'))
         (path/'test.rs').write_text(source)
         subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name','trueos_terminal',str(ROOT/'crates/trueos-terminal/src/lib.rs'),'-o',str(path/'libtrueos_terminal.rlib')],check=True)
-        subprocess.run(['rustc', '--edition=2024', '--test', str(path/'test.rs'), '-o', str(path/'tests'),'--extern',f'trueos_terminal={path}/libtrueos_terminal.rlib'], check=True)
-        subprocess.run([str(path/'tests')], check=True)
+        subprocess.run(['rustc', '--edition=2024', '--test', str(path/'test.rs'), '-o', str(path/'tests'),'--extern',f'trueos_terminal={path}/libtrueos_terminal.rlib',*dependency_args], check=True)
+        subprocess.run([str(path/'tests'),'--test-threads=1'], check=True)
 
 
 if __name__ == '__main__':

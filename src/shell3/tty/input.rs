@@ -2,6 +2,7 @@
 use super::super::tui;
 use super::{LINE_LIMIT, Terminal};
 use alloc::{format, string::String, vec::Vec};
+use zeroize::{Zeroize, Zeroizing};
 
 /// Partial transport input that can span several network packets.
 #[derive(Default)]
@@ -14,78 +15,28 @@ pub(super) struct InputDecoder {
     pub(super) after_cr: bool,
 }
 
-/// Saved submissions, the recalled entry, and the interrupted input draft.
-#[derive(Default)]
-pub(super) struct CommandHistory {
-    pub(super) entries: Vec<String>,
-    pub(super) cursor: Option<usize>,
-    pub(super) draft: String,
-}
-
 impl Terminal {
-    // SSH recall is connection-local; exclude authentication material.
     pub(super) fn remember(&mut self, line: &str) {
-        let command = line.trim();
-        let first = command.split_whitespace().next().unwrap_or("");
-        if self.view.lines.is_none()
-            || command.is_empty()
-            || first.trim_start_matches('§').eq_ignore_ascii_case("cry")
-            || first.bytes().all(|b| b.is_ascii_digit())
-        {
-            return;
-        }
-        if self
-            .history
-            .entries
-            .last()
-            .is_some_and(|previous| previous == line)
-        {
-            return;
-        }
-        if self.history.entries.len() == 64 {
-            self.history.entries.remove(0);
-        }
-        self.history.entries.push(String::from(line));
+        if self.view.lines.is_some() { self.history.remember(line); }
     }
 
     pub(super) fn recall(&mut self, up: bool) {
-        if self.view.lines.is_none() || self.history.entries.is_empty() {
-            return;
-        }
-        if up {
-            if self.history.cursor.is_none() {
-                self.history.draft = self.line.clone();
-            }
-            let index = self
-                .history
-                .cursor
-                .map_or(self.history.entries.len() - 1, |i| i.saturating_sub(1));
-            self.history.cursor = Some(index);
-            self.line = self.history.entries[index].clone();
-        } else if let Some(index) = self.history.cursor {
-            if index + 1 < self.history.entries.len() {
-                self.history.cursor = Some(index + 1);
-                self.line = self.history.entries[index + 1].clone();
-            } else {
-                self.history.cursor = None;
-                self.line = core::mem::take(&mut self.history.draft);
-            }
-        }
+        if self.view.lines.is_none() { return; }
+        let Some(line) = self.history.recall(up, &self.line) else { return; };
+        self.line.zeroize();
+        self.line = line;
         self.line_overflow = false;
         self.decoder.utf8_len = 0;
         self.shell.set_prompt(&self.line);
         self.shell.set_cursor(self.line.chars().count());
     }
 
-    pub(super) fn end_recall(&mut self) {
-        self.history.cursor = None;
-        self.history.draft.clear();
-    }
+    pub(super) fn end_recall(&mut self) { self.history.end_recall(); }
 
     // SSH and UI4 share immediate recognition; nc alone defers until Enter.
     pub(super) fn keyboard(&mut self, key: Option<u16>, ch: char) {
         use crate::r::keyboard::*;
-        let mut completed = String::from(self.shell.prompt());
+        let mut completed = Zeroizing::new(String::from(self.shell.prompt()));
         if key.is_none() {
             completed.push(ch);
         }
@@ -113,12 +64,13 @@ impl Terminal {
         if latched {
             self.remember(&completed);
         }
+        self.line.zeroize();
         self.line = self.shell.prompt().into();
     }
 
     pub(super) fn submit(&mut self) {
         self.reset_input();
-        let line = core::mem::take(&mut self.line);
+        let line = Zeroizing::new(core::mem::take(&mut self.line));
         let recalled = self.history.cursor.is_some();
         self.end_recall();
         let command = line.trim();
@@ -261,7 +213,9 @@ impl Terminal {
                 } else if (0x40..=0x7e).contains(&byte) {
                     self.matrix_mouse(byte);
                     self.matrix_scroll_key(byte);
-                    if self.decoder.escape == 2 && matches!(byte, b'A' | b'B') {
+                    let arrow_parameters = matches!(self.decoder.csi.as_slice(), b"" | b"0" | b"1")
+                        || self.decoder.csi.strip_prefix(b"1;").is_some_and(|modifier| matches!(modifier, b"2" | b"3" | b"4" | b"5" | b"6" | b"7" | b"8"));
+                    if !self.decoder.csi_overflow && arrow_parameters && matches!(byte, b'A' | b'B') {
                         self.recall(byte == b'A');
                     }
                     self.decoder.escape = 0;
@@ -296,7 +250,7 @@ impl Terminal {
                     }
                     3 => {
                         self.end_recall();
-                        self.line.clear();
+                        self.line.zeroize();
                         if self.view.lines.is_some() {
                             self.shell.set_prompt("");
                         }

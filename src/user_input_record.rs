@@ -1,4 +1,4 @@
-//! Authenticated, encrypted persistence for Shell2 command submissions.
+//! Authenticated, encrypted persistence for Shell3 command submissions.
 //!
 //! Recording is off unless `crypt` has a verified 2FA session for the same
 //! shell backend. Plaintext is encrypted immediately; the pending queue and
