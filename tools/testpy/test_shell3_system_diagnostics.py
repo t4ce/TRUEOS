@@ -33,8 +33,9 @@ def main():
     vcpy = re.sub(r'^#\[trueos_executor::task[^\n]*\n', '', vcpy, flags=re.M)
     vcpy = vcpy.replace('async fn menu_task(', 'async fn menu_task_run(')
     tlb = (ROOT / 'src/shell3/system/tlb.rs').read_text()
-    selectors = function(tlb, 'parse_acpi_signature') + '\n' + function(tlb, 'valid_selection')
-    writer = function(tlb, 'write_dump_bytes_to_default_path')
+    tables = (ROOT / 'src/efi/acpi/tlb.rs').read_text()
+    selectors = function(tables, 'parse_acpi_signature') + '\n' + function(tlb, 'valid_selection')
+    writer = function(tables, 'write_dump_bytes_to_default_path')
     source = HARNESS.replace("#![allow(dead_code)]", "#![allow(dead_code, unused_imports)]").split('    mod monitor {', 1)[0].replace('@HELPER@', helper)
     source += 'mod picker {' + picker + '}\nmod gpu {' + r'''
     struct Output {lines:Vec<String>}

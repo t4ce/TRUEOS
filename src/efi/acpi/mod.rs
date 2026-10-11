@@ -16,6 +16,7 @@ pub mod facp;
 pub mod hpet;
 pub mod madt;
 pub mod sleep;
+pub(crate) mod tlb;
 // pub mod fpdt;
 // pub mod ssdt;
 // pub mod tpm2;

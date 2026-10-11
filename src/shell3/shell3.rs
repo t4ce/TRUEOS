@@ -1,7 +1,7 @@
 #[path = "system/picker.rs"]
 mod picker;
 #[path = "system/output.rs"]
-mod output;
+pub(crate) mod output;
 #[path = "system/gpu.rs"]
 mod gpu;
 #[path = "system/tlb.rs"]
@@ -14,7 +14,7 @@ mod os;
 pub(crate) use os::matrix_target_interrupted;
 mod os_update;
 mod monitor;
-mod table;
+pub(crate) mod table;
 #[path = "system/cry.rs"]
 mod cry;
 #[path = "system/disc.rs"]
