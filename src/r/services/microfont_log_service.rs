@@ -10,6 +10,8 @@ const PERIOD_MS: u64 = 25;
 const FG: u32 = 0xFF00_0000;
 const BG: u32 = 0xFFFF_FFFF;
 static SURFACE: Once<Surface> = Once::new();
+// Serialize boot publication, the NIC callback and the timeout verdict.
+static VERDICT_FROZEN: spin::Mutex<bool> = spin::Mutex::new(false);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Surface {
@@ -54,14 +56,37 @@ pub(crate) unsafe fn install(surface: Surface) -> bool {
     if !surface.valid() {
         return false;
     }
-    *SURFACE.call_once(|| {
-        // End the four-colour proof; keep the monitor blank until the verdict.
+    let installed = *SURFACE.call_once(|| {
+        // A missing/unconfigured NIC already means No. Never expose a blank
+        // pending state, even if the service executor fails to start.
         unsafe {
             clear_surface(surface);
         }
         crate::intel::dma_cache_flush_range(surface.virt as *const u8, surface.byte_len);
+        let mut frozen = VERDICT_FROZEN.lock();
+        let result = crate::net::laptop_profile::assignment_result();
+        paint_verdict(surface, result.unwrap_or(false));
+        *frozen = result.is_some();
         surface
-    }) == surface
+    }) == surface;
+    // Close the race with configuration between the snapshot and publication.
+    if let Some(assigned) = crate::net::laptop_profile::assignment_result() {
+        assignment_changed(assigned);
+    }
+    installed
+}
+
+/// Called synchronously by NIC configuration; independent of AP/task timers.
+pub(crate) fn assignment_changed(assigned: bool) {
+    let Some(surface) = surface() else { return; };
+    let mut frozen = VERDICT_FROZEN.lock();
+    if !*frozen {
+        // Clear the old centered No before drawing the wider Yes.
+        unsafe { clear_surface(surface); }
+        paint_verdict(surface, assigned);
+        crate::intel::dma_cache_flush_range(surface.virt as *const u8, surface.byte_len);
+        *frozen = true;
+    }
 }
 
 pub(crate) fn enabled() -> bool {
@@ -130,7 +155,7 @@ pub(crate) async fn microfont_log_task(assigned_slot: u32) {
     if crate::cpu::CpuProfile::current().map(|cpu| cpu.slot()) != Some(assigned_slot) {
         return;
     }
-    let Some(surface) = surface() else {
+    let Some(_surface) = surface() else {
         return;
     };
     // USB discovery can arrive after this task starts. Wait without taking
@@ -138,7 +163,7 @@ pub(crate) async fn microfont_log_task(assigned_slot: u32) {
     let started = trueos_time::Instant::now().as_millis();
     loop {
         if let Some(assigned) = crate::net::laptop_profile::assignment_result() {
-            paint_verdict(surface, assigned);
+            assignment_changed(assigned);
             return; // Freeze this one line and retain plane ownership.
         }
         if trueos_time::Instant::now()
@@ -146,7 +171,7 @@ pub(crate) async fn microfont_log_task(assigned_slot: u32) {
             .saturating_sub(started)
             >= ASSIGNMENT_WAIT_MS
         {
-            paint_verdict(surface, false);
+            assignment_changed(false);
             return; // A later adapter registration cannot repaint the verdict.
         }
         trueos_time::Timer::after(trueos_time::Duration::from_millis(PERIOD_MS)).await;

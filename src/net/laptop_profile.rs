@@ -14,6 +14,8 @@ pub(crate) fn matches(mac: [u8; 6], identity: Option<(u16, u16)>) -> bool {
 
 pub(crate) fn record_assignment(assigned: bool) {
     RESULT.store(if assigned { 1 } else { 2 }, Ordering::Release);
+    #[cfg(not(test))]
+    crate::r::services::microfont_log_service::assignment_changed(assigned);
 }
 
 pub(crate) fn assignment_result() -> Option<bool> {

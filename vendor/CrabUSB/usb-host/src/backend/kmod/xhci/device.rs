@@ -611,13 +611,15 @@ impl Device {
         interface: u8,
         alternate: u8,
     ) -> Result<&[EndpointDescriptor]> {
-        for config in &self.config_desc {
-            for iface in &config.interfaces {
-                if iface.interface_number == interface {
-                    for alt in &iface.alt_settings {
-                        if alt.alternate_setting == alternate {
-                            return Ok(&alt.endpoints);
-                        }
+        // Interface numbers are local to a configuration. In particular,
+        // RTL8153's vendor and ECM configurations reuse interface 0; selecting
+        // ECM must not configure its interrupt pipe from the vendor layout.
+        let config = self.current_config_desc()?;
+        for iface in &config.interfaces {
+            if iface.interface_number == interface {
+                for alt in &iface.alt_settings {
+                    if alt.alternate_setting == alternate {
+                        return Ok(&alt.endpoints);
                     }
                 }
             }

@@ -70,6 +70,21 @@ RING_TESTS = r'''
 PEN_TESTS = r'''
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn boot_has_no_blank_state_and_nic_callback_freezes_without_executor() {
+        let pixels = Box::leak(vec![BG; 127 * 91].into_boxed_slice());
+        let surface = Surface { phys: 0x1000, gpu: 0xE0000000,
+            virt: pixels.as_mut_ptr() as usize, byte_len: pixels.len()*4,
+            width: 127, height: 91, pitch_bytes: 127*4 };
+        assert!(unsafe { install(surface) });
+        assert!(pixels.iter().any(|&pixel| pixel == FG));
+        let initial = pixels.to_vec();
+        assignment_changed(true);
+        assert_ne!(&pixels[..], &initial[..]);
+        let assigned = pixels.to_vec();
+        assignment_changed(false);
+        assert_eq!(&pixels[..], &assigned[..]);
+        crate::intel::take_flushes();
+    }
     #[test] fn verdict_is_centered_fourfold_and_only_one_line() {
         for (assigned, text) in [(true, &b"Yes"[..]), (false, &b"No"[..])] {
             let width = 127; let height = 91; let pitch = width + 9;
@@ -179,6 +194,9 @@ def main():
     policy = POLICY_HARNESS.replace('__FUNCTIONS__', '\n'.join(functions))
     # Exact production ring prefix; omit only the unrelated asynchronous TCP server.
     harness = '''extern crate alloc;
+mod net { pub mod laptop_profile {
+    pub fn assignment_result() -> Option<bool> { None }
+} }
 mod intel {
     static FLUSHES: std::sync::Mutex<Vec<(usize, usize, usize, usize)>> = std::sync::Mutex::new(Vec::new());
     pub fn dma_cache_flush_range(_: *const u8, _: usize) {}

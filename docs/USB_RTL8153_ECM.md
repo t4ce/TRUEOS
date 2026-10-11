@@ -14,6 +14,12 @@ state comes from CDC notifications; USB bus speed is not Ethernet link speed.
 The existing primary stays selected while it has a link. A newly linked USB NIC
 can replace a primary that is down. Explicit NIC selection accepts `@0bda:8153`.
 
+xHCI interface endpoint lookup uses only the selected configuration. The vendor
+and ECM configurations can reuse interface/alternate numbers; searching all
+configurations can configure ECM pipes with the vendor layout. The regression
+check is `python3 tools/testpy/test_usb_active_configuration.py`. Physical
+validation of this correction on the laptop remains pending.
+
 ## Next boot
 
 - `usb-net: ready ctrl=0 slot=... vid=0bda pid=8153 net=... cfg=2 ...` means
