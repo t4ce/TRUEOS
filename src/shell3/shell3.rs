@@ -1807,11 +1807,8 @@ fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) ->
             }
         }
         Mode::ADM => {
-            for entry in ADM_NAMES {
-                if !runs.is_empty() {
-                    runs.push(MetaFmtStr::new(" "));
-                }
-                runs.push(MetaFmtStr::new(entry.name).color(entry.color));
+            for group in &names::ADM_GROUPS {
+                append_group(group, None);
             }
         }
     }

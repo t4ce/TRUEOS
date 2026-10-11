@@ -456,12 +456,12 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
 #[test] fn tab_updates_title_per_instance_and_enter_is_inert() {
     let mut a=Shell3::new(20); let mut b=Shell3::new(20);
     key(&mut a,1,0,'x'); key(&mut b,1,0,'y');
-    let admin_names=ADM_NAMES.iter().map(|entry|entry.name).collect::<Vec<_>>().join(" ");
+    let admin_names=format!("System[{}]",ADM_NAMES.iter().map(|entry|entry.name).collect::<Vec<_>>().join(" "));
     for mode in [Mode::CMD,Mode::ADM,Mode::HV] {
         assert!(key(&mut a,2,2,'\\t')); assert_eq!(a.mode,mode);
         assert_eq!(a.rows.title.left[0].text,"TrueOS § 12:34");
         let legend:String=a.rows.title.right.iter().map(|run|run.text.as_str()).collect();
-        assert_eq!(legend,match mode {Mode::HV=>"[online peer] [status pause] [snap preserve eject delete kick load store probe]",Mode::CMD=>"Capture[pic vid aud vaud] AppDB[]",Mode::ADM=>admin_names.as_str()});
+        assert_eq!(legend,match mode {Mode::HV=>"[status peer probe] [pause load store snap preserve eject delete kick]",Mode::CMD=>"Capture[pic vid aud vaud] AppDB[]",Mode::ADM=>admin_names.as_str()});
     }
     assert_eq!(b.mode,Mode::HV); assert_eq!(b.prompt.text,"y");
     assert!(!key(&mut a,2,3,'\\r')); assert!(!key(&mut a,1,0,'\\n'));
@@ -570,7 +570,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     for name in ["hello","pic","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render()," ");s.select_matrix_slot_index(0);}
     assert!(MatrixSlots::echo_lines(None).is_empty());
     s.set_mode(3); let admin=s.rows.title.right.clone();
-    assert_eq!(admin[0].color,Some(RgbaColor::Pink));assert_eq!(admin[2].color,Some(RgbaColor::Pink));
+    assert_eq!(admin[0].text,"System");assert_eq!(admin[2].color,Some(RgbaColor::Pink));assert_eq!(admin[4].color,Some(RgbaColor::Pink));
     s.set_appdb_names(&["Other".into()]);assert_eq!(s.rows.title.right,admin);
     s.set_mode(2);assert!(s.rows.title.right.iter().any(|run|run.text=="Other"));
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));

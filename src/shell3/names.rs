@@ -14,20 +14,34 @@ pub(super) struct NameGroup {
 pub const GROUP_OPEN: char = '[';
 pub const GROUP_CLOSE: char = ']';
 
-const HV_GROUP_1: [NameEntry; 1] = [NameEntry { name: "peer", color: RgbaColor::White }];
-
-const HV_GROUP_2: [NameEntry; 2] = [
+const HV_GROUP_1: [NameEntry; 3] = [
     NameEntry {
         name: "status",
         color: RgbaColor::White,
     },
     NameEntry {
-        name: "pause",
+        name: "peer",
+        color: RgbaColor::White,
+    },
+    NameEntry {
+        name: "probe",
         color: RgbaColor::White,
     },
 ];
 
-const HV_GROUP_3: [NameEntry; 8] = [
+const HV_GROUP_2: [NameEntry; 8] = [
+    NameEntry {
+        name: "pause",
+        color: RgbaColor::White,
+    },
+    NameEntry {
+        name: "load",
+        color: RgbaColor::White,
+    },
+    NameEntry {
+        name: "store",
+        color: RgbaColor::White,
+    },
     NameEntry {
         name: "snap",
         color: RgbaColor::White,
@@ -48,21 +62,9 @@ const HV_GROUP_3: [NameEntry; 8] = [
         name: "kick",
         color: RgbaColor::White,
     },
-    NameEntry {
-        name: "load",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "store",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "probe",
-        color: RgbaColor::White,
-    },
 ];
 
-pub(super) const HV_GROUPS: [NameGroup; 3] = [
+pub(super) const HV_GROUPS: [NameGroup; 2] = [
     NameGroup {
         name: "",
         names: &HV_GROUP_1,
@@ -70,10 +72,6 @@ pub(super) const HV_GROUPS: [NameGroup; 3] = [
     NameGroup {
         name: "",
         names: &HV_GROUP_2,
-    },
-    NameGroup {
-        name: "",
-        names: &HV_GROUP_3,
     },
 ];
 
@@ -161,6 +159,11 @@ pub(super) const ADM_NAMES: &[NameEntry] = &[
         color: RgbaColor::White,
     },
 ];
+
+pub(super) const ADM_GROUPS: [NameGroup; 1] = [NameGroup {
+    name: "System",
+    names: ADM_NAMES,
+}];
 
 /// Slot-specific VM environment controls; not a Tab mode.
 pub(super) const VME_GROUP: NameGroup = NameGroup {
