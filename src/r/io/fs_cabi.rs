@@ -2759,3 +2759,23 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_launch_script_v1(
     };
     blueprint_launch_script_payload(vm_id, payload)
 }
+
+/// Queue a Shell3 with initial pixel geometry, or poll completion when width is zero.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell3_window_v1(x: i32, y: i32, width: u32, height: u32) -> i64 {
+    let geometry = (width != 0).then_some(crate::shell3::service::WindowGeometry { x, y, width, height });
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut payload = [0u8; 16];
+        payload[0..4].copy_from_slice(&x.to_le_bytes());
+        payload[4..8].copy_from_slice(&y.to_le_bytes());
+        payload[8..12].copy_from_slice(&width.to_le_bytes());
+        payload[12..16].copy_from_slice(&height.to_le_bytes());
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SHELL3_WINDOW_V1, u64::from(width != 0), 0,
+            &payload, &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK { rc as i64 } else { -3 };
+    }
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else { return -3; };
+    crate::shell3::service::blueprint_window_spawn(vm_id, geometry)
+}

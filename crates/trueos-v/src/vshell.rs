@@ -598,3 +598,19 @@ pub fn launch_with_script(app: &str, script: &str) -> Result<(), i32> {
         unsafe { vcabi::trueos_cabi_blueprint_launch_script_v1(payload.as_ptr(), payload.len()) };
     if rc == 0 { Ok(()) } else { Err(rc) }
 }
+
+/// Spawn a normal Shell3 at a pixel origin and size, waiting for its first paint.
+/// Shell3 enforces its minimum text grid; partial edge cells remain padding.
+/// The returned window belongs to the Shell3 service and outlives the caller.
+pub fn spawn_window(x: i32, y: i32, width: u32, height: u32) -> Result<u32, i32> {
+    if width == 0 || height == 0 { return Err(-1); }
+    let rc = unsafe { vcabi::trueos_cabi_shell3_window_v1(x, y, width, height) };
+    if rc < 0 { return Err(rc as i32); }
+    loop {
+        let rc = unsafe { vcabi::trueos_cabi_shell3_window_v1(0, 0, 0, 0) };
+        if rc < 0 { return Err(rc as i32); }
+        if rc > 0 { return Ok(rc as u32); }
+        crate::vsys::poll_once();
+        crate::vsys::sleep_ms(1);
+    }
+}

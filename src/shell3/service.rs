@@ -35,7 +35,7 @@ struct ShellOwnership {
     worker_slots: Vec<u32>,
     shells_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
     pending_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
-    startup_requests: VecDeque<(u32, Option<crate::shell3::startup::Startup>)>,
+    startup_requests: VecDeque<(u32, Option<crate::shell3::startup::Startup>, Option<WindowSpawn>)>,
     live_shells: usize,
     next_round_robin: usize,
     initial_assignments: usize,
@@ -216,6 +216,10 @@ pub fn request_shell3() -> Result<u32, super::Shell3Error> {
 }
 
 pub(crate) fn request_shell3_with_startup(startup: Option<crate::shell3::startup::Startup>) -> Result<u32, super::Shell3Error> {
+    request_shell3_configured(startup, None)
+}
+
+fn request_shell3_configured(startup: Option<crate::shell3::startup::Startup>, window: Option<WindowSpawn>) -> Result<u32, super::Shell3Error> {
     refresh_appdb_names();
     let mut ownership = SHELL_OWNERSHIP.lock();
     if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
@@ -228,7 +232,7 @@ pub(crate) fn request_shell3_with_startup(startup: Option<crate::shell3::startup
         return Err(super::Shell3Error::NoExecutor);
     };
     ownership.pending_by_slot[slot as usize] += 1;
-    ownership.startup_requests.push_back((slot, startup));
+    ownership.startup_requests.push_back((slot, startup, window));
     advance_round_robin(&mut ownership, slot);
     drop(ownership);
     SHELL_WORK_AVAILABLE.notify_all();
@@ -514,11 +518,11 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             shell.reconcile_matrix_selection();
         }
         while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
-            let startup = {
+            let (startup, window) = {
                 let mut ownership = SHELL_OWNERSHIP.lock();
-                ownership.startup_requests.iter().position(|(slot, _)| *slot == expected_slot)
+                ownership.startup_requests.iter().position(|(slot, _, _)| *slot == expected_slot)
                     .and_then(|index| ownership.startup_requests.remove(index))
-                    .and_then(|(_, startup)| startup)
+                    .map(|(_, startup, window)| (startup, window)).unwrap_or((None, None))
             };
             let aka_names = crate::r::restart::startup_alias_names();
             let appdb_names = appdb_names_snapshot().1;
@@ -533,7 +537,27 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             ) {
                 Ok(index) => {
                     if let Some(shell) = owned_shells.get_mut(index) {
-                        match shell.present().await {
+                        if let Some(window) = window.as_ref() {
+                            shell.configure_window(window.placement);
+                        }
+                        let presentation = shell.present().await;
+                        if let Some(window) = window {
+                            let result = if presentation.is_ok() {
+                                if let Some(id) = shell.show.window() {
+                                    let mut presented = false;
+                                    for _ in 0..10_000 {
+                                        match crate::ui4::take_window_first_presentation(crate::ui4::WindowOwner::SHELL3_SERVICE, id) {
+                                            Ok(true) => { presented = true; break; }
+                                            Ok(false) => Timer::after(Duration::from_millis(1)).await,
+                                            Err(_) => break,
+                                        }
+                                    }
+                                    if presented { id.raw() as i64 } else { -3 }
+                                } else { -3 }
+                            } else { -3 };
+                            window.ready.store(result, core::sync::atomic::Ordering::Release);
+                        }
+                        match presentation {
                             Ok(()) => if let Some(startup) = startup { startup.launch(shell); },
                             Err(error) => crate::log_warn!(target: "service";
                                 "sh3srv: initial presentation failed slot={} shell={} error={}\n",
@@ -542,10 +566,14 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                         }
                     }
                 }
-                Err(error) => crate::log_warn!(target: "service";
-                    "sh3srv: queued shell creation failed slot={} error={:?}\n",
-                    expected_slot, error,
-                ),
+                Err(error) => {
+                    if let Some(window) = window {
+                        window.ready.store(-3, core::sync::atomic::Ordering::Release);
+                    }
+                    crate::log_warn!(target: "service";
+                        "sh3srv: queued shell creation failed slot={} error={:?}\n", expected_slot, error,
+                    );
+                }
             }
         }
 
@@ -856,4 +884,41 @@ pub(super) fn edit_aka(frontend: super::tui::Frontend) -> Result<(), alloc::stri
     let worker = crate::workers::pick_background_spawner().ok_or("Aka: no background worker")?;
     let task = edit_aka_task(frontend).map_err(|_| alloc::string::String::from("Aka: editor request busy"))?;
     worker.spawn(task); Ok(())
+}
+
+/// Initial pixel geometry, applied before the first Shell3 snapshot and paint.
+#[derive(Clone, Copy)]
+pub(crate) struct WindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+struct WindowSpawn {
+    placement: WindowGeometry,
+    ready: alloc::sync::Arc<core::sync::atomic::AtomicI64>,
+}
+static WINDOW_SPAWNS: spin::Mutex<Vec<(u8, alloc::sync::Arc<core::sync::atomic::AtomicI64>)>> = spin::Mutex::new(Vec::new());
+
+pub(crate) fn clear_window_spawn(vm_id: u8) {
+    WINDOW_SPAWNS.lock().retain(|(owner, _)| *owner != vm_id);
+}
+
+// One outstanding request per Blueprint; zero polls its first-paint completion.
+pub(crate) fn blueprint_window_spawn(vm_id: u8, geometry: Option<WindowGeometry>) -> i64 {
+    use core::sync::atomic::{AtomicI64, Ordering};
+    let mut requests = WINDOW_SPAWNS.lock();
+    if let Some(geometry) = geometry {
+        if geometry.width == 0 || geometry.height == 0 { return -1; }
+        if requests.iter().any(|(owner, _)| *owner == vm_id) { return -16; }
+        let ready = alloc::sync::Arc::new(AtomicI64::new(0));
+        if request_shell3_configured(None, Some(WindowSpawn { placement: geometry, ready: ready.clone() })).is_err() { return -3; }
+        requests.push((vm_id, ready));
+        0
+    } else {
+        let Some(index) = requests.iter().position(|(owner, _)| *owner == vm_id) else { return -1; };
+        let result = requests[index].1.load(Ordering::Acquire);
+        if result != 0 { requests.remove(index); }
+        result
+    }
 }

@@ -61,6 +61,7 @@ pub struct Show {
     backend: Backend,
     surface: Option<Ui4Surface>,
     poisoned: bool,
+    initial_geometry: Option<super::service::WindowGeometry>,
     font_scale: u32,
     pan: Option<pan::PanBuffer>,
     strips: [Option<reveal::StripCache>; 2],
@@ -79,11 +80,17 @@ impl Show {
             backend,
             surface: None,
             poisoned: false,
+            initial_geometry: None,
             font_scale: super::service::DEFAULT_MICROFONT_SCALE,
             pan: None,
             strips: [None, None],
             pan_budget: None,
         }
+    }
+
+    pub(crate) fn configure_window(&mut self, geometry: super::service::WindowGeometry) {
+        self.initial_geometry = Some(geometry);
+        self.font_scale = super::service::microfont_scale();
     }
 
     pub(crate) const fn font_scale(&self) -> u32 {
@@ -280,6 +287,7 @@ impl Show {
             .as_ref()
             .filter(|surface| surface.broker_resized)
             .map(|surface| (surface.width, surface.height))
+            .or_else(|| self.initial_geometry.map(|geometry| (geometry.width, geometry.height)))
             .unwrap_or(requested_extent);
         let (width, height) = extent;
         let recreate_surface = self.surface.as_ref().is_none_or(|surface| {
@@ -287,7 +295,7 @@ impl Show {
         });
         if recreate_surface {
             self.release_surface();
-            self.surface = Some(create_surface(width, height, self.backend)?);
+            self.surface = Some(create_surface(width, height, self.backend, self.initial_geometry)?);
             self.surface.as_mut().unwrap().scale = self.font_scale;
         }
         if !recreate_surface
@@ -368,7 +376,7 @@ fn show_extent(columns: usize, rows: usize, scale: u32) -> Result<(u32, u32), &'
     Ok((width, height))
 }
 
-fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surface, &'static str> {
+fn create_surface(width: u32, height: u32, backend: Backend, geometry: Option<super::service::WindowGeometry>) -> Result<Ui4Surface, &'static str> {
     let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or("shell3-show-scanout-unavailable")?;
@@ -387,8 +395,8 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
         output,
         plane: WindowPlane::Universal(crate::ui4::ALPHA_OVERLAY_PLANE_SLOT as u8),
         placement: WindowPlacement {
-            x: screen_width.saturating_sub(width) as i32 / 2,
-            y: screen_height.saturating_sub(height) as i32 / 2,
+            x: geometry.map(|g| g.x).unwrap_or(screen_width.saturating_sub(width) as i32 / 2),
+            y: geometry.map(|g| g.y).unwrap_or(screen_height.saturating_sub(height) as i32 / 2),
             width,
             height,
             z: 90,
@@ -426,7 +434,7 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
         height,
         backend,
         closing: false,
-        broker_resized: false,
+        broker_resized: geometry.is_some(),
         frame_contents: [None, None],
         scale: 1,
         clear_buffers: [false; 2],

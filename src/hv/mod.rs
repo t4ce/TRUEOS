@@ -5087,6 +5087,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     teardown_diagnostics::set(vm_id, TeardownStage::Net);
     let blueprint_net_closed = crate::hv::blueprint_net::release_vm(vm_id);
     let mio_closed = crate::mio_compat::close_sockets_for_vm(vm_id);
+    crate::shell3::service::clear_window_spawn(vm_id);
     let cabi_closed = crate::r::net::socket_cabi::close_sockets_for_vm(vm_id);
     hvlogf(format_args!(
         "hv: vm{} lifecycle: net cleanup complete blueprint_net={} mio={} socket_cabi={}",

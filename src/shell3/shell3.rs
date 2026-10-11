@@ -751,6 +751,19 @@ impl Shell3 {
         self.show.backend()
     }
 
+    pub(super) fn configure_window(&mut self, mut geometry: service::WindowGeometry) {
+        let scale = service::microfont_scale();
+        geometry.width = geometry.width.max(MIN_COLUMNS as u32 * microfont::FWIDTH as u32 * scale);
+        geometry.height = geometry.height.max(MIN_ROWS as u32 * microfont::FHEIGHT as u32 * scale);
+        if let Some((width, height)) = crate::intel::active_scanout_dimensions() {
+            geometry.width = geometry.width.min(width);
+            geometry.height = geometry.height.min(height);
+        }
+        self.show.configure_window(geometry);
+        self.set((geometry.width / (microfont::FWIDTH as u32 * scale)) as usize,
+                 (geometry.height / (microfont::FHEIGHT as u32 * scale)) as usize);
+    }
+
     pub fn set_show_backend(&mut self, backend: ShowBackend) {
         self.show.set_backend(backend);
     }

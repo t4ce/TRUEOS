@@ -12,4 +12,5 @@
 # Additive winit single-UI/triple-scene frame contract v1. Existing signatures unchanged.
 # Additive region-limited GPU sprite begin v1. Existing signatures unchanged.
 # Additive Blueprint launch with one-shot script v1. All existing declarations unchanged.
-3b4195769feb596d0b080669849413118b869c3d0d65fd0cfc893acda53515e4
+# Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
+19de604d0373eec1685df47d121a3178f6ead75eeb4be8434923605bdddea0fe

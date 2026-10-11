@@ -159,6 +159,7 @@ pub const OP_BP_CHILD_SEND_V1: u32 = 0x13D; // arg0 handle, payload message -> b
 pub const OP_BP_CHILD_RECEIVE_V1: u32 = 0x13E; // arg0 handle -> one queued message
 pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F; // arg0 handle -> lifecycle state/rc
 pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
+pub const OP_BP_SHELL3_WINDOW_V1: u32 = 0x187;
 pub const OP_BP_LAUNCH_SCRIPT_V1: u32 = 0x186;
 pub const OP_BP_IMG_OPEN_V1: u32 = 0x17B; // NUL-separated TRUEOSFS paths -> queued/rc
 pub const OP_BP_VID_OPEN_V1: u32 = 0x182; // primary-root video path -> queued/rc
@@ -3505,6 +3506,21 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(|()| 0i64)
                 .unwrap_or_else(i64::from);
             write_response(vm_id, seq, STATUS_OK, result as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL3_WINDOW_V1 => {
+            let rc = if arg0 == 0 {
+                crate::shell3::service::blueprint_window_spawn(vm_id, None)
+            } else if let Some(payload) = request_payload(vm_id, req_len).filter(|p| p.len() == 16) {
+                let geometry = crate::shell3::service::WindowGeometry {
+                    x: i32::from_le_bytes(payload[0..4].try_into().unwrap()),
+                    y: i32::from_le_bytes(payload[4..8].try_into().unwrap()),
+                    width: u32::from_le_bytes(payload[8..12].try_into().unwrap()),
+                    height: u32::from_le_bytes(payload[12..16].try_into().unwrap()),
+                };
+                crate::shell3::service::blueprint_window_spawn(vm_id, Some(geometry))
+            } else { -1 };
+            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_LAUNCH_SCRIPT_V1 => {

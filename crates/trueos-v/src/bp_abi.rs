@@ -1758,6 +1758,7 @@ unsafe extern "C" {
 
 
 
+    pub fn trueos_cabi_shell3_window_v1(x: i32, y: i32, width: u32, height: u32) -> i64;
     pub fn trueos_cabi_blueprint_launch_script_v1(payload_ptr: *const u8, payload_len: usize) -> i32;
     pub fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len: usize) -> i32;
     pub fn trueos_cabi_vid_open_v1(path_ptr: *const u8, path_len: usize) -> i32;
