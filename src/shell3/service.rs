@@ -641,9 +641,9 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                         super::tui::pointer(shell.tui_frontend, shell.active_matrix_slot_name().as_deref(), &event, shell.show.font_scale());
                     } else {
                         let scale = shell.show.font_scale() as usize;
-                        let column = (event.local_x >= 0 && event.local_y >= 0
-                            && event.local_y as usize / (microfont::FHEIGHT * scale) == 1)
-                            .then_some(event.local_x.max(0) as usize / (microfont::FWIDTH * scale));
+                        let position = (event.local_x >= 0 && event.local_y >= 0)
+                            .then_some((event.local_y.max(0) as usize / (microfont::FHEIGHT * scale),
+                                event.local_x.max(0) as usize / (microfont::FWIDTH * scale)));
                         let matrix_area = event.local_x >= 0 && event.local_y >= 0
                             && event.local_x as usize / (microfont::FWIDTH * scale) < shell.columns
                             && (3..shell.rows_count).contains(&(event.local_y as usize / (microfont::FHEIGHT * scale)));
@@ -651,7 +651,7 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                         let dragged = shell.drag_matrix((event.local_x, event.local_y),
                             event.buttons_pressed & 4 != 0, event.buttons_down & 4 != 0,
                             matrix_area, ((microfont::FWIDTH * scale) as i32, (microfont::FHEIGHT * scale) as i32));
-                        if shell.handle_status_pointer(column, event.buttons_pressed & 1 != 0) || scrolled || dragged {
+                        if shell.handle_controls_pointer(position, event.buttons_pressed & 1 != 0) || scrolled || dragged {
                             if let Err(error) = shell.present().await {
                                 crate::log_warn!(target: "service"; "shell3 pointer present failed on executor_slot={}: {}", expected_slot, error);
                             }

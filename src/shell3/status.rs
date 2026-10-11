@@ -23,15 +23,13 @@ fn entries(ids: &[String], active: Option<&str>, aliases: &[String], working: &[
         .into_iter()
         .enumerate()
         .flat_map(|(index, run)| {
-            let target = if index == 0 {
-                Some(Target::Default)
-            } else if (index - 1) % 3 == 0 {
+            let target = if index % 3 == 0 {
                 None
             } else {
-                Some(Target::Slot(ids[(index - 1) / 3].clone()))
+                Some(Target::Slot(ids[index / 3].clone()))
             };
-            let suffix = if index > 0 && (index - 1) % 3 == 2
-                && working.contains(&ids[(index - 1) / 3]) {
+            let suffix = if index % 3 == 2
+                && working.contains(&ids[index / 3]) {
                 Some((MetaFmtStr { color: run.color, ..MetaFmtStr::new(alloc::format!("{marker}")) }, None))
             } else { None };
             core::iter::once((run, target)).chain(suffix)
@@ -114,6 +112,19 @@ fn hit_with_width(ids: &[String], aliases: &[String], columns: usize, column: us
 }
 
 impl Shell3 {
+    pub(super) fn handle_controls_pointer(&mut self, position: Option<(usize, usize)>, pressed: bool) -> bool {
+        if let Some((0, column)) = position {
+            let title = self.capture_controls_snapshot();
+            if column == 7 && title.rendered_lines()[0].get(column).map(|cell| cell.0) == Some(super::OPERATOR) {
+                let changed = self.status_hover != Some(Target::Default);
+                self.status_hover = Some(Target::Default);
+                if pressed { self.select_matrix_slot_index(0); }
+                return changed || pressed;
+            }
+        }
+        self.handle_status_pointer(position.filter(|(row, _)| *row == 1).map(|(_, column)| column), pressed)
+    }
+
     pub(super) fn handle_status_pointer(&mut self, column: Option<usize>, pressed: bool) -> bool {
         let target = column.and_then(|column| {
             let working = super::service::working_vmx_slots();

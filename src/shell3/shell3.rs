@@ -185,23 +185,13 @@ fn matrix_slots() -> &'static spin::Mutex<MatrixSlotsState> {
 fn matrix_slots_meta(ids: &[String], active: Option<&str>) -> Vec<MetaFmtStr> {
     let mut runs = Vec::with_capacity(ids.len().saturating_mul(3).saturating_add(1));
     let active = active.filter(|active| ids.iter().any(|id| id == active));
-    let default_color = if active.is_none() {
-        RgbaColor::Pink
-    } else {
-        RgbaColor::White
-    };
-    runs.push(
-        MetaFmtStr::new(OPERATOR.to_string())
-            .color(default_color)
-            .bold(),
-    );
-    for id in ids {
+    for (index, id) in ids.iter().enumerate() {
         let color = if active == Some(id.as_str()) {
             RgbaColor::Pink
         } else {
             RgbaColor::White
         };
-        runs.push(MetaFmtStr::new(" ").color(RgbaColor::White));
+        runs.push(MetaFmtStr::new(if index == 0 { "" } else { " " }).color(RgbaColor::White));
         runs.push(MetaFmtStr::new(OPERATOR.to_string()).color(color).bold());
         runs.push(MetaFmtStr::new(id.clone()).color(color));
     }
@@ -210,9 +200,8 @@ fn matrix_slots_meta(ids: &[String], active: Option<&str>) -> Vec<MetaFmtStr> {
 
 fn matrix_slots_text(ids: &[String]) -> String {
     let mut text = String::new();
-    text.push(OPERATOR);
-    for id in ids {
-        text.push(' ');
+    for (index, id) in ids.iter().enumerate() {
+        if index != 0 { text.push(' '); }
         text.push(OPERATOR);
         text.push_str(id);
     }
@@ -1352,6 +1341,25 @@ impl Shell3 {
         }
         let mut strips = self.rows.row(row).clone();
         if row == SpecialRows::TitleRow {
+            // The title operator is the permanent default-slot control.
+            let mut column = 0;
+            strips.left = strips.left.into_iter().flat_map(|run| {
+                let mut parts = Vec::new();
+                for ch in run.text.chars() {
+                    let mut part = run.clone();
+                    part.text = ch.to_string();
+                    if column == 7 && ch == OPERATOR {
+                        part.color = Some(if self.active_matrix_slot_name().is_none() {
+                            RgbaColor::Pink
+                        } else { RgbaColor::White });
+                        part.bold = true;
+                        part.underline = self.status_hover == Some(status::Target::Default);
+                    }
+                    column += 1;
+                    parts.push(part);
+                }
+                parts
+            }).collect();
             if let Some(app) = self.active_vmx_app() {
                 strips.left.push(MetaFmtStr::new(format!(" {}", app.app)).bold());
                 strips.left.push(MetaFmtStr::new(format!(" {}", vmx_hash_text(&app.sha256))));
