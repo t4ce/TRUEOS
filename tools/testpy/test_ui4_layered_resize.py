@@ -26,7 +26,7 @@ impl WindowId { fn raw(self) -> u32 { self.0 } }
 }
 struct BlueprintSceneSurface {
     owner:WindowOwner, window:WindowId, render_target:u32, frame:FrameHandle,
-    width:u32, height:u32, placement:WindowPlacement,
+    width:u32, height:u32, placement:WindowPlacement,scene_divisor:u32,
     pending_resize:Option<BlueprintPendingResize>, pending_resize_ready:bool,
 }
 const ERROR_STATE:i32 = -1;
@@ -39,7 +39,7 @@ thread_local! {
 fn retire_frame_when_released(frame:u32) { RETIRED.with(|r|r.borrow_mut().push(frame)); }
 mod window_broker {
     use super::*;
-    pub(super) fn commit_window_layered_replacement(_:WindowOwner,_:WindowId,foreground:u32,background:u32,_:WindowPlacement,_:u64)->Result<(),WindowBrokerError> {
+    pub(super) fn commit_window_layered_replacement_scaled(_:WindowOwner,_:WindowId,foreground:u32,background:u32,_:WindowPlacement,_:u64,_:u32)->Result<(),WindowBrokerError> {
         COMMITS.with(|c|c.borrow_mut().push((foreground,background)));
         RESULT.with(|r|*r.borrow())
     }
@@ -56,7 +56,7 @@ fn pair()->Vec<BlueprintSceneSurface> {
         let new = WindowPlacement{x:7,y:8,width:200,height:150};
         BlueprintSceneSurface {
             owner:1,window:WindowId(1),render_target:if layer==0 {1}else{0x8001},
-            frame:20+layer,width:200,height:150,placement:new,pending_resize_ready:false,
+            frame:20+layer,width:200,height:150,placement:new,scene_divisor:1,pending_resize_ready:false,
             pending_resize:Some(BlueprintPendingResize{previous_frame:10+layer,
                 previous_width:100,previous_height:100,previous_placement:old,placement:new,resize_epoch:9}),
         }

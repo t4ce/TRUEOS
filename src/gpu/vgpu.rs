@@ -731,6 +731,19 @@ struct VoxyStreamSource {
     identity_indices: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct VoxyStreamKey {
+    vertex_buffer: BufferHandle,
+    index_buffer: BufferHandle,
+    vertex_offset: usize,
+    index_start: usize,
+}
+struct VoxyRetainedStream {
+    key: VoxyStreamKey,
+    source: Option<VoxyStreamSource>,
+    mesh: Arc<crate::intel::render::ResidentTriangleMesh>,
+}
+
 struct VoxyStreamUpdate {
     vertices: Vec<(usize, Vec<u8>)>,
     indices: Vec<(usize, Vec<u8>)>,
@@ -1114,10 +1127,12 @@ struct VirtualDevice {
     retained_meshes: Vec<RetainedMeshSlot>,
     retained_textures: Vec<RetainedTextureSlot>,
     drawable_depths: Vec<(u32, Arc<crate::intel::render::DrawableDepth>)>,
-    /// Voxygen streams one bounded geometry allocation after exact retirement.
-    /// The camera and indirect draw retain their GPU addresses as terrain arrives.
+    /// Each source buffer pair retains its own physical GPU mesh.
+    /// Selecting another draw restores its residency and dirty-range history.
     voxy_stream_mesh: Option<Arc<crate::intel::render::ResidentTriangleMesh>>,
     voxy_stream_source: Option<VoxyStreamSource>,
+    voxy_stream_key: Option<VoxyStreamKey>,
+    voxy_retained_streams: Vec<VoxyRetainedStream>,
     voxy_stream_buffers: Option<(BufferHandle, BufferHandle)>,
     voxy_stream_in_flight: bool,
     voxy_stream_owner: Option<(QueueHandle, SurfaceHandle)>,
@@ -1333,6 +1348,8 @@ pub(crate) fn open(
         drawable_depths: Vec::new(),
         voxy_stream_mesh: None,
         voxy_stream_source: None,
+        voxy_stream_key: None,
+        voxy_retained_streams: Vec::new(),
         voxy_stream_buffers: None,
         voxy_stream_in_flight: false,
         voxy_stream_owner: None,
@@ -1998,6 +2015,8 @@ pub(crate) fn destroy_buffer(
     {
         return Err(VgpuError::Busy);
     }
+    if lookup_buffer(device, buffer_handle)?.in_flight != 0 { return Err(VgpuError::Busy); }
+    release_voxy_retained_buffer(device, buffer_handle)?;
     let (slot, generation) = decode_handle(buffer_handle.raw())?;
     let buffer_slot = device
         .buffers
@@ -5554,6 +5573,59 @@ fn prepare_voxy_atlas(
     Ok(texture)
 }
 
+// Source handles include generations. Switching draws never overwrites the
+// GPU payload of another source; the active fields only select a retained entry.
+fn select_voxy_retained_stream(device: &mut VirtualDevice, key: VoxyStreamKey) {
+    if device.voxy_stream_key == Some(key) { return; }
+    if let (Some(previous), Some(mesh)) = (device.voxy_stream_key.take(), device.voxy_stream_mesh.take()) {
+        device.voxy_retained_streams.push(VoxyRetainedStream {
+            key: previous, source: device.voxy_stream_source.take(), mesh,
+        });
+    } else {
+        device.voxy_stream_source = None;
+    }
+    if let Some(index) = device.voxy_retained_streams.iter().position(|entry| entry.key == key) {
+        let entry = device.voxy_retained_streams.swap_remove(index);
+        device.voxy_stream_mesh = Some(entry.mesh);
+        device.voxy_stream_source = entry.source;
+    }
+    device.voxy_stream_key = Some(key);
+}
+
+fn release_voxy_retained_buffer(device: &mut VirtualDevice, buffer: BufferHandle) -> Result<(), VgpuError> {
+    let matches = |key: VoxyStreamKey| key.vertex_buffer == buffer || key.index_buffer == buffer;
+    if device.voxy_stream_key.is_some_and(matches) {
+        if device.voxy_stream_mesh.as_ref().is_some_and(|mesh| Arc::strong_count(mesh) != 1) {
+            return Err(VgpuError::Busy);
+        }
+        if let Some(mesh) = device.voxy_stream_mesh.as_ref() {
+            if !crate::intel::render::release_resident_triangle_mesh(mesh) {
+                device.voxy_stream_quarantined = true;
+                device.lost = true;
+                return Err(VgpuError::DeviceLost);
+            }
+            device.memory_used = device.memory_used.saturating_sub(mesh.storage_bytes);
+        }
+        device.voxy_stream_mesh = None;
+        device.voxy_stream_source = None;
+        device.voxy_stream_key = None;
+    }
+    let mut index = 0;
+    while index < device.voxy_retained_streams.len() {
+        let entry = &device.voxy_retained_streams[index];
+        if !matches(entry.key) { index += 1; continue; }
+        if Arc::strong_count(&entry.mesh) != 1 { return Err(VgpuError::Busy); }
+        if !crate::intel::render::release_resident_triangle_mesh(&entry.mesh) {
+            device.voxy_stream_quarantined = true;
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+        device.memory_used = device.memory_used.saturating_sub(entry.mesh.storage_bytes);
+        device.voxy_retained_streams.swap_remove(index);
+    }
+    Ok(())
+}
+
 /// The operation lease spans CPU writes, native submission and exact retirement.
 /// Allocate the bounded maximum once so terrain/entity count changes never move
 /// the camera, index buffer or indirect record while this device is alive.
@@ -5567,12 +5639,11 @@ fn stage_voxy_stream_update(
     let index_start = draw.index_offset.checked_add(
         (draw.first_index as usize).checked_mul(4).ok_or(VgpuError::Unsupported)?
     ).ok_or(VgpuError::Unsupported)?;
-    // Replacing a smaller resident allocation requires the complete source,
-    // including bytes that have not changed since the previous draw.
-    let source_capacity = lookup_buffer(device, draw.vertex_buffer)?.bytes.saturating_sub(80) / 32;
-    let may_grow = device.voxy_stream_mesh.as_ref().is_some_and(|mesh|
-        source_capacity > mesh.vertex_bytes as usize / 32);
-    let same_source = !may_grow && device.voxy_stream_source.as_ref().is_some_and(|source|
+    select_voxy_retained_stream(device, VoxyStreamKey {
+        vertex_buffer: draw.vertex_buffer, index_buffer: draw.index_buffer,
+        vertex_offset: draw.vertex_offset, index_start,
+    });
+    let same_source = device.voxy_stream_source.as_ref().is_some_and(|source|
         source.vertex_buffer == draw.vertex_buffer && source.index_buffer == draw.index_buffer
         && source.vertex_offset == draw.vertex_offset && source.index_start == index_start);
     let mut source = if same_source {
@@ -5645,8 +5716,15 @@ fn stage_voxy_stream_update(
         || camera[17] <= 0.0 || camera[18] <= 0.0 || camera[19] <= camera[18] {
         return Err(VgpuError::Unsupported);
     }
+    let grow = device.voxy_stream_mesh.as_ref().is_some_and(|mesh|
+        vertex_count.max(index_count) > mesh.vertex_bytes as usize / 32);
+    if grow {
+        index_updates.clear();
+        let raw = unsafe { core::slice::from_raw_parts(index_virt.add(index_start), index_count * 4) };
+        index_updates.push((0, raw.to_vec()));
+    }
     let mut dirty = Vec::new();
-    if !same_source {
+    if !same_source || grow {
         record_dirty_range(&mut dirty, 0..vertex_bytes);
     } else {
         if source.vertex_revision != vertex_record.write_revision {
@@ -7547,7 +7625,7 @@ const _: () = {
             Capabilities::CLIENT_BASE.union(Capabilities::PRESENT),
         )
         .memory_bytes
-            == 128 * 1024 * 1024
+            == 512 * 1024 * 1024
     );
     assert!(Quota::GUEST.buffers == 256);
 };
@@ -7602,6 +7680,8 @@ fn ensure_kernel_device(
         drawable_depths: Vec::new(),
         voxy_stream_mesh: None,
         voxy_stream_source: None,
+        voxy_stream_key: None,
+        voxy_retained_streams: Vec::new(),
         voxy_stream_buffers: None,
         voxy_stream_in_flight: false,
         voxy_stream_owner: None,
@@ -7753,6 +7833,16 @@ fn destroy_device_resources(
         }
         device.memory_used = device.memory_used.saturating_sub(mesh.storage_bytes);
         device.voxy_stream_mesh = None;
+    }
+    while let Some(entry) = device.voxy_retained_streams.last() {
+        if Arc::strong_count(&entry.mesh) != 1 { return Err(VgpuError::Busy); }
+        if !crate::intel::render::release_resident_triangle_mesh(&entry.mesh) {
+            device.voxy_stream_quarantined = true;
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+        device.memory_used = device.memory_used.saturating_sub(entry.mesh.storage_bytes);
+        device.voxy_retained_streams.pop();
     }
     for slot in &mut device.retained_textures {
         if let Some(record) = slot.record.take() {

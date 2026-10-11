@@ -306,7 +306,7 @@ fn constructor_keeps_capacity_descriptors_and_flushes_only_live_update_ranges() 
 }
 #[test]
 fn invalid_constructor_input_does_not_reach_allocation_or_flush() {
-    for capacity in [0,4,780003,usize::MAX] {
+    for capacity in [0,4,VOXY_HEADLESS_MAX_STREAM_CAPACITY+3,usize::MAX] {
         assert!(create_resident_voxy_headless_streaming_mesh(capacity, &[[1.0;16];3], &[0,1,2], &live_camera()).is_err());
     }
     assert!(create_resident_voxy_headless_streaming_mesh(3, &[[1.0;16];3], &[0,1,3], &live_camera()).is_err());
@@ -448,7 +448,7 @@ fn raw_update_rejects_malformed_fixed_layout_before_dereferencing_storage() {
 }
 #[test]
 fn raw_constructor_rejects_invalid_input_before_mapping_and_allocation() {
-    for capacity in [0,4,780003,usize::MAX] {
+    for capacity in [0,4,VOXY_HEADLESS_MAX_STREAM_CAPACITY+3,usize::MAX] {
         assert!(create_resident_voxy_headless_streaming_mesh_raw(
             capacity,&[(0,packed_vertices(3,1.0))],&[(0,packed_indices(&[0,1,2]))],&live_camera(),3).is_err());
     }
@@ -642,10 +642,16 @@ with tempfile.TemporaryDirectory(prefix='trueos-voxy-atlas-') as tmp:
 # cache identity, index decoding, range rounding and vertex/camera admission.
 staging = r'''#![allow(dead_code)]
 #[derive(Debug, PartialEq)]
-enum VgpuError { Unsupported, PermissionDenied, Busy, InvalidHandle }
+enum VgpuError { Unsupported, PermissionDenied, Busy, InvalidHandle, DeviceLost }
 enum BufferBacking { Dma { phys: u64, virt: *mut u8 }, GuestPages {} }
 struct SampledBufferCache;
-struct VirtualDevice { buffers: Vec<BufferSlot>, voxy_stream_source: Option<VoxyStreamSource> }
+use std::sync::Arc;
+struct VirtualDevice {
+ buffers: Vec<BufferSlot>, voxy_stream_source: Option<VoxyStreamSource>,
+ voxy_stream_mesh: Option<Arc<intel::render::ResidentTriangleMesh>>,
+ voxy_stream_key: Option<VoxyStreamKey>, voxy_retained_streams: Vec<VoxyRetainedStream>,
+ memory_used: usize, voxy_stream_quarantined: bool, lost: bool,
+}
 struct Ui4IndexedDrawDescriptor {
     vertex_buffer: BufferHandle, index_buffer: BufferHandle, vertex_offset: usize,
     index_offset: usize, first_index: u32, index_count: u32,
@@ -653,12 +659,17 @@ struct Ui4IndexedDrawDescriptor {
 mod intel { pub mod render {
 '''
 staging += constant(resources, 'VOXY_HEADLESS_MAX_STREAM_CAPACITY')
-staging += '} }\n'
+staging += '''
+#[derive(Debug)] pub struct ResidentTriangleMesh { pub vertex_bytes: u32, pub storage_bytes: usize }
+pub fn release_resident_triangle_mesh(_: &ResidentTriangleMesh) -> bool {true}
+} }\n'''
+
 staging += '\n'.join(constant('src/gpu/vgpu.rs', name) for name in [
     'BUFFER_USAGE_MAP_WRITE', 'BUFFER_USAGE_COPY_DST', 'BUFFER_USAGE_VERTEX', 'BUFFER_USAGE_INDEX',
 ])
 staging += '\n'.join(item('src/gpu/vgpu.rs', name) for name in [
     'BufferHandle', 'BufferRecord', 'BufferSlot', 'VoxyStreamSource', 'VoxyStreamUpdate',
+    'VoxyStreamKey', 'VoxyRetainedStream', 'select_voxy_retained_stream', 'release_voxy_retained_buffer',
     'encode_handle', 'decode_handle', 'lookup_buffer', 'lookup_buffer_mut',
     'record_dirty_range', 'stage_voxy_stream_update',
 ])
@@ -696,6 +707,8 @@ impl Fixture {
             device:VirtualDevice {
                 buffers:vec![BufferSlot { generation:1,record:Some(vertex) },
                     BufferSlot { generation:1,record:Some(index) }],voxy_stream_source:None,
+                voxy_stream_mesh:None,voxy_stream_key:None,voxy_retained_streams:Vec::new(),
+                memory_used:0,voxy_stream_quarantined:false,lost:false,
             },storage,
             draw:Ui4IndexedDrawDescriptor {
                 vertex_buffer:BufferHandle(encode_handle(0,1)),index_buffer:BufferHandle(encode_handle(1,1)),
@@ -733,6 +746,53 @@ fn shapes(updates: &[(usize,Vec<u8>)]) -> Vec<(usize,usize)> {
 }
 fn assert_no_geometry(update: &VoxyStreamUpdate) {
     assert!(update.vertices.is_empty()); assert!(update.indices.is_empty());
+}
+#[test]
+fn alternating_retained_buffer_pairs_preserves_gpu_identity_and_zero_geometry_uploads() {
+    let mut fixture=Fixture::identity(9,9);
+    fixture.stage().unwrap();
+    let first=Arc::new(intel::render::ResidentTriangleMesh {vertex_bytes:9*32,storage_bytes:4096});
+    fixture.device.voxy_stream_mesh=Some(first.clone());
+    let first_vb=fixture.draw.vertex_buffer;let first_ib=fixture.draw.index_buffer;
+    let mut vb=camera_bytes(&camera());vb.extend(vertex_bytes(9,500.0));
+    fixture.storage.push(vb.into_boxed_slice());
+    let v=record(fixture.storage.last_mut().unwrap(),BUFFER_USAGE_VERTEX|BUFFER_USAGE_MAP_WRITE);
+    fixture.storage.push(index_bytes(&(0..9).collect::<Vec<_>>()).into_boxed_slice());
+    let i=record(fixture.storage.last_mut().unwrap(),BUFFER_USAGE_INDEX|BUFFER_USAGE_MAP_WRITE);
+    fixture.device.buffers.push(BufferSlot {generation:1,record:Some(v)});
+    fixture.device.buffers.push(BufferSlot {generation:1,record:Some(i)});
+    let second_vb=BufferHandle(encode_handle(2,1));let second_ib=BufferHandle(encode_handle(3,1));
+    fixture.draw.vertex_buffer=second_vb;fixture.draw.index_buffer=second_ib;
+    let initial=fixture.stage().unwrap();assert_eq!(initial.vertices.len(),1);
+    let second=Arc::new(intel::render::ResidentTriangleMesh {vertex_bytes:9*32,storage_bytes:4096});
+    fixture.device.voxy_stream_mesh=Some(second.clone());
+    for frame in 0..120 {
+        let (vb,ib,mesh)=if frame%2==0 {(first_vb,first_ib,&first)} else {(second_vb,second_ib,&second)};
+        fixture.draw.vertex_buffer=vb;fixture.draw.index_buffer=ib;
+        let mut moved=camera();moved[0]=frame as f32;
+        fixture.write(vb,0,&camera_bytes(&moved));
+        let update=fixture.stage().unwrap();assert_no_geometry(&update);assert_eq!(update.camera,moved);
+        assert!(Arc::ptr_eq(fixture.device.voxy_stream_mesh.as_ref().unwrap(),mesh));
+        assert_eq!(fixture.device.voxy_retained_streams.len(),1);
+    }
+    // A live GPU reference prevents reclamation; after it retires, releasing
+    // one source leaves the other retained source untouched.
+    assert_eq!(release_voxy_retained_buffer(&mut fixture.device,first_vb),Err(VgpuError::Busy));
+    drop(first);drop(second);
+    fixture.device.memory_used=8192;
+    release_voxy_retained_buffer(&mut fixture.device,first_vb).unwrap();
+    assert_eq!(fixture.device.memory_used,4096);
+    assert!(fixture.device.voxy_stream_mesh.is_some());
+    assert!(fixture.device.voxy_retained_streams.is_empty());
+}
+#[test]
+fn growing_resident_allocation_restages_full_geometry_before_replacement() {
+    let mut fixture=Fixture::identity(9,3);fixture.stage().unwrap();
+    fixture.device.voxy_stream_mesh=Some(Arc::new(intel::render::ResidentTriangleMesh {vertex_bytes:3*32,storage_bytes:4096}));
+    fixture.draw.index_count=9;
+    let update=fixture.stage().unwrap();
+    assert_eq!(shapes(&update.vertices),[(0,9*32)]);
+    assert_eq!(shapes(&update.indices),[(0,9*4)]);
 }
 #[test]
 fn initial_snapshot_then_unchanged_and_camera_only_have_no_geometry_copies() {

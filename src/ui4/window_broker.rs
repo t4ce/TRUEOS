@@ -1920,6 +1920,16 @@ pub(super) fn attach_window_background(
     id: WindowId,
     frame: FrameHandle,
 ) -> Result<(), WindowBrokerError> {
+    attach_window_background_scaled(owner, id, frame, 1)
+}
+
+pub(super) fn attach_window_background_scaled(
+    owner: WindowOwner,
+    id: WindowId,
+    frame: FrameHandle,
+    scene_divisor: u32,
+) -> Result<(), WindowBrokerError> {
+    if !matches!(scene_divisor, 1 | 2 | 4) { return Err(WindowBrokerError::EmptyExtent); }
     let plan = super::frame_snapshot(frame)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
         .plan;
@@ -1936,7 +1946,7 @@ pub(super) fn attach_window_background(
         || window.background.is_some()
         || window.output != plan.output
         || window.frame == frame
-        || (window.placement.width, window.placement.height) != (plan.width, plan.height)
+        || ((window.placement.width / scene_divisor).max(1), (window.placement.height / scene_divisor).max(1)) != (plan.width, plan.height)
         || plan.format != super::ScanoutFormat::Rgba8888Premultiplied
     {
         return Err(WindowBrokerError::InvalidPlane);
@@ -2013,10 +2023,23 @@ pub(super) fn commit_window_layered_replacement(
     placement: WindowPlacement,
     resize_epoch: u64,
 ) -> Result<u64, WindowBrokerError> {
+    commit_window_layered_replacement_scaled(owner, id, foreground, background, placement, resize_epoch, 1)
+}
+
+pub(super) fn commit_window_layered_replacement_scaled(
+    owner: WindowOwner,
+    id: WindowId,
+    foreground: FrameHandle,
+    background: FrameHandle,
+    placement: WindowPlacement,
+    resize_epoch: u64,
+    scene_divisor: u32,
+) -> Result<u64, WindowBrokerError> {
+    if !matches!(scene_divisor, 1 | 2 | 4) { return Err(WindowBrokerError::EmptyExtent); }
     let plan = super::frame_snapshot(background)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
         .plan;
-    if (plan.width, plan.height) != (placement.width, placement.height) {
+    if (plan.width, plan.height) != ((placement.width / scene_divisor).max(1), (placement.height / scene_divisor).max(1)) {
         return Err(WindowBrokerError::EmptyExtent);
     }
     commit_window_replacement(

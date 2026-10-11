@@ -719,6 +719,7 @@ struct BlueprintSceneSurface {
     // Winit foreground-only clients keep a transparent background until the
     // first real producer lease. Its resize needs no second application redraw.
     winit_dormant_background: bool,
+    scene_divisor: u32,
     pending_resize: Option<BlueprintPendingResize>,
     pending_resize_ready: bool,
     write_lease: Option<FrameWriteLease>,
@@ -1360,13 +1361,22 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_layered_v1(
 /// Released foreground allocations can be scanned directly and are writable
 /// only after the display retires their read leases.
 pub extern "C" fn trueos_cabi_ui4_winit_frame_open_v1(
+    x: i32, y: i32, width: u32, height: u32, background_hz: u32,
+) -> u32 {
+    trueos_cabi_ui4_winit_frame_open_scaled_v1(x, y, width, height, background_hz, 1)
+}
+
+/// Full-resolution UI and placement, independently scaled scene backing.
+pub extern "C" fn trueos_cabi_ui4_winit_frame_open_scaled_v1(
     x: i32,
     y: i32,
     width: u32,
     height: u32,
     background_hz: u32,
+    scene_divisor: u32,
 ) -> u32 {
-    if width == 0
+    if !matches!(scene_divisor, 1 | 2 | 4)
+        || width == 0
         || height == 0
         || width > MAX_FRAME_WIDTH
         || height > MAX_FRAME_HEIGHT
@@ -1377,10 +1387,10 @@ pub extern "C" fn trueos_cabi_ui4_winit_frame_open_v1(
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let (status, window) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_UI4_WINIT_FRAME_OPEN_V1,
+            trueos_vm::vmcall::OP_BP_UI4_WINIT_FRAME_OPEN_SCALED_V1,
             pack_i32_pair(x, y),
             pack_u32_pair(width, height),
-            &background_hz.to_le_bytes(),
+            &[background_hz.to_le_bytes(), scene_divisor.to_le_bytes()].concat(),
             &mut [],
         );
         return if status == trueos_vm::vmcall::STATUS_OK {
@@ -1399,7 +1409,7 @@ pub extern "C" fn trueos_cabi_ui4_winit_frame_open_v1(
         let surface = surface_mut(&mut surfaces, owner, window_id).unwrap();
         (surface.window, surface.session)
     };
-    if open_blueprint_surface_with_cadence(
+    if open_blueprint_surface_with_cadence_scaled(
         x,
         y,
         width,
@@ -1407,6 +1417,7 @@ pub extern "C" fn trueos_cabi_ui4_winit_frame_open_v1(
         FrameCadence::Streaming,
         Some(background_hz),
         Some(parent),
+        scene_divisor,
     ) == 0 {
         let _ = trueos_cabi_ui4_solara_frame_close(window_id);
         return 0;
@@ -1568,19 +1579,35 @@ fn open_blueprint_surface_with_cadence(
     visual_target_hz: Option<u32>,
     parent: Option<(WindowId, WindowSessionId)>,
 ) -> u32 {
+    open_blueprint_surface_with_cadence_scaled(x, y, width, height, frame_cadence,
+        visual_target_hz, parent, 1)
+}
+
+fn open_blueprint_surface_with_cadence_scaled(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    frame_cadence: FrameCadence,
+    visual_target_hz: Option<u32>,
+    parent: Option<(WindowId, WindowSessionId)>,
+    scene_divisor: u32,
+) -> u32 {
     reap_retired_frames();
     let Some(owner) = blueprint_owner() else {
         return 0;
     };
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let backing_width = (width / scene_divisor).max(1);
+    let backing_height = (height / scene_divisor).max(1);
     let frame_spec = FrameSpec {
         output,
         content: FrameContent::BlueprintScene,
         cadence: frame_cadence,
         buffering: blueprint_frame_buffering(frame_cadence),
         format: ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
+        width: backing_width,
+        height: backing_height,
         base_color: (visual_target_hz.is_none() || frame_cadence == FrameCadence::Streaming)
             .then_some(PremultipliedRgba8::TRANSPARENT),
     };
@@ -1655,7 +1682,7 @@ fn open_blueprint_surface_with_cadence(
     };
 
     let render_target = if parent.is_some() {
-        if super::window_broker::attach_window_background(owner, window, frame).is_err() {
+        if super::window_broker::attach_window_background_scaled(owner, window, frame, scene_divisor).is_err() {
             let _ = destroy_frame(frame);
             return 0;
         }
@@ -1680,11 +1707,12 @@ fn open_blueprint_surface_with_cadence(
                 session,
                 frame,
                 window,
-                width,
-                height,
+                width: backing_width,
+                height: backing_height,
                 cadence: frame_cadence,
                 visual_cadence: visual_target_hz.map(BlueprintVisualCadence::new),
                 winit_dormant_background: false,
+                scene_divisor,
                 pending_resize: None,
                 pending_resize_ready: false,
                 write_lease: None,
@@ -1743,11 +1771,12 @@ fn open_blueprint_surface_with_cadence(
         session,
         frame,
         window,
-        width,
-        height,
+        width: backing_width,
+        height: backing_height,
         cadence: frame_cadence,
         visual_cadence: visual_target_hz.map(BlueprintVisualCadence::new),
         winit_dormant_background: false,
+        scene_divisor,
         pending_resize: None,
         pending_resize_ready: false,
         write_lease: None,
@@ -9535,8 +9564,8 @@ fn stage_layered_resize(
             cadence: surface.cadence,
             buffering: blueprint_frame_buffering(surface.cadence),
             format: ScanoutFormat::Rgba8888Premultiplied,
-            width,
-            height,
+            width: (width / surface.scene_divisor).max(1),
+            height: (height / surface.scene_divisor).max(1),
             base_color: Some(PremultipliedRgba8::TRANSPARENT),
         };
         if log_attempt {
@@ -9591,8 +9620,8 @@ fn stage_layered_resize(
         });
         surface.pending_resize_ready = surface.winit_dormant_background;
         surface.frame = replacement;
-        surface.width = width;
-        surface.height = height;
+        surface.width = (width / surface.scene_divisor).max(1);
+        surface.height = (height / surface.scene_divisor).max(1);
         surface.placement = placement;
         surface.taken_resize_event = None;
         surface.retained_text_backbuffer = None;
@@ -9632,13 +9661,14 @@ fn commit_layered_resize_if_ready(
     if pending.placement != other.placement || pending.resize_epoch != other.resize_epoch {
         return ERROR_STATE;
     }
-    let result = super::window_broker::commit_window_layered_replacement(
+    let result = super::window_broker::commit_window_layered_replacement_scaled(
         owner,
         window,
         surfaces[foreground].frame,
         surfaces[background].frame,
         pending.placement,
         pending.resize_epoch,
+        surfaces[background].scene_divisor,
     );
     if let Err(error) = result {
         crate::log_warn!(target: "ui4/resize";

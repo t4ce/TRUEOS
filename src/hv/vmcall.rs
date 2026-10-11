@@ -119,6 +119,7 @@ pub const OP_BP_UI4_SCENE_FRAME_RESIZE: u32 = 0xC6; // arg0 window,arg1 width/he
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_LAYERED_V1: u32 = 0x180;
 pub const OP_BP_UI4_SCENE_FRAME_LAYER_V1: u32 = 0x181;
 pub const OP_BP_UI4_WINIT_FRAME_OPEN_V1: u32 = 0x184;
+pub const OP_BP_UI4_WINIT_FRAME_OPEN_SCALED_V1: u32 = 0x188;
 pub const OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN_REGION_V1: u32 = 0x185;
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING: u32 = 0xC7; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB; // arg0 cap -> attached-shell input payload
@@ -2654,6 +2655,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         width,
                         height,
                         u32::from_le_bytes(payload.try_into().unwrap()),
+                    )
+                })
+                .unwrap_or(0);
+            write_response(vm_id, seq, STATUS_OK, window as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_WINIT_FRAME_OPEN_SCALED_V1 => {
+            let (x, y) = unpack_i32_pair(arg0);
+            let (width, height) = unpack_u32_pair(arg1);
+            let window = request_payload(vm_id, req_len)
+                .filter(|payload| payload.len() == 8)
+                .map(|payload| {
+                    crate::ui4::blueprint_text::trueos_cabi_ui4_winit_frame_open_scaled_v1(
+                        x,
+                        y,
+                        width,
+                        height,
+                        u32::from_le_bytes(payload[..4].try_into().unwrap()),
+                        u32::from_le_bytes(payload[4..].try_into().unwrap()),
                     )
                 })
                 .unwrap_or(0);

@@ -30,7 +30,7 @@ impl FrameHandle { fn raw(self)->u32 {self.0} }
 #[derive(Clone,Copy)] struct BlueprintPendingResize {previous_frame:FrameHandle,previous_width:u32,previous_height:u32,previous_placement:WindowPlacement,placement:WindowPlacement,resize_epoch:u64}
 #[derive(Clone)] struct BlueprintSceneSurface {
     owner:WindowOwner,window:WindowId,session:WindowSessionId,render_target:u32,
-    frame:FrameHandle,width:u32,height:u32,cadence:FrameCadence,placement:WindowPlacement,winit_dormant_background:bool,
+    frame:FrameHandle,width:u32,height:u32,cadence:FrameCadence,placement:WindowPlacement,winit_dormant_background:bool,scene_divisor:u32,
     write_lease:Option<()>,gpu_submission_unretired:bool,vgpu_surface:Option<()>,
     pending_resize:Option<BlueprintPendingResize>,pending_resize_ready:bool,
     taken_resize_event:Option<()>,retained_text_backbuffer:Option<()>,retained_text_backbuffer_extent:Option<(u32,u32)>,
@@ -68,6 +68,7 @@ thread_local! {
 mod hv {pub fn current_hull_guest_context_vm_id()->Option<u32> {None} }
 mod trueos_vm {pub mod vmcall {
     pub const OP_BP_UI4_WINIT_FRAME_OPEN_V1:u64=99;
+    pub const OP_BP_UI4_WINIT_FRAME_OPEN_SCALED_V1:u64=100;
     pub const STATUS_OK:u64=0;
     pub fn call_with_payload(_:u64,_:u64,_:u64,_:&[u8],_:&mut[u8])->(u64,u64) {panic!("host entry must not vmcall")}
 } }
@@ -90,7 +91,7 @@ fn destroy_frame(frame:FrameHandle)->Result<(),()> {DESTROYED.with(|s|s.borrow_m
 fn retire_frame_when_released(frame:FrameHandle) {RETIRED.with(|s|s.borrow_mut().push(frame));}
 fn surface(cadence:FrameCadence,background:bool)->BlueprintSceneSurface {
     BlueprintSceneSurface {owner:1,window:WindowId(1),session:2,render_target:if background {0x8001}else{1},frame:FrameHandle(if background {11}else{10}),width:100,height:100,cadence,
-    placement:WindowPlacement{x:5,y:6,width:100,height:100},winit_dormant_background:false,write_lease:None,gpu_submission_unretired:false,vgpu_surface:None,pending_resize:None,pending_resize_ready:false,taken_resize_event:Some(()),retained_text_backbuffer:Some(()),retained_text_backbuffer_extent:Some((100,100))}
+    placement:WindowPlacement{x:5,y:6,width:100,height:100},winit_dormant_background:false,scene_divisor:1,write_lease:None,gpu_submission_unretired:false,vgpu_surface:None,pending_resize:None,pending_resize_ready:false,taken_resize_event:Some(()),retained_text_backbuffer:Some(()),retained_text_backbuffer_extent:Some((100,100))}
 }
 mod producer {
     use super::*;
@@ -103,6 +104,14 @@ mod producer {
         SURFACES.lock().push(surface(cadence,parent.is_some()));
         1
     }
+    fn open_blueprint_surface_with_cadence_scaled(x:i32,y:i32,w:u32,h:u32,c:FrameCadence,hz:Option<u32>,parent:Option<(WindowId,WindowSessionId)>,divisor:u32)->u32 {
+        let result=open_blueprint_surface_with_cadence(x,y,w,h,c,hz,parent);
+        if result!=0 { let mut surfaces=SURFACES.lock();let surface=surfaces.last_mut().unwrap();
+            surface.scene_divisor=divisor;surface.width=(w/divisor).max(1);surface.height=(h/divisor).max(1);
+            surface.placement.width=w;surface.placement.height=h; }
+        result
+    }
+    pub(super) fn scaled(w:u32,h:u32,d:u32)->u32 {trueos_cabi_ui4_winit_frame_open_scaled_v1(1,2,w,h,60,d)}
     fn open_blueprint_frame(x:i32,y:i32,w:u32,h:u32,c:FrameCadence,hz:Option<u32>)->u32 {open_blueprint_surface(x,y,w,h,c,hz,None)}
     pub(super) fn open(w:u32,h:u32,hz:u32)->u32 {trueos_cabi_ui4_winit_frame_open_v1(1,2,w,h,hz)}
     pub(super) fn legacy() {open_blueprint_surface(0,0,100,100,FrameCadence::Streaming,None,None);open_blueprint_surface(0,0,100,100,FrameCadence::Streaming,Some(60),Some((WindowId(1),2)));}
@@ -113,7 +122,7 @@ mod producer {
 mod window_broker {
     use super::*;
     pub(super) fn publish_window_background(_:WindowOwner,window:WindowId,_:DamageRect)->Result<(),WindowBrokerError> {BACKGROUND_PUBLISHES.with(|s|s.borrow_mut().push(window));Ok(())}
-    pub(super) fn commit_window_layered_replacement(_:WindowOwner,_:WindowId,foreground:FrameHandle,background:FrameHandle,_:WindowPlacement,_:u64)->Result<(),WindowBrokerError> {COMMITS.with(|s|s.borrow_mut().push((foreground,background)));Ok(())}
+    pub(super) fn commit_window_layered_replacement_scaled(_:WindowOwner,_:WindowId,foreground:FrameHandle,background:FrameHandle,_:WindowPlacement,_:u64,_:u32)->Result<(),WindowBrokerError> {COMMITS.with(|s|s.borrow_mut().push((foreground,background)));Ok(())}
 }
 fn reset() {PUBLISHED.with(|s|s.borrow_mut().clear());CANCELED.with(|s|s.borrow_mut().clear());FAIL_PUBLISH.with(|s|*s.borrow_mut()=false);BACKGROUND_PUBLISHES.with(|s|s.borrow_mut().clear());COMMITS.with(|s|s.borrow_mut().clear());SURFACES.lock().clear();OPENS.with(|s|s.borrow_mut().clear());SPECS.with(|s|s.borrow_mut().clear());DESTROYED.with(|s|s.borrow_mut().clear());RETIRED.with(|s|s.borrow_mut().clear());CLOSES.with(|s|s.borrow_mut().clear());FAIL_OPEN.with(|s|*s.borrow_mut()=false);FAIL_ALLOC.with(|s|*s.borrow_mut()=None);}
 #[test] fn winit_entry_routes_dirty_double_ui_and_streaming_triple_scene() {
@@ -183,6 +192,25 @@ fn reset() {PUBLISHED.with(|s|s.borrow_mut().clear());CANCELED.with(|s|s.borrow_
 #[test] fn outstanding_producer_work_prevents_pair_allocation() {
     for kind in 0..3 {reset();let mut pair=vec![surface(FrameCadence::Dirty,false),surface(FrameCadence::Streaming,true)];match kind {0=>pair[0].write_lease=Some(()),1=>pair[1].gpu_submission_unretired=true,_=>pair[1].vgpu_surface=Some(())};assert_eq!(producer::resize(&mut pair),ERROR_BUSY);SPECS.with(|s|assert!(s.borrow().is_empty()));}
 }
+
+#[test] fn half_resolution_scene_retains_physical_ui_and_resize_placement() {
+    reset(); assert_eq!(producer::scaled(1920,1080,2),1);
+    let mut surfaces=SURFACES.lock();
+    assert_eq!((surfaces[0].width,surfaces[0].height),(100,100));
+    assert_eq!((surfaces[1].width,surfaces[1].height),(960,540));
+    assert_eq!((surfaces[1].placement.width,surfaces[1].placement.height),(1920,1080));
+    assert_eq!(producer::resize(&mut surfaces),0);
+    assert_eq!((surfaces[0].width,surfaces[0].height),(200,150));
+    assert_eq!((surfaces[1].width,surfaces[1].height),(100,75));
+    assert_eq!((surfaces[1].placement.width,surfaces[1].placement.height),(200,150));
+    SPECS.with(|s| {let s=s.borrow();assert_eq!((s[0].width,s[0].height),(200,150));
+        assert_eq!((s[1].width,s[1].height),(100,75));});
+}
+#[test] fn invalid_scene_divisor_rejects_before_allocation() {
+    reset();assert_eq!(producer::scaled(1920,1080,0),0);
+    assert_eq!(producer::scaled(1920,1080,3),0);
+    OPENS.with(|s|assert!(s.borrow().is_empty()));
+}
 '''
 
 
@@ -198,7 +226,7 @@ def abi_item(name):
 
 
 def main():
-    functions = abi_item("trueos_cabi_ui4_winit_frame_open_v1") + "\n" + "\n".join(item(SOURCE, name) for name in (
+    functions = abi_item("trueos_cabi_ui4_winit_frame_open_v1") + "\n" + abi_item("trueos_cabi_ui4_winit_frame_open_scaled_v1") + "\n" + "\n".join(item(SOURCE, name) for name in (
         "open_blueprint_surface",
         "blueprint_frame_buffering", "publish_transparent_winit_background", "stage_layered_resize", "revert_blueprint_pending_resize", "commit_layered_resize_if_ready"))
     with tempfile.TemporaryDirectory(prefix="ui4-winit-frames-") as directory:
