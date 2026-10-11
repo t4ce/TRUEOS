@@ -1595,7 +1595,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_trueosfs_rw_probe,
     ),
     unix_fd_probe_task_spec(),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
         &BP_AUTOSTART_STARTED,

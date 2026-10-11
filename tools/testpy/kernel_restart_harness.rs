@@ -37,6 +37,12 @@ mod app_db {
     }
 }
 mod r {
+    pub mod startup_config {
+        pub async fn reload() {}
+        pub fn manifest() -> alloc::sync::Arc<[u8]> { alloc::sync::Arc::from(crate::restart::embedded_startup_manifest()) }
+        pub fn blueprint(_: &str) -> Option<String> { None }
+        pub fn aliases() -> Vec<String> { Vec::new() }
+    }
     pub mod readiness {
         pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1;
         pub const UI4_COMPOSITOR_READY: u32 = 2;
@@ -83,6 +89,17 @@ mod hv {
         pub operation: u64,
         pub version: u32,
         pub bytes: Vec<u8>,
+    }
+    pub mod launcher {
+        pub struct LaunchRequest { pub archive: String, pub bytes: Vec<u8>, pub script: Option<String> }
+        impl LaunchRequest {
+            pub fn new(archive: String, bytes: Vec<u8>) -> Self { Self { archive, bytes, script: None } }
+        }
+        pub fn enqueue(request: LaunchRequest, _: Option<()>) -> Result<(), String> {
+            assert_eq!(request.archive, "appstore.bp");
+            crate::event(format!("pullbot:{}", request.script.unwrap()));
+            Ok(())
+        }
     }
     pub mod blueprint {
         pub fn prebind_required_readiness(_: &[u8]) -> Result<u32, String> {
@@ -180,6 +197,7 @@ mod hv {
         }
     }
 }
+use r::startup_config;
 mod restart {
     include!("restart.rs");
 }
@@ -241,7 +259,7 @@ fn cold_keeps_configured_defaults_detached_from_shell() {
     setup(false, vec![]);
     run(restart::restart_apps_task(Spawner));
     let e = EVENTS.lock().unwrap();
-    assert!(e.contains(&"cold:voxy.bp:0".into()));
+    assert_eq!(*e, vec!["archive:appstore.bp", "pullbot:pull --headless voxy\n"]);
     assert!(
         !e.iter()
             .any(|x| x == "complete" || x.starts_with("replica:") || x.starts_with("resume:"))

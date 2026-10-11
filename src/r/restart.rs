@@ -1,7 +1,7 @@
 //! Blueprint restart policy for cold boots and live kernel replacement.
 //!
 //! These paths are intentionally exclusive. A power-on, reset, or ACPI reboot
-//! starts configured Blueprints directly through the hypervisor. A live update
+//! starts configured Blueprints through Appstore pullbot. A live update
 //! resumes only running handoff entries; stopped apps and defaults stay closed.
 
 use alloc::{string::String, vec::Vec};
@@ -54,12 +54,26 @@ struct ColdStartBlueprint {
 }
 
 impl ColdStartBlueprint {
-    fn instance_request(&self) -> crate::hv::BlueprintInstanceRequest {
-        self.instance
-            .as_ref()
-            .map_or_else(crate::hv::BlueprintInstanceRequest::default, |name| {
-                crate::hv::BlueprintInstanceRequest::named(name.clone())
-            })
+    fn pullbot_script(&self) -> Result<String, String> {
+        let selector = self.online_selector.as_deref()
+            .unwrap_or_else(|| self.archive.strip_suffix(".bp").unwrap_or(&self.archive));
+        if selector.is_empty() || selector.starts_with('-')
+            || selector.chars().any(|c| c.is_whitespace() || c.is_control() || c == '§') {
+            return Err("invalid online selector".into());
+        }
+        if self.instance.is_some() || !self.args.is_empty() {
+            return Err("Appstore pullbot does not support instance or args".into());
+        }
+        match self.launch_script.as_deref() {
+            Some(script) if !script.trim().is_empty() => {
+                let script = script.trim();
+                if script.chars().any(|c| c.is_control()) {
+                    return Err("Appstore pullbot requires a single-line launch script".into());
+                }
+                Ok(alloc::format!("pull --headless {selector} -- {script}\n"))
+            }
+            _ => Ok(alloc::format!("pull --headless {selector}\n")),
+        }
     }
 }
 
@@ -123,58 +137,17 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
                 continue;
             }
             Timer::after(Duration::from_millis(app.settle_ms)).await;
-            let bytes = match crate::app_db::get(&app.archive) {
-                Ok(Some(bytes)) => bytes,
-                Ok(None) => {
-                    crate::log!(
-                        "restart: cold-start archive unavailable archive={}\n",
-                        app.archive
-                    );
-                    continue;
-                }
-                Err(error) => {
-                    crate::log!(
-                        "restart: cold-start archive read failed archive={} error={}\n",
-                        app.archive,
-                        error
-                    );
-                    continue;
-                }
-            };
-            let required = match crate::hv::blueprint::prebind_required_readiness(&bytes) {
-                Ok(required) => required,
-                Err(error) => {
-                    crate::log!(
-                        "restart: cold-start prebind failed archive={} error={}\n",
-                        app.archive,
-                        error
-                    );
-                    continue;
-                }
-            };
-            crate::r::readiness::wait_for(required).await;
-            let Some(vm_id) = crate::hv::first_free_vm_id() else {
-                crate::log!("restart: cold-start no free VM archive={}\n", app.archive);
-                continue;
-            };
-            let instance = app.instance_request();
-            match crate::hv::start_blueprint_app_vm(
-                vm_id,
-                &spawner,
-                app.archive,
-                bytes,
-                app.args,
-                app.launch_script,
-                instance,
-                None,
-                crate::hv::BlueprintConsoleSurface::Text,
-            ) {
-                Ok(()) => crate::log!("restart: cold-start launch queued vm={}\n", vm_id),
-                Err(error) => crate::log!(
-                    "restart: cold-start launch failed vm={} error={:?}\n",
-                    vm_id,
-                    error
-                ),
+            let result = (|| {
+                let script = app.pullbot_script()?;
+                let bytes = crate::app_db::get("appstore.bp")?
+                    .ok_or_else(|| String::from("Appstore builtin unavailable"))?;
+                let mut request = crate::hv::launcher::LaunchRequest::new("appstore.bp".into(), bytes);
+                request.script = Some(script);
+                crate::hv::launcher::enqueue(request, None)
+            })();
+            match result {
+                Ok(()) => crate::log!("restart: cold-start pullbot queued archive={} slot={}\n", app.archive, app.slot),
+                Err(error) => crate::log!("restart: cold-start pullbot failed archive={} error={}\n", app.archive, error),
             }
         }
         return;
