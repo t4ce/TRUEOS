@@ -43,6 +43,7 @@ define_started_flags!(
     FONT_WARM_POOL_STARTED,
     FONT_PLAN_SERVICE_STARTED,
     FONT_KERNEL_SERVICE_STARTED,
+    MICROFONT_MOON_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
     TTSTT_CAPTURE_WRITER_STARTED,
     LUMEN_BOOT_WARM_STARTED,
@@ -327,6 +328,14 @@ fn spawn_font_plan_pool(spawner: Spawner) -> SpawnAttempt {
 
 pub(crate) fn retry_font_plan_pool_autostart() {
     FONT_PLAN_SERVICE_STARTED.store(false, Ordering::Release);
+}
+
+fn spawn_microfont_moon(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| super::microfonttothemoon::microfonttothemoon_task())
+}
+
+fn microfont_moon_gate() -> bool {
+    crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some()
 }
 
 fn spawn_font_kernel_service(spawner: Spawner) -> SpawnAttempt {
@@ -1382,7 +1391,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 76
+const TASK_COUNT: usize = 77
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize;
@@ -1439,6 +1448,14 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         font_plan_pool_gate,
         &FONT_PLAN_SERVICE_STARTED,
         spawn_font_plan_pool,
+    ),
+    TaskSpec::enabled_gated(
+        "microfonttothemoon",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        microfont_moon_gate,
+        &MICROFONT_MOON_STARTED,
+        spawn_microfont_moon,
     ),
     TaskSpec::enabled_gated(
         "font-kernel-service",

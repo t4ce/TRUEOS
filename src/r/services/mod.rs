@@ -11,6 +11,7 @@ pub mod hid_udp_service;
 pub mod keyboard_control_service;
 pub mod media_service;
 pub(crate) mod microfont_log_service;
+pub(crate) mod microfonttothemoon;
 pub mod mouse_motion_service;
 pub(crate) mod pxeproc_service;
 pub(crate) mod oceancache;
