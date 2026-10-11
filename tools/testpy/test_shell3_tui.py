@@ -369,7 +369,7 @@ impl Shell3 {
     let (vm_frontend,vm_target)=session("vm-palette",15,12,5);tui::claim(&vm_target,15);
     tui::write(&vm_target,15,b"\x1b[?25lVM");let rows=tui::snapshot(vm_frontend.id,Some("vm-palette")).unwrap();assert_eq!(rows[0][0].1.unwrap().background(),Some([0,0,0,255]));
 }
-#[test] fn restored_system_helpers_use_default_background_for_title_help_and_body() {
+#[test] fn restored_system_helpers_color_three_control_rows_and_use_default_body() {
     for (index,name) in ["cry","disc","ram","smp"].iter().enumerate() {
         let f=frontend(40,8);let t=shell2::target(name,index as u64+1);
         let shell=Shell3 {command_history:Default::default(),tui_frontend:f.id,name:(*name).into(),size:(40,8),prompt:String::new(),mode:3};
@@ -377,9 +377,12 @@ impl Shell3 {
         tui::attach_native(f,&t).unwrap();
         tui::native_write(&t,b"\x1b[?25l\x1b[0m\x1b[2JTitle\x1b[2;1HHelp\x1b[4;1H\x1b[35mText\x1b[0m");
         tty.reconcile_matrix_selection();
-        assert!(!String::from_utf8_lossy(&tty.output).contains("48;"));
+        assert!(!String::from_utf8_lossy(&tty.output).contains("48;2;24;24;24m"));
         let mut screen=trueos_terminal::Terminal::new(40,8);screen.feed(&tty.output);
-        assert!(screen.cells().iter().all(|cell|cell.style.background==trueos_terminal::TerminalColor::Default));
+        for row in 0..3 {for cell in &screen.cells()[row*40..(row+1)*40] {
+            assert_eq!(cell.style.background,trueos_terminal::TerminalColor::Rgb {red:16,green:16,blue:16});
+        }}
+        assert!(screen.cells()[3*40..].iter().all(|cell|cell.style.background==trueos_terminal::TerminalColor::Default));
         assert_eq!(screen.render_rows()[0].trim(),"Title");
         assert_eq!(screen.render_rows()[1].trim(),"Help");
         assert_eq!(screen.render_rows()[3].trim(),"Text");
