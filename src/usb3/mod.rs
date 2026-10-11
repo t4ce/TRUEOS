@@ -195,6 +195,18 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
     };
     open_and_handoff_devices(&mut host, news, &spawner, controller_id).await;
 
+    // The first root-hub pass can only *start* a USB2 port reset. Its
+    // completion may arrive during device handoff, before we establish the
+    // maintenance event baseline below. Finish those boot-time transitions
+    // explicitly instead of waiting for another physical hotplug edge.
+    for _ in 0..3 {
+        trueos_time::Timer::after(trueos_time::Duration::from_millis(150)).await;
+        let Some(news) = probe_devices_with_log(&mut host, "initial-settle", index).await else {
+            return;
+        };
+        open_and_handoff_devices(&mut host, news, &spawner, controller_id).await;
+    }
+
     let mut observed_port_change_seq =
         USB_PORT_CHANGE_SEQ[index].load(core::sync::atomic::Ordering::Acquire);
     let mut next_snapshot = trueos_time::Instant::now()

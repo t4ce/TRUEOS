@@ -242,6 +242,14 @@ static PRIMARY_DHCP6_DNS6: spin::Mutex<([[u8; 16]; DHCP6_DNS6_MAX], u8)> =
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn primary_dhcp_dns_snapshot() -> ([[u8; 4]; DHCP_DNS_MAX], u8) {
+    let index = crate::net::primary_device_index();
+    if crate::net::mac_address_at(index).is_some_and(|mac|
+        crate::net::laptop_profile::matches(mac, crate::net::device_id_at(index)))
+    {
+        let mut dns = [[0u8; 4]; DHCP_DNS_MAX];
+        dns[0] = crate::net::laptop_profile::GATEWAY;
+        return (dns, 1);
+    }
     *PRIMARY_DHCP_DNS.lock()
 }
 
@@ -1819,7 +1827,7 @@ struct NetService {
 
     raw_icmpv6: SocketHandle,
 
-    dhcp: SocketHandle,
+    dhcp: Option<SocketHandle>,
     dhcp_has_lease: bool,
     local_ipv4: Option<Ipv4Address>,
     router_ipv4: Option<Ipv4Address>,
@@ -1879,6 +1887,9 @@ struct NetService {
 impl NetService {
     fn new(device_index: usize) -> Self {
         let mac = crate::net::mac_address_at(device_index).unwrap_or([0, 0, 0, 0, 0, 1]);
+        let laptop_profile = crate::net::laptop_profile::matches(
+            mac, crate::net::device_id_at(device_index),
+        );
         crate::log_info!(target: "net";
             "net: dev={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             device_index,
@@ -1923,6 +1934,14 @@ impl NetService {
         // Bring-up default: install static IPv4 before DHCP starts.
         let (fallback_ip, fallback_gw) =
             apply_static_fallback_ipv4(&mut iface, device_index, ipv6_ll);
+
+        let mut profile_dns = [[0u8; 4]; DHCP_DNS_MAX];
+        if laptop_profile {
+            profile_dns[0] = crate::net::laptop_profile::GATEWAY;
+            if device_index == crate::net::primary_device_index() {
+                *PRIMARY_DHCP_DNS.lock() = (profile_dns, 1);
+            }
+        }
 
         // Note: Some networks reply to RS with multicast RAs (ff02::1). Joining
         // multicast groups requires smoltcp's multicast interface support; we
@@ -1989,14 +2008,19 @@ impl NetService {
         //     kind: 12,
         //     data: current_hostname.as_bytes(),
         // }]);
-        let dhcp = sockets.add(dhcp_socket);
-        crate::log_info!(target: "net"; "net: dhcp start dev={} mode=static-fallback\n", device_index);
+        let dhcp = if laptop_profile { None } else { Some(sockets.add(dhcp_socket)) };
+        if laptop_profile {
+            crate::log_info!(target: "net";
+                "net: static profile dev={} ipv4=192.168.178.50/24 gw=192.168.178.1 dns=192.168.178.1 dhcp=disabled\n", device_index);
+        } else {
+            crate::log_info!(target: "net"; "net: dhcp start dev={} mode=static-fallback\n", device_index);
+        }
 
         let dhcp6_duid = crate::net::dhcpv6::duid_ll_from_mac(mac);
         let dhcp6_iaid =
             u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]) ^ ((device_index as u32) << 24);
 
-        Self {
+        let service = Self {
             device_index,
             iface,
             sockets,
@@ -2017,8 +2041,8 @@ impl NetService {
             local_ipv6_global: None,
             router_ipv6: None,
             rs_last_sent: None,
-            dhcp_dns: [[0u8; 4]; DHCP_DNS_MAX],
-            dhcp_dns_count: 0,
+            dhcp_dns: profile_dns,
+            dhcp_dns_count: if laptop_profile { 1 } else { 0 },
 
             ra_dns6: [[0u8; 16]; RA_DNS6_MAX],
             ra_dns6_count: 0,
@@ -2059,7 +2083,14 @@ impl NetService {
 
             internal_netbench: Vec::new(),
             internal_netbench_combined: None,
+        };
+        if laptop_profile {
+            crate::net::laptop_profile::record_assignment(service.iface.ip_addrs().iter().any(
+                |cidr| *cidr == IpCidr::new(IpAddress::Ipv4(fallback_ip),
+                    crate::net::laptop_profile::PREFIX_LEN),
+            ));
         }
+        service
     }
 
     fn internal_netbench_find_header_end(buf: &[u8]) -> Option<usize> {
@@ -4714,7 +4745,8 @@ impl NetService {
         // Internal netbench (no vnet/event copies).
         work_done |= self.internal_netbench_tick(timestamp);
 
-        let dhcp_event = self.sockets.get_mut::<dhcpv4::Socket>(self.dhcp).poll();
+        let dhcp_event = self.dhcp.and_then(|handle|
+            self.sockets.get_mut::<dhcpv4::Socket>(handle).poll());
         match dhcp_event {
             None => {}
             Some(dhcpv4::Event::Configured(config)) => {
@@ -5334,6 +5366,12 @@ fn ipv6_is_ula(ip: Ipv6Address) -> bool {
 }
 
 fn fallback_ipv4_for_device(device_index: usize) -> Ipv4Address {
+    if crate::net::mac_address_at(device_index).is_some_and(|mac|
+        crate::net::laptop_profile::matches(mac, crate::net::device_id_at(device_index)))
+    {
+        let [a, b, c, d] = crate::net::laptop_profile::ADDRESS;
+        return Ipv4Address::new(a, b, c, d);
+    }
     if device_index == crate::net::primary_device_index() {
         return Ipv4Address::new(
             STATIC_FALLBACK_PRIMARY_IPV4[0],

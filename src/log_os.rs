@@ -69,7 +69,7 @@ pub(crate) mod flags {
     /// current CrabUSB controller/HID handoff capture. Keep this enabled while
     /// the passed-through ASMedia xHCI Heal experiment needs its Info-level
     /// admission, capability, and quarantine records in host captures.
-    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = false;
+    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Boot/network diagnostic profile for startup timing and first-net-process
     /// operability logs.
