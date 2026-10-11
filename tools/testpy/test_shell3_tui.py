@@ -94,9 +94,28 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
     let f=frontend(20,5);tui::hold_navigation(f.id,true);
     let t=shell2::target("latched-blueprint",1);tui::attach(f,&t).unwrap();hv::bind(24,&t);
-    assert!(tui::supports(&t));assert_eq!(tui::claim(&t,24),Some(false));
+    assert!(tui::supports(&t));assert_eq!(tui::claim(&t,24),Some(true));
+    assert_eq!(tui::write(&t,24,b"first frame"),Some(11));
+    assert!(!tui::active(f.id,Some("latched-blueprint")));
+    assert!(tui::snapshot(f.id,Some("latched-blueprint")).is_none());
+    assert!(!tui::input(f.id,Some("latched-blueprint"),b"held key"));
     tui::hold_navigation(f.id,false);assert!(tui::select(f,Some("latched-blueprint")));
-    assert_eq!(tui::claim(&t,24),Some(true));tui::detach(f.id);
+    assert_eq!(tui::claim(&t,24),Some(true));
+    assert!(tui::active(f.id,Some("latched-blueprint")));
+    assert_eq!(tui::snapshot(f.id,Some("latched-blueprint")).unwrap()[0][0].0,'f');
+    tui::detach(f.id);
+}
+#[test] fn feedback_buffers_ssh_startup_frame_until_navigation() {
+    let f=frontend(20,5);tui::bind_remote_frontend(f.id);tui::hold_navigation(f.id,true);
+    let t=shell2::target("latched-ssh",1);tui::attach(f,&t).unwrap();hv::bind(25,&t);
+    assert_eq!(tui::claim(&t,25),Some(true));
+    assert_eq!(tui::write(&t,25,b"first ssh frame"),Some(15));
+    assert!(!tui::remote_active(f.id));assert!(tui::take_remote_output(f.id,65536).is_none());
+    tui::hold_navigation(f.id,false);assert!(tui::select(f,Some("latched-ssh")));
+    assert!(tui::remote_active(f.id));
+    let drain=tui::take_remote_output(f.id,65536).unwrap();
+    assert!(drain.active);assert!(drain.bytes.ends_with(b"first ssh frame"));
+    assert!(tui::take_remote_output(f.id,65536).unwrap().bytes.is_empty());tui::detach(f.id);
 }
 #[test] fn accepted_word_hold_keeps_new_and_resumed_native_helpers_parked() {
     let f=frontend(20,5);let t=shell2::target("latched-native",1);

@@ -66,19 +66,19 @@ fn text(feedback:&command_latch::Feedback,now:u64)->String {feedback.runs(20,now
 #[test] fn word_is_centered_then_dissolves_in_both_tab_directions() {
     let left=command_latch::Feedback::new("termdir",0,false);
     let right=command_latch::Feedback::new("termdir",0,true);
-    assert_eq!(text(&left,0),"      termdir");assert_eq!(text(&left,74_999_999),"      termdir");
-    assert_eq!(text(&left,100_000_000),"       ermdir");
-    assert_eq!(text(&right,100_000_000),"      termdi ");
-    assert!(!left.finished(199_999_999));assert!(left.finished(200_000_000));
-    assert_eq!(text(&left,200_000_000),"");
+    assert_eq!(text(&left,0),"      termdir");assert_eq!(text(&left,149_999_999),"      termdir");
+    assert_eq!(text(&left,200_000_000),"       ermdir");
+    assert_eq!(text(&right,200_000_000),"      termdi ");
+    assert!(!left.finished(399_999_999));assert!(left.finished(400_000_000));
+    assert_eq!(text(&left,400_000_000),"");
     assert_eq!(left.runs(4,0).iter().map(|run|run.text.as_str()).collect::<String>(),"termdir");
 }
 #[test] fn queued_app_is_registered_immediately_but_selected_after_feedback() {
     *matrix_slots().lock()=Slots::default();chronos::NOW.store(0,std::sync::atomic::Ordering::Relaxed);
     let mut shell=Shell3::new();shell.select_queued_app(service::QueuedBlueprint {slot:"td1".into(),sha256:[1;32]});
     assert_eq!(matrix_slots().lock().vmx_apps.len(),1);assert_eq!(shell.active_matrix_slot,None);
-    chronos::NOW.store(199_999_999,std::sync::atomic::Ordering::Relaxed);shell.finish_command_latch(false);assert_eq!(shell.active_matrix_slot,None);
-    chronos::NOW.store(200_000_000,std::sync::atomic::Ordering::Relaxed);shell.finish_command_latch(false);
+    chronos::NOW.store(399_999_999,std::sync::atomic::Ordering::Relaxed);shell.finish_command_latch(false);assert_eq!(shell.active_matrix_slot,None);
+    chronos::NOW.store(400_000_000,std::sync::atomic::Ordering::Relaxed);shell.finish_command_latch(false);
     assert_eq!(shell.active_matrix_slot.as_deref(),Some("td1"));assert!(shell.command_feedback.is_none());assert!(shell.latched_navigation.is_none());
     assert_eq!(matrix_slots().lock().vmx_apps.len(),1);shell.finish_command_latch(false);assert_eq!(matrix_slots().lock().vmx_apps.len(),1);
 }

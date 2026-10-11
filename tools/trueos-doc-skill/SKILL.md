@@ -7,6 +7,28 @@ description: Query authoritative, compact TRUEOS knowledge when working with She
 
 Use `trueos-doc` before reasoning from memory about Shell2 interaction or rig access.
 
+## Current physical test-rig access
+
+The physical rig remains at `192.168.178.94`, but its network shell is now
+Shell3 over SSH on port **22**. Shell2 NetTCP on port 4245 is retired; do not
+use `nc` or the old NetTCP commander launcher to connect.
+
+Use the existing local SSH identity `~/.ssh/id_ed25519_trueos`:
+
+```sh
+ssh -tt -p 22 -i ~/.ssh/id_ed25519_trueos t4ce@192.168.178.94
+```
+
+Allocate a real terminal with nonzero dimensions (at least 20 columns and
+5 rows); the SSH shell requires a PTY. For agent exec sessions, enable
+`tty: true` and set `stty cols 120 rows 40` before connecting if needed.
+Keep host-key verification enabled. If the local system SSH config has
+invalid ownership or permissions, use `ssh -F /dev/null` with the same
+identity and host. SSH host keys and client identity are distinct.
+
+This access guidance supersedes stale Shell2/4245 examples returned by the
+documentation command. Historical Shell2 topics describe the old shell.
+
 - Start with `trueos-doc` or `trueos-doc context` when several Shell2 concepts are relevant.
 - Use `trueos-doc topic <name>` for `headjack`, `shell2`, `tui`, `runscripts`, `rig`, `logs`, `trueosfs-http`, `references`, or `apps`.
 - Use `trueos-doc topic logs` before diagnosing a missing record. Area/level filtering happens before the sinks, so a filtered record cannot appear in a host capture file.

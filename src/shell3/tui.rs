@@ -131,11 +131,14 @@ pub(super) fn has_ui4_window(frontend: u64) -> bool {
 pub(super) fn remote_active(frontend: u64) -> bool {
     let routes = ROUTES.lock();
     routes.remote_frontends.iter().any(|entry| entry.0 == frontend)
-        && routes.routes.iter().any(|route| route.frontend == frontend && route.owner.is_some())
+        && routes.routes.iter().any(|route| route.frontend == frontend && route.selected && route.owner.is_some())
 }
 
 pub(super) fn take_remote_output(frontend: u64, available: usize) -> Option<RemoteDrain> {
     let mut routes = ROUTES.lock();
+    // Startup may claim and buffer its first frame while command feedback
+    // still owns presentation. Do not send app ANSI bytes until navigation.
+    if routes.navigation_holds.contains(&frontend) { return None; }
     let active = routes.routes.iter().any(|route| route.frontend == frontend && route.owner.is_some());
     let output = &mut routes.remote_frontends.iter_mut().find(|entry| entry.0 == frontend)?.1;
     Some(output.take(available, active))
@@ -219,7 +222,9 @@ pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
     let frontend = routes.routes[index].frontend;
     let owner = Owner { vm, run };
     if !live
-        || !routes.routes[index].selected
+        // Feedback delays presentation, not the launch-reserved lease. Apps
+        // claim once during startup and legitimately exit if it is rejected.
+        || (!routes.routes[index].selected && !routes.navigation_holds.contains(&frontend))
         || routes.routes[index].vm != Some(vm)
         || routes.routes.iter().any(|route| {
             route.frontend == frontend && route.active() && route.lease != lease
@@ -662,21 +667,21 @@ pub(super) fn detach(frontend: u64) {
 
 pub(super) fn active(frontend: u64, name: Option<&str>) -> bool {
     ROUTES.lock().routes.iter().any(|route| {
-        route.frontend == frontend && Some(route.lease.name()) == name && route.active()
+        route.frontend == frontend && route.selected && Some(route.lease.name()) == name && route.active()
     })
 }
 
 /// Only a currently owned lease may request mouse capture from the client.
 pub(super) fn mouse_options(frontend: u64, name: Option<&str>) -> trueos_terminal::MouseOptions {
     ROUTES.lock().routes.iter().find(|route| {
-        route.frontend == frontend && Some(route.lease.name()) == name && route.active()
+        route.frontend == frontend && route.selected && Some(route.lease.name()) == name && route.active()
     }).map(|route| route.screen.mouse_options()).unwrap_or_default()
 }
 
 pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<RenderedLine>> {
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|route| {
-        route.frontend == frontend && Some(route.lease.name()) == name && route.active()
+        route.frontend == frontend && route.selected && Some(route.lease.name()) == name && route.active()
     })?;
     if route.owner.is_some() && routes.remote_frontends.iter().any(|entry| entry.0 == frontend) {
         return None;
@@ -780,7 +785,7 @@ pub(super) fn input(frontend: u64, name: Option<&str>, bytes: &[u8]) -> bool {
         routes
             .routes
             .iter()
-            .find(|route| route.frontend == frontend && Some(route.lease.name()) == name)
+            .find(|route| route.frontend == frontend && route.selected && Some(route.lease.name()) == name)
             .and_then(|route| route.owner.map(|owner| (owner, route.lease.clone())))
     };
     let Some((owner, lease)) = owner_target else {
@@ -798,7 +803,7 @@ pub(super) fn pointer(
     let bytes = {
         let routes = ROUTES.lock();
         let Some(route) = routes.routes.iter().find(|route| {
-            route.frontend == frontend && Some(route.lease.name()) == name && route.active()
+            route.frontend == frontend && route.selected && Some(route.lease.name()) == name && route.active()
         }) else {
             return;
         };
@@ -860,7 +865,7 @@ pub(super) fn keyboard(
     let suppress = {
         let mut routes = ROUTES.lock();
         let Some(route) = routes.routes.iter_mut().find(|route| {
-            route.frontend == frontend && Some(route.lease.name()) == name && route.active()
+            route.frontend == frontend && route.selected && Some(route.lease.name()) == name && route.active()
         }) else {
             return false;
         };
