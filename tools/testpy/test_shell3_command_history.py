@@ -36,6 +36,7 @@ fn new()->Self {{Self {{command_history:Default::default(),prompt:Prompt {{text:
 fn finish_command_latch(&mut self,_:bool) {{}}
 fn active_matrix_slot_name(&self)->Option<&str> {{None}}
 fn get_mode(&self)->u8 {{1}} fn set_mode(&mut self,_:u8)->bool {{true}}
+fn latch_prompt_prefix(&mut self)->bool {{false}}
 fn refresh_prompt_strip(&mut self) {{}}
 fn set_prompt(&mut self,text:&str) {{self.prompt.text=text.into();self.prompt.cursor=self.prompt.char_len();}}
 fn set_cursor(&mut self,index:usize)->bool {{self.prompt.cursor=index;true}}
@@ -54,12 +55,14 @@ fn key(shell:&mut Shell3,key:u16)->bool {use r::keyboard::*;shell.handle_keyboar
     source += r'''
 #[test] fn cry_gate_scope_changes_and_logout_control_recording_and_recall() {
     crypt::SESSION.with(|session|session.set(None));let mut history=command_history::CommandHistory::default();
-    history.remember("pre-login");assert!(history.entries.is_empty());assert_eq!(history.recall(true,"draft"),None);
-    crypt::SESSION.with(|session|session.set(Some((1,1001,1))));history.remember("wrong-scope");assert!(history.entries.is_empty());
+    history.remember("pre-login");assert_eq!(history.recall(true,"draft"),Some("pre-login".into()));
+    let mut isolated=command_history::CommandHistory::default();assert_eq!(isolated.recall(true,""),None);
+    user_input_record::CAPTURED.with(|records|assert!(records.borrow().is_empty()));
+    crypt::SESSION.with(|session|session.set(Some((1,1001,1))));history.end_recall();history.remember("wrong-scope");assert_eq!(history.recall(true,""),Some("wrong-scope".into()));
     crypt::SESSION.with(|session|session.set(Some((2,1001,2))));history.remember("status");
     history.remember("status");assert_eq!(history.entries,vec!["status"]);assert_eq!(command_history::test_count(1001,"status"),2);
     let mut other=command_history::CommandHistory::default();assert_eq!(other.recall(true,"draft"),Some("status".into()));
-    crypt::SESSION.with(|session|session.set(Some((2,1002,3))));assert_eq!(other.recall(true,"draft"),None);assert!(other.draft.is_empty());
+    crypt::SESSION.with(|session|session.set(Some((2,1002,3))));assert_eq!(other.recall(true,"draft"),Some(String::new()));assert!(other.draft.is_empty());
     crypt::SESSION.with(|session|session.set(None));history.sync();assert!(history.entries.is_empty());assert!(history.cursor.is_none());
     user_input_record::CAPTURED.with(|records|assert_eq!(*records.borrow(),vec![(2,"status".into()),(2,"status".into())]));
 }
@@ -70,6 +73,24 @@ fn key(shell:&mut Shell3,key:u16)->bool {use r::keyboard::*;shell.handle_keyboar
     user_input_record::CAPTURED.with(|records|assert!(records.borrow().iter().all(|(_,text)|!text.contains("malformed") && !text.contains("recovery") && !text.contains("123456"))));
     let before=user_input_record::CAPTURED.with(|records|records.borrow().len());history.set_recording(false);history.remember("duplicate-dispatch");
     assert_eq!(before,user_input_record::CAPTURED.with(|records|records.borrow().len()));
+}
+#[test] fn ui4_arrows_clear_typed_input_with_empty_history() {
+    use r::keyboard::*;crypt::SESSION.with(|session|session.set(None));
+    let mut shell=Shell3::new();
+    for arrow in [KEYBOARD_KEY_ARROW_DOWN,KEYBOARD_KEY_ARROW_UP] {
+        shell.set_prompt("dräft");assert!(key(&mut shell,arrow));
+        assert!(shell.prompt.text.is_empty());assert_eq!(shell.prompt.cursor,0);
+        assert!(!key(&mut shell,arrow));assert!(shell.executed.is_empty());
+    }
+}
+#[test] fn ui4_recalls_without_cry_and_does_not_share_or_record() {
+    use r::keyboard::*;crypt::SESSION.with(|session|session.set(None));
+    let mut shell=Shell3::new();shell.command_history.remember("first");shell.command_history.remember("second");shell.set_prompt("draft");
+    key(&mut shell,KEYBOARD_KEY_ARROW_UP);assert_eq!(shell.prompt.text,"second");
+    key(&mut shell,KEYBOARD_KEY_ARROW_UP);assert_eq!(shell.prompt.text,"first");
+    key(&mut shell,KEYBOARD_KEY_ARROW_DOWN);key(&mut shell,KEYBOARD_KEY_ARROW_DOWN);assert_eq!(shell.prompt.text,"draft");
+    let mut other=Shell3::new();assert!(!key(&mut other,KEYBOARD_KEY_ARROW_UP));
+    user_input_record::CAPTURED.with(|records|assert!(records.borrow().is_empty()));
 }
 #[test] fn arrows_recall_without_running_and_down_restores_unicode_draft() {
     use r::keyboard::*;let mut shell=Shell3::new();shell.command_history.remember("first");shell.command_history.remember("second");shell.set_prompt("dräft");

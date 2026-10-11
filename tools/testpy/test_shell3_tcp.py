@@ -380,6 +380,27 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         let mut plain=terminal();plain.shell.history=(0..50).map(|n|format!("line{n}")).collect();
         plain.input(keys);assert_eq!(plain.shell.matrix_scroll,0);assert!(plain.line.is_empty());
     }
+    #[test] fn ssh_arrows_clear_typed_input_with_empty_history_at_every_split() {
+        crate::crypt::SESSION.with(|session|session.set(None));
+        for arrow in [b"\\x1b[A".as_slice(),b"\\x1b[B".as_slice(),b"\\x1bOA".as_slice(),b"\\x1bOB".as_slice()] {
+            for split in 0..=arrow.len() {
+                let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+                tty.input(b"draft");assert_eq!(tty.line,"draft");assert!(tty.history.entries.is_empty());
+                tty.input(&arrow[..split]);tty.input(&arrow[split..]);
+                assert!(tty.line.is_empty());assert!(tty.shell.prompt.is_empty());assert_eq!(tty.shell.cursor,0);
+                assert!(tty.submitted().is_empty());
+            }
+        }
+    }
+    #[test] fn development_ssh_recalls_without_cry_and_isolates_connections() {
+        crate::crypt::SESSION.with(|session|session.set(None));
+        let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
+        tty.input(b"first\\rsecond\\rdraft");tty.input(b"\\x1b[A");assert_eq!(tty.line,"second");
+        tty.input(b"\\x1b[A");assert_eq!(tty.line,"first");
+        tty.input(b"\\x1b[B\\x1b[B");assert_eq!(tty.line,"draft");
+        let mut other=Terminal::new_ssh(Shell3::new_terminal().unwrap());other.input(b"\\x1b[A");assert!(other.line.is_empty());
+        crate::user_input_record::CAPTURED.with(|records|assert!(records.borrow().is_empty()));
+    }
     #[test] fn ssh_recall_csi_ss3_packet_splits_and_enter_only() {
         for arrow in [b"\\x1b[A".as_slice(), b"\\x1bOA".as_slice(), b"\\x1b[1A".as_slice(), b"\\x1b[1;5A".as_slice()] {
             for split in 0..=arrow.len() {

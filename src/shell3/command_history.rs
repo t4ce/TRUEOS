@@ -1,4 +1,4 @@
-//! Cry-gated shared live recall; encrypted persistence uses the existing writer.
+//! Session-local recall, with Cry-gated sharing and encrypted persistence.
 use alloc::{string::String, vec::Vec};
 use spin::Mutex;
 use zeroize::{Zeroize, Zeroizing};
@@ -82,9 +82,20 @@ impl CommandHistory {
 
     pub fn remember(&mut self, line: &str) {
         self.sync();
-        let Some((account, _)) = self.session else { return; };
         if !self.recording || line.trim().is_empty() { return; }
         let text = Zeroizing::new(redacted(line));
+        // Development SSH and UI4 need recall even without a Cry login.
+        // These entries stay with this frontend and never reach the writer
+        // or the account-shared cache. Authentication changes wipe them.
+        let Some((account, _)) = self.session else {
+            if self.entries.iter().any(|entry| entry == text.as_str()) { return; }
+            if self.entries.len() == LIVE_CAP {
+                let mut oldest = self.entries.remove(0);
+                oldest.zeroize();
+            }
+            self.entries.push(String::from(text.as_str()));
+            return;
+        };
         crate::user_input_record::capture(self.scope_id, &text);
         {
             let mut live = LIVE.lock();
@@ -101,7 +112,15 @@ impl CommandHistory {
 
     pub fn recall(&mut self, up: bool, input: &str) -> Option<String> {
         self.sync();
-        if self.entries.is_empty() { return None; }
+        if up && self.cursor.is_none() && !self.draft.is_empty() {
+            return Some(core::mem::take(&mut self.draft));
+        }
+        if self.entries.is_empty() {
+            if input.is_empty() { return None; }
+            self.draft.zeroize();
+            self.draft = String::from(input);
+            return Some(String::new());
+        }
         if up {
             if self.cursor.is_none() { self.draft.zeroize(); self.draft = String::from(input); }
             let index = self.cursor.map_or(self.entries.len() - 1, |i| i.saturating_sub(1));
@@ -117,6 +136,7 @@ impl CommandHistory {
             }
         } else if !input.is_empty() {
             self.draft.zeroize();
+            self.draft = String::from(input);
             Some(String::new())
         } else { None }
     }
