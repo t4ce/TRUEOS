@@ -4331,7 +4331,7 @@ pub(crate) fn create_resident_voxy_headless_mesh(
     Ok(mesh)
 }
 
-pub(crate) const VOXY_HEADLESS_MAX_STREAM_CAPACITY: usize = 780_000;
+pub(crate) const VOXY_HEADLESS_MAX_STREAM_CAPACITY: usize = 6_000_000;
 pub(crate) const VOXY_HEADLESS_VERTEX_STRIDE: usize = 32;
 const VOXY_HEADLESS_CAMERA_BYTES: usize = 96;
 
@@ -4653,15 +4653,17 @@ mod voxy_headless_streaming_tests {
         assert_eq!(voxy_headless_stream_capacity(540, 540), Some(1026));
         assert_eq!(voxy_headless_stream_capacity(576, 576), Some(1026));
         assert_eq!(voxy_headless_stream_capacity(3, 6), Some(9));
-        assert_eq!(voxy_headless_stream_capacity(600_000, 600_000), Some(780_000));
-        assert_eq!(voxy_headless_stream_capacity(780_000, 780_000), Some(780_000));
-        for count in [0, 780_001, usize::MAX] {
+        assert_eq!(voxy_headless_stream_capacity(600_000, 600_000), Some(1_048_578));
+        assert_eq!(voxy_headless_stream_capacity(780_000, 780_000), Some(1_048_578));
+        assert_eq!(voxy_headless_stream_capacity(1_200_000, 1_200_000), Some(2_097_153));
+        assert_eq!(voxy_headless_stream_capacity(6_000_000, 6_000_000), Some(6_000_000));
+        for count in [0, 6_000_001, usize::MAX] {
             assert_eq!(voxy_headless_stream_capacity(count, count), None);
         }
         assert_eq!(voxy_headless_stream_layout(780_000),
             Some((24_960_000, 24_960_128, 28_080_128, 28_082_176)));
         assert_eq!(voxy_headless_stream_storage_bytes(780_000), Some(28_082_176));
-        for capacity in [0, 4, 780_003, usize::MAX] {
+        for capacity in [0, 4, 6_000_003, usize::MAX] {
             assert!(voxy_headless_stream_storage_bytes(capacity).is_none());
         }
     }

@@ -662,9 +662,11 @@ impl Quota {
     // A present-capable guest owns a mapped 1440p UI4 target, a matching D32
     // attachment, upload buffers, and Render0-resident texture copies.  Keep
     // compute-only guests at the smaller isolation boundary while admitting
-    // those bounded graphics resources and 2048-class authored mip chains.
+    // those bounded graphics resources, the complete retained terrain capture,
+    // and 2048-class authored mip chains. This is an admission ceiling;
+    // terrain storage is allocated to its actual required capacity.
     const GUEST_PRESENT: Self = Self {
-        memory_bytes: 128 * 1024 * 1024,
+        memory_bytes: 512 * 1024 * 1024,
         buffers: 256,
         queues: 4,
         contexts: 2,
@@ -5565,7 +5567,12 @@ fn stage_voxy_stream_update(
     let index_start = draw.index_offset.checked_add(
         (draw.first_index as usize).checked_mul(4).ok_or(VgpuError::Unsupported)?
     ).ok_or(VgpuError::Unsupported)?;
-    let same_source = device.voxy_stream_source.as_ref().is_some_and(|source|
+    // Replacing a smaller resident allocation requires the complete source,
+    // including bytes that have not changed since the previous draw.
+    let source_capacity = lookup_buffer(device, draw.vertex_buffer)?.bytes.saturating_sub(80) / 32;
+    let may_grow = device.voxy_stream_mesh.as_ref().is_some_and(|mesh|
+        source_capacity > mesh.vertex_bytes as usize / 32);
+    let same_source = !may_grow && device.voxy_stream_source.as_ref().is_some_and(|source|
         source.vertex_buffer == draw.vertex_buffer && source.index_buffer == draw.index_buffer
         && source.vertex_offset == draw.vertex_offset && source.index_start == index_start);
     let mut source = if same_source {
@@ -5691,7 +5698,9 @@ fn prepare_voxy_stream_mesh_raw(
     device_handle: DeviceHandle,
     update: &VoxyStreamUpdate,
 ) -> Result<Arc<crate::intel::render::ResidentTriangleMesh>, VgpuError> {
-    let capacity = crate::intel::render::VOXY_HEADLESS_MAX_STREAM_CAPACITY;
+    let capacity = crate::intel::render::voxy_headless_stream_capacity(
+        update.vertex_count, update.index_count as usize,
+    ).ok_or(VgpuError::OutOfMemory)?;
     let charge = crate::intel::render::voxy_headless_stream_storage_bytes(capacity)
         .ok_or(VgpuError::OutOfMemory)?;
     let existing = {
@@ -5699,10 +5708,12 @@ fn prepare_voxy_stream_mesh_raw(
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
         if !device.voxy_stream_in_flight { return Err(VgpuError::Busy); }
-        if let Some(mesh) = device.voxy_stream_mesh.as_ref() {
+        if let Some(mesh) = device.voxy_stream_mesh.as_ref().filter(|mesh|
+            mesh.vertex_bytes as usize / 32 >= update.vertex_count.max(update.index_count as usize)) {
             Some(Arc::clone(mesh))
         } else {
             if device.memory_used.saturating_add(charge) > device.quota.memory_bytes {
+                device.voxy_stream_source = None;
                 return Err(VgpuError::OutOfMemory);
             }
             device.memory_used += charge;
@@ -5724,11 +5735,20 @@ fn prepare_voxy_stream_mesh_raw(
         Ok(mesh) => Arc::new(mesh),
         Err(reason) => {
             device.memory_used = device.memory_used.saturating_sub(charge);
+            device.voxy_stream_source = None;
             crate::log_warn!(target: "render"; "voxy-wgpu: stream allocation rejected reason={}\n", reason);
             return Err(VgpuError::OutOfMemory);
         }
     };
-    device.voxy_stream_mesh = Some(Arc::clone(&mesh));
+    if let Some(previous) = device.voxy_stream_mesh.replace(Arc::clone(&mesh)) {
+        // The prior producer retired before this submission lease was taken.
+        if !crate::intel::render::release_resident_triangle_mesh(&previous) {
+            device.voxy_stream_quarantined = true;
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+        device.memory_used = device.memory_used.saturating_sub(previous.storage_bytes);
+    }
     ensure_live(device)?;
     crate::log_important!(target: "render";
         "voxy-wgpu: phase=stream-resident capacity={} bytes={} vb_gpu=0x{:X} camera_gpu=0x{:X} ib_gpu=0x{:X} args_gpu=0x{:X} uploads=dirty-ranges\n",

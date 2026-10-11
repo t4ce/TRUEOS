@@ -195,6 +195,9 @@ def main():
     }}
     #[derive(Clone)] pub struct MatrixTarget''')
         capture = (ROOT/'src/shell3/capture.rs').read_text()
+        # This harness exercises screen/audio capture; HDMI MMIO and its
+        # filesystem adapter are compiled by the kernel check instead.
+        capture = capture.replace('mod camera;', 'mod camera { pub(super) fn start(_: super::Frontend) -> Result<(), super::String> { Err("HDMI unavailable in screen/audio harness".into()) } }')
         capture = capture[:capture.index('/// Capture status belongs')].replace('use super::helper;\n','')
         capture += 'pub(crate) fn print_line(t:&MatrixTarget,s:&str){crate::shell2::print_matrix_target_line(t,s)}\nuse crate::shell2::cmds::rec as audio;\n'
         helper = (ROOT/'src/shell3/helper.rs').read_text().replace('super::tui::', 'super::super::tui::')

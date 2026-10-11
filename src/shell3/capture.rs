@@ -1,6 +1,7 @@
 //! Persistent Shell3 capture helpers. Copy, navigation, scheduling and recording
 //! admission live here; Shell3 only launches the helper and selects its slot.
 use super::helper;
+mod camera;
 #[cfg(feature = "trueos_h264_encode_stream")]
 mod mux;
 
@@ -203,9 +204,12 @@ impl Recording {
 }
 
 pub(super) fn recognizes(name: &str) -> bool {
-    Kind::parse(name).is_some()
+    name == "cam" || Kind::parse(name).is_some()
 }
 pub(super) fn start(name: &str, frontend: Frontend) -> Result<(), String> {
+    if name == "cam" {
+        return camera::start(frontend);
+    }
     let kind = Kind::parse(name).ok_or("capture: unknown helper")?;
     let Some((target, spawner)) = helper::admit(name, frontend)? else {
         return Ok(());
