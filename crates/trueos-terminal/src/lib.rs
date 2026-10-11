@@ -743,6 +743,18 @@ impl Terminal {
     }
 
     fn put_char(&mut self, ch: char) {
+        // Match microfont's variable-width SPECIAL icons. Expand to internal half
+        // glyphs so retained rendering, cursor movement and diffs stay in cells.
+        let icon_cells: Option<&[char]> = match ch {
+            '\u{2328}' => Some(&['\u{e000}', '\u{e001}']),
+            '\u{1f5fa}' => Some(&['\u{e002}', '\u{e003}', '\u{e004}']),
+            _ => None,
+        };
+        if let Some(cells) = icon_cells {
+            for &cell in cells { self.put_char(cell); }
+            return;
+        }
+
         if self.pending_wrap {
             self.cursor_col = 0;
             self.line_feed();
@@ -933,6 +945,19 @@ fn position_param(params: &[usize], index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn special_icons_reserve_their_styled_cells_and_can_be_overwritten() {
+        let mut terminal = Terminal::new(8, 1);
+        terminal.feed("\x1b[47m⌨🗺X".as_bytes());
+        assert_eq!(terminal.cursor().col, 6);
+        let cells = terminal.cells();
+        assert_eq!(cells[..6].iter().map(|cell| cell.glyph).collect::<String>(),
+            "\u{e000}\u{e001}\u{e002}\u{e003}\u{e004}X");
+        assert!(cells[..5].iter().all(|cell| cell.style == cells[5].style));
+        terminal.feed(b"\x1b[1;1Habcdef");
+        assert_eq!(rows(&terminal)[0], "abcdef  ");
+    }
 
     fn rows(terminal: &Terminal) -> Vec<String> {
         terminal.render_rows()
