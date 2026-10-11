@@ -100,41 +100,62 @@ pub(super) async fn present(
     }
     let paint_started = crate::ui4::text_blit::stamp();
     // The frame lease is exclusively writable; clears above have retired.
-    let cpu_paint = !*poisoned && unsafe {
-        crate::ui4::text_blit::try_mono(bcs_surface(view), &glyphs)
-    };
-    if !cpu_paint && !glyphs.is_empty() {
-        crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
-    }
-    for chunk in glyphs.chunks(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS).filter(|_| !cpu_paint) {
-        let submission = match crate::intel::queue_guc_bcs0_mono_glyphs(bcs_surface(view), chunk) {
-            Ok(submission) => submission,
-            Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
-                *poisoned = true;
-                return Err("shell3-show-mono-submit-uncertain");
-            }
-            Err(_) => {
-                let _ = cancel_frame_buffer(lease);
-                return Err("shell3-show-mono-unavailable");
+    let terminal_paint = area.is_none() && reveals.is_empty();
+    let cpu_paint;
+    if terminal_paint {
+        // ANSI cells have no Matrix/strip raster. Plan only this full-screen
+        // path; normal Shell3 keeps its existing pan and reveal caches.
+        let plan = crate::ui4::text_paint::PaintPlan::new(glyphs.clone());
+        let stats = match plan.paint(bcs_surface(view), poisoned).await {
+            Ok(stats) => stats,
+            Err(error) => {
+                if !*poisoned { let _ = cancel_frame_buffer(lease); }
+                return Err(error);
             }
         };
-        *poisoned = true;
-        loop {
-            match crate::intel::poll_guc_bcs0_rgba_copies(submission) {
-                crate::intel::GucBcs0CopyCompletion::Pending => {
-                    Timer::after(Duration::from_millis(1)).await
+        cpu_paint = stats.gpu_pixels == 0;
+        if crate::allcaps::text_blit::DIAGNOSTICS {
+            crate::log_info!(target:"apps";"text-paint: cells={} cpu_pixels={} gpu_pixels={} mono_batches={} fill_batches={} wall_ns={}\n",
+                glyphs.len(), stats.cpu_pixels, stats.gpu_pixels, stats.mono_batches, stats.fill_batches,
+                crate::ui4::text_blit::nanos(crate::ui4::text_blit::stamp().wrapping_sub(paint_started)));
+        }
+    } else {
+        cpu_paint = !*poisoned && unsafe {
+            crate::ui4::text_blit::try_mono(bcs_surface(view), &glyphs)
+        };
+        if !cpu_paint && !glyphs.is_empty() {
+            crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
+        }
+        for chunk in glyphs.chunks(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS).filter(|_| !cpu_paint) {
+            let submission = match crate::intel::queue_guc_bcs0_mono_glyphs(bcs_surface(view), chunk) {
+                Ok(submission) => submission,
+                Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
+                    *poisoned = true;
+                    return Err("shell3-show-mono-submit-uncertain");
                 }
-                crate::intel::GucBcs0CopyCompletion::Complete => break,
-                crate::intel::GucBcs0CopyCompletion::Failed
-                | crate::intel::GucBcs0CopyCompletion::InvalidSubmission => {
-                    return Err("shell3-show-mono-retirement-uncertain");
+                Err(_) => {
+                    let _ = cancel_frame_buffer(lease);
+                    return Err("shell3-show-mono-unavailable");
+                }
+            };
+            *poisoned = true;
+            loop {
+                match crate::intel::poll_guc_bcs0_rgba_copies(submission) {
+                    crate::intel::GucBcs0CopyCompletion::Pending => {
+                        Timer::after(Duration::from_millis(1)).await
+                    }
+                    crate::intel::GucBcs0CopyCompletion::Complete => break,
+                    crate::intel::GucBcs0CopyCompletion::Failed
+                    | crate::intel::GucBcs0CopyCompletion::InvalidSubmission => {
+                        return Err("shell3-show-mono-retirement-uncertain");
+                    }
                 }
             }
+            *poisoned = false;
         }
-        *poisoned = false;
+        crate::ui4::text_blit::report("frame-mono", crate::ui4::text_blit::mono_pixels(&glyphs),
+            cpu_paint, if cpu_paint {0} else {glyphs.len().div_ceil(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS)}, paint_started);
     }
-    crate::ui4::text_blit::report("frame-mono", crate::ui4::text_blit::mono_pixels(&glyphs),
-        cpu_paint, if cpu_paint {0} else {glyphs.len().div_ceil(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS)}, paint_started);
     for input in reveals.iter().filter(|input| cached[input.row]) {
         if let Err(error) = strips[input.row].as_mut().ok_or("shell3-strip-cache-missing")?
             .copy(input, bcs_surface(view), poisoned).await {
@@ -170,7 +191,7 @@ pub(super) async fn present(
     }
     surface.frame_contents[index] = Some(current);
     surface.clear_buffers[index] = false;
-    if !glyphs.is_empty() && !cpu_paint {
+    if !terminal_paint && !glyphs.is_empty() && !cpu_paint {
         crate::log_once!(target: "apps";
             "shell3/show: bcs0-retired backend=legacy command=xy-mono-src-copy-blt rop=cc colors=metafmt bold=off cpu-rgba-paint=0 staging-frame=0\n"
         );
@@ -258,17 +279,20 @@ pub(super) fn glyph_for_cell(
     let bits = microfont::glyph_cell_pixels(cell.0);
     let bias = usize::from(microfont::glyph_byte(cell.0) == b'q');
     let mut mask = [0u8; 64];
-    for py in 0..height as usize {
-        for px in 0..width as usize {
-            let sx = px / scale as usize;
-            let sy = py / scale as usize;
-            let bit = sy * microfont::FWIDTH + sx.saturating_sub(bias);
-            let count = microfont::FWIDTH * microfont::FHEIGHT;
-            let ink = sx >= bias && bit < count && bits & (1 << (count - 1 - bit)) != 0;
-            let underline = cell.1.is_some_and(super::super::RgbaColor::underline)
-                && sy == microfont::FHEIGHT - 1;
-            if ink || underline {
-                mask[py * 2 + px / 8] |= 0x80 >> (px % 8);
+    // Most erasure/padding cells need no per-pixel mask expansion.
+    if cell.0 != ' ' || cell.1.is_some_and(super::super::RgbaColor::underline) {
+        for py in 0..height as usize {
+            for px in 0..width as usize {
+                let sx = px / scale as usize;
+                let sy = py / scale as usize;
+                let bit = sy * microfont::FWIDTH + sx.saturating_sub(bias);
+                let count = microfont::FWIDTH * microfont::FHEIGHT;
+                let ink = sx >= bias && bit < count && bits & (1 << (count - 1 - bit)) != 0;
+                let underline = cell.1.is_some_and(super::super::RgbaColor::underline)
+                    && sy == microfont::FHEIGHT - 1;
+                if ink || underline {
+                    mask[py * 2 + px / 8] |= 0x80 >> (px % 8);
+                }
             }
         }
     }

@@ -1,6 +1,8 @@
 //! Small synchronous operations on exclusively owned, fully retired RGBA8.
 //! BCS0 remains the large-work path. Selection never bypasses its owner proofs.
-use crate::intel::{DmaFlushRows, GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaSurface};
+use crate::intel::{
+    DmaFlushRows, GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaFill, GucBcs0RgbaSurface,
+};
 use alloc::vec::Vec;
 
 pub(crate) fn stamp() -> u64 {
@@ -51,12 +53,60 @@ pub(crate) fn copy_pixels(copies: &[GucBcs0RgbaCopy]) -> usize {
 
 /// Caller owns every destination byte and proves all earlier GPU writes retired.
 /// Sources for copy operations additionally remain stable through this call.
+pub(crate) fn valid_mono(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) -> bool {
+    glyphs
+        .iter()
+        .all(|g| g.width <= 16 && g.height <= 32 && valid(s, g.x, g.y, g.width, g.height))
+}
+pub(crate) fn valid_fills(s: GucBcs0RgbaSurface, fills: &[GucBcs0RgbaFill]) -> bool {
+    fills.iter().all(|f| valid(s, f.x, f.y, f.width, f.height))
+}
+pub(crate) fn fill_pixels(fills: &[GucBcs0RgbaFill]) -> usize {
+    fills
+        .iter()
+        .fold(0usize, |sum, f| sum.saturating_add(f.width as usize * f.height as usize))
+}
+/// Caller owns the destination and proves earlier GPU writes retired.
+pub(crate) unsafe fn fill(s: GucBcs0RgbaSurface, fills: &[GucBcs0RgbaFill]) -> bool {
+    if fills.is_empty() || !valid_fills(s, fills) {
+        return false;
+    }
+    let spans: Vec<_> = fills
+        .iter()
+        .map(|f| span(s, f.x, f.y, f.width, f.height))
+        .collect();
+    if !crate::intel::dma_flush_strided_row_spans(&spans) {
+        return false;
+    }
+    for f in fills {
+        for y in 0..f.height as usize {
+            let row = unsafe {
+                base(s).add((f.y as usize + y) * s.pitch_bytes as usize + f.x as usize * 4)
+            };
+            unsafe {
+                write_solid(row, f.width as usize, f.color);
+            }
+        }
+    }
+    crate::intel::dma_flush_strided_row_spans(&spans)
+}
+unsafe fn write_solid(row: *mut u8, width: usize, color: u32) {
+    let pair = u64::from(color) | (u64::from(color) << 32);
+    let mut x = 0;
+    while x + 2 <= width {
+        unsafe {
+            core::ptr::write_unaligned(row.add(x * 4).cast::<u64>(), pair);
+        }
+        x += 2;
+    }
+    if x < width {
+        unsafe {
+            core::ptr::write_unaligned(row.add(x * 4).cast::<u32>(), color);
+        }
+    }
+}
 pub(crate) unsafe fn mono(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) -> bool {
-    if glyphs.is_empty()
-        || glyphs
-            .iter()
-            .any(|g| g.width > 16 || g.height > 32 || !valid(s, g.x, g.y, g.width, g.height))
-    {
+    if glyphs.is_empty() || !valid_mono(s, glyphs) {
         return false;
     }
     let spans: Vec<_> = glyphs
@@ -73,13 +123,27 @@ pub(crate) unsafe fn mono(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) ->
             let row = unsafe {
                 base(s).add((g.y as usize + y) * s.pitch_bytes as usize + g.x as usize * 4)
             };
-            for x in 0..g.width as usize {
-                let ink = g.mask[y * 2 + x / 8] & (0x80 >> (x % 8)) != 0;
+            let bits = u16::from_be_bytes([g.mask[y * 2], g.mask[y * 2 + 1]]);
+            let active = u16::MAX << (16 - g.width);
+            if bits & active == 0 || bits & active == active || g.foreground == g.background {
+                let color = if bits & active == 0 {
+                    g.background
+                } else {
+                    g.foreground
+                };
                 unsafe {
-                    core::ptr::write_unaligned(
-                        row.add(x * 4).cast::<u32>(),
-                        if ink { g.foreground } else { g.background },
-                    );
+                    write_solid(row, g.width as usize, color);
+                }
+            } else {
+                for x in 0..g.width as usize {
+                    let color = if bits & (0x8000 >> x) != 0 {
+                        g.foreground
+                    } else {
+                        g.background
+                    };
+                    unsafe {
+                        core::ptr::write_unaligned(row.add(x * 4).cast::<u32>(), color);
+                    }
                 }
             }
         }
@@ -133,14 +197,25 @@ pub(crate) unsafe fn copy(destination: GucBcs0RgbaSurface, copies: &[GucBcs0Rgba
     crate::intel::dma_flush_strided_row_spans(&spans)
 }
 
-pub(crate) unsafe fn try_mono(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) -> bool {
+pub(crate) fn mono_on_cpu(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) -> bool {
     let pixels = mono_pixels(glyphs);
     let half_row = glyphs
         .first()
         .map_or(0, |g| s.width as usize * g.height as usize / 2);
-    pixels != 0
-        && pixels <= crate::allcaps::text_blit::CPU_MONO_MAX_PIXELS.min(half_row)
-        && unsafe { mono(s, glyphs) }
+    pixels != 0 && pixels <= crate::allcaps::text_blit::CPU_MONO_MAX_PIXELS.min(half_row)
+}
+pub(crate) unsafe fn try_mono(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) -> bool {
+    mono_on_cpu(s, glyphs) && unsafe { mono(s, glyphs) }
+}
+pub(crate) fn fill_on_cpu(s: GucBcs0RgbaSurface, fills: &[GucBcs0RgbaFill]) -> bool {
+    let pixels = fill_pixels(fills);
+    let half_row = fills
+        .first()
+        .map_or(0, |f| s.width as usize * f.height as usize / 2);
+    pixels != 0 && pixels <= crate::allcaps::text_blit::CPU_COPY_MAX_PIXELS.min(half_row)
+}
+pub(crate) unsafe fn try_fill(s: GucBcs0RgbaSurface, fills: &[GucBcs0RgbaFill]) -> bool {
+    fill_on_cpu(s, fills) && unsafe { fill(s, fills) }
 }
 pub(crate) unsafe fn try_copy(
     s: GucBcs0RgbaSurface,

@@ -16,7 +16,8 @@ mod phys {pub fn phys_to_virt(v:usize)->usize {v}}
 mod percpu {pub fn current_slot()->u32 {0}}
 mod intel {
 #[derive(Clone,Copy)]pub struct GucBcs0RgbaSurface {pub phys:u64,pub gpu:u64,pub bytes:usize,pub width:u32,pub height:u32,pub pitch_bytes:u32}
-pub struct GucBcs0MonoGlyph {pub x:u32,pub y:u32,pub width:u32,pub height:u32,pub mask:[u8;64],pub foreground:u32,pub background:u32}
+#[derive(Clone,Copy)]pub struct GucBcs0MonoGlyph {pub x:u32,pub y:u32,pub width:u32,pub height:u32,pub mask:[u8;64],pub foreground:u32,pub background:u32}
+#[derive(Clone,Copy)]pub struct GucBcs0RgbaFill {pub x:u32,pub y:u32,pub width:u32,pub height:u32,pub color:u32}
 pub struct GucBcs0RgbaCopy {pub source:GucBcs0RgbaSurface,pub source_x:u32,pub source_y:u32,pub destination_x:u32,pub destination_y:u32,pub width:u32,pub height:u32}
 pub struct DmaFlushRows;
 impl DmaFlushRows {pub fn new(_: *mut u8,_:usize,_:usize,_:usize)->Self {Self}}
@@ -68,6 +69,30 @@ fn glyph(width:u32,height:u32)->GucBcs0MonoGlyph {let mut mask=[0u8;64];for (i,b
     let c=GucBcs0RgbaCopy {source:src,source_x:0,source_y:0,destination_x:0,destination_y:0,width:192,height:11};
     assert!(!unsafe{try_copy(wide,&[c],11)});
 }
+#[test]fn fills_and_uniform_mono_rows_match_reference_with_unaligned_storage() {
+    for width in [1,3,6,12,16] {
+        let mut allocation=vec![0x59;257*40+1];let mut expected=allocation.clone();
+        let s=surface(&mut allocation[1..],48,40,257);
+        let f=GucBcs0RgbaFill{x:3,y:2,width,height:11,color:0x44332211};
+        for y in 2..13 {for x in 3..3+width as usize {let offset=1+y*257+x*4;expected[offset..offset+4].copy_from_slice(&f.color.to_le_bytes());}}
+        assert!(unsafe{fill(s,&[f])});assert_eq!(allocation,expected);
+        for mask in [[0;64],[255;64]] {
+            let mut pixels=vec![0x59;257*40];let s=surface(&mut pixels,48,40,257);
+            let mut g=glyph(width,11);g.mask=mask;
+            let mut expected=pixels.clone();let color=if mask[0]==0 {g.background}else{g.foreground};
+            for y in 2..13 {for x in 3..3+width as usize {let offset=y*257+x*4;expected[offset..offset+4].copy_from_slice(&color.to_le_bytes());}}
+            assert!(unsafe{mono(s,&[g])});assert_eq!(pixels,expected);
+        }
+    }
+}
+#[test]fn fills_validate_every_rectangle_before_writing_and_keep_cpu_cutoff() {
+    let mut pixels=vec![0x59;128*16];let s=surface(&mut pixels,32,16,128);
+    let f=GucBcs0RgbaFill{x:0,y:0,width:6,height:11,color:42};let mut invalid=f;invalid.y=u32::MAX;
+    let expected=pixels.clone();assert!(!unsafe{fill(s,&[f,invalid])});assert_eq!(pixels,expected);
+    assert!(unsafe{try_fill(s,&[f])});
+    let full=GucBcs0RgbaFill{width:32,..f};assert!(!unsafe{try_fill(s,&[full])});
+}
+
 '''
 
 def main():

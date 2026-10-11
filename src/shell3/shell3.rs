@@ -1,5 +1,8 @@
 mod helper;
 mod admin;
+mod os;
+mod os_install;
+mod os_update;
 mod monitor;
 mod table;
 #[path = "system/cry.rs"]

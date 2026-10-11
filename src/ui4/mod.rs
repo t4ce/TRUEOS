@@ -30,6 +30,7 @@ mod start_button;
 pub(crate) mod text_area;
 pub(crate) mod text_area_raster;
 pub(crate) mod text_blit;
+pub(crate) mod text_paint;
 mod text_blit_bench;
 mod video_frame;
 pub(crate) mod window_arc;
