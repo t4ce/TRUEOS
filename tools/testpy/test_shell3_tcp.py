@@ -88,6 +88,7 @@ impl Shell3 {
     }
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
+    fn active_vmx_app(&self)->Option<()> {self.vmx.then_some(())}
     fn stop_active_vmx(&mut self)->bool {core::mem::take(&mut self.vmx)}
     fn row_for_render(&self, _: SpecialRows) -> RowStrips { RowStrips {left:vec![MetaFmtStr::new("TrueOS § 12:34")]} }
     fn get_strip(&self, _: SpecialRows, _: StripSide) -> String { "TrueOS § 12:34".into() }
@@ -103,7 +104,7 @@ impl Shell3 {
         use r::keyboard::*;
         if event.kind==KEYBOARD_OUTPUT_KIND_TEXT {self.prompt.push(char::from_u32(event.codepoint).unwrap());self.cursor=self.prompt.chars().count();}
         else {match event.key_code {
-            KEYBOARD_KEY_TAB=>{self.mode=self.mode%3+1;},
+            KEYBOARD_KEY_TAB=>{if self.vmx {self.parsed.borrow_mut().push("vmx-tab-exit".into());} else {self.mode=self.mode%3+1;}},
             KEYBOARD_KEY_BACKSPACE=>{self.prompt.pop();self.cursor=self.prompt.chars().count();},
             KEYBOARD_KEY_ENTER=>{let line=self.prompt.clone();self.replay_terminal_line(&line);},_=>{}
         }}
@@ -135,6 +136,16 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         tty.output.clear();tty.input("é\x1b[1;3R\x1b[<65;2;3M".as_bytes());
         assert_eq!(tui::received(),"é\x1b[1;3R\x1b[<65;2;3M".as_bytes());
         assert!(tty.output.is_empty() && tty.submitted().is_empty());
+    }
+    #[test] fn vmx_tab_bypasses_raw_guest_input_at_every_packet_split() {
+        let input=b"abc\\t";
+        for split in 0..=input.len() {
+            let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());tty.shell.vmx=true;
+            tui::claim();tty.reconcile_matrix_selection();tty.output.clear();
+            tty.input(&input[..split]);tty.input(&input[split..]);
+            assert_eq!(tui::received(),b"abc");
+            assert_eq!(&*tty.shell.parsed.borrow(), &["vmx-tab-exit"]);
+        }
     }
     #[test] fn remote_pty_resize_does_not_emit_shell_paint_or_erase_app() {
         let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());

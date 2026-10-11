@@ -163,6 +163,7 @@ impl Terminal {
         // The locked § operator must pass through UTF-8 decoding, including
         // when its C2 A7 bytes arrive in separate SSH packets.
         if self.decoder.utf8_len == 0 && !bytes.contains(&0xc2)
+            && !(self.shell.active_vmx_app().is_some() && bytes.contains(&b'\t'))
             && tui::remote_active(self.shell.tui_frontend)
             && tui::input(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref(), bytes)
         {
@@ -175,13 +176,15 @@ impl Terminal {
                 break;
             }
             // A leased crossterm app receives terminal bytes directly, including
-            // arrows, Tab, Enter and Ctrl-C/D. Submit available ASCII together:
+            // arrows, Enter and Ctrl-C/D; VMX Tab returns to the shell.
+            // Submit available ASCII together:
             // waking the app for ESC alone can turn a mouse report into Esc.
             // Decode UTF-8 through the shared
             // keyboard path so § can still park the lease as it does in UI4.
             let ascii_len =
                 if (self.view.lines.is_some() || tui::remote_active(self.shell.tui_frontend)) && self.decoder.utf8_len == 0 && byte.is_ascii() {
-                    bytes.iter().take_while(|byte| byte.is_ascii()).count()
+                    bytes.iter().take_while(|byte| byte.is_ascii()
+                        && !(self.shell.active_vmx_app().is_some() && **byte == b'\t')).count()
                 } else {
                     0
                 };

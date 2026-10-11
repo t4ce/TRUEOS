@@ -1093,6 +1093,12 @@ impl Shell3 {
         use crate::r::keyboard::*;
         if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 { return (false, false); }
         self.finish_command_latch(true);
+        // Tab leaves a VMX view before terminal input routing can consume it.
+        // Keep the guest alive and the shell's mode; the next Tab cycles normally.
+        if event.kind == KEYBOARD_OUTPUT_KIND_KEY && event.key_code == KEYBOARD_KEY_TAB
+            && self.active_vmx_app().is_some() {
+            return (self.select_matrix_slot_index(0), false);
+        }
         let operator = event.kind == KEYBOARD_OUTPUT_KIND_TEXT && event.codepoint == OPERATOR as u32;
         if operator && !tui::park(self.tui_frontend) { return (false, false); }
         if !operator {
