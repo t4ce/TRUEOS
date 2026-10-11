@@ -778,6 +778,50 @@ pub fn synthesize_host_gdt_tss() -> HvSyntheticHostState {
     }
 }
 
+// VM exit reloads descriptor-table bases from the VMCS but sets both limits
+// to 0xffff (Intel SDM 27.5.2). Keep the actual host bounds across every entry,
+// including the first entry that installs our synthetic host GDT.
+#[repr(C)]
+struct HostDescriptorTables {
+    gdt: x86_64::structures::DescriptorTablePointer,
+    gdt_padding: [u8; 6],
+    idt: x86_64::structures::DescriptorTablePointer,
+    idt_padding: [u8; 6],
+    exit_gdt: x86_64::structures::DescriptorTablePointer,
+    exit_padding: [u8; 6],
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<HostDescriptorTables>() == 48);
+    assert!(core::mem::offset_of!(HostDescriptorTables, gdt) == 0);
+    assert!(core::mem::offset_of!(HostDescriptorTables, idt) == 16);
+    assert!(core::mem::offset_of!(HostDescriptorTables, exit_gdt) == 32);
+};
+
+fn host_descriptor_tables() -> HostDescriptorTables {
+    let mut gdt = x86_64::instructions::tables::sgdt();
+    let idt = x86_64::instructions::tables::sidt();
+    let host_base = vmread(VMCS_HOST_GDTR_BASE).expect("host GDT base unavailable");
+    // The synthetic table may not be active until the first successful exit.
+    // Its size comes from our allocation, never from VMX's expanded limit.
+    for slot in 0..super::TRUEOS_VM_CPU_SLOT_LIMIT {
+        let base = unsafe { core::ptr::addr_of!(super::HV_HOST_GDTS[slot]) } as u64;
+        if host_base == base {
+            gdt.base = x86_64::VirtAddr::new(base);
+            gdt.limit = (core::mem::size_of::<[u64; 8]>() - 1) as u16;
+            break;
+        }
+    }
+    assert!(gdt.base.as_u64() == host_base, "unknown VMX host GDT");
+    assert!(idt.base.as_u64() == vmread(VMCS_HOST_IDTR_BASE).expect("host IDT base unavailable"),
+        "unknown VMX host IDT");
+    HostDescriptorTables {
+        gdt, gdt_padding: [0; 6], idt, idt_padding: [0; 6],
+        exit_gdt: x86_64::structures::DescriptorTablePointer { limit: 0, base: x86_64::VirtAddr::zero() },
+        exit_padding: [0; 6],
+    }
+}
+
 pub fn vmlaunch_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
     let guest_state = guest_extended_state_ptr(vm_id).expect("unsupported VM extended-state owner");
     unsafe { vmlaunch_once_wrapper_impl(out, guest_state) }
@@ -799,6 +843,7 @@ unsafe fn vmlaunch_once_wrapper_impl(
         let guest_regs_ptr = guest_regs_ptr();
         let host_extended_state_ptr = host_extended_state_ptr();
         let extended_state_mask = crate::cpu::vmx_xsave_mask();
+        let mut descriptor_tables = host_descriptor_tables();
         result_ptr.write(EMPTY_LAUNCH_RESULT);
         core::arch::asm!(
             "push rbx",
@@ -807,11 +852,25 @@ unsafe fn vmlaunch_once_wrapper_impl(
             "push r13",
             "push r14",
             "push r15",
+            "sub rsp, 48",
             "push {guest_regs_base}",
             "push {result_base}",
             "push {host_extended_state_base}",
             "push {guest_extended_state_base}",
             "push {extended_state_mask}",
+            // Keep the existing argument offsets; descriptor snapshots live
+            // above the five argument words and below saved host registers.
+            "mov rax, {descriptor_tables}",
+            "mov rdx, [rax]",
+            "mov [rsp + 40], rdx",
+            "mov rdx, [rax + 8]",
+            "mov [rsp + 48], rdx",
+            "mov rdx, [rax + 16]",
+            "mov [rsp + 56], rdx",
+            "mov rdx, [rax + 24]",
+            "mov [rsp + 64], rdx",
+            "lea rdx, [rax + 32]",
+            "mov [rsp + 72], rdx",
             "mov rax, rsp",
             "mov rcx, {host_rsp_field}",
             "vmwrite rcx, rax",
@@ -963,7 +1022,17 @@ unsafe fn vmlaunch_once_wrapper_impl(
             "mov [r11 + {guest_rip_off}], rax",
             "3:",
             "cld",
-            "add rsp, 40",
+            // A failed instruction leaves the original tables active. Only a
+            // real exit installs the VMCS host bases and expands the limits.
+            "mov r11, [rsp + 24]",
+            "cmp byte ptr [r11 + {entered_off}], 0",
+            "je 22f",
+            "mov rdx, [rsp + 72]",
+            "sgdt [rdx]",
+            "lgdt [rsp + 40]",
+            "lidt [rsp + 56]",
+            "22:",
+            "add rsp, 88",
             "pop r15",
             "pop r14",
             "pop r13",
@@ -983,6 +1052,7 @@ unsafe fn vmlaunch_once_wrapper_impl(
             host_extended_state_base = in(reg) host_extended_state_ptr,
             guest_extended_state_base = in(reg) guest_extended_state_ptr,
             extended_state_mask = in(reg) extended_state_mask,
+            descriptor_tables = in(reg) &mut descriptor_tables,
             entered_off = const core::mem::offset_of!(LaunchResult, entered),
             launch_failed_off = const core::mem::offset_of!(LaunchResult, launch_failed),
             exit_reason_off = const core::mem::offset_of!(LaunchResult, exit_reason),
@@ -1014,6 +1084,14 @@ unsafe fn vmlaunch_once_wrapper_impl(
             clobber_abi("sysv64"),
         );
         *out = result_ptr.read();
+        if out.entered != 0 {
+            let exit_limit = descriptor_tables.exit_gdt.limit;
+            let restored_limit = descriptor_tables.gdt.limit;
+            crate::log_rate_limited!(target: "global"; level: crate::log_os::LogLevel::Important; first: 1; every: 1000000;
+                "vmx: host GDT limit restored after exit raw=0x{:04X} restored=0x{:04X}\n",
+                exit_limit, restored_limit,
+            );
+        }
     }
 }
 
@@ -1025,6 +1103,7 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
         let guest_extended_state_ptr =
             guest_extended_state_ptr(vm_id).expect("unsupported VM extended-state owner");
         let extended_state_mask = crate::cpu::vmx_xsave_mask();
+        let mut descriptor_tables = host_descriptor_tables();
         result_ptr.write(EMPTY_LAUNCH_RESULT);
         core::arch::asm!(
             "push rbx",
@@ -1033,11 +1112,25 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             "push r13",
             "push r14",
             "push r15",
+            "sub rsp, 48",
             "push {guest_regs_base}",
             "push {result_base}",
             "push {host_extended_state_base}",
             "push {guest_extended_state_base}",
             "push {extended_state_mask}",
+            // Keep the existing argument offsets; descriptor snapshots live
+            // above the five argument words and below saved host registers.
+            "mov rax, {descriptor_tables}",
+            "mov rdx, [rax]",
+            "mov [rsp + 40], rdx",
+            "mov rdx, [rax + 8]",
+            "mov [rsp + 48], rdx",
+            "mov rdx, [rax + 16]",
+            "mov [rsp + 56], rdx",
+            "mov rdx, [rax + 24]",
+            "mov [rsp + 64], rdx",
+            "lea rdx, [rax + 32]",
+            "mov [rsp + 72], rdx",
             "mov rax, rsp",
             "mov rcx, {host_rsp_field}",
             "vmwrite rcx, rax",
@@ -1183,7 +1276,17 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             "mov [r11 + {guest_rip_off}], rax",
             "3:",
             "cld",
-            "add rsp, 40",
+            // A failed instruction leaves the original tables active. Only a
+            // real exit installs the VMCS host bases and expands the limits.
+            "mov r11, [rsp + 24]",
+            "cmp byte ptr [r11 + {entered_off}], 0",
+            "je 22f",
+            "mov rdx, [rsp + 72]",
+            "sgdt [rdx]",
+            "lgdt [rsp + 40]",
+            "lidt [rsp + 56]",
+            "22:",
+            "add rsp, 88",
             "pop r15",
             "pop r14",
             "pop r13",
@@ -1203,6 +1306,7 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             host_extended_state_base = in(reg) host_extended_state_ptr,
             guest_extended_state_base = in(reg) guest_extended_state_ptr,
             extended_state_mask = in(reg) extended_state_mask,
+            descriptor_tables = in(reg) &mut descriptor_tables,
             entered_off = const core::mem::offset_of!(LaunchResult, entered),
             launch_failed_off = const core::mem::offset_of!(LaunchResult, launch_failed),
             exit_reason_off = const core::mem::offset_of!(LaunchResult, exit_reason),
@@ -1234,6 +1338,14 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             clobber_abi("sysv64"),
         );
         *out = result_ptr.read();
+        if out.entered != 0 {
+            let exit_limit = descriptor_tables.exit_gdt.limit;
+            let restored_limit = descriptor_tables.gdt.limit;
+            crate::log_rate_limited!(target: "global"; level: crate::log_os::LogLevel::Important; first: 1; every: 1000000;
+                "vmx: host GDT limit restored after exit raw=0x{:04X} restored=0x{:04X}\n",
+                exit_limit, restored_limit,
+            );
+        }
     }
 }
 

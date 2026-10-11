@@ -21,7 +21,7 @@ pub(crate) fn submit_live_update_from_url_to_target(
         "update live: step=01/20 command-accepted mode=RAM-only disk-install=disabled",
     );
 
-    match live_update_command_task(target.clone(), *spawner, url) {
+    match live_update_command_task(target.clone(), url) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
 
@@ -31,7 +31,7 @@ pub(crate) fn submit_live_update_from_url_to_target(
 }
 
 #[trueos_executor::task]
-async fn live_update_command_task(target: MatrixTarget, spawner: Spawner, url: &'static str) {
+async fn live_update_command_task(target: MatrixTarget, url: &'static str) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -113,20 +113,34 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner, url: &
         .as_str());
         drop(iso);
 
-        match crate::live_update::stage_and_swap(
-            kernel,
-            spawner,
-            task_target.clone(),
-            crate::live_update::NonReplicatableVmPolicy::DiscardAtCommit,
-        )
-        .await
-        {
-            Ok(never) => match never {},
-            Err(error) => {
-                log(alloc::format!("update live: failed ({})", error).as_str());
-            }
+        // The download may run on an administration AP, but the swap parks
+        // every AP. Hand ownership to the BSP before beginning that protocol.
+        let Some(bsp) = crate::workers::spawner_for_slot(0) else {
+            log("update live: failed (BSP executor unavailable)");
+            return;
+        };
+        match live_update_swap_task(kernel, task_target.clone()) {
+            Ok(token) => bsp.spawn(token),
+            Err(_) => log("update live: failed (swap task pool exhausted)"),
         }
     }
     .await;
+}
 
+#[trueos_executor::task]
+async fn live_update_swap_task(kernel: alloc::vec::Vec<u8>, target: MatrixTarget) {
+    let spawner = unsafe { Spawner::for_current_executor().await };
+    match crate::live_update::stage_and_swap(
+        kernel,
+        spawner,
+        target.clone(),
+        crate::live_update::NonReplicatableVmPolicy::DiscardAtCommit,
+    ).await {
+        Ok(never) => match never {},
+        Err(error) => {
+            let line = alloc::format!("update live: failed ({})", error);
+            print_matrix_target_line(&target, line.as_str());
+            crate::log_important!(target: "global"; "{}\n", line);
+        }
+    }
 }

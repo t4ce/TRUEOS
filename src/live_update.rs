@@ -702,7 +702,7 @@ pub fn warm_kernel_file_bytes() -> Option<&'static [u8]> {
 
 pub fn log_boot_mode() {
     if let Some(handoff) = warm_handoff() {
-        crate::log_info!(
+        crate::log_important!(
             target: "global";
             "live-update: step=18/20 candidate-kmain-entered generation={} candidate_hash=0x{:016X} arena=0x{:016X}+0x{:X} expected_aps={} mode=fullforget-warm\n",
             handoff.generation,
@@ -717,7 +717,7 @@ pub fn log_boot_mode() {
 pub fn release_warm_aps() {
     if let Some(handoff) = warm_handoff() {
         WARM_APS_RELEASED.store(true, Ordering::Release);
-        crate::log_info!(
+        crate::log_important!(
             target: "global";
             "live-update: step=19/20 parked-APs-released count={} generation={}\n",
             handoff.expected_aps,
@@ -733,7 +733,7 @@ pub fn spawn_post_boot(_spawner: Spawner) {
 
     let virtio_logo = crate::virtio_gpu_logo::present();
     let intel_display = crate::intel::has_claimed_device();
-    crate::log_info!(target: "global";
+    crate::log_important!(target: "global";
         "live-update: visual proof route generation={} virtio_logo={} intel_display={} route={}\n",
         handoff.generation,
         virtio_logo as u8,
@@ -745,7 +745,7 @@ pub fn spawn_post_boot(_spawner: Spawner) {
     }
 
     SHELL_NOTICE_PENDING.store(true, Ordering::Release);
-    crate::log_info!(
+    crate::log_important!(
         target: "global";
         "live-update: step=20/20 bp-autostart-uplift-delegated generation={} fresh_tcp_notice=armed\n",
         handoff.generation,
@@ -856,6 +856,9 @@ pub(crate) async fn stage_and_swap(
     target: MatrixTarget,
     non_replicatable_vms: NonReplicatableVmPolicy,
 ) -> Result<Infallible, LiveUpdateError> {
+    if crate::percpu::current_slot() != 0 {
+        return Err(LiveUpdateError::Incompatible("live kernel swap requires the BSP executor"));
+    }
     let _run_guard = LiveUpdateRunGuard::acquire()?;
     if false {
         return Err(LiveUpdateError::Interrupted);
@@ -1441,8 +1444,8 @@ async fn rendezvous_aps(
     crate::log_info!(target: "global"; "{}\n", complete);
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
-    // Success intentionally leaves BSP interrupts disabled. The caller performs
-    // only handoff bookkeeping before entering the non-returning commit path.
+    // The BSP scheduler polls timers even with interrupts masked. The updater
+    // must remain on that executor while every AP is permanently parked.
     Ok(())
 }
 
@@ -2200,6 +2203,10 @@ fn snapshot_transition_gdt(
     let current_limit = unsafe { ptr::read_unaligned(ptr::addr_of!(current.limit)) };
     let current_base = unsafe { ptr::read_unaligned(ptr::addr_of!(current.base)) };
     let bytes = usize::from(current_limit).saturating_add(1);
+    crate::log_important!(target: "global";
+        "live-update: transition GDT cpu={} base=0x{:016X} limit=0x{:04X} bytes={} capacity={}\n",
+        crate::percpu::current_slot(), current_base, current_limit, bytes, MAX_TRANSITION_GDT_BYTES,
+    );
     if bytes == 0 || bytes > MAX_TRANSITION_GDT_BYTES || current_base == 0 {
         return Err(LiveUpdateError::Incompatible("current GDT does not fit transition contract"));
     }
@@ -2587,4 +2594,7 @@ fn elf_string(table: &[u8], offset: usize) -> Result<&str, LiveUpdateError> {
         .map_err(|_| LiveUpdateError::BadElf("section-name table is not UTF-8"))
 }
 
-fn report_update(_target: &MatrixTarget, line: &str) { crate::log!("{}\n", line); }
+fn report_update(target: &MatrixTarget, line: &str) {
+    crate::shell3::matrix_target_print_line(target, line);
+    crate::log_important!(target: "global"; "{}\n", line);
+}
