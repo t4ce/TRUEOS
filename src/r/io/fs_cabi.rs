@@ -2719,7 +2719,7 @@ async fn launch_archive_task(frontend: Option<crate::shell3::tui::Frontend>, arc
             launch_request::Destination::Headless => {
                 let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
                 request.script = script;
-                crate::hv::launcher::enqueue(request, None)
+                crate::hv::launcher::enqueue(request, None).map(|_| ())
             }
         }
     })();

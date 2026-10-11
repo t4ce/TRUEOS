@@ -22,8 +22,13 @@ mod chronos {pub static NOW:std::sync::atomic::AtomicU64=std::sync::atomic::Atom
     for name in ('metafmtstr', 'transition', 'command_latch'):
         source += f'#[path="{ROOT}/src/shell3/{name}.rs"] mod {name};\n'
     source += '''use metafmtstr::MetaFmtStr;
+mod hv {pub mod matrix {
+pub fn app(name:&str,lifetime:Option<u64>)->Option<()> {
+crate::matrix_slots().lock().lifetimes.iter().any(|(id,generation)| id==name && lifetime==Some(*generation)).then_some(())
+}
+}}
 mod service {
-#[derive(Clone)] pub struct QueuedBlueprint {pub slot:String,pub sha256:[u8;32]}
+#[derive(Clone)] pub struct QueuedBlueprint {pub slot:String,pub lifetime:u64,pub sha256:[u8;32]}
 pub fn notify_work() {}
 }
 #[derive(Clone,Copy)] struct Frontend;
@@ -35,7 +40,7 @@ pub fn select_for_navigation(_:Frontend,_:&str)->bool {true}
 pub fn queue_launch(_:u64,_:service::QueuedBlueprint) {panic!("unexpected queue")}
 pub fn request(_:Frontend,_:&str)->Result<(),String> {Ok(())}
 }
-#[derive(Default)] struct Slots {ids:Vec<String>,lifetimes:Vec<(String,u64)>,vmx_apps:Vec<service::QueuedBlueprint>,generation:u64}
+#[derive(Default)] struct Slots {ids:Vec<String>,lifetimes:Vec<(String,u64)>,generation:u64}
 struct Mutex<T>(std::sync::Mutex<T>);
 impl<T> Mutex<T> {fn lock(&self)->std::sync::MutexGuard<'_,T> {self.0.lock().unwrap()}}
 fn matrix_slots()->&'static Mutex<Slots> {static S:std::sync::OnceLock<Mutex<Slots>>=std::sync::OnceLock::new();S.get_or_init(||Mutex(std::sync::Mutex::new(Slots::default())))}
@@ -91,14 +96,14 @@ fn text(feedback:&command_latch::Feedback,now:u64)->String {feedback.runs(20,now
     assert_eq!(text(&left,400_000_000),"");
     assert_eq!(left.runs(4,0).iter().map(|run|run.text.as_str()).collect::<String>(),"termdir");
 }
-#[test] fn queued_app_is_registered_immediately_but_selected_after_feedback() {
+#[test] fn admitted_app_is_selected_after_feedback_without_allocating_another_slot() {
     *matrix_slots().lock()=Slots::default();chronos::NOW.store(0,std::sync::atomic::Ordering::Relaxed);
-    let mut shell=Shell3::new();shell.select_queued_app(service::QueuedBlueprint {slot:"td1".into(),sha256:[1;32]});
-    assert_eq!(matrix_slots().lock().vmx_apps.len(),1);assert_eq!(shell.active_matrix_slot,None);
+    let mut shell=Shell3::new();MatrixSlots::ensure_named("td1");shell.select_queued_app(service::QueuedBlueprint {slot:"td1".into(),lifetime:1,sha256:[1;32]});
+    assert_eq!(matrix_slots().lock().ids.iter().filter(|id| id.as_str()=="td1").count(),1);assert_eq!(shell.active_matrix_slot,None);
     chronos::NOW.store(399_999_999,std::sync::atomic::Ordering::Relaxed);shell.finish_command_latch(false);assert_eq!(shell.active_matrix_slot,None);
     chronos::NOW.store(400_000_000,std::sync::atomic::Ordering::Relaxed);shell.finish_command_latch(false);
     assert_eq!(shell.active_matrix_slot.as_deref(),Some("td1"));assert!(shell.command_feedback.is_none());assert!(shell.latched_navigation.is_none());
-    assert_eq!(matrix_slots().lock().vmx_apps.len(),1);shell.finish_command_latch(false);assert_eq!(matrix_slots().lock().vmx_apps.len(),1);
+    assert_eq!(matrix_slots().lock().ids.iter().filter(|id| id.as_str()=="td1").count(),1);shell.finish_command_latch(false);assert_eq!(matrix_slots().lock().ids.iter().filter(|id| id.as_str()=="td1").count(),1);
 }
 #[test] fn reused_slot_is_not_selected_and_new_input_can_finish_early() {
     *matrix_slots().lock()=Slots::default();chronos::NOW.store(0,std::sync::atomic::Ordering::Relaxed);
@@ -111,8 +116,16 @@ fn text(feedback:&command_latch::Feedback,now:u64)->String {feedback.runs(20,now
 }
 #[test] fn removed_app_slot_cannot_be_revived_by_delayed_navigation() {
     *matrix_slots().lock()=Slots::default();chronos::NOW.store(0,std::sync::atomic::Ordering::Relaxed);
-    let mut shell=Shell3::new();shell.select_queued_app(service::QueuedBlueprint {slot:"td1".into(),sha256:[1;32]});
+    let mut shell=Shell3::new();MatrixSlots::ensure_named("td1");shell.select_queued_app(service::QueuedBlueprint {slot:"td1".into(),lifetime:1,sha256:[1;32]});
     matrix_slots().lock().lifetimes.clear();shell.finish_command_latch(true);assert_eq!(shell.active_matrix_slot,None);
+}
+'''
+    source += r'''
+#[test] fn expired_receipt_does_not_recreate_a_matrix_slot() {
+    let mut shell=Shell3::new();
+    shell.select_queued_app(service::QueuedBlueprint {slot:"expired".into(),lifetime:99,sha256:[0;32]});
+    assert!(shell.latched_navigation.is_none());
+    assert!(!matrix_slots().lock().ids.iter().any(|id|id=="expired"));
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-command-latch-') as directory:

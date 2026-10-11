@@ -143,7 +143,7 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
                     .ok_or_else(|| String::from("Appstore builtin unavailable"))?;
                 let mut request = crate::hv::launcher::LaunchRequest::new("appstore.bp".into(), bytes);
                 request.script = Some(script);
-                crate::hv::launcher::enqueue(request, None)
+                crate::hv::launcher::enqueue(request, None).map(|_| ())
             })();
             match result {
                 Ok(()) => crate::log!("restart: cold-start pullbot queued archive={} slot={}\n", app.archive, app.slot),

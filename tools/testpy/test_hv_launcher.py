@@ -38,7 +38,12 @@ mod trueos_executor {
     pub struct Spawner;
     impl Spawner { pub async unsafe fn for_current_executor() -> Self { Self } }
 }
-mod shell3 { #[derive(Clone)] pub struct MatrixTarget; }
+mod shell3 {
+    #[derive(Clone)] pub struct MatrixTarget;
+    pub fn matrix_target_slot_lease(_: &MatrixTarget) {}
+    pub mod matrix_target { pub fn matrix_slot_is_live(_: &()) -> bool { true } }
+    pub mod tui { #[derive(Clone,Copy)] pub struct Frontend; pub fn bind_vm(_: &super::MatrixTarget, _: u8) {} }
+}
 mod r { pub mod readiness { pub fn mask() -> u32 { crate::READY.load(std::sync::atomic::Ordering::SeqCst) } } }
 mod log_os { pub fn blueprint_important_line(_: std::fmt::Arguments) {} }
 mod hv {
@@ -54,6 +59,7 @@ mod hv {
     pub fn start_blueprint_app_vm(_:u8,_:&trueos_executor::Spawner,archive:String,bytes:Vec<u8>,args:Vec<String>,script:Option<String>,_:BlueprintInstanceRequest,target:Option<shell3::MatrixTarget>,_:BlueprintConsoleSurface) -> Result<(), &'static str> {
         CALLS.lock().unwrap().push((archive,bytes,args,script,target.is_some())); Ok(())
     }
+    pub mod matrix { pub fn discard(_: &crate::shell3::MatrixTarget) {} }
     pub mod launcher {
         use crate::{spin, trueos_time, trueos_executor};
 '''
@@ -64,7 +70,7 @@ tests = r'''
 impl hv::launcher::LaunchObserver for Arc<Events> {
     fn is_live(&self) -> bool { self.live }
     fn started(&self, vm:u8) { self.starts.lock().unwrap().push(vm); }
-    fn finished(&self, vm:Option<u8>, error:Option<&str>) { self.ends.lock().unwrap().push((vm,error.map(str::to_owned))); }
+    fn finished(&self, _: &shell3::MatrixTarget, vm:Option<u8>, error:Option<&str>) { self.ends.lock().unwrap().push((vm,error.map(str::to_owned))); }
 }
 fn run(f: impl std::future::Future<Output=()>) {
     struct Wake; impl std::task::Wake for Wake { fn wake(self:Arc<Self>) {} }
@@ -74,29 +80,29 @@ fn run(f: impl std::future::Future<Output=()>) {
 }
 fn reset() { CLOCK.store(0,std::sync::atomic::Ordering::SeqCst); READY.store(0,std::sync::atomic::Ordering::SeqCst); hv::CALLS.lock().unwrap().clear(); *hv::FREE.lock().unwrap() = Some(3); }
 fn request() -> hv::launcher::LaunchRequest { hv::launcher::LaunchRequest::new("app.bp".into(),vec![1,2]) }
-#[test] fn unattended_launch_preserves_args_and_script_without_terminal() {
+#[test] fn unattended_launch_preserves_args_and_script_with_matrix_identity() {
     let _guard=TEST_LOCK.lock().unwrap(); reset(); let mut req=request();
     req.args=vec!["argument".into()]; req.script=Some("pull app\n".into());
-    run(hv::launcher::launch_task(req,0,None));
-    assert_eq!(*hv::CALLS.lock().unwrap(),vec![("app.bp".into(),vec![1,2],vec!["argument".into()],Some("pull app\n".into()),false)]);
+    run(hv::launcher::launch_task(req,shell3::MatrixTarget,0,None));
+    assert_eq!(*hv::CALLS.lock().unwrap(),vec![("app.bp".into(),vec![1,2],vec!["argument".into()],Some("pull app\n".into()),true)]);
 }
 #[test] fn expired_owner_cancels_before_admission() {
     let _guard=TEST_LOCK.lock().unwrap(); reset(); let events=Arc::new(Events::default());
-    run(hv::launcher::launch_task(request(),0,Some(Box::new(events.clone()))));
+    run(hv::launcher::launch_task(request(),shell3::MatrixTarget,0,Some(Box::new(events.clone()))));
     assert!(hv::CALLS.lock().unwrap().is_empty()); assert_eq!(*events.ends.lock().unwrap(),vec![(None,None)]);
 }
 #[test] fn readiness_timeout_reports_failure_without_starting_vm() {
     let _guard=TEST_LOCK.lock().unwrap(); reset(); let events=Arc::new(Events {live:true,..Default::default()});
-    run(hv::launcher::launch_task(request(),1,Some(Box::new(events.clone()))));
+    run(hv::launcher::launch_task(request(),shell3::MatrixTarget,1,Some(Box::new(events.clone()))));
     assert!(hv::CALLS.lock().unwrap().is_empty()); assert!(events.ends.lock().unwrap()[0].1.as_ref().unwrap().contains("readiness timeout"));
 }
 #[test] fn admission_failure_and_success_deliver_lifecycle_events() {
     let _guard=TEST_LOCK.lock().unwrap(); reset(); let events=Arc::new(Events {live:true,..Default::default()});
     *hv::FREE.lock().unwrap()=None;
-    run(hv::launcher::launch_task(request(),0,Some(Box::new(events.clone()))));
+    run(hv::launcher::launch_task(request(),shell3::MatrixTarget,0,Some(Box::new(events.clone()))));
     assert_eq!(events.ends.lock().unwrap()[0],(None,Some("no free VM".into())));
     *hv::FREE.lock().unwrap()=Some(3);
-    run(hv::launcher::launch_task(request(),0,Some(Box::new(events.clone()))));
+    run(hv::launcher::launch_task(request(),shell3::MatrixTarget,0,Some(Box::new(events.clone()))));
     assert_eq!(*events.starts.lock().unwrap(),vec![3]); assert_eq!(events.ends.lock().unwrap()[1],(Some(3),None));
 }
 '''

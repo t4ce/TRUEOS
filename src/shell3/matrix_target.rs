@@ -54,6 +54,13 @@ pub(crate) fn matrix_slot_is_live(lease: &MatrixSlotLease) -> bool {
         .any(|(name, generation)| name == lease.name() && *generation == lease.lifetime_generation())
 }
 
+/// Admission binds the VM while deletion is excluded by the slot registry lock.
+pub(crate) fn with_live_matrix_slot<T>(lease: &MatrixSlotLease, bind: impl FnOnce() -> T) -> Option<T> {
+    let slots = super::matrix_slots().lock();
+    if !slots.lifetimes.iter().any(|(name, generation)| name == lease.name() && *generation == lease.lifetime_generation()) { return None; }
+    Some(bind())
+}
+
 pub(crate) fn attach_matrix_slot_resource(
     lease: &MatrixSlotLease,
     resource: alloc::sync::Arc<dyn MatrixSlotAttachment>,

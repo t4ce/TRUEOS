@@ -4,13 +4,7 @@ use alloc::{collections::VecDeque, vec::Vec};
 use trueos_executor::{SpawnError, SpawnToken};
 use trueos_time::{Duration, Timer};
 
-/// Reserved slot and archive identity captured before the VM worker runs.
-#[derive(Clone, Debug)]
-pub(crate) struct QueuedBlueprint {
-    pub slot: alloc::string::String,
-    pub app: alloc::string::String,
-    pub sha256: [u8; 32],
-}
+pub(crate) use crate::hv::matrix::AppReceipt as QueuedBlueprint;
 
 const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
 static SHELL_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -89,18 +83,18 @@ static SHELL_OWNERSHIP: spin::Mutex<ShellOwnership> = spin::Mutex::new(ShellOwne
 static APPDB_NAMES: spin::Mutex<AppDbNames> = spin::Mutex::new(AppDbNames::new());
 
 /// Hand AppDB launches to the existing Matrix/VMX queue.
-pub(super) fn launch_appdb(name: &str, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
-    launch_archive(alloc::format!("{name}.bp"), slot, frontend)
+pub(super) fn launch_appdb(name: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
+    launch_archive(alloc::format!("{name}.bp"), frontend)
 }
 
-pub(super) fn launch_alias(name: &str, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
+pub(super) fn launch_alias(name: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     let mut archive = crate::r::restart::startup_alias_blueprint(name)
         .ok_or_else(|| alloc::string::String::from("apps: alias not configured"))?;
     if !archive.ends_with(".bp") {
         archive.push_str(".bp");
     }
     if let Some(bytes) = crate::app_db::get(&archive)? {
-        return launch_bytes(archive, bytes, slot, frontend);
+        return launch_bytes(archive, bytes, frontend);
     }
     let selector = archive.strip_suffix(".bp").unwrap_or(&archive);
     launch_appstore(selector, frontend)
@@ -115,13 +109,13 @@ pub(super) fn launch_appstore(selector: &str, frontend: super::tui::Frontend) ->
     launch_bytes_with_script("appstore.bp".into(), store, frontend, Some(alloc::format!("pull {selector}\n")))
 }
 
-fn launch_archive(archive: alloc::string::String, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
+fn launch_archive(archive: alloc::string::String, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     let bytes = crate::app_db::get(&archive)?
         .ok_or_else(|| alloc::format!("apps: archive not found in AppDB: {archive}"))?;
-    launch_bytes(archive, bytes, slot, frontend)
+    launch_bytes(archive, bytes, frontend)
 }
 
-pub(super) fn launch_bytes(archive: alloc::string::String, bytes: Vec<u8>, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
+pub(super) fn launch_bytes(archive: alloc::string::String, bytes: Vec<u8>, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     launch_bytes_with_script(archive, bytes, frontend, None)
 }
 pub(crate) fn launch_bytes_with_script(archive: alloc::string::String, bytes: Vec<u8>, frontend: super::tui::Frontend, script: Option<alloc::string::String>) -> Result<QueuedBlueprint, alloc::string::String> {
@@ -129,34 +123,15 @@ pub(crate) fn launch_bytes_with_script(archive: alloc::string::String, bytes: Ve
     launch_bytes_with_args(archive, bytes, frontend, script, args)
 }
 fn launch_bytes_with_args(archive: alloc::string::String, bytes: Vec<u8>, frontend: super::tui::Frontend, script: Option<alloc::string::String>, args: Vec<alloc::string::String>) -> Result<QueuedBlueprint, alloc::string::String> {
-    use sha2::{Digest, Sha256};
-    let (name, generation) = super::MatrixSlots::fresh_terminal_slot(None);
-    let target = super::MatrixTarget::from_lease(super::MatrixSlotLease::from_identity(name.clone(), generation));
-    if let Err(error) = super::tui::attach(frontend, &target) {
-        super::MatrixSlots::drop_slot(Some(&name)); return Err(error);
-    }
-    let receipt = QueuedBlueprint { slot: name.clone(), app: archive.clone(), sha256: Sha256::digest(&bytes).into() };
-    let observer = ShellLaunch { target: target.clone(), os_admin: archive == "os.bp", run: spin::Mutex::new(None) };
+    let observer = (archive == "os.bp").then(|| alloc::boxed::Box::new(ShellLaunch {
+        run: spin::Mutex::new(None),
+    }) as alloc::boxed::Box<dyn crate::hv::launcher::LaunchObserver>);
     let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
     request.script = script;
     request.args = args;
-    request.console_target = Some(target);
+    request.frontend = Some(frontend);
     request.console_surface = crate::hv::BlueprintConsoleSurface::Terminal;
-    if let Err(error) = crate::hv::launcher::enqueue(request, Some(alloc::boxed::Box::new(observer))) {
-        super::MatrixSlots::drop_slot(Some(&name));
-        return Err(error);
-    }
-    Ok(receipt)
-}
-
-/// Retire the launch target too: queued work is cancelled by its expired
-/// lifetime, and a starting/running Blueprint is killed without guest cleanup.
-pub(super) fn drop_vmx_slot(name: &str) {
-    let vm = {
-        let mut launches = APP_LAUNCHES.lock();
-        launches.iter().position(|(lease, _)| lease.name() == name).map(|i| launches.remove(i))
-    };
-    if let Some((lease, vm)) = vm { let _ = crate::hv::kill_for_matrix_slot(vm, &lease); }
+    crate::hv::launcher::enqueue(request, observer)
 }
 
 /// Read app names through the current app.db API, using the archive basename
@@ -780,62 +755,32 @@ pub fn start_pool() -> Result<usize, SpawnError> {
     Ok(started)
 }
 
-// UI ownership only; HV serializes admission and monitors each VM run.
-static APP_LAUNCHES: spin::Mutex<Vec<(super::MatrixSlotLease, u8)>> = spin::Mutex::new(Vec::new());
-
-// Snapshot before taking the Matrix lock: launch observers take these locks
-// in the opposite order while validating their slot lease.
 pub(super) fn working_vmx_slots() -> Vec<alloc::string::String> {
-    APP_LAUNCHES.lock().iter().filter_map(|(lease, vm)| {
-        let state = crate::hv::vm_state(*vm);
-        (state.running && !state.pause_latched).then(|| lease.name().into())
-    }).collect()
+    crate::hv::matrix::working_slots()
 }
 
-struct ShellLaunch {
-    target: super::MatrixTarget,
-    os_admin: bool,
-    run: spin::Mutex<Option<u64>>,
-}
-
+// OS update completion is presentation policy, not Matrix/VM ownership.
+struct ShellLaunch { run: spin::Mutex<Option<u64>> }
 impl crate::hv::launcher::LaunchObserver for ShellLaunch {
-    fn is_live(&self) -> bool {
-        super::matrix_target::matrix_slot_is_live(&super::matrix_target_slot_lease(&self.target))
-    }
-    fn starting(&self, vm: u8) { super::tui::bind_vm(&self.target, vm); }
-    fn started(&self, vm: u8) {
-        *self.run.lock() = crate::hv::vm_run_generation(vm);
-        let lease = super::matrix_target_slot_lease(&self.target);
-        let mut launches = APP_LAUNCHES.lock();
-        if self.is_live() { launches.push((lease, vm)); }
-        else { let _ = crate::hv::kill_for_matrix_slot(vm, &lease); }
-    }
-    fn finished(&self, vm: Option<u8>, error: Option<&str>) {
-        let lease = super::matrix_target_slot_lease(&self.target);
-        APP_LAUNCHES.lock().retain(|(owner, id)| owner != &lease || Some(*id) != vm);
-        if self.is_live() {
-            if let Some(error) = error { super::MatrixSlots::echo(None, None, alloc::format!("apps: {error}")); }
-            if self.os_admin && error.is_none() {
-                if let Some(vm) = vm.filter(|vm| crate::hv::vm_run_generation(*vm) == *self.run.lock()) {
-                    if let Some(reason) = crate::hv::blueprint_console_exit_reason(vm) {
-                        if !matches!(reason.as_str(), "os:quit" | "os:cancel") {
-                            super::os::complete(self.target.clone(), reason);
-                            return;
-                        }
-                    }
+    fn started(&self, vm: u8) { *self.run.lock() = crate::hv::vm_run_generation(vm); }
+    fn finished(&self, target: &super::MatrixTarget, vm: Option<u8>, error: Option<&str>) {
+        if error.is_some() { return; }
+        if let Some(vm) = vm.filter(|vm| crate::hv::vm_run_generation(*vm) == *self.run.lock()) {
+            if let Some(reason) = crate::hv::blueprint_console_exit_reason(vm) {
+                if !matches!(reason.as_str(), "os:quit" | "os:cancel") {
+                    super::os::complete(target.clone(), reason);
+                    return;
                 }
             }
-            super::MatrixSlots::drop_slot(Some(lease.name()));
         }
+        crate::hv::matrix::discard(target);
     }
 }
 
 /// Snapshot the selected slot's guest environment, or the host launch defaults.
 pub(super) fn environment_lines(slot: Option<&str>, lifetime: Option<u64>) -> Vec<alloc::string::String> {
     let vm = match (slot, lifetime) {
-        (Some(slot), Some(lifetime)) => APP_LAUNCHES.lock().iter()
-            .find(|(lease, _)| lease.name() == slot && lease.lifetime_generation() == lifetime)
-            .map(|(_, vm)| *vm),
+        (Some(slot), Some(lifetime)) => crate::hv::matrix::vm_for_slot(slot, lifetime),
         _ => None,
     };
     if let Some(vm) = vm {

@@ -21,12 +21,14 @@ def main():
     source += f'#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;use metafmtstr::MetaFmtStr;\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n#[path="{ROOT}/src/shell3/transition.rs"] mod transition;\n'
     source += '''
 const SpecialSeperator:char='│';
+const Default_COLUMNS:usize=100;const Default_ROWS:usize=25;
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
 mod service {pub use crate::shell2::cmds::run::QueuedBlueprint;pub fn notify_work(){}}
 struct MatrixSlots;
 static TRANSCRIPTS:std::sync::Mutex<Vec<(shell2::MatrixSlotLease,String)>>=std::sync::Mutex::new(Vec::new());
 impl MatrixSlots {
 fn echo_output(lease:&shell2::MatrixSlotLease,line:String) {if shell2::matrix_slot_is_live(lease) {TRANSCRIPTS.lock().unwrap().push((lease.clone(),line));}}
+fn drop_lease(lease:&shell2::MatrixSlotLease)->bool {shell2::free_name(lease.name());true}
 fn drop_slot(name:Option<&str>)->bool {if let Some(name)=name {shell2::free_name(name);}true}}
 mod r {pub mod keyboard {
 '''
@@ -64,6 +66,7 @@ pub fn free_name(name:&str) {
 }
 }
 mod hv {
+pub fn blueprint_console_is_terminal(_:u8)->bool {true}
 use super::*;use std::sync::atomic::{AtomicU64,AtomicUsize,Ordering};
 #[derive(Clone,Copy)] pub struct BlueprintTerminalSurfaceSnapshot {pub generation:u64,pub cols:u32,pub rows:u32}
 pub static RUN:AtomicU64=AtomicU64::new(1);
@@ -125,6 +128,34 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     tui::hold_navigation(f.id,false);assert!(tui::select_for_navigation(f,"latched-native"));
     assert!(tui::active(f.id,Some("latched-native")));tui::detach(f.id);
 }
+#[test] fn vm_id_reuse_disconnects_the_previous_slot_input_and_terminal_owner() {
+    let (old_frontend,old)=session("previous-run",30,20,5);assert_eq!(tui::claim(&old,30),Some(true));
+    let new=shell2::target("replacement-run",1);tui::reserve(&new).unwrap();hv::bind(30,&new);
+    assert!(!tui::active(old_frontend.id,Some("previous-run")));
+    assert!(!tui::input(old_frontend.id,Some("previous-run"),b"stale input"));
+    assert_eq!(tui::write(&old,30,b"stale output"),Some(0));
+    assert_eq!(tui::claim(&new,30),Some(true));
+    shell2::free_name("previous-run");shell2::free_name("replacement-run");
+}
+#[test] fn disconnect_during_readiness_wait_keeps_the_queued_slot_alive() {
+    let f=frontend(20,5);let t=shell2::target("queued-before-disconnect",1);
+    tui::reserve(&t).unwrap();tui::attach(f,&t).unwrap();tui::detach(f.id);
+    assert!(shell2::matrix_slot_is_live(&t.lease));assert!(tui::supports(&t));
+    hv::bind(29,&t);assert_eq!(tui::claim(&t,29),Some(true));
+    shell2::free_name("queued-before-disconnect");
+}
+#[test] fn unattended_output_has_one_buffer_and_survives_frontend_disconnect() {
+    let t=shell2::target("unattended",1);tui::reserve(&t).unwrap();hv::bind(31,&t);
+    assert_eq!(tui::write_stdout(&t,31,b"before attach\\n"),14);
+    let lines=TRANSCRIPTS.lock().unwrap().iter().filter(|(lease,_)|lease==&t.lease).map(|(_,text)|text.clone()).collect::<Vec<_>>();
+    assert_eq!(lines,vec!["before attach"]);
+    let f=frontend(40,9);tui::attach(f,&t).unwrap();
+    assert_eq!(tui::claim(&t,31),Some(true));
+    tui::detach(f.id);assert!(shell2::matrix_slot_is_live(&t.lease));assert!(tui::supports(&t));
+    assert_eq!(tui::write_stdout(&t,31,b"after detach\\n"),13);
+    let next=frontend(40,9);assert!(tui::select_for_navigation(next,"unattended"));
+    shell2::free_name("unattended");assert!(!tui::supports(&t));
+}
 #[test] fn stdout_transcript_keeps_prompt_until_terminal_claim() {
     let (f,t)=session("stdout-transcript",23,20,5);
     assert_eq!(tui::write_stdout(&t,23,b"map: caf\\xc3"),9);
@@ -159,7 +190,9 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     assert!(tui::select(tui::Frontend {id:f.id,cols:30,rows:12},Some("size")));
     let resized=tui::surface(&t).unwrap();assert_eq!((resized.cols,resized.rows),(30,12));assert!(resized.generation>initial.generation);
     hv::INPUT.lock().unwrap().clear();tui::write(&t,2,b"\\x1b[6n");assert!(!hv::INPUT.lock().unwrap().is_empty());
-    tui::detach(f.id);assert!(!tui::supports(&t));
+    tui::detach(f.id);assert!(tui::supports(&t));
+    assert!(shell2::matrix_slot_is_live(&t.lease));
+    let next=frontend(40,9);assert!(tui::select_for_navigation(next,"size"));
 }
 #[test] fn explicit_slot_navigation_requests_blueprint_reentry_without_claiming_text_output() {
     let (f,t)=session("navigation-reentry",24,20,8);
@@ -222,6 +255,8 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
 struct RowStrips {left:Vec<MetaFmtStr>}
 struct Shell3 {command_history:command_history::CommandHistory,tui_frontend:u64,name:String,size:(usize,usize),prompt:String,mode:u8}
 impl Shell3 {
+fn active_vmx_app(&self)->Option<()> {None}
+fn submit_app_prompt(&mut self)->bool {false}
     fn row_for_render(&self,_:SpecialRows)->RowStrips {RowStrips {left:vec![MetaFmtStr::new("TrueOS")]}}
     fn active_matrix_slot_name(&self)->Option<String>{Some(self.name.clone())}
     fn set_mode(&mut self,mode:u8){self.mode=mode;}

@@ -26,7 +26,7 @@ mod smp;
 #[path = "system/net.rs"]
 mod system_net;
 pub(crate) mod capture;
-mod matrix_target;
+pub(crate) mod matrix_target;
 mod log_tap;
 pub(crate) use matrix_target::{matrix_target_print_line, MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
 mod metafmtstr;
@@ -187,7 +187,6 @@ struct MatrixSlotsState {
     next_lifetime: u64,
     attachments: Vec<(MatrixSlotLease, alloc::sync::Arc<dyn matrix_target::MatrixSlotAttachment>)>,
     echoes: Vec<(Option<String>, VecDeque<String>)>,
-    vmx_apps: Vec<service::QueuedBlueprint>,
     generation: u64,
 }
 
@@ -199,7 +198,6 @@ impl MatrixSlotsState {
             next_lifetime: 1,
             attachments: Vec::new(),
             echoes: Vec::new(),
-            vmx_apps: Vec::new(),
             generation: 0,
         }
     }
@@ -269,7 +267,6 @@ impl MatrixSlots {
         slots
             .echoes
             .retain(|(id, _)| id.as_ref().is_none_or(|id| ids.contains(id)));
-        slots.vmx_apps.retain(|app| ids.contains(&app.slot));
         slots.ids = ids;
         let retired = matrix_target::retire_expired_attachments(&mut slots);
         slots.generation = slots.generation.wrapping_add(1);
@@ -296,7 +293,7 @@ impl MatrixSlots {
     }
 
     /// Allocate under one lock so simultaneous connections cannot share a name.
-    fn fresh_terminal_slot(peer_port: Option<u16>) -> (String, u64) {
+    pub(crate) fn fresh_slot(peer_port: Option<u16>) -> (String, u64) {
         let mut slots = matrix_slots().lock();
         let preferred = peer_port.filter(|port| *port != 0).map(|port| port.to_string());
         let mut number = 1u64;
@@ -321,28 +318,29 @@ impl MatrixSlots {
     }
 
     /// None resets the implicit default slot; named slots disappear entirely.
-    fn drop_slot(name: Option<&str>) -> bool {
+    pub(crate) fn drop_lease(lease: &MatrixSlotLease) -> bool {
+        Self::drop_slot_inner(Some(lease.name()), Some(lease.lifetime_generation()))
+    }
+
+    pub(crate) fn drop_slot(name: Option<&str>) -> bool {
+        Self::drop_slot_inner(name, None)
+    }
+
+    fn drop_slot_inner(name: Option<&str>, expected: Option<u64>) -> bool {
         let mut slots = matrix_slots().lock();
-        let vmx_slot = name
-            .filter(|name| slots.vmx_apps.iter().any(|app| app.slot == *name))
-            .map(str::to_string);
+        if expected.is_some_and(|generation| !slots.lifetimes.iter().any(|(id, lifetime)| Some(id.as_str()) == name && *lifetime == generation)) { return false; }
         if let Some(name) = name {
             if !slots.ids.iter().any(|id| id == name) {
                 return false;
             }
             slots.ids.retain(|id| id != name);
             slots.lifetimes.retain(|(id, _)| id != name);
-            slots.vmx_apps.retain(|app| app.slot != name);
         }
         slots.echoes.retain(|(id, _)| id.as_deref() != name);
         slots.generation = slots.generation.wrapping_add(1);
         let retired = matrix_target::retire_expired_attachments(&mut slots);
         drop(slots);
-        let drop_owner = vmx_slot.as_deref().or(name.filter(|name| tui::native_slot(name)));
         for (lease, resource) in retired { resource.on_matrix_slot_freed(&lease); }
-        if let Some(name) = drop_owner {
-            service::drop_vmx_slot(name);
-        }
         service::notify_work();
         true
     }
@@ -620,7 +618,7 @@ impl Shell3 {
         );
         shell.command_history.set_scope(matrix_target::TRANSPORT_NET_TCP_SCOPE);
         shell.set_show_backend(ShowBackend::Network);
-        let (name, lifetime) = MatrixSlots::fresh_terminal_slot(peer_port);
+        let (name, lifetime) = MatrixSlots::fresh_slot(peer_port);
         shell.active_matrix_slot = Some(name);
         shell.active_matrix_lifetime = Some(lifetime);
         shell.matrix_selection_dirty = true;
@@ -1042,6 +1040,22 @@ impl Shell3 {
         }
     }
 
+    /// Prompt-row input is addressed by the selected app lifetime, not a view.
+    fn submit_app_prompt(&mut self) -> bool {
+        if self.prompt.text.starts_with(OPERATOR) { return false; }
+        let (Some(name), Some(lifetime)) = (self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) else { return false; };
+        let Some(vm) = crate::hv::matrix::vm_for_slot(name, lifetime) else { return false; };
+        let Some(run) = crate::hv::vm_run_generation(vm) else { return false; };
+        let lease = MatrixSlotLease::from_identity(name.into(), lifetime);
+        let input = format!("{}\n", self.prompt.text);
+        if crate::hv::blueprint_console_submit_stdin_for_lease(vm, &lease, run, input.as_bytes()) != input.len() { return false; }
+        MatrixSlots::echo(Some(name), Some(lifetime), self.prompt.text.clone());
+        self.command_history.remember(&self.prompt.text);
+        self.command_history.end_recall();
+        self.set_prompt("");
+        true
+    }
+
     /// Enter is reserved for operator submission; other prompt text is inert.
     fn submit_operator_prompt(&mut self) -> bool {
         let mut input = self.prompt.text.clone();
@@ -1061,6 +1075,11 @@ impl Shell3 {
     /// is discarded. Stop early when the prompt cannot become a valid name.
     pub(super) fn replay_terminal_line(&mut self, line: &str) {
         use crate::r::keyboard::*;
+        if self.active_vmx_app().is_some() && !line.starts_with(OPERATOR) && !self.parse_name(line) {
+            self.set_prompt(line);
+            self.submit_app_prompt();
+            return;
+        }
         self.set_prompt("");
         for ch in line.chars() {
             let mut utf8 = [0; 4];
@@ -1132,7 +1151,8 @@ impl Shell3 {
                         self.replay_terminal_line(&input);
                         return (true, true);
                     }
-                    return (self.submit_operator_prompt(), false);
+                    let submitted = self.submit_app_prompt() || self.submit_operator_prompt();
+                    return (submitted, false);
                 }
                 KEYBOARD_KEY_TAB => {
                     let changed = self.set_mode(self.get_mode() % 3 + 1);
@@ -1192,11 +1212,10 @@ impl Shell3 {
     }
 
     fn launch_named_app(&mut self, text: &str, is_alias: bool) {
-        let slot = self.active_matrix_slot.as_deref().unwrap_or("");
         let result = if !is_alias {
-            service::launch_appdb(text, slot, self.tui_frontend())
+            service::launch_appdb(text, self.tui_frontend())
         } else {
-            service::launch_alias(text, slot, self.tui_frontend())
+            service::launch_alias(text, self.tui_frontend())
         };
         match result {
             Ok(app) => self.select_queued_app(app),
@@ -1238,13 +1257,9 @@ impl Shell3 {
     }
 
     fn select_queued_app(&mut self, app: service::QueuedBlueprint) {
+        if crate::hv::matrix::app(&app.slot, Some(app.lifetime)).is_none() { return; }
         if self.command_feedback.is_some() {
-            let lifetime = MatrixSlots::ensure_named(&app.slot);
-            let mut slots = matrix_slots().lock();
-            slots.vmx_apps.retain(|existing| existing.slot != app.slot);
-            slots.vmx_apps.push(app.clone());
-            slots.generation = slots.generation.wrapping_add(1);
-            drop(slots);
+            let lifetime = app.lifetime;
             self.latched_navigation = Some(LatchedNavigation::App { app, lifetime });
             service::notify_work();
             return;
@@ -1253,18 +1268,13 @@ impl Shell3 {
             tui::queue_launch(self.tui_frontend, app);
             return;
         }
-        let lifetime = MatrixSlots::ensure_named(&app.slot);
+        let lifetime = app.lifetime;
         self.active_matrix_slot = Some(app.slot.clone());
         self.active_matrix_lifetime = Some(lifetime);
         self.matrix_selection_dirty = true;
         self.matrix_scroll = 0;
         self.matrix_column = 0;
         self.matrix_drag = None;
-        let mut slots = matrix_slots().lock();
-        slots.vmx_apps.retain(|existing| existing.slot != app.slot);
-        slots.vmx_apps.push(app);
-        slots.generation = slots.generation.wrapping_add(1);
-        drop(slots);
         service::notify_work();
     }
 
@@ -1369,11 +1379,8 @@ impl Shell3 {
         } else if is_app {
             self.launch_named_app(&text, false);
         } else {
-            MatrixSlots::echo(
-                self.active_matrix_slot.as_deref(),
-                self.active_matrix_lifetime,
-                text.clone(),
-            );
+            MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, text.clone());
+
         }
         text.zeroize();
         self.prompt.colors.clear();
@@ -1787,12 +1794,7 @@ impl Shell3 {
 
     fn active_vmx_app(&self) -> Option<service::QueuedBlueprint> {
         let active = self.active_matrix_slot_name()?;
-        matrix_slots()
-            .lock()
-            .vmx_apps
-            .iter()
-            .find(|app| app.slot == active)
-            .cloned()
+        crate::hv::matrix::app(&active, self.active_matrix_lifetime)
     }
 
     pub fn parse_name(&self, name: &str) -> bool {

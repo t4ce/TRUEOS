@@ -20,6 +20,9 @@ def main():
     layout = broker[begin:broker.index('\npub(crate) fn create_render_pipeline(', begin)]
     pipeline = (ROOT / 'src/intel/render/pipeline.rs').read_text()
     packets = pipeline[pipeline.index('fn figure_uniform_gpu_base('):]
+    unbind_constants = '\n'.join(re.search(r'^const ' + name + r': u32 = .*?;',
+        (ROOT / 'src/intel/render/constants.rs').read_text(), re.M | re.S)[0]
+        for name in ['CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS', 'CMD_3DSTATE_BINDING_TABLE_POINTERS_VS', 'CMD_3DSTATE_BINDING_TABLE_POINTERS_PS'])
     mocs = re.search(r'^const RENDER_MOCS: u32 = .*?;', (ROOT / 'src/intel/render/constants.rs').read_text(), re.M)[0]
     constants = []
     for path in [ROOT / 'crates/trueos-v/src/vgpu.rs',
@@ -32,6 +35,7 @@ def main():
 mod v {{ pub mod vgpu {{ pub const SHADER_PACKAGE_VOXY_FIGURE_FNV1A64: u64 = {constants[0]}; pub const SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64: u64 = 0x07442C9AD2E3AAF8; pub const VOXY_FIGURE_STATE_BYTES: usize = 2720; }} }}
 {layout}
 {mocs}
+{unbind_constants}
 {packets}
 #[test] fn original_hidden_bone_normals_are_admitted() {{
     let mut state = [0u8; 2720];
@@ -76,6 +80,9 @@ mod v {{ pub mod vgpu {{ pub const SHADER_PACKAGE_VOXY_FIGURE_FNV1A64: u64 = {co
     for (address, bytes) in [(0, 64), (1, 64), (base, 8), (base, 0), (u64::MAX & !31, 64)] {{
         assert!(figure_constant_packets(address, bytes).is_err());
     }}
+}}
+#[test] fn retiring_pose_removes_pushed_and_pulled_addresses() {{
+    assert_eq!(figure_unbind_packets(), [0x786D1100, RENDER_MOCS, 0x78260000, 0, 0x782A0000, 0]);
 }}
 #[test] fn original_pair_and_native_bytes_match() {{
     let mut hash = 0xcbf29ce484222325u64;

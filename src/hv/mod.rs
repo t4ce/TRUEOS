@@ -1,6 +1,7 @@
 pub mod app_crash;
 pub mod blueprint;
 pub(crate) mod launcher;
+pub(crate) mod matrix;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
 pub mod control_kick;
@@ -2111,7 +2112,7 @@ fn start_with_mode(
     vm_id: u8,
     boot_mode: VmBootMode,
     stack_mb: Option<usize>,
-    pending_blueprint: Option<BlueprintPendingLaunchState>,
+    mut pending_blueprint: Option<BlueprintPendingLaunchState>,
     already_reserved: bool,
 ) -> Result<(), StartError> {
     let Some(vm) = vm_slot(vm_id) else {
@@ -2129,6 +2130,7 @@ fn start_with_mode(
         return Err(StartError::VgpuQuarantined);
     }
 
+    let mut matrix_admission = matrix::Admission::new(vm_id);
     {
         let _control = vm.lifecycle_control.lock();
         if vm.running.load(Ordering::Acquire) {
@@ -2142,14 +2144,25 @@ fn start_with_mode(
             if vm.starting.load(Ordering::Acquire) {
                 return Err(StartError::AlreadyRunning);
             }
+        }
+        if pending_blueprint.is_some() && vm.pause_latched.load(Ordering::Acquire) {
+            hvwarnf(format_args!("hv: vm{} lifecycle: fresh blueprint start rejected while pause is retained", vm_id));
+            return Err(StartError::AlreadyRunning);
+        }
+        if let Some(pending) = pending_blueprint.as_mut() {
+            // Identity is established under lifecycle admission, before the VM
+            // worker can execute. Child and replica launches enter here too.
+            let target = matrix::bind(vm_id, &pending.archive, &pending.module_bytes, pending.console_target.take())
+                .map_err(|_| StartError::ConsoleUnsupported)?;
+            matrix_admission.bound(&target);
+            pending.console_target = Some(target);
+        }
+        if pending_blueprint.is_none() && !blueprint_launch_active(vm_id) {
+            *vm.matrix_owner.lock() = None;
+        }
+        if !already_reserved {
             vm.cooperative_stop.reset();
             vm.stop_req.store(false, Ordering::Release);
-            if let Some(pending) = pending_blueprint.as_ref() {
-                *vm.matrix_owner.lock() = pending.console_target.as_ref()
-                    .map(crate::shell3::matrix_target_slot_lease);
-            } else if !vm.pause_latched.load(Ordering::Acquire) {
-                *vm.matrix_owner.lock() = None;
-            }
             teardown_diagnostics::set(vm_id, TeardownStage::Preparing);
             vm.lifecycle_generation.fetch_add(1, Ordering::AcqRel);
             vm.starting.store(true, Ordering::Release);
@@ -2200,14 +2213,6 @@ fn start_with_mode(
     }
 
     let is_blueprint_start = pending_blueprint.is_some();
-    if is_blueprint_start && vm.pause_latched.load(Ordering::Acquire) {
-        hvwarnf(format_args!(
-            "hv: vm{} lifecycle: fresh blueprint start rejected while pause is retained",
-            vm_id
-        ));
-        vm.starting.store(false, Ordering::Release);
-        return Err(StartError::AlreadyRunning);
-    }
     if is_blueprint_start {
         // `starting` is the fresh-incarnation latch: no other launcher can
         // claim this VM id after it is set.  Retain an offline incarnation's
@@ -2373,6 +2378,7 @@ fn start_with_mode(
             return Err(StartError::SpawnFailed);
         }
     }
+    matrix_admission.commit();
     Ok(())
 }
 
@@ -2547,9 +2553,7 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     vm.resume_prepared.store(false, Ordering::Release);
     vm.pause_store_seq.store(0, Ordering::Release);
     reset_prepare_pause(vm);
-    if !allow_starting {
-        *vm.matrix_owner.lock() = None;
-    }
+    if !allow_starting { matrix::retire_vm(vm_id); }
     Ok(had_state)
 }
 
@@ -3350,6 +3354,13 @@ pub fn stage_blueprint_launch(
     let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
+    let target = {
+        let vm = vm_slot(vm_id).ok_or(StartError::UnsupportedVmId)?;
+        let _control = vm.lifecycle_control.lock();
+        matrix::bind(vm_id, &state.archive, &state.module_bytes, console_target)
+            .map_err(|_| StartError::ConsoleUnsupported)?
+    };
+    let console_target = Some(target);
     // This outer gate is held only across synchronous state/backend calls; no
     // await or guest execution is allowed while it is held.
     let _transition = transition_slot.lock();
@@ -3896,6 +3907,11 @@ pub(crate) fn blueprint_process_arg_count(vm_id: u8) -> Option<usize> {
 pub(crate) fn blueprint_process_arg(vm_id: u8, index: usize) -> Option<AllocString> {
     let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
     context.as_ref()?.args.get(index).cloned()
+}
+
+pub(crate) fn blueprint_console_is_terminal(vm_id: u8) -> bool {
+    BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)
+        .is_some_and(|slot| slot.lock().as_ref().is_some_and(|context| context.console_surface.is_terminal()))
 }
 
 pub(crate) fn blueprint_console_target(vm_id: u8) -> Option<crate::shell3::MatrixTarget> {
@@ -4639,7 +4655,7 @@ pub(crate) fn blueprint_console_submit_stdin_for_lease(vm_id: u8, lease: &crate:
 
 fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option<(&crate::shell3::MatrixSlotLease, u64)>) -> usize {
     const MAX_CONSOLE_INPUT: usize = 64 * 1024;
-    if data.is_empty() {
+    if data.is_empty() || expected.is_some_and(|(lease, _)| !crate::shell3::matrix_target::matrix_slot_is_live(lease)) {
         return 0;
     }
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
@@ -4654,7 +4670,6 @@ fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option
     }
     if let Some((lease, run)) = expected {
         if vm_run_generation(vm_id) != Some(run)
-            || !matches!(context.terminal_lease, BlueprintTerminalLeaseState::Active { .. })
             || context.console_target.as_ref().map(crate::shell3::matrix_target_slot_lease).as_ref() != Some(lease)
         { return 0; }
     }
@@ -4717,7 +4732,8 @@ pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
 }
 
 pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
-    crate::log!("blueprint vm{}: {}\n", vm_id, line);
+    let output = alloc::format!("{line}\n");
+    blueprint_console_write(vm_id, output.as_bytes());
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

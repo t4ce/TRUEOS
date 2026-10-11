@@ -5248,6 +5248,16 @@ fn encode_triangle_probe_batch(
         )?;
     }
 
+    if draw.voxy_figure {
+        // The pose is appended to a transient mesh. Drain the figure before
+        // removing its push/pull bindings: the next submission's opening
+        // flush must not encounter pointers into an already unmapped pose.
+        log_batch_offset(cursor, "PIPE_CONTROL figure-before-unbind");
+        push_pipe_control_full(warm.device_id, batch_dwords, &mut cursor,
+            PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS, PIPE_CONTROL_BIG_PRE_DRAW_BITS)?;
+        for word in figure_unbind_packets() { push(batch_dwords, &mut cursor, word)?; }
+    }
+
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final");
     push_store_data_imm(
         batch_dwords,
@@ -6802,4 +6812,12 @@ fn figure_constant_packets(vertex_gpu: u64, vertex_bytes: u32) -> Result<[[u32; 
     ps[2] = 2 << 16;
     ps[9] = globals_ps as u32; ps[10] = (globals_ps >> 32) as u32;
     Ok([vs, ps])
+}
+
+/// Gen12 CONSTANT_ALL is used only with zero addresses (Wa_16011448509).
+/// Clear both the pushed ranges and the pull-constant binding tables.
+fn figure_unbind_packets() -> [u32; 6] {
+    [CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS, RENDER_MOCS,
+     CMD_3DSTATE_BINDING_TABLE_POINTERS_VS, 0,
+     CMD_3DSTATE_BINDING_TABLE_POINTERS_PS, 0]
 }

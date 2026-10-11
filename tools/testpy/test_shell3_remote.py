@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Production lease routing and remote output, with host-only kernel services."""
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import test_clip_position3_uv_texture as extract
@@ -21,10 +22,18 @@ impl<T> Mutex<T> {
 use alloc::{string::String, vec::Vec};
 '''
     source += extract.item('src/shell3/shell3.rs', 'RgbaColor')
+    source += re.search(r'^impl RgbaColor \{.*?^}', (ROOT/'src/shell3/shell3.rs').read_text(), re.M|re.S).group()
     source += r'''
 mod update {pub const CONTROL_BACKGROUND:[u8;4]=[16,16,16,255];pub const MATRIX_BACKGROUND:[u8;4]=[24,24,24,255];pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>;}
 mod tty {pub const OUTPUT_LIMIT:usize=1024*1024;}
-mod service {pub fn notify_work() {}}
+mod service {pub use crate::shell2::cmds::run::QueuedBlueprint;pub fn notify_work() {}}
+const Default_COLUMNS:usize=100;const Default_ROWS:usize=25;
+struct MatrixSlots;impl MatrixSlots {fn echo_output(_: &shell2::MatrixSlotLease,_:String) {}}
+mod shell3 {pub use crate::shell2::{MatrixSlotLease,MatrixTarget,matrix_target_slot_lease};}
+mod matrix_target {
+pub use crate::shell2::{MatrixSlotAttachment,attach_matrix_slot_resource,matrix_slot_is_live};
+pub const TRANSPORT_NET_TCP_SCOPE:u8=1;pub const TRANSPORT_LOCAL_SCOPE:u8=2;
+}
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
 mod shell2 {
     pub mod cmds {pub mod run {pub struct QueuedBlueprint;}}
@@ -68,12 +77,13 @@ mod tui {
         crate::shell2::LIVE.store(1,Ordering::Relaxed);
         crate::hv::INPUT.lock().unwrap().clear();
     }
-    fn setup(id:u64, name:&str, remote:bool)->crate::shell2::MatrixTarget {
+    fn setup(id:u64, name:&str, remote:bool)->crate::shell2::MatrixTarget {setup_vm(id,name,remote,7)}
+    fn setup_vm(id:u64, name:&str, remote:bool,vm:u8)->crate::shell2::MatrixTarget {
         if remote {bind_remote_frontend(id);}
         let target=crate::shell2::MatrixSlotLease{name:name.into(),generation:1};
         attach(Frontend{id,cols:120,rows:40},&target).unwrap();
-        bind_vm(&target,7);
-        assert_eq!(claim(&target,7),Some(true));
+        bind_vm(&target,vm);
+        assert_eq!(claim(&target,vm),Some(true));
         target
     }
     #[test] fn launch_backend_uses_the_frontends_own_ui4_window() {
@@ -144,9 +154,9 @@ mod tui {
         assert!(take_remote_output(1,tty_limit()).unwrap().bytes.is_empty());
     }
     #[test] fn separate_remote_frontends_do_not_share_output() {
-        reset();let a=setup(1,"a",true);let b=setup(2,"b",true);
+        reset();let a=setup(1,"a",true);let b=setup_vm(2,"b",true,8);
         take_remote_output(1,tty_limit());take_remote_output(2,tty_limit());
-        write(&a,7,b"alpha");write(&b,7,b"beta");
+        write(&a,7,b"alpha");write(&b,8,b"beta");
         assert_eq!(take_remote_output(1,tty_limit()).unwrap().bytes,b"alpha");
         assert_eq!(take_remote_output(2,tty_limit()).unwrap().bytes,b"beta");
     }
