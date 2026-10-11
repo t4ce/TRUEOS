@@ -29,7 +29,7 @@ def main():
     source = f'''#![allow(dead_code)]
 {types}
 #[path = "{GENERATED}"] mod figure;
-mod v {{ pub mod vgpu {{ pub const SHADER_PACKAGE_VOXY_FIGURE_FNV1A64: u64 = {constants[0]}; pub const VOXY_FIGURE_STATE_BYTES: usize = 2720; }} }}
+mod v {{ pub mod vgpu {{ pub const SHADER_PACKAGE_VOXY_FIGURE_FNV1A64: u64 = {constants[0]}; pub const SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64: u64 = 0x07442C9AD2E3AAF8; pub const VOXY_FIGURE_STATE_BYTES: usize = 2720; }} }}
 {layout}
 {mocs}
 {packets}

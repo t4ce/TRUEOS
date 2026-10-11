@@ -3259,7 +3259,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             || draw.topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList
             || draw.depth_flags & (v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH | v::vgpu::INDEXED_DRAW_DEPTH_TEST | v::vgpu::INDEXED_DRAW_DEPTH_WRITE)
                 != (v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH | v::vgpu::INDEXED_DRAW_DEPTH_TEST | v::vgpu::INDEXED_DRAW_DEPTH_WRITE)
-            || (draw.depth_flags & v::vgpu::INDEXED_DRAW_DEPTH_COMPARE_MASK) >> v::vgpu::INDEXED_DRAW_DEPTH_COMPARE_SHIFT != 6) {
+            || !matches!((draw.depth_flags & v::vgpu::INDEXED_DRAW_DEPTH_COMPARE_MASK) >> v::vgpu::INDEXED_DRAW_DEPTH_COMPARE_SHIFT, 3 | 6)) {
             return Err(unsupported("voxy-figure-layout"));
         }
         let fixed = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64;
