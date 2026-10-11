@@ -13,6 +13,8 @@ mod disc;
 mod ram;
 #[path = "system/smp.rs"]
 mod smp;
+#[path = "system/net.rs"]
+mod system_net;
 pub(crate) mod capture;
 mod matrix_target;
 mod log_tap;
@@ -1278,13 +1280,14 @@ impl Shell3 {
             for line in service::environment_lines(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
             }
-        } else if self.mode == Mode::ADM && matches!(text.as_str(), "cry" | "disc" | "ram" | "smp") {
+        } else if self.mode == Mode::ADM && matches!(text.as_str(), "cry" | "disc" | "ram" | "smp" | "net") {
             let frontend = self.tui_frontend();
             let result = match text.as_str() {
                 "cry" => cry::start(frontend),
                 "disc" => disc::start(frontend),
                 "ram" => ram::start(frontend),
-                _ => smp::start(frontend),
+                "smp" => smp::start(frontend),
+                _ => system_net::start(frontend),
             };
             match result {
                 Ok(()) => { self.select_matrix_slot_name(&text); }
