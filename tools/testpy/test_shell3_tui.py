@@ -370,7 +370,7 @@ impl Shell3 {
     tui::write(&vm_target,15,b"\x1b[?25lVM");let rows=tui::snapshot(vm_frontend.id,Some("vm-palette")).unwrap();assert_eq!(rows[0][0].1.unwrap().background(),Some([0,0,0,255]));
 }
 #[test] fn restored_system_helpers_color_three_control_rows_and_use_default_body() {
-    for (index,name) in ["cry","disc","ram","smp"].iter().enumerate() {
+    for (index,name) in ["cry","disc","ram","smp","net","gpu","tlb","vcpy"].iter().enumerate() {
         let f=frontend(40,8);let t=shell2::target(name,index as u64+1);
         let shell=Shell3 {command_history:Default::default(),tui_frontend:f.id,name:(*name).into(),size:(40,8),prompt:String::new(),mode:3};
         let mut tty=tty::Terminal::new_ssh(shell);tty.output.clear();

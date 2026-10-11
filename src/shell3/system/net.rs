@@ -203,9 +203,10 @@ fn nic_snapshot(width: usize, selector: Option<&str>) -> Vec<String> {
         };
         let ipv6 = ipv6_text(index);
 
-        table.emit_row(&[&idx, &bdf, &vidpid, iface, &mac, &ipv4, mode, &ipv6], |text| {
-            lines.push(text.into())
-        });
+        table
+            .emit_row::<&str, _>(&[&idx, &bdf, &vidpid, iface, &mac, &ipv4, mode, &ipv6], |text| {
+                lines.push(text.into())
+            });
     }
 
     table.emit_footer(|text| lines.push(text.into()));
@@ -647,7 +648,10 @@ impl View {
                 match action {
                     Action::Up => self.scroll = self.scroll.saturating_sub(1),
                     Action::Down => self.scroll = self.scroll.saturating_add(1),
-                    Action::Choose | Action::Quit | Action::Click(1) => self.home(),
+                    Action::Choose | Action::Quit | Action::Click(1) => {
+                        self.home();
+                        return;
+                    }
                     _ => {}
                 }
             }

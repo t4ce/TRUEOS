@@ -143,7 +143,7 @@ pub(super) const ADM_NAMES: &[NameEntry] = &[
         color: RgbaColor::White,
     },
     NameEntry {
-        name: "vgpu",
+        name: "gpu",
         color: RgbaColor::White,
     },
     NameEntry {

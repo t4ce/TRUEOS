@@ -1,3 +1,13 @@
+#[path = "system/picker.rs"]
+mod picker;
+#[path = "system/output.rs"]
+mod output;
+#[path = "system/gpu.rs"]
+mod gpu;
+#[path = "system/tlb.rs"]
+pub(crate) mod tlb;
+#[path = "system/vcpy.rs"]
+mod vcpy;
 mod helper;
 mod admin;
 mod os;
@@ -1010,7 +1020,11 @@ impl Shell3 {
         if let Some(app) = tui::take_native_launch(self.tui_frontend) {
             self.select_queued_app(app);
         }
-        if tui::take_native_return(self.tui_frontend) || (self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none()) {
+        if let Some(destination) = tlb::take_return(self.tui_frontend) {
+            if let Some(lease) = destination.0 && matrix_target::matrix_slot_is_live(&lease) {
+                self.select_matrix_slot_name(lease.name());
+            } else { self.select_matrix_slot_index(0); }
+        } else if tui::take_native_return(self.tui_frontend) || (self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none()) {
             self.select_matrix_slot_index(0);
         }
     }
@@ -1280,14 +1294,21 @@ impl Shell3 {
             for line in service::environment_lines(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
             }
-        } else if self.mode == Mode::ADM && matches!(text.as_str(), "cry" | "disc" | "ram" | "smp" | "net") {
+        } else if self.mode == Mode::ADM && matches!(text.as_str(), "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb") {
             let frontend = self.tui_frontend();
             let result = match text.as_str() {
                 "cry" => cry::start(frontend),
                 "disc" => disc::start(frontend),
                 "ram" => ram::start(frontend),
                 "smp" => smp::start(frontend),
-                _ => system_net::start(frontend),
+                "net" => system_net::start(frontend),
+                "gpu" => gpu::start(frontend),
+                "vcpy" => vcpy::start(frontend),
+                _ => {
+                    let origin = output::DumpTarget(self.active_matrix_slot.clone().zip(self.active_matrix_lifetime)
+                        .map(|(name,lifetime)| MatrixSlotLease::from_identity(name,lifetime)));
+                    tlb::start(frontend,origin)
+                },
             };
             match result {
                 Ok(()) => { self.select_matrix_slot_name(&text); }
