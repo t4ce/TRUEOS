@@ -700,8 +700,11 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
             .enumerate()
             .map(|(row_index, row)| {
                 let default_background = if route.native.is_some() {
-                    if row_index == 0 { super::update::CONTROL_BACKGROUND }
-                    else { super::update::MATRIX_BACKGROUND }
+                    if row_index < 3 { super::update::CONTROL_BACKGROUND }
+                    else if routes.remote_frontends.iter().any(|entry| entry.0 == frontend) {
+                        // ANSI helpers inherit the client terminal’s background.
+                        RgbaColor::BlackTransparent.rgba()
+                    } else { super::update::MATRIX_BACKGROUND }
                 } else { [0, 0, 0, 255] };
                 row.iter()
                     .enumerate()

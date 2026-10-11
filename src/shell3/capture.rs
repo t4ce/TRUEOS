@@ -297,13 +297,17 @@ impl Menu {
         }
     }
     fn layout(&self, rows: usize) -> (usize, usize, usize) {
-        let first = if rows >= 12 { 4 } else { 1 };
+        let first = if rows >= 12 { 4 } else { 2 };
         let visible = rows
-            .saturating_sub(first + 3)
+            .saturating_sub(first + 2)
             .max(1)
             .min(self.labels().len());
         let offset = self.selected.saturating_sub(visible - 1);
         (first, visible, offset)
+    }
+    fn status_row(&self, rows: usize) -> usize {
+        let (first, visible, _) = self.layout(rows);
+        (first + visible + 1).min(rows.saturating_sub(2))
     }
     fn action(&mut self, action: Action, target: &MatrixTarget, rows: usize, now: u64) -> bool {
         let labels = self.labels();
@@ -316,7 +320,7 @@ impl Menu {
                 return true;
             }
             Action::Click(row) => {
-                if row == rows - 1 {
+                if row == 1 {
                     tui::native_return(target);
                     return true;
                 }
@@ -473,7 +477,7 @@ impl Menu {
                 format!("  {} {}", if index == self.selected { "›" } else { " " }, labels[index]);
         }
         // Progress never replaces the last saved filename or failure.
-        let status_row = rows - 3;
+        let status_row = self.status_row(rows);
         let status = if let Some(pictures) = &self.pictures {
             format!(
                 "{} picture(s) remaining; next in {} sec. {}",
@@ -507,18 +511,18 @@ impl Menu {
         } else {
             status
         };
-        lines[rows - 2] = self.result_line(cols);
-        if rows >= 16 {
+        lines[status_row + 1] = self.result_line(cols);
+        if status_row + 3 < rows {
             for (index, recording) in self.video.iter().chain(self.audio.iter()).enumerate() {
                 let status = recording.status.lock();
-                lines[rows - 5 + index] = if status.message.is_empty() {
+                lines[status_row + 2 + index] = if status.message.is_empty() {
                     format!("trueosfs:/{}", recording.path)
                 } else {
                     status.message.clone()
                 };
             }
         }
-        lines[rows - 1] = if cols < 70 {
+        lines[1] = if cols < 70 {
             "↑/↓ j/k  Enter choose  Esc/q Return".into()
         } else {
             FOOTER.into()

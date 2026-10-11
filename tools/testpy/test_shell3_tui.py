@@ -229,6 +229,7 @@ impl Shell3 {
     fn refresh_clock(&mut self){}
     fn get_size(&self)->(usize,usize){self.size}
     fn set(&mut self,cols:usize,rows:usize){self.size=(cols,rows);tui::select(tui::Frontend {id:self.tui_frontend,cols,rows},Some(&self.name));}
+    fn parse_name(&self,name:&str)->bool{name==self.name}
     fn prompt(&self)->&str{&self.prompt}
     fn set_prompt(&mut self,text:&str){self.prompt=text.into();}
     fn set_cursor(&mut self,_:usize){}
@@ -356,7 +357,8 @@ impl Shell3 {
     assert!(!tui::native_pending_frame(f.id,Some("native-palette")));
     let rows=tui::snapshot(f.id,Some("native-palette")).unwrap();
     for cell in &rows[0] {assert_eq!(cell.1.unwrap().background(),Some(update::CONTROL_BACKGROUND));assert_eq!(cell.1.unwrap().rgba(),RgbaColor::White.rgba());}
-    for index in [1,2,4] {for cell in &rows[index] {assert_eq!(cell.1.unwrap().background(),Some(update::MATRIX_BACKGROUND));}}
+    for index in [1,2] {for cell in &rows[index] {assert_eq!(cell.1.unwrap().background(),Some(update::CONTROL_BACKGROUND));}}
+    for cell in &rows[4] {assert_eq!(cell.1.unwrap().background(),Some(update::MATRIX_BACKGROUND));}
     assert_eq!(rows[3][0].1.unwrap().rgba(),[0,0,0,255]);assert_eq!(rows[3][0].1.unwrap().background(),Some([229,229,229,255]));
     assert_eq!(rows[3][2].1.unwrap().background(),Some(update::MATRIX_BACKGROUND));
     let title=[MetaFmtStr::new("TrueOS")];let shell=update::Snapshot::new((12,5),0,[(&title,&[]),(&[],&[]),(&[],&[])],12).with_matrix(&[],0).rendered_lines();
@@ -380,7 +382,14 @@ impl Shell3 {
     tui::attach_native(f,&t).unwrap();assert_eq!(tui::native_transport_scope(&t),Some(1));
     tui::native_write(&t,"\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[2JCRY  account & keys\x1b[23;1HAuthenticator code: ••••••".as_bytes());
     tty.reconcile_matrix_selection();let out=String::from_utf8_lossy(&tty.output);
-    assert!(out.contains("CRY"));assert!(out.contains("••••••"));assert!(out.contains("?1000h"));assert!(out.contains("48;2;16;16;16m"));assert!(out.contains("48;2;24;24;24m"));
+    assert!(out.contains("CRY"));assert!(out.contains("••••••"));assert!(out.contains("?1000h"));assert!(out.contains("48;2;16;16;16m"));assert!(!out.contains("48;2;24;24;24m"));
+    let mut screen=trueos_terminal::Terminal::new(70,25);screen.feed(&tty.output);
+    for row in 0..3 {for cell in &screen.cells()[row*70..(row+1)*70] {
+        assert_eq!(cell.style.background,trueos_terminal::TerminalColor::Rgb {red:16,green:16,blue:16});
+    }}
+    for cell in &screen.cells()[3*70..] {
+        assert_eq!(cell.style.background,trueos_terminal::TerminalColor::Default);
+    }
     assert!(tui::snapshot(f.id,Some("native-admin-ssh")).is_some());
     tty.input(b"123456\r");assert_eq!(tui::native_read(&t).unwrap().0,b"123456\r");
     tui::native_return(&t);tty.output.clear();tty.reconcile_matrix_selection();

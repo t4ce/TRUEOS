@@ -88,15 +88,25 @@ TESTS = r'''
         assert!(menu.action(Action::Quit,&target,25,0));assert!(crate::RETURNED.load(Ordering::SeqCst));assert!(!recording.stopped());
         for rows in [5,8,12,25]{for cols in [20,70,100]{assert!(menu.frame(cols,rows,0).iter().any(|line|line.contains("VID")));}}
         menu.choose(&target,0);assert!(menu.video.as_ref().unwrap().stopped());
+        for kind in [Kind::Pic,Kind::Vid,Kind::Aud,Kind::Vaud] {
+            let menu=Menu::new(kind);let lines=menu.frame(100,25,0);
+            assert_eq!(lines[1],FOOTER);
+            assert!(lines[menu.status_row(25)+2..].iter().all(String::is_empty));
+            let small=menu.frame(20,5,0);assert!(small[1].contains("Enter"));
+            assert!(small[2].contains("›"));
+        }
+        let mut menu=Menu::new(Kind::Pic);
+        assert!(!menu.action(Action::Click(24),&target,25,0));
+        assert!(menu.action(Action::Click(1),&target,25,0));
     }
     #[test] fn finite_capture_work_spins_until_the_async_result_even_when_parked(){
         setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Pic);
-        menu.notice("Saved: previous.png");menu.sync_work(&target);assert!(menu.work.is_none());assert!(menu.frame(100,25,0)[22].is_empty());
+        menu.notice("Saved: previous.png");menu.sync_work(&target);assert!(menu.work.is_none());assert!(menu.frame(100,25,0)[menu.status_row(25)].is_empty());
         menu.choose(&target,0);menu.sync_work(&target);assert!(menu.work.is_some());
-        assert!(menu.frame(100,25,0)[22].starts_with('⣿'));assert!(menu.frame(100,25,100_000_000)[22].starts_with('⣾'));assert!(menu.frame(100,25,900_000_000)[22].starts_with('⣿'));assert_eq!(menu.frame(100,25,100_000_000)[23],"Saved: previous.png");
+        assert!(menu.frame(100,25,0)[menu.status_row(25)].starts_with('⣿'));assert!(menu.frame(100,25,100_000_000)[menu.status_row(25)].starts_with('⣾'));assert!(menu.frame(100,25,900_000_000)[menu.status_row(25)].starts_with('⣿'));assert_eq!(menu.frame(100,25,100_000_000)[menu.status_row(25)+1],"Saved: previous.png");
         menu.pictures(&target,0);menu.sync_work(&target);assert!(!menu.busy());assert!(menu.working());assert!(menu.work.is_some());
         menu.action(Action::Quit,&target,25,0);menu.sync_work(&target);assert!(menu.work.is_some());
-        menu.notice("Saved: new.png");menu.sync_work(&target);assert!(menu.work.is_none());assert!(menu.frame(100,25,0)[22].is_empty());
+        menu.notice("Saved: new.png");menu.sync_work(&target);assert!(menu.work.is_none());assert!(menu.frame(100,25,0)[menu.status_row(25)].is_empty());
         menu.selected=1;menu.choose(&target,1_000_000_000);menu.sync_work(&target);assert!(menu.work.is_some());
         menu.choose(&target,1_000_000_000);menu.sync_work(&target);assert!(menu.work.is_none());
         menu.choose(&target,2_000_000_000);menu.sync_work(&target);crate::S.lock().no_root=true;menu.pictures(&target,2_000_000_000);menu.sync_work(&target);assert!(menu.work.is_none());assert!(menu.result.starts_with("Error:"));
@@ -106,11 +116,11 @@ TESTS = r'''
         setup();let target=crate::shell2::MatrixTarget(1);let mut menu=Menu::new(Kind::Pic);
         crate::ui4::report_shot_result(Some(&target),Ok("screenshots/last-capture.png"));
         let notice=crate::NOTICES.lock().pop().unwrap();menu.notice(&notice);
-        assert_eq!(menu.frame(100,25,0)[23],"Saved: last-capture.png");assert!(menu.message.is_empty());
-        menu.selected=1;menu.choose(&target,0);assert!(menu.frame(100,25,0)[22].contains("10 sec"));assert_eq!(menu.frame(100,25,0)[23],notice);
+        assert_eq!(menu.frame(100,25,0)[menu.status_row(25)+1],"Saved: last-capture.png");assert!(menu.message.is_empty());
+        menu.selected=1;menu.choose(&target,0);assert!(menu.frame(100,25,0)[menu.status_row(25)].contains("10 sec"));assert_eq!(menu.frame(100,25,0)[menu.status_row(25)+1],notice);
         menu.action(Action::Quit,&target,25,0);assert_eq!(menu.result,notice);
         crate::ui4::report_shot_result(Some(&target),Err("No space for screenshot."));menu.notice(&crate::NOTICES.lock().pop().unwrap());
-        assert_eq!(menu.result,"Error: No space for screenshot.");assert!(menu.frame(100,5,0)[3].starts_with("Error:"));
+        assert_eq!(menu.result,"Error: No space for screenshot.");assert!(menu.frame(100,5,0)[menu.status_row(5)+1].starts_with("Error:"));
         menu.problem("bad\nwrite\tresult");assert_eq!(menu.result,"Error: bad write result");assert_eq!(menu.result_line(12),"Error: bad …");
     }
     #[test] fn recording_results_keep_only_the_saved_filename_or_failure(){
@@ -121,7 +131,7 @@ TESTS = r'''
             assert_eq!(menu.result,saved_result(&recording.path));assert!(menu.message.is_empty());assert!(!menu.busy());
             let saved=menu.result.clone();menu.choose(&target,1_000_000_000);assert_eq!(menu.result,saved);
             menu.video.as_ref().or(menu.audio.as_ref()).unwrap().finish("rec: final recording write failed; retained 9 chunks at /long/path",false);menu.recordings(&target);
-            assert_eq!(menu.result,"Error: final recording write failed");assert_eq!(menu.frame(100,25,0)[23],menu.result);
+            assert_eq!(menu.result,"Error: final recording write failed");assert_eq!(menu.frame(100,25,0)[menu.status_row(25)+1],menu.result);
         }
         let mut menu=Menu::new(Kind::Pic);menu.notice("Saved: wd-postblend-xyuv709-123456789-123456789012-wd000001-capture000001.png");
         assert_eq!(menu.result_line(30).chars().count(),30);assert!(menu.result_line(30).ends_with(".png"));assert!(menu.result_line(30).starts_with("Saved:"));
