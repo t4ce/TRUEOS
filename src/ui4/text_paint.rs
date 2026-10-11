@@ -4,7 +4,7 @@ use crate::intel::{GucBcs0MonoGlyph, GucBcs0RgbaFill, GucBcs0RgbaSurface};
 use alloc::vec::Vec;
 use trueos_time::{Duration, Timer};
 
-pub(crate) enum PaintRun {
+enum PaintRun {
     Mono(Vec<GucBcs0MonoGlyph>),
     Fill(Vec<GucBcs0RgbaFill>),
 }

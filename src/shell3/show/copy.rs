@@ -100,12 +100,13 @@ pub(super) async fn present(
     }
     let paint_started = crate::ui4::text_blit::stamp();
     // The frame lease is exclusively writable; clears above have retired.
+    let glyph_count = glyphs.len();
     let terminal_paint = area.is_none() && reveals.is_empty();
     let cpu_paint;
     if terminal_paint {
         // ANSI cells have no Matrix/strip raster. Plan only this full-screen
         // path; normal Shell3 keeps its existing pan and reveal caches.
-        let plan = crate::ui4::text_paint::PaintPlan::new(glyphs.clone());
+        let plan = crate::ui4::text_paint::PaintPlan::new(core::mem::take(&mut glyphs));
         let stats = match plan.paint(bcs_surface(view), poisoned).await {
             Ok(stats) => stats,
             Err(error) => {
@@ -116,7 +117,7 @@ pub(super) async fn present(
         cpu_paint = stats.gpu_pixels == 0;
         if crate::allcaps::text_blit::DIAGNOSTICS {
             crate::log_info!(target:"apps";"text-paint: cells={} cpu_pixels={} gpu_pixels={} mono_batches={} fill_batches={} wall_ns={}\n",
-                glyphs.len(), stats.cpu_pixels, stats.gpu_pixels, stats.mono_batches, stats.fill_batches,
+                glyph_count, stats.cpu_pixels, stats.gpu_pixels, stats.mono_batches, stats.fill_batches,
                 crate::ui4::text_blit::nanos(crate::ui4::text_blit::stamp().wrapping_sub(paint_started)));
         }
     } else {
@@ -199,7 +200,7 @@ pub(super) async fn present(
     if crate::allcaps::text_blit::DIAGNOSTICS {
         let ns = crate::ui4::text_blit::nanos(crate::ui4::text_blit::stamp().wrapping_sub(present_started));
         crate::log_info!(target:"apps";"shell3/present: ap={} glyphs={} cpu_glyphs={} using_pan={} wall_ns={}\n",
-            crate::percpu::current_slot(),glyphs.len(),if cpu_paint {glyphs.len()} else {0},using_pan,ns);
+            crate::percpu::current_slot(),glyph_count,if cpu_paint {glyph_count} else {0},using_pan,ns);
     }
     let segments = if updates.is_empty() {
         fallback_segments
