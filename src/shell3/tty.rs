@@ -40,7 +40,6 @@ impl Terminal {
         shell.command_history.set_recording(false);
         let mut history = CommandHistory::default();
         history.set_scope(super::matrix_target::TRANSPORT_NET_TCP_SCOPE);
-        shell.set_mode(3);
         let mut terminal = Self {
             shell,
             line: String::new(),

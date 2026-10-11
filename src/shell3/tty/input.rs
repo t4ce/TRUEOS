@@ -62,6 +62,13 @@ impl Terminal {
                 ..Default::default()
             });
         if latched {
+            if key == Some(KEYBOARD_KEY_TAB) {
+                let end = completed.char_indices()
+                    .map(|(index, ch)| index + ch.len_utf8())
+                    .find(|&end| self.shell.parse_name(&completed[..end]));
+                if let Some(end) = end { completed.truncate(end); }
+                else { completed.zeroize(); }
+            }
             self.remember(&completed);
         }
         self.line.zeroize();

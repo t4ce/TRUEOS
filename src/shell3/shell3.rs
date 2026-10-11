@@ -665,7 +665,7 @@ impl Shell3 {
         let columns = columns.max(MIN_COLUMNS);
         let rows_count = rows.max(MIN_ROWS);
         let mut rows_state = SpecialRowsState::new(&time, &prompt_left);
-        rows_state.title.right = mode_title_meta(Mode::HV, &aka_names, &appdb_names);
+        rows_state.title.right = mode_title_meta(Mode::CMD, &aka_names, &appdb_names);
         rows_state.status.right = status::alias_runs(&aka_names);
 
         let status_left = {
@@ -700,7 +700,7 @@ impl Shell3 {
             layout_generation: 0,
             time,
             clock: crate::chronos::signals::subscribe(crate::chronos::signals::Every::MINUTE),
-            mode: Mode::HV,
+            mode: Mode::CMD,
             active_matrix_slot: None,
             active_matrix_lifetime: None,
             matrix_selection_dirty: false,
@@ -1084,7 +1084,11 @@ impl Shell3 {
                     }
                     return (self.submit_operator_prompt(), false);
                 }
-                KEYBOARD_KEY_TAB => return (self.set_mode(self.get_mode() % 3 + 1), false),
+                KEYBOARD_KEY_TAB => {
+                    let changed = self.set_mode(self.get_mode() % 3 + 1);
+                    let latched = changed && self.latch_prompt_prefix();
+                    return (changed, latched);
+                }
                 KEYBOARD_KEY_BACKSPACE => {
                     self.command_history.end_recall();
                     if self.prompt.cursor == 0 {
@@ -1212,6 +1216,22 @@ impl Shell3 {
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
         service::notify_work();
+    }
+
+    /// A mode switch can make an existing prefix executable. Consume only
+    /// the first recognized name; trailing input never reaches echo or history.
+    fn latch_prompt_prefix(&mut self) -> bool {
+        self.sync_aka_names();
+        if self.prompt().starts_with(OPERATOR) { return false; }
+        let matched_end = self.prompt().char_indices()
+            .map(|(index, ch)| index + ch.len_utf8())
+            .find(|&end| self.parse_name(&self.prompt()[..end]));
+        let Some(end) = matched_end else { return false; };
+        let name = self.prompt()[..end].to_string();
+        self.set_prompt(&name);
+        let latched = self.echo_recognized_prompt();
+        self.refresh_prompt_strip();
+        latched
     }
 
     fn echo_recognized_prompt(&mut self) -> bool {

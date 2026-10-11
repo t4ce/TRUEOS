@@ -84,7 +84,7 @@ impl Shell3 {
     fn get_size(&self)->(usize,usize) {self.size}
     fn set(&mut self,cols:usize,rows:usize) {self.size=(cols,rows);}
     fn new_terminal() -> Result<Self, ()> {
-        Ok(Self { command_history:Default::default(), tui_frontend:1, history:Vec::new(), matrix_scroll:0, notices:Vec::new(), pointer:Vec::new(), size:(100,25), vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
+        Ok(Self { command_history:Default::default(), tui_frontend:1, history:Vec::new(), matrix_scroll:0, notices:Vec::new(), pointer:Vec::new(), size:(100,25), vmx:false, mode: 2, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
     fn active_matrix_slot_name(&self) -> Option<String> { Some("sh1".into()) }
@@ -93,6 +93,7 @@ impl Shell3 {
     fn get_strip(&self, _: SpecialRows, _: StripSide) -> String { "TrueOS § 12:34".into() }
     fn mode(&self) -> Mode { match self.mode { 1 => Mode::HV, 2 => Mode::CMD, _ => Mode::ADM } }
     fn get_mode(&self) -> u8 { self.mode }
+    fn parse_name(&self,name:&str)->bool {matches!(name,"app"|"help"|"env")}
     fn set_mode(&mut self, mode: u8) { self.mode = mode; }
     fn set_prompt(&mut self, text: &str) { self.prompt = text.into(); }
     fn set_cursor(&mut self, cursor: usize) { self.cursor = cursor; }
@@ -179,7 +180,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         assert_eq!(&*tty.shell.parsed.borrow(), &["abc"]);
         let output=String::from_utf8_lossy(&tty.output);assert!(output.contains("\\x1b[3;1H")&&output.contains("   "));
     }
-    #[test] fn ssh_wire_pixels_match_shared_palette_after_scroll_clear_and_resize() {
+    #[test] fn ssh_controls_keep_palette_and_matrix_uses_default_after_scroll_clear_and_resize() {
         fn check(tty:&Terminal, screen:&trueos_terminal::Terminal) {
             let rows=tty.shell.capture_matrix_snapshot().rendered_lines();
             let (columns,height)=tty.shell.get_size();
@@ -188,7 +189,10 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
                 let actual=&screen.cells()[y*columns+x];let color=style.unwrap();
                 let [red,green,blue,alpha]=if color.blink() {crate::update::CONTROL_BACKGROUND} else {color.background().unwrap()};
                 assert_eq!(alpha,255);assert_eq!(actual.glyph,*glyph,"cell {x},{y}");
-                assert_eq!(actual.style.background,trueos_terminal::TerminalColor::Rgb {red,green,blue},"cell {x},{y}");
+                let expected_background=if y>=3 && [red,green,blue,alpha]==crate::update::MATRIX_BACKGROUND {
+                    trueos_terminal::TerminalColor::Default
+                } else {trueos_terminal::TerminalColor::Rgb {red,green,blue}};
+                assert_eq!(actual.style.background,expected_background,"cell {x},{y}");
                 if *glyph!=' ' {let [red,green,blue,_]=color.rgba();assert_eq!(actual.style.foreground,trueos_terminal::TerminalColor::Rgb {red,green,blue});}
                 assert_eq!(actual.style.underline,color.underline());
             }}
@@ -273,13 +277,13 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
         tty.output.clear();tty.input(b"\\x15exit\\r");assert!(tty.closing);
         assert!(String::from_utf8_lossy(&tty.output).contains("\\x1b[0 q"));
     }
-    #[test] fn adapter_starts_in_adm_and_enter_reuses_the_existing_prompt() {
-        let mut tty=terminal();assert_eq!(tty.shell.get_mode(),3);
+    #[test] fn adapter_starts_in_appdb_and_enter_reuses_the_existing_prompt() {
+        let mut tty=terminal();assert_eq!(tty.shell.get_mode(),2);
         // A canonical nc client sends this after locally echoing '.' and Enter.
         tty.input(b".\\r");tty.input(b"\\n");
         assert_eq!(tty.output,b"\\x1b8.\\x1b8\\x1b[K\\x1b8\\x1b[K");
         assert!(tty.line.is_empty());assert!(tty.shell.prompt.is_empty());
-        tty.output.clear();tty.input(b"tab\\n");assert_eq!(tty.shell.get_mode(),1);
+        tty.output.clear();tty.input(b"tab\\n");assert_eq!(tty.shell.get_mode(),3);
         assert!(!String::from_utf8_lossy(&tty.output).contains("§sh1"));
     }
     #[test] fn metadata_emits_foreground_background_underline_and_resets() {
@@ -298,7 +302,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
     }
     #[test] fn connection_banner_contains_only_title_and_slot_prompt() {
         let tty=Terminal::new(Shell3::new_terminal().unwrap());
-        assert_eq!(tty.output, "\\x1b[?1007s\\x1b[?1007l\\x1b[?1049h\\x1b[0m\\x1b[48;2;24;24;24m\\x1b[2J\\x1b[H\\x1b[0mTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m \\x1b7".as_bytes());
+        assert_eq!(tty.output, "\\x1b[?1007s\\x1b[?1007l\\x1b[?1049h\\x1b[0m\\x1b[2J\\x1b[HTrueOS § 12:34\\r\\n\\x1b[0m\\x1b[38;2;255;105;180m§sh1\\x1b[0m \\x1b7".as_bytes());
     }
     #[test] fn clear_screen_returns_to_active_slot_prompt() {
         let mut tty=terminal();
@@ -345,7 +349,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
     #[test] fn independent_modes_and_prompts() {
         let mut first = terminal(); let mut second = terminal();
         first.input(b"\\tfirst"); second.input(b"second");
-        assert_eq!(first.shell.get_mode(), 1); assert_eq!(second.shell.get_mode(), 3);
+        assert_eq!(first.shell.get_mode(), 3); assert_eq!(second.shell.get_mode(), 2);
         assert_eq!(first.shell.prompt, "first"); assert_eq!(second.shell.prompt, "second");
         first.input(b"\\x03"); assert_eq!(first.shell.prompt, "");
         assert_eq!(second.shell.prompt, "second");

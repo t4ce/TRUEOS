@@ -25,8 +25,7 @@ impl AnsiView {
 
 impl Terminal {
     pub(super) fn clear_screen(&mut self) {
-        let [r, g, b, _] = update::MATRIX_BACKGROUND;
-        self.write(format!("\x1b[0m\x1b[48;2;{r};{g};{b}m\x1b[2J\x1b[H\x1b[0m").as_bytes());
+        self.write(b"\x1b[0m\x1b[2J\x1b[H");
     }
 
     fn apply_mouse_options(&mut self, options: MouseOptions) {
@@ -63,7 +62,9 @@ impl Terminal {
         if let Some(color) = run.color {
             let [r, g, b, _] = color.rgba();
             self.write(format!("\x1b[38;2;{r};{g};{b}m").as_bytes());
-            if let Some([r, g, b, _]) = color.background() {
+            if let Some([r, g, b, _]) = color.background()
+                .filter(|bg| *bg != RgbaColor::BlackTransparent.rgba())
+            {
                 self.write(format!("\x1b[48;2;{r};{g};{b}m").as_bytes());
             }
         }
@@ -132,6 +133,29 @@ impl Terminal {
         }
         let mut current =
             app.unwrap_or_else(|| self.shell.capture_matrix_snapshot().rendered_lines());
+        // Pixel renderers need a concrete base color. ANSI matrix cells use
+        // the client terminal’s default instead; retain explicit highlights.
+        if !active {
+            for line in current.iter_mut().skip(3) {
+                for (_, style) in line {
+                    if let Some(color) = *style
+                        && color.background() == Some(update::MATRIX_BACKGROUND)
+                    {
+                        *style = Some(if color.blink() {
+                            RgbaColor::Blinking {
+                                foreground: color.rgba(), background: None, underline: color.underline(),
+                            }
+                        } else {
+                            RgbaColor::Terminal {
+                                foreground: color.rgba(),
+                                background: RgbaColor::BlackTransparent.rgba(),
+                                underline: color.underline(),
+                            }
+                        });
+                    }
+                }
+            }
+        }
         let previous = self.view.lines.as_ref().unwrap();
         // The native cursor supplies the blinking block; its underlying cell
         // remains a plain blank, carrying no printable cursor glyph.

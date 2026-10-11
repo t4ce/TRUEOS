@@ -50,19 +50,37 @@ fn echo(_:Option<&str>,_:Option<u64>,_:String) {}
 '''
     source += extract.item('src/shell3/shell3.rs', 'LatchedNavigation')
     source += '''struct Shell3 {
+input:String, accepted:Vec<String>,
 command_feedback:Option<command_latch::Feedback>,latched_navigation:Option<LatchedNavigation>,
 tui_frontend:u64,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,
 matrix_selection_dirty:bool,matrix_scroll:usize,matrix_column:usize,matrix_drag:Option<()>,
 }
 impl Shell3 {
 fn tui_frontend(&self)->Frontend {Frontend}
-fn new()->Self {Self {command_feedback:Some(command_latch::Feedback::new("termdir",0,false)),latched_navigation:None,tui_frontend:1,active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false,matrix_scroll:0,matrix_column:0,matrix_drag:None}}
+fn sync_aka_names(&mut self) {}
+fn prompt(&self)->&str {&self.input}
+fn set_prompt(&mut self,text:&str) {self.input=text.into();}
+fn parse_name(&self,text:&str)->bool {matches!(text,"app"|"apple"|"äβ")}
+fn echo_recognized_prompt(&mut self)->bool {self.accepted.push(core::mem::take(&mut self.input));true}
+fn refresh_prompt_strip(&mut self) {}
+
+fn new()->Self {Self {input:String::new(),accepted:vec![],command_feedback:Some(command_latch::Feedback::new("termdir",0,false)),latched_navigation:None,tui_frontend:1,active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false,matrix_scroll:0,matrix_column:0,matrix_drag:None}}
 '''
-    for name in ('select_matrix_slot_index', 'select_matrix_slot_name', 'active_matrix_slot_name', 'finish_command_latch', 'select_queued_app'):
+    for name in ('latch_prompt_prefix', 'select_matrix_slot_index', 'select_matrix_slot_name', 'active_matrix_slot_name', 'finish_command_latch', 'select_queued_app'):
         source += re.search(rf'^    (?:pub(?:\([^)]*\))? )?fn {name}\(.*?^    }}', shell, re.M | re.S).group()
-    source += '}'
+    source += "}\nconst OPERATOR:char='§';"
     source += r'''
 fn text(feedback:&command_latch::Feedback,now:u64)->String {feedback.runs(20,now).iter().map(|run|run.text.as_str()).collect()}
+#[test] fn mode_switch_latches_first_prefix_and_drops_tail() {
+    for (input,expected) in [("apple tail","app"),("äβdiscard","äβ")] {
+        let mut shell=Shell3::new();shell.input=input.into();
+        assert!(shell.latch_prompt_prefix());assert_eq!(shell.accepted,vec![expected]);assert!(shell.input.is_empty());
+    }
+    for input in ["unknown","§app","ap"] {
+        let mut shell=Shell3::new();shell.input=input.into();
+        assert!(!shell.latch_prompt_prefix());assert_eq!(shell.input,input);assert!(shell.accepted.is_empty());
+    }
+}
 #[test] fn word_is_centered_then_dissolves_in_both_tab_directions() {
     let left=command_latch::Feedback::new("termdir",0,false);
     let right=command_latch::Feedback::new("termdir",0,true);
