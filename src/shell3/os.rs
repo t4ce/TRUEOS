@@ -10,7 +10,7 @@ pub(super) fn arguments() -> Vec<String> {
     args
 }
 
-pub(super) fn matrix_target_interrupted(target: &MatrixTarget) -> bool {
+pub(crate) fn matrix_target_interrupted(target: &MatrixTarget) -> bool {
     !super::matrix_target::matrix_slot_is_live(&super::matrix_target_slot_lease(target))
 }
 
@@ -140,15 +140,15 @@ fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str)
     };
 
     match source {
-        "local" => super::os_install::submit_install_to_target(spawner, target.clone(), disk),
-        "online" => super::os_update::submit_online_install_to_target(spawner, target.clone(), disk),
-        "pxeproc-local" => super::os_install::submit_install_mode_to_target(
+        "local" => crate::disc::install::controller::submit_install_to_target(spawner, target.clone(), disk),
+        "online" => crate::disc::install::controller::submit_online_install_to_target(spawner, target.clone(), disk),
+        "pxeproc-local" => crate::disc::install::controller::submit_install_mode_to_target(
             spawner,
             target.clone(),
             disk,
             crate::disc::install::pxeproc::InstallMode::Pxeproc,
         ),
-        "pxeproc-online" => super::os_update::submit_online_install_mode_to_target(
+        "pxeproc-online" => crate::disc::install::controller::submit_online_install_mode_to_target(
             spawner,
             target.clone(),
             disk,

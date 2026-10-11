@@ -18,24 +18,24 @@ mod efi { pub mod acpi { pub mod facp {
     pub fn enter_named_sleep_state(n: u8) -> Result<(), ()> { assert_eq!(n, 5); crate::event("shutdown"); Ok(()) }
     pub fn reset_system() -> Result<(), ()> { crate::event("reboot"); Ok(()) }
 }}}
-mod disc { pub mod install { pub mod pxeproc {
-    pub enum InstallMode { Pxeproc }
-}}}
+mod disc { pub mod install {
+    pub mod pxeproc { pub enum InstallMode { Pxeproc } }
+    pub mod controller {
+        pub fn submit_online_install_to_target(_: &crate::Spawner, _: (), disk: u32) { assert_eq!(disk, 7); crate::event("online"); }
+        pub fn submit_install_to_target(_: &crate::Spawner, _: (), disk: u32) { assert_eq!(disk, 7); crate::event("local"); }
+        pub fn submit_install_mode_to_target(_: &crate::Spawner, _: (), disk: u32, _: super::pxeproc::InstallMode) { assert_eq!(disk, 7); crate::event("pxeproc-local"); }
+        pub fn submit_online_install_mode_to_target(_: &crate::Spawner, _: (), disk: u32, _: super::pxeproc::InstallMode) { assert_eq!(disk, 7); crate::event("pxeproc-online"); }
+    }
+}}
 mod shell3 {
     pub mod table {
         pub fn parse_disc_id_raw(s: &str) -> Option<u32> { s.parse().ok() }
         pub fn select_top_level_disk(id: u32) -> Option<u32> { (id == 7).then_some(id) }
     }
-    pub mod os_install {
-        pub fn submit_install_to_target(_: &crate::Spawner, _: (), disk: u32) { assert_eq!(disk, 7); crate::event("local"); }
-        pub fn submit_install_mode_to_target(_: &crate::Spawner, _: (), disk: u32, _: crate::disc::install::pxeproc::InstallMode) { assert_eq!(disk, 7); crate::event("pxeproc-local"); }
-    }
     pub mod os_update {
         pub const LAN_ISO_URL: &str = "lan";
         pub fn submit_live_update_to_target(_: &crate::Spawner, _: ()) { crate::event("live"); }
         pub fn submit_live_update_from_url_to_target(_: &crate::Spawner, _: (), url: &str) { assert_eq!(url, LAN_ISO_URL); crate::event("lan"); }
-        pub fn submit_online_install_to_target(_: &crate::Spawner, _: (), disk: u32) { assert_eq!(disk, 7); crate::event("online"); }
-        pub fn submit_online_install_mode_to_target(_: &crate::Spawner, _: (), disk: u32, _: crate::disc::install::pxeproc::InstallMode) { assert_eq!(disk, 7); crate::event("pxeproc-online"); }
     }
     pub mod os {
         use crate::{Spawner, MatrixTarget, print_matrix_target_line};

@@ -1,7 +1,7 @@
 mod helper;
 mod admin;
 mod os;
-mod os_install;
+pub(crate) use os::matrix_target_interrupted;
 mod os_update;
 mod monitor;
 mod table;
