@@ -388,6 +388,8 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
                 tty.input(b"draft");assert_eq!(tty.line,"draft");assert!(tty.history.entries.is_empty());
                 tty.input(&arrow[..split]);tty.input(&arrow[split..]);
                 assert!(tty.line.is_empty());assert!(tty.shell.prompt.is_empty());assert_eq!(tty.shell.cursor,0);
+                tty.input(b"\\x1b[B");assert!(tty.line.is_empty());
+                tty.input(b"\\x1b[A");assert_eq!(tty.line,"draft");assert_eq!(tty.shell.prompt,"draft");assert_eq!(tty.shell.cursor,5);
                 assert!(tty.submitted().is_empty());
             }
         }
@@ -414,7 +416,7 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
                 tty.input(b"\\x1bOB");assert_eq!(tty.line,"second");
                 tty.input(b"\\x1b[B");assert_eq!(tty.line,"draft");
                 tty.input(b"\\x1b[B");assert!(tty.line.is_empty());assert!(tty.shell.prompt.is_empty());
-                tty.input(arrow);tty.input(b"\\r");
+                tty.input(arrow);assert_eq!(tty.line,"draft");tty.input(arrow);tty.input(b"\\r");
                 assert_eq!(tty.submitted(),vec!["first","second","second"]);
                 assert!(tty.line.is_empty());
             }

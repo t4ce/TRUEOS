@@ -78,9 +78,11 @@ fn key(shell:&mut Shell3,key:u16)->bool {use r::keyboard::*;shell.handle_keyboar
     use r::keyboard::*;crypt::SESSION.with(|session|session.set(None));
     let mut shell=Shell3::new();
     for arrow in [KEYBOARD_KEY_ARROW_DOWN,KEYBOARD_KEY_ARROW_UP] {
-        shell.set_prompt("dräft");assert!(key(&mut shell,arrow));
+        shell.command_history.end_recall();shell.set_prompt("dräft");assert!(key(&mut shell,arrow));
         assert!(shell.prompt.text.is_empty());assert_eq!(shell.prompt.cursor,0);
-        assert!(!key(&mut shell,arrow));assert!(shell.executed.is_empty());
+        assert!(!key(&mut shell,KEYBOARD_KEY_ARROW_DOWN));
+        assert!(key(&mut shell,KEYBOARD_KEY_ARROW_UP));assert_eq!(shell.prompt.text,"dräft");assert_eq!(shell.prompt.cursor,5);
+        assert!(shell.executed.is_empty());
     }
 }
 #[test] fn ui4_recalls_without_cry_and_does_not_share_or_record() {
@@ -100,6 +102,7 @@ fn key(shell:&mut Shell3,key:u16)->bool {use r::keyboard::*;shell.handle_keyboar
     key(&mut shell,KEYBOARD_KEY_ARROW_DOWN);assert_eq!(shell.prompt.text,"dräft");assert_eq!(shell.prompt.cursor,5);
     assert!(key(&mut shell,KEYBOARD_KEY_ARROW_DOWN));assert!(shell.prompt.text.is_empty());assert_eq!(shell.prompt.cursor,0);
     assert!(!key(&mut shell,KEYBOARD_KEY_ARROW_DOWN));
+    key(&mut shell,KEYBOARD_KEY_ARROW_UP);assert_eq!(shell.prompt.text,"dräft");
     key(&mut shell,KEYBOARD_KEY_ARROW_UP);assert_eq!(shell.prompt.text,"second");
 }
 #[test] fn enter_runs_recalled_command_and_editing_ends_recall() {

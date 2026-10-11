@@ -111,7 +111,10 @@ impl CommandHistory {
     }
 
     pub fn recall(&mut self, up: bool, input: &str) -> Option<String> {
-        self.sync();
+        let changed = self.sync();
+        if changed && self.entries.is_empty() {
+            return if input.is_empty() { None } else { Some(String::new()) };
+        }
         if up && self.cursor.is_none() && !self.draft.is_empty() {
             return Some(core::mem::take(&mut self.draft));
         }
