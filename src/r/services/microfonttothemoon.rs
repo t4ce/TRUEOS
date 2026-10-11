@@ -13,6 +13,7 @@ struct Stamp {
     height: u32,
     detail: u32,
     glyphs: usize,
+    recipe: &'static str,
 }
 mod han {
     use super::Stamp;
@@ -24,6 +25,7 @@ mod han {
         height: HEIGHT,
         detail: DETAIL,
         glyphs: 512,
+        recipe: RECIPE,
     };
 }
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, Result<Vec<u8>, &'static str>>;
@@ -38,6 +40,7 @@ pub(crate) async fn microfonttothemoon_task() {
             height: HEIGHT,
             detail: DETAIL,
             glyphs: 514,
+            recipe: RECIPE,
         },
         han::STAMP,
     ] {
@@ -47,7 +50,7 @@ pub(crate) async fn microfonttothemoon_task() {
 
 async fn run_stamp(stamp: Stamp) {
     crate::log_important!(target: "microfonttothemoon";
-        "microfonttothemoon: start glyphs={} scale=4 cell=24x44 tile=80x64 image={}x{} model=membrane route=auto detail={} destination={}\n", stamp.glyphs, stamp.width, stamp.height, stamp.detail, stamp.path);
+        "microfonttothemoon: start glyphs={} scale=4 cell=24x44 tile=80x64 image={}x{} detail={} destination={} recipe={}\n", stamp.glyphs, stamp.width, stamp.height, stamp.detail, stamp.path, stamp.recipe);
     let reply = Arc::new(Reply::new());
     let png = loop {
         // Queue admission may wait; accepted GPU work is never replayed.

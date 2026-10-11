@@ -5,7 +5,9 @@
 //! share references into a stack with other carriers. Until TRUEOS provides
 //! synchronous remote TLB invalidation, retired virtual aliases are never
 //! reused: no remote stale translation can become a later thread's stack.
-//! Physical backing is reclaimed and cleared through HHDM before use.
+//! Physical backing is reclaimed and cleared through HHDM before use. VM
+//! threads use their private heap and publish the guarded alias to that VM;
+//! host-only threads use dedicated PMM backing.
 //! The 512 GiB virtual arena admits 261,123 default 2 MiB stacks per boot
 //! (including both guards); exhausting it rejects further allocation. Empty
 //! page tables are retained, bounded by the arena's 1 GiB of leaf table frames
@@ -45,6 +47,16 @@ impl Stack {
         })
     }
 
+    pub(super) fn new_for_vm(bytes: usize, vm_id: Option<u8>) -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        { let _ = vm_id; Self::new(bytes) }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let len = usable_bytes(bytes)?;
+            Some(Self { backing: backing::Mapping::new_for_vm(len, vm_id)?, len })
+        }
+    }
+
     /// The first call activates the alias on its permanent carrier. Call only
     /// from that carrier's first task poll, never from the submitting CPU.
     pub(super) fn ptr(&self) -> NonNull<u8> {
@@ -71,11 +83,30 @@ mod backing {
         phys: u64,
         len: usize,
         carrier: AtomicUsize,
+        vm_id: Option<u8>,
+        heap_backing: Option<NonNull<u8>>,
     }
 
     impl Mapping {
         pub(super) fn new(len: usize) -> Option<Self> {
-            let arena = crate::phys::reserve_heap_arena(len, PAGE_BYTES)?;
+            Self::new_for_vm(len, None)
+        }
+
+        pub(super) fn new_for_vm(len: usize, vm_id: Option<u8>) -> Option<Self> {
+            // The Hull's EPT already admits its private heap. Host PMM stack
+            // pages are not guest memory and cannot back shared stack pointers.
+            let (phys, virt, heap_backing) = if let Some(vm) = vm_id {
+                let layout = core::alloc::Layout::from_size_align(len, PAGE_BYTES).ok()?;
+                let pointer = NonNull::new(unsafe { crate::allocators::alloc_raw_hv_guest(vm, layout) })?;
+                let Some(physical) = crate::phys::virt_to_phys_checked(pointer.as_ptr()) else {
+                    unsafe { crate::allocators::dealloc_raw(pointer.as_ptr()) };
+                    return None;
+                };
+                (physical, pointer.as_ptr() as usize, Some(pointer))
+            } else {
+                let arena = crate::phys::reserve_heap_arena(len, PAGE_BYTES)?;
+                (arena.phys_start, arena.virt_start, None)
+            };
             let total = (len + 2 * PAGE_BYTES) as u64;
             let reserved = NEXT_VIRTUAL.try_update(Ordering::AcqRel, Ordering::Acquire, |next| {
                 next.checked_add(total).filter(|end| *end <= VIRTUAL_LIMIT)
@@ -83,28 +114,32 @@ mod backing {
             let base = match reserved {
                 Ok(base) => base + PAGE_BYTES as u64,
                 Err(_) => {
-                    assert!(
-                        crate::phys::free_phys_range(arena.phys_start, len),
-                        "failed to release stack backing after virtual arena exhaustion"
-                    );
+                    release_backing(phys, len, heap_backing);
                     return None;
                 }
             };
-            // Dedicated PMM pages, outside the ordinary heap allocator.
             // HHDM initialization does not touch the execution-owned alias.
-            unsafe { core::ptr::write_bytes(arena.virt_start as *mut u8, 0, len) };
-            match unsafe { crate::pci::mmio::map_guarded_stack(base, arena.phys_start, len) } {
-                Ok(ptr) => Some(Self {
+            unsafe { core::ptr::write_bytes(virt as *mut u8, 0, len) };
+            match unsafe { crate::pci::mmio::map_guarded_stack(base, phys, len) } {
+                Ok(ptr) => {
+                    if let Some(vm) = vm_id {
+                        if crate::hv::memory::map_thread_stack(vm, base, phys, len).is_err() {
+                            unsafe { crate::pci::mmio::unmap_guarded_stack(base, phys, len) }
+                                .expect("rejected guest stack host alias rollback");
+                            release_backing(phys, len, heap_backing);
+                            return None;
+                        }
+                    }
+                    Some(Self {
                     ptr,
-                    phys: arena.phys_start,
+                    phys,
                     len,
                     carrier: AtomicUsize::new(NO_CARRIER),
-                }),
+                    vm_id,
+                    heap_backing,
+                }) },
                 Err(_) => {
-                    assert!(
-                        crate::phys::free_phys_range(arena.phys_start, len),
-                        "failed to release rejected stack backing"
-                    );
+                    release_backing(phys, len, heap_backing);
                     None
                 }
             }
@@ -126,6 +161,14 @@ mod backing {
         }
     }
 
+    fn release_backing(phys: u64, len: usize, heap_backing: Option<NonNull<u8>>) {
+        if let Some(pointer) = heap_backing {
+            unsafe { crate::allocators::dealloc_raw(pointer.as_ptr()) };
+        } else {
+            assert!(crate::phys::free_phys_range(phys, len), "failed to release stack backing");
+        }
+    }
+
     impl Drop for Mapping {
         fn drop(&mut self) {
             let carrier = self.carrier.load(Ordering::Acquire);
@@ -139,10 +182,11 @@ mod backing {
                 crate::pci::mmio::unmap_guarded_stack(self.ptr.as_ptr() as u64, self.phys, self.len)
             }
             .expect("failed to retire owned guarded stack");
-            assert!(
-                crate::phys::free_phys_range(self.phys, self.len),
-                "failed to release retired stack backing"
-            );
+            if let Some(vm) = self.vm_id {
+                crate::hv::memory::unmap_thread_stack(vm, self.ptr.as_ptr() as u64, self.phys, self.len)
+                    .expect("retired guest stack alias ownership");
+            }
+            release_backing(self.phys, self.len, self.heap_backing);
         }
     }
 }

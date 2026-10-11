@@ -30,6 +30,9 @@ class CarrierTableTests(unittest.TestCase):
     def test_owned_carrier_table_lifetime(self):
         self.run_fixture("carrier_address_space.rs", "carrier", ROOT / "src/hv/memory/carrier.rs")
 
+    def test_vm_owned_shared_stack_aliases(self):
+        self.run_fixture("guest_thread_stack.rs", "thread_stack", ROOT / "src/hv/memory/thread_stack.rs")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -77,7 +77,7 @@ pub(super) const HV_GROUPS: [NameGroup; 2] = [
 
 const CMD_AKA_NAMES: [NameEntry; 0] = [];
 
-const CMD_MEDIA_NAMES: [NameEntry; 4] = [
+const CMD_CAPTURE_NAMES: [NameEntry; 5] = [
     NameEntry {
         name: "pic",
         color: RgbaColor::White,
@@ -93,6 +93,10 @@ const CMD_MEDIA_NAMES: [NameEntry; 4] = [
     NameEntry {
         name: "vaud",
         color: RgbaColor::White,
+    },
+    NameEntry {
+        name: "cam",
+        color: RgbaColor::White,
     }
 ];
 
@@ -105,7 +109,7 @@ pub(super) const CMD_GROUPS: [NameGroup; 3] = [
     },
     NameGroup {
         name: "Capture",
-        names: &CMD_MEDIA_NAMES,
+        names: &CMD_CAPTURE_NAMES,
     },
     NameGroup {
         name: "AppDB",

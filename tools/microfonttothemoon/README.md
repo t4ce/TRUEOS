@@ -16,7 +16,7 @@ a normal 6×11 cell occupies 24×44 pixels; the map and keyboard keep their
 The catalog records the slot, character, route and mesh statistics.
 The second sheet contains all 512 entries of the vendored GUI Han subset,
 including its punctuation, in ascending Unicode order. It uses the same
-4× dimensions and Draft membrane/triangle renderer as the first sheet.
+4× dimensions and Draft tissue/triangle renderer as the first sheet.
 The generator obtains masks by compiling and running the vendored Rust
 decoder itself, preserving all 66 source bits.
 
@@ -24,11 +24,11 @@ decoder itself, preserving all 66 source bits.
 
 Geometry comes from the HTML studio's pure `buildShape` functions. The
 build tool executes those functions in an isolated JavaScript context with
-`detail=6`, the studio's lowest Draft setting, and its default membrane
-parameters and automatic semantic routing. This changes the generated
-vertices/triangles: general-field sampling spacing is 1/6 source unit;
-round Braille dots use 18 polygon segments. Boxes and blocks retain their
-exact cell geometry. It does not draw diagnostic mesh lines.
+`detail=6`, the studio's lowest Draft setting, and the shared `recipe.json`
+parameters and forced general-field routing. This changes the generated
+vertices/triangles: general-field sampling spacing is 1/6 source unit.
+All source masks, including Braille, use the general-field route. It does
+not draw diagnostic mesh lines.
 
 This stage fixes tessellation at **build time**. The kernel embeds vector
 geometry, uploads it once, and performs the raster pass at boot. No RGBA
@@ -67,3 +67,10 @@ winding normalization. No geometry is rasterized by the build tool.
 On a booted machine, look for the `microfonttothemoon: saved` log. It reports
 the actual disk ID and file path. A successful host build is not evidence
 that the GPU ran or that the disk artifact exists on the rig.
+
+The shared recipe uses Directional tissue, reach 1.76, sigma 0.45, threshold
+0.75, density balance 1.0, tangent stretch 1.75, neutral connection bias,
+and zero diagonal assist/centerline snap. Shortcut pruning remains enabled;
+cross-character links remain disabled. These values affect field geometry;
+box, block and Braille source masks also use the forced general-field route. In Tissue mode,
+stretch is `1 + 1.75 * local_coherence`, not a uniform 1.75× screen scaling.

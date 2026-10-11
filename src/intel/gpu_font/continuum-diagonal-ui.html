@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Continuum — cell-aware geometry</title>
+<title>Continuum — diagonal studio</title>
 <style>
 :root{color-scheme:dark;--bg:#101615;--panel:#19211f;--panel2:#1e2925;--border:#344139;--text:#eef0df;--dim:#a8b3a8;--muted:#7d9184;--accent:#c5ed94;--ink:#dcf3b4;--cyan:#8ad7d0;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden}body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);background:var(--bg);font-size:13px}button,input,select,textarea{font:inherit;color:inherit}button,select{cursor:pointer}button{background:none;border:1px solid var(--border);border-radius:6px;padding:7px 10px;white-space:nowrap}button:hover{background:#2b3830;border-color:#7b9272}button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button.active{background:var(--accent);border-color:var(--accent);color:#1b281a}button:disabled{opacity:.45;cursor:default}input,select,textarea{border:1px solid #425045;background:#131c18;border-radius:6px;min-width:0}select{width:100%;padding:10px 30px 10px 10px;max-width:100%;text-overflow:ellipsis}input[type=text],input[type=search]{width:100%;padding:9px 10px}a{color:var(--cyan)}p{line-height:1.6}h1,h2,h3,p{margin:0}h1{font-size:17px;font-weight:650;letter-spacing:-.6px}h2{font-size:13px;font-weight:600}small{font-size:11px;color:var(--dim)}.mono{font-family:var(--mono)}.muted{color:var(--dim)}.eyebrow{font:10px var(--mono);text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}.app{height:100dvh;display:grid;grid-template-rows:60px minmax(0,1fr) 28px}
@@ -64,8 +64,12 @@ aside{min-height:0;min-width:0;display:flex;flex-direction:column;border-left:1p
 <div id="organicControls">
 
 <div class="labelrow"><strong>Interpretation</strong><small>NOT A RENDER STYLE</small></div>
-<select id="recipe" class="presetselect" aria-label="Geometric interpretation"><option value="membrane">01 · Convolved membrane</option><option value="charge">02 · Charge bath</option><option value="tissue">03 · Directional tissue</option><option value="envelope">04 · Distance envelope</option></select>
+<select id="recipe" class="presetselect" aria-label="Geometric interpretation"><option value="membrane">01 · Convolved membrane</option><option value="charge">02 · Charge bath</option><option value="tissue">03 · Directional tissue</option><option value="diagonal">04 · Diagonal ribbons</option><option value="envelope">05 · Distance envelope</option></select>
 <p class="description" id="recipeDescription"></p>
+<div id="diagonalControls" hidden style="margin:16px 0;padding:14px;border:1px solid var(--accent);border-radius:8px;background:var(--panel2)">
+<div class="labelrow"><strong>Diagonal reconstruction</strong><small>NEW CONTROLS</small></div>
+<div class="knobgrid"><div class="control" id="diagAssistControl" hidden><div class="controlhead"><label for="diagAssist">Diagonal assist</label><output for="diagAssist" id="diagAssistOut"></output></div><input type="range" id="diagAssist" min="0" max="1.4" step="0.01" value="0.95"><p class="hint">How strongly staircase runs are reinterpreted as one slanted ribbon.</p></div><div class="control" id="diagSnapControl" hidden><div class="controlhead"><label for="diagSnap">Centerline snap</label><output for="diagSnap" id="diagSnapOut"></output></div><input type="range" id="diagSnap" min="0" max="1" step="0.01" value="0.72"><p class="hint">Pull diagonal runs toward a cleaner fitted centerline to suppress jiggle.</p></div></div>
+</div>
 <div class="biascard"><div class="controlhead"><label for="bias">Connection bias</label><output id="biasOut">Neutral</output></div><input type="range" id="bias" min="-1" max="1" step="0.01" value="0" aria-label="Horizontal versus vertical connection bias"><div class="biasends"><span>— Horizontal</span><button id="zeroBias">Neutral</button><span>Vertical │</span></div><label class="check"><input type="checkbox" id="smartBias" checked>Protect established continuations</label><p class="hintp">Attenuate the competing direction before the body forms. Other links must support a stroke; it cannot vote for itself.</p><p id="biasSummary" class="hintp"></p></div>
 
 <div class="knobgrid">
@@ -74,6 +78,8 @@ aside{min-height:0;min-width:0;display:flex;flex-direction:column;border-left:1p
 <div class="control"><div class="controlhead"><label for="level">Body threshold</label><output for="level" id="levelOut"></output></div><input type="range" id="level" min="0.10" max="0.85" step="0.01" value="0.48"><p class="hint">Lower grows and joins; higher carves and separates.</p></div>
 <div class="control" id="balanceControl"><div class="controlhead"><label for="balance">Density balance</label><output for="balance" id="balanceOut"></output></div><input type="range" id="balance" min="0" max="1" step="0.02" value="0.82"><p class="hint">Reduce bulges from crowded sites and busy junctions.</p></div>
 <div class="control" id="stretchControl" hidden><div class="controlhead"><label for="stretch">Tangent stretch</label><output for="stretch" id="stretchOut"></output></div><input type="range" id="stretch" min="0" max="2.5" step="0.05" value="1.4"><p class="hint">Let local alignment elongate each site's influence.</p></div>
+
+
 </div>
 <details id="advanced"><summary>Meshing & construction</summary><div class="qualityrow"><label for="detail">Tessellation detail</label><select id="detail"><option value="6">Draft · 6 / cell</option><option value="12" selected>Fine · 12 / cell</option><option value="24">High · 24 / cell</option><option value="40">Ultra · 40 / cell</option></select></div><label class="check" id="pruneRow"><input type="checkbox" id="prune" checked>Suppress redundant shortcut links</label><label class="check"><input type="checkbox" id="cross">Allow links between text characters</label><label class="check"><input type="checkbox" id="overlay">Show control sites over the body</label><p>Kernel support ends at 3.5σ. This is a finite-range shape field, not an electron simulation. Links obey their own reach limit. Detail changes geometry, not a texture.</p></details>
 </div><!-- organicControls -->
@@ -108,6 +114,60 @@ function buildOrganic(input) {
   const incident=Array.from({length:n},()=>[]), nearest=new Float64Array(n).fill(Infinity);
   const bias=clamp(S.bias||0,-1,1), strength=Math.abs(bias), protection=S.smartBias===false?0:.90;
   const dist2=(a,b)=>(a.x-b.x)**2+(a.y-b.y)**2;
+  function detectDiagonalRuns() {
+    const map=new Map(), eps=v=>Math.round((v-.5)*1000)/1000;
+    for(let i=0;i<n;i++) map.set(eps(P[i].x)+','+eps(P[i].y)+','+P[i].group,i);
+    const membership=new Float32Array(n), runs=[];
+    for(const slope of [1,-1]) {
+      const adj=Array.from({length:n},()=>[]);
+      for(let i=0;i<n;i++) {
+        const x=eps(P[i].x), y=eps(P[i].y), g=P[i].group;
+        const j=map.get((x+1)+','+(y+slope)+','+g);
+        if(j!=null) { adj[i].push(j); adj[j].push(i); }
+      }
+      const seen=new Set();
+      function edgeKey(a,b){return a<b?a+'_'+b:b+'_'+a;}
+      function walk(start,next){
+        const seq=[start]; let prev=-1, cur=start;
+        while(true){
+          seq.push(next); seen.add(edgeKey(cur,next));
+          prev=cur; cur=next;
+          const opts=adj[cur].filter(v=>v!==prev && !seen.has(edgeKey(cur,v)));
+          if(opts.length!==1) break;
+          next=opts[0];
+        }
+        return seq;
+      }
+      for(let i=0;i<n;i++) if(adj[i].length===1) {
+        const j=adj[i][0], key=edgeKey(i,j); if(seen.has(key)) continue;
+        const seq=walk(i,j); if(seq.length>=3) runs.push(makeRun(seq,slope,membership));
+      }
+      for(let i=0;i<n;i++) for(const j of adj[i]) {
+        const key=edgeKey(i,j); if(seen.has(key)) continue;
+        const seq=walk(i,j); if(seq.length>=3) runs.push(makeRun(seq,slope,membership));
+      }
+    }
+    return {runs:runs.filter(Boolean), membership};
+  }
+  function makeRun(seq,slope,membership){
+    if(seq.length<3) return null;
+    let ux=1/Math.SQRT2, uy=slope/Math.SQRT2;
+    const first=P[seq[0]], last=P[seq[seq.length-1]];
+    if((last.x-first.x)*ux+(last.y-first.y)*uy<0){ux=-ux;uy=-uy;}
+    const vx=-uy, vy=ux;
+    let tmin=Infinity,tmax=-Infinity, usum=0;
+    for(const idx of seq){
+      const p=P[idx], t=p.x*ux+p.y*uy, u=p.x*vx+p.y*vy;
+      tmin=Math.min(tmin,t); tmax=Math.max(tmax,t); usum+=u; membership[idx]=Math.max(membership[idx],1);
+    }
+    const u0=usum/seq.length;
+    const ext=.45 + 0.30*(S.diagSnap||0);
+    const ax=(tmin-ext)*ux + u0*vx, ay=(tmin-ext)*uy + u0*vy;
+    const bx=(tmax+ext)*ux + u0*vx, by=(tmax+ext)*uy + u0*vy;
+    const d=Math.hypot(bx-ax,by-ay);
+    if(d<1.2) return null;
+    return {ax,ay,bx,by,ux,uy,d,seq};
+  }
   // Radius graph with an optional CLOSED diameter-disc exclusion test.
   // Closed-disc ties deliberately suppress redundant diagonals on square lattices.
   for(let a=0;a<n;a++) for(let b=a+1;b<n;b++) {
@@ -159,6 +219,32 @@ function buildOrganic(input) {
     }
     // Endpoint caps and isolated sites, continuously reduced as links take over.
     for(let i=0;i<n;i++) kernel(P[i].x,P[i].y,Math.max(0,1-degree[i]*.5),1,0,1,1,scaleAt[i].sx,scaleAt[i].sy);
+  } else if(S.model==='diagonal') {
+    const diag=detectDiagonalRuns(), assist=S.diagAssist||0, snap=S.diagSnap||0;
+    for(const e of edges) {
+      const a=P[e.a],b=P[e.b], steps=Math.max(2,Math.ceil(e.d/Math.min(.18,sigma*.45)));
+      const diagness=Math.max(0,1-Math.abs(Math.abs(e.ux)-Math.abs(e.uy)));
+      const m=e.w*e.d/(steps*Math.sqrt(2*Math.PI)*sigma) * (1 + .18*diagness*assist);
+      const stretch=1 + S.stretch*(.18 + .95*diagness*assist);
+      for(let i=0;i<steps;i++){
+        const t=(i+.5)/steps;
+        kernel(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,m,e.ux,e.uy,stretch,e.gain);
+      }
+    }
+    for(const run of diag.runs){
+      const dx=run.bx-run.ax, dy=run.by-run.ay;
+      const steps=Math.max(3,Math.ceil(run.d/Math.min(.16,sigma*.42)));
+      const m=(.75+1.25*assist)*run.d/(steps*Math.sqrt(2*Math.PI)*sigma);
+      const stretch=1 + S.stretch*(.65 + 1.35*snap);
+      for(let i=0;i<steps;i++){
+        const t=(i+.5)/steps;
+        kernel(run.ax+dx*t, run.ay+dy*t, m, run.ux, run.uy, stretch, 1);
+      }
+    }
+    for(let i=0;i<n;i++) {
+      const keep=Math.max(.10, 1 - .78*assist*diag.membership[i]);
+      kernel(P[i].x,P[i].y,Math.max(0,keep*(1-degree[i]*.35)),1,0,1,1,scaleAt[i].sx,scaleAt[i].sy);
+    }
   } else if(S.model==='tissue') {
     const cov=Array.from({length:n},()=>[0,0,0]);
     for(const e of edges) {
@@ -622,12 +708,13 @@ let camera={zoom:1,px:0,py:0},pointer=null,drag=null,editing=null;
 let framePending=false,scheduled=0,generation=0,busy=false,pending=null;
 let routeMode='auto';
 const CELL_DEFAULTS={stroke:.64,doubleGap:.70,edgeGhosts:true,continuations:true,boxSource:'ports',dotSize:1,dotStyle:'round',barLength:1.7,dotGap:.24,brailleLayout:'microfont',joinDots:false,blockCoverage:'ideal',blockInset:0,shadeRows:8};
-const settings={bias:0,smartBias:true,cell:{...CELL_DEFAULTS},model:'membrane',reach:1.85,sigma:.44,level:.48,balance:.82,stretch:1.4,detail:12,prune:true,cross:false,contours:false};
+const settings={bias:0,smartBias:true,cell:{...CELL_DEFAULTS},model:'membrane',reach:1.85,sigma:.44,level:.48,balance:.82,stretch:1.4,diagAssist:.95,diagSnap:.72,detail:12,prune:true,cross:false,contours:false};
 const recipes={
-membrane:{description:'Treat links as continuous sources. Their influence blends into one body; density balance evens out crowded junctions.',reach:1.85,sigma:.44,level:.48,balance:.82,stretch:1.4},
-charge:{description:'No explicit links. Radial potentials overlap, grow necks, and fuse into shared regions at the chosen threshold.',reach:1.85,sigma:.63,level:.45,balance:.92,stretch:1.4},
-tissue:{description:'Infer direction from neighbors. Stretched, locally aligned fields cooperate to produce a flowing body.',reach:1.85,sigma:.37,level:.46,balance:.88,stretch:1.45},
-envelope:{description:'A geometric baseline: a rounded union around the nearest sites and links. No additive cooperation between influences.',reach:1.85,sigma:.40,level:.50,balance:0,stretch:1.4}
+membrane:{description:'Treat links as continuous sources. Their influence blends into one body; density balance evens out crowded junctions.',reach:1.85,sigma:.44,level:.48,balance:.82,stretch:1.4,diagAssist:.15,diagSnap:.20},
+charge:{description:'No explicit links. Radial potentials overlap, grow necks, and fuse into shared regions at the chosen threshold.',reach:1.85,sigma:.63,level:.45,balance:.92,stretch:1.4,diagAssist:0,diagSnap:0},
+tissue:{description:'Infer direction from neighbors. Stretched, locally aligned fields cooperate to produce a flowing body.',reach:1.85,sigma:.37,level:.46,balance:.88,stretch:1.45,diagAssist:.25,diagSnap:.25},
+diagonal:{description:'Detect 45° / 135° staircase runs, fit cleaner slanted centerlines through them, and blend those ribbons into the body before meshing.',reach:1.90,sigma:.36,level:.46,balance:.72,stretch:1.75,diagAssist:.95,diagSnap:.72},
+envelope:{description:'A geometric baseline: a rounded union around the nearest sites and links. No additive cooperation between influences.',reach:1.85,sigma:.40,level:.50,balance:0,stretch:1.4,diagAssist:0,diagSnap:0}
 };
 function displayChar(ch){if(ch===' ')return 'SPACE';if(ch==='\u00a0')return 'NBSP';if(ch==='\u007f')return 'DEL';if(ch==='\u00ad')return 'SHY';if(ch==='\u2800')return 'BRAILLE BLANK';return ch;}
 const unicode=g=>'U+'+g.char.codePointAt(0).toString(16).toUpperCase().padStart(4,'0');
@@ -681,17 +768,25 @@ function setupCatalog(){
   $('glyph').value=glyphId;
 }
 function syncControls(){
-  for(const key of ['reach','sigma','level','balance','stretch']){
-    const inp=$(key);inp.value=settings[key];
+  for(const key of ['reach','sigma','level','balance','stretch','diagAssist','diagSnap']){
+    const inp=$(key); if(!inp) continue; inp.value=settings[key];
     inp.style.setProperty('--pct',100*(Number(inp.value)-Number(inp.min))/(Number(inp.max)-Number(inp.min))+'%');
-    $(key+'Out').textContent=key==='balance'?Math.round(settings[key]*100)+'%':key==='stretch'?'+'+settings[key].toFixed(2)+'×':settings[key].toFixed(2)+(key==='reach'||key==='sigma'?' u':'');
+    $(key+'Out').textContent=
+      key==='balance'?Math.round(settings[key]*100)+'%':
+      key==='stretch'?'+'+settings[key].toFixed(2)+'×':
+      key==='diagAssist'?Math.round(settings[key]*100)+'%':
+      key==='diagSnap'?Math.round(settings[key]*100)+'%':
+      settings[key].toFixed(2)+(key==='reach'||key==='sigma'?' u':'');
   }
   $('recipe').value=settings.model;
   $('recipeDescription').textContent=recipes[settings.model].description;
   $('reachControl').hidden=settings.model==='charge';
   $('pruneRow').hidden=settings.model==='charge';
   $('balanceControl').hidden=settings.model==='envelope';
-  $('stretchControl').hidden=settings.model!=='tissue';
+  $('stretchControl').hidden=!['tissue','diagonal'].includes(settings.model);
+  $('diagonalControls').hidden=settings.model!=='diagonal';
+  $('diagAssistControl').hidden=settings.model!=='diagonal';
+  $('diagSnapControl').hidden=settings.model!=='diagonal';
   $('prune').checked=settings.prune;$('cross').checked=settings.cross;$('detail').value=settings.detail;
   cellControlsSync();
 }
@@ -755,7 +850,7 @@ function updateStats(){
   $('statSpacing').textContent=s.spacing.toFixed(4)+' u';$('statArea').textContent=s.area.toFixed(2)+' u²';
   $('pipeSites').textContent=s.sites+' source sites';
   $('pipeGraph').textContent=settings.model==='charge'?'Radial potentials':s.links+' local links';
-  $('pipeField').textContent=({membrane:'Convolve & balance',charge:'Add & balance',tissue:'Orient & blend',envelope:'Nearest distance'})[settings.model];
+  $('pipeField').textContent=({membrane:'Convolve & balance',charge:'Add & balance',tissue:'Orient & blend',diagonal:'Fit diagonal ribbons',envelope:'Nearest distance'})[settings.model];
   $('pipeBody').textContent=nf.format(s.triangles)+' triangles';
   $('footerStats').textContent=s.components+' bodies · '+s.holes+' holes · '+nf.format(s.vertices)+' vertices · '+nf.format(s.triangles)+' triangles';
   const messages=[];
@@ -907,7 +1002,7 @@ function renderAtlas(){
 $('glyph').addEventListener('change',e=>selectGlyph(e.target.value));
 document.querySelectorAll('[data-char]').forEach(b=>b.onclick=()=>selectGlyph(byChar.get(b.dataset.char).id));
 $('recipe').addEventListener('change',e=>setRecipe(e.target.value));
-for(const k of ['reach','sigma','level','balance','stretch'])$(k).addEventListener('input',e=>{settings[k]=Number(e.target.value);syncControls();scheduleBuild();});
+for(const k of ['reach','sigma','level','balance','stretch','diagAssist','diagSnap'])$(k).addEventListener('input',e=>{settings[k]=Number(e.target.value);syncControls();scheduleBuild();});
 $('detail').onchange=e=>{settings.detail=Number(e.target.value);$('cellDetail').value=e.target.value;scheduleBuild();};
 for(const k of ['prune','cross'])$(k).onchange=e=>{settings[k]=e.target.checked;scheduleBuild();};
 $('overlay').onchange=requestDraw;
@@ -1062,7 +1157,7 @@ document.querySelectorAll('[data-proof]').forEach(b=>b.onclick=()=>setCompositio
 for(const j of [0,3,1,4,2,5,6,7]){const b=document.createElement('button');b.textContent=String(j+1);b.dataset.dot=j;b.title='Toggle Braille dot '+(j+1);b.setAttribute('aria-label',b.title);b.onclick=()=>{const g=byId.get(glyphId),mask=familyOf(g.char)==='braille'?g.char.codePointAt(0)-0x2800:0;selectGlyph('braille-'+(mask^(1<<j)));};$('dotmatrix').append(b);}
 
 new ResizeObserver(resize).observe($('viewport'));
-setupCatalog();glyphId=byChar.get('╬').id;syncControls();selectGlyph(glyphId);resize();
+setupCatalog();glyphId=byChar.get('/').id;setRecipe('diagonal');selectGlyph(glyphId);resize();
 // Exposed read-only snapshots make numerical and UI testing reproducible.
 window.continuum={get result(){return result;},get scene(){return scene;},get settings(){return {...settings};},get catalog(){return catalog;},selectGlyph,setView,setRecipe,fit,setComposition,get renderer(){return {available:gpuRenderer.available,reason:gpuRenderer.reason};},get cellSettings(){return {...settings.cell};}};
 

@@ -16,6 +16,7 @@ mod percpu {
 }
 
 mod phys {
+    pub fn virt_to_phys_checked(pointer: *mut u8) -> Option<u64> { Some(pointer as u64) }
     pub struct HeapArena {
         pub phys_start: u64,
         pub virt_start: usize,
@@ -41,6 +42,60 @@ mod phys {
         super::FREED.fetch_add(1, super::Ordering::SeqCst);
         true
     }
+}
+
+mod allocators {
+    pub unsafe fn alloc_raw_hv_guest(_: u8, layout: std::alloc::Layout) -> *mut u8 {
+        super::GUEST_LEN.store(layout.size(), super::Ordering::SeqCst);
+        super::phys::reserve_heap_arena(layout.size(), layout.align()).map_or(std::ptr::null_mut(), |a|a.virt_start as *mut u8)
+    }
+    pub unsafe fn dealloc_raw(pointer: *mut u8) {
+        let len = super::GUEST_LEN.load(super::Ordering::SeqCst);
+        assert!(super::phys::free_phys_range(pointer as u64, len));
+    }
+}
+static GUEST_LEN: AtomicUsize = AtomicUsize::new(0);
+static GUEST_MAPPED: AtomicUsize = AtomicUsize::new(0);
+static GUEST_UNMAPPED: AtomicUsize = AtomicUsize::new(0);
+static FAIL_GUEST_MAPPING: AtomicBool = AtomicBool::new(false);
+mod hv { pub mod memory {
+    pub fn map_thread_stack(vm:u8, _:u64, _:u64, bytes:usize) -> Result<(), &'static str> {
+        assert_eq!(vm,3);
+        if super::super::FAIL_GUEST_MAPPING.swap(false, super::super::Ordering::SeqCst) {
+            return Err("guest map rejected");
+        }
+        super::super::GUEST_LEN.store(bytes, super::super::Ordering::SeqCst);
+        super::super::GUEST_MAPPED.fetch_add(1, super::super::Ordering::SeqCst);
+        Ok(())
+    }
+    pub fn unmap_thread_stack(vm:u8, _:u64, _:u64, bytes:usize) -> Result<(), &'static str> {
+        assert_eq!(vm,3);
+        assert_eq!(bytes,super::super::GUEST_LEN.load(super::super::Ordering::SeqCst));
+        super::super::GUEST_UNMAPPED.fetch_add(1, super::super::Ordering::SeqCst);
+        Ok(())
+    }
+} }
+
+#[test]
+fn vm_stack_uses_private_backing_and_retires_both_aliases() {
+    // Select the production backend directly (the public Linux entry point
+    // deliberately uses mmap instead of kernel guest mappings).
+    let mapped = GUEST_MAPPED.load(Ordering::SeqCst);
+    let unmapped = GUEST_UNMAPPED.load(Ordering::SeqCst);
+    let stack = stack::guest_test_stack(65_536,3).unwrap();
+    assert_eq!(GUEST_MAPPED.load(Ordering::SeqCst),mapped+1);
+    drop(stack);
+    assert_eq!(GUEST_UNMAPPED.load(Ordering::SeqCst),unmapped+1);
+}
+
+#[test]
+fn rejected_guest_alias_retires_host_alias_and_private_backing() {
+    let freed = FREED.load(Ordering::SeqCst);
+    let unmapped = UNMAPPED.load(Ordering::SeqCst);
+    FAIL_GUEST_MAPPING.store(true,Ordering::SeqCst);
+    assert!(stack::guest_test_stack(65_536,3).is_none());
+    assert_eq!(FREED.load(Ordering::SeqCst),freed+1);
+    assert_eq!(UNMAPPED.load(Ordering::SeqCst),unmapped+1);
 }
 
 mod pci {

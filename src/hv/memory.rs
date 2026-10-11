@@ -5,6 +5,8 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 mod carrier;
+mod thread_stack;
+pub(crate) use thread_stack::{map_thread_stack, unmap_thread_stack};
 pub(crate) use carrier::CarrierAddressSpace;
 
 #[inline]

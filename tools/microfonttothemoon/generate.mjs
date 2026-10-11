@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import {performance} from 'node:perf_hooks';
 import crypto from 'node:crypto';
 const han=process.argv[4]==='han';
-const html=fs.readFileSync('src/intel/gpu_font/continuum-cell-studio.html','utf8');
+const html=fs.readFileSync('src/intel/gpu_font/continuum-diagonal-ui.html','utf8');
 const detail=Number(process.argv[2]||6);
 if(![6,12,24,40].includes(detail)) throw new Error('detail must be 6 (Draft), 12, 24, or 40');
 const context=vm.createContext({performance});
@@ -22,7 +22,9 @@ if(han) {
  hanSource=fs.readFileSync('vendor/microfont/src/gui_han.rs','utf8')+fs.readFileSync('vendor/microfont/src/gui_han_data.rs','utf8');
 }
 const cell={stroke:.64,doubleGap:.70,edgeGhosts:true,continuations:true,boxSource:'ports',dotSize:1,dotStyle:'round',barLength:1.7,dotGap:.24,brailleLayout:'microfont',joinDots:false,blockCoverage:'ideal',blockInset:0,shadeRows:8};
-const settings={bias:0,smartBias:true,cell,model:'membrane',reach:1.85,sigma:.44,level:.48,balance:.82,stretch:1.4,detail,prune:true,cross:false,contours:false};
+const recipe=JSON.parse(fs.readFileSync('tools/microfonttothemoon/recipe.json','utf8'));
+const settings={...recipe,cell,detail};
+const recipeNote=Object.entries(recipe).map(([key,value])=>`${key}=${value}`).join(' ');
 function sites(g) {
  const points=[]; const cells=g.cells||[g.bits]; const count=g.kind==='custom'||g.full66?66:64;
  cells.forEach((bits,k)=>{for(let i=0;i<count;i++)if((bits>>BigInt(count-1-i))&1n)points.push({x:k*6+i%6+.5,y:Math.floor(i/6)+.5,group:0});});
@@ -34,7 +36,7 @@ for(let slot=0;slot<glyphs.length;slot++) {
  const family=cp>=0x2500&&cp<=0x257f?'box':cp>=0x2580&&cp<=0x259f?'block':cp>=0x2800&&cp<=0x28ff?'braille':g.char===' '||g.char==='\u00a0'?'space':'field';
  const points=sites(g),tile={char:g.char,family,x:0,y:0,width:g.width,height:11,points,mask:family==='braille'?cp-0x2800:0};
  if(family==='block')tile.blockPoints=sites(catalog.find(g=>g.id==='block-'+(cp-0x2580)));
- const input={id:slot,width:g.width,height:11,points,tiles:[tile],settings:{...settings,route:family==='field'?'field':'cells'}};
+ const input={id:slot,width:g.width,height:11,points,tiles:[tile],settings:{...settings,route:recipe.route==='field'?'field':(family==='field'?'field':'cells')}};
  context.input=input;
  const mesh=vm.runInContext('buildShape(input)',context);
  if(mesh.stats.openLoops||mesh.stats.nonmanifold)throw new Error(`invalid mesh slot ${slot}`);
@@ -62,6 +64,6 @@ indices.forEach((x,i)=>bytes.writeUInt32LE(x,16+vertices.length*4+i*4));
 const root=(process.argv[3]||'src/intel/gpu_font/moon').replace(/\/$/,'')+'/';
 fs.mkdirSync(root,{recursive:true});
 fs.writeFileSync(root+'draft.mesh',bytes);
-fs.writeFileSync(root+'config.rs',`// Generated geometry configuration.\nconst WIDTH: u32 = 2560;\nconst HEIGHT: u32 = 1088;\nconst DETAIL: u32 = ${detail};\n`);
-fs.writeFileSync(root+'catalog.json',JSON.stringify({detail,scale:4,width:2560,height:1088,model:'membrane',route:'auto',source_sha256:crypto.createHash('sha256').update(html).digest('hex'),set:han?'gui-han':'studio',glyph_count:glyphs.length,han_source_sha256:han?crypto.createHash('sha256').update(hanSource).digest('hex'):undefined,mesh_sha256:crypto.createHash('sha256').update(bytes).digest('hex'),glyphs:stats},null,2)+'\n');
+fs.writeFileSync(root+'config.rs',`// Generated geometry configuration.\nconst WIDTH: u32 = 2560;\nconst HEIGHT: u32 = 1088;\nconst DETAIL: u32 = ${detail};\nconst RECIPE: &str = ${JSON.stringify(recipeNote)};\n`);
+fs.writeFileSync(root+'catalog.json',JSON.stringify({detail,scale:4,width:2560,height:1088,model:recipe.model,recipe,route:recipe.route,source_sha256:crypto.createHash('sha256').update(html).digest('hex'),set:han?'gui-han':'studio',glyph_count:glyphs.length,han_source_sha256:han?crypto.createHash('sha256').update(hanSource).digest('hex'):undefined,mesh_sha256:crypto.createHash('sha256').update(bytes).digest('hex'),glyphs:stats},null,2)+'\n');
 console.log(`Detail ${detail}: ${glyphs.length} glyphs, ${vertices.length/3} vertices, ${indices.length/3} triangles, ${bytes.length} bytes`);

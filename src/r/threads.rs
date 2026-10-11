@@ -347,7 +347,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     // Scheduler storage belongs to the host even when spawned from guest
     // code. Guest closure execution/destruction uses its retained VM realm.
     let prepared = crate::allocators::with_host_alloc_domain_strong(|| {
-        let stack = context::Stack::new(stack).ok_or(11)?;
+        let stack = context::Stack::new_for_vm(stack, vm_id).ok_or(11)?;
         #[cfg(not(target_os = "linux"))]
         let address_space = vm_id
             .map(|vm| unsafe { crate::hv::memory::CarrierAddressSpace::new(vm) })

@@ -33,6 +33,7 @@ class GuardedStackTests(unittest.TestCase):
         stack = stack.replace('#[cfg(not(target_os = "linux"))]', '#[cfg(test)]')
         stack = stack.replace('#[cfg(target_os = "linux")]', '#[cfg(not(test))]')
         stack = stack.replace('#[cfg(all(test, target_os = "linux"))]', '#[cfg(not(test))]')
+        stack += '\npub fn guest_test_stack(bytes: usize, vm: u8) -> Option<Stack> { Some(Stack { backing: backing::Mapping::new_for_vm(bytes, Some(vm))?, len: bytes }) }\n'
         fixture = (ROOT / "tools/rust-std/tests/guarded_stack_kernel.rs").read_text()
         self.run_rust(fixture + '\n#[path="kernel_stack.rs"] mod stack;\n', {"kernel_stack.rs": stack})
 

@@ -1,0 +1,16 @@
+{
+  "model": "tissue",
+  "reach": 1.76,
+  "sigma": 0.45,
+  "level": 0.75,
+  "balance": 1.0,
+  "stretch": 1.75,
+  "bias": 0,
+  "smartBias": true,
+  "diagAssist": 0,
+  "diagSnap": 0,
+  "prune": true,
+  "cross": false,
+  "contours": false,
+  "route": "field"
+}
