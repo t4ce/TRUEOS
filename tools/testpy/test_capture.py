@@ -195,9 +195,9 @@ def main():
     }}
     #[derive(Clone)] pub struct MatrixTarget''')
         capture = (ROOT/'src/shell3/capture.rs').read_text()
-        capture = capture[:capture.index('/// Capture status belongs')]
+        capture = capture[:capture.index('/// Capture status belongs')].replace('use super::helper;\n','')
         capture += 'pub(crate) fn print_line(t:&MatrixTarget,s:&str){crate::shell2::print_matrix_target_line(t,s)}\nuse crate::shell2::cmds::rec as audio;\n'
-        helper = (ROOT/'src/shell3/capture.rs').read_text().split('mod helper {\n',1)[1].split('\n}\n\nmod audio {',1)[0]
+        helper = (ROOT/'src/shell3/helper.rs').read_text().replace('super::tui::', 'super::super::tui::')
         helper = re.sub(r'pub\(super\) fn admit\(.*?^}', 'pub(super) fn admit(_: &str, _: Frontend) -> Result<Option<(MatrixTarget, crate::workers::WorkerSpawner)>, String> {Ok(Some((MatrixTarget(1),crate::Spawner)))}', helper, flags=re.M | re.S)
         capture += '\nmod helper {\n' + helper + '\n}\n'
         capture = re.sub(r'^//!.*\n','',capture,flags=re.M)

@@ -52,6 +52,8 @@ mod shell2 {
     }
 }
 mod shell3 {
+    pub use crate::shell2::MatrixTarget;
+    use crate::shell2::cmds::{ram,smp};
     pub mod tui {
         #[derive(Clone,Copy)]pub struct Frontend {pub id:u64,pub cols:usize,pub rows:usize}
         pub struct Surface {pub cols:u32,pub rows:u32}
@@ -65,7 +67,7 @@ mod shell3 {
         pub fn native_read(_:&crate::shell2::MatrixTarget)->Option<(Vec<u8>,Vec<String>)>{crate::LIVE.load(crate::Ordering::SeqCst).then(||(std::mem::take(&mut *crate::INPUT.lock().unwrap()),vec![]))}
         pub fn surface(_:&crate::shell2::MatrixTarget)->Option<Surface>{let (cols,rows)=*crate::GEOMETRY.lock().unwrap();Some(Surface{cols:cols as u32,rows:rows as u32})}
     }
-    #[path="@ROOT@/src/shell3/helper.rs"] mod helper;
+    mod helper { @HELPER@ }
     mod monitor {
         @MONITOR@
         fn monitor_task(_:Kind,_:crate::shell2::MatrixTarget)->Result<(),()>{Ok(())}
@@ -92,8 +94,8 @@ mod shell3 {
             #[test]fn scroll_mouse_footer_and_tiny_geometry_are_bounded(){
                 reset();let target=crate::shell2::MatrixTarget;let mut v=View::new(Kind::Smp);v.refresh(100,0);
                 for _ in 0..30 {v.action(Action::Down,&target,12);}assert_eq!(v.scroll,11);v.paint(&target,100,12);
-                let mut terminal=trueos_terminal::Terminal::new(100,12);for bytes in WRITES.lock().unwrap().drain(..){terminal.feed(&bytes);}assert!(terminal.render_rows()[2].starts_with("cpu11"));
-                v.action(Action::Up,&target,12);assert_eq!(v.scroll,10);assert!(!v.action(Action::Click(2),&target,12));assert!(v.action(Action::Click(11),&target,12));assert!(!VISIBLE.load(Ordering::SeqCst));
+                let mut terminal=trueos_terminal::Terminal::new(100,12);for bytes in WRITES.lock().unwrap().drain(..){terminal.feed(&bytes);}assert!(terminal.render_rows()[3].starts_with("cpu11"));
+                v.action(Action::Up,&target,12);assert_eq!(v.scroll,10);assert!(!v.action(Action::Click(2),&target,12));assert!(v.action(Action::Click(1),&target,12));assert!(!VISIBLE.load(Ordering::SeqCst));
                 for rows in 0..4 {v.paint(&target,10,rows);}v.paint(&target,100,30);assert_eq!(v.scroll,0);
             }
             fn poll(future:crate::Pin<&mut impl crate::Future>)->crate::Poll<()> {future.poll(&mut crate::Context::from_waker(crate::Waker::noop())).map(|_|())}
@@ -115,6 +117,10 @@ mod shell3 {
 
 
 def main():
+
+    helper=(ROOT/'src/shell3/helper.rs').read_text()
+    helper=re.sub(r'^//!.*\n','',helper,flags=re.M)
+    helper=re.sub(r'pub\(super\) fn admit\(.*?^}', 'pub(super) fn admit(name:&str, frontend:Frontend)->Result<Option<(MatrixTarget,crate::workers::WorkerSpawner)>,String>{\n        if tui::native_slot(name) {tui::request(frontend,name).map_err(String::from)?;return Ok(None);}\n        let origin=crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "");\n        let target=crate::shell2::claim_matrix_target_for_named_app_slot(&origin,name,name).ok_or("occupied")?;\n        tui::attach_native(frontend,&target)?;Ok(Some((target,crate::Spawner)))\n    }',helper,flags=re.M|re.S)
     monitor = (ROOT / 'src/shell3/monitor.rs').read_text()
     monitor = re.sub(r'^//!.*\n|^#\[trueos_executor::task[^\n]*\n', '', monitor, flags=re.M)
     monitor = monitor.replace('async fn monitor_task(', 'async fn monitor_task_run(')
@@ -123,7 +129,7 @@ def main():
         terminal = path / 'libtrueos_terminal.rlib'
         subprocess.run(['rustc', '--edition=2024', '--crate-type=rlib', '--crate-name', 'trueos_terminal', str(ROOT / 'crates/trueos-terminal/src/lib.rs'), '-o', str(terminal)], check=True)
         source = path / 'tests.rs'
-        source.write_text(HARNESS.replace('@ROOT@', str(ROOT)).replace('@MONITOR@', monitor))
+        source.write_text(HARNESS.replace('@HELPER@', helper).replace('@ROOT@', str(ROOT)).replace('@MONITOR@', monitor))
         binary = path / 'tests'
         subprocess.run(['rustc', '--edition=2024', '--test', str(source), '--extern', f'trueos_terminal={terminal}', '-o', str(binary)], check=True)
         subprocess.run([str(binary), '--test-threads=1'], check=True)

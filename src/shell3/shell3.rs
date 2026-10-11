@@ -1,3 +1,15 @@
+mod helper;
+mod admin;
+mod monitor;
+mod table;
+#[path = "system/cry.rs"]
+mod cry;
+#[path = "system/disc.rs"]
+mod disc;
+#[path = "system/ram.rs"]
+mod ram;
+#[path = "system/smp.rs"]
+mod smp;
 pub(crate) mod capture;
 mod matrix_target;
 mod log_tap;
@@ -1262,6 +1274,18 @@ impl Shell3 {
         } else if text == "env" && (self.mode == Mode::ADM || self.active_vmx_app().is_some()) {
             for line in service::environment_lines(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+            }
+        } else if self.mode == Mode::ADM && matches!(text.as_str(), "cry" | "disc" | "ram" | "smp") {
+            let frontend = self.tui_frontend();
+            let result = match text.as_str() {
+                "cry" => cry::start(frontend),
+                "disc" => disc::start(frontend),
+                "ram" => ram::start(frontend),
+                _ => smp::start(frontend),
+            };
+            match result {
+                Ok(()) => { self.select_matrix_slot_name(&text); }
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
             }
         } else if self.mode == Mode::ADM && text == "sh3" {
             if let Err(error) = service::request_shell3() {
