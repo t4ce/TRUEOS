@@ -182,7 +182,7 @@ async fn online_install_command_task(
 ) {
     let task_target = target.clone();
     async move {
-        const ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
+        const ISO_URL: &str = "https://trueos.eu/TrueOS.lz4";
 
         Timer::after(EmbassyDuration::from_millis(1)).await;
 
@@ -254,25 +254,24 @@ async fn online_install_command_task(
         }
 
         log(alloc::format!(
-            "install online: downloaded payload={} bytes (7z_magic={})",
+            "install online: downloaded payload={} bytes (lz4_magic={})",
             payload.len(),
-            crate::z7::looks_like_7z(payload.as_slice())
+            payload.starts_with(&crate::r::lz4::MAGIC)
         )
         .as_str());
 
-        if !crate::z7::looks_like_7z(payload.as_slice()) {
-            log("install online: refused (payload is not a 7z archive)");
+        if !payload.starts_with(&crate::r::lz4::MAGIC) {
+            log("install online: refused (payload is not an LZ4 frame)");
             return;
         }
 
-        let iso = match crate::z7::extract_file_to_vec(payload.as_slice(), "trueos.iso") {
+        let iso = match crate::iso9660::decode_update_bundle(payload).await {
             Ok(v) => v,
             Err(e) => {
                 log(alloc::format!("install online: extract failed ({:?})", e).as_str());
                 return;
             }
         };
-        drop(payload);
         let iso_view = iso.as_slice();
         if interrupted() {
             log("install online: interrupted before install");

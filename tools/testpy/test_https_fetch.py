@@ -7,7 +7,9 @@ from test_clip_position3_uv_texture import ROOT, item
 
 source = "src/r/net/https.rs"
 harness = "extern crate alloc;\nuse alloc::{format, string::String, vec::Vec};\n"
+harness += 'const DEFAULT_USER_AGENT: &str = "TRUEOS net-fetch";\n'
 for name in ("FetchTarget", "HttpsJsonResponse", "valid_header_value", "parse_fetch_url",
+             "HttpsRequest", "valid_header_name", "request_has_header", "build_http_request",
              "fetch_target_url", "resolve_fetch_redirect", "find_http_header_end",
              "parse_http_status", "trim_ascii", "header_value", "header_value_has_token",
              "decode_chunked", "final_response_bytes", "bad_response_message", "complete_http_response",

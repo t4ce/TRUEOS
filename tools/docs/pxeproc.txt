@@ -27,7 +27,7 @@ visible until the live handoff or a later response. Neither the autostart
 controller, the RAM-only launch script, nor the download worker needs a
 TRUEOSFS mount in this cold boot mode.
 
-The shared live-update path accepts the online https://trueos.eu/TrueOS.7z or
+The shared live-update path accepts the online https://trueos.eu/TrueOS.lz4 or
 the LAN http://192.168.178.111:8080/trueos.iso. tools/netboot/pxe2.js serves the
 same bld/trueos.iso used by development boots at that HTTP endpoint. Restart
 that host PXE process after updating the script to enable the HTTP listener.

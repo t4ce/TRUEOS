@@ -87,3 +87,9 @@ and random input). These are single-run smoke measurements, not throughput
 claims for the native TRUEOS backend. The local test does not validate the
 pinned ADL-S native binary, GuC command encoding, cancellation, or filesystem
 latency on the TRUEOS rig. That end-to-end hardware validation remains required.
+
+Install/update downloads use `TrueOS.lz4`, a standard LZ4 frame containing a
+USTAR archive with `trueos.iso`. `make iso` packages the ISO alone; `make release`
+also bundles launchers, OVMF and provenance. Both require the host `lz4` CLI.
+Kernel decoding is bounded to 512 MiB and 32 members. General 7z compatibility,
+legacy Blueprint payloads and the embedded Lilly asset still use the 7z codec.

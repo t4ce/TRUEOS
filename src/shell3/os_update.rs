@@ -1,7 +1,7 @@
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
-pub(crate) const REMOTE_ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
+pub(crate) const REMOTE_ISO_URL: &str = "https://trueos.eu/TrueOS.lz4";
 pub(crate) const LAN_ISO_URL: &str = "http://192.168.178.111:8080/trueos.iso";
 
 use crate::shell3::{MatrixTarget, matrix_target_print_line as print_matrix_target_line};
@@ -73,8 +73,8 @@ async fn live_update_command_task(target: MatrixTarget, url: &'static str) {
         )
         .as_str());
 
-        let iso = if crate::z7::looks_like_7z(payload.as_slice()) {
-            match crate::z7::extract_file_to_vec(payload.as_slice(), "trueos.iso") {
+        let iso = if payload.starts_with(&crate::r::lz4::MAGIC) {
+            match crate::iso9660::decode_update_bundle(core::mem::take(&mut payload)).await {
                 Ok(iso) => iso,
                 Err(error) => {
                     log(alloc::format!("update live: extract failed ({:?})", error).as_str());
@@ -86,7 +86,7 @@ async fn live_update_command_task(target: MatrixTarget, url: &'static str) {
         };
         drop(payload);
         if !crate::iso9660::looks_like_iso9660(iso.as_slice()) {
-            log("update live: refused (payload is not an ISO9660 image or a 7z containing trueos.iso)");
+            log("update live: refused (payload is not an ISO9660 image or a tar/LZ4 bundle containing trueos.iso)");
             return;
         }
         log("update live: step=04b/20 ISO9660-verified");

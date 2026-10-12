@@ -648,7 +648,9 @@ fn build_http_request(target: &FetchTarget, request: &HttpsRequest<'_>) -> Resul
         req.push_str("\r\n");
     }
     if !request_has_header(request, "Accept") {
-        req.push_str("Accept: */*\r\n");
+        // crates.io serves its page routes only when HTML is explicitly
+        // accepted. Keep the wildcard for generic binary/stylesheet fetches.
+        req.push_str("Accept: */*,text/html;q=0.9\r\n");
     }
     if !request_has_header(request, "Accept-Encoding") {
         req.push_str("Accept-Encoding: identity\r\n");
@@ -2442,6 +2444,23 @@ mod tests {
 #[cfg(test)]
 mod http_fetch_tests {
     use super::*;
+
+    #[test]
+    fn default_accept_includes_html_and_preserves_explicit_accept() {
+        let target = parse_fetch_url("https://crates.io/crates/microfont").unwrap();
+        let mut request = HttpsRequest {
+            method: "GET",
+            content_type: None,
+            headers: Vec::new(),
+            body: &[],
+        };
+        let encoded = String::from_utf8(build_http_request(&target, &request).unwrap()).unwrap();
+        assert!(encoded.contains("\r\nAccept: */*,text/html;q=0.9\r\n"));
+        request.headers.push((String::from("Accept"), String::from("application/json")));
+        let encoded = String::from_utf8(build_http_request(&target, &request).unwrap()).unwrap();
+        assert!(encoded.contains("\r\nAccept: application/json\r\n"));
+        assert!(!encoded.contains("text/html"));
+    }
 
     #[test]
     fn redirects_preserve_location_and_resolve_uri_references() {

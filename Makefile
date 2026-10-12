@@ -20,9 +20,9 @@ ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
-UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
+UPDATE_LZ4_FLAGS ?= -9 -BI --content-size
 RELEASE_BUNDLE_DIR := $(ISO_DIR)/trueos-release
-ISO_ARCHIVE := $(ISO_DIR)/TrueOS.7z
+ISO_ARCHIVE := $(ISO_DIR)/TrueOS.lz4
 RELEASE_ARCHIVE := $(ISO_ARCHIVE)
 PUBLISH_RELEASE_SMB ?= 1
 BUNDLED_OVMF_NAME := ovmf-code-x86_64.fd
@@ -587,7 +587,9 @@ iso: artifacts images limine
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 	$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
 	rm -f $(ISO_ARCHIVE)
-	cd $(ISO_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) $(notdir $(ISO_ARCHIVE)) $(notdir $(ISO_PATH))
+	tar --format=ustar -C $(ISO_DIR) -cf $(ISO_ARCHIVE).tar $(notdir $(ISO_PATH))
+	lz4 $(UPDATE_LZ4_FLAGS) -f $(ISO_ARCHIVE).tar $(ISO_ARCHIVE)
+	rm -f $(ISO_ARCHIVE).tar
 	@if [ "$(PUBLISH_RELEASE_SMB)" = "1" ]; then \
 		env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true; \
 		env -u GIO_MODULE_DIR gio copy $(ISO_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/; \
@@ -696,7 +698,9 @@ release: release-git-clean
 		cp "$(OVMF_LICENSE_PATH)" $(RELEASE_BUNDLE_DIR)/OVMF-LICENSE.txt; \
 	fi
 	chmod +x $(RELEASE_BUNDLE_DIR)/run-linux.sh $(RELEASE_BUNDLE_DIR)/run-macos.sh
-	cd $(RELEASE_BUNDLE_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) ../$(notdir $(RELEASE_ARCHIVE)) trueos.iso TRUEOS.provenance.json $$(test -f TRUEOS.source-files.sha256 && printf '%s' TRUEOS.source-files.sha256) $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
+	cd $(RELEASE_BUNDLE_DIR) && tar --format=ustar -cf ../$(notdir $(RELEASE_ARCHIVE)).tar trueos.iso TRUEOS.provenance.json $$(test -f TRUEOS.source-files.sha256 && printf '%s' TRUEOS.source-files.sha256) $(BUNDLED_OVMF_NAME) run-linux.sh run-macos.sh README-RUN.txt $$(test -f OVMF-LICENSE.txt && printf '%s' OVMF-LICENSE.txt)
+	lz4 $(UPDATE_LZ4_FLAGS) -f $(RELEASE_ARCHIVE).tar $(RELEASE_ARCHIVE)
+	rm -f $(RELEASE_ARCHIVE).tar
 	@if [ "$(PUBLISH_RELEASE_SMB)" = "1" ]; then \
 		env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true; \
 		env -u GIO_MODULE_DIR gio copy $(RELEASE_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/; \

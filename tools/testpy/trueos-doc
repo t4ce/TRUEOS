@@ -47,7 +47,7 @@ COMMAND_DETAILS: dict[str, dict[str, Any]] = {
                 "Press Down then Enter to select Live update running TRUEOS.",
                 "On Confirm, press Down then Enter to select Proceed (or Discard apps and proceed when non-replicatable apps are listed).",
             ],
-            "effect": "Fetch https://trueos.eu/TrueOS.7z and replace only the running kernel from RAM; no disk installation is performed.",
+            "effect": "Fetch https://trueos.eu/TrueOS.lz4 and replace only the running kernel from RAM; no disk installation is performed.",
             "lan_selection": "From Home, press Down twice, Enter, Down, Enter to live-update from http://192.168.178.111:8080/trueos.iso through the same RAM-only update path.",
             "expected_transition": "A single idle Shell2 TCP connection may resume when its scalar TCP/session capsule is strictly quiet (no queued, unacknowledged, received, or out-of-order bytes). Otherwise the connection closes and the new kernel falls back to a fresh listener; wait for 192.168.178.94:4245 before confirmation and do not issue a second update while transitioning.",
             "warning": "Any non-replicatable app still running at commit is discarded; the confirmation screen names affected VMs.",
@@ -174,13 +174,13 @@ TOPICS: dict[str, dict[str, Any]] = {
         "invocation": "make iso",
         "build_outputs": {
             "iso": "bld/trueos.iso",
-            "update_archive": "bld/TrueOS.7z",
+            "update_archive": "bld/TrueOS.lz4",
             "runtime_elf": "bld/artifacts/<build-mode>-<build-id>/TRUEOS.elf",
         },
         "workflow": [
             "Build the runtime artifacts, disk image prerequisites, and Limine bootloader.",
             "Stage the EFI bootloader, TRUEOS runtime ELF, firmware, and generated Limine configuration; construct bld/trueos.iso and verify the packaged GPU copy.",
-            "Create bld/TrueOS.7z; publish it to the configured SMB release share when PUBLISH_RELEASE_SMB=1 (the default).",
+            "Create bld/TrueOS.lz4; publish it to the configured SMB release share when PUBLISH_RELEASE_SMB=1 (the default).",
             "When START_BAREMETAL_LOG=1 (the default), asynchronously run testrig-physical-reset-log: it stops an earlier collector, physically resets the rig through the ESP32 reset-button circuit, verifies PXE reads against the newly built bootloader/runtime SHA-256 values by default, then starts and waits for the fresh bare-metal log drain.",
         ],
         "external_effects": [
@@ -196,7 +196,7 @@ TOPICS: dict[str, dict[str, Any]] = {
         "controls": {
             "START_BAREMETAL_LOG=0": "Skip the physical deploy/reset/log-verification dispatch.",
             "BAREMETAL_TFTP_VERIFY=0": "Keep the physical reset path but explicitly skip PXE read verification.",
-            "PUBLISH_RELEASE_SMB=0": "Skip SMB publication of bld/TrueOS.7z.",
+            "PUBLISH_RELEASE_SMB=0": "Skip SMB publication of bld/TrueOS.lz4.",
         },
         "log_note": "For capture semantics and the current bare-metal log pointer, query topic logs. The rotating LatestOfThree.logs link is evidence only after the new deployment's collector has completed.",
         "sources": ["Makefile::iso", "Makefile::testrig-physical-reset-log", "tools/testrig-physical-reset-button.py", "tools/baremetal-log-drain.sh"],

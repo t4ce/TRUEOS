@@ -87,6 +87,7 @@ mod r {{
     #[path="{ROOT / 'src/r/lz4.rs'}"] pub mod lz4;
     #[path="{ROOT / 'src/r/tar.rs'}"] pub mod tar;
 }}
+#[path="{ROOT / 'src/iso9660.rs'}"] mod iso9660;
 fn block_on<T>(future: impl std::future::Future<Output=T>) -> T {{
     let mut future=std::pin::pin!(future);
     let mut context=std::task::Context::from_waker(std::task::Waker::noop());
@@ -113,6 +114,8 @@ fn main() {{
             }}
             println!("Production decoder verified {{}} asset files / {{}} bytes",entries.len(),entries.iter().map(|entry|entry.bytes.len()).sum::<usize>());
         }}
+        "update-bundle" => std::fs::write(&args[3],block_on(iso9660::decode_update_bundle(source)).unwrap()).unwrap(),
+        "bad-update-bundle" => assert!(block_on(iso9660::decode_update_bundle(source)).is_err()),
         "encode" => std::fs::write(&args[3],r::lz4::compress_frame_cpu(&source)).unwrap(),
         "decode" => std::fs::write(&args[3],r::lz4::decompress_frame_cpu(&source,8*1024*1024).unwrap()).unwrap(),
         "unpack" => {{
@@ -216,6 +219,19 @@ fn main() {{
             assert decompress(encoded.read_bytes()) == data
             encoded.write_bytes(compress(data));restored=folder/f'{index}.out';run('decode',encoded,restored)
             assert restored.read_bytes()==data
+        # Exercise the exact USTAR/LZ4 packaging flags used by make iso/release.
+        iso=folder/'trueos.iso';iso.write_bytes(b'installer ISO fixture'*10000)
+        launcher=folder/'run-linux.sh';launcher.write_bytes(b'#!/bin/sh\necho boot\n')
+        bundle_tar=folder/'bundle.tar';bundle=folder/'TrueOS.lz4'
+        subprocess.run(['tar','--format=ustar','-C',str(folder),'-cf',str(bundle_tar),'trueos.iso','run-linux.sh'],check=True)
+        subprocess.run(['lz4','-9','-BI','--content-size','-f',str(bundle_tar),str(bundle)],check=True)
+        restored=folder/'installer.iso';run('update-bundle',bundle,restored)
+        assert restored.read_bytes()==iso.read_bytes()
+        for names in [('run-linux.sh',),('trueos.iso','trueos.iso')]:
+            subprocess.run(['tar','--format=ustar','-C',str(folder),'-cf',str(bundle_tar),*names],check=True)
+            subprocess.run(['lz4','-9','-BI','--content-size','-f',str(bundle_tar),str(bundle)],check=True)
+            run('bad-update-bundle',bundle)
+        bundle.write_bytes(b'invalid frame');run('bad-update-bundle',bundle)
         archive=folder/'input.tar'
         with tarfile.open(archive,'w',format=tarfile.PAX_FORMAT) as tf:
             for i in range(25):

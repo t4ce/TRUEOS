@@ -26,7 +26,7 @@ pub mod static_slots;
 pub mod stream;
 pub mod sync;
 pub(crate) mod threads;
-mod tar;
+pub(crate) mod tar;
 pub mod tga_rpc;
 pub mod time;
 pub mod ui_cursor;

@@ -151,10 +151,7 @@ pub fn looks_like_iso9660(iso: &[u8]) -> bool {
 
 /// Locate an ISO9660 image embedded inside a larger blob.
 ///
-/// This is used for the update payload: `TrueOS.7z` is generated in *store*
-/// mode (Copy, non-solid), so it contains the raw ISO bytes verbatim.
-/// We avoid implementing full 7z decompression by scanning for the Primary
-/// Volume Descriptor signature and validating it.
+/// Scans for the Primary Volume Descriptor signature and validates it.
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn find_embedded_iso9660_start(blob: &[u8]) -> Option<usize> {
     // PVD signature is at ISO offset 16*2048 and begins with: 0x01 "CD001" 0x01
@@ -290,4 +287,27 @@ pub fn file_slice<'a>(iso: &'a [u8], path: &str) -> Result<&'a [u8], IsoError> {
     }
 
     Err(IsoError::NotFound)
+}
+
+/// Decode the published tar/LZ4 bundle, retaining only its installer ISO.
+/// Bound both frame expansion and archive members before installation or swap.
+pub async fn decode_update_bundle(
+    payload: alloc::vec::Vec<u8>,
+) -> Result<alloc::vec::Vec<u8>, &'static str> {
+    const MAX_BYTES: usize = 512 * 1024 * 1024;
+    let tar = crate::r::lz4::decompress_frame(payload, MAX_BYTES)
+        .await
+        .map_err(|_| "invalid or oversized LZ4 frame")?;
+    let entries = crate::r::tar::unpack(&tar, 32, MAX_BYTES, MAX_BYTES)
+        .map_err(|_| "invalid or oversized tar archive")?;
+    let mut iso = None;
+    for entry in entries {
+        if entry.name == "trueos.iso" {
+            if iso.is_some() {
+                return Err("duplicate trueos.iso");
+            }
+            iso = Some(entry.bytes);
+        }
+    }
+    iso.ok_or("archive missing trueos.iso")
 }

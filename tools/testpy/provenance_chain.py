@@ -150,7 +150,7 @@ def should_skip(path: Path, rel: str) -> bool:
         return True
     if path.suffix in EXCLUDED_SUFFIXES:
         return True
-    if path.name.endswith((".iso", ".7z")):
+    if path.name.endswith((".iso", ".7z", ".lz4")):
         return True
     return False
 

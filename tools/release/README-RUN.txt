@@ -1,6 +1,10 @@
 TRUEOS QEMU bundle
 ==================
 
+Extract TrueOS.lz4 with the LZ4 and tar tools first:
+
+    lz4 -dc TrueOS.lz4 | tar -xf -
+
 This archive includes:
 
 - trueos.iso
