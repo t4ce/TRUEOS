@@ -42,6 +42,7 @@ pub(crate) fn open(vm: u8, script: &[u8], cols: usize, rows: usize, stdin_open: 
     if !valid_size(cols, rows) || script.len() > INPUT_LIMIT - 1 || script.contains(&0)
         || core::str::from_utf8(script).is_err() { return -1; }
     let Some(owner) = owner(vm) else { return -3; };
+    super::service::refresh_appdb_names();
     let mut registry = SESSIONS.lock();
     if registry.len() >= super::MAX_SHELL3_INSTANCES { return -4; }
     let Ok(slot) = super::service::reserve_terminal_slot() else { return -4; };

@@ -51,6 +51,7 @@ impl Shell3 {
     fn set_prompt(&mut self,_:&str){}
     fn set_cursor(&mut self,_:usize){}
     fn replay_terminal_line(&mut self,_:&str){}
+    fn submit_app_prompt(&mut self)->bool{false}
     fn submit_operator_prompt(&mut self)->bool{false}
     fn refresh_prompt_strip(&mut self){}
     fn echo_recognized_prompt(&mut self)->bool{false}

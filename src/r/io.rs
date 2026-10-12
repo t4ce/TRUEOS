@@ -498,6 +498,7 @@ pub mod env {
 pub mod async_fs_cabi;
 pub mod calculator_cabi;
 pub mod fs_cabi;
+pub mod shell3_sessions_cabi;
 pub mod input_cabi;
 pub mod vgpu_cabi;
 

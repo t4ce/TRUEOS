@@ -2780,4 +2780,3 @@ pub extern "C" fn trueos_cabi_shell3_window_v1(x: i32, y: i32, width: u32, heigh
     crate::shell3::service::blueprint_window_spawn(vm_id, geometry)
 }
 
-include!("shell3_sessions_cabi.rs");
