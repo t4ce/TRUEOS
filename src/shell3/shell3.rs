@@ -1047,7 +1047,7 @@ impl Shell3 {
 
     /// Prompt-row input is addressed by the selected app lifetime, not a view.
     fn submit_app_prompt(&mut self) -> bool {
-        if self.prompt.text.starts_with(OPERATOR) { return false; }
+        if self.active_vmx_app().is_none() || self.prompt.text.starts_with(OPERATOR) { return false; }
         let (Some(name), Some(lifetime)) = (self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) else { return false; };
         let Some(vm) = crate::hv::matrix::vm_for_slot(name, lifetime) else { return false; };
         let Some(run) = crate::hv::vm_run_generation(vm) else { return false; };
@@ -1061,7 +1061,7 @@ impl Shell3 {
         true
     }
 
-    /// Enter is reserved for operator submission; other prompt text is inert.
+    /// Outside VMX, Enter is reserved for operator submission.
     fn submit_operator_prompt(&mut self) -> bool {
         let mut input = self.prompt.text.clone();
         if !self.parse_operator(&input) {
