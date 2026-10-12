@@ -53,6 +53,8 @@ enum RequestKind {
     TypedStat {
         path: String,
     },
+    Metadata { path: String },
+    MetadataV2 { path: String },
     RecordKey {
         path: String,
     },
@@ -428,6 +430,14 @@ pub(crate) fn start_stat(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Stat { path })
 }
 
+pub(crate) fn start_metadata_v2(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::MetadataV2 { path })
+}
+
+pub(crate) fn start_metadata(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::Metadata { path })
+}
+
 pub(crate) fn start_typed_stat(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::TypedStat { path })
 }
@@ -709,6 +719,8 @@ async fn process(request: &Request) -> OperationState {
         | RequestKind::Write { path, .. }
         | RequestKind::CreateDirAll { path }
         | RequestKind::Stat { path }
+        | RequestKind::Metadata { path }
+        | RequestKind::MetadataV2 { path }
         | RequestKind::TypedStat { path }
         | RequestKind::RecordKey { path }
         | RequestKind::ListDir { path }
@@ -809,6 +821,33 @@ async fn process(request: &Request) -> OperationState {
                     OperationState::Read(bytes)
                 }
                 Err(code) => OperationState::Failed(code),
+            }
+        }
+        RequestKind::Metadata { path: _ } | RequestKind::MetadataV2 { path: _ } => {
+            let info = if selected_path.is_empty() {
+                Ok(Some(crate::r::fs::trueosfs::NodeInfo {
+                    revision: 0, file_id: 0, kind: crate::r::fs::trueosfs::NodeKind::Directory,
+                    data_len: 0, content_type: crate::r::fs::trueosfs::ContentTypeId::NONE,
+                    record_key: crate::r::fs::trueosfs::RecordKey::Ffa,
+                }))
+            } else { crate::r::fs::trueosfs::node_info_async(disk, selected_path).await };
+            match info {
+                Ok(Some(info)) => {
+                    let mut bytes = Vec::with_capacity(24);
+                    bytes.extend_from_slice(&(match info.kind {
+                        crate::r::fs::trueosfs::NodeKind::File => 1u32,
+                        crate::r::fs::trueosfs::NodeKind::Directory => 2u32,
+                    }).to_le_bytes());
+                    bytes.extend_from_slice(&info.data_len.to_le_bytes());
+                    bytes.extend_from_slice(&info.file_id.to_le_bytes());
+                    bytes.extend_from_slice(&disk.id().raw().to_le_bytes());
+                    if matches!(&request.kind, RequestKind::MetadataV2 { .. }) {
+                        bytes.extend_from_slice(&info.revision.to_le_bytes());
+                    }
+                    OperationState::Read(bytes)
+                }
+                Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
         RequestKind::TypedStat { path: _ } => {
@@ -1223,6 +1262,26 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_typed_stat_start(
     } else {
         start_typed_stat(direct_owner(), path)
     }
+}
+
+/// Metadata v2: the 24-byte v1 result followed by a committed revision u64.
+/// Revision is an append-only record address, not a wall-clock timestamp.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_metadata_start_v2(path_ptr: *const u8, path_len: usize) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) { Ok(path) => path, Err(code) => return code };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_METADATA_START_V2, path.as_str())
+    } else { start_metadata_v2(direct_owner(), path) }
+}
+
+/// Read versioned node metadata without changing the legacy stat wire format.
+/// Result: kind:u32, size:u64, persistent file id:u64, root id:u32 (LE).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_metadata_start_v1(path_ptr: *const u8, path_len: usize) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) { Ok(path) => path, Err(code) => return code };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_METADATA_START_V1, path.as_str())
+    } else { start_metadata(direct_owner(), path) }
 }
 
 /// Start a metadata-only read of the `RecordKey` stored in a TRUEOSFS file header.

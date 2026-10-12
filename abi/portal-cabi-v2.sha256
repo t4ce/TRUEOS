@@ -1,3 +1,5 @@
+# Additive filesystem metadata v2 with committed revision; v1 and existing signatures unchanged.
+# Additive filesystem metadata v1 with root-scoped persistent object identity; existing signatures unchanged.
 # Additive Blueprint-owned Shell3 byte sessions v1; existing signatures unchanged.
 # Additive cursor-scoped UI4 drag buffers v1. Existing symbol signatures unchanged.
 # Additive typed clipboard command v1. Existing symbol signatures unchanged.
@@ -16,4 +18,4 @@
 # Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
-ae69af92887512517d410fde45699a1bf6d55c3a702a666abe86ecb22a1eb195
+0253b67c6d37cc40449cf923134109c833a5b78ec033a88e245f401f5abc632c

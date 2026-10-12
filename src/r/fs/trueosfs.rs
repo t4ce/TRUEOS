@@ -1411,6 +1411,9 @@ async fn file_in_with_metadata_async(
     // Recheck the namespace under the write lease. Never rebuild an index here:
     // rebuilding can checkpoint and would recursively acquire this same lease.
     let indexed = validate_indexed_file_target(disk.id(), name, legacy_blob)?;
+    let existing_id = if indexed {
+        lookup_file_record_async(disk, name).await?.map_or(0, |record| record.file_id)
+    } else { 0 };
     let begun = if indexed {
         trueos_fs::begin_write_file_stream_prevalidated(
             &io,
@@ -1418,6 +1421,7 @@ async fn file_in_with_metadata_async(
             name,
             bytes.len() as u64,
             trueos_fs::FileWriteMetadata {
+                file_id: existing_id,
                 content_type,
                 record_key,
             },
@@ -1430,6 +1434,7 @@ async fn file_in_with_metadata_async(
             name,
             bytes.len() as u64,
             trueos_fs::FileWriteMetadata {
+                file_id: existing_id,
                 content_type,
                 record_key,
             },
@@ -1622,6 +1627,9 @@ async fn file_write_begin_with_metadata_async(
     // Recheck the namespace under the write lease. Never rebuild an index here:
     // rebuilding can checkpoint and would recursively acquire this same lease.
     let indexed = validate_indexed_file_target(disk.id(), name, legacy_blob)?;
+    let existing_id = if indexed {
+        lookup_file_record_async(disk, name).await?.map_or(0, |record| record.file_id)
+    } else { 0 };
     let begun = if indexed {
         trueos_fs::begin_write_file_stream_prevalidated(
             &io,
@@ -1629,6 +1637,7 @@ async fn file_write_begin_with_metadata_async(
             name,
             total_len,
             trueos_fs::FileWriteMetadata {
+                file_id: existing_id,
                 content_type,
                 record_key,
             },
@@ -1641,6 +1650,7 @@ async fn file_write_begin_with_metadata_async(
             name,
             total_len,
             trueos_fs::FileWriteMetadata {
+                file_id: existing_id,
                 content_type,
                 record_key,
             },
@@ -1819,6 +1829,7 @@ async fn lookup_via_index_async(
         .await?
         .and_then(|record| {
             (record.kind == NodeKind::File).then_some(trueos_fs::FileRecordRef {
+                file_id: record.file_id,
                 entry_lba: record.entry_lba,
                 data_lba: record.data_lba,
                 data_len: record.data_len,
@@ -1924,6 +1935,7 @@ pub async fn file_out_if_index_ready_async(
                     .map_err(map_engine_err)?
                     .and_then(|record| {
                         (record.kind == NodeKind::File).then_some(trueos_fs::FileRecordRef {
+                            file_id: record.file_id,
                             entry_lba: record.entry_lba,
                             data_lba: record.data_lba,
                             data_len: record.data_len,
@@ -1966,6 +1978,8 @@ pub async fn node_info_async(
     }
     if name.is_empty() || name == "/" {
         return Ok(Some(NodeInfo {
+            revision: 0,
+            file_id: 0,
             kind: NodeKind::Directory,
             data_len: 0,
             content_type: ContentTypeId::NONE,
@@ -1981,6 +1995,8 @@ pub async fn node_info_async(
     Ok(lookup_node_via_index_async(disk, &placement, name)
         .await?
         .map(|record| NodeInfo {
+            revision: record.entry_lba,
+            file_id: record.file_id,
             kind: record.kind,
             data_len: record.data_len,
             content_type: record.content_type,
@@ -2416,7 +2432,7 @@ pub async fn file_rename_async(
     };
     let io = KernelBlockIo::new(disk);
     let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
-    let ok = trueos_fs::copy_file_from_record(&io, &params, src, &source_record, dst)
+    let ok = trueos_fs::move_file_from_record(&io, &params, src, &source_record, dst)
         .await
         .map_err(map_engine_err)?;
     if !ok {
@@ -3253,6 +3269,7 @@ pub async fn file_append_async(
         name,
         bytes.len() as u64,
         trueos_fs::FileWriteMetadata {
+            file_id: 0,
             content_type: ContentTypeId::BLOB,
             record_key,
         },

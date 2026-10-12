@@ -1159,6 +1159,8 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_async_fs_write_commit(id: u32) -> i32;
     pub fn trueos_cabi_async_fs_create_dir_all_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_metadata_start_v2(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_metadata_start_v1(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_stat_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_typed_stat_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_record_key_start(path_ptr: *const u8, path_len: usize) -> i32;

@@ -833,6 +833,30 @@ fn queue_async_plane(
             (window, view)
         })
         .collect();
+    if crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED {
+        crate::log_trace!(target: "ui4";
+            "ui4/plane-transaction revision={} slot={} sources={} damage={:?}\n",
+            pending.broker_revision, target_plane_slot(plan.target), selected.len(), plan.damage,
+        );
+        for (z, (window, view)) in selected.iter().enumerate() {
+            let buffer = pending.windows.iter()
+                .position(|candidate| candidate.id == window.id && candidate.layer == window.layer)
+                .map(|index| pending.leases[index].buffer_index);
+            let frame_plan = frame_snapshot(window.frame).ok().map(|snapshot| snapshot.plan);
+            crate::log_trace!(target: "ui4";
+                "ui4/plane-source revision={} slot={} z={} window={} layer={} frame={} buffer={:?} publish={} gpu_authored={} release={} phys=0x{:X} source={}x{} pitch={} destination={}x{}@{},{} opacity={} fully_opaque={} scanout_cache={} arc={} plan={:?}\n",
+                pending.broker_revision, target_plane_slot(plan.target), z,
+                window.id.raw(), window.layer, window.frame.raw(), buffer, window.publish_serial,
+                view.gpu_authored as u8, view.gpu_release.map_or(0, |release| release.sequence()),
+                view.phys, view.width, view.height, view.pitch,
+                window.placement.width, window.placement.height,
+                window.placement.x, window.placement.y, window.placement.opacity,
+                view.fully_opaque as u8,
+                composition_source_uses_scanout_cache(window, *view) as u8,
+                window.arc, frame_plan,
+            );
+        }
+    }
     if selected.is_empty() && matches!(plan.target, CompositionTarget::Primary) {
         crate::log_trace!(target: "ui4";
             "ui4/slot0-park backend=transparent-swap windows=0 action=clear-stale-damage-and-flip layer_kernel=0 frame_blend=0\n",

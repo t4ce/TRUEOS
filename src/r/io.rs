@@ -26,8 +26,11 @@ pub mod kfs {
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct FsStat {
+        pub revision: u64,
         pub kind: FsNodeKind,
         pub len: u64,
+        pub file_id: u64,
+        pub root_id: u32,
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

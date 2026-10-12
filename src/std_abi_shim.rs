@@ -402,6 +402,9 @@ pub(crate) enum OpenFile {
 }
 
 pub(crate) struct RegularFileWorld {
+    disk_revision: u64,
+    file_id: u64,
+    root_id: u32,
     bytes: Vec<u8>,
     dirty: bool,
     revision: u64,
@@ -2331,6 +2334,12 @@ fn trace_posix_file_world(path: Option<&str>) -> bool {
     path == Some(POSIX_FILE_WORLD_PROBE_PATH)
 }
 
+fn regular_file_metadata(path: &str) -> Result<crate::r::io::kfs::FsStat, c_int> {
+    let path = crate::r::io::env::resolve_fs_path(path, true).ok_or(TRUEOS_EINVAL)?;
+    crate::r::io::kfs::stat(&path)
+        .map_err(|error| fs_rc_to_errno(crate::r::io::fs_cabi::fs_error_to_code(error)))
+}
+
 fn open_regular_file_world(
     path: &str,
     should_create: bool,
@@ -2367,7 +2376,15 @@ fn open_regular_file_world(
         dirty = true;
     }
 
+    let metadata = match regular_file_metadata(path) {
+        Ok(metadata) => Some(metadata),
+        Err(TRUEOS_ENOENT) if should_create => None,
+        Err(errno) => return Err(errno),
+    };
     let world = Arc::new(Mutex::new(RegularFileWorld {
+        disk_revision: metadata.map_or(0, |metadata| metadata.revision),
+        file_id: metadata.map_or(0, |metadata| metadata.file_id),
+        root_id: metadata.map_or(0, |metadata| metadata.root_id),
         bytes,
         dirty,
         revision: u64::from(dirty),
@@ -2390,7 +2407,13 @@ fn writeback_regular_file_world(
         (world.bytes.clone(), world.revision)
     };
     write_file_to_cabi(path, bytes.as_slice())?;
+    let metadata = regular_file_metadata(path)?;
     let mut world = world.lock();
+    if world.file_id == 0 {
+        world.file_id = metadata.file_id;
+        world.root_id = metadata.root_id;
+    }
+    world.disk_revision = metadata.revision;
     if world.revision == revision {
         world.dirty = false;
     }
@@ -2405,7 +2428,7 @@ fn cleanup_regular_file_world(path: Option<&str>, world: &Arc<Mutex<RegularFileW
     }
 }
 
-async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_int> {
+async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(u32, u64, u64), c_int> {
     crate::log!("std-abi-shim: async-write stage=resolve path={} bytes={}\n", path, bytes.len());
     let Some(path) = crate::r::io::env::resolve_fs_path(path, false) else {
         crate::log!("std-abi-shim: async-write failed stage=resolve errno={}\n", TRUEOS_EINVAL);
@@ -2509,7 +2532,9 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
     match finish {
         Ok(Ok(())) => {
             crate::log!("std-abi-shim: async-write success stage=finish handle={}\n", handle);
-            Ok(())
+            let metadata = crate::r::fs::trueosfs::node_info_async(disk, path.as_str())
+                .await.map_err(block_error_to_errno)?.ok_or(TRUEOS_ENOENT)?;
+            Ok((disk.id().raw(), metadata.file_id, metadata.revision))
         }
         Ok(Err(err)) => Err(block_error_to_errno(err)),
         Err(_) => {
@@ -4845,34 +4870,21 @@ pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut c_void) -> c_int {
         return -1;
     };
 
-    let mut kind = 0u32;
-    let mut len = 0u64;
-    let rc = unsafe {
-        crate::r::io::cabi::trueos_cabi_fs_stat(
-            path.as_ptr(),
-            path.len(),
-            &mut kind as *mut u32,
-            &mut len as *mut u64,
-        )
-    };
-    if rc != 0 {
-        TRUEOS_ERRNO.store(fs_rc_to_errno(rc), Ordering::Relaxed);
-        return -1;
-    }
-
-    let mode = match kind {
-        1 => TRUEOS_FILE_MODE,
-        2 => TRUEOS_DIR_MODE,
-        _ => {
-            TRUEOS_ERRNO.store(TRUEOS_EIO, Ordering::Relaxed);
+    let metadata = match regular_file_metadata(path.as_str()) {
+        Ok(metadata) => metadata,
+        Err(errno) => {
+            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
             return -1;
         }
     };
+    let len = metadata.len;
+    let directory = metadata.kind == crate::r::io::kfs::FsNodeKind::Directory;
+    let mode = if directory { TRUEOS_DIR_MODE } else { TRUEOS_FILE_MODE };
     let blocks = core::cmp::min(len.saturating_add(511) / 512, i64::MAX as u64) as i64;
     let out = TrueosStat {
-        st_dev: 1,
-        st_ino: 1,
-        st_nlink: if kind == 2 { 2 } else { 1 },
+        st_dev: metadata.root_id as u64,
+        st_ino: metadata.file_id,
+        st_nlink: if directory { 2 } else { 1 },
         st_mode: mode,
         st_uid: 0,
         st_gid: 0,
@@ -4885,8 +4897,9 @@ pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut c_void) -> c_int {
         st_atime_nsec: 0,
         st_mtime: 0,
         st_mtime_nsec: 0,
-        st_ctime: 0,
-        st_ctime_nsec: 0,
+        // Encode a logical revision in the Unix time slots, not calendar time.
+        st_ctime: (metadata.revision / 1_000_000_000) as i64,
+        st_ctime_nsec: (metadata.revision % 1_000_000_000) as i64,
         __unused: [0; 3],
     };
     if !copy_to_abi_out(buf.cast::<u8>(), unsafe {
@@ -5141,11 +5154,19 @@ pub async fn close_async(fd: c_int) -> c_int {
                 && dirty
                 && let Some(path) = path.as_deref()
             {
-                if let Err(errno) = write_file_to_trueosfs_async(path, bytes.as_slice()).await {
-                    TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
-                    return -1;
-                }
+                let (root_id, file_id, disk_revision) = match write_file_to_trueosfs_async(path, bytes.as_slice()).await {
+                    Ok(identity) => identity,
+                    Err(errno) => {
+                        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                        return -1;
+                    }
+                };
                 let mut world = world.lock();
+                if world.file_id == 0 {
+                    world.file_id = file_id;
+                    world.root_id = root_id;
+                }
+                world.disk_revision = disk_revision;
                 if world.revision == revision {
                     world.dirty = false;
                 }
@@ -5693,10 +5714,17 @@ pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
         return -1;
     };
     let len = file.len() as u64;
+    let (root_id, file_id, disk_revision) = match file {
+        OpenFile::Regular { world, .. } => {
+            let world = world.lock();
+            (world.root_id as u64, world.file_id, world.disk_revision)
+        }
+        _ => (1, fd as u64, 0),
+    };
     let blocks = core::cmp::min(len.saturating_add(511) / 512, i64::MAX as u64) as i64;
     let out = TrueosStat {
-        st_dev: 1,
-        st_ino: fd as u64,
+        st_dev: root_id,
+        st_ino: file_id,
         st_nlink: 1,
         st_mode: TRUEOS_FILE_MODE,
         st_uid: 0,
@@ -5710,8 +5738,8 @@ pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
         st_atime_nsec: 0,
         st_mtime: 0,
         st_mtime_nsec: 0,
-        st_ctime: 0,
-        st_ctime_nsec: 0,
+        st_ctime: (disk_revision / 1_000_000_000) as i64,
+        st_ctime_nsec: (disk_revision % 1_000_000_000) as i64,
         __unused: [0; 3],
     };
     if !copy_to_abi_out(buf.cast::<u8>(), unsafe {

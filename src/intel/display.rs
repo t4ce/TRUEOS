@@ -5074,7 +5074,8 @@ pub(crate) fn ui4_direct_scanout_ready_for_frame(producer_frame: u64) -> Option<
 }
 
 const fn should_log_ui4_direct_checkpoint(sequence: u64) -> bool {
-    sequence <= 8 || sequence.is_multiple_of(120)
+    crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED
+        || sequence <= 8 || sequence.is_multiple_of(120)
 }
 
 #[derive(Copy, Clone, Debug)]

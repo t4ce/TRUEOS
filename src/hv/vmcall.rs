@@ -5594,6 +5594,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_ASYNC_FS_CREATE_DIR_ALL_START
         | OP_BP_ASYNC_FS_STAT_START
         | OP_BP_ASYNC_FS_LIST_DIR_START
+        | trueos_vm::vmcall::OP_BP_ASYNC_FS_METADATA_START_V1
+        | trueos_vm::vmcall::OP_BP_ASYNC_FS_METADATA_START_V2
         | OP_BP_ASYNC_FS_TYPED_STAT_START
         | OP_BP_ASYNC_FS_TYPED_LIST_DIR_START
         | trueos_vm::vmcall::OP_BP_ASYNC_FS_SELECT_FILES_START_V1
@@ -5643,6 +5645,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 OP_BP_ASYNC_FS_STAT_START => crate::r::io::async_fs_cabi::start_stat(owner, path),
                 OP_BP_ASYNC_FS_LIST_DIR_START => {
                     crate::r::io::async_fs_cabi::start_list_dir(owner, path)
+                }
+                trueos_vm::vmcall::OP_BP_ASYNC_FS_METADATA_START_V2 => {
+                    crate::r::io::async_fs_cabi::start_metadata_v2(owner, path)
+                }
+                trueos_vm::vmcall::OP_BP_ASYNC_FS_METADATA_START_V1 => {
+                    crate::r::io::async_fs_cabi::start_metadata(owner, path)
                 }
                 OP_BP_ASYNC_FS_TYPED_STAT_START => {
                     crate::r::io::async_fs_cabi::start_typed_stat(owner, path)

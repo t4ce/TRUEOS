@@ -218,6 +218,13 @@ pub const LOG_ENTRY_MAGIC: [u8; 8] = *b"TOSFLOG\0";
 
 /// Delete records store the referenced (deleted) entry LBA as their data payload.
 pub const DELETE_REF_BYTES: usize = 8;
+// Optional V3 identity extension in the previously reserved header tail:
+// [112..116] TOID; [116..124] nonzero root-scoped u64 object ID.
+// Legacy zero tails derive identity from their entry LBA. Rewrites persist it.
+const FILE_ID_MAGIC: [u8; 4] = *b"TOID";
+const FILE_ID_OFF: usize = RECORD_HEADER_MIN_BYTES;
+const FILE_ID_END: usize = FILE_ID_OFF + 12;
+
 const ZERO_INTEGRITY_TAG: [u8; 32] = [0u8; 32];
 
 // Record-key extension in the otherwise reserved portion of every log header.
@@ -277,6 +284,10 @@ impl NodeKind {
 /// Metadata for a live filesystem node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NodeInfo {
+    /// Committed record address; changes on every file rewrite. Not wall-clock time.
+    pub revision: u64,
+    /// Root-scoped object identity, preserved by writes and renames.
+    pub file_id: u64,
     pub kind: NodeKind,
     pub data_len: u64,
     pub content_type: ContentTypeId,
@@ -286,6 +297,8 @@ pub struct NodeInfo {
 /// Stable reference to a live file or directory record in the append-only log.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NodeRecordRef {
+    /// Root-scoped object identity, preserved by writes and renames.
+    pub file_id: u64,
     pub entry_lba: u64,
     pub data_lba: u64,
     pub kind: NodeKind,
@@ -306,12 +319,15 @@ pub struct DirEntry {
 /// committed file headers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileWriteMetadata {
+    /// Existing object identity; zero preserves the destination ID or allocates a new ID.
+    pub file_id: u64,
     pub content_type: ContentTypeId,
     pub record_key: RecordKey,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LogHeader {
+    file_id: u64,
     kind: LogKind,
     committed: bool,
     name_len: u16,
@@ -520,6 +536,10 @@ impl LogHeader {
         }
         block[CONTENT_TYPE_ID_OFF..RECORD_HEADER_MIN_BYTES]
             .copy_from_slice(&self.content_type.raw().to_le_bytes());
+        if self.file_id != 0 && block.len() >= FILE_ID_END {
+            block[FILE_ID_OFF..FILE_ID_OFF + 4].copy_from_slice(&FILE_ID_MAGIC);
+            block[FILE_ID_OFF + 4..FILE_ID_END].copy_from_slice(&self.file_id.to_le_bytes());
+        }
     }
 
     fn decode_from_block(block: &[u8]) -> Option<Self> {
@@ -555,14 +575,16 @@ impl LogHeader {
                 .try_into()
                 .ok()?,
         ));
-        if block[RECORD_HEADER_MIN_BYTES..]
-            .iter()
-            .any(|byte| *byte != 0)
-            || !valid_content_type_for_kind(kind, content_type)
-        {
+        let (file_id, tail) = if block.len() >= FILE_ID_END && block[FILE_ID_OFF..FILE_ID_OFF + 4] == FILE_ID_MAGIC {
+            let id = u64::from_le_bytes(block[FILE_ID_OFF + 4..FILE_ID_END].try_into().ok()?);
+            if id == 0 || !matches!(kind, LogKind::Put | LogKind::Directory) { return None; }
+            (id, FILE_ID_END)
+        } else { (0, RECORD_HEADER_MIN_BYTES) };
+        if block[tail..].iter().any(|byte| *byte != 0) || !valid_content_type_for_kind(kind, content_type) {
             return None;
         }
         Some(Self {
+            file_id,
             kind,
             committed,
             name_len,
@@ -870,6 +892,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
     // 1) Header committed=0.
     let mut hdr0 = vec![0u8; bs];
     LogHeader {
+        file_id: 0,
         kind: LogKind::IndexCheckpoint,
         committed: false,
         name_len: 0,
@@ -911,6 +934,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
     // 3) Rewrite header committed=1 with sha of payload.
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
+        file_id: 0,
         kind: LogKind::IndexCheckpoint,
         committed: true,
         name_len: 0,
@@ -1268,6 +1292,7 @@ pub struct PutWriteStream {
 pub fn write_stream_record_ref(stream: &PutWriteStream) -> FileRecordRef {
     let name_blocks = (stream.name_len as usize).div_ceil(stream.block_size);
     FileRecordRef {
+        file_id: stream.metadata.file_id,
         entry_lba: stream.entry_lba,
         data_lba: stream
             .entry_lba
@@ -1333,6 +1358,7 @@ pub async fn begin_write_file_stream<D: BlockIo>(
         name,
         data_len,
         FileWriteMetadata {
+            file_id: 0,
             content_type: ContentTypeId::BLOB,
             record_key,
         },
@@ -1355,7 +1381,8 @@ pub async fn begin_write_file_stream_with_metadata<D: BlockIo>(
 
 /// Begin a typed file write after the caller validated the destination (absent
 /// or a file) and its existing directory parent through a mounted namespace
-/// index. The caller must hold its namespace write lease from validation through
+/// index. For an existing file, metadata.file_id must carry its current ID;
+/// zero allocates a new identity. The caller must hold its namespace write lease from validation through
 /// commit and update that index before releasing it. Path syntax, content type,
 /// capacity, and commit ordering are still checked here; only log replay is skipped.
 pub async fn begin_write_file_stream_prevalidated<D: BlockIo>(
@@ -1377,7 +1404,7 @@ async fn begin_write_file_stream_with_metadata_inner<D: BlockIo>(
     params: &FsParams,
     name: &str,
     data_len: u64,
-    metadata: FileWriteMetadata,
+    mut metadata: FileWriteMetadata,
     allow_unregistered_existing_type: bool,
     namespace_prevalidated: bool,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
@@ -1385,7 +1412,7 @@ async fn begin_write_file_stream_with_metadata_inner<D: BlockIo>(
         return Ok(None);
     }
     let bs = dev.block_size();
-    if bs < RECORD_HEADER_MIN_BYTES
+    if bs < FILE_ID_END
         || metadata.content_type == ContentTypeId::NONE
         || (!allow_unregistered_existing_type
             && !valid_new_file_content_type(metadata.content_type))
@@ -1396,10 +1423,11 @@ async fn begin_write_file_stream_with_metadata_inner<D: BlockIo>(
     if matches!(record_key, RecordKey::Key(_)) && bs < RECORD_KEY_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
+    let existing = if !namespace_prevalidated {
+        lookup_node_record(dev, params, name).await?
+    } else { None };
     if !namespace_prevalidated {
-        if lookup_node_record(dev, params, name)
-            .await?
-            .is_some_and(|record| record.kind != NodeKind::File)
+        if existing.is_some_and(|record| record.kind != NodeKind::File)
         {
             return Ok(None);
         }
@@ -1419,9 +1447,13 @@ async fn begin_write_file_stream_with_metadata_inner<D: BlockIo>(
         return Ok(None);
     };
 
+    if metadata.file_id == 0 {
+        metadata.file_id = existing.map_or(entry_lba, |record| record.file_id);
+    }
     // Header with committed=0.
     let mut hdr0 = vec![0u8; bs];
     LogHeader {
+        file_id: metadata.file_id,
         kind: LogKind::Put,
         committed: false,
         name_len: name.len() as u16,
@@ -1500,6 +1532,7 @@ pub async fn begin_write_file_stream_with_key<D: BlockIo>(
         name,
         data_len,
         FileWriteMetadata {
+            file_id: 0,
             content_type: ContentTypeId::BLOB,
             record_key,
         },
@@ -1615,6 +1648,7 @@ pub async fn finish_write_file_stream<D: BlockIo>(
 
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
+        file_id: stream.metadata.file_id,
         kind: LogKind::Put,
         committed: true,
         name_len: stream.name_len,
@@ -1651,6 +1685,7 @@ async fn write_empty_node_entry<D: BlockIo>(
 
     let mut hdr0 = vec![0u8; bs];
     LogHeader {
+        file_id: 0,
         kind,
         committed: false,
         name_len: name_bytes.len() as u16,
@@ -1675,6 +1710,7 @@ async fn write_empty_node_entry<D: BlockIo>(
 
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
+        file_id: 0,
         kind,
         committed: true,
         name_len: name_bytes.len() as u16,
@@ -1708,6 +1744,7 @@ async fn write_delete_entry<D: BlockIo>(
     // 1) Header committed=0.
     let mut hdr0 = vec![0u8; bs];
     LogHeader {
+        file_id: 0,
         kind: LogKind::Delete,
         committed: false,
         name_len: name_len as u16,
@@ -1776,6 +1813,7 @@ async fn write_delete_entry<D: BlockIo>(
     // 2) Rewrite header committed=1 (after payload is durable).
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
+        file_id: 0,
         kind: LogKind::Delete,
         committed: true,
         name_len: name_len as u16,
@@ -1808,6 +1846,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
 
     let mut hdr0 = vec![0u8; bs];
     LogHeader {
+        file_id: 0,
         kind: LogKind::RenameTree,
         committed: false,
         name_len: name_len as u16,
@@ -1874,6 +1913,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
 
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
+        file_id: 0,
         kind: LogKind::RenameTree,
         committed: true,
         name_len: name_len as u16,
@@ -1924,6 +1964,7 @@ async fn read_put_entry_data<D: BlockIo>(
     Ok(Some((
         out,
         FileWriteMetadata {
+            file_id: if hdr.file_id == 0 { entry_lba } else { hdr.file_id },
             content_type: hdr.content_type,
             record_key: hdr.record_key,
         },
@@ -2089,6 +2130,7 @@ async fn build_live_nodes<D: BlockIo>(
                 live.insert(
                     name,
                     NodeRecordRef {
+                        file_id: if hdr.file_id == 0 { lba } else { hdr.file_id },
                         entry_lba: lba,
                         data_lba: lba.saturating_add(1).saturating_add(name_blocks as u64),
                         kind,
@@ -2217,6 +2259,7 @@ pub async fn write_file_with_key<D: BlockIo>(
         name,
         bytes,
         FileWriteMetadata {
+            file_id: 0,
             content_type: ContentTypeId::BLOB,
             record_key,
         },
@@ -2269,6 +2312,7 @@ pub async fn append_directory_prevalidated<D: BlockIo>(
     let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::Directory).await?;
     advance_log_head(dev, params, sb, blocks).await?;
     Ok(Some(NodeRecordRef {
+        file_id: entry_lba,
         entry_lba,
         data_lba: entry_lba + blocks,
         kind: NodeKind::Directory,
@@ -2280,6 +2324,8 @@ pub async fn append_directory_prevalidated<D: BlockIo>(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileInfo {
+    /// Root-scoped object identity, preserved by writes and renames.
+    pub file_id: u64,
     pub data_len: u64,
     pub content_type: ContentTypeId,
     pub record_key: RecordKey,
@@ -2287,6 +2333,8 @@ pub struct FileInfo {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileRecordRef {
+    /// Root-scoped object identity, preserved by writes and renames.
+    pub file_id: u64,
     pub entry_lba: u64,
     pub data_lba: u64,
     pub data_len: u64,
@@ -2297,6 +2345,7 @@ pub struct FileRecordRef {
 impl From<FileRecordRef> for NodeRecordRef {
     fn from(record: FileRecordRef) -> Self {
         Self {
+            file_id: record.file_id,
             entry_lba: record.entry_lba,
             data_lba: record.data_lba,
             kind: NodeKind::File,
@@ -2316,6 +2365,8 @@ pub async fn read_node_info<D: BlockIo>(
     Ok(lookup_node_record(dev, params, name)
         .await?
         .map(|record| NodeInfo {
+            revision: record.entry_lba,
+            file_id: record.file_id,
             kind: record.kind,
             data_len: record.data_len,
             content_type: record.content_type,
@@ -2344,6 +2395,7 @@ pub async fn read_file_info<D: BlockIo>(
         return Ok(None);
     }
     Ok(Some(FileInfo {
+        file_id: rec.file_id,
         data_len: rec.data_len,
         content_type: rec.content_type,
         record_key: rec.record_key,
@@ -2362,6 +2414,7 @@ pub async fn lookup_file_record<D: BlockIo>(
         return Ok(None);
     }
     Ok(Some(FileRecordRef {
+        file_id: rec.file_id,
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
@@ -2373,6 +2426,7 @@ pub async fn lookup_file_record<D: BlockIo>(
 #[inline]
 pub fn file_info_from_record(record: &FileRecordRef) -> FileInfo {
     FileInfo {
+        file_id: record.file_id,
         data_len: record.data_len,
         content_type: record.content_type,
         record_key: record.record_key,
@@ -2392,6 +2446,7 @@ pub async fn read_file<D: BlockIo>(
     }
 
     let rec = FileRecordRef {
+        file_id: rec.file_id,
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
@@ -2454,6 +2509,29 @@ pub async fn copy_file_from_record<D: BlockIo>(
     source: &FileRecordRef,
     destination_name: &str,
 ) -> Result<bool, FsError<D::Error>> {
+    copy_file_record_inner(dev, params, source_name, source, destination_name, false).await
+}
+
+/// Publish the destination record of a rename while preserving object identity.
+/// The caller must remove the source after success under its namespace write lease.
+pub async fn move_file_from_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    source_name: &str,
+    source: &FileRecordRef,
+    destination_name: &str,
+) -> Result<bool, FsError<D::Error>> {
+    copy_file_record_inner(dev, params, source_name, source, destination_name, true).await
+}
+
+async fn copy_file_record_inner<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    source_name: &str,
+    source: &FileRecordRef,
+    destination_name: &str,
+    preserve_identity: bool,
+) -> Result<bool, FsError<D::Error>> {
     if !is_normalized_nonempty_path(destination_name) {
         return Ok(false);
     }
@@ -2477,6 +2555,7 @@ pub async fn copy_file_from_record<D: BlockIo>(
         destination_name,
         &bytes,
         FileWriteMetadata {
+            file_id: if preserve_identity { source.file_id } else { 0 },
             content_type: source.content_type,
             record_key: source.record_key,
         },
@@ -2560,6 +2639,7 @@ pub async fn get_node_record_by_lba<D: BlockIo>(
         .saturating_add(name_blocks as u64);
 
     Ok(Some(NodeRecordRef {
+        file_id: if hdr.file_id == 0 { entry_lba } else { hdr.file_id },
         entry_lba,
         data_lba,
         kind,
@@ -2583,6 +2663,7 @@ pub async fn get_file_record_at<D: BlockIo>(
         return Ok(None);
     }
     Ok(Some(FileRecordRef {
+        file_id: record.file_id,
         entry_lba: record.entry_lba,
         data_lba: record.data_lba,
         data_len: record.data_len,
@@ -2605,6 +2686,7 @@ pub async fn read_file_range<D: BlockIo>(
         return Ok(None);
     }
     let rec = FileRecordRef {
+        file_id: rec.file_id,
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
@@ -3211,6 +3293,7 @@ pub async fn append_file<D: BlockIo>(
             name,
             append_bytes,
             FileWriteMetadata {
+                file_id: 0,
                 content_type: ContentTypeId::BLOB,
                 record_key: RecordKey::Ffa,
             },
@@ -3230,6 +3313,7 @@ pub async fn append_file<D: BlockIo>(
         name,
         &base,
         FileWriteMetadata {
+            file_id: record.file_id,
             content_type: record.content_type,
             record_key: record.record_key,
         },
@@ -3268,6 +3352,7 @@ pub async fn append_file_typed<D: BlockIo>(
         name,
         &base,
         FileWriteMetadata {
+            file_id: 0,
             content_type: record.content_type,
             record_key: metadata.record_key,
         },
@@ -3415,6 +3500,97 @@ mod tests {
 
     fn test_key() -> KeyRef {
         KeyRef::new(ProviderId::new([0x31; 16]).unwrap(), KeyHandle::new([0xa7; 32]).unwrap())
+    }
+
+    #[test]
+    fn same_length_overwrite_changes_revision_without_changing_object_identity() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(write_file(&disk, &params, "snapshot", b"one").await, Ok(true));
+            let before = read_node_info(&disk, &params, "snapshot").await.unwrap().unwrap();
+            assert_ne!(before.revision, 0);
+            assert_eq!(read_node_info(&disk, &params, "snapshot").await.unwrap().unwrap(), before);
+            assert_eq!(write_file(&disk, &params, "snapshot", b"two").await, Ok(true));
+            let after = read_node_info(&disk, &params, "snapshot").await.unwrap().unwrap();
+            assert_eq!(before.file_id, after.file_id);
+            assert_eq!(before.data_len, after.data_len);
+            assert_ne!(before.revision, after.revision);
+            assert_eq!(read_node_info(&disk, &params, "snapshot").await.unwrap().unwrap(), after);
+        });
+    }
+
+    #[test]
+    fn object_identity_extension_rejects_zero_unknown_and_control_record_ids() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(write_file(&disk, &params, "file", b"one").await, Ok(true));
+            let record = lookup_file_record(&disk, &params, "file").await.unwrap().unwrap();
+            let bytes = disk.bytes.lock().unwrap();
+            let start = record.entry_lba as usize * BLOCK_SIZE;
+            let header = bytes[start..start + BLOCK_SIZE].to_vec();
+            assert_eq!(LogHeader::decode_from_block(&header).unwrap().file_id, record.file_id);
+            let mut invalid = header.clone();
+            invalid[FILE_ID_OFF + 4..FILE_ID_END].fill(0);
+            assert!(LogHeader::decode_from_block(&invalid).is_none());
+            let mut invalid = header.clone();
+            invalid[FILE_ID_OFF] = b'?';
+            assert!(LogHeader::decode_from_block(&invalid).is_none());
+            let mut invalid = header;
+            invalid[8] = LogKind::Delete as u8;
+            assert!(LogHeader::decode_from_block(&invalid).is_none());
+        });
+    }
+
+    #[test]
+    fn object_identity_survives_writes_and_rename_but_not_copy_or_recreation() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(write_file(&disk, &params, "history", b"one").await, Ok(true));
+            let first = lookup_file_record(&disk, &params, "history").await.unwrap().unwrap();
+            assert_ne!(first.file_id, 0);
+            assert_eq!(write_file(&disk, &params, "history", b"two").await, Ok(true));
+            assert_eq!(append_file(&disk, &params, "history", b"three").await, Ok(true));
+            let updated = lookup_file_record(&disk, &params, "history").await.unwrap().unwrap();
+            assert_eq!(updated.file_id, first.file_id);
+            assert_ne!(updated.entry_lba, first.entry_lba);
+            assert_eq!(copy_file_from_record(&disk, &params, "history", &updated, "copy").await, Ok(true));
+            let copy = lookup_file_record(&disk, &params, "copy").await.unwrap().unwrap();
+            assert_ne!(copy.file_id, first.file_id);
+            assert_eq!(move_file_from_record(&disk, &params, "history", &updated, "renamed").await, Ok(true));
+            assert_eq!(delete_file(&disk, &params, "history").await, Ok(true));
+            assert_eq!(lookup_file_record(&disk, &params, "renamed").await.unwrap().unwrap().file_id, first.file_id);
+            assert_eq!(write_file(&disk, &params, "history", b"new").await, Ok(true));
+            assert_ne!(lookup_file_record(&disk, &params, "history").await.unwrap().unwrap().file_id, first.file_id);
+        });
+    }
+
+    #[test]
+    fn legacy_object_identity_is_carried_forward_and_restored_on_undelete() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(write_file(&disk, &params, "legacy", b"one").await, Ok(true));
+            let first = lookup_file_record(&disk, &params, "legacy").await.unwrap().unwrap();
+            {
+                let mut bytes = disk.bytes.lock().unwrap();
+                let start = first.entry_lba as usize * BLOCK_SIZE;
+                bytes[start + FILE_ID_OFF..start + FILE_ID_END].fill(0);
+            }
+            let legacy = lookup_file_record(&disk, &params, "legacy").await.unwrap().unwrap();
+            assert_eq!(legacy.file_id, first.entry_lba);
+            assert_eq!(delete_file(&disk, &params, "legacy").await, Ok(true));
+            assert_eq!(undelete_file(&disk, &params, "legacy").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "legacy", b"two").await, Ok(true));
+            let updated = lookup_file_record(&disk, &params, "legacy").await.unwrap().unwrap();
+            assert_eq!(updated.file_id, legacy.file_id);
+            assert_ne!(updated.entry_lba, legacy.entry_lba);
+            let bytes = disk.bytes.lock().unwrap();
+            let start = updated.entry_lba as usize * BLOCK_SIZE;
+            assert_eq!(&bytes[start + FILE_ID_OFF..start + FILE_ID_OFF + 4], &FILE_ID_MAGIC);
+        });
     }
 
     #[test]
@@ -3602,6 +3778,7 @@ mod tests {
                     "file",
                     0,
                     FileWriteMetadata {
+                        file_id: 0,
                         content_type: ContentTypeId::BLOB,
                         record_key: RecordKey::Ffa,
                     },
@@ -3616,6 +3793,7 @@ mod tests {
     fn v3_header_requires_typed_put_and_zero_control_metadata() {
         let mut file = [0u8; BLOCK_SIZE];
         LogHeader {
+            file_id: 0,
             kind: LogKind::Put,
             committed: true,
             name_len: 1,
@@ -3644,6 +3822,7 @@ mod tests {
 
         let mut control = [0u8; BLOCK_SIZE];
         LogHeader {
+            file_id: 0,
             kind: LogKind::Directory,
             committed: true,
             name_len: 1,
@@ -3687,6 +3866,7 @@ mod tests {
             let disk = MemoryBlockIo::new();
             let params = params();
             let metadata = FileWriteMetadata {
+                file_id: 0,
                 content_type: ContentTypeId::PNG,
                 record_key: RecordKey::Ffa,
             };
@@ -3715,6 +3895,7 @@ mod tests {
                     "bad",
                     b"x",
                     FileWriteMetadata {
+                        file_id: 0,
                         content_type: ContentTypeId::from_raw(0x00ff_ffff),
                         record_key: RecordKey::Ffa,
                     },
@@ -3744,6 +3925,7 @@ mod tests {
                         "rejected",
                         4,
                         FileWriteMetadata {
+                            file_id: 0,
                             content_type,
                             record_key: RecordKey::Ffa,
                         },
@@ -3768,6 +3950,7 @@ mod tests {
                     "typed",
                     b"png",
                     FileWriteMetadata {
+                        file_id: 0,
                         content_type: ContentTypeId::PNG,
                         record_key: RecordKey::Ffa,
                     },
@@ -3808,6 +3991,7 @@ mod tests {
             let disk = MemoryBlockIo::new();
             let params = params();
             let png = FileWriteMetadata {
+                file_id: 0,
                 content_type: ContentTypeId::PNG,
                 record_key: RecordKey::Ffa,
             };
@@ -3822,6 +4006,7 @@ mod tests {
                     "typed",
                     b"two",
                     FileWriteMetadata {
+                        file_id: 0,
                         content_type: ContentTypeId::BLOB,
                         record_key: RecordKey::Ffa,
                     },
@@ -3854,6 +4039,7 @@ mod tests {
                     "source",
                     b"payload",
                     FileWriteMetadata {
+                        file_id: 0,
                         content_type: ContentTypeId::PNG,
                         record_key: RecordKey::Ffa,
                     },
@@ -4019,6 +4205,7 @@ mod tests {
                     "new",
                     b"bytes",
                     FileWriteMetadata {
+                        file_id: 0,
                         content_type: future,
                         record_key: RecordKey::Ffa
                     },
@@ -4036,6 +4223,7 @@ mod tests {
             let params = params();
             assert_eq!(create_directory(&disk, &params, "out").await, Ok(true));
             let metadata = FileWriteMetadata {
+                file_id: 0,
                 content_type: ContentTypeId::BLOB,
                 record_key: RecordKey::Ffa,
             };
@@ -4154,6 +4342,8 @@ mod tests {
             assert_eq!(
                 read_node_info(&disk, &params, "empty").await,
                 Ok(Some(NodeInfo {
+                    revision: lookup_node_record(&disk, &params, "empty").await.unwrap().unwrap().entry_lba,
+                    file_id: lookup_node_record(&disk, &params, "empty").await.unwrap().unwrap().file_id,
                     kind: NodeKind::Directory,
                     data_len: 0,
                     content_type: ContentTypeId::NONE,

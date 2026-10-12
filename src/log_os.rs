@@ -103,7 +103,7 @@ pub(crate) mod flags {
     /// motion - only appear once Global admits Trace. Enable this while
     /// working on the plane lease contract or the slot0 stack painter; it is
     /// noisy by design and belongs off in ordinary boots.
-    pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = false;
+    pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Focused Shell2 single-keystroke/render latency profile.
     ///
@@ -234,6 +234,11 @@ pub(crate) mod flags {
     ///
     /// Keep all area/profile choices here: both sinks consult this same policy.
     pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
+        // UI4 and vGPU targets resolve to Global. Honor this focused override
+        // before early-return profiles, including the ordinary TGL policy.
+        if UI4_DIAG_PROFILE_ENABLED && matches!(area, LogArea::Global) {
+            return LogLevelPolicy::up(LogLevelFilter::Trace);
+        }
         if ARCHIVE_DIAG_PROFILE_ENABLED
             && matches!(area, LogArea::Apps | LogArea::Storage)
         {
@@ -760,6 +765,13 @@ pub fn init_global_dispatch() {
         );
     }
     crate::log_font_warm_diag!("phase=profile version=1 first=2 every=128 clip_budget=320\n");
+    if flags::UI4_DIAG_PROFILE_ENABLED {
+        log_with_area_level(
+            flags::LogArea::Boot,
+            LogLevel::Important,
+            format_args!("log-profile=ui4-plane-diag-v1 global=Up(Trace) override=tgl,hv markers=ui4,vgpu,frame-drag,slot0-compose other-areas=existing-profile\n"),
+        );
+    }
     if flags::TGL_GPU_DIAG_PROFILE_ENABLED {
         log_with_area_level(
             flags::LogArea::Boot,

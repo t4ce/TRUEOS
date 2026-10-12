@@ -1,7 +1,9 @@
 # TRUEOS font assets
 
-TRUEOS does not bundle JuliaMono. To enable the preferred Shell2 terminal
-face, download the unmodified `JuliaMono-Regular.ttf` from the
+JuliaMono is optional and user-installed. Its TTF and the local
+`juliamono-ttf.tar.lz4` development backup are not byte-embedded in the kernel
+or included in ISO/release packaging. To enable face 4 explicitly, download
+the unmodified `JuliaMono-Regular.ttf` from the
 [`t4ce/juliamono`](https://github.com/t4ce/juliamono) repository and place it
 on the mounted TrueOSFS root at:
 

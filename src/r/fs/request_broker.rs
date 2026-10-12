@@ -509,6 +509,9 @@ async fn process_request(request: Request) {
                             super::trueosfs::NodeKind::Directory => FsNodeKind::Directory,
                         },
                         len: info.data_len,
+                        revision: info.revision,
+                        file_id: info.file_id,
+                        root_id: disk.id().raw(),
                     },
                     info.content_type,
                 )),
@@ -699,6 +702,9 @@ async fn stat_async(disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
         return Ok(FsStat {
             kind: FsNodeKind::Directory,
             len: 0,
+            revision: 0,
+            file_id: 0,
+            root_id: disk.id().raw(),
         });
     }
 
@@ -709,6 +715,9 @@ async fn stat_async(disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
                 super::trueosfs::NodeKind::Directory => FsNodeKind::Directory,
             },
             len: info.data_len,
+                        revision: info.revision,
+                        file_id: info.file_id,
+                        root_id: disk.id().raw(),
         });
     }
     Err(FsError::NotFound)

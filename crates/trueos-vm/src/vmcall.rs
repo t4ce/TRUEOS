@@ -642,3 +642,9 @@ pub fn shutdown(reason: &[u8]) -> ! {
 }
 
 pub const OP_BP_VGPU_OFFSCREEN_INDEXED_BATCH_V1: u32 = 0x190;
+
+/// Versioned node metadata: kind,u64 size,u64 persistent id,u32 root identity.
+pub const OP_BP_ASYNC_FS_METADATA_START_V1: u32 = 0x231;
+
+/// Metadata v2 additionally reports the committed record revision.
+pub const OP_BP_ASYNC_FS_METADATA_START_V2: u32 = 0x232;

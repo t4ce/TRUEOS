@@ -390,7 +390,7 @@ mod native_sleep_tests {
 }
 
 #[inline]
-fn fs_error_to_code(err: super::kfs::FsError) -> i32 {
+pub(crate) fn fs_error_to_code(err: super::kfs::FsError) -> i32 {
     use super::kfs::FsError;
     match err {
         FsError::NoRoot => FS_ERR_NOT_FOUND,
