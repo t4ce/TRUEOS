@@ -128,6 +128,7 @@ const TRUEOS_O_CREAT: c_int = 0o100;
 const TRUEOS_O_TRUNC: c_int = 0o1000;
 const TRUEOS_O_NONBLOCK: c_int = 0o4000;
 const TRUEOS_AT_FDCWD: c_int = -100;
+const TRUEOS_O_APPEND: c_int = 0o2000;
 const TRUEOS_F_GETFD: c_int = 1;
 const TRUEOS_F_SETFD: c_int = 2;
 const TRUEOS_F_GETFL: c_int = 3;
@@ -3403,6 +3404,7 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
             world,
             offset,
             writable,
+            flags,
             ..
         } => {
             if !*writable {
@@ -3410,6 +3412,11 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
                 return -1;
             }
             let mut world = world.lock();
+            // Select EOF under the same world lock as the write. A seek must
+            // not turn O_APPEND into an overwrite, including other descriptors.
+            if *flags & TRUEOS_O_APPEND != 0 && !input.is_empty() {
+                *offset = world.bytes.len();
+            }
             let end = offset.saturating_add(input.len());
             if world.bytes.len() < end {
                 world.bytes.resize(end, 0);

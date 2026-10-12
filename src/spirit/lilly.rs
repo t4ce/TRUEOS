@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use spin::Mutex;
 
-const LILLY_ARCHIVE_7Z: &[u8] = include_bytes!("../../tools/Lilly.7z");
+const LILLY_ARCHIVE_LZ4: &[u8] = include_bytes!("../../tools/Lilly.tar.lz4");
 const LILLY_CATALOG: &str = include_str!("../../tools/Lilly.catalog");
 const LILLY_EXPECTED_ASSETS: usize = 70;
 const LILLY_FRAMES_PER_ASSET: usize = 7;
@@ -132,7 +132,7 @@ struct LillyCatalogEntry {
 #[derive(Debug)]
 enum LillyLoadError {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    Archive(crate::z7::SevenZError),
+    Archive(crate::r::tar::Error),
     ArchiveShape,
     PngHeader,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -145,8 +145,8 @@ enum LillyLoadError {
     ResidentWrite,
 }
 
-impl From<crate::z7::SevenZError> for LillyLoadError {
-    fn from(value: crate::z7::SevenZError) -> Self {
+impl From<crate::r::tar::Error> for LillyLoadError {
+    fn from(value: crate::r::tar::Error) -> Self {
         Self::Archive(value)
     }
 }
@@ -162,8 +162,8 @@ pub(super) fn prepare_resident_once() -> bool {
 
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: first-job start job=lilly-resident-assets source=embedded-7z archive_bytes=0x{:X} decode=kernel-z7+png target=spirit-execution-ppgtt lifetime=runtime render_dependency=0\n",
-        LILLY_ARCHIVE_7Z.len(),
+        "trueos-spirit: first-job start job=lilly-resident-assets source=embedded-tar-lz4 archive_bytes=0x{:X} decode=kernel-lz4+tar+png target=spirit-execution-ppgtt lifetime=runtime render_dependency=0\n",
+        LILLY_ARCHIVE_LZ4.len(),
     );
     let assets = match load_resident_assets() {
         Ok(assets) => assets,
@@ -172,7 +172,7 @@ pub(super) fn prepare_resident_once() -> bool {
                 target: "gfx";
                 "trueos-spirit: first-job failed job=lilly-resident-assets error={:?} archive_bytes=0x{:X} action=retain-existing-spirit-stream\n",
                 error,
-                LILLY_ARCHIVE_7Z.len(),
+                LILLY_ARCHIVE_LZ4.len(),
             );
             return false;
         }
@@ -246,7 +246,9 @@ pub(crate) fn resident_frame_count() -> usize {
 
 fn load_resident_assets() -> Result<LillyResidentAssets, LillyLoadError> {
     let catalog = parse_catalog()?;
-    let mut entries = crate::z7::extract_all_to_vec(LILLY_ARCHIVE_7Z)?;
+    let tar = crate::r::lz4::decompress_frame_cpu(LILLY_ARCHIVE_LZ4, 256 * 1024 * 1024)
+        .map_err(|_| LillyLoadError::ArchiveShape)?;
+    let mut entries = crate::r::tar::unpack(&tar, 4096, 16 * 1024 * 1024, 256 * 1024 * 1024)?;
     entries.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     validate_archive_shape(entries.as_slice(), catalog.as_slice())?;
 
@@ -283,7 +285,7 @@ fn load_resident_assets() -> Result<LillyResidentAssets, LillyLoadError> {
 
 fn populate_resident_frames(
     allocation: &crate::gpu::resident::ResidentDmaBuffer,
-    entries: Vec<crate::z7::SevenZEntry>,
+    entries: Vec<crate::r::tar::Entry>,
     expected_storage_bytes: usize,
 ) -> Result<(Vec<LillyFrameEntry>, usize), LillyLoadError> {
     let mut frames = Vec::with_capacity(entries.len());
@@ -527,7 +529,7 @@ fn expected_archive_frame_count(catalog: &[LillyCatalogEntry]) -> usize {
 }
 
 fn validate_archive_shape(
-    entries: &[crate::z7::SevenZEntry],
+    entries: &[crate::r::tar::Entry],
     catalog: &[LillyCatalogEntry],
 ) -> Result<(), LillyLoadError> {
     if entries.len() != expected_archive_frame_count(catalog) {

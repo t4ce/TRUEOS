@@ -23,7 +23,7 @@ reviewed. Left/Right adjusts the shared background Speed and Down/Up adjusts
 Intensity, both in `0.01` steps.
 
 Lilly uses all seven frames of `idle.crossed.soft_blink`, extracted directly
-from `tools/Lilly.7z`, and advances every 110 ms independently of shader time.
+from `tools/Lilly.tar.lz4`, and advances every 110 ms independently of shader time.
 Escape or the window close action exits.
 
 From the repository root:
@@ -42,5 +42,5 @@ bld/tools/spirit_vfx_offline --render-grid bld/magic-time-43.png 1.5 36583
 ```
 
 The host dependencies are an OpenCL ICD loader/runtime with SPIR-V IL support,
-`libpng`, `7z`, X11, and Xrender. The program carries the small subset of
+`libpng`, `lz4`, `tar`, X11, and Xrender. The program carries the small subset of
 OpenCL declarations it needs, so OpenCL development headers are not required.

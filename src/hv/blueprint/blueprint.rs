@@ -15,7 +15,7 @@ use spin::Mutex;
 const BLUEPRINT_HEADER_LEN: usize = 24;
 const BLUEPRINT_PAYLOAD_MASK: u16 = 0x00FF;
 const BLUEPRINT_PAYLOAD_RAW: u16 = 1;
-const BLUEPRINT_PAYLOAD_7Z: u16 = 2;
+const BLUEPRINT_PAYLOAD_TAR_LZ4: u16 = 3;
 pub(crate) const BLUEPRINT_CAP_REPLICATABLE: u16 = 1 << 8;
 pub(crate) const BLUEPRINT_CAP_ARGV_ENTRY_V1: u16 = 1 << 9;
 pub(crate) const BLUEPRINT_CAP_FILESYSTEM_INDEPENDENT: u16 = 1 << 10;
@@ -1473,9 +1473,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_service_lane_available_capacity" => {
             Some(crate::r::blocking::trueos_service_lane_available_capacity as *const () as usize)
         }
-        "trueos_service_lane_cancellation_requested" => {
-            Some(crate::r::blocking::trueos_service_lane_cancellation_requested as *const () as usize)
-        }
+        "trueos_service_lane_cancellation_requested" => Some(
+            crate::r::blocking::trueos_service_lane_cancellation_requested as *const () as usize,
+        ),
         "trueos_tokio_spawn_blocking_job" => {
             Some(crate::r::blocking::trueos_tokio_spawn_blocking_job as *const () as usize)
         }
@@ -1785,10 +1785,7 @@ pub(crate) fn build_process_env(
     if archive_stem == "voxy" {
         // Settings, profiles and logs survive replacement of the container.
         // The resolver exports only this app's shared userdata subtree.
-        vars.insert(
-            String::from("VELOREN_USERDATA"),
-            String::from("/apps/voxy/userdata"),
-        );
+        vars.insert(String::from("VELOREN_USERDATA"), String::from("/apps/voxy/userdata"));
         vars.insert(
             String::from("VOXYGEN_SCREENSHOT"),
             alloc::format!("{}/screenshots", app_home.trim_end_matches('/')),
@@ -1984,10 +1981,15 @@ pub(crate) fn parse_blueprint(bytes: &[u8]) -> Result<BlueprintModule<'_>, &'sta
 }
 
 pub(crate) fn unpack_blueprint(module: &BlueprintModule<'_>) -> Result<Vec<u8>, &'static str> {
+    if module.raw_payload_len > crate::allcaps::blueprint::ASSET_DECODE_CAP_BYTES {
+        return Err("blueprint payload exceeds decode cap");
+    }
     match module.flags & BLUEPRINT_PAYLOAD_MASK {
         BLUEPRINT_PAYLOAD_RAW => Ok(module.payload.to_vec()),
-        BLUEPRINT_PAYLOAD_7Z => crate::z7::extract_single_file_to_vec(module.payload)
-            .map_err(|_| "7z payload decode failed"),
+        BLUEPRINT_PAYLOAD_TAR_LZ4 => {
+            crate::r::tar::decode_single_lz4(module.payload, module.raw_payload_len as usize)
+                .map_err(|_| "tar/LZ4 payload decode failed")
+        }
         _ => Err("unsupported blueprint payload flags"),
     }
 }
@@ -2207,12 +2209,11 @@ pub(crate) fn materialize_embedded_assets(
     let Some(archive) = embedded_asset_archive(unpacked)? else {
         return Ok(None);
     };
-    let decoded = crate::z7::extract_single_file_to_vec_bounded(
+    let decoded = crate::r::tar::decode_single_lz4(
         archive,
         crate::allcaps::blueprint::ASSET_DECODE_CAP_BYTES,
-        crate::allcaps::blueprint::ASSET_7Z_DICTIONARY_CAP_BYTES,
     )
-    .map_err(|err| alloc::format!("embedded asset 7z decode failed: {:?}", err))?;
+    .map_err(|err| alloc::format!("embedded asset tar/LZ4 decode failed: {:?}", err))?;
     let (entries, total_data_len) = parse_embedded_asset_table(decoded.as_slice())?;
 
     crate::r::io::kfs::create_dir_all(app_fs_root).map_err(|err| {

@@ -94,7 +94,6 @@ mod wait;
 mod wls;
 mod workers;
 mod x2apic;
-mod z7;
 
 // Re-exports
 pub(crate) use crate::intel::hda;

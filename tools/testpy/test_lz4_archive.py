@@ -48,14 +48,12 @@ edition = "2024"
 [dependencies]
 lz4_flex = { version = "0.11.6", default-features = false, features = ["safe-encode", "safe-decode", "checked-decode"] }
 twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32"] }
-lzma-rust2 = { version = "0.16.2", default-features = false, features = ["encoder"] }
 crc32fast = "1.5.0"
 ''')
         (folder / 'src/main.rs').write_text(f'''
 extern crate alloc;
 #[macro_export] macro_rules! log_info {{ ($($args:tt)*) => {{}}; }}
 #[macro_export] macro_rules! log_warn {{ ($($args:tt)*) => {{}}; }}
-#[path="{ROOT / 'src/z7.rs'}"] mod z7;
 mod intel {{ pub mod gpgpu {{
     #[derive(Debug)] pub enum Lz4GpuError {{ Unavailable, Submission, Capacity, InvalidInput }}
     pub const LZ4_GPU_DECODE_BATCH_BYTES: usize = 16 * 1024 * 1024;
@@ -125,7 +123,7 @@ fn main() {{
         }}
         "repack" => {{
             let entries=r::tar::unpack(&source,32,200000,4*1024*1024).unwrap();
-            let borrowed:Vec<_>=entries.iter().map(|e|z7::SevenZSourceEntry{{name:&e.name,bytes:&e.bytes,content_type_raw:e.content_type_raw}}).collect();
+            let borrowed:Vec<_>=entries.iter().map(|e|r::tar::SourceEntry{{name:&e.name,bytes:&e.bytes,content_type_raw:e.content_type_raw}}).collect();
             std::fs::write(&args[3],r::tar::pack(&borrowed,4*1024*1024).unwrap()).unwrap();
         }}
         _ => panic!(),
@@ -194,8 +192,18 @@ fn main() {{
     intel::gpgpu::MODE.set(3);
     assert_eq!(block_on(r::lz4::decompress_frame(frame, data.len())).unwrap(), data);
 }}
+#[test] fn single_member_bundle_is_bounded_and_rejects_multiple_members() {{
+    let entries=[r::tar::SourceEntry{{name:"module.elf",bytes:b"ELF fixture",content_type_raw:None}}];
+    let tar=r::tar::pack(&entries,8192).unwrap();
+    let frame=r::lz4::compress_frame_cpu(&tar);
+    assert_eq!(r::tar::decode_single_lz4(&frame,11).unwrap(),b"ELF fixture");
+    assert!(r::tar::decode_single_lz4(&frame,10).is_err());
+    let tar=r::tar::pack(&[entries[0],r::tar::SourceEntry{{name:"other",..entries[0]}}],8192).unwrap();
+    assert!(r::tar::decode_single_lz4(&r::lz4::compress_frame_cpu(&tar),100).is_err());
+    assert!(r::tar::decode_single_lz4(b"old or invalid archive",100).is_err());
+}}
 #[test] fn tar_limits_and_corruption() {{
-    let entries=[z7::SevenZSourceEntry{{name:"nested/empty",bytes:b"",content_type_raw:None}},z7::SevenZSourceEntry{{name:"long",bytes:b"abc",content_type_raw:Some(1)}}];
+    let entries=[r::tar::SourceEntry{{name:"nested/empty",bytes:b"",content_type_raw:None}},r::tar::SourceEntry{{name:"long",bytes:b"abc",content_type_raw:Some(1)}}];
     let tar=r::tar::pack(&entries,8192).unwrap();
     assert_eq!(r::tar::unpack(&tar,2,3,3).unwrap().len(),2);
     assert!(r::tar::unpack(&tar,1,3,3).is_err());
@@ -224,12 +232,12 @@ fn main() {{
         launcher=folder/'run-linux.sh';launcher.write_bytes(b'#!/bin/sh\necho boot\n')
         bundle_tar=folder/'bundle.tar';bundle=folder/'TrueOS.lz4'
         subprocess.run(['tar','--format=ustar','-C',str(folder),'-cf',str(bundle_tar),'trueos.iso','run-linux.sh'],check=True)
-        subprocess.run(['lz4','-9','-BI','--content-size','-f',str(bundle_tar),str(bundle)],check=True)
+        subprocess.run(['lz4','-12','-BI','--content-size','-f',str(bundle_tar),str(bundle)],check=True)
         restored=folder/'installer.iso';run('update-bundle',bundle,restored)
         assert restored.read_bytes()==iso.read_bytes()
         for names in [('run-linux.sh',),('trueos.iso','trueos.iso')]:
             subprocess.run(['tar','--format=ustar','-C',str(folder),'-cf',str(bundle_tar),*names],check=True)
-            subprocess.run(['lz4','-9','-BI','--content-size','-f',str(bundle_tar),str(bundle)],check=True)
+            subprocess.run(['lz4','-12','-BI','--content-size','-f',str(bundle_tar),str(bundle)],check=True)
             run('bad-update-bundle',bundle)
         bundle.write_bytes(b'invalid frame');run('bad-update-bundle',bundle)
         archive=folder/'input.tar'

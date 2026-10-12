@@ -22,39 +22,11 @@ use super::archive_limits::{
     MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES, MAX_SOURCE_FILE_BYTES, MAX_SOURCE_TOTAL_BYTES,
     MAX_TAR_BYTES,
 };
-const MAX_ARCHIVE_DICTIONARY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARCHIVE_PATH_BYTES: usize = 1_024;
 const MAX_ARCHIVE_PATH_DEPTH: usize = 64;
 
-/// Existing 7z callers retain the same content identity. The LZ4 path selects
-/// its own registered identity after choosing the output encoding.
 const ARCHIVE_CONTENT_TYPE: crate::r::fs::trueosfs::ContentTypeId =
-    crate::r::fs::trueosfs::ContentTypeId::SEVEN_Z;
-
-#[derive(Clone, Copy)]
-enum ArchiveFormat {
-    SevenZ,
-    TarLz4,
-}
-impl ArchiveFormat {
-    fn for_output(path: &str) -> Self {
-        if path
-            .rsplit('.')
-            .next()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("lz4") || ext.eq_ignore_ascii_case("mz4"))
-        {
-            Self::TarLz4
-        } else {
-            Self::SevenZ
-        }
-    }
-    fn content_type(self) -> crate::r::fs::trueosfs::ContentTypeId {
-        match self {
-            Self::SevenZ => ARCHIVE_CONTENT_TYPE,
-            Self::TarLz4 => crate::r::fs::trueosfs::ContentTypeId::LZ4,
-        }
-    }
-}
+    crate::r::fs::trueosfs::ContentTypeId::LZ4;
 pub(super) fn codec_now_ms() -> u64 {
     trueos_time::Instant::now().as_millis()
 }
@@ -142,7 +114,6 @@ pub enum CodecError {
     UnsupportedContentType(crate::r::fs::trueosfs::ContentIdentityRejectReason),
     ReadFailed,
     WriteFailed,
-    Archive(crate::z7::SevenZError),
     Lz4(super::lz4::Error),
     Tar(super::tar::Error),
     Fs(crate::disc::block::Error),
@@ -163,7 +134,6 @@ impl core::fmt::Display for CodecError {
             }
             Self::ReadFailed => f.write_str("read failed"),
             Self::WriteFailed => f.write_str("write failed"),
-            Self::Archive(err) => write!(f, "archive: {:?}", err),
             Self::Lz4(err) => write!(f, "lz4: {:?}", err),
             Self::Tar(err) => write!(f, "tar: {:?}", err),
             Self::Fs(err) => write!(f, "fs: {:?}", err),
@@ -174,12 +144,6 @@ impl core::fmt::Display for CodecError {
 impl From<crate::disc::block::Error> for CodecError {
     fn from(value: crate::disc::block::Error) -> Self {
         Self::Fs(value)
-    }
-}
-
-impl From<crate::z7::SevenZError> for CodecError {
-    fn from(value: crate::z7::SevenZError) -> Self {
-        Self::Archive(value)
     }
 }
 
@@ -337,34 +301,55 @@ pub fn operation_status(owner: u32, id: u32) -> i32 {
 /// Decode only: no destination directory or filesystem writes.
 pub fn enqueue_lz4_decode(owner: u32, archive_path: String) -> Result<u32, CodecError> {
     let archive_path = normalize_path(&archive_path, false)?;
-    enqueue_operation(owner, |id| CodecRequest::DecodeLz4Path { owner, id, archive_path })
+    enqueue_operation(owner, |id| CodecRequest::DecodeLz4Path {
+        owner,
+        id,
+        archive_path,
+    })
 }
 
 pub fn operation_result_len(owner: u32, id: u32) -> Result<usize, CodecError> {
     let operations = OPERATIONS.lock();
-    let operation = operations.iter().find(|op| op.owner == owner && op.id == id)
+    let operation = operations
+        .iter()
+        .find(|op| op.owner == owner && op.id == id)
         .ok_or(CodecError::NotFound)?;
     match &operation.state {
-        OperationState::Complete(Ok(_)) => operation.result_bytes.as_ref()
-            .map(Vec::len).ok_or(CodecError::NotFound),
+        OperationState::Complete(Ok(_)) => operation
+            .result_bytes
+            .as_ref()
+            .map(Vec::len)
+            .ok_or(CodecError::NotFound),
         OperationState::Complete(Err(error)) => Err(error.clone()),
         _ => Err(CodecError::NotReady),
     }
 }
 
-pub fn operation_result_read(owner: u32, id: u32, offset: usize, out: &mut [u8]) -> Result<usize, CodecError> {
+pub fn operation_result_read(
+    owner: u32,
+    id: u32,
+    offset: usize,
+    out: &mut [u8],
+) -> Result<usize, CodecError> {
     let mut operations = OPERATIONS.lock();
-    let operation = operations.iter_mut().find(|op| op.owner == owner && op.id == id)
+    let operation = operations
+        .iter_mut()
+        .find(|op| op.owner == owner && op.id == id)
         .ok_or(CodecError::NotFound)?;
     match &operation.state {
-        OperationState::Complete(Ok(_)) => {},
+        OperationState::Complete(Ok(_)) => {}
         OperationState::Complete(Err(error)) => return Err(error.clone()),
         _ => return Err(CodecError::NotReady),
     }
-    let bytes = operation.result_bytes.as_ref().ok_or(CodecError::NotFound)?;
+    let bytes = operation
+        .result_bytes
+        .as_ref()
+        .ok_or(CodecError::NotFound)?;
     let remaining = bytes.get(offset..).ok_or(CodecError::BadPath)?;
     let count = remaining.len().min(out.len());
-    let delivery_started = *operation.delivery_started_ms.get_or_insert_with(codec_now_ms);
+    let delivery_started = *operation
+        .delivery_started_ms
+        .get_or_insert_with(codec_now_ms);
     out[..count].copy_from_slice(&remaining[..count]);
     if count != 0 && offset + count == bytes.len() {
         let now = codec_now_ms();
@@ -375,7 +360,9 @@ pub fn operation_result_read(owner: u32, id: u32, offset: usize, out: &mut [u8])
 }
 
 fn retain_result_bytes(owner: u32, id: u32, bytes: Vec<u8>) {
-    if let Some(operation) = OPERATIONS.lock().iter_mut()
+    if let Some(operation) = OPERATIONS
+        .lock()
+        .iter_mut()
         .find(|op| op.owner == owner && op.id == id)
     {
         operation.result_bytes = Some(bytes);
@@ -399,7 +386,9 @@ pub fn operation_report(owner: u32, id: u32) -> Result<CodecReport, CodecError> 
 /// Owner-scoped progress; 100 is reserved for successful completion.
 pub fn operation_progress(owner: u32, id: u32) -> Result<u32, CodecError> {
     let operations = OPERATIONS.lock();
-    let operation = operations.iter().find(|op| op.owner == owner && op.id == id)
+    let operation = operations
+        .iter()
+        .find(|op| op.owner == owner && op.id == id)
         .ok_or(CodecError::NotFound)?;
     match &operation.state {
         OperationState::Complete(Ok(_)) => Ok(100),
@@ -409,7 +398,9 @@ pub fn operation_progress(owner: u32, id: u32) -> Result<u32, CodecError> {
 }
 
 fn update_unpack_progress(owner: u32, id: u32, percent: u32) {
-    if let Some(operation) = OPERATIONS.lock().iter_mut()
+    if let Some(operation) = OPERATIONS
+        .lock()
+        .iter_mut()
         .find(|op| op.owner == owner && op.id == id)
     {
         operation.progress_percent = operation.progress_percent.max(percent.min(99));
@@ -533,7 +524,7 @@ async fn read_source_file(
 
 /// The way an archive member's identity is restored.
 ///
-/// An absent extension denotes a legacy or third-party 7z archive. It must use
+/// An absent extension denotes a legacy or third-party tar archive. It must use
 /// the TRUEOSFS legacy Blob writer, which refuses to downgrade an existing
 /// typed file. An explicit Blob ID is different: it is a preserved, deliberate
 /// TRUEOSFS identity and uses the typed writer like every other explicit ID.
@@ -554,12 +545,12 @@ fn legacy_destination_would_downgrade(
 
 /// Resolve archive member identities before mutating the destination tree.
 ///
-/// A missing extension is an ordinary 7z compatibility case and is explicitly
+/// A missing extension is an ordinary tar compatibility case and is explicitly
 /// restored as Blob. A present identity must be one this kernel can legally
 /// originate; accepting `NONE` or an unknown future registry value would turn
 /// archive extraction into an unsafe raw metadata injection path.
 fn restored_content_types(
-    entries: &[crate::z7::SevenZEntry],
+    entries: &[super::tar::Entry],
 ) -> Result<Vec<RestoreDisposition>, CodecError> {
     let mut content_types = Vec::new();
     content_types
@@ -664,38 +655,25 @@ async fn collect_source_entries(
     Ok(entries)
 }
 
-async fn compress_entries(
-    entries: Vec<OwnedSourceEntry>,
-    format: ArchiveFormat,
-) -> Result<Vec<u8>, CodecError> {
+async fn compress_entries(entries: Vec<OwnedSourceEntry>) -> Result<Vec<u8>, CodecError> {
     let started = codec_now_ms();
     let prepared = CODEC_COMPUTE
         .run("archive/pack", move |_| {
             let sources: Vec<_> = entries
                 .iter()
-                .map(|entry| crate::z7::SevenZSourceEntry {
+                .map(|entry| super::tar::SourceEntry {
                     name: entry.name.as_str(),
                     bytes: entry.bytes.as_slice(),
                     content_type_raw: Some(entry.content_type_raw),
                 })
                 .collect();
-            match format {
-                ArchiveFormat::SevenZ => {
-                    crate::z7::compress_files_to_vec(&sources).map_err(CodecError::Archive)
-                }
-                ArchiveFormat::TarLz4 => {
-                    super::tar::pack(&sources, MAX_TAR_BYTES).map_err(CodecError::Tar)
-                }
-            }
+            super::tar::pack(&sources, MAX_TAR_BYTES).map_err(CodecError::Tar)
         })
         .await
         .map_err(|_| CodecError::NotReady)??;
-    let out = match format {
-        ArchiveFormat::SevenZ => prepared,
-        ArchiveFormat::TarLz4 => super::lz4::compress_frame(prepared)
-            .await
-            .map_err(CodecError::Lz4)?,
-    };
+    let out = super::lz4::compress_frame(prepared)
+        .await
+        .map_err(CodecError::Lz4)?;
     crate::log_important!(target: "storage"; "codec: phase=encode elapsed_ms={} output_bytes={}\n", codec_now_ms().saturating_sub(started), out.len());
     Ok(out)
 }
@@ -709,8 +687,7 @@ async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecRep
             .ok_or(CodecError::LimitExceeded)
     })?;
     let file_count = u32::try_from(entries.len()).map_err(|_| CodecError::LimitExceeded)?;
-    let format = ArchiveFormat::for_output(archive_path);
-    let archive = compress_entries(entries, format).await?;
+    let archive = compress_entries(entries).await?;
     if archive.len() > MAX_ARCHIVE_BYTES {
         return Err(CodecError::LimitExceeded);
     }
@@ -723,7 +700,7 @@ async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecRep
         disk,
         archive_path,
         archive.as_slice(),
-        format.content_type(),
+        ARCHIVE_CONTENT_TYPE,
     )
     .await?
     {
@@ -761,8 +738,7 @@ async fn pack_paths_job(
             .ok_or(CodecError::LimitExceeded)
     })?;
     let file_count = u32::try_from(entries.len()).map_err(|_| CodecError::LimitExceeded)?;
-    let format = ArchiveFormat::for_output(archive_path);
-    let archive = compress_entries(entries, format).await?;
+    let archive = compress_entries(entries).await?;
     if archive.len() > MAX_ARCHIVE_BYTES {
         return Err(CodecError::LimitExceeded);
     }
@@ -775,7 +751,7 @@ async fn pack_paths_job(
         disk,
         archive_path,
         archive.as_slice(),
-        format.content_type(),
+        ARCHIVE_CONTENT_TYPE,
     )
     .await?
     {
@@ -788,7 +764,7 @@ async fn pack_paths_job(
     })
 }
 
-fn validate_entry_set(entries: &[crate::z7::SevenZEntry]) -> Result<Vec<String>, CodecError> {
+fn validate_entry_set(entries: &[super::tar::Entry]) -> Result<Vec<String>, CodecError> {
     let mut path_set = BTreeSet::new();
     let mut paths = Vec::new();
     paths
@@ -816,7 +792,12 @@ fn validate_entry_set(entries: &[crate::z7::SevenZEntry]) -> Result<Vec<String>,
     Ok(paths)
 }
 
-async fn unpack_path_job(owner: u32, id: u32, archive_path: &str, output_path: &str) -> Result<CodecReport, CodecError> {
+async fn unpack_path_job(
+    owner: u32,
+    id: u32,
+    archive_path: &str,
+    output_path: &str,
+) -> Result<CodecReport, CodecError> {
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=read-begin source={:?} destination={:?} root={:?}\n", archive_path, output_path, disk);
     let info = crate::r::fs::trueosfs::file_info_async(disk, archive_path)
@@ -837,7 +818,7 @@ async fn unpack_path_job(owner: u32, id: u32, archive_path: &str, output_path: &
     update_unpack_progress(owner, id, 10);
     crate::log_info!(target: "storage"; "codec/archive: phase=read-complete source={:?} input_bytes={} lz4_magic={}\n", archive_path, input_bytes, archive.starts_with(&super::lz4::MAGIC));
     let decode_started = codec_now_ms();
-    let entries = if archive.starts_with(&super::lz4::MAGIC) {
+    let entries = {
         crate::log_info!(target: "storage"; "codec/archive: phase=lz4-begin source={:?} gpu_available={} cpu_fallback=on-unavailable\n", archive_path, crate::intel::gpgpu::lz4_gpu_available());
         let tar = super::lz4::decompress_frame(archive, MAX_TAR_BYTES)
             .await
@@ -855,24 +836,14 @@ async fn unpack_path_job(owner: u32, id: u32, archive_path: &str, output_path: &
             .await
             .map_err(|_| CodecError::NotReady)?
             .map_err(CodecError::Tar)?
-    } else {
-        CODEC_COMPUTE
-            .run("archive/7z-unpack", move |_| {
-                crate::z7::extract_all_to_vec_bounded(
-                    archive.as_slice(),
-                    MAX_ARCHIVE_ENTRIES,
-                    MAX_SOURCE_FILE_BYTES,
-                    MAX_SOURCE_TOTAL_BYTES,
-                    MAX_ARCHIVE_DICTIONARY_BYTES,
-                )
-            })
-            .await
-            .map_err(|_| CodecError::NotReady)??
     };
     crate::log_important!(target: "storage"; "codec: phase=decode elapsed_ms={} input_bytes={} files={}\n", codec_now_ms().saturating_sub(decode_started), input_bytes, entries.len());
     let restore_started = codec_now_ms();
     update_unpack_progress(owner, id, 20);
-    let total_output_bytes = entries.iter().map(|entry| entry.bytes.len() as u64).sum::<u64>();
+    let total_output_bytes = entries
+        .iter()
+        .map(|entry| entry.bytes.len() as u64)
+        .sum::<u64>();
     crate::log_info!(target: "storage"; "codec/archive: phase=preflight-begin destination={:?} files={}\n", output_path, entries.len());
     let validated = validate_entry_set(entries.as_slice())?;
     let restore_dispositions = match restored_content_types(entries.as_slice()) {
@@ -902,7 +873,7 @@ async fn unpack_path_job(owner: u32, id: u32, archive_path: &str, output_path: &
         return Err(CodecError::PathConflict);
     }
 
-    // Do this before creating even the output directory. A metadata-less 7z
+    // Do this before creating even the output directory. A metadata-less tar
     // entry is a legacy Blob write, which must never silently replace a typed
     // destination. `file_write_all_async` repeats this guard at write time;
     // the preflight keeps one later legacy conflict from leaving earlier files
@@ -966,7 +937,9 @@ async fn unpack_path_job(owner: u32, id: u32, archive_path: &str, output_path: &
             .checked_add(entry.bytes.len() as u64)
             .ok_or(CodecError::LimitExceeded)?;
         // Combine committed bytes and files so tiny/empty files also advance.
-        let byte_percent = if total_output_bytes == 0 { 100 } else {
+        let byte_percent = if total_output_bytes == 0 {
+            100
+        } else {
             output_bytes * 100 / total_output_bytes
         };
         let file_percent = (index as u64 + 1) * 100 / entries.len() as u64;
@@ -1018,28 +991,38 @@ async fn execute_request(request: CodecRequest) {
                 Ok((report, bytes)) => {
                     retain_result_bytes(owner, id, bytes);
                     Ok(report)
-                },
+                }
                 Err(error) => Err(error),
             }
-        },
+        }
     };
     match &result {
-        Ok(report) => crate::log_info!(target: "storage"; "codec/archive: phase=complete owner={} operation={} elapsed_ms={} files={} input_bytes={} output_bytes={}\n", owner, id, codec_now_ms().saturating_sub(started), report.file_count, report.input_bytes, report.output_bytes),
-        Err(error) => crate::log_warn!(target: "storage"; "codec/archive: phase=failed owner={} operation={} elapsed_ms={} error={}\n", owner, id, codec_now_ms().saturating_sub(started), error),
+        Ok(report) => {
+            crate::log_info!(target: "storage"; "codec/archive: phase=complete owner={} operation={} elapsed_ms={} files={} input_bytes={} output_bytes={}\n", owner, id, codec_now_ms().saturating_sub(started), report.file_count, report.input_bytes, report.output_bytes)
+        }
+        Err(error) => {
+            crate::log_warn!(target: "storage"; "codec/archive: phase=failed owner={} operation={} elapsed_ms={} error={}\n", owner, id, codec_now_ms().saturating_sub(started), error)
+        }
     }
     complete_operation(owner, id, result);
 }
 
-async fn decode_lz4_path_job(owner: u32, id: u32, path: &str) -> Result<(CodecReport, Vec<u8>), CodecError> {
+async fn decode_lz4_path_job(
+    owner: u32,
+    id: u32,
+    path: &str,
+) -> Result<(CodecReport, Vec<u8>), CodecError> {
     let started = codec_now_ms();
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=ram-read source={:?}\n", path);
-    let info = crate::r::fs::trueosfs::file_info_async(disk, path).await?
+    let info = crate::r::fs::trueosfs::file_info_async(disk, path)
+        .await?
         .ok_or(CodecError::NotFound)?;
     if info.data_len > MAX_ARCHIVE_BYTES as u64 {
         return Err(CodecError::LimitExceeded);
     }
-    let input = crate::r::fs::trueosfs::file_out_async(disk, path).await?
+    let input = crate::r::fs::trueosfs::file_out_async(disk, path)
+        .await?
         .ok_or(CodecError::ReadFailed)?;
     if input.len() != info.data_len as usize || input.len() > MAX_ARCHIVE_BYTES {
         return Err(CodecError::LimitExceeded);
@@ -1047,18 +1030,28 @@ async fn decode_lz4_path_job(owner: u32, id: u32, path: &str) -> Result<(CodecRe
     let input_bytes = input.len() as u64;
     let read_ms = codec_now_ms().saturating_sub(started);
     update_unpack_progress(owner, id, 10);
-    let bytes = super::lz4::decompress_frame_with_progress(input, MAX_TAR_BYTES, move |done, total| {
-        update_unpack_progress(owner, id, 10 + (done * 89 / total.max(1)) as u32);
-    }).await.map_err(CodecError::Lz4)?;
+    let bytes =
+        super::lz4::decompress_frame_with_progress(input, MAX_TAR_BYTES, move |done, total| {
+            update_unpack_progress(owner, id, 10 + (done * 89 / total.max(1)) as u32);
+        })
+        .await
+        .map_err(CodecError::Lz4)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=ram-decoded source={:?} input_bytes={} output_bytes={} read_ms={} decode_ms={} ready_ms={} filesystem_writes=0\n", path, input_bytes, bytes.len(), read_ms, codec_now_ms().saturating_sub(started).saturating_sub(read_ms), codec_now_ms().saturating_sub(started));
-    Ok((CodecReport { input_bytes, output_bytes: bytes.len() as u64, file_count: 0 }, bytes))
+    Ok((
+        CodecReport {
+            input_bytes,
+            output_bytes: bytes.len() as u64,
+            file_count: 0,
+        },
+        bytes,
+    ))
 }
 
 #[trueos_executor::task(pool_size = CODEC_WORKER_CAP)]
 pub async fn codec_worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
     crate::log_info!(
         target: "storage";
-        "codec: worker={} online archive=7z,tar.lz4 pool={} worker_slot={} core_kind={}\n",
+        "codec: worker={} online archive=tar.lz4 pool={} worker_slot={} core_kind={}\n",
         worker_id,
         CODEC_WORKER_CAP,
         worker_slot,
@@ -1081,8 +1074,8 @@ mod tests {
         restored_content_types,
     };
 
-    fn entry(content_type_raw: Option<u32>) -> crate::z7::SevenZEntry {
-        crate::z7::SevenZEntry {
+    fn entry(content_type_raw: Option<u32>) -> crate::r::tar::Entry {
+        crate::r::tar::Entry {
             name: String::from("member"),
             bytes: alloc::vec![],
             content_type_raw,
@@ -1090,9 +1083,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_archives_have_a_registered_seven_z_identity() {
-        assert_eq!(ARCHIVE_CONTENT_TYPE, crate::r::fs::trueosfs::ContentTypeId::SEVEN_Z);
-        assert!(ARCHIVE_CONTENT_TYPE.is_registered());
+    fn generated_archives_have_a_registered_lz4_identity() {
+        let content_type = ARCHIVE_CONTENT_TYPE;
+        assert_eq!(content_type, crate::r::fs::trueosfs::ContentTypeId::LZ4);
+        assert!(content_type.is_registered());
     }
 
     #[test]

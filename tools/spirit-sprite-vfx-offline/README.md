@@ -7,7 +7,7 @@ contains no duplicate shader math, and has no legacy OpenCL-C fallback.
 The live renderer:
 
 1. extracts all seven frames of Lilly's fixed `idle.crossed.soft_blink` asset
-   from `tools/Lilly.7z`;
+   from `tools/Lilly.tar.lz4`;
 2. loads the checked-in C++ SPIR-V on the host GPU;
 3. dispatches stable Sprite shader IDs 0 through 15 with their exact demo
    defaults and colors;
@@ -44,7 +44,7 @@ make -C tools/spirit-sprite-vfx-offline render \
   TIME=0.75 OUTPUT=bld/spirit-sprite-vfx-grid-075.png
 ```
 
-The dependencies are an OpenCL ICD loader/runtime, `libpng`, `7z`,
+The dependencies are an OpenCL ICD loader/runtime, `libpng`, `lz4`, `tar`,
 X11/Xrender (Xwayland works), and `zenity` for the two color pickers. The
 program embeds the minimal OpenCL 1.2 declarations it needs, so OpenCL headers
 are not required.

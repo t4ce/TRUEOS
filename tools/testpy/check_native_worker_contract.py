@@ -45,8 +45,15 @@ def check(kernel: Path, sdk: Path) -> None:
         contracts.append(signature(implementation, symbol, True))
         if len(set(contracts)) != 1:
             raise ValueError(f"{symbol}: kernel SDK / Blueprint SDK / implementation mismatch: {contracts}")
-        arm = re.search(r'"' + symbol + r'"\s*=>\s*\{([^}]+)\}', loader)
-        if not arm or f"crate::r::blocking::{symbol} as *const () as usize" not in arm[1]:
+        # rustfmt may turn a braced Some(...) arm into an expression arm.
+        # Accept both forms, but require the exact exported function pointer.
+        arm = re.search(
+            r'"' + re.escape(symbol) + r'"\s*=>\s*(?:\{\s*)?Some\(\s*'
+            + r"crate::r::blocking::" + re.escape(symbol)
+            + r"\s+as\s+\*const\s+\(\)\s+as\s+usize\s*,?\s*\)",
+            loader,
+        )
+        if not arm:
             raise ValueError(f"{symbol}: required loader export missing or points to another function")
     vmcall = (kernel / "src/hv/vmcall.rs").read_text()
     constants = dict(re.findall(r"pub const (OP_\w+): u32 = (0x[0-9a-fA-F]+)", vmcall))

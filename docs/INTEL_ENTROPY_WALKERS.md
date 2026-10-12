@@ -381,7 +381,7 @@ package + graphics energy delta
 UAS end-to-end throughput
 ```
 
-Compare against at least raw copy, LZ4, zstd-fast, and the current 7z archive
+Compare against at least raw copy, LZ4, zstd-fast, and the current tar/LZ4 archive
 workflow where appropriate. A mathematically elegant model that loses the UAS
 pipeline is a research result, not a kernel default.
 

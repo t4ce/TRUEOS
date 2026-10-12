@@ -87,7 +87,6 @@ pub mod blueprint {
     pub const HEAVY_GRAPHICS_HEAP_UPPER_MIB: usize = 2048;
     pub const ASSET_ARCHIVE_CAP_BYTES: usize = 1024 * 1024 * 1024;
     pub const ASSET_DECODE_CAP_BYTES: usize = 2 * 1024 * 1024 * 1024;
-    pub const ASSET_7Z_DICTIONARY_CAP_BYTES: usize = 256 * 1024 * 1024;
     pub const ASSET_FILE_CAP_BYTES: usize = 512 * 1024 * 1024;
     pub const ASSET_ENTRY_COUNT_CAP: usize = 65_536;
     pub const ASSET_PATH_BYTES_CAP: usize = 4096;

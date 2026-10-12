@@ -189,7 +189,7 @@ pub const OP_BP_VMEDIA_TEXTURE_DECODE_INFO: u32 = 0x158;
 pub const OP_BP_VGPU_RETAINED_TEXTURED_FRAME_V1: u32 = 0x162;
 pub const OP_BP_VMEDIA_VIDEO_COMMAND_V1: u32 = 0x161;
 pub const OP_BP_VMEDIA_TEXTURE_RELEASE: u32 = 0x159;
-/// Pack several regular TRUEOSFS files into one deterministic 7z archive.
+/// Pack several regular TRUEOSFS files into one deterministic tar/LZ4 archive.
 /// `arg0` is the byte length of the NUL-separated source-path list; the
 /// payload is that list followed by the destination archive path.
 pub const OP_BP_ARCHIVE_PACK_MANY_START: u32 = 0x15A;

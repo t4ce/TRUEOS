@@ -45,7 +45,6 @@ pub(crate) fn map_error(error: &crate::r::codec::CodecError) -> i32 {
         }
         CodecError::ReadFailed
         | CodecError::WriteFailed
-        | CodecError::Archive(_)
         | CodecError::Lz4(_)
         | CodecError::Tar(_)
         | CodecError::Fs(_) => FS_ERR_IO,

@@ -10,10 +10,9 @@ layer; tar is a separate container above it.
 ## Archive behavior
 
 The existing Blueprint `trueos::archive::{pack, pack_many, unpack}` API remains
-asynchronous. A pack destination ending in `.lz4` selects a standard LZ4 frame
-containing a POSIX tar archive; use `.tar.lz4`. Other destination names retain
-7z. Unpack detects the input magic, regardless of its filename. Termdir's
-archive action now creates `.tar.lz4` and recognizes both `.tar.lz4` and `.7z`
+asynchronous. Every pack creates a standard LZ4 frame containing a POSIX
+tar archive; use `.tar.lz4`. Unpack requires LZ4 frame magic, regardless of its
+filename. Termdir's archive action creates and recognizes `.tar.lz4`
 for extraction. Termdir polls the operation future once per UI frame and reports
 completion in its log; archive work no longer enters a UI-blocking `block_on`.
 One operation per explorer is admitted at a time; navigation remains available.
@@ -90,6 +89,10 @@ latency on the TRUEOS rig. That end-to-end hardware validation remains required.
 
 Install/update downloads use `TrueOS.lz4`, a standard LZ4 frame containing a
 USTAR archive with `trueos.iso`. `make iso` packages the ISO alone; `make release`
-also bundles launchers, OVMF and provenance. Both require the host `lz4` CLI.
-Kernel decoding is bounded to 512 MiB and 32 members. General 7z compatibility,
-legacy Blueprint payloads and the embedded Lilly asset still use the 7z codec.
+also bundles launchers, OVMF and provenance. Both require the host `lz4` CLI and use `-12 -BI --content-size` for maximum
+LZ4 compression with independent blocks. Runtime kernel archive creation uses
+the fast CPU/GPU block encoder; it does not use the host CLI compression level.
+Kernel update decoding is bounded to 512 MiB and 32 members. Blueprint payloads
+use encoding flag 3 for a single-file tar/LZ4 bundle; rebuild existing `.bp`
+files. Embedded Blueprint assets and Lilly also use tar/LZ4. The kernel no
+longer includes a 7z/LZMA codec and rejects old 7z payloads.

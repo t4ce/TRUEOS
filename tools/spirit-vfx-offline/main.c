@@ -202,7 +202,7 @@ static uint8_t *extract_lilly_rgba(unsigned frame, uint32_t *width_out, uint32_t
     }
     char command[256];
     int written =
-        snprintf(command, sizeof(command), "7z x -so tools/Lilly.7z "
+        snprintf(command, sizeof(command), "lz4 -dc tools/Lilly.tar.lz4 | tar -xOf - "
                                            "'%s/frame_%02u.png' 2>/dev/null",
                  LILLY_ASSET_DIRECTORY, frame + 1);
     if (written < 0 || (size_t)written >= sizeof(command)) {
@@ -210,7 +210,7 @@ static uint8_t *extract_lilly_rgba(unsigned frame, uint32_t *width_out, uint32_t
     }
     FILE *stream = popen(command, "r");
     if (stream == NULL) {
-        die("failed to start 7z for the fixed Lilly frame");
+        die("failed to start tar/LZ4 for the fixed Lilly frame");
     }
 
     png_image image;
@@ -238,7 +238,7 @@ static uint8_t *extract_lilly_rgba(unsigned frame, uint32_t *width_out, uint32_t
     if (status != 0) {
         free(rgba);
         png_image_free(&image);
-        die("7z failed while extracting the fixed Lilly frame");
+        die("tar/LZ4 failed while extracting the fixed Lilly frame");
     }
     *width_out = image.width;
     *height_out = image.height;

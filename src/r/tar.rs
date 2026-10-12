@@ -1,6 +1,16 @@
 //! Bounded POSIX tar/PAX container. LZ4 remains an independent codec layer.
 extern crate alloc;
-use crate::z7::{SevenZEntry, SevenZSourceEntry};
+pub struct Entry {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    pub content_type_raw: Option<u32>,
+}
+#[derive(Clone, Copy)]
+pub struct SourceEntry<'a> {
+    pub name: &'a str,
+    pub bytes: &'a [u8],
+    pub content_type_raw: Option<u32>,
+}
 use alloc::{
     format,
     string::{String, ToString},
@@ -69,7 +79,7 @@ fn pax_record(key: &str, value: &str) -> String {
 }
 /// Deterministic tar with standard PAX paths and an optional namespaced content
 /// identity field. Other tar readers may ignore that field and read every file.
-pub fn pack(entries: &[SevenZSourceEntry<'_>], max_bytes: usize) -> Result<Vec<u8>, Error> {
+pub fn pack(entries: &[SourceEntry<'_>], max_bytes: usize) -> Result<Vec<u8>, Error> {
     let mut sorted: Vec<_> = entries.iter().collect();
     sorted.sort_by_key(|entry| entry.name);
     let mut out = Vec::new();
@@ -151,7 +161,7 @@ pub fn unpack(
     max_entries: usize,
     max_file: usize,
     max_total: usize,
-) -> Result<Vec<SevenZEntry>, Error> {
+) -> Result<Vec<Entry>, Error> {
     let mut pos = 0usize;
     let mut total = 0usize;
     let mut out = Vec::new();
@@ -235,11 +245,22 @@ pub fn unpack(
                 }
             }
         };
-        out.push(SevenZEntry {
+        out.push(Entry {
             name,
             bytes: data.to_vec(),
             content_type_raw: fields.content_type,
         });
     }
     Err(Error::Invalid)
+}
+
+/// Decode one regular member from a bounded tar/LZ4 bundle on the CPU.
+pub fn decode_single_lz4(input: &[u8], max_bytes: usize) -> Result<Vec<u8>, Error> {
+    let tar_limit = max_bytes.checked_add(8192).ok_or(Error::Limit)?;
+    let tar = super::lz4::decompress_frame_cpu(input, tar_limit).map_err(|_| Error::Invalid)?;
+    let mut entries = unpack(&tar, 1, max_bytes, max_bytes)?;
+    if entries.len() != 1 {
+        return Err(Error::Invalid);
+    }
+    Ok(entries.remove(0).bytes)
 }
