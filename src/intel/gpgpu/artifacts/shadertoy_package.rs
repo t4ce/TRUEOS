@@ -2,12 +2,19 @@
 use alloc::vec::Vec;
 use sha2::{Digest, Sha256};
 
+/// Bound untrusted provenance independently of a particular build's size.
+pub(crate) const MAX_PACKAGE_BYTES: usize = 4 * 1024 * 1024;
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ShaderToyPackageContract {
     pub(crate) shader_id: u32,
+    // Build-time provenance size; runtime uploads may differ in metadata size.
+    #[allow(dead_code)]
     pub(crate) bytes: usize,
     pub(crate) bin_bytes: usize,
     pub(crate) spv_bytes: usize,
+    // Complete-package provenance hash used by offline build verification only.
+    #[allow(dead_code)]
     pub(crate) sha256: [u8; 32],
 }
 
@@ -54,39 +61,70 @@ pub(crate) fn contract(shader_id: u32) -> Option<ShaderToyPackageContract> {
 }
 
 impl ShaderToyPackageContract {
-    /// Authenticate the entire immutable kernel copy before interpreting bytes.
-    /// Source and provenance are covered as well as the executable and SPIR-V.
+    pub(crate) fn report_mismatch(&self, received_bytes: usize, reason: &str) {
+        crate::log_error!(target: "gpgpu";
+            "Safety-Guard with SHA256: Shader Package mismatch shader={} reason={} received_bytes={} action=reject\n",
+            self.shader_id, reason, received_bytes);
+    }
+
+    /// Decode a bounded package and authenticate executable payloads against
+    /// the kernel-owned ABI contract. Embedded source/provenance is never used
+    /// for execution; its complete-package hash is verified at build time.
     pub(crate) fn payloads<'a>(&self, bytes: &'a [u8]) -> Option<(&'a [u8], &'a [u8])> {
-        if bytes.len() != self.bytes || Sha256::digest(bytes)[..] != self.sha256 {
+        if bytes.len() > MAX_PACKAGE_BYTES || bytes.get(..8)? != b"STPKG01\0" {
             return None;
         }
-        if bytes.get(..8)? != b"STPKG01\0" {
+        let mut lengths = [0usize; 6];
+        for (i, length) in lengths.iter_mut().enumerate() {
+            *length = u32::from_le_bytes(bytes.get(8 + i * 4..12 + i * 4)?.try_into().ok()?) as usize;
+        }
+        let total = lengths.iter().try_fold(32usize, |sum, length| sum.checked_add(*length))?;
+        if total != bytes.len() || lengths[0] != self.bin_bytes || lengths[1] != self.spv_bytes {
             return None;
         }
         let bin_end = 32usize.checked_add(self.bin_bytes)?;
         let spv_end = bin_end.checked_add(self.spv_bytes)?;
-        Some((bytes.get(32..bin_end)?, bytes.get(bin_end..spv_end)?))
+        let bin = bytes.get(32..bin_end)?;
+        let spv = bytes.get(bin_end..spv_end)?;
+        let (bin_hash, spv_hash) = execution_hashes(self.shader_id)?;
+        if Sha256::digest(bin)[..] != bin_hash || Sha256::digest(spv)[..] != spv_hash {
+            return None;
+        }
+        Some((bin, spv))
     }
+}
+
+fn execution_hashes(shader_id: u32) -> Option<([u8; 32], [u8; 32])> {
+    let abi = match shader_id {
+        17 => &super::SKYBOX_SAMPLE_RGB565_ADLS_CPP_ABI_CONTRACT,
+        15 => &super::PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT,
+        _ => super::shadertoy_artifact_slot(shader_id)?.0.abi_contract?,
+    };
+    Some((abi.zebin_sha256, abi.spv_sha256))
 }
 
 pub(crate) struct ShaderToyPackageUpload {
     pub(crate) contract: ShaderToyPackageContract,
     pub(crate) bytes: Vec<u8>,
+    package_len: usize,
 }
 
 impl ShaderToyPackageUpload {
-    pub(crate) fn new(shader_id: u32) -> Option<Self> {
+    pub(crate) fn new(shader_id: u32, package_len: usize) -> Option<Self> {
+        if !(32..=MAX_PACKAGE_BYTES).contains(&package_len) {
+            return None;
+        }
         let contract = contract(shader_id)?;
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(contract.bytes).ok()?;
-        Some(Self { contract, bytes })
+        bytes.try_reserve_exact(package_len).ok()?;
+        Some(Self { contract, bytes, package_len })
     }
 
     pub(crate) fn append(&mut self, shader_id: u32, offset: usize, bytes: &[u8]) -> bool {
         if shader_id != self.contract.shader_id
             || offset != self.bytes.len()
             || bytes.is_empty()
-            || bytes.len() > self.contract.bytes.saturating_sub(offset)
+            || bytes.len() > self.package_len.saturating_sub(offset)
         {
             return false;
         }
@@ -95,6 +133,10 @@ impl ShaderToyPackageUpload {
     }
 
     pub(crate) fn complete(&self) -> bool {
-        self.bytes.len() == self.contract.bytes
+        self.bytes.len() == self.package_len
+    }
+
+    pub(crate) fn package_len(&self) -> usize {
+        self.package_len
     }
 }

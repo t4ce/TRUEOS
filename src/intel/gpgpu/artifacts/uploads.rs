@@ -243,7 +243,7 @@ pub(crate) fn register_skybox_package(package: &[u8]) -> bool {
         return false;
     };
     let Some((bin, spv)) = contract.payloads(package) else {
-        crate::log_error!(target: "gpgpu"; "intel/gpgpu: skybox package rejected reason=package-sha256-or-layout\n");
+        contract.report_mismatch(package.len(), "sha256-or-layout");
         return false;
     };
     let Some(dev) = super::claimed_device() else {
@@ -340,7 +340,7 @@ pub(crate) fn register_shadertoy_package(shader_id: u32, package: &[u8]) -> bool
         return false;
     };
     let Some((bin, spv)) = contract.payloads(package) else {
-        crate::log_error!(target: "gpgpu"; "intel/gpgpu: shadertoy package rejected shader={} reason=package-sha256-or-layout\n", shader_id);
+        contract.report_mismatch(package.len(), "sha256-or-layout");
         return false;
     };
     let Some((artifact, gpu, slot)) = shadertoy_artifact_slot(shader_id) else {

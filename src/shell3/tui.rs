@@ -949,7 +949,8 @@ fn keyboard_bytes(event: &crate::r::keyboard::TrueosKeyboardOutputEvent) -> Vec<
 }
 fn named_key_sequence(key_code: u16) -> Option<&'static [u8]> {
     match key_code {
-        crate::r::keyboard::KEYBOARD_KEY_BACKSPACE => Some(b"\x08"),
+        // Crossterm treats BS (0x08) as Ctrl-H; DEL is terminal Backspace.
+        crate::r::keyboard::KEYBOARD_KEY_BACKSPACE => Some(b"\x7f"),
         crate::r::keyboard::KEYBOARD_KEY_TAB => Some(b"\t"),
         crate::r::keyboard::KEYBOARD_KEY_ENTER => Some(b"\r"),
         crate::r::keyboard::KEYBOARD_KEY_ESCAPE => Some(b"\x1b"),

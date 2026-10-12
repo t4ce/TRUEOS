@@ -239,6 +239,8 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     e.codepoint='q' as u32;e.modifiers=1;tui::keyboard(f.id,Some("keys"),&e);assert_eq!(*hv::INPUT.lock().unwrap(),b" \\x11");
     e.kind=KEYBOARD_OUTPUT_KIND_KEY;e.key_code=KEYBOARD_KEY_ARROW_UP;e.codepoint=0;e.modifiers=0;tui::keyboard(f.id,Some("keys"),&e);
     assert!(hv::INPUT.lock().unwrap().ends_with(b"\\x1b[A"));
+    e.key_code=KEYBOARD_KEY_BACKSPACE;tui::keyboard(f.id,Some("keys"),&e);
+    assert!(hv::INPUT.lock().unwrap().ends_with(b"\\x7f")); // Crossterm Backspace, not Ctrl-H.
     e.key_code=KEYBOARD_KEY_ESCAPE;tui::keyboard(f.id,Some("keys"),&e);
     assert!(hv::INPUT.lock().unwrap().ends_with(b"\\x1b"));
     assert!(tui::active(f.id,Some("keys"))); // The consumer decides whether Esc releases its lease.

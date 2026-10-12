@@ -270,6 +270,7 @@ const ERROR_STATE: i32 = -4;
 const ERROR_FONT: i32 = -5;
 const ERROR_UI4: i32 = -6;
 pub(crate) const ERROR_BUSY: i32 = -7;
+const ERROR_SHADER_PACKAGE_MISMATCH: i32 = -8;
 const TEXT_SCENE_FONT_ID_STAMP_ONCE: u32 = 1 << 31;
 const TEXT_SCENE_FONT_ID_BACKBUFFER: u32 = 1 << 30;
 const TEXT_SCENE_FONT_ID_FLAGS: u32 = TEXT_SCENE_FONT_ID_STAMP_ONCE | TEXT_SCENE_FONT_ID_BACKBUFFER;
@@ -4378,18 +4379,26 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_register_kernel(
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
         };
-        if surface.visual_cadence.is_none() || offset == 0 && package_len == 0 {
+        if surface.visual_cadence.is_none() {
             return ERROR_INVALID;
         }
+        if !(32..=crate::intel::gpgpu::shadertoy_package::MAX_PACKAGE_BYTES).contains(&(package_len as usize)) {
+            if let Some(contract) = crate::intel::gpgpu::shadertoy_package::contract(17) {
+                contract.report_mismatch(package_len as usize, "package-size-limit");
+            }
+            return ERROR_SHADER_PACKAGE_MISMATCH;
+        }
         if offset == 0 {
-            surface.skybox_kernel_upload = ShaderToyPackageUpload::new(17);
+            surface.skybox_kernel_upload = ShaderToyPackageUpload::new(17, package_len as usize);
         }
         let Some(upload) = surface.skybox_kernel_upload.as_mut() else {
             return ERROR_STATE;
         };
-        if upload.contract.bytes != package_len as usize
-            || !upload.append(17, offset as usize, bytes)
-        {
+        if upload.package_len() != package_len as usize {
+            surface.skybox_kernel_upload = None;
+            return ERROR_SHADER_PACKAGE_MISMATCH;
+        }
+        if !upload.append(17, offset as usize, bytes) {
             surface.skybox_kernel_upload = None;
             return ERROR_INVALID;
         }
@@ -4398,6 +4407,10 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_register_kernel(
         }
         surface.skybox_kernel_upload.take().unwrap()
     };
+    if package.contract.payloads(&package.bytes).is_none() {
+        package.contract.report_mismatch(package.bytes.len(), "sha256-or-layout");
+        return ERROR_SHADER_PACKAGE_MISMATCH;
+    }
     if !crate::intel::gpgpu::register_skybox_package(&package.bytes) {
         return ERROR_INVALID;
     }
@@ -4760,12 +4773,15 @@ pub(crate) fn write_shadertoy_package_chunk(
     package_len: usize,
     bytes: &[u8],
 ) -> i32 {
-    if bytes.is_empty()
-        || bytes.len() > 2048
-        || crate::intel::gpgpu::shadertoy_package::contract(shader_id)
-            .is_none_or(|contract| contract.bytes != package_len)
-    {
+    if bytes.is_empty() || bytes.len() > 2048 {
         return ERROR_INVALID;
+    }
+    let Some(contract) = crate::intel::gpgpu::shadertoy_package::contract(shader_id) else {
+        return ERROR_INVALID;
+    };
+    if !(32..=crate::intel::gpgpu::shadertoy_package::MAX_PACKAGE_BYTES).contains(&package_len) {
+        contract.report_mismatch(package_len, "package-size-limit");
+        return ERROR_SHADER_PACKAGE_MISMATCH;
     }
     let package = {
         let mut surfaces = SURFACES.lock();
@@ -4778,7 +4794,7 @@ pub(crate) fn write_shadertoy_package_chunk(
         if offset == 0 {
             // Drop the previous bounded staging allocation before starting another.
             surface.shadertoy_upload = None;
-            let Some(upload) = ShaderToyPackageUpload::new(shader_id) else {
+            let Some(upload) = ShaderToyPackageUpload::new(shader_id, package_len) else {
                 return ERROR_INVALID;
             };
             surface.shadertoy_upload = Some(upload);
@@ -4786,7 +4802,7 @@ pub(crate) fn write_shadertoy_package_chunk(
         let Some(upload) = surface.shadertoy_upload.as_mut() else {
             return ERROR_STATE;
         };
-        if !upload.append(shader_id, offset, bytes) {
+        if upload.package_len() != package_len || !upload.append(shader_id, offset, bytes) {
             surface.shadertoy_upload = None;
             return ERROR_INVALID;
         }
@@ -4797,6 +4813,10 @@ pub(crate) fn write_shadertoy_package_chunk(
     };
     // The guest can no longer modify this allocation while it is authenticated
     // and copied into DMA pages. Staging is freed on both success and failure.
+    if package.contract.payloads(&package.bytes).is_none() {
+        package.contract.report_mismatch(package.bytes.len(), "sha256-or-layout");
+        return ERROR_SHADER_PACKAGE_MISMATCH;
+    }
     if !crate::intel::gpgpu::register_shadertoy_package(shader_id, &package.bytes) {
         return ERROR_INVALID;
     }
