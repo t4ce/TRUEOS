@@ -172,7 +172,7 @@ empty-libs:
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libgcc_s.a
 
 define BUILDIN_APP_RULE
-$(BLUEPRINTS_DIR)/dist/$(1).bp: $(BUILDIN_MANIFEST) $(BUILDIN_COMMON_INPUTS) $(shell if [ -d "$(BLUEPRINTS_DIR)/buildins/$(1)" ]; then find "$(BLUEPRINTS_DIR)/buildins/$(1)" -type f 2>/dev/null; fi)
+$(BLUEPRINTS_DIR)/dist/$(1).bp: $(BUILDIN_MANIFEST) $(BUILDIN_COMMON_INPUTS) $(shell for dir in "$(BLUEPRINTS_DIR)/buildins/$(1)" "$(BLUEPRINTS_DIR)/apps/$(1)"; do if [ -d "$$dir" ]; then find "$$dir" -type f -not -path '*/target/*' 2>/dev/null; fi; done)
 	@test -f "$(BUILDIN_MANIFEST)" || { echo "error: Blueprint build-in manifest not found at $(BUILDIN_MANIFEST)"; exit 1; }
 	cd "$(BLUEPRINTS_DIR)" && TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH=1 cargo bp "$(1)"
 endef

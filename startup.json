@@ -19,6 +19,7 @@
     ]
   },
   "autostart": [
+    { "action": "launch", "archive": "share.bp", "slot": "share", "settle_ms": 250 },
     { "action": "skip", "archive": "swarm.bp", "online_selector": "swarm", "slot": "swm", "settle_ms": 250 },
     { "action": "skip", "archive": "img.bp", "online_selector": "img", "slot": "img", "settle_ms": 250 },
     { "action": "skip", "archive": "cubes.bp", "slot": "cub", "settle_ms": 750 },

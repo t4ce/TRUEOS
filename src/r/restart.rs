@@ -1,7 +1,7 @@
 //! Blueprint restart policy for cold boots and live kernel replacement.
 //!
 //! These paths are intentionally exclusive. A power-on, reset, or ACPI reboot
-//! starts configured Blueprints through Appstore pullbot. A live update
+//! starts local Blueprints from AppDB, falling back to Appstore pullbot. A live update
 //! resumes only running handoff entries; stopped apps and defaults stay closed.
 
 use alloc::{string::String, vec::Vec};
@@ -138,6 +138,17 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
             }
             Timer::after(Duration::from_millis(app.settle_ms)).await;
             let result = (|| {
+                if app.online_selector.is_none() {
+                    if let Some(bytes) = crate::app_db::get(&app.archive)? {
+                        let mut request = crate::hv::launcher::LaunchRequest::new(app.archive.clone(), bytes);
+                        request.args = app.args.clone();
+                        request.script = app.launch_script.clone();
+                        if let Some(instance) = &app.instance {
+                            request.instance = crate::hv::BlueprintInstanceRequest::named(instance.clone());
+                        }
+                        return crate::hv::launcher::enqueue(request, None).map(|_| ());
+                    }
+                }
                 let script = app.pullbot_script()?;
                 let bytes = crate::app_db::get("appstore.bp")?
                     .ok_or_else(|| String::from("Appstore builtin unavailable"))?;
@@ -146,8 +157,8 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
                 crate::hv::launcher::enqueue(request, None).map(|_| ())
             })();
             match result {
-                Ok(()) => crate::log!("restart: cold-start pullbot queued archive={} slot={}\n", app.archive, app.slot),
-                Err(error) => crate::log!("restart: cold-start pullbot failed archive={} error={}\n", app.archive, error),
+                Ok(()) => crate::log!("restart: cold-start queued archive={} slot={}\n", app.archive, app.slot),
+                Err(error) => crate::log!("restart: cold-start failed archive={} error={}\n", app.archive, error),
             }
         }
         return;

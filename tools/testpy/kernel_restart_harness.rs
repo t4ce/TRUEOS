@@ -33,7 +33,7 @@ fn event(s: impl Into<String>) {
 mod app_db {
     pub fn get(s: &str) -> Result<Option<Vec<u8>>, String> {
         crate::event(format!("archive:{s}"));
-        Ok(Some(vec![1]))
+        Ok(matches!(s, "appstore.bp" | "share.bp").then(|| vec![1]))
     }
 }
 mod r {
@@ -91,13 +91,25 @@ mod hv {
         pub bytes: Vec<u8>,
     }
     pub mod launcher {
-        pub struct LaunchRequest { pub archive: String, pub bytes: Vec<u8>, pub script: Option<String> }
+        pub struct LaunchRequest {
+            pub archive: String, pub bytes: Vec<u8>, pub script: Option<String>,
+            pub args: Vec<String>, pub instance: super::BlueprintInstanceRequest,
+        }
         impl LaunchRequest {
-            pub fn new(archive: String, bytes: Vec<u8>) -> Self { Self { archive, bytes, script: None } }
+            pub fn new(archive: String, bytes: Vec<u8>) -> Self {
+                Self { archive, bytes, script: None, args: Vec::new(), instance: Default::default() }
+            }
         }
         pub fn enqueue(request: LaunchRequest, _: Option<()>) -> Result<(), String> {
-            assert_eq!(request.archive, "appstore.bp");
-            crate::event(format!("pullbot:{}", request.script.unwrap()));
+            match request.archive.as_str() {
+                "appstore.bp" => crate::event(format!("pullbot:{}", request.script.unwrap())),
+                "share.bp" => {
+                    assert!(request.args.is_empty());
+                    assert!(request.script.is_none());
+                    crate::event("local:share.bp");
+                }
+                _ => panic!("unexpected launch: {}", request.archive),
+            }
             Ok(())
         }
     }
@@ -259,7 +271,7 @@ fn cold_keeps_configured_defaults_detached_from_shell() {
     setup(false, vec![]);
     run(restart::restart_apps_task(Spawner));
     let e = EVENTS.lock().unwrap();
-    assert_eq!(*e, vec!["archive:appstore.bp", "pullbot:pull --headless voxy\n"]);
+    assert_eq!(*e, vec!["archive:share.bp", "local:share.bp", "archive:voxy.bp", "archive:appstore.bp", "pullbot:pull --headless voxy\n"]);
     assert!(
         !e.iter()
             .any(|x| x == "complete" || x.starts_with("replica:") || x.starts_with("resume:"))

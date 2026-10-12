@@ -18,6 +18,7 @@ def main():
         )
         (project / "startup.json").write_text(json.dumps({
             "autostart": [
+                {"action": "launch", "archive": "share.bp", "slot": "share", "settle_ms": 0},
                 {"action": "launch", "archive": "voxy.bp", "slot": "voxy", "settle_ms": 0},
                 {"action": "skip", "archive": "closed.bp", "slot": "closed", "settle_ms": 0},
             ]
