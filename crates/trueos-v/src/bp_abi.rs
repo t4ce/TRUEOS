@@ -1766,6 +1766,10 @@ unsafe extern "C" {
 
 
 
+    pub fn trueos_cabi_shell3_session_open_v1(script_ptr: *const u8, script_len: usize, cols: u32, rows: u32, stdin_open: u32) -> i64;
+    pub fn trueos_cabi_shell3_session_read_v1(session: u64, out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_shell3_session_write_v1(session: u64, bytes_ptr: *const u8, bytes_len: usize) -> isize;
+    pub fn trueos_cabi_shell3_session_control_v1(session: u64, operation: u32, cols: u32, rows: u32) -> i32;
     pub fn trueos_cabi_shell3_window_v1(x: i32, y: i32, width: u32, height: u32) -> i64;
     pub fn trueos_cabi_blueprint_launch_script_v1(payload_ptr: *const u8, payload_len: usize) -> i32;
     pub fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len: usize) -> i32;
@@ -2180,4 +2184,5 @@ pub struct TrueosUi4WindowStateV1 {
     pub opacity: u32,
     pub focused: u32,
     pub reserved: [u32; 3],
+
 }

@@ -486,9 +486,11 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
     };
     let mut appdb_generation = appdb_names_snapshot().0;
     let mut terminals = super::net::WorkerTerminals::new(expected_slot);
+    let mut command_sessions = super::sessions::Worker::new(expected_slot);
 
     loop {
         terminals.poll();
+        command_sessions.poll();
         for shell in &mut owned_shells.shells {
             shell.reconcile_matrix_selection();
         }
@@ -732,9 +734,9 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             }
         }
 
-        if owned_shells.is_empty() && terminals.is_empty() {
+        if owned_shells.is_empty() && terminals.is_empty() && command_sessions.is_empty() {
             let observed = SHELL_WORK_AVAILABLE.observe();
-            if !has_pending_for_executor(expected_slot) && !terminals.has_events() {
+            if !has_pending_for_executor(expected_slot) && !terminals.has_events() && !command_sessions.pending() {
                 SHELL_WORK_AVAILABLE.wait_after(observed).await;
             }
         } else {

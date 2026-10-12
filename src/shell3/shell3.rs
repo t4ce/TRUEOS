@@ -35,6 +35,7 @@ pub mod net;
 mod ssh;
 mod ssh_boot;
 mod tty;
+pub(crate) mod sessions;
 mod status;
 pub(crate) mod tui;
 mod update;
@@ -602,6 +603,10 @@ impl Shell3 {
     /// Construct a previously admitted terminal on its permanent AP owner.
     pub(super) fn new_terminal_reserved(slot: u32, peer_port: Option<u16>) -> Self {
         Self::new_terminal_sized_reserved(slot, peer_port, Default_COLUMNS, Default_ROWS)
+    }
+
+    pub(super) fn active_matrix_lease(&self) -> Option<MatrixSlotLease> {
+        Some(MatrixSlotLease::from_identity(self.active_matrix_slot.clone()?, self.active_matrix_lifetime?))
     }
 
     /// SSH supplies its accepted PTY size before model construction or drawing.

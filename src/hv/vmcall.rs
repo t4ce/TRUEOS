@@ -161,6 +161,10 @@ pub const OP_BP_CHILD_RECEIVE_V1: u32 = 0x13E; // arg0 handle -> one queued mess
 pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F; // arg0 handle -> lifecycle state/rc
 pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
 pub const OP_BP_SHELL3_WINDOW_V1: u32 = 0x187;
+pub const OP_BP_SHELL3_SESSION_OPEN_V1: u32 = 0x189;
+pub const OP_BP_SHELL3_SESSION_READ_V1: u32 = 0x18a;
+pub const OP_BP_SHELL3_SESSION_WRITE_V1: u32 = 0x18b;
+pub const OP_BP_SHELL3_SESSION_CONTROL_V1: u32 = 0x18c;
 pub const OP_BP_LAUNCH_SCRIPT_V1: u32 = 0x186;
 pub const OP_BP_IMG_OPEN_V1: u32 = 0x17B; // NUL-separated TRUEOSFS paths -> queued/rc
 pub const OP_BP_VID_OPEN_V1: u32 = 0x182; // primary-root video path -> queued/rc
@@ -3526,6 +3530,39 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(|()| 0i64)
                 .unwrap_or_else(i64::from);
             write_response(vm_id, seq, STATUS_OK, result as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL3_SESSION_OPEN_V1 => {
+            let rc = request_payload(vm_id, req_len).filter(|p| p.len() >= 12).map(|p| {
+                crate::shell3::sessions::open(vm_id, &p[12..],
+                    u32::from_le_bytes(p[..4].try_into().unwrap()) as usize,
+                    u32::from_le_bytes(p[4..8].try_into().unwrap()) as usize,
+                    u32::from_le_bytes(p[8..12].try_into().unwrap()) != 0)
+            }).unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL3_SESSION_READ_V1 => {
+            let mut output = [0u8; PAYLOAD_CAP];
+            let cap = (arg1 as usize).min(PAYLOAD_CAP);
+            let rc = crate::shell3::sessions::read(vm_id, arg0, &mut output[..cap]);
+            if rc > 0 { write_record_slice_response(vm_id, seq, rc as u64, &output[..rc as usize]); }
+            else { write_response(vm_id, seq, STATUS_OK, rc as u64, 0); }
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL3_SESSION_WRITE_V1 => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|p| crate::shell3::sessions::write(vm_id, arg0, p)).unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL3_SESSION_CONTROL_V1 => {
+            let rc = request_payload(vm_id, req_len).filter(|p| p.len() == 8).map(|p| {
+                crate::shell3::sessions::control(vm_id, arg0, arg1 as u32,
+                    u32::from_le_bytes(p[..4].try_into().unwrap()) as usize,
+                    u32::from_le_bytes(p[4..].try_into().unwrap()) as usize)
+            }).unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_SHELL3_WINDOW_V1 => {

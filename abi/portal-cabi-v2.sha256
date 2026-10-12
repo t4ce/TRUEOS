@@ -1,3 +1,4 @@
+# Additive Blueprint-owned Shell3 byte sessions v1; existing signatures unchanged.
 # Additive cursor-scoped UI4 drag buffers v1. Existing symbol signatures unchanged.
 # Additive typed clipboard command v1. Existing symbol signatures unchanged.
 # Additive RAM-only LZ4 decode/result API v1. All existing signatures reviewed unchanged.
@@ -14,4 +15,4 @@
 # Additive Blueprint launch with one-shot script v1. All existing declarations unchanged.
 # Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
-9b593bce2485b7823aead27fb3fbb6bdce146b3c37015297bf572cf1d1f62f7a
+8ab00a69c38fbee55ff7c73205934f01a36da6b00a0722de55c105a88932cb7d
