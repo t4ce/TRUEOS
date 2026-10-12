@@ -11,10 +11,11 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const ASYNC_FS_MAX_OPERATIONS: usize = 64;
 const ASYNC_FS_MAX_RESULT_BYTES: u64 = 16 * 1024 * 1024;
-// Whole-file reads also serve resident game archives (war3.mpq is 500+ MiB).
-// This is a host-memory admission limit, not a guest address-space mapping.
-// Keep writes, directory listings and virtual results at their existing cap.
-const ASYNC_FS_MAX_FILE_READ_BYTES: u64 = 1024 * 1024 * 1024;
+// File transfers support the WebDAV share's 4 GiB per-file limit. These are
+// host-memory admission limits, not guest address-space mappings. Directory
+// listings and virtual results retain the smaller result cap above.
+const ASYNC_FS_MAX_FILE_READ_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const ASYNC_FS_MAX_FILE_WRITE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const ASYNC_FS_IDLE_MS: u64 = 1;
 const DIR_LIST_MAGIC: [u8; 4] = *b"TDL1";
 const DIR_LIST_HEADER_BYTES: usize = 12;
@@ -315,7 +316,12 @@ fn start_write_inner(
     content_type: crate::r::fs::trueosfs::ContentTypeId,
     legacy_blob: bool,
 ) -> i32 {
-    if total_len as u64 > ASYNC_FS_MAX_RESULT_BYTES {
+    let max_bytes = if path.starts_with("vFile:") {
+        ASYNC_FS_MAX_RESULT_BYTES
+    } else {
+        ASYNC_FS_MAX_FILE_WRITE_BYTES
+    };
+    if total_len as u64 > max_bytes {
         return FS_ERR_TOO_LARGE;
     }
 

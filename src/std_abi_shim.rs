@@ -91,6 +91,7 @@ const TRUEOS_EADDRINUSE: c_int = 98;
 const TRUEOS_EBUSY: c_int = 16;
 const TRUEOS_EDEADLK: c_int = 35;
 const TRUEOS_ENOENT: c_int = 2;
+const TRUEOS_EPIPE: c_int = 32;
 pub(crate) const TRUEOS_EINVAL: c_int = 22;
 const TRUEOS_ENAMETOOLONG: c_int = 36;
 const TRUEOS_ERANGE: c_int = 34;
@@ -2614,6 +2615,20 @@ pub unsafe extern "C" fn sys_rand(recv_buf: *mut u32, words: usize) {
     }
 }
 
+fn child_vmx_stdio() -> bool {
+    crate::r::io::env::var("TRUEOS_MCP_STDIO").as_deref() == Some("1")
+}
+
+fn write_child_vmx_stdout(bytes: &[u8]) -> Result<usize, c_int> {
+    let len = bytes.len().min(trueos_vm::vmcall::PAYLOAD_CAP);
+    loop {
+        let result = unsafe { crate::r::io::fs_cabi::trueos_cabi_blueprint_child_send_v1(0, bytes.as_ptr(), len) };
+        if result >= 0 { return Ok(result as usize); }
+        if result != -3 { return Err(TRUEOS_EPIPE); }
+        crate::r::io::fs_cabi::trueos_cabi_sleep_ms(10);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_write(fd: u32, write_buf: *const u8, nbytes: usize) {
     if write_buf.is_null() || nbytes == 0 {
@@ -2622,7 +2637,15 @@ pub unsafe extern "C" fn sys_write(fd: u32, write_buf: *const u8, nbytes: usize)
     let Some(bytes) = abi_read_bytes(write_buf, nbytes) else {
         return;
     };
-    write_platform_fd(fd, bytes);
+    if fd == 1 && child_vmx_stdio() {
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            match write_child_vmx_stdout(rest) {
+                Ok(n) if n > 0 => rest = &rest[n..],
+                _ => break,
+            }
+        }
+    } else { write_platform_fd(fd, bytes); }
 }
 
 #[unsafe(no_mangle)]
@@ -2645,7 +2668,10 @@ pub unsafe extern "C" fn sys_read(_fd: u32, recv_buf: *mut u8, nrequested: usize
     let Some(out) = abi_write_bytes(recv_buf, nrequested) else {
         return 0;
     };
-    crate::r::io::fs_cabi::read_attached_console_bytes(out)
+    if child_vmx_stdio() {
+        let n = unsafe { crate::r::io::fs_cabi::trueos_cabi_blueprint_child_read_v1(0, out.as_mut_ptr(), out.len()) };
+        if n > 0 { n as usize } else { 0 }
+    } else { crate::r::io::fs_cabi::read_attached_console_bytes(out) }
 }
 
 #[unsafe(no_mangle)]
@@ -3330,6 +3356,15 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
+    if fd == 1 && child_vmx_stdio() {
+        let Some(bytes) = abi_read_bytes(buf.cast::<u8>(), count) else {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed); return -1;
+        };
+        return match write_child_vmx_stdout(bytes) {
+            Ok(n) => { TRUEOS_ERRNO.store(0, Ordering::Relaxed); n as isize },
+            Err(error) => { TRUEOS_ERRNO.store(error, Ordering::Relaxed); -1 },
+        };
+    }
     if fd == 1 || fd == 2 {
         // Printing is transcript output, not a request to own terminal input.
         // Raw mode, stdin reads and explicit lease calls remain handoff points.
@@ -3429,6 +3464,20 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
     if buf.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
+    }
+    if fd == 0 && child_vmx_stdio() {
+        if count == 0 { return 0; }
+        loop {
+            let n = unsafe { crate::r::io::fs_cabi::trueos_cabi_blueprint_child_read_v1(0, buf.cast::<u8>(), count) };
+            if n > 0 { TRUEOS_ERRNO.store(0, Ordering::Relaxed); return n; }
+            if n < 0 || crate::r::io::fs_cabi::trueos_cabi_blueprint_child_status_v1(0) >= 4 {
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed); return 0;
+            }
+            if STD_FD_FLAGS[0].load(Ordering::Relaxed) & TRUEOS_O_NONBLOCK != 0 {
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed); return -1;
+            }
+            crate::r::io::fs_cabi::trueos_cabi_sleep_ms(10);
+        }
     }
     if fd == 0 {
         crate::r::io::fs_cabi::claim_attached_console_for_terminal_io();

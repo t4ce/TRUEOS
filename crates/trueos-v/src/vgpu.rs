@@ -742,6 +742,16 @@ macro_rules! impl_vvideo_pod {
 }
 impl_vvideo_pod!(u8, u16, u32, u64, i8, i16, i32, i64, f32, f64);
 
+/// One-shot native render into a tightly packed RGBA8 readback buffer.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct OffscreenIndexedBatchV1 {
+    pub output_buffer: u64,
+    pub width: u32,
+    pub height: u32,
+    pub batch: IndexedDrawBatchV2,
+}
+
 impl Device {
     pub fn open(requested: Capabilities) -> Result<Self, i32> {
         let mut handle = 0u64;
@@ -916,6 +926,31 @@ impl Device {
 
     pub fn destroy_buffer(self, buffer: Buffer) -> Result<(), i32> {
         rc_result(unsafe { vcabi::trueos_cabi_vgpu_buffer_destroy(self.0, buffer.0) })
+    }
+
+    /// Render without a UI4 window. Output must be an ordinary MAP_READ |
+    /// MAP_WRITE buffer of at least width * height * 4 bytes. On success all
+    /// visible pixels are initialized and GPU retirement precedes CPU readback.
+    pub fn submit_offscreen_indexed_batch_v1(
+        self, queue: Queue, output: Buffer, width: u32, height: u32,
+        pipeline: RenderPipeline, vertices: Buffer, indices: Buffer,
+        mut batch: IndexedDrawBatchV2,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self { return Err(ERR_BAD_HANDLE); }
+        batch.surface = 0;
+        batch.pipeline = pipeline.0;
+        batch.vertex_buffer = vertices.0;
+        batch.index_buffer = indices.0;
+        let request = OffscreenIndexedBatchV1 {
+            output_buffer: output.0, width, height, batch,
+        };
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_offscreen_indexed_batch_v1(
+                self.0, queue.handle, &request, &mut point,
+            )
+        })?;
+        Ok(point)
     }
 
     pub fn submit_control_nop(self, queue: Queue) -> Result<TimelinePoint, i32> {

@@ -1447,6 +1447,12 @@ unsafe extern "C" {
         buffer: u64,
         out_info: *mut crate::vgpu::BufferInfo,
     ) -> i32;
+    pub fn trueos_cabi_vgpu_offscreen_indexed_batch_v1(
+        device: u64,
+        queue: u64,
+        request: *const crate::vgpu::OffscreenIndexedBatchV1,
+        out_point: *mut crate::vgpu::TimelinePoint,
+    ) -> i32;
     pub fn trueos_cabi_vgpu_ui4_surface_acquire(
         device: u64,
         window_id: u32,
@@ -1780,6 +1786,8 @@ unsafe extern "C" {
         initial_len: usize,
         out_handle: *mut u64,
     ) -> i32;
+    pub fn trueos_cabi_blueprint_child_spawn_program_v1(request: *const u8, len: usize, out_handle: *mut u64) -> i32;
+    pub fn trueos_cabi_blueprint_child_read_v1(handle: u64, out: *mut u8, cap: usize) -> isize;
     pub fn trueos_cabi_blueprint_child_send_v1(
         handle: u64,
         data_ptr: *const u8,

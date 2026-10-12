@@ -170,6 +170,7 @@ pub const OP_BP_IMG_OPEN_V1: u32 = 0x17B; // NUL-separated TRUEOSFS paths -> que
 pub const OP_BP_VID_OPEN_V1: u32 = 0x182; // primary-root video path -> queued/rc
 pub const OP_BP_VID_OPEN_V2: u32 = 0x183; // disc-qualified TRUEOSFS video path -> queued/rc
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141; // arg0 device,arg1 queue,payload IndexedDrawBatch -> TimelinePoint
+pub const OP_BP_VGPU_OFFSCREEN_INDEXED_BATCH_V1: u32 = 0x190;
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2: u32 = 0x14C; // arg0 device,arg1 queue,payload IndexedDrawBatchV2 -> TimelinePoint
 pub const OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1: u32 = 0x218; // arg0 device,arg1 queue,payload PreparedRasterBatchV1 -> TimelinePoint
 pub const OP_BP_VGPU_RETAINED_MESH_CREATE: u32 = 0x14D; // arg0 device,payload RetainedMeshDescriptor -> handle
@@ -1576,6 +1577,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 });
             let result = batch.ok_or(-22).and_then(|batch| {
                 crate::r::io::vgpu_cabi::broker_ui4_indexed_batch_submit(
+                    principal, arg0, arg1, batch,
+                )
+            });
+            match result {
+                Ok(point) => write_record_response(vm_id, seq, 0, &point),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_OFFSCREEN_INDEXED_BATCH_V1 => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let batch = request_payload(vm_id, req_len)
+                .filter(|payload| {
+                    payload.len() == core::mem::size_of::<v::vgpu::OffscreenIndexedBatchV1>()
+                })
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(
+                        payload.as_ptr().cast::<v::vgpu::OffscreenIndexedBatchV1>(),
+                    )
+                });
+            let result = batch.ok_or(-22).and_then(|batch| {
+                crate::r::io::vgpu_cabi::broker_offscreen_indexed_batch_v1(
                     principal, arg0, arg1, batch,
                 )
             });
@@ -3485,7 +3508,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let result = crate::hv::blueprint_child_spawn(vm_id, payload);
+            let result = match arg0 {
+                0 => crate::hv::blueprint_child_spawn(vm_id, payload),
+                1 => crate::hv::blueprint_child_spawn_program(vm_id, payload),
+                _ => Err(-1),
+            };
             write_response(
                 vm_id,
                 seq,
@@ -3512,7 +3539,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (*page).payload };
-            match crate::hv::blueprint_child_receive(vm_id, arg0, out) {
+            let result = if arg1 == 0 {
+                crate::hv::blueprint_child_receive(vm_id, arg0, out)
+            } else {
+                let cap = (arg1 as usize).min(out.len());
+                crate::hv::blueprint_child_receive_stream(vm_id, arg0, &mut out[..cap])
+            };
+            match result {
                 Ok(length) => write_response(vm_id, seq, STATUS_OK, length as u64, length as u32),
                 Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }

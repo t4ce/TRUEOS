@@ -15,4 +15,5 @@
 # Additive Blueprint launch with one-shot script v1. All existing declarations unchanged.
 # Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
-8ab00a69c38fbee55ff7c73205934f01a36da6b00a0722de55c105a88932cb7d
+# Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
+ae69af92887512517d410fde45699a1bf6d55c3a702a666abe86ecb22a1eb195

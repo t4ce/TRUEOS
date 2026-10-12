@@ -648,6 +648,7 @@ struct BlueprintChildLink {
     state: u8,
     parent_to_child: VecDeque<AllocVec<u8>>,
     child_to_parent: VecDeque<AllocVec<u8>>,
+    process_launch: Option<BlueprintChildProcessLaunch>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1274,6 +1275,47 @@ fn blueprint_child_actor_is_parent(link: &BlueprintChildLink, vm_id: u8, generat
     link.parent_vm_id == vm_id && link.parent_generation == generation
 }
 
+/// A process-shaped request whose execution boundary is a fresh VMX Hull.
+#[derive(Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BlueprintChildProcessLaunch {
+    pub program: AllocString,
+    #[serde(default)]
+    pub args: AllocVec<AllocString>,
+    #[serde(default)]
+    pub env: BTreeMap<AllocString, AllocString>,
+    pub cwd: Option<AllocString>,
+}
+
+pub(crate) fn blueprint_child_spawn_program(parent_vm_id: u8, payload: &[u8]) -> Result<u64, i32> {
+    let mut request: BlueprintChildProcessLaunch = serde_json::from_slice(payload)
+        .map_err(|_| BLUEPRINT_CHILD_ERR_INVALID)?;
+    if request.program.is_empty() || request.program.contains('\0')
+        || request.args.iter().any(|arg| arg.contains('\0'))
+        || request.env.iter().any(|(key, value)| key.is_empty() || key.contains(['=', '\0']) || value.contains('\0'))
+    {
+        return Err(BLUEPRINT_CHILD_ERR_INVALID);
+    }
+    crate::hv::with_guest_broker_context(parent_vm_id, || {
+        if let Some(cwd) = request.cwd.as_ref() {
+            request.cwd = Some(crate::r::io::env::resolve_fs_path(cwd, true).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?);
+        }
+        let name = request.program.rsplit('/').next().ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+        let archive = if name.ends_with(".bp") { AllocString::from(name) } else { alloc::format!("{name}.bp") };
+        let bytes = if request.program.contains('/') {
+            let path = crate::r::io::env::resolve_fs_path(&request.program, false)
+                .ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+            let len = crate::r::io::kfs::read_file_len(&path).map_err(|_| BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+            if len > 512 * 1024 * 1024 { return Err(BLUEPRINT_CHILD_ERR_INVALID); }
+            crate::r::io::kfs::read_file(&path).map_err(|_| BLUEPRINT_CHILD_ERR_NOT_FOUND)?
+        } else {
+            crate::app_db::get(&archive).map_err(|_| BLUEPRINT_CHILD_ERR_NOT_FOUND)?
+                .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?
+        };
+        blueprint_child_spawn_archive(parent_vm_id, archive, bytes, &[], Some(request))
+    })
+}
+
 /// Start the same Blueprint archive in a headless child Hull.  The returned
 /// handle is opaque and generation-bound; `0` is reserved for the worker's
 /// own parent endpoint in the other child calls.
@@ -1290,6 +1332,23 @@ pub(crate) fn blueprint_child_spawn(parent_vm_id: u8, initial_message: &[u8]) ->
     }
     let template = blueprint_child_template(parent_vm_id, parent_generation)
         .ok_or(BLUEPRINT_CHILD_ERR_UNAVAILABLE)?;
+    blueprint_child_spawn_archive(parent_vm_id, template.archive, template.module_bytes, initial_message, None)
+}
+
+fn blueprint_child_spawn_archive(
+    parent_vm_id: u8,
+    archive: AllocString,
+    module_bytes: AllocVec<u8>,
+    initial_message: &[u8],
+    process_launch: Option<BlueprintChildProcessLaunch>,
+) -> Result<u64, i32> {
+    let parent_generation = vm_run_generation(parent_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    let parent = vm_slot(parent_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    if !parent.running.load(Ordering::Acquire) || parent.stop_req.load(Ordering::Acquire) {
+        return Err(BLUEPRINT_CHILD_ERR_UNAVAILABLE);
+    }
+    let app_args = process_launch.as_ref().map(|request| request.args.clone())
+        .unwrap_or_else(|| alloc::vec![AllocString::from(BLUEPRINT_CHILD_WORKER_ARG)]);
     // Claim the VM's existing `starting` bit before publishing a relationship.
     // `first_free_vm_id` is only an observation; a concurrent Shell2 launch
     // could otherwise claim the same id between that observation and link
@@ -1314,6 +1373,7 @@ pub(crate) fn blueprint_child_spawn(parent_vm_id: u8, initial_message: &[u8]) ->
         state: BLUEPRINT_CHILD_STATE_STARTING,
         parent_to_child,
         child_to_parent: VecDeque::new(),
+        process_launch,
     };
     let Some(link_slot) = BLUEPRINT_CHILD_LINKS.get(child_vm_id as usize) else {
         return Err(BLUEPRINT_CHILD_ERR_UNAVAILABLE);
@@ -1322,8 +1382,9 @@ pub(crate) fn blueprint_child_spawn(parent_vm_id: u8, initial_message: &[u8]) ->
 
     let result = start_blueprint_child_vm(
         child_vm_id,
-        template.archive,
-        template.module_bytes,
+        archive,
+        module_bytes,
+        app_args,
         BlueprintInstanceRequest::default(),
     );
     if result.is_err() {
@@ -1439,6 +1500,20 @@ pub(crate) fn blueprint_child_receive(
         .expect("front message disappeared while link locked");
     out[..message.len()].copy_from_slice(message.as_slice());
     Ok(message.len())
+}
+
+pub(crate) fn blueprint_child_receive_stream(actor_vm_id: u8, handle: u64, out: &mut [u8]) -> Result<usize, i32> {
+    let generation = vm_run_generation(actor_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    let (child_vm_id, parent_side) = blueprint_child_find_link_for_actor(actor_vm_id, generation, handle)
+        .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    let mut guard = BLUEPRINT_CHILD_LINKS[child_vm_id as usize].lock();
+    let link = guard.as_mut().ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    let queue = if parent_side { &mut link.child_to_parent } else { &mut link.parent_to_child };
+    let Some(message) = queue.front_mut() else { return Ok(0); };
+    let len = out.len().min(message.len());
+    out[..len].copy_from_slice(&message[..len]);
+    if len == message.len() { queue.pop_front(); } else { message.drain(..len); }
+    Ok(len)
 }
 
 pub(crate) fn blueprint_child_status(actor_vm_id: u8, handle: u64) -> Result<u8, i32> {
@@ -2087,6 +2162,7 @@ fn start_blueprint_child_vm(
     vm_id: u8,
     archive: AllocString,
     module_bytes: AllocVec<u8>,
+    app_args: AllocVec<AllocString>,
     instance: BlueprintInstanceRequest,
 ) -> Result<(), StartError> {
     start_with_mode(
@@ -2096,7 +2172,7 @@ fn start_blueprint_child_vm(
         Some(BlueprintPendingLaunchState {
             archive,
             module_bytes,
-            app_args: alloc::vec![AllocString::from(BLUEPRINT_CHILD_WORKER_ARG)],
+            app_args,
             launch_script: None,
             instance,
             console_target: None,
@@ -3419,7 +3495,7 @@ pub fn stage_blueprint_launch(
         clear_blueprint_child_template(vm_id);
         return Err(StartError::GuestMemoryUnavailable);
     };
-    let process_context = BlueprintProcessContext {
+    let mut process_context = BlueprintProcessContext {
         args: crate::hv::blueprint::build_process_args(
             state.archive.as_str(),
             state.app_args.as_slice(),
@@ -3444,6 +3520,16 @@ pub fn stage_blueprint_launch(
         control_shell_line: AllocVec::new(),
         exit_reason: None,
     };
+    if let Some(link) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize).and_then(|slot| { let guard = slot.lock(); guard.as_ref().filter(|link| link.child_generation == generation).and_then(|link| link.process_launch.clone()) }) {
+        // Platform identity, access scope and channel selection are kernel-owned.
+        for (key, value) in link.env {
+            if !key.starts_with("TRUEOS_") { process_context.vars.insert(key, value); }
+        }
+        if let Some(cwd) = link.cwd {
+            process_context.vars.insert(AllocString::from("TRUEOS_APP_FS_ROOT"), cwd);
+        }
+        process_context.vars.insert(AllocString::from("TRUEOS_MCP_STDIO"), AllocString::from("1"));
+    }
     *launch_script_slot.lock() = state.launch_script.clone();
     *slot.lock() = Some(guest_state);
     let _ = exit_reason_mailbox.lock().take();

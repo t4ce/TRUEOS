@@ -1959,6 +1959,32 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_child_spawn_v1(
     0
 }
 
+/// Launch a named Blueprint as an independent VMX application with raw stdio.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_child_spawn_program_v1(
+    request_ptr: *const u8, request_len: usize, out_handle: *mut u64,
+) -> i32 {
+    if request_ptr.is_null() || out_handle.is_null() || request_len > trueos_vm::vmcall::PAYLOAD_CAP
+        || crate::hv::current_hull_guest_context_vm_id().is_none() { return -1; }
+    let request = unsafe { core::slice::from_raw_parts(request_ptr, request_len) };
+    let (status, handle) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_CHILD_SPAWN_V1, 1, 0, request, &mut []);
+    if status != trueos_vm::vmcall::STATUS_OK { return -4; }
+    if (handle as i64) <= 0 { return (handle as i64) as i32; }
+    unsafe { out_handle.write(handle) }; 0
+}
+
+/// Read at most out_cap bytes without losing the remainder of a queued frame.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_child_read_v1(handle: u64, out_ptr: *mut u8, out_cap: usize) -> isize {
+    if out_ptr.is_null() || out_cap == 0 || crate::hv::current_hull_guest_context_vm_id().is_none() { return -1; }
+    let cap = out_cap.min(trueos_vm::vmcall::PAYLOAD_CAP);
+    let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, cap) };
+    let (status, result) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_CHILD_RECEIVE_V1, handle, cap as u64, &[], out);
+    if status == trueos_vm::vmcall::STATUS_OK { vmcall_signed(result) } else { -1 }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_blueprint_child_send_v1(
     handle: u64,

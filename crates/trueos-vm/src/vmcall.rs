@@ -640,3 +640,5 @@ pub fn shutdown(reason: &[u8]) -> ! {
         core::hint::spin_loop();
     }
 }
+
+pub const OP_BP_VGPU_OFFSCREEN_INDEXED_BATCH_V1: u32 = 0x190;
