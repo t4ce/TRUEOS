@@ -741,6 +741,13 @@ impl BlueprintTerminalLeaseState {
         }
     }
 
+    /// Line-input apps such as Hull keep the shell prompt instead of claiming
+    /// a terminal UI. Their launch reservation must not block ShellIO stdin.
+    const fn accepts_console_input(self, app_command_passthrough: bool) -> bool {
+        !self.suppresses_terminal_output()
+            || (matches!(self, Self::Reserved) && app_command_passthrough)
+    }
+
     /// A parked/reentry transition deliberately leaves Shell2 interactive.
     /// Guest terminal paint must therefore never be routed into its Matrix
     /// surface until the lease becomes Active again.
@@ -4467,7 +4474,7 @@ fn blueprint_app_command_passthrough_enabled(vm_id: u8) -> bool {
         .and_then(|slot| {
             slot.lock().as_ref().map(|context| {
                 context.console_attached
-                    && !context.terminal_lease.suppresses_terminal_output()
+                    && context.terminal_lease.accepts_console_input(context.app_command_passthrough)
                     && context.app_command_passthrough
             })
         })
@@ -4485,7 +4492,7 @@ fn blueprint_forward_app_command(vm_id: u8, raw: &str) -> bool {
         return false;
     };
     if !context.console_attached
-        || context.terminal_lease.suppresses_terminal_output()
+        || !context.terminal_lease.accepts_console_input(context.app_command_passthrough)
         || !context.app_command_passthrough
     {
         return false;
@@ -4751,7 +4758,7 @@ fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option
     let Some(context) = guard.as_mut() else {
         return 0;
     };
-    if !context.console_attached || context.terminal_lease.suppresses_terminal_output() {
+    if !context.console_attached || !context.terminal_lease.accepts_console_input(context.app_command_passthrough) {
         return 0;
     }
     if let Some((lease, run)) = expected {
@@ -4805,7 +4812,7 @@ pub(crate) fn blueprint_console_read(vm_id: u8, out: &mut [u8]) -> usize {
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else { return 0; };
     let mut guard = slot.lock();
     let Some(context) = guard.as_mut() else { return 0; };
-    if !context.console_attached || context.terminal_lease.suppresses_terminal_output() { return 0; }
+    if !context.console_attached || !context.terminal_lease.accepts_console_input(context.app_command_passthrough) { return 0; }
     let count = out.len().min(context.console_input.len());
     for byte in &mut out[..count] { *byte = context.console_input.pop_front().unwrap(); }
     count
@@ -4813,7 +4820,7 @@ pub(crate) fn blueprint_console_read(vm_id: u8, out: &mut [u8]) -> usize {
 
 pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
     BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).and_then(|slot| {
-        slot.lock().as_ref().map(|c| if c.console_attached && !c.terminal_lease.suppresses_terminal_output() { c.console_input.len() } else { 0 })
+        slot.lock().as_ref().map(|c| if c.console_attached && c.terminal_lease.accepts_console_input(c.app_command_passthrough) { c.console_input.len() } else { 0 })
     }).unwrap_or(0)
 }
 
