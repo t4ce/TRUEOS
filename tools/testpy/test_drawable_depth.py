@@ -926,3 +926,66 @@ with tempfile.TemporaryDirectory(prefix='trueos-voxy-staging-') as tmp:
     src.write_text(staging)
     subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
+
+# Exercise the production persistent-VA allocator with the actual frozen
+# terrain size alongside other resident resources, including spill recycling.
+va = '''
+extern crate alloc;
+use std::sync::atomic::{AtomicU64, Ordering};
+mod intel { pub fn align_up(v: usize, a: usize) -> Option<usize> {v.checked_add(a-1).map(|n|n & !(a-1))} }
+struct Mutex<T>(std::sync::Mutex<T>);
+impl<T> Mutex<T> {
+ const fn new(value:T)->Self {Self(std::sync::Mutex::new(value))}
+ fn lock(&self)->std::sync::MutexGuard<'_,T> {self.0.lock().unwrap()}
+}
+'''
+va += '\n'.join(constant('src/intel/render/constants.rs', name) for name in (
+    'GPU_VA_PERSISTENT_RESOURCE_BASE', 'GPU_VA_PERSISTENT_RESOURCE_LIMIT',
+    'GPU_VA_PERSISTENT_SPILL_BASE', 'GPU_VA_PERSISTENT_SPILL_LIMIT'))
+va += '''
+static PERSISTENT_RESOURCE_GPU_VA_CURSOR:AtomicU64=AtomicU64::new(GPU_VA_PERSISTENT_RESOURCE_BASE);
+static PERSISTENT_RESOURCE_GPU_VA_SPILL_CURSOR:AtomicU64=AtomicU64::new(GPU_VA_PERSISTENT_SPILL_BASE);
+static PERSISTENT_RESOURCE_GPU_VA_FREE:Mutex<Vec<(u64,u64)>>=Mutex::new(Vec::new());
+'''
+va += '\n'.join(item(resources, name) for name in (
+    'reserve_render_gpu_va_range', 'reserve_persistent_render_gpu_va',
+    'recycle_persistent_render_gpu_va'))
+va += '''
+#[test] fn full_capture_coexists_with_resources_and_reuses_spill() {
+ let existing=reserve_persistent_render_gpu_va(32*1024*1024).unwrap();
+ assert_eq!(existing,GPU_VA_PERSISTENT_RESOURCE_BASE);
+ let bytes=intel::align_up(3_131_688*36+160,4096).unwrap();
+ let terrain=reserve_persistent_render_gpu_va(bytes).unwrap();
+ assert_eq!(terrain,GPU_VA_PERSISTENT_SPILL_BASE);
+ assert!(terrain+bytes as u64<=GPU_VA_PERSISTENT_SPILL_LIMIT);
+ let other=reserve_persistent_render_gpu_va(4096).unwrap();
+ assert!(other>=existing+32*1024*1024 && other<GPU_VA_PERSISTENT_RESOURCE_LIMIT);
+ recycle_persistent_render_gpu_va(terrain,bytes);
+ let half=bytes/2/4096*4096;
+ let a=reserve_persistent_render_gpu_va(half).unwrap();
+ let b=reserve_persistent_render_gpu_va(bytes-half).unwrap();
+ assert_eq!(a,terrain);assert_eq!(b,terrain+half as u64);
+ recycle_persistent_render_gpu_va(a,half);
+ recycle_persistent_render_gpu_va(b,bytes-half);
+ assert_eq!(reserve_persistent_render_gpu_va(bytes),Some(terrain));
+ assert_eq!(reserve_persistent_render_gpu_va(usize::MAX),None);
+}
+#[test] fn range_exhaustion_and_concurrent_reservations_are_bounded() {
+ let cursor=AtomicU64::new(0x8000_0000);
+ let limit=0x8000_0000+4096*32;
+ std::thread::scope(|s| {
+  let jobs=(0..32).map(|_|s.spawn(||reserve_render_gpu_va_range(&cursor,limit,4096).unwrap())).collect::<Vec<_>>();
+  let mut addresses=jobs.into_iter().map(|job|job.join().unwrap()).collect::<Vec<_>>();
+  addresses.sort();addresses.dedup();assert_eq!(addresses.len(),32);
+ });
+ assert_eq!(cursor.load(Ordering::Acquire),limit);
+ assert_eq!(reserve_render_gpu_va_range(&cursor,limit,4096),None);
+ assert_eq!(reserve_render_gpu_va_range(&cursor,limit,0),None);
+ assert_eq!(cursor.load(Ordering::Acquire),limit);
+}
+'''
+with tempfile.TemporaryDirectory(prefix='trueos-retained-va-') as tmp:
+    src, exe = Path(tmp) / 'va.rs', Path(tmp) / 'va-tests'
+    src.write_text(va)
+    subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(exe)], check=True)
+    subprocess.run([str(exe)], check=True)

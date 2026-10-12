@@ -87,6 +87,7 @@ mod unix_fd_probe;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 mod user_input_record;
+mod os_assets;
 mod virtio_gpu_logo;
 mod wait;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

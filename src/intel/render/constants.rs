@@ -233,12 +233,22 @@ const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 // and mapping contract without borrowing a fixed address from another owner.
 const GPU_VA_PERSISTENT_RESOURCE_BASE: u64 = 0x2000_0000;
 const GPU_VA_PERSISTENT_RESOURCE_LIMIT: u64 = 0x2800_0000;
+// Large retained captures must coexist with fonts and other scene resources.
+// This render-PPGTT-only spill range starts after the UI4 frame aliases and
+// remains below 4 GiB for pipelines that encode 32-bit buffer addresses.
+const GPU_VA_PERSISTENT_SPILL_BASE: u64 = 0x8000_0000;
+const GPU_VA_PERSISTENT_SPILL_LIMIT: u64 = 0x9000_0000;
 const _: () = {
     assert!(GPU_VA_PERSISTENT_RESOURCE_LIMIT == GPU_VA_VERTEX_BASE);
     assert!(GPU_VA_VERTEX_BASE + WARM_VERTEX_BYTES as u64 <= GPU_VA_RESIDENT_SCENE_STATE_BASE);
+    assert!(GPU_VA_RESIDENT_UI4_FRAME_LIMIT <= GPU_VA_PERSISTENT_SPILL_BASE);
+    assert!(GPU_VA_PERSISTENT_SPILL_BASE < GPU_VA_PERSISTENT_SPILL_LIMIT);
+    assert!(GPU_VA_PERSISTENT_SPILL_LIMIT <= u32::MAX as u64);
 };
 static PERSISTENT_RESOURCE_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(GPU_VA_PERSISTENT_RESOURCE_BASE);
+static PERSISTENT_RESOURCE_GPU_VA_SPILL_CURSOR: AtomicU64 =
+    AtomicU64::new(GPU_VA_PERSISTENT_SPILL_BASE);
 static PERSISTENT_RESOURCE_GPU_VA_FREE: spin::Mutex<alloc::vec::Vec<(u64, u64)>> =
     spin::Mutex::new(alloc::vec::Vec::new());
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

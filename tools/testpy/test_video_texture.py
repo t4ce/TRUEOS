@@ -108,7 +108,7 @@ mod gpu {pub mod vgpu {
  pub fn acquire_retained_texture_write(_:Principal,_:DeviceHandle,_:RetainedTextureHandle)->Result<Write,VgpuError>{Ok(Write)}
 }}
 mod intel {
- pub mod media{pub mod hw_vid{pub async fn run_memory_texture_video_playback(_:crate::ui4::VideoPlaybackSession,_:Vec<u8>)->Result<(),&'static str>{Ok(())}}}
+ pub mod media{pub mod hw_vid{pub async fn run_resolved_ui4_framed_video_playback(_:crate::ui4::VideoPlaybackSession,_:&str)->Result<(), &'static str>{Ok(())}pub async fn run_memory_texture_video_playback(_:crate::ui4::VideoPlaybackSession,_:Vec<u8>)->Result<(),&'static str>{Ok(())}}}
  pub mod gpgpu{
  #[derive(Clone,Copy)]pub struct GpgpuRgba8Surface;
  #[derive(Clone,Copy)]pub struct GpgpuNv12Tile64Surface;impl GpgpuNv12Tile64Surface{pub fn new(_:u64,_:u64,_:usize,_:u32,_:u32,_:u32,_:u32)->Option<Self>{Some(Self)}}
@@ -126,6 +126,7 @@ mod ui4 {
  static VIDEO_SESSIONS:[State;3]=[const{State::new()};3];
  impl VideoPlaybackSession{
  pub fn is_cancelled(self)->bool{VIDEO_SESSIONS[self.slot].cancelled.load(Ordering::Acquire)}
+ pub fn set_paused(self, value:bool){VIDEO_SESSIONS[self.slot].paused.store(value,Ordering::Release);}
  pub fn cancel(self){VIDEO_SESSIONS[self.slot].cancelled.store(true,Ordering::Release);}
  pub fn finish(self,_:&str){VIDEO_SESSIONS[self.slot].occupied.store(false,Ordering::Release);}
  }

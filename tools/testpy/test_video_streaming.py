@@ -15,6 +15,7 @@ def item(name):
 production = s[s.index('#[derive(Clone, Copy, Debug)]\nstruct Mp4Box'):s.index('fn h264_prepare_trueosfs_asset')]
 production += s[s.index('#[derive(Copy, Clone, Debug)]\nstruct H264StreamNal'):s.index('struct H264IndexedFrame')]
 production += s[s.index('struct H264MemoryNalReader'):s.index('fn h264_ticks_to_millis')]
+production += s[s.index('struct H264HlsNalReader'):s.index('fn bytes_contains')].replace('super::hls', 'hls')
 production += ''.join(item(n) for n in ['h264_find_start_code', 'h264_slice_first_mb_in_slice', 'h264_read_first_ue_from_ebsp', 'h264_ebsp_bit'])
 harness = r'''
 #![allow(dead_code, unused_variables)]
@@ -39,6 +40,14 @@ mod allocators {
     pub struct Heap { pub healthy: bool, pub reason: &'static str, pub nodes: usize }
     pub fn host_heap_integrity_bounded() -> Heap { Heap { healthy: true, reason: "ok", nodes: 0 } }
 }
+mod hls { include!(concat!(env!("HLS_SOURCE_ROOT"), "/hls_test_module.rs")); }
+async fn h264_fetch_hls_bytes(session: ui4::VideoPlaybackSession, url: &str, max: usize, _: Option<&str>) -> Result<Vec<u8>, &'static str> {
+    if session.is_cancelled() { return Err("cancelled"); }
+    let b = std::fs::read(url).map_err(|_| "injected fetch failure")?;
+    if b.len() > max { return Err("size limit"); }
+    Ok(b)
+}
+#[macro_export] macro_rules! log_warn { ($($x:tt)*) => {}; }
 struct Timer;
 impl Timer { async fn after_millis(_: u64) {} }
 mod r { pub mod fs { pub mod trueosfs {
@@ -270,6 +279,30 @@ async fn mkv_open_avc_track(
     }
 }
 '''
+harness += r'''
+#[test] fn hls_reader_matches_reference_nals_and_timestamp_order() {
+    let fixtures = std::env::var("HLS_STREAM_FIXTURES").unwrap_or_default();
+    if fixtures.is_empty() { return; }
+    let (session, _) = setup(Vec::new());
+    let segments: Vec<_> = fixtures.split('|').map(String::from).collect();
+    let count = segments.len();
+    let mut reader = H264HlsNalReader { session, segments, next_segment:0,
+        demux:hls::Demux::new(), memory:None, timing:Vec::new(), offset:0, failed:false, user_agent:None };
+    let reference = std::fs::read(std::env::var("HLS_STREAM_REFERENCE").unwrap()).unwrap();
+    let mut expected = H264MemoryNalReader::new(reference, "reference");
+    let mut wanted = Vec::new(); while let Some(n) = run(expected.next_nal()) { wanted.push(n.bytes); }
+    let mut got = Vec::new(); while let Some(n) = run(reader.next_nal()) { got.push(n.bytes); }
+    assert!(!reader.failed); assert_eq!(reader.next_segment,count); assert_eq!(got,wanted);
+    let times = std::fs::read_to_string(std::env::var("HLS_STREAM_TIMES").unwrap()).unwrap();
+    let wanted: Vec<_> = times.lines().map(|line| {let v:Vec<_>=line.split(',').collect();(v[0].parse::<i64>().unwrap(),v[1].parse::<u64>().unwrap())}).collect();
+    assert_eq!(reader.timing.iter().map(|t|(t.pts,t.dts)).collect::<Vec<_>>(),wanted);
+    let (session, _) = setup(Vec::new());
+    reader.session=session; reader.next_segment=0; reader.memory=None; reader.failed=false;
+    RIG.lock().unwrap().cancel=true; assert!(run(reader.next_nal()).is_none()); assert!(!reader.failed);
+    RIG.lock().unwrap().cancel=false; reader.segments[0]="/missing-hls-fixture".into();
+    assert!(run(reader.next_nal()).is_none()); assert!(reader.failed);
+}
+'''
 with tempfile.TemporaryDirectory(prefix='trueos-video-streaming-') as tmp:
     src = Path(tmp) / 'test.rs'; binary = Path(tmp) / 'test'
     fixtures = []
@@ -291,6 +324,22 @@ with tempfile.TemporaryDirectory(prefix='trueos-video-streaming-') as tmp:
     import os
     if os.environ.get('MKV_STREAM_FIXTURE'):
         mkv_fixtures.append(os.environ['MKV_STREAM_FIXTURE'])
+    hls_fixtures = []
+    if shutil.which('ffmpeg'):
+        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=blue:s=32x32:r=30','-frames:v','90','-c:v','libx264','-bf','2','-g','30','-sc_threshold','0','-f','hls','-hls_time','1','-hls_list_size','0','-y',str(Path(tmp)/'fixture.m3u8')],check=True)
+        hls_fixtures = sorted(Path(tmp).glob('fixture*.ts'))
+        if os.environ.get('HLS_REAL_FIXTURES'):
+            hls_fixtures = [Path(p) for p in os.environ['HLS_REAL_FIXTURES'].split('|')]
+        concat = 'concat:'+'|'.join(map(str,hls_fixtures))
+        reference = Path(tmp)/'reference.h264'; times = Path(tmp)/'times.csv'
+        subprocess.run(['ffmpeg','-v','error','-i',concat,'-c:v','copy','-an','-f','h264','-y',str(reference)],check=True)
+        import json
+        packets = json.loads(subprocess.check_output(['ffprobe','-v','error','-i',concat,'-select_streams','v:0','-show_entries','packet=pts,dts','-of','json']))['packets']
+        times.write_text(''.join(f"{p['pts']},{p['dts']}\n" for p in packets))
+        os.environ.update(HLS_STREAM_FIXTURES='|'.join(map(str,hls_fixtures)),HLS_STREAM_REFERENCE=str(reference),HLS_STREAM_TIMES=str(times))
+    hls = (ROOT / 'src/intel/media/hls.rs').read_text().replace('//!', '//')
+    (Path(tmp) / 'hls_test_module.rs').write_text(hls)
+    os.environ['HLS_SOURCE_ROOT'] = tmp
     src.write_text(harness + production)
     subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(binary)], check=True)
     import os

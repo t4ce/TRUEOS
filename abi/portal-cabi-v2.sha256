@@ -13,4 +13,5 @@
 # Additive region-limited GPU sprite begin v1. Existing signatures unchanged.
 # Additive Blueprint launch with one-shot script v1. All existing declarations unchanged.
 # Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
-19de604d0373eec1685df47d121a3178f6ead75eeb4be8434923605bdddea0fe
+# Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
+9b593bce2485b7823aead27fb3fbb6bdce146b3c37015297bf572cf1d1f62f7a

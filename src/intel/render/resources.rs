@@ -3594,14 +3594,22 @@ fn reserve_persistent_render_gpu_va(bytes: usize) -> Option<u64> {
             return Some(start);
         }
     }
+    reserve_render_gpu_va_range(&PERSISTENT_RESOURCE_GPU_VA_CURSOR,
+        GPU_VA_PERSISTENT_RESOURCE_LIMIT, bytes)
+        .or_else(|| reserve_render_gpu_va_range(&PERSISTENT_RESOURCE_GPU_VA_SPILL_CURSOR,
+            GPU_VA_PERSISTENT_SPILL_LIMIT, bytes))
+}
+
+fn reserve_render_gpu_va_range(cursor: &AtomicU64, limit: u64, bytes: u64) -> Option<u64> {
+    if bytes == 0 { return None; }
     loop {
-        let current = PERSISTENT_RESOURCE_GPU_VA_CURSOR.load(Ordering::Acquire);
+        let current = cursor.load(Ordering::Acquire);
         let aligned = (current.checked_add(4095)?) & !4095;
         let next = aligned.checked_add(bytes)?;
-        if next > GPU_VA_PERSISTENT_RESOURCE_LIMIT {
+        if next > limit {
             return None;
         }
-        if PERSISTENT_RESOURCE_GPU_VA_CURSOR
+        if cursor
             .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {

@@ -107,7 +107,6 @@ const MAX_INPUT_ROUTES: usize = 32;
 /// Larger or noncanonical scenes retain the arbitrary-quad fallback.
 const UI4_SOLID_FAST_RECT_LIMIT: usize = 256;
 const IMAGE_SOURCE_READ_CHUNK_BYTES: usize = 16 * 1024;
-const IMAGE_SOURCE_FORMAT_JPEG: u32 = 1;
 const IMAGE_SOURCE_FORMAT_RGBA8: u32 = 2;
 const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
 const UI4_SCENE_SOURCE_GPU: u64 = 0x3000_0000;
@@ -162,17 +161,15 @@ pub(crate) struct BlueprintImageSourceInfo {
     pub byte_len: u32,
 }
 
-const IMAGE_SOURCE_FORMAT_PNG: u32 = 3;
-const INTEL_GRAPHICS_LOGO_PNG: &[u8] = include_bytes!("../../Intel_Graphics_logo.png");
 
 pub(crate) fn blueprint_image_source_info(name: &str) -> Result<BlueprintImageSourceInfo, i32> {
+    if let Some(image) = crate::os_assets::image(name) {
+        return Ok(BlueprintImageSourceInfo {
+            format: image.format, width: image.width, height: image.height,
+            byte_len: image.bytes.len() as u32,
+        });
+    }
     match name {
-        "kernel:logo" => Ok(BlueprintImageSourceInfo {
-            format: IMAGE_SOURCE_FORMAT_JPEG,
-            width: 0,
-            height: 0,
-            byte_len: crate::virtio_gpu_logo::embedded_logo_jpeg().len() as u32,
-        }),
         "kernel:bgrt" => {
             let Some((width, height, pixels)) = crate::efi::acpi::bgrt::decoded_logo_rgba() else {
                 return Err(ERROR_NOT_FOUND);
@@ -185,28 +182,6 @@ pub(crate) fn blueprint_image_source_info(name: &str) -> Result<BlueprintImageSo
                 byte_len: byte_len as u32,
             })
         }
-        "kernel:intel-graphics" => Ok(BlueprintImageSourceInfo {
-            format: IMAGE_SOURCE_FORMAT_PNG,
-            width: 565,
-            height: 565,
-            byte_len: INTEL_GRAPHICS_LOGO_PNG.len() as u32,
-        }),
-        "kernel:live-update" | "kernel:live-update-noway" => Ok(BlueprintImageSourceInfo {
-            format: IMAGE_SOURCE_FORMAT_PNG,
-            width: 1_122,
-            height: 1_402,
-            byte_len: crate::virtio_gpu_logo::embedded_live_update_notice_png(1)
-                .ok_or(ERROR_NOT_FOUND)?
-                .len() as u32,
-        }),
-        "kernel:live-update-0way" => Ok(BlueprintImageSourceInfo {
-            format: IMAGE_SOURCE_FORMAT_PNG,
-            width: 1_122,
-            height: 1_402,
-            byte_len: crate::virtio_gpu_logo::embedded_live_update_notice_png(0)
-                .ok_or(ERROR_NOT_FOUND)?
-                .len() as u32,
-        }),
         "kernel:live-update-nway-left"
         | "kernel:live-update-nway-center"
         | "kernel:live-update-nway-right" => {
@@ -237,14 +212,13 @@ pub(crate) fn copy_blueprint_image_source(
     if out.len() > IMAGE_SOURCE_READ_CHUNK_BYTES {
         return Err(ERROR_INVALID);
     }
+    if let Some(image) = crate::os_assets::image(name) {
+        let available = image.bytes.get(offset..).ok_or(ERROR_INVALID)?;
+        let copied = available.len().min(out.len());
+        out[..copied].copy_from_slice(&available[..copied]);
+        return Ok(copied);
+    }
     match name {
-        "kernel:logo" => {
-            let source = crate::virtio_gpu_logo::embedded_logo_jpeg();
-            let available = source.get(offset..).ok_or(ERROR_INVALID)?;
-            let copied = available.len().min(out.len());
-            out[..copied].copy_from_slice(&available[..copied]);
-            Ok(copied)
-        }
         "kernel:bgrt" => {
             let Some((_, _, pixels)) = crate::efi::acpi::bgrt::decoded_logo_rgba() else {
                 return Err(ERROR_NOT_FOUND);
@@ -263,30 +237,6 @@ pub(crate) fn copy_blueprint_image_source(
                     _ => u8::MAX,
                 };
             }
-            Ok(copied)
-        }
-        "kernel:intel-graphics" => {
-            let available = INTEL_GRAPHICS_LOGO_PNG.get(offset..).ok_or(ERROR_INVALID)?;
-            let copied = available.len().min(out.len());
-            out[..copied].copy_from_slice(&available[..copied]);
-            Ok(copied)
-        }
-        "kernel:live-update" | "kernel:live-update-noway" => {
-            let available = crate::virtio_gpu_logo::embedded_live_update_notice_png(1)
-                .ok_or(ERROR_NOT_FOUND)?
-                .get(offset..)
-                .ok_or(ERROR_INVALID)?;
-            let copied = available.len().min(out.len());
-            out[..copied].copy_from_slice(&available[..copied]);
-            Ok(copied)
-        }
-        "kernel:live-update-0way" => {
-            let available = crate::virtio_gpu_logo::embedded_live_update_notice_png(0)
-                .ok_or(ERROR_NOT_FOUND)?
-                .get(offset..)
-                .ok_or(ERROR_INVALID)?;
-            let copied = available.len().min(out.len());
-            out[..copied].copy_from_slice(&available[..copied]);
             Ok(copied)
         }
         "kernel:live-update-nway-left"

@@ -14,3 +14,5 @@ pub(crate) use self::pic_backend as xelp_media2_ngin_hw_pic;
 pub(crate) use super::{
     claimed_device, dma_flush, ggtt_invalidate, map_ggtt, mask_en, mmio_read, mmio_write,
 };
+
+mod hls;

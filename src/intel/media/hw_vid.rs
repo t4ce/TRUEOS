@@ -580,6 +580,9 @@ async fn run_media_url_playback(
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
+    if url.split('?').next().unwrap_or(url).ends_with(".m3u8") {
+        return run_hls_url_playback(session, url, options, playback_path, user_agent).await;
+    }
     let mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope, user_agent).await?;
     if session.is_cancelled() {
         return Err("playback cancelled");
@@ -617,6 +620,200 @@ async fn run_media_url_playback(
         report.presented,
     );
     Ok(report)
+}
+
+async fn h264_fetch_hls_bytes(
+    session: crate::ui4::VideoPlaybackSession,
+    url: &str,
+    max_bytes: usize,
+    user_agent: Option<&str>,
+) -> Result<Vec<u8>, &'static str> {
+    if !url.starts_with("https://") {
+        return Err("HLS requires HTTPS");
+    }
+    let cancellation = crate::r::net::https::MediaFetchCancellation::new();
+    let fetch = crate::r::net::https::get_media_bytes_profile_shared(
+        url,
+        "plain-norange",
+        H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS as u32,
+        max_bytes,
+        &cancellation,
+        user_agent,
+    );
+    let mut fetch = core::pin::pin!(fetch);
+    let watch = async {
+        while !session.is_cancelled() {
+            Timer::after_millis(5).await;
+        }
+        cancellation.cancel();
+    };
+    let mut watch = core::pin::pin!(watch);
+    let mut stopped = false;
+    let result = core::future::poll_fn(|cx| {
+        use core::future::Future;
+        if !stopped && watch.as_mut().poll(cx).is_ready() {
+            stopped = true;
+        }
+        // Cancellation cannot drop the TLS owner before its completion fence.
+        fetch.as_mut().poll(cx)
+    })
+    .await;
+    if session.is_cancelled() {
+        return Err("playback cancelled");
+    }
+    result.map_err(|_| "HLS HTTPS fetch failed")
+}
+
+async fn run_hls_url_playback(
+    session: crate::ui4::VideoPlaybackSession,
+    url: &str,
+    options: H264PlaybackOptions,
+    path: &'static str,
+    user_agent: Option<&str>,
+) -> Result<H264PlaybackReport, &'static str> {
+    let mut current = String::from(url);
+    let mut segments = None;
+    for _ in 0..3 {
+        let bytes =
+            h264_fetch_hls_bytes(session, &current, super::hls::PLAYLIST_CAP, user_agent).await?;
+        let text = core::str::from_utf8(&bytes).map_err(|_| "HLS playlist is not UTF-8")?;
+        match super::hls::playlist(text)? {
+            super::hls::Playlist::Variant(reference) => {
+                current = crate::r::net::https::resolve_http_location(&current, &reference)
+                    .map_err(|_| "HLS invalid variant URL")?;
+            }
+            super::hls::Playlist::Vod(references) => {
+                let urls: Result<Vec<_>, _> = references
+                    .iter()
+                    .map(|reference| {
+                        crate::r::net::https::resolve_http_location(&current, reference)
+                            .map_err(|_| "HLS invalid segment URL")
+                    })
+                    .collect();
+                segments = Some(urls?);
+                break;
+            }
+        }
+    }
+    let segments = segments.ok_or("HLS variant nesting limit")?;
+    if segments.iter().any(|s| !s.starts_with("https://")) {
+        return Err("HLS requires HTTPS segments");
+    }
+    let mut reader = H264HlsNalReader {
+        session,
+        segments,
+        next_segment: 0,
+        demux: super::hls::Demux::new(),
+        memory: None,
+        timing: Vec::new(),
+        offset: 0,
+        failed: false,
+        user_agent: user_agent.map(String::from),
+    };
+    while reader.timing.is_empty() && reader.next_segment < reader.segments.len() {
+        reader.load_segment().await?;
+    }
+    crate::log_info!(target: "intel-media";
+        "video/hls: prepared segments={} pictures={} container=mpeg-ts codec=avc incremental=1\n",
+        reader.segments.len(), reader.timing.len());
+    let media_session = h264_reserve_decode_session(session).await?;
+    let _diagnostics = H264PlaybackGuard::begin();
+    let report = h264_i_p_playback_probe_with_reader(
+        session,
+        H264NalReader::Hls(reader),
+        0,
+        Vec::new(),
+        "media-url-hls-avc",
+        path,
+        options,
+        media_session.generation(),
+    )
+    .await;
+    drop(media_session);
+    Ok(report)
+}
+
+struct H264HlsNalReader {
+    session: crate::ui4::VideoPlaybackSession,
+    segments: Vec<String>,
+    next_segment: usize,
+    demux: super::hls::Demux,
+    memory: Option<H264MemoryNalReader>,
+    timing: Vec<H264SampleTiming>,
+    offset: u64,
+    failed: bool,
+    user_agent: Option<String>,
+}
+impl H264HlsNalReader {
+    async fn load_segment(&mut self) -> Result<(), &'static str> {
+        let url = self
+            .segments
+            .get(self.next_segment)
+            .ok_or("HLS end of stream")?;
+        let bytes = h264_fetch_hls_bytes(
+            self.session,
+            url,
+            super::hls::SEGMENT_CAP,
+            self.user_agent.as_deref(),
+        )
+        .await?;
+        let last = self.next_segment + 1 == self.segments.len();
+        let samples = self.demux.segment(&bytes, last)?;
+        if self.timing.len() + samples.len() > 1_000_000 {
+            return Err("HLS picture count limit");
+        }
+        // B-frame ordering is sorted within each completed batch. Reject a
+        // cross-batch inversion rather than presenting at the wrong timestamp.
+        if let (Some(previous), Some(next)) =
+            (self.timing.iter().map(|t| t.pts).max(), samples.iter().map(|s| s.pts).min())
+        {
+            if next as i64 <= previous {
+                return Err("HLS cross-segment PTS inversion unsupported");
+            }
+        }
+        let mut annexb = Vec::new();
+        for sample in samples {
+            self.timing.push(H264SampleTiming {
+                dts: sample.dts,
+                pts: sample.pts as i64,
+                duration: 0,
+                timescale: 90_000,
+                colour: None,
+            });
+            annexb.extend_from_slice(&sample.data);
+        }
+        self.next_segment += 1;
+        crate::log_info!(target: "intel-media";
+            "video/hls: segment={}/{} bytes={} pictures_total={}\n",
+            self.next_segment, self.segments.len(), bytes.len(), self.timing.len());
+        self.memory = Some(H264MemoryNalReader::new(annexb, "hls-segment"));
+        Ok(())
+    }
+    async fn next_nal(&mut self) -> Option<H264BufferedNal> {
+        loop {
+            if self.session.is_cancelled() || self.failed {
+                return None;
+            }
+            if let Some(reader) = self.memory.as_mut() {
+                if let Some(mut nal) = reader.next_nal().await {
+                    nal.meta.stream_offset += self.offset;
+                    return Some(nal);
+                }
+                self.offset += reader.buffer.len() as u64;
+                self.memory = None;
+            }
+            if self.next_segment == self.segments.len() {
+                return None;
+            }
+            if let Err(error) = self.load_segment().await {
+                self.failed = !self.session.is_cancelled();
+                if self.failed {
+                    crate::log_warn!(target: "intel-media"; "video/hls: segment failed reason={}\n", error);
+                }
+                return None;
+            }
+        }
+    }
 }
 
 fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -2753,8 +2950,10 @@ async fn h264_next_stream_access_unit(
             .as_ref()
             .is_some_and(|unit| unit.data.len() > H264_FS_PICTURE_CAP_BYTES)
         {
-            if let H264NalReader::File(r) = reader {
-                r.failed = true;
+            match reader {
+                H264NalReader::File(r) => r.failed = true,
+                H264NalReader::Hls(r) => r.failed = true,
+                _ => {}
             }
             return None;
         }
@@ -2767,6 +2966,7 @@ async fn h264_next_stream_access_unit(
 enum H264NalReader {
     Memory(H264MemoryNalReader),
     File(H264FileNalReader),
+    Hls(H264HlsNalReader),
 }
 
 impl H264NalReader {
@@ -2777,21 +2977,27 @@ impl H264NalReader {
         }
     }
     fn streaming(&self) -> bool {
-        matches!(self, Self::File(_))
+        matches!(self, Self::File(_) | Self::Hls(_))
     }
     fn failed(&self) -> bool {
-        matches!(self, Self::File(r) if r.failed)
+        match self {
+            Self::File(r) => r.failed,
+            Self::Hls(r) => r.failed,
+            _ => false,
+        }
     }
     fn replay(&mut self, bytes: Vec<u8>) {
         match self {
             Self::File(r) => r.replay = Some(H264MemoryNalReader::new(bytes, "fs-prefix")),
             Self::Memory(r) => r.scan_offset = 0,
+            Self::Hls(_) => {}
         }
     }
     async fn next_nal(&mut self) -> Option<H264BufferedNal> {
         match self {
             Self::Memory(reader) => reader.next_nal().await,
             Self::File(reader) => reader.next_nal().await,
+            Self::Hls(reader) => reader.next_nal().await,
         }
     }
 }
@@ -3013,7 +3219,7 @@ async fn h264_i_p_playback_probe_with_reader(
         access_units.iter().map(|unit| unit.timing).collect()
     };
     let access_unit_count = timing.len();
-    let incremental_mkv = reader.mkv_track().is_some();
+    let incremental_mkv = reader.mkv_track().is_some() || matches!(reader, H264NalReader::Hls(_));
     let presentation_reordering_required = incremental_mkv
         || timing.windows(2).any(|pair| {
             matches!((pair[0], pair[1]), (Some(previous), Some(next))
@@ -3078,6 +3284,23 @@ async fn h264_i_p_playback_probe_with_reader(
                 &mut presentation_rank,
                 &mut base_pts,
             ) {
+                presentation_slots.resize(sample_timing.len(), H264PresentationSlot::Waiting);
+            }
+        }
+        if let H264NalReader::Hls(hls) = &reader {
+            let first = sample_timing.len();
+            if first < hls.timing.len() {
+                let added = &hls.timing[first..];
+                if first == 0 {
+                    base_pts = added.iter().map(|t| t.pts).min().unwrap_or(0);
+                }
+                let mut order: Vec<_> = (0..added.len()).collect();
+                order.sort_by_key(|&i| (added[i].pts, added[i].dts, i));
+                presentation_rank.resize(first + added.len(), 0);
+                for (rank, i) in order.into_iter().enumerate() {
+                    presentation_rank[first + i] = first + rank;
+                }
+                sample_timing.extend_from_slice(added);
                 presentation_slots.resize(sample_timing.len(), H264PresentationSlot::Waiting);
             }
         }

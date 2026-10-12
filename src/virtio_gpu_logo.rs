@@ -27,10 +27,9 @@ pub(crate) fn output_dimensions() -> Option<(u32, u32)> {
     (packed != 0).then_some(((packed >> 32) as u32, packed as u32))
 }
 
-const LOGO_JPEG: &[u8] = include_bytes!("../logo.jpg");
-const LIVE_UPDATE_0WAY_PNG: &[u8] = include_bytes!("../tools/updlive/0way.png");
-const LIVE_UPDATE_NOWAY_PNG: &[u8] = include_bytes!("../tools/updlive/noway.png");
-const LIVE_UPDATE_NWAY_PNG: &[u8] = include_bytes!("../tools/updlive/nway.png");
+use crate::os_assets::{
+    LIVE_UPDATE_0WAY_PNG, LIVE_UPDATE_NOWAY_PNG, LIVE_UPDATE_NWAY_PNG, LOGO_JPEG,
+};
 const LIVE_UPDATE_NOTICE_VISIBLE_MS: u64 = 3_000;
 pub(crate) const LIVE_UPDATE_NOTICE_VARIANT_COUNT: usize = 5;
 
@@ -46,20 +45,8 @@ static LIVE_UPDATE_NWAY_PANEL: spin::Mutex<
     Option<(usize, crate::graphics::png_codec::DecodedPng)>,
 > = spin::Mutex::new(None);
 
-pub(crate) const fn embedded_logo_jpeg() -> &'static [u8] {
-    LOGO_JPEG
-}
-
 pub(crate) const fn live_update_notice_source(variant: usize) -> &'static str {
     LIVE_UPDATE_NOTICE_SOURCES[variant % LIVE_UPDATE_NOTICE_VARIANT_COUNT]
-}
-
-pub(crate) const fn embedded_live_update_notice_png(variant: usize) -> Option<&'static [u8]> {
-    match variant {
-        0 => Some(LIVE_UPDATE_0WAY_PNG),
-        1 => Some(LIVE_UPDATE_NOWAY_PNG),
-        _ => None,
-    }
 }
 
 fn decode_live_update_triptych_panel(
@@ -139,7 +126,12 @@ pub(crate) fn copy_live_update_triptych_panel(
 fn decode_live_update_notice_variant(
     variant: usize,
 ) -> Result<crate::graphics::png_codec::DecodedPng, crate::graphics::png_codec::PngDecodeError> {
-    if let Some(png) = embedded_live_update_notice_png(variant) {
+    let png = match variant {
+        0 => Some(LIVE_UPDATE_0WAY_PNG),
+        1 => Some(LIVE_UPDATE_NOWAY_PNG),
+        _ => None,
+    };
+    if let Some(png) = png {
         return crate::graphics::png_codec::decode_png_rgba(png);
     }
     decode_live_update_triptych_panel(variant.saturating_sub(2))
