@@ -122,3 +122,130 @@ passed. The updated Codex package is rebuilt locally without publication.
 This new run also validates the previous process-exit repair: lines 2933-2940
 record `std-abi: exit`, terminal return and shutdown acknowledgement. Lines
 2962-2965 record clean process stop, terminal cleanup and zero native jobs.
+
+## Reboot with saved authentication: fresh thread and stale std cache
+
+The next capture, `trueos-baremetal.2.log`, skips onboarding after account/read.
+It still enters the same `SessionSelection::StartFresh` branch and spawns the
+same `thread/start` request as the earlier onboarding run. Clearing chat
+history does not choose this branch; history persistence is a separate setting.
+
+`thread_start_begin` appears at line 1491. The initial frame is scheduled at
+line 1520, but neither thread-start completion nor failure is recorded during
+several subsequent minutes. Rules-directory requests now correctly return -8
+NotFound. Read-only SSH status confirms Codex remains running. These records
+do not establish the exact pending await inside thread creation.
+
+The old directory error still appears at line 774. Inspection established a
+build-cache omission in the preceding repair: the packer fingerprints patched
+thread/TLS/time/random rust-src, but did not fingerprint `std/src/sys/fs/unix.rs`.
+Cargo reused a libstd compiled before the decoder change despite the source
+patch being installed. Therefore the prior package rebuild did not actually
+include the corrected directory reader.
+
+The std cache fingerprint now includes that filesystem source. A regression
+test verifies that changing it changes the cache revision. A new cache shard
+was built; inspecting its libstd archive confirms `trueos_directory_names` is
+present and the old NUL-error string is absent.
+
+The diagnostic Codex build also logs TRUEOS-only `codex_startup` phase markers
+around client request preparation/RPC, server config/metadata/thread creation,
+and core rules migration/model loading. It also brackets the persistence/MCP
+initialization join, environment readiness, AGENTS/plugin/skill discovery,
+required MCP runtime initialization and scheduling of socket prewarm.
+Request IDs and existing request spans
+correlate the records. These markers change logging only; authentication,
+history and startup behavior remain unchanged. A new rig run is needed to
+identify the unresolved thread-start await.
+
+The diagnostic package build passed. The module extracted directly from its
+compressed payload matches `module.stripped.o` by SHA-256. That packed module
+contains the client/server/core phase markers and no old NUL-error string.
+Package SHA-256:
+`55d6ead5e973c97cec4bad05f2a02c735f77ca094dd9105fc2a8ffd851124f31`.
+The current rig already demonstrates the kernel's NotFound correction; the
+next diagnostic pass needs this newly compiled Codex package on that kernel.
+
+## Diagnostic run: queued inputs and rules migration
+
+The next run (`trueos-baremetal.0.log`) reaches `thread_start_prepare` and
+`thread_start_rpc_begin` at lines 1519–1520, then server config/metadata/create
+and `core_rule_migration_begin` at line 1581. No migration completion or
+thread-start response appears. TUI redraws record submitted messages under
+“Queued follow-up inputs”: keyboard delivery works, but startup is pending.
+No additional key is required to start a thread.
+
+The migration uses `NamedTempFile::persist_noclobber`, implemented upstream
+with a hard link. TRUEOS std rejects hard links immediately. Dropping the
+resulting error also drops the tempfile, flushing its buffered `v1\n` through
+the synchronous POSIX close path. At lines 1622–1627 a three-byte temporary
+file write begins successfully while plugin staging-directory work overlaps.
+Chunk/finish success is not logged, so these logs alone cannot locate the
+exact blocked broker request.
+
+Source inspection exposes a definite deadlock in that path: the BSP filesystem
+broker awaited requests one at a time, but a streamed write retains its root
+write lease between begin and finish/abort. A directory mutation queued between
+those calls waits for the lease, preventing the broker from processing the
+chunk or finish that releases it. The broker now polls independent request
+futures concurrently on its existing BSP task; filesystem futures remain
+local and no executor is polled recursively. Arrival notification is registered
+before draining the queue.
+
+`tools/testpy/test_fs_request_broker.py` compiles the production service/pump
+and verifies that reads, chunks, finish and abort pass a writer waiting for an
+open stream's lease, and that releasing the lease completes that writer. Both
+tests pass, and `cargo check --bin TRUEOS` succeeds with existing warnings.
+This kernel correction still requires hardware validation. The
+unsupported migration hard link will continue to produce an upstream warning
+after cleanup completes; it is separate from this broker deadlock.
+
+## Next run: conversation writer lock is unsupported
+
+The subsequent `trueos-baremetal.2.log` run completes rules migration at
+line 1753 and model loading at line 1900. It reaches and returns from the
+persistence/MCP join (1915–1955), then fails at line 1956:
+`failed to acquire thread writer coordination lock: lock() not supported`.
+The TUI reports `thread_start_failed` at line 1995 after 33.473 seconds.
+This is creation of the Codex conversation, not creation of an OS pthread.
+
+Codex's rollout writer coordinator requires std File::lock, try_lock and
+close-based release. The pinned std Unix backend excludes TRUEOS from its
+flock platform list. The Blueprint overlay now enables all five lock methods
+(including shared locks and explicit unlock), and the kernel implements the
+flock compatibility import with an actual host-owned advisory-lock registry.
+Hull calls cross VMX to that same registry, rather than consulting a private
+copy. Independent opens have separate owners; dup/try_clone aliases share an
+Arc handle. Its final drop releases ownership, including after a writeback
+error, and VM teardown clears that realm's locks. Blocking contention sleeps
+five milliseconds between attempts; nonblocking contention returns EAGAIN.
+Registry allocations are explicitly host-owned so guest shutdown cannot free
+live global state.
+
+Lock identity uses the canonical primary-root/path namespace, including
+unpublished buffered creations. This conservatively retains exclusion if a
+path is deleted/recreated while locked, rather than promising Unix inode lock
+semantics across TRUEOSFS's copy/delete rename compatibility operation.
+
+Eight compiled-production-function lock tests pass, covering cross-realm
+contention, shared/exclusive conversion, blocking sleep/retry, Hull dispatch,
+duplicate descriptor lifetime, explicit release and realm teardown. Two
+Blueprint patch tests and the kernel check pass. Hardware validation still
+requires both the newly built kernel and Codex package.
+
+The run also performs extensive plugin bundle extraction/copying. It is a
+plausible contributor to responsiveness loss, but these logs do not measure
+input-to-render latency or establish a scheduler failure. Logged pthread
+creations succeeded; the conversation-store error is independently definite.
+
+The release kernel and Codex package both build successfully. The rebuilt std
+archive has `flock` and no `lock() not supported` fallback string. The final
+linked Codex module imports `flock`; the module extracted from the compressed
+package matches it by SHA-256 (`7ce5d7e3eb82315abf6a4e8e85560f77c6f2572ccb3f5acbee9a016e9fa5b66b`).
+The CABI pack guard passes with the same 36 imports and unchanged CABI contract.
+Local package: `TRUEOS-Blueprints/dist/codex.bp`, 81,797,305 bytes, SHA-256
+`a212c7aa4f10086024211d45ebcaf09182b447824d0e7fd8578eef45acf3e78e`.
+Local kernel: `tgt/x86_64-unknown-trueos/release/TRUEOS`.
+Kernel SHA-256:
+`cb811ca2f198d8f3475a178cce394eb440bc1267167e76ea06d7f4344aa6241f`.
+Neither artifact was deployed to the rig during this repair.

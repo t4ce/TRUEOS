@@ -12,11 +12,15 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::future::{Future, poll_fn};
+use core::pin::{Pin, pin};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::task::{Context, Poll};
 
 use spin::Mutex;
 
@@ -748,6 +752,30 @@ fn finish<T>(id: u64, operation: &'static str, completion: Completion<T>, result
     }
 }
 
+type ActiveRequest = Pin<Box<dyn Future<Output = ()>>>;
+
+fn poll_request_batch(active: &mut Vec<ActiveRequest>, cx: &mut Context<'_>) {
+    // A streamed begin retains the root write lease until finish/abort. Awaiting
+    // each request serially lets a later writer block the very chunk/finish
+    // requests that release that lease. Poll independent requests on this same
+    // BSP task; never move the non-Send filesystem futures to an AP executor.
+    loop {
+        let request = BROKER_REQUESTS.lock().pop_front();
+        let Some(request) = request else {
+            break;
+        };
+        active.push(Box::pin(process_request(request)));
+    }
+    let mut index = 0;
+    while index < active.len() {
+        if active[index].as_mut().poll(cx).is_ready() {
+            drop(active.swap_remove(index));
+        } else {
+            index += 1;
+        }
+    }
+}
+
 #[trueos_executor::task]
 pub async fn service_task() {
     BROKER_ONLINE.store(true, Ordering::Release);
@@ -755,11 +783,19 @@ pub async fn service_task() {
         "trueosfs-request-broker: online realm=bsp callers=background-service-lanes wait=parked-no-executor-poll\n"
     );
 
+    let mut active = Vec::new();
     loop {
-        let request = BROKER_REQUESTS.lock().pop_front();
-        match request {
-            Some(request) => process_request(request).await,
-            None => BROKER_WAIT.wait_for_event().await,
-        }
+        let mut arrival = pin!(BROKER_WAIT.wait_for_event());
+        poll_fn(|cx| {
+            // Register before checking the queue, closing the arrival/wait race.
+            let notified = arrival.as_mut().poll(cx).is_ready();
+            poll_request_batch(&mut active, cx);
+            if notified {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
     }
 }

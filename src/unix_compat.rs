@@ -79,6 +79,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "fchown"
             | "fcntl"
             | "fcntl64"
+            | "flock"
             | "fdatasync"
             | "fdopendir"
             | "fork"
@@ -250,6 +251,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "fchown" => Some(crate::std_abi_shim::fchown as *const () as usize),
         "fcntl" => Some(crate::std_abi_shim::fcntl as *const () as usize),
         "fcntl64" => Some(crate::std_abi_shim::fcntl64 as *const () as usize),
+        "flock" => Some(crate::std_abi_shim::flock as *const () as usize),
         "fdatasync" => Some(crate::std_abi_shim::fdatasync as *const () as usize),
         "fdopendir" => Some(crate::std_abi_shim::fdopendir as *const () as usize),
         "fork" => Some(crate::std_abi_shim::fork as *const () as usize),

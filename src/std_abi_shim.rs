@@ -381,6 +381,7 @@ pub(crate) struct BytePipe {
 pub(crate) enum OpenFile {
     Regular {
         path: Option<String>,
+        lock: Arc<FileLockHandle>,
         world: Arc<Mutex<RegularFileWorld>>,
         offset: usize,
         readable: bool,
@@ -400,6 +401,25 @@ pub(crate) enum OpenFile {
         tx: Arc<Mutex<BytePipe>>,
         flags: c_int,
     },
+}
+
+pub(crate) struct FileLockHandle {
+    owner: crate::r::fs::advisory_lock::Owner,
+    path: String,
+}
+
+impl Drop for FileLockHandle {
+    fn drop(&mut self) {
+        if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let _ = trueos_vm::vmcall::call(
+                trueos_vm::vmcall::OP_BP_POSIX_FLOCK_RELEASE,
+                self.owner.description,
+                0,
+            );
+        } else {
+            crate::r::fs::advisory_lock::LOCKS.lock().release(self.owner);
+        }
+    }
 }
 
 pub(crate) struct RegularFileWorld {
@@ -641,6 +661,9 @@ pub(crate) fn blueprint_process_state_ready_flag(vm_id: u8) -> Option<(u64, u8)>
 }
 
 pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
+    // Lifecycle teardown has already stopped the Hull and drained its native
+    // jobs before reusing this realm's descriptor sequence.
+    crate::r::fs::advisory_lock::LOCKS.lock().release_realm(u64::from(vm_id) + 1);
     let Some(init) = BLUEPRINT_PROCESS_STATE_INIT.get(vm_id as usize) else {
         crate::log_important!(target: "hv";
             "std-abi-shim: blueprint process-state reset scope unavailable vm={} limit={} action=noop\n",
@@ -5009,6 +5032,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
     let should_create = flags & TRUEOS_O_CREAT != 0;
     let trace_file_world = path == POSIX_FILE_WORLD_PROBE_PATH;
 
+    let fd = next_file_fd();
     let file = match access {
         TRUEOS_O_RDONLY | TRUEOS_O_WRONLY | TRUEOS_O_RDWR => {
             let (world, reused) = match open_regular_file_world(
@@ -5040,6 +5064,16 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
                 );
             }
             OpenFile::Regular {
+                lock: Arc::new(FileLockHandle {
+                    owner: crate::r::fs::advisory_lock::Owner {
+                        realm: file_lock_realm(),
+                        description: fd as u64,
+                    },
+                    path: crate::r::io::env::resolve_fs_path(path.as_str(), false)
+                        .and_then(|path| crate::r::path::FsPath::parse(&path, false).ok())
+                        .map(|path| path.to_relative_string())
+                        .unwrap_or_else(|| path.clone()),
+                }),
                 path: Some(path),
                 world,
                 offset: 0,
@@ -5053,7 +5087,6 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
             return -1;
         }
     };
-    let fd = next_file_fd();
     if let Err(file) = OPEN_FILES.lock().insert(fd, file) {
         if let OpenFile::Regular { path, world, .. } = &file {
             cleanup_regular_file_world(path.as_deref(), world);
@@ -5803,6 +5836,71 @@ pub unsafe extern "C" fn fsync(fd: c_int) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fdatasync(fd: c_int) -> c_int {
     unsafe { fsync(fd) }
+}
+
+fn file_lock_realm() -> u64 {
+    crate::r::threads::current_vm_id()
+        .or_else(crate::hv::current_guest_execution_context_vm_id)
+        .map_or(0, |vm_id| u64::from(vm_id) + 1)
+}
+
+/// One nonblocking attempt on the host-owned namespace. Called by VMX dispatch
+/// as well as native carriers; no disk operation or descriptor lock is awaited.
+pub(crate) fn file_lock_try_host(fd: c_int, operation: c_int) -> c_int {
+    let mode = match operation & !4 {
+        1 => Some(false),
+        2 => Some(true),
+        8 => None,
+        _ => return TRUEOS_EINVAL,
+    };
+    // Keep the description alive until this attempt is recorded. This guard
+    // spans only a nonblocking registry operation, never the contention wait.
+    let files = OPEN_FILES.lock();
+    let lock = match files.get(fd) {
+        Some(OpenFile::Regular { lock, .. }) => lock,
+        Some(_) => return TRUEOS_EINVAL,
+        None => return TRUEOS_EBADF,
+    };
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        return TRUEOS_EIO;
+    };
+    let acquired = crate::allocators::with_host_alloc_domain_strong(|| {
+        crate::r::fs::advisory_lock::LOCKS.lock().try_set(
+            disk.id().raw(), &lock.path, lock.owner, mode,
+        )
+    });
+    if acquired {
+        0
+    } else {
+        TRUEOS_EAGAIN
+    }
+}
+
+pub(crate) fn file_lock_release_host(description: u64) {
+    crate::r::fs::advisory_lock::LOCKS.lock().release(
+        crate::r::fs::advisory_lock::Owner { realm: file_lock_realm(), description },
+    );
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn flock(fd: c_int, operation: c_int) -> c_int {
+    loop {
+        let errno = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+            let (status, value) = trueos_vm::vmcall::call(
+                trueos_vm::vmcall::OP_BP_POSIX_FLOCK_TRY,
+                fd as u64,
+                operation as u64,
+            );
+            if status == trueos_vm::vmcall::STATUS_OK { value as c_int } else { TRUEOS_EIO }
+        } else {
+            file_lock_try_host(fd, operation)
+        };
+        if errno != TRUEOS_EAGAIN || operation & 4 != 0 {
+            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+            return if errno == 0 { 0 } else { -1 };
+        }
+        crate::r::io::fs_cabi::trueos_cabi_sleep_ms(5);
+    }
 }
 
 #[unsafe(no_mangle)]

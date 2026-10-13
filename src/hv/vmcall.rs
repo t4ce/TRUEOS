@@ -329,6 +329,8 @@ pub const OP_BP_FS_WRITE_BEGIN: u32 = 0x2E; // arg0 total len, payload path -> r
 pub const OP_BP_FS_WRITE_CHUNK: u32 = 0x2F; // arg0 handle, payload chunk -> rc
 pub const OP_BP_FS_WRITE_FINISH: u32 = 0x30; // arg0 handle -> rc
 pub const OP_BP_FS_WRITE_ABORT: u32 = 0x31; // arg0 handle -> rc
+pub const OP_BP_POSIX_FLOCK_TRY: u32 = 0x224; // fd, operation -> errno; host namespace
+pub const OP_BP_POSIX_FLOCK_RELEASE: u32 = 0x225; // final open-description drop
 pub const OP_BP_FS_EXISTS: u32 = 0x33; // payload path -> 0/1/rc
 pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32], optional payload kind:u32 len:u64
@@ -5901,6 +5903,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_FS_WRITE_ABORT => {
             let rc = crate::r::io::cabi::fs_write_abort_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_POSIX_FLOCK_TRY => {
+            let errno = crate::std_abi_shim::file_lock_try_host(arg0 as i32, arg1 as i32);
+            write_response(vm_id, seq, STATUS_OK, errno as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_POSIX_FLOCK_RELEASE => {
+            crate::std_abi_shim::file_lock_release_host(arg0);
+            write_response(vm_id, seq, STATUS_OK, 0, 0);
             DispatchOutcome::Resume
         }
         OP_BP_FS_EXISTS => {
