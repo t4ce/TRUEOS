@@ -1,0 +1,1338 @@
+{
+  "manifest_sections_checked": 73,
+  "manifest_mismatches": [],
+  "original_dependency_option_variants": {
+    "codex-utils-absolute-path": [
+      {
+        "workspace": true
+      }
+    ],
+    "codex-utils-path-uri": [
+      {
+        "workspace": true
+      }
+    ],
+    "codex-utils-path": [
+      {
+        "workspace": true
+      }
+    ],
+    "codex-utils-home-dir": [
+      {
+        "workspace": true
+      }
+    ],
+    "codex-utils-elapsed": [
+      {
+        "workspace": true
+      }
+    ],
+    "codex-utils-fuzzy-match": [
+      {
+        "workspace": true
+      }
+    ],
+    "codex-utils-template": [
+      {
+        "workspace": true
+      }
+    ],
+    "codex-utils-stream-parser": [
+      {
+        "workspace": true
+      }
+    ]
+  },
+  "manifest_sections": [
+    {
+      "manifest": "codex-rs/skills/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/core-plugins/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/analytics/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/analytics/Cargo.toml",
+      "section": "dev-dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/app-server-transport/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/network-proxy/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-home-dir",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/app-server-client/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/app-server-daemon/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-home-dir"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/hooks/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/agent-graph-store/Cargo.toml",
+      "section": "dev-dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/codex-mcp/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/exec/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/agent-roles/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/protocol/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/model-provider-info/Cargo.toml",
+      "section": "dev-dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/cli/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/tui/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-home-dir",
+        "codex-utils-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/tui/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-elapsed",
+        "codex-utils-fuzzy-match"
+      ],
+      "bundle": "codex-utils-text",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/plugin/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/tools/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/file-system/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/thread-store/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/thread-store/Cargo.toml",
+      "section": "dev-dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/rmcp-client/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-path-uri",
+        "codex-utils-home-dir"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/app-server/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/core-api/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/shell-command/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/exec-server-protocol/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/exec-server/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-home-dir",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/login/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-template"
+      ],
+      "bundle": "codex-utils-text",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/core/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-home-dir",
+        "codex-utils-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/core/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-stream-parser"
+      ],
+      "bundle": "codex-utils-text",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/execpolicy/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/install-context/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-home-dir"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/mxc-sandbox/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/prompts/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/prompts/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-template"
+      ],
+      "bundle": "codex-utils-text",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/sandboxing/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/sandboxing/Cargo.toml",
+      "section": "target.cfg(windows).dependencies",
+      "source_keys": [
+        "codex-utils-home-dir"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/git-utils/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/otel/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/otel/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-stream-parser"
+      ],
+      "bundle": "codex-utils-text",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/linux-sandbox/Cargo.toml",
+      "section": "target.cfg(target_os = \"linux\").dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/core-plugin-common/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/rollout/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/rollout/Cargo.toml",
+      "section": "dev-dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/apply-patch/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/arg0/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-home-dir"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/windows-sandbox-rs/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/config/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/state/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/websocket-auth/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/codex-home/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/app-server-protocol/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/memories/read/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/memories/write/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/memories/write/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-template"
+      ],
+      "bundle": "codex-utils-text",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/core/tests/common/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/skills/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/mcp/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/connectors/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/extension-api/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/goal/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-template"
+      ],
+      "bundle": "codex-utils-text",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/goal/Cargo.toml",
+      "section": "dev-dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/image-generation/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/memories/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/memories/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-template"
+      ],
+      "bundle": "codex-utils-text",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/queue/Cargo.toml",
+      "section": "dev-dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/ext/items/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/utils/sandbox-summary/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/utils/sandbox-summary/Cargo.toml",
+      "section": "dev-dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/utils/git-discovery/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    },
+    {
+      "manifest": "codex-rs/utils/plugins/Cargo.toml",
+      "section": "dependencies",
+      "source_keys": [
+        "codex-utils-absolute-path",
+        "codex-utils-path-uri"
+      ],
+      "bundle": "codex-utils-paths",
+      "expected": {
+        "workspace": true
+      },
+      "actual": {
+        "workspace": true
+      }
+    }
+  ],
+  "source_files_checked": 31,
+  "original_test_declarations": 192,
+  "migrated_test_declarations": 192,
+  "source_files": [
+    {
+      "before": "codex-rs/utils/elapsed/src/lib.rs",
+      "after": "codex-rs/utils/text/src/elapsed/mod.rs",
+      "tests_before": 4,
+      "tests_after": 4,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/fuzzy-match/src/lib.rs",
+      "after": "codex-rs/utils/text/src/fuzzy_match/mod.rs",
+      "tests_before": 8,
+      "tests_after": 8,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/stream-parser/src/assistant_text.rs",
+      "after": "codex-rs/utils/text/src/stream_parser/assistant_text.rs",
+      "tests_before": 2,
+      "tests_after": 2,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/stream-parser/src/citation.rs",
+      "after": "codex-rs/utils/text/src/stream_parser/citation.rs",
+      "tests_before": 7,
+      "tests_after": 7,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/stream-parser/src/inline_hidden_tag.rs",
+      "after": "codex-rs/utils/text/src/stream_parser/inline_hidden_tag.rs",
+      "tests_before": 6,
+      "tests_after": 6,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/stream-parser/src/lib.rs",
+      "after": "codex-rs/utils/text/src/stream_parser/mod.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/stream-parser/src/proposed_plan.rs",
+      "after": "codex-rs/utils/text/src/stream_parser/proposed_plan.rs",
+      "tests_before": 5,
+      "tests_after": 5,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/stream-parser/src/stream_text.rs",
+      "after": "codex-rs/utils/text/src/stream_parser/stream_text.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/stream-parser/src/tagged_line_parser.rs",
+      "after": "codex-rs/utils/text/src/stream_parser/tagged_line_parser.rs",
+      "tests_before": 2,
+      "tests_after": 2,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/stream-parser/src/utf8_stream.rs",
+      "after": "codex-rs/utils/text/src/stream_parser/utf8_stream.rs",
+      "tests_before": 6,
+      "tests_after": 6,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/template/src/lib.rs",
+      "after": "codex-rs/utils/text/src/template/mod.rs",
+      "tests_before": 14,
+      "tests_after": 14,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/absolute-path/src/absolutize.rs",
+      "after": "codex-rs/utils/paths/src/absolute_path/absolutize.rs",
+      "tests_before": 9,
+      "tests_after": 9,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/absolute-path/src/lib.rs",
+      "after": "codex-rs/utils/paths/src/absolute_path/mod.rs",
+      "tests_before": 24,
+      "tests_after": 24,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/absolute-path/src/system_aliases.rs",
+      "after": "codex-rs/utils/paths/src/absolute_path/system_aliases.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/absolute-path/src/system_aliases_tests.rs",
+      "after": "codex-rs/utils/paths/src/absolute_path/system_aliases_tests.rs",
+      "tests_before": 2,
+      "tests_after": 2,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/home-dir/src/lib.rs",
+      "after": "codex-rs/utils/paths/src/home_dir/mod.rs",
+      "tests_before": 4,
+      "tests_after": 4,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-utils/src/env.rs",
+      "after": "codex-rs/utils/paths/src/path/env.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-utils/src/lib.rs",
+      "after": "codex-rs/utils/paths/src/path/mod.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-utils/src/path_utils_tests.rs",
+      "after": "codex-rs/utils/paths/src/path/path_utils_tests.rs",
+      "tests_before": 10,
+      "tests_after": 10,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-utils/src/system_commands.rs",
+      "after": "codex-rs/utils/paths/src/path/system_commands.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-utils/src/system_commands_tests.rs",
+      "after": "codex-rs/utils/paths/src/path/system_commands_tests.rs",
+      "tests_before": 1,
+      "tests_after": 1,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/absolute_path_normalization.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/absolute_path_normalization.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/api_path_string.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/api_path_string.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/api_path_string_tests.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/api_path_string_tests.rs",
+      "tests_before": 17,
+      "tests_after": 17,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/config_path.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/config_path.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/config_path_tests.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/config_path_tests.rs",
+      "tests_before": 4,
+      "tests_after": 4,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/lib.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/mod.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/native_path_bytes.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/native_path_bytes.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/platform.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/platform.rs",
+      "tests_before": 0,
+      "tests_after": 0,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/platform_tests.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/platform_tests.rs",
+      "tests_before": 3,
+      "tests_after": 3,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    },
+    {
+      "before": "codex-rs/utils/path-uri/src/tests.rs",
+      "after": "codex-rs/utils/paths/src/path_uri/tests.rs",
+      "tests_before": 64,
+      "tests_after": 64,
+      "source_equal_after_import_rebase_and_rustfmt": true
+    }
+  ],
+  "obsolete_readme_reference_fixed": "codex-rs/config/src/loader/README.md:61",
+  "bp_obsolete_fixed_path_references_found": 0,
+  "source_mismatches": []
+}

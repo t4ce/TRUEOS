@@ -1,0 +1,66 @@
+# Recovered from /tmp/trueos-codex-login-pack.log; packer source_overlay_patches.
+[patch.crates-io]
+"axum" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-0.8.9" }
+"axum-core" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-core-0.5.6" }
+"base64" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1" }
+"bytes" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1" }
+"crossbeam-utils" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21" }
+"crossterm" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossterm-0.29.0-trueos" }
+"directories-next" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/directories-next-2.0.0" }
+"getrandom" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.2.17" }
+"getrandom_03" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.3.4", package = "getrandom" }
+"getrandom_04" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.4.2", package = "getrandom" }
+"h2" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/h2-0.4.14" }
+"hickory-proto" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hickory-proto-0.25.2" }
+"hickory-resolver" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hickory-resolver-0.25.2" }
+"http" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0" }
+"http-body" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1" }
+"http-body-util" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3" }
+"httpdate" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3" }
+"hyper" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0" }
+"hyper-rustls" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-rustls-0.27.9" }
+"hyper-timeout" = { path = "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-timeout-trueos" }
+"hyper-util" = { path = "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos" }
+"if-watch" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/if-watch-3.2.2" }
+"libc" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186" }
+"libloading" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libloading-0.8.9" }
+"matchit" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/matchit-0.8.4" }
+"mime" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17" }
+"mio" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mio-1.2.0" }
+"quinn" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-0.11.9" }
+"quinn-proto" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-proto-0.11.14" }
+"quinn-udp" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-udp-0.5.14" }
+"rama-dns" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rama-dns-0.3.0-alpha.4-trueos" }
+"rama-http" = { path = "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rama-http-0.3.0-alpha.4" }
+"rama-tls-rustls" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rama-tls-rustls-0.3.0-alpha.4-rustcrypto" }
+"rayon" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rayon" }
+"rayon-core" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rayon/rayon-core" }
+"reqwest" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3" }
+"ring" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/ring-0.17.14" }
+"russh-cryptovec" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/russh-cryptovec-0.62.0" }
+"rustix" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos" }
+"rustix_0_38" = { path = "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rustix-0.38.44-trueos", package = "rustix" }
+"rustls-rustcrypto" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustls-rustcrypto-0.0.2-alpha" }
+"signal-hook-mio" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/signal-hook-mio-0.2.5-trueos" }
+"socket2" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3" }
+"socket2_0_5" = { path = "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/socket2-0.5.10-trueos", package = "socket2" }
+"sqlx-sqlite" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/sqlx-sqlite-0.9.0" }
+"starlark" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/starlark-0.14.2-trueos" }
+"tokio" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3" }
+"tokio-macros" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-macros-2.7.0" }
+"tokio-rustls" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4" }
+"tokio-stream" = { path = "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos" }
+"tokio-tungstenite" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-tungstenite-0.29.0" }
+"tokio-util" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18" }
+"tonic" = { path = "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tonic-trueos" }
+"tower" = { path = "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos" }
+"tower-http" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-http-0.6.9" }
+"tower-layer" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-layer-0.3.3" }
+"tower-service" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3" }
+"tracing" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44" }
+"tracing-appender" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-appender-0.2.5" }
+"tracing-attributes" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-attributes-0.1.31" }
+"tracing-core" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36" }
+"tracing-log" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-log-0.2.0" }
+"tracing-subscriber" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23" }
+"want" = { path = "/home/t4ce/Repos/TRUEOS-Blueprints/vendor/want-0.3.1" }

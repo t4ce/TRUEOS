@@ -1,0 +1,50 @@
+{
+  "new_members": [
+    "transport",
+    "network-foundation"
+  ],
+  "removed_members": [
+    "codex-api",
+    "codex-client",
+    "http-client",
+    "websocket-client",
+    "utils/rustls-provider"
+  ],
+  "cargo_dependency_mapping": {
+    "codex-api": {
+      "key": "codex-transport",
+      "path": "transport"
+    },
+    "codex-client": {
+      "key": "codex-transport",
+      "path": "transport"
+    },
+    "codex-http-client": {
+      "key": "codex-transport",
+      "path": "transport"
+    },
+    "codex-utils-rustls-provider": {
+      "key": "codex-network-foundation",
+      "path": "network-foundation"
+    },
+    "codex-websocket-client": {
+      "key": "codex-transport",
+      "path": "transport"
+    }
+  },
+  "rust_path_mapping": {
+    "codex_api": "codex_transport::api",
+    "codex_client": "codex_transport::client",
+    "codex_http_client": "codex_transport::http",
+    "codex_websocket_client": "codex_transport::websocket",
+    "codex_utils_rustls_provider": "codex_network_foundation"
+  },
+  "special_changes": [
+    "protocol normal codex-http-client dependency migrated to codex-network-foundation, reqwest dev dependency added solely for existing error fixture",
+    "protocol/src/error.rs imports canonical foundation HttpError and RetryAfter",
+    "network-proxy source and manifest provider dependency migrated to codex-network-foundation"
+  ],
+  "test_command": "CODEX_CA_CERTIFICATE= SSL_CERT_FILE= cargo test --offline -p codex-network-foundation -p codex-transport -p codex-protocol --lib --tests -j 2",
+  "cycle_resolution": "Protocol error identity/retry advice and proxy TLS provider remain in codex-network-foundation; API/client/HTTP/WebSocket execution folded into codex-transport.",
+  "test_environment": "Explicit empty CA environment values prevent rustup/Cargo injection of SSL_CERT_FILE from changing the native TLS test fixture into a Rustls custom-CA fixture; application CA precedence and TLS classifiers are unchanged."
+}

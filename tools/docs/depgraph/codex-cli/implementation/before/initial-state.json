@@ -1,0 +1,17 @@
+{
+  "captured_at_unix": 1791889000.4349678,
+  "repositories": {
+    "TRUEOS": {
+      "head": "f5b38b48eb78a2f28202b5ec3bf0c96c35274f55",
+      "status": "?? tools/docs/depgraph/codex-cli/implementation/\n"
+    },
+    "TRUEOS-Blueprints": {
+      "head": "0bcf40f15f41384cd8e6d2c43b7baa54d6369ecd",
+      "status": " M src/cargo_output.rs\n M src/main.rs\n"
+    },
+    "codex": {
+      "head": "8ba74b60ef7bb61d90ef325646f3682c4ef4ec13",
+      "status": ""
+    }
+  }
+}

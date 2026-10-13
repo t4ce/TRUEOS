@@ -1,0 +1,66 @@
+{
+  "new_members": [
+    "utils/text",
+    "utils/paths"
+  ],
+  "removed_members": [
+    "utils/elapsed",
+    "utils/fuzzy-match",
+    "utils/stream-parser",
+    "utils/template",
+    "utils/absolute-path",
+    "utils/home-dir",
+    "utils/path-utils",
+    "utils/path-uri"
+  ],
+  "cargo_dependency_mapping": {
+    "codex-utils-elapsed": {
+      "key": "codex-utils-text",
+      "path": "utils/text"
+    },
+    "codex-utils-fuzzy-match": {
+      "key": "codex-utils-text",
+      "path": "utils/text"
+    },
+    "codex-utils-stream-parser": {
+      "key": "codex-utils-text",
+      "path": "utils/text"
+    },
+    "codex-utils-template": {
+      "key": "codex-utils-text",
+      "path": "utils/text"
+    },
+    "codex-utils-absolute-path": {
+      "key": "codex-utils-paths",
+      "path": "utils/paths"
+    },
+    "codex-utils-home-dir": {
+      "key": "codex-utils-paths",
+      "path": "utils/paths"
+    },
+    "codex-utils-path": {
+      "key": "codex-utils-paths",
+      "path": "utils/paths"
+    },
+    "codex-utils-path-uri": {
+      "key": "codex-utils-paths",
+      "path": "utils/paths"
+    }
+  },
+  "rust_path_mapping": {
+    "codex_utils_elapsed": "codex_utils_text::elapsed",
+    "codex_utils_fuzzy_match": "codex_utils_text::fuzzy_match",
+    "codex_utils_stream_parser": "codex_utils_text::stream_parser",
+    "codex_utils_template": "codex_utils_text::template",
+    "codex_utils_absolute_path": "codex_utils_paths::absolute_path",
+    "codex_utils_home_dir": "codex_utils_paths::home_dir",
+    "codex_utils_path": "codex_utils_paths::path",
+    "codex_utils_path_uri": "codex_utils_paths::path_uri"
+  },
+  "special_changes": [
+    "Existing crate-relative imports rebased within source modules; absolute-path references inside the bundle point to crate::absolute_path.",
+    "Public Rust module paths changed; original serde/schema/TS type names retained. No exported macros exist in the source versions of these eight crates.",
+    "TRUEOS-specific source overlays targeting the removed package paths must be rebased to utils/paths/src/absolute_path/mod.rs and any injected exported macros must refer to $crate::absolute_path::AbsolutePathBuf."
+  ],
+  "test_command": "cargo test -p codex-utils-text -p codex-utils-paths --lib"
+}

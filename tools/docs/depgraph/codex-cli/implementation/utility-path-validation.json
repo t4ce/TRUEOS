@@ -1,0 +1,36 @@
+{
+  "command": "cargo test --offline -p codex-utils-text -p codex-utils-paths --lib -j 2",
+  "exit_code": 0,
+  "host": "x86_64-unknown-linux-gnu",
+  "rust_version": "1.95.0",
+  "text": {
+    "passed": 54,
+    "failed": 0,
+    "ignored": 0
+  },
+  "paths": {
+    "passed": 124,
+    "failed": 0,
+    "ignored": 1,
+    "ignored_probe_executed_in_subprocess": true
+  },
+  "source_preservation": "Every original Rust file copied and audited before removal; only crate import paths rebased within bundle modules and rustfmt applied.",
+  "schema_type_names": "AbsolutePathBuf, PathUri, PathConvention and LegacyAppPathString unchanged; original serde/schema/ts-rs implementations retained.",
+  "old_package_directories_removed": [
+    "utils/elapsed",
+    "utils/fuzzy-match",
+    "utils/stream-parser",
+    "utils/template",
+    "utils/absolute-path",
+    "utils/home-dir",
+    "utils/path-utils",
+    "utils/path-uri"
+  ],
+  "new_package_directories": [
+    "utils/text",
+    "utils/paths"
+  ],
+  "limitations": [
+    "TRUEOS build and pack validate upstream crate consumers separately. Host tests do not compile windows-only cfgs."
+  ]
+}

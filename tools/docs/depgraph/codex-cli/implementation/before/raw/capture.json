@@ -1,0 +1,122 @@
+{
+  "captured_at_unix": 1791879922.3173013,
+  "manifest": "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml",
+  "target": "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/x86_64-unknown-trueos.json",
+  "rustflags": [
+    "--check-cfg=cfg(target_os,values(\"trueos\",\"zkvm\"))",
+    "-A",
+    "warnings",
+    "-C",
+    "panic=abort"
+  ],
+  "inputs_sha256": {
+    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml": "b0182ea30daa6ee0353c6e207b3bced4d84c56c91b2dfdc697ad5051628aa394",
+    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.lock": "e138cb9b143a6f8ff6c28424eeb4931bd56554ccc5d585c964b66d16ebb11f96",
+    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/x86_64-unknown-trueos.json": "c124f4048fb623f2180a61568efeb08ba818c35981c667aff33a1d280f8ae87b",
+    "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml": "8fd1d1247f1a1283b1c37783d6a3e502cff0375b00ab7b556955dab61f8f79d1"
+  },
+  "commands": {
+    "metadata": {
+      "argv": [
+        "/home/t4ce/Repos/TRUEOS-Rust-Toolchain-nightly-2026-07-10/bin/cargo",
+        "metadata",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/x86_64-unknown-trueos.json",
+        "--locked",
+        "--offline",
+        "-Z",
+        "json-target-spec",
+        "--manifest-path",
+        "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml",
+        "--no-default-features",
+        "--features",
+        "trueos-blueprint,trueos/default-global-allocator",
+        "--config",
+        "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml"
+      ],
+      "exit_code": 0,
+      "output_sha256": "6efa3d510faf5b573626ec554071592728a9a69b1c32a5613d41fd51e499a6db"
+    },
+    "tree": {
+      "argv": [
+        "/home/t4ce/Repos/TRUEOS-Rust-Toolchain-nightly-2026-07-10/bin/cargo",
+        "tree",
+        "--prefix",
+        "depth",
+        "--edges",
+        "normal,build",
+        "--package",
+        "codex-cli",
+        "--target",
+        "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/x86_64-unknown-trueos.json",
+        "--locked",
+        "--offline",
+        "-Z",
+        "json-target-spec",
+        "--manifest-path",
+        "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml",
+        "--no-default-features",
+        "--features",
+        "trueos-blueprint,trueos/default-global-allocator",
+        "--config",
+        "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml"
+      ],
+      "exit_code": 0,
+      "output_sha256": "a13e5c99c784315eddeaa2284f423f875826ab20d493522bd23067dfc4445cff"
+    },
+    "unit-graph": {
+      "argv": [
+        "/home/t4ce/Repos/TRUEOS-Rust-Toolchain-nightly-2026-07-10/bin/cargo",
+        "build",
+        "--unit-graph",
+        "-Z",
+        "unstable-options",
+        "-Z",
+        "build-std=core,compiler_builtins,alloc,std,panic_abort",
+        "--bin",
+        "codex",
+        "--release",
+        "--target",
+        "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/x86_64-unknown-trueos.json",
+        "--locked",
+        "--offline",
+        "-Z",
+        "json-target-spec",
+        "--manifest-path",
+        "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml",
+        "--no-default-features",
+        "--features",
+        "trueos-blueprint,trueos/default-global-allocator",
+        "--config",
+        "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml"
+      ],
+      "exit_code": 0,
+      "output_sha256": "04a40186b0b7e2242211a555f0b8caf47bfdf510c0c17c0c81cf0c87f9d6d951"
+    }
+  },
+  "scope": "Existing staged pack only. Unit graph plans a build; it does not compile or publish.",
+  "inputs_unchanged": true,
+  "rustc_identity": "rustc 1.99.0-nightly (af3d95584 2026-07-09)\nbinary: rustc\ncommit-hash: af3d95584dbddcae597890340995509a7fb47a50\ncommit-date: 2026-07-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8\n",
+  "native_root_sha256": "0a75aa4fbb2178cd35d00b85b84794f6ab1a3dbc8dbb32ea8ccf7d18f4a3b82a",
+  "native_inventory_sha256": "901b9455e6b32a7c203f96754b71092322b58d7e1efc5f6dc084a5bbe34de672",
+  "existing_artifacts": {
+    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/module.o": {
+      "bytes": 433698816,
+      "mtime_unix": 1791879773.3551996
+    },
+    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/module.stripped.o": {
+      "bytes": 375038536,
+      "mtime_unix": 1791879795.0685704
+    },
+    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/module.stripped.tar.lz4": {
+      "bytes": 81959122,
+      "mtime_unix": 1791879795.0
+    },
+    "/home/t4ce/Repos/TRUEOS-Blueprints/dist/codex.bp": {
+      "bytes": 81959146,
+      "mtime_unix": 1791879797.8646183
+    }
+  }
+}
