@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "scope": "Host x86_64 Linux source fold, release opt-level=1/codegen-units=8, original tests retained. Not a TRUEOS package-size benchmark.",
+  "source_crates": [
+    "codex-utils-elapsed",
+    "codex-utils-fuzzy-match",
+    "codex-utils-stream-parser",
+    "codex-utils-template"
+  ],
+  "changes": [
+    {
+      "file": "src/stream_parser/inline_hidden_tag.rs",
+      "crate_path_references_rebased": 4
+    },
+    {
+      "file": "src/stream_parser/utf8_stream.rs",
+      "crate_path_references_rebased": 5
+    },
+    {
+      "file": "src/stream_parser/citation.rs",
+      "crate_path_references_rebased": 6
+    },
+    {
+      "file": "src/stream_parser/proposed_plan.rs",
+      "crate_path_references_rebased": 7
+    },
+    {
+      "file": "src/stream_parser/assistant_text.rs",
+      "crate_path_references_rebased": 6
+    }
+  ],
+  "baseline": {
+    "build_command": [
+      "cargo",
+      "+1.95.0",
+      "build",
+      "--offline",
+      "--release",
+      "--workspace",
+      "--target",
+      "x86_64-unknown-linux-gnu",
+      "--message-format=json",
+      "--manifest-path",
+      "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/baseline/Cargo.toml"
+    ],
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "test",
+      "--offline",
+      "--release",
+      "--workspace",
+      "--target",
+      "x86_64-unknown-linux-gnu",
+      "--message-format=json",
+      "--manifest-path",
+      "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/baseline/Cargo.toml"
+    ],
+    "build_exit_code": 0,
+    "exit_code": 0,
+    "elapsed_seconds": 0.924,
+    "source_crate_rlibs": [
+      {
+        "crate": "codex_utils_elapsed",
+        "bytes": 6622,
+        "path": "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/baseline/x86_64-unknown-linux-gnu/release/libcodex_utils_elapsed.rlib"
+      },
+      {
+        "crate": "codex_utils_fuzzy_match",
+        "bytes": 46912,
+        "path": "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/baseline/x86_64-unknown-linux-gnu/release/libcodex_utils_fuzzy_match.rlib"
+      },
+      {
+        "crate": "codex_utils_template",
+        "bytes": 146138,
+        "path": "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/baseline/x86_64-unknown-linux-gnu/release/libcodex_utils_template.rlib"
+      },
+      {
+        "crate": "codex_utils_stream_parser",
+        "bytes": 307394,
+        "path": "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/baseline/x86_64-unknown-linux-gnu/release/libcodex_utils_stream_parser.rlib"
+      }
+    ],
+    "source_crate_rlib_count": 4,
+    "aggregate_source_crate_rlib_bytes": 507066,
+    "original_test_suites": [
+      {
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "status": "ok",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "status": "ok",
+        "passed": 28,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "status": "ok",
+        "passed": 14,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "tests_passed": 54,
+    "tests_failed": 0,
+    "tests_ignored": 0
+  },
+  "merged": {
+    "build_command": [
+      "cargo",
+      "+1.95.0",
+      "build",
+      "--offline",
+      "--release",
+      "--workspace",
+      "--target",
+      "x86_64-unknown-linux-gnu",
+      "--message-format=json",
+      "--manifest-path",
+      "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged/Cargo.toml"
+    ],
+    "command": [
+      "cargo",
+      "+1.95.0",
+      "test",
+      "--offline",
+      "--release",
+      "--workspace",
+      "--target",
+      "x86_64-unknown-linux-gnu",
+      "--message-format=json",
+      "--manifest-path",
+      "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged/Cargo.toml"
+    ],
+    "build_exit_code": 0,
+    "exit_code": 0,
+    "elapsed_seconds": 1.068,
+    "source_crate_rlibs": [
+      {
+        "crate": "codex_pure_text_utilities_prototype",
+        "bytes": 480362,
+        "path": "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/libcodex_pure_text_utilities_prototype.rlib"
+      }
+    ],
+    "source_crate_rlib_count": 1,
+    "aggregate_source_crate_rlib_bytes": 480362,
+    "original_test_suites": [
+      {
+        "status": "ok",
+        "passed": 54,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "tests_passed": 54,
+    "tests_failed": 0,
+    "tests_ignored": 0
+  },
+  "bp_byte_savings": null,
+  "validation": {
+    "both_builds_passed": true,
+    "original_test_count_equal": true,
+    "source_crate_units_before": 4,
+    "source_crate_units_after": 1,
+    "expected_crate_units": true
+  }
+}

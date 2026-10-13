@@ -1,0 +1,22 @@
+[
+  {
+    "path": "/tmp/codex-bp-coalesce-ts43cca6/coalesce-discard-locals.bp",
+    "header_magic": "TRBP",
+    "version": 1,
+    "flags": 3,
+    "entry_hint_hex": "000000010030ea40",
+    "tar_member": "module.elf",
+    "payload_sha256": "0c1de8cdb027ec7215240e8362a68af11c24b3d6e5f5176bf6391b7183b69db7",
+    "payload_matches_elf": true
+  },
+  {
+    "path": "/tmp/codex-bp-coalesce-ts43cca6/coalesce.bp",
+    "header_magic": "TRBP",
+    "version": 1,
+    "flags": 3,
+    "entry_hint_hex": "000000010030ea40",
+    "tar_member": "module.elf",
+    "payload_sha256": "8d3399ad4d97142b183f239722b78980743f20528cd42692a659cb91232dcb1c",
+    "payload_matches_elf": true
+  }
+]

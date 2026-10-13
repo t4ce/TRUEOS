@@ -1,0 +1,49 @@
+[
+  {
+    "id": "pure-text-utilities",
+    "title": "Fold pure text utility crates",
+    "package_names": [
+      "codex-utils-elapsed",
+      "codex-utils-fuzzy-match",
+      "codex-utils-stream-parser",
+      "codex-utils-template"
+    ],
+    "status": "source-prototype-passed",
+    "note": "Four pure utility leaf source crates -> one bundle. Isolated release host build retained all 54 original tests; 54/54 passed before and after. Eight target consumer units; zero external source dependencies. Full depth unchanged; no TRUEOS BP byte reduction measured."
+  },
+  {
+    "id": "path-primitives",
+    "title": "Fold shared path primitives",
+    "package_names": [
+      "codex-utils-absolute-path",
+      "codex-utils-home-dir",
+      "codex-utils-path",
+      "codex-utils-path-uri"
+    ],
+    "status": "acyclic-projection",
+    "note": "Four path crates -> one bundle; 3 internal dependency edges removed, 54 external target consumers. Full longest depth unchanged. Projection only; all consuming crate paths and source macro/type identities require migration."
+  },
+  {
+    "id": "http-transport-wide-attempt",
+    "title": "Rejected wide HTTP transport fold",
+    "package_names": [
+      "codex-api",
+      "codex-client",
+      "codex-http-client",
+      "codex-utils-rustls-provider"
+    ],
+    "status": "rejected-cycle",
+    "note": "Rejected: merging codex-api with the HTTP/client/provider layer creates bundle -> codex-protocol -> codex-network-proxy -> bundle. Original graph is a DAG; simple contraction is invalid."
+  },
+  {
+    "id": "http-transport-narrow",
+    "title": "Fold narrow HTTP transport layer",
+    "package_names": [
+      "codex-client",
+      "codex-http-client",
+      "codex-utils-rustls-provider"
+    ],
+    "status": "acyclic-projection",
+    "note": "Three transport crates -> one bundle; codex-api stays above protocol and network-proxy. Two internal edges removed, 36 target consumer units, 23 external dependency units. Projection only; full longest depth unchanged."
+  }
+]

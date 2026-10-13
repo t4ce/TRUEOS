@@ -1,0 +1,66 @@
+{"reason":"compiler-artifact","package_id":"path+file:///home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged#codex-pure-text-utilities-prototype@0.0.0","manifest_path":"/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"codex_pure_text_utilities_prototype","src_path":"/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged/src/lib.rs","edition":"2024","doc":true,"doctest":false,"test":true},"profile":{"opt_level":"1","debuginfo":0,"debug_assertions":false,"overflow_checks":false,"test":false},"features":[],"filenames":["/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/libcodex_pure_text_utilities_prototype.rlib","/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/libcodex_pure_text_utilities_prototype-ac31b14eec63d3ff.rmeta"],"executable":null,"fresh":false}
+{"reason":"build-finished","success":true}
+{"reason":"compiler-artifact","package_id":"registry+https://github.com/rust-lang/crates.io-index#yansi@1.0.1","manifest_path":"/home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yansi-1.0.1/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"yansi","src_path":"/home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yansi-1.0.1/src/lib.rs","edition":"2021","doc":true,"doctest":true,"test":true},"profile":{"opt_level":"1","debuginfo":0,"debug_assertions":false,"overflow_checks":false,"test":false},"features":["alloc","default","std"],"filenames":["/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/libyansi-b4f5deb3a519541d.rlib","/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/libyansi-b4f5deb3a519541d.rmeta"],"executable":null,"fresh":false}
+{"reason":"compiler-artifact","package_id":"registry+https://github.com/rust-lang/crates.io-index#diff@0.1.13","manifest_path":"/home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/diff-0.1.13/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"diff","src_path":"/home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/diff-0.1.13/src/lib.rs","edition":"2015","doc":true,"doctest":true,"test":true},"profile":{"opt_level":"1","debuginfo":0,"debug_assertions":false,"overflow_checks":false,"test":false},"features":[],"filenames":["/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/libdiff-2fdbf2691b9a9e59.rlib","/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/libdiff-2fdbf2691b9a9e59.rmeta"],"executable":null,"fresh":false}
+{"reason":"compiler-artifact","package_id":"registry+https://github.com/rust-lang/crates.io-index#pretty_assertions@1.4.1","manifest_path":"/home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pretty_assertions-1.4.1/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"pretty_assertions","src_path":"/home/t4ce/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pretty_assertions-1.4.1/src/lib.rs","edition":"2018","doc":true,"doctest":true,"test":true},"profile":{"opt_level":"1","debuginfo":0,"debug_assertions":false,"overflow_checks":false,"test":false},"features":["default","std"],"filenames":["/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/libpretty_assertions-04a2dfea2c2f7108.rlib","/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/libpretty_assertions-04a2dfea2c2f7108.rmeta"],"executable":null,"fresh":false}
+{"reason":"compiler-artifact","package_id":"path+file:///home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged#codex-pure-text-utilities-prototype@0.0.0","manifest_path":"/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"codex_pure_text_utilities_prototype","src_path":"/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged/src/lib.rs","edition":"2024","doc":true,"doctest":false,"test":true},"profile":{"opt_level":"1","debuginfo":0,"debug_assertions":false,"overflow_checks":false,"test":true},"features":[],"filenames":["/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/codex_pure_text_utilities_prototype-93eca1fa1ac58e98"],"executable":"/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/codex_pure_text_utilities_prototype-93eca1fa1ac58e98","fresh":false}
+{"reason":"build-finished","success":true}
+
+running 54 tests
+test elapsed::tests::test_format_duration_minutes ... ok
+test elapsed::tests::test_format_duration_one_hour_has_space ... ok
+test elapsed::tests::test_format_duration_seconds ... ok
+test fuzzy_match::tests::ascii_basic_indices ... ok
+test elapsed::tests::test_format_duration_subsecond ... ok
+test fuzzy_match::tests::case_insensitive_matching_basic ... ok
+test fuzzy_match::tests::empty_needle_matches_with_max_score_and_no_indices ... ok
+test fuzzy_match::tests::indices_are_deduped_for_multichar_lowercase_expansion ... ok
+test fuzzy_match::tests::prefer_contiguous_match_over_spread ... ok
+test fuzzy_match::tests::start_of_string_bonus_applies ... ok
+test fuzzy_match::tests::unicode_dotted_i_istanbul_highlighting ... ok
+test fuzzy_match::tests::unicode_german_sharp_s_casefold ... ok
+test stream_parser::assistant_text::tests::parses_citations_across_seed_and_delta_boundaries ... ok
+test stream_parser::assistant_text::tests::parses_plan_segments_after_citation_stripping ... ok
+test stream_parser::citation::tests::citation_parser_auto_closes_unterminated_tag_on_finish ... ok
+test stream_parser::citation::tests::citation_parser_buffers_partial_open_tag_prefix ... ok
+test stream_parser::citation::tests::citation_parser_does_not_support_nested_tags ... ok
+test stream_parser::citation::tests::citation_parser_preserves_partial_open_tag_at_eof_if_not_a_full_tag ... ok
+test stream_parser::citation::tests::citation_parser_streams_across_chunk_boundaries ... ok
+test stream_parser::citation::tests::strip_citations_auto_closes_unterminated_citation_at_eof ... ok
+test stream_parser::citation::tests::strip_citations_collects_all_citations ... ok
+test stream_parser::inline_hidden_tag::tests::generic_inline_parser_prefers_longest_opener_at_same_offset ... ok
+test stream_parser::inline_hidden_tag::tests::generic_inline_parser_preserves_output_across_every_chunk_boundary ... ok
+test stream_parser::inline_hidden_tag::tests::generic_inline_parser_rejects_empty_close_delimiter - should panic ... ok
+test stream_parser::inline_hidden_tag::tests::generic_inline_parser_rejects_empty_open_delimiter - should panic ... ok
+test stream_parser::inline_hidden_tag::tests::generic_inline_parser_supports_multiple_tag_types ... ok
+test stream_parser::inline_hidden_tag::tests::generic_inline_parser_supports_non_ascii_tag_delimiters ... ok
+test stream_parser::proposed_plan::tests::closes_unterminated_plan_block_on_finish ... ok
+test stream_parser::proposed_plan::tests::extracts_proposed_plan_text ... ok
+test stream_parser::proposed_plan::tests::preserves_non_tag_lines ... ok
+test stream_parser::proposed_plan::tests::streams_proposed_plan_segments_and_visible_text ... ok
+test stream_parser::proposed_plan::tests::strips_proposed_plan_blocks_from_text ... ok
+test stream_parser::tagged_line_parser::tests::buffers_prefix_until_tag_is_decided ... ok
+test stream_parser::tagged_line_parser::tests::rejects_tag_lines_with_extra_text ... ok
+test stream_parser::utf8_stream::tests::utf8_stream_parser_errors_on_incomplete_code_point_at_eof ... ok
+test stream_parser::utf8_stream::tests::utf8_stream_parser_handles_split_code_points_across_chunks ... ok
+test stream_parser::utf8_stream::tests::utf8_stream_parser_into_inner_errors_when_partial_code_point_is_buffered ... ok
+test stream_parser::utf8_stream::tests::utf8_stream_parser_into_inner_lossy_drops_buffered_partial_code_point ... ok
+test stream_parser::utf8_stream::tests::utf8_stream_parser_rolls_back_entire_chunk_when_invalid_byte_follows_valid_prefix ... ok
+test stream_parser::utf8_stream::tests::utf8_stream_parser_rolls_back_on_invalid_utf8_chunk ... ok
+test template::tests::parse_errors_when_closing_delimiter_is_unmatched ... ok
+test template::tests::parse_errors_when_placeholder_is_empty ... ok
+test template::tests::parse_errors_when_placeholder_is_nested ... ok
+test template::tests::parse_errors_when_placeholder_is_unterminated ... ok
+test template::tests::parsed_templates_can_be_reused ... ok
+test template::tests::placeholders_are_sorted_and_unique ... ok
+test template::tests::render_errors_when_duplicate_value_is_provided ... ok
+test template::tests::render_errors_when_extra_value_is_provided ... ok
+test template::tests::render_errors_when_placeholder_is_missing ... ok
+test template::tests::render_function_wraps_parse_errors ... ok
+test template::tests::render_function_wraps_render_errors ... ok
+test template::tests::render_replaces_placeholders_with_and_without_whitespace ... ok
+test template::tests::render_supports_literal_delimiter_escapes ... ok
+test template::tests::render_supports_multiline_templates_and_adjacent_placeholders ... ok
+
+test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

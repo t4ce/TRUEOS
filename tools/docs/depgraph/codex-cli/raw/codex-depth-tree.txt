@@ -1,0 +1,4514 @@
+0codex-cli v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app)
+1anyhow v1.0.104
+1chrono v0.4.45
+2iana-time-zone v0.1.65
+2num-traits v0.2.19
+3libm v0.2.16
+3autocfg v1.5.1
+2serde v1.0.228
+3serde_core v1.0.228
+3serde_derive v1.0.228 (proc-macro)
+4proc-macro2 v1.0.107
+5unicode-ident v1.0.27
+4quote v1.0.47
+5proc-macro2 v1.0.107 (*)
+4syn v2.0.119
+5proc-macro2 v1.0.107 (*)
+5quote v1.0.47 (*)
+5unicode-ident v1.0.27
+1clap v4.6.7
+2clap_builder v4.6.7
+3anstream v1.0.0
+4anstyle v1.0.14
+4anstyle-parse v1.0.0
+5utf8parse v0.2.2
+4anstyle-query v1.1.5
+4colorchoice v1.0.5
+4is_terminal_polyfill v1.70.2
+4utf8parse v0.2.2
+3anstyle v1.0.14
+3clap_lex v1.1.1
+3strsim v0.11.1
+3terminal_size v0.4.4
+4rustix v1.1.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos)
+5bitflags v2.13.2
+5errno v0.3.14
+6libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+5libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+2clap_derive v4.6.7 (proc-macro)
+3heck v0.5.0
+3proc-macro2 v1.0.107 (*)
+3quote v1.0.47 (*)
+3syn v3.0.9
+4proc-macro2 v1.0.107 (*)
+4quote v1.0.47 (*)
+4unicode-ident v1.0.27
+1clap_complete v4.6.11
+2clap v4.6.7 (*)
+1codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api)
+2async-channel v2.5.0
+3concurrent-queue v2.5.0
+4crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+3event-listener-strategy v0.5.4
+4event-listener v5.4.2
+5parking v2.2.1
+5pin-project-lite v0.2.17
+4pin-project-lite v0.2.17
+3futures-core v0.3.34
+3pin-project-lite v0.2.17
+2base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+2bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+2chrono v0.4.45 (*)
+2codex-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-client)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client)
+4bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+4codex-utils-rustls-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/rustls-provider)
+5rustls v0.23.45
+6log v0.4.34
+6once_cell v1.21.4
+6ring v0.17.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/ring-0.17.14)
+7cfg-if v1.0.5
+7getrandom v0.2.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.2.17)
+8cfg-if v1.0.5
+8libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+7untrusted v0.9.0
+7cc v1.8.0
+8find-msvc-tools v0.1.14
+8jobserver v0.1.35
+9libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+8libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+8shlex v2.0.1
+6rustls-pki-types v1.15.1
+7zeroize v1.9.1
+8zeroize_derive v1.5.0 (proc-macro)
+9proc-macro2 v1.0.107 (*)
+9quote v1.0.47 (*)
+9syn v2.0.119 (*)
+6rustls-webpki v0.103.15
+7ring v0.17.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/ring-0.17.14) (*)
+7rustls-pki-types v1.15.1 (*)
+7untrusted v0.9.0
+6subtle v2.6.1
+6zeroize v1.9.1 (*)
+5rustls-rustcrypto v0.0.2-alpha (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustls-rustcrypto-0.0.2-alpha)
+6aead v0.5.2
+7crypto-common v0.1.7
+8generic-array v0.14.7
+9typenum v1.20.1
+9zeroize v1.9.1 (*)
+9version_check v0.9.5
+8rand_core v0.6.4
+9getrandom v0.2.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.2.17) (*)
+8typenum v1.20.1
+7generic-array v0.14.7 (*)
+6aes-gcm v0.10.3
+7aead v0.5.2 (*)
+7aes v0.8.4
+8cfg-if v1.0.5
+8cipher v0.4.4
+9crypto-common v0.1.7 (*)
+9inout v0.1.4
+10generic-array v0.14.7 (*)
+9zeroize v1.9.1 (*)
+8cpufeatures v0.2.17
+7cipher v0.4.4 (*)
+7ctr v0.9.2
+8cipher v0.4.4 (*)
+7ghash v0.5.1
+8opaque-debug v0.3.1
+8polyval v0.6.2
+9cfg-if v1.0.5
+9cpufeatures v0.2.17
+9opaque-debug v0.3.1
+9universal-hash v0.5.1
+10crypto-common v0.1.7 (*)
+10subtle v2.6.1
+7subtle v2.6.1
+6chacha20poly1305 v0.10.1
+7aead v0.5.2 (*)
+7chacha20 v0.9.1
+8cfg-if v1.0.5
+8cipher v0.4.4 (*)
+8cpufeatures v0.2.17
+7cipher v0.4.4 (*)
+7poly1305 v0.8.0
+8cpufeatures v0.2.17
+8opaque-debug v0.3.1
+8universal-hash v0.5.1 (*)
+7zeroize v1.9.1 (*)
+6crypto-common v0.1.7 (*)
+6der v0.7.10
+7const-oid v0.9.6
+7pem-rfc7468 v0.7.0
+8base64ct v1.8.3
+7zeroize v1.9.1 (*)
+6digest v0.10.7
+7block-buffer v0.10.4
+8generic-array v0.14.7 (*)
+7const-oid v0.9.6
+7crypto-common v0.1.7 (*)
+7subtle v2.6.1
+6ecdsa v0.16.9
+7der v0.7.10 (*)
+7digest v0.10.7 (*)
+7elliptic-curve v0.13.8
+8base16ct v0.2.0
+8crypto-bigint v0.5.5
+9generic-array v0.14.7 (*)
+9rand_core v0.6.4 (*)
+9subtle v2.6.1
+9zeroize v1.9.1 (*)
+8digest v0.10.7 (*)
+8ff v0.13.1
+9rand_core v0.6.4 (*)
+9subtle v2.6.1
+8generic-array v0.14.7 (*)
+8group v0.13.0
+9ff v0.13.1 (*)
+9rand_core v0.6.4 (*)
+9subtle v2.6.1
+8hkdf v0.12.4
+9hmac v0.12.1
+10digest v0.10.7 (*)
+8pem-rfc7468 v0.7.0 (*)
+8pkcs8 v0.10.2
+9der v0.7.10 (*)
+9pkcs5 v0.7.1
+10der v0.7.10 (*)
+10spki v0.7.3
+11der v0.7.10 (*)
+9spki v0.7.3 (*)
+8rand_core v0.6.4 (*)
+8sec1 v0.7.3
+9base16ct v0.2.0
+9der v0.7.10 (*)
+9generic-array v0.14.7 (*)
+9pkcs8 v0.10.2 (*)
+9subtle v2.6.1
+9zeroize v1.9.1 (*)
+8subtle v2.6.1
+8zeroize v1.9.1 (*)
+7rfc6979 v0.4.0
+8hmac v0.12.1 (*)
+8subtle v2.6.1
+7signature v2.2.0
+8digest v0.10.7 (*)
+8rand_core v0.6.4 (*)
+7spki v0.7.3 (*)
+6ed25519-dalek v2.2.0
+7curve25519-dalek v4.1.3
+8cfg-if v1.0.5
+8cpufeatures v0.2.17
+8curve25519-dalek-derive v0.1.1 (proc-macro)
+9proc-macro2 v1.0.107 (*)
+9quote v1.0.47 (*)
+9syn v2.0.119 (*)
+8digest v0.10.7 (*)
+8subtle v2.6.1
+8zeroize v1.9.1 (*)
+8rustc_version v0.4.1
+9semver v1.0.28
+7ed25519 v2.2.3
+8pkcs8 v0.10.2 (*)
+8signature v2.2.0 (*)
+7sha2 v0.10.9
+8cfg-if v1.0.5
+8cpufeatures v0.2.17
+8digest v0.10.7 (*)
+7subtle v2.6.1
+7zeroize v1.9.1 (*)
+6hmac v0.12.1 (*)
+6p256 v0.13.2
+7ecdsa v0.16.9 (*)
+7elliptic-curve v0.13.8 (*)
+7primeorder v0.13.6
+8elliptic-curve v0.13.8 (*)
+7sha2 v0.10.9 (*)
+6p384 v0.13.1
+7ecdsa v0.16.9 (*)
+7elliptic-curve v0.13.8 (*)
+7primeorder v0.13.6 (*)
+7sha2 v0.10.9 (*)
+6paste v1.0.15 (proc-macro)
+6pkcs8 v0.10.2 (*)
+6rand_core v0.6.4 (*)
+6rsa v0.9.10
+7const-oid v0.9.6
+7digest v0.10.7 (*)
+7num-bigint-dig v0.8.6
+8lazy_static v1.5.1
+9spin v0.9.9
+10lock_api v0.4.14
+11scopeguard v1.2.0
+8libm v0.2.16
+8num-integer v0.1.47
+9num-traits v0.2.19 (*)
+8num-iter v0.1.46
+9num-integer v0.1.47 (*)
+9num-traits v0.2.19 (*)
+8num-traits v0.2.19 (*)
+8rand v0.8.8
+9libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+9rand_chacha v0.3.1
+10ppv-lite86 v0.2.21
+11zerocopy v0.8.62
+10rand_core v0.6.4 (*)
+9rand_core v0.6.4 (*)
+8smallvec v1.16.3
+9serde v1.0.228 (*)
+8zeroize v1.9.1 (*)
+7num-integer v0.1.47 (*)
+7num-traits v0.2.19 (*)
+7pkcs1 v0.7.5
+8der v0.7.10 (*)
+8pkcs8 v0.10.2 (*)
+8spki v0.7.3 (*)
+7pkcs8 v0.10.2 (*)
+7rand_core v0.6.4 (*)
+7sha2 v0.10.9 (*)
+7signature v2.2.0 (*)
+7spki v0.7.3 (*)
+7subtle v2.6.1
+7zeroize v1.9.1 (*)
+6rustls v0.23.45 (*)
+6rustls-pki-types v1.15.1 (*)
+6rustls-webpki v0.103.15 (*)
+6sec1 v0.7.3 (*)
+6sha2 v0.10.9 (*)
+6signature v2.2.0 (*)
+6x25519-dalek v2.0.1
+7curve25519-dalek v4.1.3 (*)
+7rand_core v0.6.4 (*)
+7zeroize v1.9.1 (*)
+4futures v0.3.34
+5futures-channel v0.3.34
+6futures-core v0.3.34
+6futures-sink v0.3.34
+5futures-core v0.3.34
+5futures-executor v0.3.34
+6futures-core v0.3.34
+6futures-task v0.3.34
+6futures-util v0.3.34
+7futures-channel v0.3.34 (*)
+7futures-core v0.3.34
+7futures-io v0.3.34
+7futures-macro v0.3.34 (proc-macro)
+8proc-macro2 v1.0.107 (*)
+8quote v1.0.47 (*)
+8syn v3.0.9 (*)
+7futures-sink v0.3.34
+7futures-task v0.3.34
+7memchr v2.8.3
+7pin-project-lite v0.2.17
+7slab v0.4.12
+5futures-io v0.3.34
+5futures-sink v0.3.34
+5futures-task v0.3.34
+5futures-util v0.3.34 (*)
+4http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0)
+5bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+5hashbrown v0.17.1
+6allocator-api2 v0.2.21
+6equivalent v1.0.2
+6foldhash v0.2.0
+6serde_core v1.0.228
+5itoa v1.0.18
+4http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1)
+5bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+5http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+4httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+4opentelemetry v0.31.0
+5futures-core v0.3.34
+5futures-sink v0.3.34
+5pin-project-lite v0.2.17
+5thiserror v2.0.21
+6thiserror-impl v2.0.21 (proc-macro)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v3.0.9 (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44)
+6log v0.4.34
+6pin-project-lite v0.2.17
+6tracing-attributes v0.1.31 (proc-macro) (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-attributes-0.1.31)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+6tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36)
+7once_cell v1.21.4
+4reqwest v0.13.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3)
+5base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+5bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+5cookie v0.18.2
+6percent-encoding v2.3.2
+6time v0.3.55
+7deranged v0.5.9
+7libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+7num-conv v0.2.2
+7num_threads v0.1.7
+7powerfmt v0.2.1
+7time-core v0.1.9
+7time-macros v0.2.32 (proc-macro)
+8num-conv v0.2.2
+8time-core v0.1.9
+6version_check v0.9.5
+5cookie_store v0.22.1
+6cookie v0.18.2 (*)
+6document-features v0.2.12 (proc-macro)
+7litrs v1.0.1
+6idna v1.1.0
+7idna_adapter v1.2.2
+8icu_normalizer v2.3.0
+9icu_collections v2.3.0
+10displaydoc v0.2.7 (proc-macro)
+11proc-macro2 v1.0.107 (*)
+11quote v1.0.47 (*)
+11syn v3.0.9 (*)
+10potential_utf v0.1.6
+11writeable v0.6.4
+11zerovec v0.11.8
+12yoke v0.8.3
+13stable_deref_trait v1.2.1
+13yoke-derive v0.8.4 (proc-macro)
+14proc-macro2 v1.0.107 (*)
+14quote v1.0.47 (*)
+14syn v3.0.9 (*)
+14synstructure v0.14.0
+15proc-macro2 v1.0.107 (*)
+15quote v1.0.47 (*)
+15syn v3.0.9 (*)
+13zerofrom v0.1.8
+14zerofrom-derive v0.1.8 (proc-macro)
+15proc-macro2 v1.0.107 (*)
+15quote v1.0.47 (*)
+15syn v3.0.9 (*)
+15synstructure v0.14.0 (*)
+12zerofrom v0.1.8 (*)
+12zerovec-derive v0.11.6 (proc-macro)
+13proc-macro2 v1.0.107 (*)
+13quote v1.0.47 (*)
+13syn v3.0.9 (*)
+10utf8_iter v1.0.4
+10yoke v0.8.3 (*)
+10zerofrom v0.1.8 (*)
+10zerovec v0.11.8 (*)
+9icu_normalizer_data v2.3.0
+9icu_provider v2.3.1
+10displaydoc v0.2.7 (proc-macro) (*)
+10icu_locale_core v2.3.0
+11displaydoc v0.2.7 (proc-macro) (*)
+11litemap v0.8.3
+11tinystr v0.8.4
+12displaydoc v0.2.7 (proc-macro) (*)
+12zerovec v0.11.8 (*)
+11writeable v0.6.4
+11zerovec v0.11.8 (*)
+10stable_deref_trait v1.2.1
+10writeable v0.6.4
+10yoke v0.8.3 (*)
+10zerofrom v0.1.8 (*)
+10zerotrie v0.2.5
+11displaydoc v0.2.7 (proc-macro) (*)
+11yoke v0.8.3 (*)
+11zerofrom v0.1.8 (*)
+10zerovec v0.11.8 (*)
+9smallvec v1.16.3 (*)
+9zerovec v0.11.8 (*)
+8icu_properties v2.3.0
+9displaydoc v0.2.7 (proc-macro) (*)
+9icu_collections v2.3.0 (*)
+9icu_locale_core v2.3.0 (*)
+9icu_properties_data v2.3.0
+9icu_provider v2.3.1 (*)
+9zerotrie v0.2.5 (*)
+9zerovec v0.11.8 (*)
+7smallvec v1.16.3 (*)
+7utf8_iter v1.0.4
+6log v0.4.34
+6publicsuffix v2.3.0
+7idna v1.1.0 (*)
+7psl-types v2.0.11
+6serde v1.0.228 (*)
+6serde_derive v1.0.228 (proc-macro) (*)
+6serde_json v1.0.150
+7indexmap v2.14.2
+8equivalent v1.0.2
+8hashbrown v0.17.1 (*)
+8serde_core v1.0.228
+7itoa v1.0.18
+7memchr v2.8.3
+7serde_core v1.0.228
+7zmij v1.0.23
+6time v0.3.55 (*)
+6url v2.5.8
+7form_urlencoded v1.2.2
+8percent-encoding v2.3.2
+7idna v1.1.0 (*)
+7percent-encoding v2.3.2
+7serde v1.0.228 (*)
+7serde_derive v1.0.228 (proc-macro) (*)
+5encoding_rs v0.8.42
+6cfg-if v1.0.5
+6core_detect v1.0.0
+6multiversion_no_op v1.0.0 (proc-macro)
+6scopeguard v1.2.0
+6simdutf8 v0.1.5
+6rustversion v1.0.23 (proc-macro)
+5futures-channel v0.3.34 (*)
+5futures-core v0.3.34
+5futures-util v0.3.34 (*)
+5h2 v0.4.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/h2-0.4.14)
+6atomic-waker v1.1.2
+6bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+6fnv v1.0.7
+6futures-core v0.3.34
+6futures-sink v0.3.34
+6http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+6indexmap v2.14.2 (*)
+6slab v0.4.12
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3)
+7bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+7libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+7mio v1.2.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mio-1.2.0)
+8libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+8log v0.4.34
+7parking_lot v0.12.5
+8lock_api v0.4.14 (*)
+8parking_lot_core v0.9.12
+9cfg-if v1.0.5
+9libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+9smallvec v1.16.3 (*)
+7pin-project-lite v0.2.17
+7signal-hook-registry v1.4.8
+8errno v0.3.14 (*)
+8libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+7socket2 v0.6.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3)
+8libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+7tokio-macros v2.7.0 (proc-macro) (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-macros-2.7.0)
+8proc-macro2 v1.0.107 (*)
+8quote v1.0.47 (*)
+8syn v2.0.119 (*)
+6tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18)
+7bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+7futures-core v0.3.34
+7futures-sink v0.3.34
+7futures-util v0.3.34 (*)
+7pin-project-lite v0.2.17
+7slab v0.4.12
+7tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+5http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+5http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3)
+6bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+6futures-core v0.3.34
+6http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+6http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+6pin-project-lite v0.2.17
+6trueos-io v0.1.0 (/home/t4ce/Repos/TRUEOS-Blueprints/crates/trueos-io)
+7core3 v0.1.2
+8memchr v2.8.3
+5hyper v1.10.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0)
+6atomic-waker v1.1.2
+6bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+6futures-channel v0.3.34 (*)
+6futures-core v0.3.34
+6h2 v0.4.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/h2-0.4.14) (*)
+6hashbrown v0.17.1 (*)
+6http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+6http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+6httparse v1.10.1
+6httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+6itoa v1.0.18
+6pin-project-lite v0.2.17
+6smallvec v1.16.3 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6trueos-io v0.1.0 (/home/t4ce/Repos/TRUEOS-Blueprints/crates/trueos-io) (*)
+6want v0.3.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/want-0.3.1)
+7try-lock v0.2.5
+5hyper-rustls v0.27.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-rustls-0.27.9)
+6http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+6hyper v1.10.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0) (*)
+6hyper-util v0.1.20 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos)
+7base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+7bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+7futures-channel v0.3.34 (*)
+7futures-util v0.3.34 (*)
+7hashbrown v0.17.1 (*)
+7http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+7http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+7hyper v1.10.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0) (*)
+7ipnet v2.12.2
+7libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+7percent-encoding v2.3.2
+7pin-project-lite v0.2.17
+7socket2 v0.6.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3) (*)
+7tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+7tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+7tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+6rustls v0.23.45 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tokio-rustls v0.26.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4)
+7rustls v0.23.45 (*)
+7tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+6webpki-roots v1.0.9
+7rustls-pki-types v1.15.1 (*)
+5hyper-util v0.1.20 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos) (*)
+5log v0.4.34
+5mime v0.3.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17)
+5percent-encoding v2.3.2
+5pin-project-lite v0.2.17
+5rustls v0.23.45 (*)
+5rustls-pki-types v1.15.1 (*)
+5rustls-rustcrypto v0.0.2-alpha (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustls-rustcrypto-0.0.2-alpha) (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5serde_urlencoded v0.7.1
+6form_urlencoded v1.2.2 (*)
+6itoa v1.0.18
+6ryu v1.0.23
+6serde v1.0.228 (*)
+5sync_wrapper v1.0.2
+6futures-core v0.3.34
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tokio-rustls v0.26.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4) (*)
+5tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+5tower v0.5.3 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos)
+6futures-core v0.3.34
+6futures-util v0.3.34 (*)
+6indexmap v2.14.2 (*)
+6pin-project-lite v0.2.17
+6slab v0.4.12
+6spin v0.10.1
+7lock_api v0.4.14 (*)
+6sync_wrapper v1.0.2 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+6tower-layer v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-layer-0.3.3)
+6tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5tower-http v0.6.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-http-0.6.9)
+6bitflags v2.13.2
+6bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+6futures-util v0.3.34 (*)
+6http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+6http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+6pin-project-lite v0.2.17
+6tower v0.5.3 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos) (*)
+6tower-layer v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-layer-0.3.3)
+6tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+6url v2.5.8 (*)
+5tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+5url v2.5.8 (*)
+5webpki-roots v1.0.9 (*)
+4rustls v0.23.45 (*)
+4rustls-native-certs v0.8.4
+5openssl-probe v0.2.1
+5rustls-pki-types v1.15.1 (*)
+4rustls-pki-types v1.15.1 (*)
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+4serde_urlencoded v0.7.1 (*)
+4sha2 v0.10.9 (*)
+4thiserror v2.0.21 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4tracing-opentelemetry v0.32.1
+5opentelemetry v0.31.0 (*)
+5smallvec v1.16.3 (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36) (*)
+5tracing-log v0.2.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-log-0.2.0)
+6log v0.4.34
+6once_cell v1.21.4
+6tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36) (*)
+5tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23)
+6matchers v0.2.0
+7regex-automata v0.4.18
+8aho-corasick v1.1.5
+9memchr v2.8.3
+8memchr v2.8.3
+8regex-syntax v0.8.11
+6nu-ansi-term v0.50.3
+6once_cell v1.21.4
+6regex-automata v0.4.18 (*)
+6serde v1.0.228 (*)
+6serde_json v1.0.150 (*)
+6sharded-slab v0.1.7
+7lazy_static v1.5.1 (*)
+6smallvec v1.16.3 (*)
+6thread_local v1.1.10
+7cfg-if v1.0.5
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+6tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36) (*)
+6tracing-log v0.2.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-log-0.2.0) (*)
+6tracing-serde v0.2.0
+7serde v1.0.228 (*)
+7tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36) (*)
+4zstd v0.13.3
+5zstd-safe v7.3.0
+6zstd-sys v2.1.1+zstd.1.5.7
+7cc v1.8.0 (*)
+7pkg-config v0.3.34
+3eventsource-stream v0.2.3
+4futures-core v0.3.34
+4nom v7.1.3
+5memchr v2.8.3
+5minimal-lexical v0.2.1
+4pin-project-lite v0.2.17
+3futures v0.3.34 (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3rand v0.9.5
+4rand_chacha v0.9.0
+5ppv-lite86 v0.2.21 (*)
+5rand_core v0.9.5
+6getrandom v0.3.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.3.4)
+7cfg-if v1.0.5
+4rand_core v0.9.5 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3url v2.5.8 (*)
+2codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+2codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol)
+3chardetng v0.1.17
+4cfg-if v1.0.5
+4encoding_rs v0.8.42 (*)
+4memchr v2.8.3
+3chrono v0.4.45 (*)
+3codex-async-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/async-utils)
+4rand v0.9.5 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+3codex-execpolicy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/execpolicy)
+4anyhow v1.0.104
+4clap v4.6.7 (*)
+4codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path)
+5dirs v6.0.0
+6dirs-sys v0.5.0
+7libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+7option-ext v0.2.0
+5dunce v1.0.5
+5schemars v0.8.22
+6dyn-clone v1.0.20
+6schemars_derive v0.8.22 (proc-macro)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7serde_derive_internals v0.29.1
+8proc-macro2 v1.0.107 (*)
+8quote v1.0.47 (*)
+8syn v2.0.119 (*)
+7syn v2.0.119 (*)
+6serde v1.0.228 (*)
+6serde_json v1.0.150 (*)
+5serde v1.0.228 (*)
+5ts-rs v11.1.0
+6serde_json v1.0.150 (*)
+6thiserror v2.0.21 (*)
+6ts-rs-macros v11.1.0 (proc-macro)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+7termcolor v1.4.1
+6uuid v1.28.0
+7getrandom v0.4.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.4.2)
+8cfg-if v1.0.5
+8rand_core v0.10.1
+7serde_core v1.0.228
+7sha1_smol v1.0.1
+4multimap v0.10.1
+5serde v1.0.228 (*)
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+4shlex v1.3.0
+4starlark v0.14.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/starlark-0.14.2-trueos)
+5allocative v0.3.6
+6allocative_derive v0.3.6 (proc-macro)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+6bumpalo v3.20.3
+6ctor v1.0.13
+7link-section v0.19.3
+7linktime-proc-macro v0.2.3 (proc-macro)
+6hashbrown v0.16.1
+7allocator-api2 v0.2.21
+7equivalent v1.0.2
+7foldhash v0.2.0
+6num-bigint v0.4.8
+7num-integer v0.1.47 (*)
+7num-traits v0.2.19 (*)
+7serde v1.0.228 (*)
+5anyhow v1.0.104
+5blake3 v1.8.2
+6arrayref v0.3.9
+6arrayvec v0.7.8
+7zeroize v1.9.1 (*)
+6cfg-if v1.0.5
+6constant_time_eq v0.3.1
+6digest v0.10.7 (*)
+6rayon-core v1.13.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rayon/rayon-core)
+7crossbeam-deque v0.8.6 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-deque-0.8.6)
+8crossbeam-epoch v0.9.21
+9crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+8crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+7crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+7spin v0.10.1 (*)
+6cc v1.8.0 (*)
+5bumpalo v3.20.3
+5cmp_any v0.8.1
+5dashmap v6.2.1
+6cfg-if v1.0.5
+6crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+6hashbrown v0.14.5
+6lock_api v0.4.14 (*)
+6once_cell v1.21.4
+6parking_lot_core v0.9.12 (*)
+5debugserver-types v0.5.0
+6schemafy v0.5.2 (proc-macro)
+7Inflector v0.11.4
+8lazy_static v1.5.1
+8regex v1.13.1
+9aho-corasick v1.1.5
+10memchr v2.8.3
+9memchr v2.8.3
+9regex-automata v0.4.18
+10aho-corasick v1.1.5 (*)
+10memchr v2.8.3
+10regex-syntax v0.8.11
+9regex-syntax v0.8.11
+7schemafy_core v0.5.2
+8serde v1.0.228
+9serde_core v1.0.228
+9serde_derive v1.0.228 (proc-macro) (*)
+8serde_json v1.0.150
+9indexmap v2.14.2
+10equivalent v1.0.2
+10hashbrown v0.17.1
+9itoa v1.0.18
+9memchr v2.8.3
+9serde_core v1.0.228
+9zmij v1.0.23
+7schemafy_lib v0.5.2
+8Inflector v0.11.4 (*)
+8proc-macro2 v1.0.107 (*)
+8quote v1.0.47 (*)
+8schemafy_core v0.5.2 (*)
+8serde v1.0.228 (*)
+8serde_derive v1.0.228 (proc-macro) (*)
+8serde_json v1.0.150 (*)
+8syn v1.0.109
+9proc-macro2 v1.0.107 (*)
+9quote v1.0.47 (*)
+9unicode-ident v1.0.27
+7serde v1.0.228 (*)
+7serde_derive v1.0.228 (proc-macro) (*)
+7serde_json v1.0.150 (*)
+7serde_repr v0.1.21 (proc-macro)
+8proc-macro2 v1.0.107 (*)
+8quote v1.0.47 (*)
+8syn v3.0.9 (*)
+7syn v1.0.109 (*)
+6serde v1.0.228 (*)
+6serde_json v1.0.150 (*)
+5derivative v2.2.0 (proc-macro)
+6proc-macro2 v1.0.107 (*)
+6quote v1.0.47 (*)
+6syn v1.0.109 (*)
+5derive_more v1.0.0
+6derive_more-impl v1.0.0 (proc-macro)
+7convert_case v0.6.0
+8unicode-segmentation v1.13.3
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+7unicode-xid v0.2.6
+5display_container v0.9.0
+6either v1.19.0
+7serde v1.0.228 (*)
+6indenter v0.3.4
+5dupe v0.9.1
+6dupe_derive v0.9.1 (proc-macro)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+5either v1.19.0 (*)
+5erased-serde v0.3.31
+6serde v1.0.228 (*)
+5hashbrown v0.16.1 (*)
+5indexmap v2.14.2 (*)
+5inventory v0.3.25
+5itertools v0.14.0
+6either v1.19.0 (*)
+5maplit v1.0.2
+5memoffset v0.9.1
+6autocfg v1.5.1
+5num-bigint v0.4.8 (*)
+5num-traits v0.2.19 (*)
+5once_cell v1.21.4
+5pagable v0.4.2
+6allocative v0.3.6 (*)
+6anyhow v1.0.104
+6async-trait v0.1.92 (proc-macro)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v3.0.9 (*)
+6blake3 v1.8.2 (*)
+6bytemuck v1.25.2
+7bytemuck_derive v1.12.1 (proc-macro)
+8proc-macro2 v1.0.107 (*)
+8quote v1.0.47 (*)
+8syn v3.0.9 (*)
+6dashmap v6.2.1 (*)
+6dupe v0.9.1 (*)
+6either v1.19.0 (*)
+6erased-serde v0.4.10
+7serde_core v1.0.228
+7typeid v1.0.3
+6fancy-regex v0.16.2
+7bit-set v0.8.0
+8bit-vec v0.8.0
+7regex-automata v0.4.18 (*)
+7regex-syntax v0.8.11
+6indexmap v2.14.2 (*)
+6inventory v0.3.25
+6num-bigint v0.4.8 (*)
+6once_cell v1.21.4
+6pagable_derive v0.4.2 (proc-macro)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+6parking_lot v0.12.5 (*)
+6postcard v1.1.3
+7cobs v0.3.0
+8thiserror v2.0.21 (*)
+7crc v3.4.0
+8crc-catalog v2.5.0
+7heapless v0.7.17
+8hash32 v0.2.1
+9byteorder v1.5.0
+8serde v1.0.228 (*)
+8spin v0.9.9 (*)
+8stable_deref_trait v1.2.1
+8rustc_version v0.4.1 (*)
+7serde v1.0.228 (*)
+6regex v1.13.1
+7aho-corasick v1.1.5 (*)
+7memchr v2.8.3
+7regex-automata v0.4.18 (*)
+7regex-syntax v0.8.11
+6sequence_trie v0.3.6
+6serde v1.0.228 (*)
+6serde_json v1.0.150 (*)
+6smallvec v1.16.3 (*)
+6sorted_vector_map v0.2.1
+7itertools v0.14.0 (*)
+7quickcheck v1.1.0
+8env_logger v0.11.11
+9env_filter v2.0.0
+10log v0.4.34
+10regex v1.13.1 (*)
+9log v0.4.34
+8log v0.4.34
+8rand v0.10.3
+9chacha20 v0.10.2
+10cfg-if v1.0.5
+10cpufeatures v0.3.1
+10rand_core v0.10.1
+9getrandom v0.4.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.4.2) (*)
+9rand_core v0.10.1
+6static_assertions v1.1.0
+6static_interner v0.1.3
+7equivalent v1.0.2
+7lock_free_hashtable v0.1.4
+8atomic v0.5.3
+8parking_lot v0.12.5 (*)
+6strong_hash v0.1.0
+7ref-cast v1.0.27
+8ref-cast-impl v1.0.27 (proc-macro)
+9proc-macro2 v1.0.107 (*)
+9quote v1.0.47 (*)
+9syn v3.0.9 (*)
+7strong_hash_derive v0.1.0 (proc-macro)
+8quote v1.0.47 (*)
+8syn v2.0.119 (*)
+6take_mut v0.2.2
+6triomphe v0.1.17
+7serde v1.0.228 (*)
+7stable_deref_trait v1.2.1
+5paste v1.0.15 (proc-macro)
+5ref-cast v1.0.27 (*)
+5regex v1.13.1 (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5starlark_derive v0.14.2 (proc-macro)
+6dupe v0.9.1
+7dupe_derive v0.9.1 (proc-macro) (*)
+6proc-macro2 v1.0.107 (*)
+6quote v1.0.47 (*)
+6syn v2.0.119 (*)
+5starlark_map v0.14.2
+6allocative v0.3.6 (*)
+6dupe v0.9.1 (*)
+6equivalent v1.0.2
+6fxhash v0.2.1
+7byteorder v1.5.0
+6hashbrown v0.16.1 (*)
+6pagable v0.4.2 (*)
+6serde v1.0.228 (*)
+6strong_hash v0.1.0 (*)
+5starlark_syntax v0.14.2
+6allocative v0.3.6 (*)
+6annotate-snippets v0.9.2
+7unicode-width v0.1.14
+6anyhow v1.0.104
+6derivative v2.2.0 (proc-macro) (*)
+6derive_more v1.0.0 (*)
+6dupe v0.9.1 (*)
+6logos v0.15.1
+7logos-derive v0.15.1 (proc-macro)
+8logos-codegen v0.15.1
+9beef v0.5.2
+9fnv v1.0.7
+9lazy_static v1.5.1
+9proc-macro2 v1.0.107 (*)
+9quote v1.0.47 (*)
+9regex-syntax v0.8.11
+9syn v2.0.119 (*)
+9rustc_version v0.4.1 (*)
+6lsp-types v0.97.0
+7bitflags v1.3.2
+7fluent-uri v0.1.4
+8bitflags v1.3.2
+7serde v1.0.228 (*)
+7serde_json v1.0.150 (*)
+7serde_repr v0.1.21 (proc-macro) (*)
+6memchr v2.8.3
+6num-bigint v0.4.8 (*)
+6num-traits v0.2.19 (*)
+6once_cell v1.21.4
+6pagable v0.4.2 (*)
+6starlark_map v0.14.2 (*)
+6thiserror v2.0.21 (*)
+5static_assertions v1.1.0
+5strong_hash v0.1.0 (*)
+5strsim v0.10.0
+5textwrap v0.11.0
+6unicode-width v0.1.14
+5thiserror v2.0.21 (*)
+4tempfile v3.27.0
+5fastrand v2.5.0
+5getrandom v0.4.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.4.2) (*)
+5once_cell v1.21.4
+5rustix v1.1.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos) (*)
+4thiserror v2.0.21 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3codex-extension-items v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/items)
+4codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+4schemars v0.8.22 (*)
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+4ts-rs v11.1.0 (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy)
+4anyhow v1.0.104
+4base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+4chrono v0.4.45 (*)
+4clap v4.6.7 (*)
+4codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+4codex-utils-home-dir v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/home-dir)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+5dirs v6.0.0 (*)
+4codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri)
+5base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+5schemars v0.8.22 (*)
+5serde v1.0.228 (*)
+5thiserror v2.0.21 (*)
+5ts-rs v11.1.0 (*)
+5url v2.5.8 (*)
+5urlencoding v2.1.3
+4codex-utils-rustls-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/rustls-provider) (*)
+4globset v0.4.20
+5aho-corasick v1.1.5 (*)
+5bstr v1.13.1
+6memchr v2.8.3
+6regex-automata v0.4.18 (*)
+5log v0.4.34
+5regex-automata v0.4.18 (*)
+5regex-syntax v0.8.11
+4libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+4opentelemetry v0.31.0 (*)
+4rama-core v0.3.0-alpha.4
+5ahash v0.8.12
+6cfg-if v1.0.5
+6getrandom v0.3.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.3.4) (*)
+6once_cell v1.21.4
+6zerocopy v0.8.62
+6version_check v0.9.5
+5asynk-strim v0.1.5
+6futures-core v0.3.34
+6pin-project-lite v0.2.17
+5bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+5futures v0.3.34 (*)
+5parking_lot v0.12.5 (*)
+5pin-project-lite v0.2.17
+5rama-error v0.3.0-alpha.4
+5rama-macros v0.3.0-alpha.4 (proc-macro)
+6proc-macro-crate v3.5.0
+7toml_edit v0.25.17+spec-1.1.0
+8indexmap v2.14.2 (*)
+8toml_datetime v1.1.2+spec-1.1.0
+8toml_parser v1.1.5+spec-1.1.0
+9winnow v1.0.4
+8winnow v1.0.4
+6proc-macro2 v1.0.107 (*)
+6quote v1.0.47 (*)
+6syn v2.0.119 (*)
+5rama-utils v0.3.0-alpha.4
+6const_format v0.2.36
+7const_format_proc_macros v0.2.34 (proc-macro)
+8proc-macro2 v1.0.107 (*)
+8quote v1.0.47 (*)
+8unicode-xid v0.2.6
+7konst v0.2.20
+8konst_macro_rules v0.2.19
+6parking_lot v0.12.5 (*)
+6pin-project-lite v0.2.17
+6rama-macros v0.3.0-alpha.4 (proc-macro) (*)
+6regex v1.13.1 (*)
+6serde v1.0.228 (*)
+6smallvec v1.16.3 (*)
+6smol_str v0.3.6
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6wildcard v0.3.0
+7thiserror v2.0.21 (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tokio-graceful v0.2.2
+6pin-project-lite v0.2.17
+6slab v0.4.12
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4rama-error v0.3.0-alpha.4
+4rama-http v0.3.0-alpha.4 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rama-http-0.3.0-alpha.4)
+5ahash v0.8.12 (*)
+5base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+5bitflags v2.13.2
+5chrono v0.4.45 (*)
+5const_format v0.2.36 (*)
+5csv v1.4.0
+6csv-core v0.1.13
+7memchr v2.8.3
+6itoa v1.0.18
+6ryu v1.0.23
+6serde_core v1.0.228
+5http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+5http-range-header v0.4.2
+5httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+5iri-string v0.7.14
+5matchit v0.9.2
+5parking_lot v0.12.5 (*)
+5percent-encoding v2.3.2
+5pin-project-lite v0.2.17
+5radix_trie v0.3.0
+6endian-type v0.2.0
+6nibble_vec v0.1.0
+7smallvec v1.16.3 (*)
+5rama-core v0.3.0-alpha.4 (*)
+5rama-error v0.3.0-alpha.4
+5rama-http-headers v0.3.0-alpha.4
+6ahash v0.8.12 (*)
+6base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+6chrono v0.4.45 (*)
+6const_format v0.2.36 (*)
+6httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+6rama-core v0.3.0-alpha.4 (*)
+6rama-error v0.3.0-alpha.4
+6rama-http-types v0.3.0-alpha.4
+7ahash v0.8.12 (*)
+7bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+7const_format v0.2.36 (*)
+7fnv v1.0.7
+7http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+7http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+7http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3) (*)
+7itoa v1.0.18
+7memchr v2.8.3
+7mime v0.3.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17)
+7mime_guess v2.0.5
+8mime v0.3.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17)
+8unicase v2.10.0
+8unicase v2.10.0
+7nom v8.0.0
+8memchr v2.8.3
+7pin-project-lite v0.2.17
+7rama-core v0.3.0-alpha.4 (*)
+7rama-error v0.3.0-alpha.4
+7rama-macros v0.3.0-alpha.4 (proc-macro) (*)
+7rama-utils v0.3.0-alpha.4 (*)
+7rand v0.9.5 (*)
+7serde v1.0.228 (*)
+7serde_json v1.0.150 (*)
+7sync_wrapper v1.0.2 (*)
+7tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6rama-macros v0.3.0-alpha.4 (proc-macro) (*)
+6rama-net v0.3.0-alpha.4
+7ahash v0.8.12 (*)
+7const_format v0.2.36 (*)
+7flume v0.12.0
+8fastrand v2.5.0
+8futures-core v0.3.34
+8futures-sink v0.3.34
+8spin v0.9.9 (*)
+7hex v0.4.3
+7ipnet v2.12.2
+7itertools v0.14.0 (*)
+7md5 v0.8.1
+7nom v8.0.0 (*)
+7parking_lot v0.12.5 (*)
+7pin-project-lite v0.2.17
+7psl v2.1.241
+8psl-types v2.0.11
+7radix_trie v0.3.0 (*)
+7rama-core v0.3.0-alpha.4 (*)
+7rama-http-types v0.3.0-alpha.4 (*)
+7rama-macros v0.3.0-alpha.4 (proc-macro) (*)
+7rama-utils v0.3.0-alpha.4 (*)
+7serde v1.0.228 (*)
+7sha2 v0.10.9 (*)
+7socket2 v0.6.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3) (*)
+7tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6rama-utils v0.3.0-alpha.4 (*)
+6rand v0.9.5 (*)
+6serde v1.0.228 (*)
+6sha1 v0.10.6
+7cfg-if v1.0.5
+7cpufeatures v0.2.17
+7digest v0.10.7 (*)
+5rama-http-types v0.3.0-alpha.4 (*)
+5rama-net v0.3.0-alpha.4 (*)
+5rama-utils v0.3.0-alpha.4 (*)
+5rand v0.9.5 (*)
+5serde v1.0.228 (*)
+5serde_html_form v0.3.2
+6form_urlencoded v1.2.2 (*)
+6indexmap v2.14.2 (*)
+6itoa v1.0.18
+6ryu v1.0.23
+6serde_core v1.0.228
+5serde_json v1.0.150 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5uuid v1.28.0 (*)
+4rama-http-backend v0.3.0-alpha.4
+5h2 v0.4.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/h2-0.4.14) (*)
+5pin-project-lite v0.2.17
+5rama-core v0.3.0-alpha.4 (*)
+5rama-http v0.3.0-alpha.4 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rama-http-0.3.0-alpha.4) (*)
+5rama-http-core v0.3.0-alpha.4
+6ahash v0.8.12 (*)
+6atomic-waker v1.1.2
+6futures-channel v0.3.34 (*)
+6httparse v1.10.1
+6httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+6indexmap v2.14.2 (*)
+6itoa v1.0.18
+6parking_lot v0.12.5 (*)
+6pin-project-lite v0.2.17
+6rama-core v0.3.0-alpha.4 (*)
+6rama-http v0.3.0-alpha.4 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rama-http-0.3.0-alpha.4) (*)
+6rama-http-types v0.3.0-alpha.4 (*)
+6rama-utils v0.3.0-alpha.4 (*)
+6slab v0.4.12
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tokio-test v0.4.6
+7futures-core v0.3.34
+7tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+7tokio-stream v0.1.19 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos)
+8futures-core v0.3.34
+8pin-project-lite v0.2.17
+8tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+8tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+6want v0.3.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/want-0.3.1) (*)
+5rama-http-headers v0.3.0-alpha.4 (*)
+5rama-http-types v0.3.0-alpha.4 (*)
+5rama-net v0.3.0-alpha.4 (*)
+5rama-tcp v0.3.0-alpha.4
+6pin-project-lite v0.2.17
+6rama-core v0.3.0-alpha.4 (*)
+6rama-dns v0.3.0-alpha.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rama-dns-0.3.0-alpha.4-trueos)
+7ahash v0.8.12 (*)
+7rama-core v0.3.0-alpha.4 (*)
+7rama-net v0.3.0-alpha.4 (*)
+7rama-utils v0.3.0-alpha.4 (*)
+7serde v1.0.228 (*)
+7tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6rama-http-types v0.3.0-alpha.4 (*)
+6rama-net v0.3.0-alpha.4 (*)
+6rama-utils v0.3.0-alpha.4 (*)
+6rand v0.9.5 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5rama-unix v0.3.0-alpha.4
+6pin-project-lite v0.2.17
+6rama-core v0.3.0-alpha.4 (*)
+6rama-net v0.3.0-alpha.4 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5rama-utils v0.3.0-alpha.4 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4rama-macros v0.3.0-alpha.4 (proc-macro) (*)
+4rama-net v0.3.0-alpha.4 (*)
+4rama-socks5 v0.3.0-alpha.4
+5byteorder v1.5.0
+5rama-core v0.3.0-alpha.4 (*)
+5rama-net v0.3.0-alpha.4 (*)
+5rama-tcp v0.3.0-alpha.4 (*)
+5rama-udp v0.3.0-alpha.4
+6rama-core v0.3.0-alpha.4 (*)
+6rama-net v0.3.0-alpha.4 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+5rama-utils v0.3.0-alpha.4 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4rama-tcp v0.3.0-alpha.4 (*)
+4rama-tls-rustls v0.3.0-alpha.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rama-tls-rustls-0.3.0-alpha.4-rustcrypto)
+5pin-project-lite v0.2.17
+5rama-core v0.3.0-alpha.4 (*)
+5rama-http-types v0.3.0-alpha.4 (*)
+5rama-net v0.3.0-alpha.4 (*)
+5rama-utils v0.3.0-alpha.4 (*)
+5rcgen v0.14.10
+6pem v4.0.0
+7base64 v0.23.1
+6ring v0.17.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/ring-0.17.14) (*)
+6rustls-pki-types v1.15.1 (*)
+6time v0.3.55 (*)
+6x509-parser v0.18.1
+7asn1-rs v0.7.2
+8asn1-rs-derive v0.6.0 (proc-macro)
+9proc-macro2 v1.0.107 (*)
+9quote v1.0.47 (*)
+9syn v2.0.119 (*)
+9synstructure v0.13.2
+10proc-macro2 v1.0.107 (*)
+10quote v1.0.47 (*)
+10syn v2.0.119 (*)
+8asn1-rs-impl v0.2.0 (proc-macro)
+9proc-macro2 v1.0.107 (*)
+9quote v1.0.47 (*)
+9syn v2.0.119 (*)
+8displaydoc v0.2.7 (proc-macro) (*)
+8nom v7.1.3 (*)
+8num-traits v0.2.19 (*)
+8rusticata-macros v4.1.0
+9nom v7.1.3 (*)
+8thiserror v2.0.21 (*)
+8time v0.3.55 (*)
+7data-encoding v2.11.1
+7der-parser v10.0.0
+8asn1-rs v0.7.2 (*)
+8displaydoc v0.2.7 (proc-macro) (*)
+8nom v7.1.3 (*)
+8num-bigint v0.4.8 (*)
+8num-traits v0.2.19 (*)
+8rusticata-macros v4.1.0 (*)
+7lazy_static v1.5.1 (*)
+7nom v7.1.3 (*)
+7oid-registry v0.8.1
+8asn1-rs v0.7.2 (*)
+7ring v0.17.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/ring-0.17.14) (*)
+7rusticata-macros v4.1.0 (*)
+7thiserror v2.0.21 (*)
+7time v0.3.55 (*)
+6yasna v0.6.0
+7time v0.3.55 (*)
+5rustls v0.23.45 (*)
+5rustls-native-certs v0.8.4 (*)
+5rustls-pki-types v1.15.1 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tokio-rustls v0.26.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4) (*)
+5webpki-roots v1.0.9 (*)
+5x509-parser v0.18.1 (*)
+4rama-unix v0.3.0-alpha.4 (*)
+4rama-utils v0.3.0-alpha.4 (*)
+4rand v0.9.5 (*)
+4rand_regex v0.18.1
+5rand v0.9.5 (*)
+5regex-syntax v0.8.11
+4regex v1.13.1 (*)
+4regex-automata v0.4.18 (*)
+4regex-syntax v0.8.11
+4rustls-native-certs v0.8.4 (*)
+4schemars v0.8.22 (*)
+4serde v1.0.228 (*)
+4serde_ignored v0.1.14
+5serde_core v1.0.228
+4serde_json v1.0.150 (*)
+4sha2 v0.10.9 (*)
+4thiserror v2.0.21 (*)
+4time v0.3.55 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+4url v2.5.8 (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3codex-utils-image v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/image)
+4base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+4codex-utils-cache v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cache)
+5lru v0.18.5
+6hashbrown v0.17.1 (*)
+5sha1 v0.10.6 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4image v0.25.10
+5bytemuck v1.25.2 (*)
+5byteorder-lite v0.1.0
+5color_quant v1.1.0
+5gif v0.14.2
+6color_quant v1.1.0
+6weezl v0.1.12
+5image-webp v0.2.4
+6byteorder-lite v0.1.0
+6quick-error v2.0.1
+5moxcms v0.8.1
+6num-traits v0.2.19 (*)
+6pxfm v0.1.30
+5num-traits v0.2.19 (*)
+5png v0.18.1
+6bitflags v2.13.2
+6crc32fast v1.5.2
+7cfg-if v1.0.5
+6fdeflate v0.3.7
+7simd-adler32 v0.3.10
+6flate2 v1.1.10
+7crc32fast v1.5.2 (*)
+7miniz_oxide v0.9.1
+8adler2 v2.0.1
+8simd-adler32 v0.3.10
+7zlib-rs v0.6.8
+6miniz_oxide v0.8.9
+7adler2 v2.0.1
+7simd-adler32 v0.3.10
+5zune-core v0.5.3
+5zune-jpeg v0.5.15
+6zune-core v0.5.3
+4mime_guess v2.0.5 (*)
+4png v0.18.1 (*)
+4thiserror v2.0.21 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+3codex-utils-redacted-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/redacted-string)
+4schemars v0.8.22 (*)
+4serde v1.0.228 (*)
+3codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string)
+4regex-lite v0.1.9
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+3derive_more v2.1.1
+4derive_more-impl v2.1.1 (proc-macro)
+5convert_case v0.10.0
+6unicode-segmentation v1.13.3
+5proc-macro2 v1.0.107 (*)
+5quote v1.0.47 (*)
+5syn v2.0.119 (*)
+5unicode-xid v0.2.6
+5rustc_version v0.4.1 (*)
+3encoding_rs v0.8.42 (*)
+3gix-url v0.35.3
+4bstr v1.13.1 (*)
+4gix-path v0.11.3
+5bstr v1.13.1 (*)
+5gix-trace v0.1.21
+5gix-validate v0.11.4
+6bstr v1.13.1 (*)
+5thiserror v2.0.21 (*)
+4percent-encoding v2.3.2
+4thiserror v2.0.21 (*)
+3globset v0.4.20 (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3icu_decimal v2.3.0
+4displaydoc v0.2.7 (proc-macro) (*)
+4fixed_decimal v0.7.2
+5displaydoc v0.2.7 (proc-macro) (*)
+5smallvec v1.16.3 (*)
+5writeable v0.6.4
+4icu_decimal_data v2.3.0
+4icu_locale_core v2.3.0 (*)
+4icu_locale_fallback v2.3.0
+5icu_locale_core v2.3.0 (*)
+5icu_locale_fallback_data v2.3.0
+5icu_provider v2.3.1 (*)
+5potential_utf v0.1.6 (*)
+5tinystr v0.8.4 (*)
+5zerovec v0.11.8 (*)
+4icu_provider v2.3.1 (*)
+4writeable v0.6.4
+4zerovec v0.11.8 (*)
+3icu_locale_core v2.3.0 (*)
+3icu_provider v2.3.1 (*)
+3quick-xml v0.41.0
+4memchr v2.8.3
+4serde v1.0.228 (*)
+3schemars v0.8.22 (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3serde_with v3.22.0
+4base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+4serde_core v1.0.228
+4serde_with_macros v3.22.0 (proc-macro)
+5darling v0.23.0
+6darling_core v0.23.0
+7ident_case v1.0.1
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7strsim v0.11.1
+7syn v2.0.119 (*)
+6darling_macro v0.23.0 (proc-macro)
+7darling_core v0.23.0 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+5proc-macro2 v1.0.107 (*)
+5quote v1.0.47 (*)
+5syn v2.0.119 (*)
+3strum v0.27.2
+4strum_macros v0.27.2 (proc-macro)
+5heck v0.5.0
+5proc-macro2 v1.0.107 (*)
+5quote v1.0.47 (*)
+5syn v2.0.119 (*)
+3strum_macros v0.28.0 (proc-macro)
+4heck v0.5.0
+4proc-macro2 v1.0.107 (*)
+4quote v1.0.47 (*)
+4syn v2.0.119 (*)
+3sys-locale v0.3.2
+3thiserror v2.0.21 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3ts-rs v11.1.0 (*)
+3uuid v1.28.0 (*)
+3wildmatch v2.6.1
+2codex-utils-rustls-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/rustls-provider) (*)
+2codex-websocket-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/websocket-client)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3futures v0.3.34 (*)
+3rustls v0.23.45 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tokio-rustls v0.26.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4) (*)
+3tokio-tungstenite v0.28.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tokio-tungstenite-0.28.0-openai)
+4futures-util v0.3.34 (*)
+4log v0.4.34
+4rustls v0.23.45 (*)
+4rustls-native-certs v0.8.4 (*)
+4rustls-pki-types v1.15.1 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tokio-rustls v0.26.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4) (*)
+4tungstenite v0.27.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tungstenite-0.27.0-openai)
+5bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+5data-encoding v2.11.1
+5flate2 v1.1.10 (*)
+5headers v0.4.2
+6base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+6bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+6headers-core v0.3.0
+7http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+6http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+6httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+6mime v0.3.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17)
+6sha1 v0.10.6 (*)
+5http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+5httparse v1.10.1
+5log v0.4.34
+5rand v0.9.5 (*)
+5rustls v0.23.45 (*)
+5rustls-pki-types v1.15.1 (*)
+5sha1 v0.10.6 (*)
+5thiserror v2.0.21 (*)
+5utf-8 v0.7.6
+3url v2.5.8 (*)
+2eventsource-stream v0.2.3 (*)
+2futures v0.3.34 (*)
+2http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+2regex-lite v0.1.9
+2schemars v0.8.22 (*)
+2serde v1.0.228 (*)
+2serde_json v1.0.150 (*)
+2thiserror v2.0.21 (*)
+2tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2tokio-tungstenite v0.28.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tokio-tungstenite-0.28.0-openai) (*)
+2tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+2tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2tungstenite v0.27.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tungstenite-0.27.0-openai) (*)
+2url v2.5.8 (*)
+2uuid v1.28.0 (*)
+1codex-app-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server)
+2anyhow v1.0.104
+2axum v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-0.8.9)
+3axum-core v0.5.6 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-core-0.5.6)
+4bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+4futures-core v0.3.34
+4http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+4http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+4http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3) (*)
+4mime v0.3.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17)
+4pin-project-lite v0.2.17
+4sync_wrapper v1.0.2 (*)
+4tower-layer v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-layer-0.3.3)
+4tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+3base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+3bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+3futures-util v0.3.34 (*)
+3hashbrown v0.17.1 (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+3http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3) (*)
+3hyper v1.10.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0) (*)
+3hyper-util v0.1.20 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos) (*)
+3itoa v1.0.18
+3log v0.4.34
+3matchit v0.8.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/matchit-0.8.4)
+3memchr v2.8.3
+3mime v0.3.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17)
+3percent-encoding v2.3.2
+3pin-project-lite v0.2.17
+3serde_core v1.0.228
+3serde_json v1.0.150 (*)
+3serde_path_to_error v0.1.20
+4itoa v1.0.18
+4serde_core v1.0.228
+3sha1 v0.10.6 (*)
+3sync_wrapper v1.0.2 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tokio-tungstenite v0.29.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-tungstenite-0.29.0)
+4futures-util v0.3.34 (*)
+4log v0.4.34
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tungstenite v0.29.0
+5bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+5log v0.4.34
+5rand v0.9.5 (*)
+5thiserror v2.0.21 (*)
+3tower v0.5.3 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos) (*)
+3tower-layer v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-layer-0.3.3)
+3tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+2base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+2chrono v0.4.45 (*)
+2clap v4.6.7 (*)
+2codex-agent-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/agent)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core)
+4anyhow v1.0.104
+4arc-swap v1.9.2
+5rustversion v1.0.23 (proc-macro)
+4async-channel v2.5.0 (*)
+4base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+4bm25 v2.3.2
+5cached v0.56.0
+6ahash v0.8.12 (*)
+6cached_proc_macro v0.25.0 (proc-macro)
+7darling v0.20.11
+8darling_core v0.20.11
+9fnv v1.0.7
+9ident_case v1.0.1
+9proc-macro2 v1.0.107 (*)
+9quote v1.0.47 (*)
+9strsim v0.11.1
+9syn v2.0.119 (*)
+8darling_macro v0.20.11 (proc-macro)
+9darling_core v0.20.11 (*)
+9quote v1.0.47 (*)
+9syn v2.0.119 (*)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+6cached_proc_macro_types v0.1.1
+6hashbrown v0.15.5
+7allocator-api2 v0.2.21
+7equivalent v1.0.2
+7foldhash v0.1.5
+6once_cell v1.21.4
+6thiserror v2.0.21 (*)
+6web-time v1.1.0
+5deunicode v1.6.2
+5fxhash v0.2.1 (*)
+5rust-stemmers v1.2.0
+6serde v1.0.228 (*)
+6serde_derive v1.0.228 (proc-macro) (*)
+5stop-words v0.9.0
+6serde_json v1.0.150 (*)
+5unicode-segmentation v1.13.3
+4chrono v0.4.45 (*)
+4codex-agent-graph-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/agent-graph-store)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state)
+6anyhow v1.0.104
+6chrono v0.4.45 (*)
+6codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history)
+7codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+7schemars v0.8.22 (*)
+7serde v1.0.228 (*)
+7serde_json v1.0.150 (*)
+6codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+6codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+6file-id v0.2.3
+6log v0.4.34
+6serde v1.0.228 (*)
+6serde_json v1.0.150 (*)
+6sqlx v0.9.0
+7sqlx-core v0.9.0
+8base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+8bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+8cfg-if v1.0.5
+8chrono v0.4.45 (*)
+8crc v3.4.0 (*)
+8crossbeam-queue v0.3.14
+9crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+8either v1.19.0 (*)
+8event-listener v5.4.2 (*)
+8futures-core v0.3.34
+8futures-intrusive v0.5.0
+9futures-core v0.3.34
+9lock_api v0.4.14 (*)
+9parking_lot v0.12.5 (*)
+8futures-io v0.3.34
+8futures-util v0.3.34 (*)
+8hashbrown v0.16.1 (*)
+8hashlink v0.11.1
+9hashbrown v0.16.1 (*)
+8indexmap v2.14.2 (*)
+8log v0.4.34
+8memchr v2.8.3
+8percent-encoding v2.3.2
+8rustls v0.23.45 (*)
+8serde v1.0.228 (*)
+8serde_json v1.0.150 (*)
+8sha2 v0.10.9 (*)
+8smallvec v1.16.3 (*)
+8thiserror v2.0.21 (*)
+8time v0.3.55 (*)
+8tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+8tokio-stream v0.1.19 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos) (*)
+8tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+8url v2.5.8 (*)
+8uuid v1.28.0 (*)
+8webpki-roots v1.0.9 (*)
+7sqlx-sqlite v0.9.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/sqlx-sqlite-0.9.0)
+8atoi v2.0.0
+9num-traits v0.2.19 (*)
+8chrono v0.4.45 (*)
+8flume v0.12.0 (*)
+8form_urlencoded v1.2.2 (*)
+8futures-channel v0.3.34 (*)
+8futures-core v0.3.34
+8futures-executor v0.3.34 (*)
+8futures-intrusive v0.5.0 (*)
+8futures-util v0.3.34 (*)
+8log v0.4.34
+8percent-encoding v2.3.2
+8reqwest v0.13.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3) (*)
+8serde v1.0.228 (*)
+8serde_json v1.0.150 (*)
+8sqlx-core v0.9.0 (*)
+8thiserror v2.0.21 (*)
+8time v0.3.55 (*)
+8tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+8tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+8trueos v0.1.0 (/home/t4ce/Repos/TRUEOS-Blueprints/api)
+9mio v1.2.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mio-1.2.0) (*)
+9socket2 v0.6.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3) (*)
+9tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+9v v0.1.0 (/home/t4ce/Repos/TRUEOS-Blueprints/crates/trueos-v)
+10hashbrown v0.17.1 (*)
+10infer v0.22.0-trueos.1 (/home/t4ce/Repos/TRUEOS/vendor/infer)
+10serde v1.0.228 (*)
+10serde_json v1.0.150 (*)
+10skrifa v0.44.0
+11bytemuck v1.25.2 (*)
+11core_maths v0.1.1
+12libm v0.2.16
+11read-fonts v0.41.0
+12bytemuck v1.25.2 (*)
+12core_maths v0.1.1 (*)
+12font-types v0.12.6
+13bytemuck v1.25.2 (*)
+12once_cell v1.21.4
+10spin v0.10.1 (*)
+10trueos-fs v0.0.1 (/home/t4ce/Repos/TRUEOS/crates/trueos-fs)
+11infer v0.22.0-trueos.1 (/home/t4ce/Repos/TRUEOS/vendor/infer)
+11trueos-crypto v0.1.0 (/home/t4ce/Repos/TRUEOS/crates/trueos-crypto)
+12hmac v0.12.1 (*)
+12sha1 v0.10.6 (*)
+10trueos-math v0.1.0 (/home/t4ce/Repos/TRUEOS-Blueprints/crates/trueos-math)
+11libm v0.2.16
+8url v2.5.8 (*)
+8uuid v1.28.0 (*)
+6sqlx-macros v0.9.0 (proc-macro)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7sqlx-core v0.9.0
+8base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+8bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+8cfg-if v1.0.5
+8crc v3.4.0
+9crc-catalog v2.5.0
+8crossbeam-queue v0.3.14
+9crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+8either v1.19.0
+9serde v1.0.228 (*)
+8event-listener v5.4.2
+9parking v2.2.1
+9pin-project-lite v0.2.17
+8futures-core v0.3.34
+8futures-intrusive v0.5.0
+9futures-core v0.3.34
+9lock_api v0.4.14
+10scopeguard v1.2.0
+9parking_lot v0.12.5
+10lock_api v0.4.14 (*)
+10parking_lot_core v0.9.12
+11cfg-if v1.0.5
+11libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+11smallvec v1.16.3
+8futures-io v0.3.34
+8futures-util v0.3.34
+9futures-core v0.3.34
+9futures-io v0.3.34
+9futures-sink v0.3.34
+9futures-task v0.3.34
+9memchr v2.8.3
+9pin-project-lite v0.2.17
+9slab v0.4.12
+8hashbrown v0.16.1
+9allocator-api2 v0.2.21
+9equivalent v1.0.2
+9foldhash v0.2.0
+8hashlink v0.11.1
+9hashbrown v0.16.1 (*)
+8indexmap v2.14.2 (*)
+8log v0.4.34
+8memchr v2.8.3
+8percent-encoding v2.3.2
+8serde v1.0.228 (*)
+8sha2 v0.10.9
+9cfg-if v1.0.5
+9cpufeatures v0.2.17
+9digest v0.10.7
+10block-buffer v0.10.4
+11generic-array v0.14.7
+12typenum v1.20.1
+12version_check v0.9.5
+10crypto-common v0.1.7
+11generic-array v0.14.7 (*)
+11typenum v1.20.1
+8smallvec v1.16.3
+8thiserror v2.0.21
+9thiserror-impl v2.0.21 (proc-macro) (*)
+8tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44)
+9log v0.4.34
+9pin-project-lite v0.2.17
+9tracing-attributes v0.1.31 (proc-macro) (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-attributes-0.1.31) (*)
+9tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36)
+10once_cell v1.21.4
+8url v2.5.8
+9form_urlencoded v1.2.2
+10percent-encoding v2.3.2
+9idna v1.1.0
+10idna_adapter v1.2.2
+11icu_normalizer v2.3.0
+12icu_collections v2.3.0
+13displaydoc v0.2.7 (proc-macro) (*)
+13potential_utf v0.1.6
+14zerovec v0.11.8
+15yoke v0.8.3
+16stable_deref_trait v1.2.1
+16yoke-derive v0.8.4 (proc-macro) (*)
+16zerofrom v0.1.8
+17zerofrom-derive v0.1.8 (proc-macro) (*)
+15zerofrom v0.1.8 (*)
+15zerovec-derive v0.11.6 (proc-macro) (*)
+13utf8_iter v1.0.4
+13yoke v0.8.3 (*)
+13zerofrom v0.1.8 (*)
+13zerovec v0.11.8 (*)
+12icu_normalizer_data v2.3.0
+12icu_provider v2.3.1
+13displaydoc v0.2.7 (proc-macro) (*)
+13icu_locale_core v2.3.0
+14displaydoc v0.2.7 (proc-macro) (*)
+14litemap v0.8.3
+14tinystr v0.8.4
+15displaydoc v0.2.7 (proc-macro) (*)
+15zerovec v0.11.8 (*)
+14writeable v0.6.4
+14zerovec v0.11.8 (*)
+13writeable v0.6.4
+13yoke v0.8.3 (*)
+13zerofrom v0.1.8 (*)
+13zerotrie v0.2.5
+14displaydoc v0.2.7 (proc-macro) (*)
+14yoke v0.8.3 (*)
+14zerofrom v0.1.8 (*)
+13zerovec v0.11.8 (*)
+12smallvec v1.16.3
+12zerovec v0.11.8 (*)
+11icu_properties v2.3.0
+12displaydoc v0.2.7 (proc-macro) (*)
+12icu_collections v2.3.0 (*)
+12icu_locale_core v2.3.0 (*)
+12icu_properties_data v2.3.0
+12icu_provider v2.3.1 (*)
+12zerotrie v0.2.5 (*)
+12zerovec v0.11.8 (*)
+10smallvec v1.16.3
+10utf8_iter v1.0.4
+9percent-encoding v2.3.2
+7sqlx-macros-core v0.9.0
+8cfg-if v1.0.5
+8dotenvy v0.15.7
+8either v1.19.0 (*)
+8heck v0.5.0
+8hex v0.4.3
+8proc-macro2 v1.0.107 (*)
+8quote v1.0.47 (*)
+8serde v1.0.228 (*)
+8serde_json v1.0.150 (*)
+8sha2 v0.10.9 (*)
+8sqlx-core v0.9.0 (*)
+8syn v2.0.119 (*)
+8url v2.5.8 (*)
+7syn v2.0.119 (*)
+6sqlx-sqlite v0.9.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/sqlx-sqlite-0.9.0) (*)
+6strum v0.27.2 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+6tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+6uuid v1.28.0 (*)
+5serde v1.0.228 (*)
+5thiserror v2.0.21 (*)
+4codex-agent-message-board-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/agent-message-board-client)
+5anyhow v1.0.104
+5chrono v0.4.45 (*)
+5codex-agent-message-board-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/agent-message-board)
+6base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+6caseless v0.2.2
+7unicode-normalization v0.1.25
+8tinyvec v1.13.3
+6chrono v0.4.45 (*)
+6codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api)
+7codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+7codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config)
+8anyhow v1.0.104
+8base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+8codex-execpolicy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/execpolicy) (*)
+8codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features)
+9codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9codex-utils-redacted-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/redacted-string) (*)
+9schemars v0.8.22 (*)
+9serde v1.0.228 (*)
+9toml v0.9.12+spec-1.1.0
+10indexmap v2.14.2 (*)
+10serde_core v1.0.228
+10serde_spanned v1.1.2
+11serde_core v1.0.228
+10toml_datetime v0.7.5+spec-1.1.0
+11serde_core v1.0.228
+10toml_parser v1.1.5+spec-1.1.0
+11winnow v1.0.4
+10toml_writer v1.1.3+spec-1.1.0
+10winnow v0.7.15
+11memchr v2.8.3
+9tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+8codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system)
+9bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+9codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+9futures v0.3.34 (*)
+9serde v1.0.228 (*)
+8codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils)
+9anyhow v1.0.104
+9chrono v0.4.45 (*)
+9codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system) (*)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+9codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+9codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+9codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty)
+10anyhow v1.0.104
+10libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+10tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+10trueos v0.1.0 (/home/t4ce/Repos/TRUEOS-Blueprints/api) (*)
+9futures v0.3.34 (*)
+9gix v0.81.0
+10gix-actor v0.40.0
+11bstr v1.13.1 (*)
+11gix-date v0.15.6
+12bstr v1.13.1 (*)
+12gix-error v0.2.5
+13bstr v1.13.1 (*)
+12itoa v1.0.18
+12jiff v0.2.38
+13jiff-core v0.1.1
+11gix-error v0.2.5 (*)
+11winnow v0.7.15 (*)
+10gix-commitgraph v0.35.0
+11bstr v1.13.1 (*)
+11gix-chunk v0.7.3
+12gix-error v0.2.5 (*)
+11gix-error v0.2.5 (*)
+11gix-hash v0.23.0
+12faster-hex v0.10.1
+13heapless v0.8.0
+14hash32 v0.3.1
+15byteorder v1.5.0
+14stable_deref_trait v1.2.1
+13autocfg v1.5.1
+12gix-features v0.46.2
+13crc32fast v1.5.2 (*)
+13gix-path v0.11.3 (*)
+13gix-trace v0.1.21
+13gix-utils v0.3.6
+14fastrand v2.5.0
+14getrandom v0.4.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.4.2) (*)
+14unicode-normalization v0.1.25 (*)
+13libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+13once_cell v1.21.4
+13prodash v31.0.1
+14parking_lot v0.12.5 (*)
+13thiserror v2.0.21 (*)
+13walkdir v2.5.0
+14same-file v1.0.6
+13zlib-rs v0.6.8
+12sha1-checked v0.10.0
+13digest v0.10.7 (*)
+13sha1 v0.10.6 (*)
+12thiserror v2.0.21 (*)
+11memmap2 v0.9.11
+12libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+11nonempty v0.12.0
+10gix-config v0.54.0
+11bstr v1.13.1 (*)
+11gix-config-value v0.17.2
+12bitflags v2.13.2
+12bstr v1.13.1 (*)
+12gix-path v0.11.3 (*)
+12libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+12thiserror v2.0.21 (*)
+11gix-features v0.46.2 (*)
+11gix-glob v0.24.0
+12bitflags v2.13.2
+12bstr v1.13.1 (*)
+12gix-features v0.46.2 (*)
+12gix-path v0.11.3 (*)
+11gix-path v0.11.3 (*)
+11gix-ref v0.61.0
+12gix-actor v0.40.0 (*)
+12gix-features v0.46.2 (*)
+12gix-fs v0.19.2
+13bstr v1.13.1 (*)
+13fastrand v2.5.0
+13gix-features v0.46.2 (*)
+13gix-path v0.11.3 (*)
+13gix-utils v0.3.6 (*)
+13thiserror v2.0.21 (*)
+12gix-hash v0.23.0 (*)
+12gix-lock v21.0.2
+13gix-tempfile v21.0.2
+14gix-fs v0.19.2 (*)
+14libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+14parking_lot v0.12.5 (*)
+14tempfile v3.27.0 (*)
+13gix-utils v0.3.6 (*)
+13thiserror v2.0.21 (*)
+12gix-object v0.58.0
+13bstr v1.13.1 (*)
+13gix-actor v0.40.0 (*)
+13gix-date v0.15.6 (*)
+13gix-features v0.46.2 (*)
+13gix-hash v0.23.0 (*)
+13gix-hashtable v0.13.0
+14gix-hash v0.23.0 (*)
+14hashbrown v0.16.1 (*)
+14parking_lot v0.12.5 (*)
+13gix-path v0.11.3 (*)
+13gix-utils v0.3.6 (*)
+13gix-validate v0.11.4 (*)
+13itoa v1.0.18
+13smallvec v1.16.3 (*)
+13thiserror v2.0.21 (*)
+13winnow v0.7.15 (*)
+12gix-path v0.11.3 (*)
+12gix-tempfile v21.0.2 (*)
+12gix-utils v0.3.6 (*)
+12gix-validate v0.11.4 (*)
+12memmap2 v0.9.11 (*)
+12thiserror v2.0.21 (*)
+12winnow v0.7.15 (*)
+11gix-sec v0.13.3
+12bitflags v2.13.2
+12libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+11memchr v2.8.3
+11smallvec v1.16.3 (*)
+11thiserror v2.0.21 (*)
+11unicode-bom v2.0.3
+11winnow v0.7.15 (*)
+10gix-date v0.15.6 (*)
+10gix-diff v0.61.0
+11bstr v1.13.1 (*)
+11gix-hash v0.23.0 (*)
+11gix-object v0.58.0 (*)
+11thiserror v2.0.21 (*)
+10gix-discover v0.49.0
+11bstr v1.13.1 (*)
+11gix-fs v0.19.2 (*)
+11gix-path v0.11.3 (*)
+11gix-ref v0.61.0 (*)
+11gix-sec v0.13.3 (*)
+11thiserror v2.0.21 (*)
+10gix-error v0.2.5 (*)
+10gix-features v0.46.2 (*)
+10gix-fs v0.19.2 (*)
+10gix-glob v0.24.0 (*)
+10gix-hash v0.23.0 (*)
+10gix-hashtable v0.13.0 (*)
+10gix-lock v21.0.2 (*)
+10gix-object v0.58.0 (*)
+10gix-odb v0.78.0
+11arc-swap v1.9.2 (*)
+11gix-features v0.46.2 (*)
+11gix-fs v0.19.2 (*)
+11gix-hash v0.23.0 (*)
+11gix-hashtable v0.13.0 (*)
+11gix-object v0.58.0 (*)
+11gix-pack v0.68.0
+12clru v0.6.3
+13hashbrown v0.16.1 (*)
+12gix-chunk v0.7.3 (*)
+12gix-error v0.2.5 (*)
+12gix-features v0.46.2 (*)
+12gix-hash v0.23.0 (*)
+12gix-hashtable v0.13.0 (*)
+12gix-object v0.58.0 (*)
+12gix-path v0.11.3 (*)
+12memmap2 v0.9.11 (*)
+12smallvec v1.16.3 (*)
+12thiserror v2.0.21 (*)
+11gix-path v0.11.3 (*)
+11gix-quote v0.7.2
+12bstr v1.13.1 (*)
+12gix-error v0.2.5 (*)
+12gix-utils v0.3.6 (*)
+11parking_lot v0.12.5 (*)
+11tempfile v3.27.0 (*)
+11thiserror v2.0.21 (*)
+10gix-pack v0.68.0 (*)
+10gix-path v0.11.3 (*)
+10gix-protocol v0.59.0
+11bstr v1.13.1 (*)
+11gix-date v0.15.6 (*)
+11gix-features v0.46.2 (*)
+11gix-hash v0.23.0 (*)
+11gix-ref v0.61.0 (*)
+11gix-shallow v0.10.0
+12bstr v1.13.1 (*)
+12gix-hash v0.23.0 (*)
+12gix-lock v21.0.2 (*)
+12nonempty v0.12.0
+12thiserror v2.0.21 (*)
+11gix-transport v0.55.1
+12bstr v1.13.1 (*)
+12gix-command v0.8.1
+13bstr v1.13.1 (*)
+13gix-path v0.11.3 (*)
+13gix-quote v0.7.2 (*)
+13gix-trace v0.1.21
+13shell-words v1.1.1
+12gix-features v0.46.2 (*)
+12gix-packetline v0.21.5
+13bstr v1.13.1 (*)
+13faster-hex v0.10.1 (*)
+13gix-trace v0.1.21
+13thiserror v2.0.21 (*)
+12gix-quote v0.7.2 (*)
+12gix-sec v0.13.3 (*)
+12gix-url v0.35.3 (*)
+12thiserror v2.0.21 (*)
+11gix-utils v0.3.6 (*)
+11maybe-async v0.2.11 (proc-macro)
+12proc-macro2 v1.0.107 (*)
+12quote v1.0.47 (*)
+12syn v2.0.119 (*)
+11nonempty v0.12.0
+11thiserror v2.0.21 (*)
+11winnow v0.7.15 (*)
+10gix-ref v0.61.0 (*)
+10gix-refspec v0.39.0
+11bstr v1.13.1 (*)
+11gix-error v0.2.5 (*)
+11gix-glob v0.24.0 (*)
+11gix-hash v0.23.0 (*)
+11gix-revision v0.43.0
+12bstr v1.13.1 (*)
+12gix-commitgraph v0.35.0 (*)
+12gix-date v0.15.6 (*)
+12gix-error v0.2.5 (*)
+12gix-hash v0.23.0 (*)
+12gix-object v0.58.0 (*)
+12gix-revwalk v0.29.0
+13gix-commitgraph v0.35.0 (*)
+13gix-date v0.15.6 (*)
+13gix-error v0.2.5 (*)
+13gix-hash v0.23.0 (*)
+13gix-hashtable v0.13.0 (*)
+13gix-object v0.58.0 (*)
+13smallvec v1.16.3 (*)
+13thiserror v2.0.21 (*)
+12nonempty v0.12.0
+11gix-validate v0.11.4 (*)
+11smallvec v1.16.3 (*)
+11thiserror v2.0.21 (*)
+10gix-revision v0.43.0 (*)
+10gix-revwalk v0.29.0 (*)
+10gix-sec v0.13.3 (*)
+10gix-shallow v0.10.0 (*)
+10gix-tempfile v21.0.2 (*)
+10gix-trace v0.1.21
+10gix-traverse v0.55.0
+11bitflags v2.13.2
+11gix-commitgraph v0.35.0 (*)
+11gix-date v0.15.6 (*)
+11gix-hash v0.23.0 (*)
+11gix-hashtable v0.13.0 (*)
+11gix-object v0.58.0 (*)
+11gix-revwalk v0.29.0 (*)
+11smallvec v1.16.3 (*)
+11thiserror v2.0.21 (*)
+10gix-url v0.35.3 (*)
+10gix-utils v0.3.6 (*)
+10gix-validate v0.11.4 (*)
+10nonempty v0.12.0
+10smallvec v1.16.3 (*)
+10thiserror v2.0.21 (*)
+9once_cell v1.21.4
+9regex v1.13.1 (*)
+9schemars v0.8.22 (*)
+9serde v1.0.228 (*)
+9similar v2.7.0
+9tempfile v3.27.0 (*)
+9thiserror v2.0.21 (*)
+9tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+9ts-rs v11.1.0 (*)
+9walkdir v2.5.0 (*)
+8codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info)
+9codex-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-client) (*)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9codex-utils-redacted-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/redacted-string) (*)
+9http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+9schemars v0.8.22 (*)
+9serde v1.0.228 (*)
+9url v2.5.8 (*)
+8codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+8codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+8codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+8codex-utils-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-utils)
+9codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+9dunce v1.0.5
+9tempfile v3.27.0 (*)
+8codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+8codex-utils-redacted-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/redacted-string) (*)
+8dns-lookup v3.0.1
+9cfg-if v1.0.5
+9libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+9socket2 v0.6.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3) (*)
+8dunce v1.0.5
+8futures v0.3.34 (*)
+8gethostname v1.1.0
+9rustix v1.1.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos) (*)
+8indexmap v2.14.2 (*)
+8libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+8multimap v0.10.1 (*)
+8prost v0.14.4
+9bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+9prost-derive v0.14.4 (proc-macro)
+10anyhow v1.0.104
+10itertools v0.14.0
+11either v1.19.0 (*)
+10proc-macro2 v1.0.107 (*)
+10quote v1.0.47 (*)
+10syn v2.0.119 (*)
+8regex-lite v0.1.9
+8schemars v0.8.22 (*)
+8serde v1.0.228 (*)
+8serde_ignored v0.1.14 (*)
+8serde_json v1.0.150 (*)
+8serde_path_to_error v0.1.20 (*)
+8sha2 v0.10.9 (*)
+8thiserror v2.0.21 (*)
+8tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+8toml v0.9.12+spec-1.1.0 (*)
+8toml_edit v0.24.1+spec-1.1.0
+9indexmap v2.14.2 (*)
+9toml_datetime v0.7.5+spec-1.1.0 (*)
+9toml_parser v1.1.5+spec-1.1.0 (*)
+9toml_writer v1.1.3+spec-1.1.0
+9winnow v0.7.15 (*)
+8tonic v0.14.6 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tonic-trueos)
+9async-trait v0.1.92 (proc-macro) (*)
+9base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+9bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+9http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+9http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+9http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3) (*)
+9hyper v1.10.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0) (*)
+9hyper-timeout v0.5.2 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-timeout-trueos)
+10hyper v1.10.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0) (*)
+10hyper-util v0.1.20 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos) (*)
+10pin-project-lite v0.2.17
+10tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+10tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+9hyper-util v0.1.20 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos) (*)
+9percent-encoding v2.3.2
+9pin-project v1.1.13
+10pin-project-internal v1.1.13 (proc-macro)
+11proc-macro2 v1.0.107 (*)
+11quote v1.0.47 (*)
+11syn v2.0.119 (*)
+9rustls-native-certs v0.8.4 (*)
+9sync_wrapper v1.0.2 (*)
+9tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+9tokio-rustls v0.26.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4) (*)
+9tokio-stream v0.1.19 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos) (*)
+9tower v0.5.3 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos) (*)
+9tower-layer v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-layer-0.3.3)
+9tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+9tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+8tonic-prost v0.14.6
+9bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+9prost v0.14.4 (*)
+9tonic v0.14.6 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tonic-trueos) (*)
+8tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+8wildmatch v2.6.1
+7codex-context-fragments v0.0.0 (/home/t4ce/Repos/codex/codex-rs/context-fragments)
+8codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+8codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+8serde_json v1.0.150 (*)
+7codex-exec-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server-protocol)
+8base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+8codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system) (*)
+8codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context)
+9codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+9codex-utils-home-dir v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/home-dir) (*)
+9semver v1.0.28
+10serde_core v1.0.228
+9serde v1.0.228 (*)
+9serde_json v1.0.150 (*)
+8codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+8codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+8codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command)
+9base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+9libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+9once_cell v1.21.4
+9regex v1.13.1 (*)
+9serde v1.0.228 (*)
+9serde_json v1.0.150 (*)
+9shlex v1.3.0
+9tree-sitter v0.25.10
+10regex v1.13.1 (*)
+10regex-syntax v0.8.11
+10streaming-iterator v0.1.9
+10tree-sitter-language v0.1.9
+10cc v1.8.0 (*)
+10serde_json v1.0.150 (*)
+9tree-sitter-bash v0.25.1
+10tree-sitter-language v0.1.9
+10cc v1.8.0 (*)
+9tree-sitter-powershell v0.26.4
+10tree-sitter-language v0.1.9
+10cc v1.8.0 (*)
+9url v2.5.8 (*)
+9which v8.0.6
+10libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+8codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+8serde v1.0.228 (*)
+8serde_json v1.0.150 (*)
+7codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system) (*)
+7codex-guardian-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/guardian-context)
+8codex-context-fragments v0.0.0 (/home/t4ce/Repos/codex/codex-rs/context-fragments) (*)
+8codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+8codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+8serde v1.0.228 (*)
+8serde_json v1.0.150 (*)
+7codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+7codex-mcp v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-mcp)
+8anyhow v1.0.104
+8arc-swap v1.9.2 (*)
+8async-channel v2.5.0 (*)
+8codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+8codex-async-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/async-utils) (*)
+8codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+8codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors)
+9anyhow v1.0.104
+9arc-swap v1.9.2 (*)
+9codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+9codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login)
+10anyhow v1.0.104
+10base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+10chrono v0.4.45 (*)
+10codex-agent-identity v0.0.0 (/home/t4ce/Repos/codex/codex-rs/agent-identity)
+11anyhow v1.0.104
+11base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+11chrono v0.4.45 (*)
+11codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+11codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+11crypto_box v0.9.1
+12aead v0.5.2 (*)
+12blake2 v0.10.6
+13digest v0.10.7 (*)
+12crypto_secretbox v0.1.1
+13aead v0.5.2 (*)
+13cipher v0.4.4 (*)
+13generic-array v0.14.7 (*)
+13poly1305 v0.8.0 (*)
+13salsa20 v0.10.2
+14cipher v0.4.4 (*)
+13subtle v2.6.1
+13zeroize v1.9.1 (*)
+12curve25519-dalek v4.1.3 (*)
+12salsa20 v0.10.2 (*)
+12subtle v2.6.1
+12zeroize v1.9.1 (*)
+11ed25519-dalek v2.2.0 (*)
+11http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+11jsonwebtoken v9.3.1
+12base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+12pem v3.0.6
+13base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+12ring v0.17.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/ring-0.17.14) (*)
+12serde v1.0.228 (*)
+12serde_json v1.0.150 (*)
+12simple_asn1 v0.6.4
+13num-bigint v0.4.8 (*)
+13num-traits v0.2.19 (*)
+13thiserror v2.0.21 (*)
+13time v0.3.55 (*)
+11rand v0.9.5 (*)
+11serde v1.0.228 (*)
+11serde_json v1.0.150 (*)
+11sha2 v0.10.9 (*)
+10codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+10codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+10codex-keyring-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/keyring-store)
+11keyring v3.6.3
+12log v0.4.34
+11tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+10codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+10codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel)
+11bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+11chrono v0.4.45 (*)
+11codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+11codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+11codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+11codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+11codex-utils-stream-parser v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/stream-parser)
+11codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+11eventsource-stream v0.2.3 (*)
+11gethostname v1.1.0 (*)
+11http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+11opentelemetry v0.31.0 (*)
+11opentelemetry-appender-tracing v0.31.1
+12opentelemetry v0.31.0 (*)
+12tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+12tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36) (*)
+12tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+11opentelemetry-semantic-conventions v0.31.0
+11opentelemetry_sdk v0.31.0
+12futures-channel v0.3.34 (*)
+12futures-executor v0.3.34 (*)
+12futures-util v0.3.34 (*)
+12opentelemetry v0.31.0 (*)
+12percent-encoding v2.3.2
+12rand v0.9.5 (*)
+12thiserror v2.0.21 (*)
+12tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+12tokio-stream v0.1.19 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos) (*)
+11os_info v3.15.0
+12log v0.4.34
+12serde v1.0.228 (*)
+11reqwest v0.13.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3) (*)
+11serde v1.0.228 (*)
+11serde_json v1.0.150 (*)
+11strum_macros v0.28.0 (proc-macro) (*)
+11thiserror v2.0.21 (*)
+11tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+11tokio-tungstenite v0.28.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tokio-tungstenite-0.28.0-openai) (*)
+11tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+11tracing-opentelemetry v0.32.1 (*)
+11tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+10codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+10codex-secrets v0.0.0 (/home/t4ce/Repos/codex/codex-rs/secrets)
+11age v0.12.1
+12age-core v0.12.0
+13base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+13bech32 v0.11.1
+13chacha20poly1305 v0.10.1 (*)
+13cookie-factory v0.3.3
+14futures v0.3.34 (*)
+13hkdf v0.12.4 (*)
+13hpke v0.12.0
+14aead v0.5.2 (*)
+14aes-gcm v0.10.3 (*)
+14chacha20poly1305 v0.10.1 (*)
+14digest v0.10.7 (*)
+14generic-array v0.14.7 (*)
+14hkdf v0.12.4 (*)
+14hmac v0.12.1 (*)
+14p256 v0.13.2 (*)
+14rand_core v0.6.4 (*)
+14sha2 v0.10.9 (*)
+14subtle v2.6.1
+14zeroize v1.9.1 (*)
+13io_tee v0.1.1
+13nom v8.0.0 (*)
+13rand v0.8.8 (*)
+13secrecy v0.10.3
+14zeroize v1.9.1 (*)
+13sha2 v0.10.9 (*)
+12base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+12bech32 v0.11.1
+12chacha20poly1305 v0.10.1 (*)
+12cipher v0.4.4 (*)
+12cookie-factory v0.3.3 (*)
+12hkdf v0.12.4 (*)
+12hmac v0.12.1 (*)
+12hpke v0.12.0 (*)
+12i18n-embed v0.16.0
+13arc-swap v1.9.2 (*)
+13fluent v0.17.0
+14fluent-bundle v0.16.0
+15fluent-langneg v0.13.1
+16unic-langid v0.9.6
+17unic-langid-impl v0.9.6
+18tinystr v0.8.4 (*)
+15fluent-syntax v0.12.0
+16memchr v2.8.3
+16thiserror v2.0.21 (*)
+15intl-memoizer v0.5.3
+16type-map v0.5.1
+17rustc-hash v2.1.3
+16unic-langid v0.9.6 (*)
+15intl_pluralrules v7.0.2
+16unic-langid v0.9.6 (*)
+15rustc-hash v2.1.3
+15self_cell v1.3.0
+15smallvec v1.16.3 (*)
+15unic-langid v0.9.6 (*)
+14unic-langid v0.9.6 (*)
+13fluent-langneg v0.13.1 (*)
+13fluent-syntax v0.12.0 (*)
+13i18n-embed-impl v0.8.4 (proc-macro)
+14find-crate v0.6.3
+15toml v0.5.11
+16serde v1.0.228 (*)
+14i18n-config v0.4.8
+15basic-toml v0.1.10
+16serde v1.0.228 (*)
+15log v0.4.34
+15serde v1.0.228 (*)
+15serde_derive v1.0.228 (proc-macro) (*)
+15thiserror v1.0.69
+16thiserror-impl v1.0.69 (proc-macro)
+17proc-macro2 v1.0.107 (*)
+17quote v1.0.47 (*)
+17syn v2.0.119 (*)
+15unic-langid v0.9.6
+16unic-langid-impl v0.9.6
+17serde v1.0.228 (*)
+17tinystr v0.8.4 (*)
+14proc-macro2 v1.0.107 (*)
+14quote v1.0.47 (*)
+14syn v2.0.119 (*)
+13intl-memoizer v0.5.3 (*)
+13log v0.4.34
+13parking_lot v0.12.5 (*)
+13rust-embed v8.13.0
+14rust-embed-impl v8.13.0 (proc-macro)
+15mime_guess v2.0.5
+16mime v0.3.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17)
+16unicase v2.10.0
+16unicase v2.10.0
+15proc-macro2 v1.0.107 (*)
+15quote v1.0.47 (*)
+15rust-embed-utils v8.13.0
+16sha2 v0.11.1
+17cfg-if v1.0.5
+17cpufeatures v0.3.1
+17digest v0.11.3
+18block-buffer v0.12.1
+19hybrid-array v0.4.15
+20typenum v1.20.1
+18const-oid v0.10.2
+18crypto-common v0.2.2
+19hybrid-array v0.4.15 (*)
+16walkdir v2.5.0
+17same-file v1.0.6
+15syn v2.0.119 (*)
+15walkdir v2.5.0 (*)
+14rust-embed-utils v8.13.0
+15sha2 v0.11.1
+16cfg-if v1.0.5
+16cpufeatures v0.3.1
+16digest v0.11.3
+17block-buffer v0.12.1
+18hybrid-array v0.4.15
+19typenum v1.20.1
+17const-oid v0.10.2
+17crypto-common v0.2.2
+18hybrid-array v0.4.15 (*)
+15walkdir v2.5.0 (*)
+14walkdir v2.5.0 (*)
+13thiserror v1.0.69
+14thiserror-impl v1.0.69 (proc-macro) (*)
+13unic-langid v0.9.6 (*)
+12i18n-embed-fl v0.10.1 (proc-macro)
+13find-crate v0.6.3 (*)
+13fluent v0.17.0
+14fluent-bundle v0.16.0
+15fluent-langneg v0.13.1
+16unic-langid v0.9.6 (*)
+15fluent-syntax v0.12.0
+16memchr v2.8.3
+16thiserror v2.0.21 (*)
+15intl-memoizer v0.5.3
+16type-map v0.5.1
+17rustc-hash v2.1.3
+16unic-langid v0.9.6 (*)
+15intl_pluralrules v7.0.2
+16unic-langid v0.9.6 (*)
+15rustc-hash v2.1.3
+15self_cell v1.3.0
+15smallvec v1.16.3
+15unic-langid v0.9.6 (*)
+14unic-langid v0.9.6 (*)
+13fluent-syntax v0.12.0 (*)
+13i18n-config v0.4.8 (*)
+13i18n-embed v0.16.0
+14arc-swap v1.9.2
+15rustversion v1.0.23 (proc-macro)
+14fluent v0.17.0 (*)
+14fluent-langneg v0.13.1 (*)
+14fluent-syntax v0.12.0 (*)
+14i18n-embed-impl v0.8.4 (proc-macro) (*)
+14intl-memoizer v0.5.3 (*)
+14log v0.4.34
+14parking_lot v0.12.5 (*)
+14rust-embed v8.13.0
+15rust-embed-impl v8.13.0 (proc-macro) (*)
+15rust-embed-utils v8.13.0 (*)
+15walkdir v2.5.0 (*)
+14thiserror v1.0.69 (*)
+14unic-langid v0.9.6 (*)
+14walkdir v2.5.0 (*)
+13proc-macro-error3 v3.1.1
+14proc-macro-error-attr3 v3.1.1 (proc-macro)
+15proc-macro2 v1.0.107 (*)
+15quote v1.0.47 (*)
+14proc-macro2 v1.0.107 (*)
+14quote v1.0.47 (*)
+14syn v3.0.9 (*)
+13proc-macro2 v1.0.107 (*)
+13quote v1.0.47 (*)
+13strsim v0.11.1
+13syn v2.0.119 (*)
+13unic-langid v0.9.6 (*)
+12lazy_static v1.5.1 (*)
+12ml-kem v0.2.3
+13hybrid-array v0.2.3
+14typenum v1.20.1
+13kem v0.3.0-pre.0
+14rand_core v0.6.4 (*)
+14zeroize v1.9.1 (*)
+13rand_core v0.6.4 (*)
+13sha3 v0.10.9
+14digest v0.10.7 (*)
+14keccak v0.1.6
+13zeroize v1.9.1 (*)
+12nom v8.0.0 (*)
+12p256 v0.13.2 (*)
+12pin-project v1.1.13 (*)
+12rand v0.8.8 (*)
+12rust-embed v8.13.0 (*)
+12scrypt v0.11.0
+13pbkdf2 v0.12.2
+14digest v0.10.7 (*)
+14hmac v0.12.1 (*)
+13salsa20 v0.10.2 (*)
+13sha2 v0.10.9 (*)
+12sha2 v0.10.9 (*)
+12sha3 v0.10.9 (*)
+12subtle v2.6.1
+12x25519-dalek v2.0.1 (*)
+12zeroize v1.9.1 (*)
+11anyhow v1.0.104
+11base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+11codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+11codex-keyring-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/keyring-store) (*)
+11rand v0.9.5 (*)
+11regex v1.13.1 (*)
+11schemars v0.8.22 (*)
+11serde v1.0.228 (*)
+11serde_json v1.0.150 (*)
+11sha2 v0.10.9 (*)
+11tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+10codex-terminal-detection v0.0.0 (/home/t4ce/Repos/codex/codex-rs/terminal-detection)
+11tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+10codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+10codex-utils-template v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/template)
+10codex-workload-identity v0.0.0 (/home/t4ce/Repos/codex/codex-rs/workload-identity)
+11codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+11serde v1.0.228 (*)
+11serde_json v1.0.150 (*)
+11thiserror v2.0.21 (*)
+11tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+11url v2.5.8 (*)
+10http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+10once_cell v1.21.4
+10os_info v3.15.0 (*)
+10rand v0.9.5 (*)
+10serde v1.0.228 (*)
+10serde_json v1.0.150 (*)
+10sha2 v0.10.9 (*)
+10thiserror v2.0.21 (*)
+10tiny_http v0.12.0
+11ascii v1.1.0
+11chunked_transfer v1.5.0
+11httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+11log v0.4.34
+10tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+10tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+10url v2.5.8 (*)
+10urlencoding v2.1.3
+10webbrowser v1.2.4
+11log v0.4.34
+11url v2.5.8 (*)
+9codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+9codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin)
+10codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+10codex-core-plugin-common v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugin-common)
+11codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+11semver v1.0.28 (*)
+11serde v1.0.228 (*)
+11serde_json v1.0.150 (*)
+11thiserror v2.0.21 (*)
+10codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+10codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+10codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+10codex-utils-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/plugins)
+11codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server)
+12arc-swap v1.9.2 (*)
+12axum v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-0.8.9) (*)
+12base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+12bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+12clatter v2.3.0
+13aes-gcm v0.10.3 (*)
+13arrayvec v0.7.8 (*)
+13displaydoc v0.2.7 (proc-macro) (*)
+13getrandom v0.3.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.3.4) (*)
+13ml-kem v0.2.3 (*)
+13rand_core v0.6.4 (*)
+13sha2 v0.10.9 (*)
+13thiserror-no-std v2.0.2
+14thiserror-impl-no-std v2.0.2 (proc-macro)
+15proc-macro2 v1.0.107 (*)
+15quote v1.0.47 (*)
+15syn v1.0.109 (*)
+13x25519-dalek v2.0.1 (*)
+13zeroize v1.9.1 (*)
+12codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+12codex-build-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/build-info)
+13codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context) (*)
+13semver v1.0.28 (*)
+13serde v1.0.228 (*)
+13sha2 v0.10.9 (*)
+12codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+12codex-core-plugin-common v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugin-common) (*)
+12codex-exec-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server-protocol) (*)
+12codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system) (*)
+12codex-file-watcher v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-watcher)
+13notify v8.2.0
+14libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+14log v0.4.34
+14notify-types v2.1.0
+15bitflags v2.13.2
+14walkdir v2.5.0 (*)
+13tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+13tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+12codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+12codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+12codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+12codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+12codex-sandboxing v0.0.0 (/home/t4ce/Repos/codex/codex-rs/sandboxing)
+13anyhow v1.0.104
+13codex-mxc-sandbox v0.0.0 (/home/t4ce/Repos/codex/codex-rs/mxc-sandbox)
+14anyhow v1.0.104
+14codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+14codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+14codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+14codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+14codex-windows-sandbox v0.0.0 (/home/t4ce/Repos/codex/codex-rs/windows-sandbox-rs)
+15anyhow v1.0.104
+15base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+15chrono v0.4.45 (*)
+15codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+15codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+15codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+15codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+15codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+15codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+15codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+15dirs-next v2.0.0
+16cfg-if v1.0.5
+16dirs-sys-next v0.1.2
+17libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+15dunce v1.0.5
+15glob v0.3.4
+15rand v0.8.8 (*)
+15serde v1.0.228 (*)
+15serde_json v1.0.150 (*)
+15tempfile v3.27.0 (*)
+15tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+15tracing-appender v0.2.5 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-appender-0.2.5)
+16crossbeam-channel v0.5.17
+17crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+16symlink v0.1.0
+16thiserror v2.0.21 (*)
+16time v0.3.55 (*)
+16tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36) (*)
+16tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+15windows v0.58.0
+16windows-core v0.58.0
+17windows-implement v0.58.0 (proc-macro)
+18proc-macro2 v1.0.107 (*)
+18quote v1.0.47 (*)
+18syn v2.0.119 (*)
+17windows-interface v0.58.0 (proc-macro)
+18proc-macro2 v1.0.107 (*)
+18quote v1.0.47 (*)
+18syn v2.0.119 (*)
+17windows-result v0.2.0
+18windows-targets v0.52.6
+17windows-strings v0.1.0
+18windows-result v0.2.0 (*)
+18windows-targets v0.52.6
+17windows-targets v0.52.6
+16windows-targets v0.52.6
+14serde v1.0.228 (*)
+14serde_json v1.0.150 (*)
+14thiserror v2.0.21 (*)
+14wxc_common v0.8.0 (https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f)
+15base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+15cidr v0.3.2
+15getrandom v0.2.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.2.17) (*)
+15libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+15mxc_config_contract v0.8.0 (https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f)
+16serde v1.0.228 (*)
+16serde_json v1.0.150 (*)
+16thiserror v2.0.21 (*)
+15mxc_telemetry v0.8.0 (https://github.com/microsoft/mxc?rev=6cd3d58f05d3447e67109cfb75e042803b843ca4#6cd3d58f)
+16uuid v1.28.0
+17getrandom v0.4.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.4.2)
+18cfg-if v1.0.5
+18libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+15semver v1.0.28 (*)
+15serde v1.0.228 (*)
+15serde_json v1.0.150 (*)
+15serde_path_to_error v0.1.20 (*)
+15thiserror v2.0.21 (*)
+15unicode-general-category v1.1.0
+15url v2.5.8 (*)
+13codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+13codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+13codex-uds v0.0.0 (/home/t4ce/Repos/codex/codex-rs/uds)
+14libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+14tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+13codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+13codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+13codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+13codex-windows-sandbox v0.0.0 (/home/t4ce/Repos/codex/codex-rs/windows-sandbox-rs) (*)
+13dunce v1.0.5
+13libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+13regex-lite v0.1.9
+13serde_json v1.0.150 (*)
+13tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+13tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+13url v2.5.8 (*)
+13which v8.0.6 (*)
+12codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+12codex-skills v0.0.0 (/home/t4ce/Repos/codex/codex-rs/skills)
+13codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+13codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+13codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+13codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+13include_dir v0.7.4
+14include_dir_macros v0.7.4 (proc-macro)
+15proc-macro2 v1.0.107 (*)
+15quote v1.0.47 (*)
+13serde v1.0.228 (*)
+13serde_yaml v0.9.34+deprecated
+14indexmap v2.14.2 (*)
+14itoa v1.0.18
+14ryu v1.0.23
+14serde v1.0.228 (*)
+14unsafe-libyaml v0.2.11
+13shlex v1.3.0
+13thiserror v2.0.21 (*)
+13tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+12codex-uds v0.0.0 (/home/t4ce/Repos/codex/codex-rs/uds) (*)
+12codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+12codex-utils-home-dir v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/home-dir) (*)
+12codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+12codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+12codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+12codex-utils-redacted-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/redacted-string) (*)
+12codex-utils-rustls-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/rustls-provider) (*)
+12codex-websocket-auth v0.0.0 (/home/t4ce/Repos/codex/codex-rs/websocket-auth)
+13anyhow v1.0.104
+13clap v4.6.7 (*)
+13codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+13constant_time_eq v0.3.1
+13http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+13jsonwebtoken v9.3.1 (*)
+13serde v1.0.228 (*)
+13sha2 v0.10.9 (*)
+13time v0.3.55 (*)
+12codex-websocket-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/websocket-client) (*)
+12dirs v6.0.0 (*)
+12futures v0.3.34 (*)
+12http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+12libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+12opentelemetry v0.31.0 (*)
+12prost v0.14.4 (*)
+12rustix v1.1.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos) (*)
+12serde v1.0.228 (*)
+12serde_json v1.0.150 (*)
+12tempfile v3.27.0 (*)
+12thiserror v2.0.21 (*)
+12tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+12tokio-tungstenite v0.28.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tokio-tungstenite-0.28.0-openai) (*)
+12tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+12toml v0.9.12+spec-1.1.0 (*)
+12tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+12url v2.5.8 (*)
+12uuid v1.28.0 (*)
+11codex-exec-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server-protocol) (*)
+11codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+11codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+11serde v1.0.228 (*)
+11serde_json v1.0.150 (*)
+10serde_json v1.0.150 (*)
+10thiserror v2.0.21 (*)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9indexmap v2.14.2 (*)
+9serde v1.0.228 (*)
+9serde_json v1.0.150 (*)
+9sha1 v0.10.6 (*)
+9tempfile v3.27.0 (*)
+9tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+9tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+9urlencoding v2.1.3
+8codex-diagnostics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/diagnostics)
+9libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+8codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+8codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+8codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider)
+9chrono v0.4.45 (*)
+9codex-agent-identity v0.0.0 (/home/t4ce/Repos/codex/codex-rs/agent-identity) (*)
+9codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+9codex-feedback v0.0.0 (/home/t4ce/Repos/codex/codex-rs/feedback)
+10anyhow v1.0.104
+10codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+10codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+10codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout)
+11anyhow v1.0.104
+11chrono v0.4.45 (*)
+11codex-extension-items v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/items) (*)
+11codex-file-search v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-search)
+12anyhow v1.0.104
+12clap v4.6.7 (*)
+12crossbeam-channel v0.5.17 (*)
+12ignore v0.4.33
+13crossbeam-deque v0.8.8
+14crossbeam-epoch v0.9.21 (*)
+14crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)
+13globset v0.4.20 (*)
+13log v0.4.34
+13memchr v2.8.3
+13regex-automata v0.4.18 (*)
+13same-file v1.0.6
+13walkdir v2.5.0 (*)
+12nucleo v0.5.0 (https://github.com/helix-editor/nucleo.git?rev=4253de9faabb4e5c6d81d946a5e35a90f87347ee#4253de9f)
+13nucleo-matcher v0.3.1 (https://github.com/helix-editor/nucleo.git?rev=4253de9faabb4e5c6d81d946a5e35a90f87347ee#4253de9f)
+14memchr v2.8.3
+14unicode-segmentation v1.13.3
+13parking_lot v0.12.5 (*)
+13rayon v1.12.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rayon)
+14either v1.19.0 (*)
+14hashbrown v0.15.5 (*)
+14rayon-core v1.13.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rayon/rayon-core) (*)
+12serde v1.0.228 (*)
+12serde_json v1.0.150 (*)
+12tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+11codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+11codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+11codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+11codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+11codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+11codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+11codex-utils-output-truncation v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/output-truncation)
+12codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+12codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+12serde_json v1.0.150 (*)
+11codex-utils-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-utils) (*)
+11codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+11codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+11memchr v2.8.3
+11regex v1.13.1 (*)
+11serde v1.0.228 (*)
+11serde_json v1.0.150 (*)
+11tempfile v3.27.0 (*)
+11time v0.3.55 (*)
+11tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+11tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+11uuid v1.28.0 (*)
+11zstd v0.13.3 (*)
+10codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+10mime_guess v2.0.5 (*)
+10serde_json v1.0.150 (*)
+10tempfile v3.27.0 (*)
+10tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+10tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+10tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+9codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+9codex-keyring-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/keyring-store) (*)
+9codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+9codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+9codex-models-manager v0.0.0 (/home/t4ce/Repos/codex/codex-rs/models-manager)
+10chrono v0.4.45 (*)
+10codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+10codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+10codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+10codex-prompts v0.0.0 (/home/t4ce/Repos/codex/codex-rs/prompts)
+11anyhow v1.0.104
+11codex-collaboration-mode-templates v0.0.0 (/home/t4ce/Repos/codex/codex-rs/collaboration-mode-templates)
+11codex-context-fragments v0.0.0 (/home/t4ce/Repos/codex/codex-rs/context-fragments) (*)
+11codex-execpolicy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/execpolicy) (*)
+11codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+11codex-guardian-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/guardian-context) (*)
+11codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+11codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+11codex-utils-template v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/template)
+11tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+10codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+10codex-utils-output-truncation v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/output-truncation) (*)
+10serde v1.0.228 (*)
+10serde_json v1.0.150 (*)
+10tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+10tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+9codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9codex-response-debug-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/response-debug-context)
+10base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+10codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+10http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+10serde_json v1.0.150 (*)
+9codex-secrets v0.0.0 (/home/t4ce/Repos/codex/codex-rs/secrets) (*)
+9codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+9http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+9serde v1.0.228 (*)
+9serde_json v1.0.150 (*)
+9sha2 v0.10.9 (*)
+9tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+9tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+9url v2.5.8 (*)
+8codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+8codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+8codex-rmcp-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rmcp-client)
+9anyhow v1.0.104
+9axum v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-0.8.9) (*)
+9base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+9bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+9codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+9codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+9codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+9codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+9codex-keyring-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/keyring-store) (*)
+9codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+9codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9codex-secrets v0.0.0 (/home/t4ce/Repos/codex/codex-rs/secrets) (*)
+9codex-utils-home-dir v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/home-dir) (*)
+9codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+9codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+9futures v0.3.34 (*)
+9http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+9keyring v3.6.3 (*)
+9libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+9memchr v2.8.3
+9oauth2 v5.0.0
+10base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+10chrono v0.4.45 (*)
+10http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+10rand v0.8.8 (*)
+10reqwest v0.12.28
+11base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+11bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+11futures-core v0.3.34
+11http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+11http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+11http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3) (*)
+11hyper v1.10.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0) (*)
+11hyper-rustls v0.27.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-rustls-0.27.9) (*)
+11hyper-util v0.1.20 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos) (*)
+11log v0.4.34
+11percent-encoding v2.3.2
+11pin-project-lite v0.2.17
+11rustls v0.23.45 (*)
+11rustls-pki-types v1.15.1 (*)
+11serde v1.0.228 (*)
+11serde_urlencoded v0.7.1 (*)
+11sync_wrapper v1.0.2 (*)
+11tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+11tokio-rustls v0.26.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4) (*)
+11tower v0.5.3 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos) (*)
+11tower-http v0.6.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-http-0.6.9) (*)
+11tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+11url v2.5.8 (*)
+11webpki-roots v1.0.9 (*)
+10serde v1.0.228 (*)
+10serde_json v1.0.150 (*)
+10serde_path_to_error v0.1.20 (*)
+10sha2 v0.10.9 (*)
+10thiserror v1.0.69 (*)
+10url v2.5.8 (*)
+9rmcp v3.5.1 (https://github.com/modelcontextprotocol/rust-sdk?rev=4048ac40e958fb1a7d614617a2ae8d26666ee2fa#4048ac40)
+10async-trait v0.1.92 (proc-macro) (*)
+10base64 v0.23.1
+10bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+10chrono v0.4.45 (*)
+10futures v0.3.34 (*)
+10http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+10http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+10http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3) (*)
+10indexmap v2.14.2 (*)
+10oauth2 v5.0.0 (*)
+10pastey v0.2.3 (proc-macro)
+10pin-project-lite v0.2.17
+10rand v0.10.3 (*)
+10reqwest v0.13.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3) (*)
+10rmcp-macros v3.5.1 (proc-macro) (https://github.com/modelcontextprotocol/rust-sdk?rev=4048ac40e958fb1a7d614617a2ae8d26666ee2fa#4048ac40)
+11darling v0.24.1
+12darling_core v0.24.1
+13ident_case v1.0.1
+13proc-macro2 v1.0.107 (*)
+13quote v1.0.47 (*)
+13strsim v0.11.1
+13syn v3.0.9 (*)
+12darling_macro v0.24.1 (proc-macro)
+13darling_core v0.24.1 (*)
+13quote v1.0.47 (*)
+13syn v3.0.9 (*)
+11proc-macro2 v1.0.107 (*)
+11quote v1.0.47 (*)
+11serde_json v1.0.150 (*)
+11syn v3.0.9 (*)
+10schemars v1.2.3
+11chrono v0.4.45 (*)
+11dyn-clone v1.0.20
+11ref-cast v1.0.27 (*)
+11schemars_derive v1.2.3 (proc-macro)
+12proc-macro2 v1.0.107 (*)
+12quote v1.0.47 (*)
+12serde_derive_internals v0.30.0
+13proc-macro2 v1.0.107 (*)
+13quote v1.0.47 (*)
+13syn v3.0.9 (*)
+12syn v3.0.9 (*)
+11serde v1.0.228 (*)
+11serde_json v1.0.150 (*)
+10serde v1.0.228 (*)
+10serde_json v1.0.150 (*)
+10sse-stream v0.2.6
+11bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+11futures-util v0.3.34 (*)
+11http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1) (*)
+11http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3) (*)
+11pin-project-lite v0.2.17
+10thiserror v2.0.21 (*)
+10tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+10tokio-stream v0.1.19 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos) (*)
+10tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+10tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)
+10tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+10url v2.5.8 (*)
+10uuid v1.28.0 (*)
+9serde v1.0.228 (*)
+9serde_json v1.0.150 (*)
+9sha2 v0.10.9 (*)
+9sse-stream v0.2.6 (*)
+9tempfile v3.27.0 (*)
+9thiserror v2.0.21 (*)
+9tiny_http v0.12.0 (*)
+9tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+9tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+9tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+9trueos v0.1.0 (/home/t4ce/Repos/TRUEOS-Blueprints/api) (*)
+9url v2.5.8 (*)
+9urlencoding v2.1.3
+9webbrowser v1.2.4 (*)
+9which v8.0.6 (*)
+8codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+8codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+8codex-utils-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/plugins) (*)
+8codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+8futures v0.3.34 (*)
+8lru v0.18.5 (*)
+8regex-lite v0.1.9
+8rmcp v3.5.1 (https://github.com/modelcontextprotocol/rust-sdk?rev=4048ac40e958fb1a7d614617a2ae8d26666ee2fa#4048ac40) (*)
+8serde v1.0.228 (*)
+8serde_json v1.0.150 (*)
+8sha1 v0.10.6 (*)
+8thiserror v2.0.21 (*)
+8tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+8tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+8tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+8url v2.5.8 (*)
+7codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+7codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools)
+8bitflags v2.13.2
+8codex-code-mode v0.0.0 (/home/t4ce/Repos/codex/codex-rs/code-mode)
+9codex-code-mode-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/code-mode-protocol)
+10codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+10prost v0.14.4 (*)
+10serde v1.0.228 (*)
+10serde_json v1.0.150 (*)
+10tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+10tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+10tonic v0.14.6 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tonic-trueos) (*)
+10tonic-prost v0.14.6 (*)
+10glob v0.3.4
+10protoc-bin-vendored v3.3.0
+11protoc-bin-vendored-linux-aarch_64 v3.3.0
+11protoc-bin-vendored-linux-ppcle_64 v3.3.0
+11protoc-bin-vendored-linux-s390_64 v3.3.0
+11protoc-bin-vendored-linux-x86_32 v3.3.0
+11protoc-bin-vendored-linux-x86_64 v3.3.0
+11protoc-bin-vendored-macos-aarch_64 v3.3.0
+11protoc-bin-vendored-macos-x86_64 v3.3.0
+11protoc-bin-vendored-win32 v3.3.0
+10tonic-prost-build v0.14.3
+11prettyplease v0.2.37
+12proc-macro2 v1.0.107 (*)
+12syn v2.0.119 (*)
+11proc-macro2 v1.0.107 (*)
+11prost-build v0.14.4
+12heck v0.5.0
+12itertools v0.14.0 (*)
+12log v0.4.34
+12multimap v0.10.1
+12petgraph v0.8.3
+13fixedbitset v0.5.7
+13hashbrown v0.15.5
+14foldhash v0.1.5
+13indexmap v2.14.2 (*)
+12prettyplease v0.2.37 (*)
+12prost v0.14.4
+13bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+13prost-derive v0.14.4 (proc-macro) (*)
+12prost-types v0.14.4
+13prost v0.14.4 (*)
+12regex v1.13.1 (*)
+12syn v2.0.119 (*)
+12tempfile v3.27.0
+13fastrand v2.5.0
+13getrandom v0.4.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.4.2) (*)
+13once_cell v1.21.4
+13rustix v1.1.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos)
+14bitflags v2.13.2
+14linux-raw-sys v0.12.1
+11prost-types v0.14.4 (*)
+11quote v1.0.47 (*)
+11syn v2.0.119 (*)
+11tempfile v3.27.0 (*)
+11tonic-build v0.14.6
+12prettyplease v0.2.37 (*)
+12proc-macro2 v1.0.107 (*)
+12quote v1.0.47 (*)
+12syn v2.0.119 (*)
+9codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+9codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context) (*)
+9codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+9codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+9futures v0.3.34 (*)
+9http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3) (*)
+9prost v0.14.4 (*)
+9rand v0.9.5 (*)
+9reqwest v0.13.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3) (*)
+9serde_json v1.0.150 (*)
+9tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+9tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+9tonic v0.14.6 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tonic-trueos) (*)
+9tower v0.5.3 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos) (*)
+9tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+9uuid v1.28.0 (*)
+8codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors) (*)
+8codex-extension-items v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/items) (*)
+8codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+8codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system) (*)
+8codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+8codex-utils-output-truncation v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/output-truncation) (*)
+8codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+8codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+8jsonptr v0.7.1
+8rmcp v3.5.1 (https://github.com/modelcontextprotocol/rust-sdk?rev=4048ac40e958fb1a7d614617a2ae8d26666ee2fa#4048ac40) (*)
+8serde v1.0.228 (*)
+8serde_json v1.0.150 (*)
+8thiserror v2.0.21 (*)
+8urlencoding v2.1.3
+7codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+7codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+7futures v0.3.34 (*)
+7serde_json v1.0.150 (*)
+6codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+6codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+6codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+6futures v0.3.34 (*)
+6serde v1.0.228 (*)
+6serde_json v1.0.150 (*)
+6sqlx v0.9.0 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+6uuid v1.28.0 (*)
+5codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+5codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5eventsource-stream v0.2.3 (*)
+5futures v0.3.34 (*)
+5http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5url v2.5.8 (*)
+4codex-agent-message-board-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/agent-message-board) (*)
+4codex-agent-roles v0.0.0 (/home/t4ce/Repos/codex/codex-rs/agent-roles)
+5codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+5codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system) (*)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+5codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+5serde v1.0.228 (*)
+5toml v0.9.12+spec-1.1.0 (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4codex-analytics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/analytics)
+5codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol)
+6anyhow v1.0.104
+6codex-app-server-protocol-noop-macros v0.0.0 (proc-macro) (/home/t4ce/Repos/codex/codex-rs/app-server-protocol-noop-macros)
+6codex-experimental-api-macros v0.0.0 (proc-macro) (/home/t4ce/Repos/codex/codex-rs/codex-experimental-api-macros)
+7proc-macro2 v1.0.107 (*)
+7quote v1.0.47 (*)
+7syn v2.0.119 (*)
+6codex-extension-items v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/items) (*)
+6codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+6codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+6codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+6codex-secrets v0.0.0 (/home/t4ce/Repos/codex/codex-rs/secrets) (*)
+6codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+6codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+6codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+6codex-utils-redacted-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/redacted-string) (*)
+6inventory v0.3.25
+6rmcp v3.5.1 (https://github.com/modelcontextprotocol/rust-sdk?rev=4048ac40e958fb1a7d614617a2ae8d26666ee2fa#4048ac40) (*)
+6serde v1.0.228 (*)
+6serde_json v1.0.150 (*)
+6serde_with v3.22.0 (*)
+6strum_macros v0.28.0 (proc-macro) (*)
+6thiserror v2.0.21 (*)
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+6uuid v1.28.0 (*)
+6zstd v0.13.3 (*)
+5codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+5codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+5codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+5codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+5codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+5codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+5os_info v3.15.0 (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5sha1 v0.10.6 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+4codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+4codex-apply-patch v0.0.0 (/home/t4ce/Repos/codex/codex-rs/apply-patch)
+5anyhow v1.0.104
+5codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+5codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+5similar v2.7.0
+5thiserror v2.0.21 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tree-sitter v0.25.10 (*)
+5tree-sitter-bash v0.25.1 (*)
+4codex-async-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/async-utils) (*)
+4codex-attachment-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/attachment-store)
+5serde v1.0.228 (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4codex-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-client) (*)
+4codex-code-mode v0.0.0 (/home/t4ce/Repos/codex/codex-rs/code-mode) (*)
+4codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+4codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors) (*)
+4codex-context-fragments v0.0.0 (/home/t4ce/Repos/codex/codex-rs/context-fragments) (*)
+4codex-core-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugins)
+5anyhow v1.0.104
+5chrono v0.4.45 (*)
+5codex-analytics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/analytics) (*)
+5codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+5codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+5codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors) (*)
+5codex-core-plugin-common v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugin-common) (*)
+5codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+5codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+5codex-hooks v0.0.0 (/home/t4ce/Repos/codex/codex-rs/hooks)
+6anyhow v1.0.104
+6async-channel v2.5.0 (*)
+6chrono v0.4.45 (*)
+6codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+6codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+6codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+6codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+6codex-utils-output-truncation v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/output-truncation) (*)
+6codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+6codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+6codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+6futures v0.3.34 (*)
+6regex v1.13.1 (*)
+6schemars v0.8.22 (*)
+6serde v1.0.228 (*)
+6serde_json v1.0.150 (*)
+6tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+6uuid v1.28.0 (*)
+5codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+5codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+5codex-mcp v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-mcp) (*)
+5codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+5codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+5codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+5codex-skills v0.0.0 (/home/t4ce/Repos/codex/codex-rs/skills) (*)
+5codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+5codex-utils-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-utils) (*)
+5codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+5codex-utils-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/plugins) (*)
+5codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+5dirs v6.0.0 (*)
+5flate2 v1.1.10 (*)
+5futures v0.3.34 (*)
+5http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+5regex v1.13.1 (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5serde_with v3.22.0 (*)
+5serde_yaml v0.9.34+deprecated (*)
+5sha2 v0.10.9 (*)
+5tar v0.4.45
+6filetime v0.2.29
+7cfg-if v1.0.5
+7libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+6libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+5tempfile v3.27.0 (*)
+5thiserror v2.0.21 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5toml v0.9.12+spec-1.1.0 (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5url v2.5.8 (*)
+5uuid v1.28.0 (*)
+5zip v2.4.2
+6aes v0.8.4 (*)
+6bzip2 v0.5.2
+7bzip2-sys v0.1.13+1.0.8
+8cc v1.8.0 (*)
+8pkg-config v0.3.34
+6constant_time_eq v0.3.1
+6crc32fast v1.5.2 (*)
+6deflate64 v0.1.12
+6displaydoc v0.2.7 (proc-macro) (*)
+6flate2 v1.1.10 (*)
+6getrandom v0.3.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.3.4) (*)
+6hmac v0.12.1 (*)
+6indexmap v2.14.2 (*)
+6lzma-rs v0.3.0
+7byteorder v1.5.0
+7crc v3.4.0 (*)
+6memchr v2.8.3
+6pbkdf2 v0.12.2 (*)
+6sha1 v0.10.6 (*)
+6thiserror v2.0.21 (*)
+6time v0.3.55 (*)
+6xz2 v0.1.7
+7lzma-sys v0.1.20
+8libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+8cc v1.8.0 (*)
+8pkg-config v0.3.34
+6zeroize v1.9.1 (*)
+6zopfli v0.8.4
+7bumpalo v3.20.3
+7crc32fast v1.5.2 (*)
+7log v0.4.34
+7simd-adler32 v0.3.10
+6zstd v0.13.3 (*)
+4codex-diagnostics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/diagnostics) (*)
+4codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+4codex-execpolicy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/execpolicy) (*)
+4codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+4codex-extension-items v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/items) (*)
+4codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+4codex-feedback v0.0.0 (/home/t4ce/Repos/codex/codex-rs/feedback) (*)
+4codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system) (*)
+4codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+4codex-guardian-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/guardian-context) (*)
+4codex-guardian-reviewer v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/guardian-reviewer)
+5anyhow v1.0.104
+5codex-analytics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/analytics) (*)
+5codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+5codex-feedback v0.0.0 (/home/t4ce/Repos/codex/codex-rs/feedback) (*)
+5codex-guardian-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/guardian-context) (*)
+5codex-mcp v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-mcp) (*)
+5codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+5codex-prompts v0.0.0 (/home/t4ce/Repos/codex/codex-rs/prompts) (*)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5rand v0.9.5 (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+4codex-hooks v0.0.0 (/home/t4ce/Repos/codex/codex-rs/hooks) (*)
+4codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+4codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context) (*)
+4codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+4codex-mcp v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-mcp) (*)
+4codex-memories-read v0.0.0 (/home/t4ce/Repos/codex/codex-rs/memories/read)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+4codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+4codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+4codex-models-manager v0.0.0 (/home/t4ce/Repos/codex/codex-rs/models-manager) (*)
+4codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+4codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+4codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+4codex-prompts v0.0.0 (/home/t4ce/Repos/codex/codex-rs/prompts) (*)
+4codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+4codex-response-debug-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/response-debug-context) (*)
+4codex-rmcp-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rmcp-client) (*)
+4codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+4codex-rollout-trace v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout-trace)
+5anyhow v1.0.104
+5codex-code-mode v0.0.0 (/home/t4ce/Repos/codex/codex-rs/code-mode) (*)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5uuid v1.28.0 (*)
+4codex-sandboxing v0.0.0 (/home/t4ce/Repos/codex/codex-rs/sandboxing) (*)
+4codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+4codex-skills v0.0.0 (/home/t4ce/Repos/codex/codex-rs/skills) (*)
+4codex-skills-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/skills)
+5blake3 v1.8.2 (*)
+5codex-analytics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/analytics) (*)
+5codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+5codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+5codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+5codex-mcp v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-mcp) (*)
+5codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5codex-skills v0.0.0 (/home/t4ce/Repos/codex/codex-rs/skills) (*)
+5codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+5codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+5codex-utils-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/plugins) (*)
+5codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+5dirs v6.0.0 (*)
+5futures v0.3.34 (*)
+5schemars v0.8.22 (*)
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5serde_yaml v0.9.34+deprecated (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5toml v0.9.12+spec-1.1.0 (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+4codex-terminal-detection v0.0.0 (/home/t4ce/Repos/codex/codex-rs/terminal-detection) (*)
+4codex-thread-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/thread-store)
+5chrono v0.4.45 (*)
+5codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+5codex-extension-items v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/items) (*)
+5codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+5codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context) (*)
+5codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+5codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+5codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+5codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+5codex-utils-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-utils) (*)
+5codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+5futures v0.3.34 (*)
+5pulldown-cmark v0.10.3
+6bitflags v2.13.2
+6memchr v2.8.3
+6pulldown-cmark-escape v0.10.1
+6unicase v2.10.0
+5serde v1.0.228 (*)
+5serde_json v1.0.150 (*)
+5sqlx v0.9.0 (*)
+5sqlx-macros v0.9.0 (proc-macro) (*)
+5thiserror v2.0.21 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5zstd v0.13.3 (*)
+4codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+4codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+4codex-utils-cache v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cache) (*)
+4codex-utils-git-discovery v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/git-discovery)
+5codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+5codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+5futures v0.3.34 (*)
+5tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4codex-utils-home-dir v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/home-dir) (*)
+4codex-utils-image v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/image) (*)
+4codex-utils-output-truncation v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/output-truncation) (*)
+4codex-utils-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-utils) (*)
+4codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+4codex-utils-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/plugins) (*)
+4codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+4codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+4codex-utils-stream-parser v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/stream-parser)
+4codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+4codex-windows-sandbox v0.0.0 (/home/t4ce/Repos/codex/codex-rs/windows-sandbox-rs) (*)
+4dirs v6.0.0 (*)
+4dunce v1.0.5
+4eventsource-stream v0.2.3 (*)
+4futures v0.3.34 (*)
+4http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+4hyper-util v0.1.20 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos) (*)
+4iana-time-zone v0.1.65
+4image v0.25.10 (*)
+4indexmap v2.14.2 (*)
+4libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+4once_cell v1.21.4
+4rand v0.9.5 (*)
+4regex-lite v0.1.9
+4rmcp v3.5.1 (https://github.com/modelcontextprotocol/rust-sdk?rev=4048ac40e958fb1a7d614617a2ae8d26666ee2fa#4048ac40) (*)
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+4sha1 v0.10.6 (*)
+4shlex v1.3.0
+4similar v2.7.0
+4tempfile v3.27.0 (*)
+4thiserror v2.0.21 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tokio-tungstenite v0.28.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tokio-tungstenite-0.28.0-openai) (*)
+4tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+4toml v0.9.12+spec-1.1.0 (*)
+4toml_edit v0.24.1+spec-1.1.0 (*)
+4tonic v0.14.6 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tonic-trueos) (*)
+4tower v0.5.3 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos) (*)
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4url v2.5.8 (*)
+4uuid v1.28.0 (*)
+4which v8.0.6 (*)
+4whoami v1.6.1
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+2codex-analytics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/analytics) (*)
+2codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+2codex-app-server-transport v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-transport)
+3axum v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-0.8.9) (*)
+3base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+3codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+3codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+3codex-uds v0.0.0 (/home/t4ce/Repos/codex/codex-rs/uds) (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3codex-utils-rustls-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/rustls-provider) (*)
+3codex-websocket-auth v0.0.0 (/home/t4ce/Repos/codex/codex-rs/websocket-auth) (*)
+3codex-websocket-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/websocket-client) (*)
+3futures v0.3.34 (*)
+3gethostname v1.1.0 (*)
+3httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+3libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+3owo-colors v4.4.0
+4supports-color v2.1.0
+5is-terminal v0.4.17
+6libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+5is_ci v1.2.0
+4supports-color v3.0.2
+5is_ci v1.2.0
+3rand v0.9.5 (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3sha2 v0.10.9 (*)
+3signal-hook v0.3.18
+4libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+4signal-hook-registry v1.4.8 (*)
+3time v0.3.55 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tokio-tungstenite v0.28.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tokio-tungstenite-0.28.0-openai) (*)
+3tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3url v2.5.8 (*)
+3uuid v1.28.0 (*)
+2codex-arg0 v0.0.0 (/home/t4ce/Repos/codex/codex-rs/arg0)
+3anyhow v1.0.104
+3codex-apply-patch v0.0.0 (/home/t4ce/Repos/codex/codex-rs/apply-patch) (*)
+3codex-async-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/async-utils) (*)
+3codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+3codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context) (*)
+3codex-linux-sandbox v0.0.0 (/home/t4ce/Repos/codex/codex-rs/linux-sandbox)
+3codex-sandboxing v0.0.0 (/home/t4ce/Repos/codex/codex-rs/sandboxing) (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3codex-utils-home-dir v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/home-dir) (*)
+3codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+3dotenvy v0.15.7
+3tempfile v3.27.0 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2codex-backend-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/backend-client)
+3anyhow v1.0.104
+3codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+3codex-backend-openapi-models v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-backend-openapi-models)
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+4serde_with v3.22.0 (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3url v2.5.8 (*)
+2codex-chatgpt v0.0.0 (/home/t4ce/Repos/codex/codex-rs/chatgpt)
+3anyhow v1.0.104
+3clap v4.6.7 (*)
+3codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+3codex-utils-cli v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cli)
+4clap v4.6.7 (*)
+4codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+4codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+4serde v1.0.228 (*)
+4toml v0.9.12+spec-1.1.0 (*)
+3serde v1.0.228 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2codex-cloud-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cloud-config)
+3base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+3chrono v0.4.45 (*)
+3codex-async-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/async-utils) (*)
+3codex-backend-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/backend-client) (*)
+3codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3hmac v0.12.1 (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3sha2 v0.10.9 (*)
+3tempfile v3.27.0 (*)
+3thiserror v2.0.21 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2codex-code-mode v0.0.0 (/home/t4ce/Repos/codex/codex-rs/code-mode) (*)
+2codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+2codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors) (*)
+2codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+2codex-core-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugins) (*)
+2codex-diagnostics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/diagnostics) (*)
+2codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+2codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+2codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+2codex-feedback v0.0.0 (/home/t4ce/Repos/codex/codex-rs/feedback) (*)
+2codex-file-search v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-search) (*)
+2codex-file-watcher v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-watcher) (*)
+2codex-git-attribution v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/git-attribution)
+3codex-backend-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/backend-client) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3serde_json v1.0.150 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+2codex-goal-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/goal)
+3codex-analytics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/analytics) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+3codex-prompts v0.0.0 (/home/t4ce/Repos/codex/codex-rs/prompts) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+3codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+3codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+3codex-utils-template v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/template)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2codex-guardian-v2 v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/guardian-v2)
+3anyhow v1.0.104
+3codex-analytics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/analytics) (*)
+3codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+3codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+3codex-context-fragments v0.0.0 (/home/t4ce/Repos/codex/codex-rs/context-fragments) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+3codex-guardian-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/guardian-context) (*)
+3codex-guardian-reviewer v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/guardian-reviewer) (*)
+3codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-prompts v0.0.0 (/home/t4ce/Repos/codex/codex-rs/prompts) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-websocket-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/websocket-client) (*)
+3dirs v6.0.0 (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3serde_json v1.0.150 (*)
+3thiserror v2.0.21 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3uuid v1.28.0 (*)
+2codex-history-notes-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/history-notes)
+3codex-analytics v0.0.0 (/home/t4ce/Repos/codex/codex-rs/analytics) (*)
+3codex-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-client) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+3codex-utils-output-truncation v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/output-truncation) (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3serde_json v1.0.150 (*)
+2codex-home v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-home)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2codex-hooks v0.0.0 (/home/t4ce/Repos/codex/codex-rs/hooks) (*)
+2codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+2codex-image-generation-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/image-generation)
+3base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+3codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-extension-items v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/items) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3codex-utils-image v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/image) (*)
+3codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3schemars v0.8.22 (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+2codex-mcp v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-mcp) (*)
+2codex-mcp-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/mcp)
+3anyhow v1.0.104
+3codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+3codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors) (*)
+3codex-connectors-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/connectors)
+4codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors) (*)
+4codex-core-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugins) (*)
+4codex-file-system v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-system) (*)
+4codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+4codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+4serde_json v1.0.150 (*)
+4thiserror v2.0.21 (*)
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-core-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugins) (*)
+3codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+3codex-mcp v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-mcp) (*)
+3codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+3serde_json v1.0.150 (*)
+3thiserror v2.0.21 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2codex-memories-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/memories)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+3codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3codex-utils-output-truncation v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/output-truncation) (*)
+3codex-utils-template v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/template)
+3schemars v0.8.22 (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3thiserror v2.0.21 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2codex-memories-write v0.0.0 (/home/t4ce/Repos/codex/codex-rs/memories/write)
+3anyhow v1.0.104
+3chrono v0.4.45 (*)
+3codex-backend-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/backend-client) (*)
+3codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+3codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+3codex-rollout-trace v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout-trace) (*)
+3codex-secrets v0.0.0 (/home/t4ce/Repos/codex/codex-rs/secrets) (*)
+3codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+3codex-terminal-detection v0.0.0 (/home/t4ce/Repos/codex/codex-rs/terminal-detection) (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3codex-utils-output-truncation v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/output-truncation) (*)
+3codex-utils-template v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/template)
+3futures v0.3.34 (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3uuid v1.28.0 (*)
+2codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+2codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+2codex-models-manager v0.0.0 (/home/t4ce/Repos/codex/codex-rs/models-manager) (*)
+2codex-network-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/network-proxy) (*)
+2codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+2codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+2codex-prompts v0.0.0 (/home/t4ce/Repos/codex/codex-rs/prompts) (*)
+2codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+2codex-queue-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/queue)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-thread-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/thread-store) (*)
+3serde_json v1.0.150 (*)
+3thiserror v2.0.21 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3uuid v1.28.0 (*)
+2codex-rmcp-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rmcp-client) (*)
+2codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+2codex-sandboxing v0.0.0 (/home/t4ce/Repos/codex/codex-rs/sandboxing) (*)
+2codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+2codex-skills v0.0.0 (/home/t4ce/Repos/codex/codex-rs/skills) (*)
+2codex-skills-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/skills) (*)
+2codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+2codex-thread-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/thread-store) (*)
+2codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+2codex-user-verification v0.0.0 (/home/t4ce/Repos/codex/codex-rs/user-verification)
+3base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+3p256 v0.13.2 (*)
+3sha2 v0.10.9 (*)
+3thiserror v2.0.21 (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+2codex-utils-cli v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cli) (*)
+2codex-utils-json-to-toml v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/json-to-toml)
+3serde_json v1.0.150 (*)
+3toml v0.9.12+spec-1.1.0 (*)
+2codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+2codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+2codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+2codex-web-search-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/web-search)
+3codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+3codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+3codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+3codex-extension-items v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/items) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+3codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-tools v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tools) (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3schemars v0.8.22 (*)
+3serde_json v1.0.150 (*)
+3url v2.5.8 (*)
+2codex-websocket-auth v0.0.0 (/home/t4ce/Repos/codex/codex-rs/websocket-auth) (*)
+2futures v0.3.34 (*)
+2libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+2serde v1.0.228 (*)
+2serde_json v1.0.150 (*)
+2sha2 v0.10.9 (*)
+2tempfile v3.27.0 (*)
+2thiserror v2.0.21 (*)
+2time v0.3.55 (*)
+2tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+2toml v0.9.12+spec-1.1.0 (*)
+2toml_edit v0.24.1+spec-1.1.0 (*)
+2tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+2url v2.5.8 (*)
+2uuid v1.28.0 (*)
+1codex-app-server-daemon v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-daemon)
+2anyhow v1.0.104
+2blake3 v1.8.2 (*)
+2codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+2codex-app-server-transport v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-transport) (*)
+2codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+2codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context) (*)
+2codex-uds v0.0.0 (/home/t4ce/Repos/codex/codex-rs/uds) (*)
+2codex-utils-home-dir v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/home-dir) (*)
+2futures v0.3.34 (*)
+2libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+2semver v1.0.28 (*)
+2serde v1.0.228 (*)
+2serde_json v1.0.150 (*)
+2tempfile v3.27.0 (*)
+2tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2tokio-tungstenite v0.28.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tokio-tungstenite-0.28.0-openai) (*)
+2tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+1codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+1codex-app-server-test-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-test-client)
+2anyhow v1.0.104
+2clap v4.6.7 (*)
+2codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+2codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+2codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+2codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+2codex-utils-cli v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cli) (*)
+2serde v1.0.228 (*)
+2serde_json v1.0.150 (*)
+2tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+2tungstenite v0.27.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tungstenite-0.27.0-openai) (*)
+2url v2.5.8 (*)
+2uuid v1.28.0 (*)
+1codex-arg0 v0.0.0 (/home/t4ce/Repos/codex/codex-rs/arg0) (*)
+1codex-build-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/build-info) (*)
+1codex-chatgpt v0.0.0 (/home/t4ce/Repos/codex/codex-rs/chatgpt) (*)
+1codex-cloud-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cloud-config) (*)
+1codex-cloud-tasks v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cloud-tasks)
+2anyhow v1.0.104
+2chrono v0.4.45 (*)
+2clap v4.6.7 (*)
+2codex-cloud-tasks-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cloud-tasks-client)
+3anyhow v1.0.104
+3chrono v0.4.45 (*)
+3codex-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-api) (*)
+3codex-backend-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/backend-client) (*)
+3codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3thiserror v2.0.21 (*)
+2codex-cloud-tasks-mock-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cloud-tasks-mock-client)
+3chrono v0.4.45 (*)
+3codex-cloud-tasks-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cloud-tasks-client) (*)
+3diffy v0.4.2
+4nu-ansi-term v0.50.3
+2codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+2codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+2codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+2codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+2codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+2codex-tui v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tui)
+3anyhow v1.0.104
+3axum v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-0.8.9) (*)
+3base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)
+3chrono v0.4.45 (*)
+3clap v4.6.7 (*)
+3codex-ansi-escape v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ansi-escape)
+4ansi-to-tui v8.0.1
+5nom v8.0.0 (*)
+5ratatui-core v0.1.2
+6bitflags v2.13.2
+6compact_str v0.9.1
+7castaway v0.2.4
+8rustversion v1.0.23 (proc-macro)
+7cfg-if v1.0.5
+7itoa v1.0.18
+7rustversion v1.0.23 (proc-macro)
+7ryu v1.0.23
+7static_assertions v1.1.0
+6critical-section v1.2.0
+6hashbrown v0.17.1 (*)
+6itertools v0.14.0 (*)
+6kasuari v0.4.12
+7hashbrown v0.16.1 (*)
+7thiserror v2.0.21 (*)
+6lru v0.18.5 (*)
+6strum v0.28.0
+7strum_macros v0.28.0 (proc-macro) (*)
+6thiserror v2.0.21 (*)
+6unicode-segmentation v1.13.3
+6unicode-truncate v2.0.1
+7itertools v0.14.0 (*)
+7unicode-segmentation v1.13.3
+7unicode-width v0.2.2
+6unicode-width v0.2.2
+5simdutf8 v0.1.5
+5smallvec v1.16.3 (*)
+5thiserror v2.0.21 (*)
+4ratatui v0.30.2
+5instability v0.3.14 (proc-macro)
+6darling v0.24.1 (*)
+6indoc v2.0.8 (proc-macro)
+7rustversion v1.0.23 (proc-macro)
+6proc-macro2 v1.0.107 (*)
+6quote v1.0.47 (*)
+6syn v3.0.9 (*)
+5ratatui-core v0.1.2 (*)
+5ratatui-crossterm v0.1.2
+6cfg-if v1.0.5
+6crossterm v0.29.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossterm-0.29.0-trueos)
+7bitflags v2.13.2
+7derive_more v2.1.1 (*)
+7document-features v0.2.12 (proc-macro) (*)
+7futures-core v0.3.34
+7mio v1.2.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mio-1.2.0) (*)
+7parking_lot v0.12.5 (*)
+7rustix v1.1.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos) (*)
+7signal-hook v0.3.18 (*)
+7signal-hook-mio v0.2.5 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/signal-hook-mio-0.2.5-trueos)
+8libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+8mio v1.2.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mio-1.2.0) (*)
+8signal-hook v0.3.18 (*)
+6instability v0.3.14 (proc-macro) (*)
+6ratatui-core v0.1.2 (*)
+5ratatui-widgets v0.3.2
+6bitflags v2.13.2
+6hashbrown v0.17.1 (*)
+6indoc v2.0.8 (proc-macro) (*)
+6instability v0.3.14 (proc-macro) (*)
+6itertools v0.14.0 (*)
+6line-clipping v0.3.8
+7bitflags v2.13.2
+6ratatui-core v0.1.2 (*)
+6strum v0.28.0 (*)
+6unicode-segmentation v1.13.3
+6unicode-width v0.2.2
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3codex-app-server-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-client)
+4codex-app-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server) (*)
+4codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+4codex-arg0 v0.0.0 (/home/t4ce/Repos/codex/codex-rs/arg0) (*)
+4codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+4codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+4codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+4codex-feedback v0.0.0 (/home/t4ce/Repos/codex/codex-rs/feedback) (*)
+4codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+4codex-uds v0.0.0 (/home/t4ce/Repos/codex/codex-rs/uds) (*)
+4codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+4codex-utils-rustls-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/rustls-provider) (*)
+4futures v0.3.34 (*)
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tokio-tungstenite v0.28.0 (/home/t4ce/Repos/codex/codex-rs/vendor/tokio-tungstenite-0.28.0-openai) (*)
+4toml v0.9.12+spec-1.1.0 (*)
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4url v2.5.8 (*)
+3codex-app-server-daemon v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-daemon) (*)
+3codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+3codex-arg0 v0.0.0 (/home/t4ce/Repos/codex/codex-rs/arg0) (*)
+3codex-backend-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/backend-client) (*)
+3codex-build-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/build-info) (*)
+3codex-cloud-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cloud-config) (*)
+3codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+3codex-connectors v0.0.0 (/home/t4ce/Repos/codex/codex-rs/connectors) (*)
+3codex-context-fragments v0.0.0 (/home/t4ce/Repos/codex/codex-rs/context-fragments) (*)
+3codex-core-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugins) (*)
+3codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+3codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+3codex-feedback v0.0.0 (/home/t4ce/Repos/codex/codex-rs/feedback) (*)
+3codex-file-search v0.0.0 (/home/t4ce/Repos/codex/codex-rs/file-search) (*)
+3codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+3codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+3codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+3codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context) (*)
+3codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+3codex-mermaid v0.0.0 (/home/t4ce/Repos/codex/codex-rs/mermaid)
+4unicode-width v0.2.2
+3codex-message-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/message-history)
+4codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+4memchr v2.8.3
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+3codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+3codex-models-manager v0.0.0 (/home/t4ce/Repos/codex/codex-rs/models-manager) (*)
+3codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+3codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+3codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-realtime-webrtc v0.0.0 (/home/t4ce/Repos/codex/codex-rs/realtime-webrtc)
+4anyhow v1.0.104
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+3codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+3codex-sandboxing v0.0.0 (/home/t4ce/Repos/codex/codex-rs/sandboxing) (*)
+3codex-shell-command v0.0.0 (/home/t4ce/Repos/codex/codex-rs/shell-command) (*)
+3codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+3codex-terminal-detection v0.0.0 (/home/t4ce/Repos/codex/codex-rs/terminal-detection) (*)
+3codex-uds v0.0.0 (/home/t4ce/Repos/codex/codex-rs/uds) (*)
+3codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+3codex-utils-approval-presets v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/approval-presets)
+4codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+3codex-utils-cli v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cli) (*)
+3codex-utils-elapsed v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/elapsed)
+3codex-utils-fuzzy-match v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/fuzzy-match)
+3codex-utils-home-dir v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/home-dir) (*)
+3codex-utils-oss v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/oss)
+4codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+4codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+3codex-utils-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-utils) (*)
+3codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+3codex-utils-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/plugins) (*)
+3codex-utils-sandbox-summary v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/sandbox-summary)
+4codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+4codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+3codex-utils-sleep-inhibitor v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/sleep-inhibitor)
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3codex-utils-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/string) (*)
+3codex-windows-sandbox v0.0.0 (/home/t4ce/Repos/codex/codex-rs/windows-sandbox-rs) (*)
+3codex-worktree v0.0.0 (/home/t4ce/Repos/codex/codex-rs/worktree)
+4anyhow v1.0.104
+4codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+4codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+4dunce v1.0.5
+4serde v1.0.228 (*)
+4serde_json v1.0.150 (*)
+4tempfile v3.27.0 (*)
+4uuid v1.28.0 (*)
+3color-eyre v0.6.5
+4backtrace v0.3.76
+5addr2line v0.25.1
+6gimli v0.32.3
+5cfg-if v1.0.5
+5libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+5miniz_oxide v0.8.9 (*)
+5object v0.37.3
+6memchr v2.8.3
+5rustc-demangle v0.1.28
+4color-spantrace v0.3.0
+5once_cell v1.21.4
+5owo-colors v4.4.0 (*)
+5tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36) (*)
+5tracing-error v0.2.1
+6tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+6tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+4eyre v0.6.14
+5indenter v0.3.4
+5once_cell v1.21.4
+5autocfg v1.5.1
+4indenter v0.3.4
+4once_cell v1.21.4
+4owo-colors v4.4.0 (*)
+4tracing-error v0.2.1 (*)
+3crossterm v0.29.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossterm-0.29.0-trueos) (*)
+3derive_more v2.1.1 (*)
+3diffy v0.4.2 (*)
+3dirs v6.0.0 (*)
+3dunce v1.0.5
+3futures v0.3.34 (*)
+3image v0.25.10 (*)
+3itertools v0.14.0 (*)
+3lazy_static v1.5.1 (*)
+3libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+3pathdiff v0.2.3
+3pulldown-cmark v0.10.3 (*)
+3rand v0.9.5 (*)
+3ratatui v0.30.2 (*)
+3ratatui-macros v0.7.2
+4ratatui-core v0.1.2 (*)
+4ratatui-widgets v0.3.2 (*)
+3regex-lite v0.1.9
+3rmcp v3.5.1 (https://github.com/modelcontextprotocol/rust-sdk?rev=4048ac40e958fb1a7d614617a2ae8d26666ee2fa#4048ac40) (*)
+3semver v1.0.28 (*)
+3serde v1.0.228 (*)
+3serde_json v1.0.150 (*)
+3sha2 v0.10.9 (*)
+3shlex v1.3.0
+3strum v0.27.2 (*)
+3strum_macros v0.28.0 (proc-macro) (*)
+3supports-color v3.0.2 (*)
+3syntect v5.3.0
+4bincode v1.3.3
+5serde v1.0.228 (*)
+4flate2 v1.1.10 (*)
+4fnv v1.0.7
+4once_cell v1.21.4
+4onig v6.5.3
+5bitflags v2.13.2
+5once_cell v1.21.4
+5onig_sys v69.9.3
+6cc v1.8.0 (*)
+6pkg-config v0.3.34
+4plist v1.10.1
+5base64 v0.23.1
+5indexmap v2.14.2 (*)
+5quick-xml v0.42.0
+6memchr v2.8.3
+5serde v1.0.228 (*)
+5time v0.3.55 (*)
+4regex-syntax v0.8.11
+4serde v1.0.228 (*)
+4serde_derive v1.0.228 (proc-macro) (*)
+4serde_json v1.0.150 (*)
+4thiserror v2.0.21 (*)
+4walkdir v2.5.0 (*)
+3tempfile v3.27.0 (*)
+3textwrap v0.16.4
+4icu_segmenter v2.3.0
+5icu_collections v2.3.0 (*)
+5icu_locale_fallback v2.3.0 (*)
+5icu_provider v2.3.1 (*)
+5icu_segmenter_data v2.3.0
+5potential_utf v0.1.6 (*)
+5smallvec v1.16.3 (*)
+5utf8_iter v1.0.4
+5zerovec v0.11.8 (*)
+4smawk v0.3.3
+4unicode-width v0.2.2
+3thiserror v2.0.21 (*)
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tokio-stream v0.1.19 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos) (*)
+3tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+3toml v0.9.12+spec-1.1.0 (*)
+3toml_edit v0.24.1+spec-1.1.0 (*)
+3tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+3tracing-appender v0.2.5 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-appender-0.2.5) (*)
+3tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+3two-face v0.5.2+bat-0.26.1
+4serde v1.0.228 (*)
+4serde_derive v1.0.228 (proc-macro) (*)
+4syntect v5.3.0 (*)
+3unicode-segmentation v1.13.3
+3unicode-width v0.2.2
+3url v2.5.8 (*)
+3urlencoding v2.1.3
+3uuid v1.28.0 (*)
+3webbrowser v1.2.4 (*)
+2codex-utils-cli v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cli) (*)
+2crossterm v0.29.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossterm-0.29.0-trueos) (*)
+2http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+2owo-colors v4.4.0 (*)
+2ratatui v0.30.2 (*)
+2serde v1.0.228 (*)
+2serde_json v1.0.150 (*)
+2supports-color v3.0.2 (*)
+2tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2tokio-stream v0.1.19 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos) (*)
+2tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+2unicode-segmentation v1.13.3
+2unicode-width v0.2.2
+1codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+1codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+1codex-core-plugins v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core-plugins) (*)
+1codex-exec v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec)
+2anyhow v1.0.104
+2clap v4.6.7 (*)
+2codex-app-server-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-client) (*)
+2codex-app-server-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/app-server-protocol) (*)
+2codex-arg0 v0.0.0 (/home/t4ce/Repos/codex/codex-rs/arg0) (*)
+2codex-cloud-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/cloud-config) (*)
+2codex-config v0.0.0 (/home/t4ce/Repos/codex/codex-rs/config) (*)
+2codex-core v0.0.0 (/home/t4ce/Repos/codex/codex-rs/core) (*)
+2codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+2codex-feedback v0.0.0 (/home/t4ce/Repos/codex/codex-rs/feedback) (*)
+2codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+2codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+2codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+2codex-model-provider-info v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider-info) (*)
+2codex-otel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/otel) (*)
+2codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+2codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+2codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+2codex-utils-cli v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cli) (*)
+2codex-utils-oss v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/oss) (*)
+2codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+2codex-utils-sandbox-summary v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/sandbox-summary) (*)
+2codex-worktree v0.0.0 (/home/t4ce/Repos/codex/codex-rs/worktree) (*)
+2owo-colors v4.4.0 (*)
+2serde v1.0.228 (*)
+2serde_json v1.0.150 (*)
+2supports-color v3.0.2 (*)
+2tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+2tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+2ts-rs v11.1.0 (*)
+2uuid v1.28.0 (*)
+1codex-exec-server v0.0.0 (/home/t4ce/Repos/codex/codex-rs/exec-server) (*)
+1codex-execpolicy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/execpolicy) (*)
+1codex-extension-api v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/extension-api) (*)
+1codex-features v0.0.0 (/home/t4ce/Repos/codex/codex-rs/features) (*)
+1codex-git-attribution v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/git-attribution) (*)
+1codex-git-utils v0.0.0 (/home/t4ce/Repos/codex/codex-rs/git-utils) (*)
+1codex-history v0.0.0 (/home/t4ce/Repos/codex/codex-rs/history) (*)
+1codex-home v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-home) (*)
+1codex-http-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/http-client) (*)
+1codex-install-context v0.0.0 (/home/t4ce/Repos/codex/codex-rs/install-context) (*)
+1codex-login v0.0.0 (/home/t4ce/Repos/codex/codex-rs/login) (*)
+1codex-mcp v0.0.0 (/home/t4ce/Repos/codex/codex-rs/codex-mcp) (*)
+1codex-memories-write v0.0.0 (/home/t4ce/Repos/codex/codex-rs/memories/write) (*)
+1codex-model-provider v0.0.0 (/home/t4ce/Repos/codex/codex-rs/model-provider) (*)
+1codex-models-manager v0.0.0 (/home/t4ce/Repos/codex/codex-rs/models-manager) (*)
+1codex-plugin v0.0.0 (/home/t4ce/Repos/codex/codex-rs/plugin) (*)
+1codex-protocol v0.0.0 (/home/t4ce/Repos/codex/codex-rs/protocol) (*)
+1codex-responses-api-proxy v0.0.0 (/home/t4ce/Repos/codex/codex-rs/responses-api-proxy)
+2anyhow v1.0.104
+2clap v4.6.7 (*)
+2codex-process-hardening v0.0.0 (/home/t4ce/Repos/codex/codex-rs/process-hardening)
+3libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+2ctor v0.6.3
+3ctor-proc-macro v0.0.7 (proc-macro)
+3dtor v0.1.1
+4dtor-proc-macro v0.0.6 (proc-macro)
+2libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+2reqwest v0.13.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3) (*)
+2serde v1.0.228 (*)
+2serde_json v1.0.150 (*)
+2tiny_http v0.12.0 (*)
+2zeroize v1.9.1 (*)
+1codex-rmcp-client v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rmcp-client) (*)
+1codex-rollout v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout) (*)
+1codex-rollout-trace v0.0.0 (/home/t4ce/Repos/codex/codex-rs/rollout-trace) (*)
+1codex-sandboxing v0.0.0 (/home/t4ce/Repos/codex/codex-rs/sandboxing) (*)
+1codex-skills-extension v0.0.0 (/home/t4ce/Repos/codex/codex-rs/ext/skills) (*)
+1codex-state v0.0.0 (/home/t4ce/Repos/codex/codex-rs/state) (*)
+1codex-stdio-to-uds v0.0.0 (/home/t4ce/Repos/codex/codex-rs/stdio-to-uds)
+2anyhow v1.0.104
+2codex-uds v0.0.0 (/home/t4ce/Repos/codex/codex-rs/uds) (*)
+2tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+1codex-tcp-tunnel v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tcp-tunnel)
+2anyhow v1.0.104
+2bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+2clap v4.6.7 (*)
+2h3 v0.0.8 (https://github.com/hyperium/h3?rev=e07e69412876f7e26f026bd75a48b2704d8c8283#e07e6941)
+3bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+3fastrand v2.5.0
+3futures-util v0.3.34 (*)
+3http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+3pin-project-lite v0.2.17
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2h3-quinn v0.0.10 (https://github.com/hyperium/h3?rev=e07e69412876f7e26f026bd75a48b2704d8c8283#e07e6941)
+3bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+3futures v0.3.34 (*)
+3h3 v0.0.8 (https://github.com/hyperium/h3?rev=e07e69412876f7e26f026bd75a48b2704d8c8283#e07e6941) (*)
+3quinn v0.11.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-0.11.9)
+4bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+4futures-io v0.3.34
+4pin-project-lite v0.2.17
+4quinn-proto v0.11.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-proto-0.11.14)
+5bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)
+5lru-slab v0.1.3
+5rand v0.9.5 (*)
+5ring v0.17.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/ring-0.17.14) (*)
+5rustc-hash v2.1.3
+5rustls v0.23.45 (*)
+5slab v0.4.12
+5thiserror v2.0.21 (*)
+5tinyvec v1.13.3
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4quinn-udp v0.5.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-udp-0.5.14)
+5libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+5socket2 v0.6.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3) (*)
+5tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+5cfg_aliases v0.2.2
+4rustc-hash v2.1.3
+4rustls v0.23.45 (*)
+4socket2 v0.6.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3) (*)
+4thiserror v2.0.21 (*)
+4tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+4tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+4cfg_aliases v0.2.2
+3tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+3tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18) (*)
+2http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+2quinn v0.11.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-0.11.9) (*)
+2rand v0.9.5 (*)
+2rustls v0.23.45 (*)
+2rustls-native-certs v0.8.4 (*)
+2serde_json v1.0.150 (*)
+2tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+2url v2.5.8 (*)
+1codex-terminal-detection v0.0.0 (/home/t4ce/Repos/codex/codex-rs/terminal-detection) (*)
+1codex-thread-store v0.0.0 (/home/t4ce/Repos/codex/codex-rs/thread-store) (*)
+1codex-tui v0.0.0 (/home/t4ce/Repos/codex/codex-rs/tui) (*)
+1codex-utils-absolute-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/absolute-path) (*)
+1codex-utils-cli v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/cli) (*)
+1codex-utils-path v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-utils) (*)
+1codex-utils-path-uri v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/path-uri) (*)
+1codex-utils-process v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/process)
+1codex-utils-pty v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/pty) (*)
+1codex-utils-redacted-string v0.0.0 (/home/t4ce/Repos/codex/codex-rs/utils/redacted-string) (*)
+1codex-websocket-auth v0.0.0 (/home/t4ce/Repos/codex/codex-rs/websocket-auth) (*)
+1crossterm v0.29.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossterm-0.29.0-trueos) (*)
+1futures v0.3.34 (*)
+1http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0) (*)
+1httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)
+1libc v0.2.186 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libc-0.2.186)
+1os_info v3.15.0 (*)
+1owo-colors v4.4.0 (*)
+1regex-lite v0.1.9
+1serde v1.0.228 (*)
+1serde_json v1.0.150 (*)
+1supports-color v3.0.2 (*)
+1sys-locale v0.3.2
+1tempfile v3.27.0 (*)
+1tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3) (*)
+1toml v0.9.12+spec-1.1.0 (*)
+1tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44) (*)
+1tracing-appender v0.2.5 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-appender-0.2.5) (*)
+1tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23) (*)
+1trueos v0.1.0 (/home/t4ce/Repos/TRUEOS-Blueprints/api) (*)
+1unicode-segmentation v1.13.3
+1url v2.5.8 (*)
+1which v8.0.6 (*)

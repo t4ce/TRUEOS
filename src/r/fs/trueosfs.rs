@@ -2597,7 +2597,8 @@ pub async fn dir_rename_async(
 
 /// Async TRUEOSFS: list the immediate children of a directory.
 ///
-/// Returns `Ok(None)` if the disk does not contain TRUEOSFS.
+/// Returns `Ok(None)` if the disk does not contain TRUEOSFS or the directory
+/// does not exist. A file at the requested path remains an invalid parameter.
 pub async fn list_dir_async(
     disk: block::DeviceHandle,
     dir: &str,
@@ -2648,12 +2649,12 @@ async fn list_dir_with_limit_async(
     let prefix = normalized_dir_prefix(dir);
     let prefix_bytes = prefix.as_bytes();
 
-    if !prefix.is_empty()
-        && !index
-            .get(prefix.trim_end_matches('/').as_bytes())
-            .is_some_and(|entry| entry.kind == trueos_fs::LogKind::Directory)
-    {
-        return Err(block::Error::InvalidParam);
+    if !prefix.is_empty() {
+        match index.get(prefix.trim_end_matches('/').as_bytes()) {
+            Some(entry) if entry.kind == trueos_fs::LogKind::Directory => {}
+            Some(_) => return Err(block::Error::InvalidParam),
+            None => return Ok(None),
+        }
     }
 
     let mut children: BTreeMap<String, (NodeKind, ContentTypeId)> = BTreeMap::new();

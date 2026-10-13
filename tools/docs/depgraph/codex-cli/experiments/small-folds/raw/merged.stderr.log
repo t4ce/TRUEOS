@@ -1,0 +1,9 @@
+     Locking 3 packages to latest Rust 1.95.0 compatible versions
+   Compiling codex-pure-text-utilities-prototype v0.0.0 (/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged)
+    Finished `release` profile [optimized] target(s) in 0.27s
+   Compiling yansi v1.0.1
+   Compiling diff v0.1.13
+   Compiling pretty_assertions v1.4.1
+   Compiling codex-pure-text-utilities-prototype v0.0.0 (/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/generated/merged)
+    Finished `release` profile [optimized] target(s) in 0.77s
+     Running unittests src/lib.rs (/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/experiments/small-folds/build/merged/x86_64-unknown-linux-gnu/release/deps/codex_pure_text_utilities_prototype-93eca1fa1ac58e98)

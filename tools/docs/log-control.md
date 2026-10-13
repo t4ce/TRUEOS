@@ -4,12 +4,25 @@ Run `log` from Shell3's System mode. It enters the same native terminal lease
 as the other System tools, locally or over SSH. The first three rows use the
 Shell3 control background; the body uses the default terminal background.
 
-The area table shows the live level and policy. Enter or click an area to edit
-it. Up includes the chosen level and every level toward Error; Down includes
-the chosen level and every level toward Trace. Only lets you toggle an exact
-set. All and None are available for one area or all areas. Arrow keys or j/k
-select, Enter chooses, mouse clicks choose, and the wheel moves selection.
-Esc/q/Left returns to the previous page, or leaves the tool from the area table.
+The main screen places each area name above its checkbox row, followed by a
+blank line. Checkboxes appear in presentation order: none, once, user, ai,
+error, important, warn, info, debug, trace. This order does not change severity
+ordering. Profiles, Live log stream, and Set all areas appear below the areas.
+
+Arrow keys move up/down between areas and left/right between checkboxes; WASD
+mirrors these keys. Enter or Space toggles the focused box, which is underlined
+in pink. Only the checkbox glyph accepts a mouse toggle: labels, spacing, area
+names and headers do nothing when clicked. Action labels choose their pages.
+The wheel moves up/down. Narrow terminals wrap checkbox rows; the viewport
+scrolls to keep focus visible. Esc/q goes back or leaves the main grid.
+
+Build Up/Down policies are shown as their effective checked levels. Browsing
+preserves them; changing a checkbox replaces that area's policy with an exact
+set while preserving every other enabled level. None clears the area. Set all
+areas offers the same grid plus All levels: a level toggle changes only that
+level across all areas, preserving each area's other selections. Its checkbox
+is checked when every area admits that level; None is checked when every area
+is empty.
 
 Policies start from the effective compile-time profile matrix, including its
 override precedence. Edits immediately affect the common acceptance gate used
@@ -38,7 +51,7 @@ already filtered boot records. Once suppression and rate limiting also remain
 in effect.
 
 Opening the editor or browsing its pages leaves collection idle. The first
-explicit policy or profile application starts the §log transcript and live
+actual checkbox change or explicit profile application starts the §log transcript and live
 reader. Collection continues when the editor is parked; freeing the slot stops
 it. Active background collection shows the filled spinner rotating in reverse
 after §log. This activity is separate from slot selection and VMX affinity,

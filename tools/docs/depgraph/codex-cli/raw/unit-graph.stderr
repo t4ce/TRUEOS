@@ -1,0 +1,83 @@
+warning: patch `rustix v0.38.44 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rustix-0.38.44-trueos)` was not used in the crate graph
+  |
+  = help: perhaps you meant one of the following:
+          	/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos
+warning: patch `socket2 v0.5.10 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/socket2-0.5.10-trueos)` was not used in the crate graph
+  |
+  = help: perhaps you meant one of the following:
+          	/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3
+warning: patch `directories-next v2.0.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/directories-next-2.0.0)` was not used in the crate graph
+warning: patch `if-watch v3.2.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/if-watch-3.2.2)` was not used in the crate graph
+warning: patch `libloading v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libloading-0.8.9)` was not used in the crate graph
+warning: patch `russh-cryptovec v0.62.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/russh-cryptovec-0.62.0)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+warning: patch `axum v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-0.8.9)` was not used in the crate graph
+warning: patch `axum-core v0.5.6 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/axum-core-0.5.6)` was not used in the crate graph
+warning: patch `base64 v0.22.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/base64-0.22.1)` was not used in the crate graph
+warning: patch `bytes v1.11.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/bytes-1.11.1)` was not used in the crate graph
+warning: patch `crossbeam-utils v0.8.21 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossbeam-utils-0.8.21)` was not used in the crate graph
+warning: patch `crossterm v0.29.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/crossterm-0.29.0-trueos)` was not used in the crate graph
+warning: patch `directories-next v2.0.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/directories-next-2.0.0)` was not used in the crate graph
+warning: patch `getrandom v0.2.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.2.17)` was not used in the crate graph
+warning: patch `getrandom v0.3.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.3.4)` was not used in the crate graph
+warning: patch `getrandom v0.4.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/getrandom-0.4.2)` was not used in the crate graph
+warning: patch `h2 v0.4.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/h2-0.4.14)` was not used in the crate graph
+warning: patch `hickory-proto v0.25.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hickory-proto-0.25.2)` was not used in the crate graph
+warning: patch `hickory-resolver v0.25.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hickory-resolver-0.25.2)` was not used in the crate graph
+warning: patch `http v1.4.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-1.4.0)` was not used in the crate graph
+warning: patch `http-body v1.0.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-1.0.1)` was not used in the crate graph
+warning: patch `http-body-util v0.1.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/http-body-util-0.1.3)` was not used in the crate graph
+warning: patch `httpdate v1.0.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3)` was not used in the crate graph
+warning: patch `hyper v1.10.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-1.10.0)` was not used in the crate graph
+warning: patch `hyper-rustls v0.27.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hyper-rustls-0.27.9)` was not used in the crate graph
+warning: patch `hyper-timeout v0.5.2 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-timeout-trueos)` was not used in the crate graph
+warning: patch `hyper-util v0.1.20 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/hyper-util-tokio-std-trueos)` was not used in the crate graph
+warning: patch `if-watch v3.2.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/if-watch-3.2.2)` was not used in the crate graph
+warning: patch `libloading v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libloading-0.8.9)` was not used in the crate graph
+warning: patch `matchit v0.8.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/matchit-0.8.4)` was not used in the crate graph
+warning: patch `mime v0.3.17 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mime-0.3.17)` was not used in the crate graph
+warning: patch `mio v1.2.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/mio-1.2.0)` was not used in the crate graph
+warning: patch `quinn v0.11.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-0.11.9)` was not used in the crate graph
+warning: patch `quinn-proto v0.11.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-proto-0.11.14)` was not used in the crate graph
+warning: patch `quinn-udp v0.5.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-udp-0.5.14)` was not used in the crate graph
+warning: patch `rama-dns v0.3.0-alpha.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rama-dns-0.3.0-alpha.4-trueos)` was not used in the crate graph
+warning: patch `rama-http v0.3.0-alpha.4 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rama-http-0.3.0-alpha.4)` was not used in the crate graph
+warning: patch `rama-tls-rustls v0.3.0-alpha.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rama-tls-rustls-0.3.0-alpha.4-rustcrypto)` was not used in the crate graph
+warning: patch `rayon v1.12.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rayon)` was not used in the crate graph
+warning: patch `rayon-core v1.13.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rayon/rayon-core)` was not used in the crate graph
+warning: patch `reqwest v0.13.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3)` was not used in the crate graph
+warning: patch `ring v0.17.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/ring-0.17.14)` was not used in the crate graph
+warning: patch `russh-cryptovec v0.62.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/russh-cryptovec-0.62.0)` was not used in the crate graph
+warning: patch `rustix v1.1.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos)` was not used in the crate graph
+warning: patch `rustix v0.38.44 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rustix-0.38.44-trueos)` was not used in the crate graph
+warning: patch `rustls-rustcrypto v0.0.2-alpha (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustls-rustcrypto-0.0.2-alpha)` was not used in the crate graph
+warning: patch `signal-hook-mio v0.2.5 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/signal-hook-mio-0.2.5-trueos)` was not used in the crate graph
+warning: patch `socket2 v0.6.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3)` was not used in the crate graph
+warning: patch `socket2 v0.5.10 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/socket2-0.5.10-trueos)` was not used in the crate graph
+warning: patch `sqlx-sqlite v0.9.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/sqlx-sqlite-0.9.0)` was not used in the crate graph
+warning: patch `starlark v0.14.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/starlark-0.14.2-trueos)` was not used in the crate graph
+warning: patch `tokio v1.52.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-1.52.3)` was not used in the crate graph
+warning: patch `tokio-macros v2.7.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-macros-2.7.0)` was not used in the crate graph
+warning: patch `tokio-rustls v0.26.4 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-rustls-0.26.4)` was not used in the crate graph
+warning: patch `tokio-stream v0.1.19 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tokio-stream-trueos)` was not used in the crate graph
+warning: patch `tokio-tungstenite v0.29.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-tungstenite-0.29.0)` was not used in the crate graph
+warning: patch `tokio-util v0.7.18 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-util-0.7.18)` was not used in the crate graph
+warning: patch `tonic v0.14.6 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tonic-trueos)` was not used in the crate graph
+warning: patch `tower v0.5.3 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/tower-tokio-std-trueos)` was not used in the crate graph
+warning: patch `tower-http v0.6.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-http-0.6.9)` was not used in the crate graph
+warning: patch `tower-layer v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-layer-0.3.3)` was not used in the crate graph
+warning: patch `tower-service v0.3.3 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tower-service-0.3.3)` was not used in the crate graph
+warning: patch `tracing v0.1.44 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-0.1.44)` was not used in the crate graph
+warning: patch `tracing-appender v0.2.5 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-appender-0.2.5)` was not used in the crate graph
+warning: patch `tracing-attributes v0.1.31 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-attributes-0.1.31)` was not used in the crate graph
+warning: patch `tracing-core v0.1.36 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-core-0.1.36)` was not used in the crate graph
+warning: patch `tracing-log v0.2.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-log-0.2.0)` was not used in the crate graph
+warning: patch `tracing-subscriber v0.3.23 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tracing-subscriber-0.3.23)` was not used in the crate graph
+warning: patch `want v0.3.1 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/want-0.3.1)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.

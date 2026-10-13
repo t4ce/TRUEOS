@@ -6,8 +6,8 @@ vertex carries phase, height fraction, radial factor, and a Float3 offset.
 The VS applies tornado motion from camera.jitter_frame.z (elapsed seconds),
 then the GPU-authored identity instance and Picasso view-projection. The PS
 writes a constant cyan color. The retained Maxpix path selects one-pixel native
-points. The Blueprint renders a half-resolution scene backing for UI4 display
-engine 2x plane scaling. HS/DS/GS are disabled.
+points. The Blueprint renders a full-resolution streaming frame presented
+at 1:1 without upscaling. HS/DS/GS are disabled.
 
 This is a dedicated baked shader admission, not a general guest shader compiler.
 The captured target is Intel UHD Graphics 770, 8086:4680 (Gen12). Mesa captures,

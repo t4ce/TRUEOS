@@ -1,0 +1,16 @@
+warning: patch `rustix v0.38.44 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/rustix-0.38.44-trueos)` was not used in the crate graph
+  |
+  = help: perhaps you meant one of the following:
+          	/home/t4ce/Repos/TRUEOS-Blueprints/vendor/rustix-1.1.4-trueos
+warning: patch `socket2 v0.5.10 (/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-crates/socket2-0.5.10-trueos)` was not used in the crate graph
+  |
+  = help: perhaps you meant one of the following:
+          	/home/t4ce/Repos/TRUEOS-Blueprints/vendor/socket2-0.6.3
+warning: patch `directories-next v2.0.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/directories-next-2.0.0)` was not used in the crate graph
+warning: patch `if-watch v3.2.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/if-watch-3.2.2)` was not used in the crate graph
+warning: patch `libloading v0.8.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/libloading-0.8.9)` was not used in the crate graph
+warning: patch `russh-cryptovec v0.62.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/russh-cryptovec-0.62.0)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.

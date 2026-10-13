@@ -1,0 +1,86 @@
+{
+  "scope": "Exact captured target units; cuts remove selected dependencies from both codex-cli bin/lib Cargo units. Simulation only, no feature/source changed.",
+  "baseline_target_units": 800,
+  "single_cuts": [
+    {
+      "cli_package_edge_to": "codex_app_server",
+      "removed_units": 0,
+      "removed_crates": []
+    },
+    {
+      "cli_package_edge_to": "codex_app_server_daemon",
+      "removed_units": 0,
+      "removed_crates": []
+    },
+    {
+      "cli_package_edge_to": "codex_exec_server",
+      "removed_units": 0,
+      "removed_crates": []
+    },
+    {
+      "cli_package_edge_to": "codex_tcp_tunnel",
+      "removed_units": 7,
+      "removed_crates": [
+        "codex_tcp_tunnel",
+        "h3",
+        "h3_quinn",
+        "lru_slab",
+        "quinn",
+        "quinn_proto",
+        "quinn_udp"
+      ]
+    },
+    {
+      "cli_package_edge_to": "codex_cloud_tasks",
+      "removed_units": 3,
+      "removed_crates": [
+        "codex_cloud_tasks",
+        "codex_cloud_tasks_client",
+        "codex_cloud_tasks_mock_client"
+      ]
+    },
+    {
+      "cli_package_edge_to": "codex_responses_api_proxy",
+      "removed_units": 4,
+      "removed_crates": [
+        "codex_process_hardening",
+        "codex_responses_api_proxy",
+        "ctor",
+        "dtor"
+      ]
+    },
+    {
+      "cli_package_edge_to": "codex_app_server_test_client",
+      "removed_units": 1,
+      "removed_crates": [
+        "codex_app_server_test_client"
+      ]
+    },
+    {
+      "cli_package_edge_to": "codex_stdio_to_uds",
+      "removed_units": 1,
+      "removed_crates": [
+        "codex_stdio_to_uds"
+      ]
+    }
+  ],
+  "combined_removed_units": 16,
+  "combined_removed_crates": [
+    "codex_app_server_test_client",
+    "codex_cloud_tasks",
+    "codex_cloud_tasks_client",
+    "codex_cloud_tasks_mock_client",
+    "codex_process_hardening",
+    "codex_responses_api_proxy",
+    "codex_stdio_to_uds",
+    "codex_tcp_tunnel",
+    "ctor",
+    "dtor",
+    "h3",
+    "h3_quinn",
+    "lru_slab",
+    "quinn",
+    "quinn_proto",
+    "quinn_udp"
+  ]
+}
