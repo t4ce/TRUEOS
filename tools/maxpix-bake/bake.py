@@ -63,7 +63,9 @@ def main():
     print('PS metadata:', ps_meta)
     vs_file, = capture.glob('*_vertex_*_shader_serialize.bin')
     ps_file = sorted(capture.glob('*_fragment_*_shader_serialize.bin'))[0]
-    vs = pbr.serialized_code(vs_file, 0)
+    # ANV serializes alignment padding after the final executable instruction.
+    vs_assembly, = capture.glob('*_vertex_*_GEN_Assembly.txt')
+    vs = pbr.serialized_code(vs_file, 0)[:baker.assembly_code_size(vs_assembly)]
     ps_all = pbr.serialized_code(ps_file, 4)
     if not ps_meta['dispatch16']: raise SystemExit('SIMD16 PS unavailable')
     assemblies = sorted(capture.glob('*_fragment_*_GEN_Assembly.txt'))
@@ -71,7 +73,7 @@ def main():
     ps = ps_all[ps_meta['offset16']:ps_meta['offset16'] + baker.assembly_code_size(ps_assembly)]
     for name, code in [('vertex',vs), ('fragment',ps)]:
         path = WORK / f'{name}.bin'; path.write_bytes(code)
-        decoded = subprocess.run(['iga64','-d','-p=12p5',str(path)], capture_output=True, text=True, check=True)
+        decoded = subprocess.run(['iga64','-d','-p=12p1',str(path)], capture_output=True, text=True, check=True)
         if 'EOT' not in decoded.stdout: raise SystemExit(f'{name}: missing EOT')
         (WORK / f'{name}.isa').write_text(decoded.stdout)
     expected = {'vf_packing0':0xA77, 'urb_read_length':1, 'urb_entry_64b':1,

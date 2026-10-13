@@ -20,7 +20,13 @@
     "uses_instanceid": 1,
     "binding_table_entries": 4,
     "sampler_count": 0,
-    "scratch_bytes": 0
+    "scratch_bytes": 0,
+    "slot": 3,
+    "set": 0,
+    "index": 0,
+    "start": 0,
+    "length": 0,
+    "dynamic_offset_index": 0
   },
   "ps": {
     "ver": 12,
@@ -47,9 +53,15 @@
     "sampler_prefetch_count": 0,
     "sampler_count": 0,
     "push_bytes": 0,
-    "scratch_bytes": 0
+    "scratch_bytes": 0,
+    "slot": 3,
+    "set": 0,
+    "index": 0,
+    "start": 0,
+    "length": 0,
+    "dynamic_offset_index": 0
   },
-  "vs_sha256": "7c6720f151b8d159cb7c9faa5f4aabdcef75c05d699bd23df44ea5219a0a0d8a",
+  "vs_sha256": "ae78870b3b4b2d8c7ee75f54f59695dbf0a4db58eaf46848d4084658c941312d",
   "ps_sha256": "847892f905f3cce9a4cafd08361e3ea3f9c9d0c6f50428742c1a85b8664eb2d6",
   "baremetal_verified": false
 }

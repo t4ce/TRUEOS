@@ -1328,9 +1328,8 @@ async fn request_https_response_preconnected(
     // A reusable client can have a final Closed event left over after it has
     // already consumed a complete length-delimited response. No connection is
     // active for this client here, so discard such stale events before opening.
-    let _ = events.drain(HTTPS_EVENT_QUEUE_DEPTH);
-
     if connected.is_none() {
+        let _ = events.drain(HTTPS_EVENT_QUEUE_DEPTH);
         cmds.push(TlsCommand::OpenTcpConnect {
             remote: vnet::EndpointV4 {
                 addr: ip,
@@ -2623,6 +2622,7 @@ async fn happy_connect(
     cmds: &'static Queue<TlsCommand>,
     events: &'static Queue<TlsEvent>,
     timeout_ms: u32,
+    ipv6_failed: &AtomicBool,
 ) -> Result<vnet::NetHandle, String> {
     let config = crate::r::net::dns::DnsConfig::for_device(device)
         .with_timeout_ms((timeout_ms as u64).min(5_000));
@@ -2647,7 +2647,10 @@ async fn happy_connect(
     } else {
         let addr = resolve_https_host(device, &target.host, timeout_ms).await?;
         // DNS lookups run together; the IPv4 connection starts after a short stagger.
-        Timer::after(EmbassyDuration::from_millis(250)).await;
+        let fallback = Instant::now() + EmbassyDuration::from_millis(250);
+        while Instant::now() < fallback && !ipv6_failed.load(Ordering::Relaxed) {
+            Timer::after(EmbassyDuration::from_millis(5)).await;
+        }
         TlsCommand::OpenTcpConnect {
             remote: vnet::EndpointV4::new(addr, target.port),
             server_name: target.host.clone(),
@@ -2701,9 +2704,19 @@ async fn request_https_happy_eyeballs(
         .saturating_duration_since(Instant::now())
         .as_millis()
         .min(u32::MAX as u64) as u32;
+    let ipv6_failed = AtomicBool::new(false);
+    let ipv6 = async {
+        let result =
+            happy_connect(target, device, true, queues[0].0, queues[0].1, remaining, &ipv6_failed)
+                .await;
+        if result.is_err() {
+            ipv6_failed.store(true, Ordering::Relaxed);
+        }
+        result
+    };
     let race = happy_eyeballs::first_success(
-        happy_connect(target, device, true, queues[0].0, queues[0].1, remaining),
-        happy_connect(target, device, false, queues[1].0, queues[1].1, remaining),
+        ipv6,
+        happy_connect(target, device, false, queues[1].0, queues[1].1, remaining, &ipv6_failed),
     );
     let winner =
         trueos_time::with_timeout(EmbassyDuration::from_millis(remaining as u64), race).await;
@@ -2717,6 +2730,12 @@ async fn request_https_happy_eyeballs(
                 .saturating_duration_since(Instant::now())
                 .as_millis()
                 .min(u32::MAX as u64) as u32;
+            if remaining == 0 {
+                for (cmds, _) in queues {
+                    let _ = fence_https_owner(cmds).await;
+                }
+                return Err(String::from("timeout"));
+            }
             request_https_response_preconnected(
                 target,
                 [0; 4],

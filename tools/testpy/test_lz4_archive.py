@@ -112,6 +112,23 @@ fn main() {{
             }}
             println!("Production decoder verified {{}} asset files / {{}} bytes",entries.len(),entries.iter().map(|entry|entry.bytes.len()).sum::<usize>());
         }}
+        "profile-check" => {{
+            let tar=r::lz4::decompress_frame_cpu(&source,64*1024*1024).unwrap();
+            let entries=r::tar::unpack(&tar,1,64*1024*1024,64*1024*1024).unwrap();
+            assert_eq!(entries.len(),1);
+            std::fs::write(&args[3],&entries[0].bytes).unwrap();
+        }},
+        "benchmark-decode" => {{
+            let mut samples=Vec::new();
+            for _ in 0..101 {{
+                let started=std::time::Instant::now();
+                let decoded=r::lz4::decompress_frame_cpu(&source,64*1024*1024).unwrap();
+                std::hint::black_box(&decoded);
+                samples.push(started.elapsed().as_secs_f64()*1000.0);
+            }}
+            samples.remove(0);samples.sort_by(f64::total_cmp);
+            println!("cpu_decode_ms={{:.6}}",(samples[49]+samples[50])/2.0);
+        }},
         "update-bundle" => std::fs::write(&args[3],block_on(iso9660::decode_update_bundle(source)).unwrap()).unwrap(),
         "bad-update-bundle" => assert!(block_on(iso9660::decode_update_bundle(source)).is_err()),
         "encode" => std::fs::write(&args[3],r::lz4::compress_frame_cpu(&source)).unwrap(),

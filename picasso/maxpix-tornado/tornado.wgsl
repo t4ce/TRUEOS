@@ -18,9 +18,10 @@ struct Input { @location(0) seed: vec3<f32>, @location(1) offset: vec3<f32> }
 fn vs_main(input: Input, @builtin(instance_index) slot: u32) -> @builtin(position) vec4<f32> {
     let time = cameras[0].jitter_frame.z;
     let height = fract(input.seed.y + time * 0.10);
-    let radius = (0.25 + 2.5 * height * height) * input.seed.z;
+    // Bottom radius 0.75 (3x); top radius 5.5 (2x).
+    let radius = (0.75 + 4.75 * height * height) * input.seed.z;
     let angle = input.seed.x + time * (2.3 - 1.2 * height) + height * 9.0;
-    let local = vec3<f32>(cos(angle) * radius, height * 8.0 - 4.0, sin(angle) * radius) + input.offset;
+    let local = vec3<f32>(cos(angle) * radius, height * 8.8 - 4.4, sin(angle) * radius) + input.offset;
     let world = instances[compacted[slot]].transform * vec4<f32>(local, 1.0);
     return cameras[0].view_proj * world;
 }

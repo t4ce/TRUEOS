@@ -300,6 +300,7 @@ fn skip_dns_name(buf: &[u8], mut offset: usize) -> Option<usize> {
     }
 }
 
+#[cfg(test)]
 fn parse_dns_a_response(buf: &[u8], expected_id: u16) -> Result<[u8; 4], DnsError> {
     parse_dns_address_response::<4>(buf, expected_id, DNS_QTYPE_A)
 }
@@ -610,8 +611,17 @@ async fn resolve_ipv4_doh_for_device(
     host: &str,
     cfg: DnsConfig,
 ) -> Result<[u8; 4], DnsError> {
+    resolve_address_doh_for_device::<4>(device_index, host, cfg, DNS_QTYPE_A).await
+}
+
+async fn resolve_address_doh_for_device<const N: usize>(
+    device_index: usize,
+    host: &str,
+    cfg: DnsConfig,
+    qtype: u16,
+) -> Result<[u8; N], DnsError> {
     let timeout_ms = cfg.timeout_ms.max(1000);
-    let (query_id, query) = build_dns_query(host, DNS_QTYPE_A)?;
+    let (query_id, query) = build_dns_query(host, qtype)?;
     let encoded = base64url_no_pad(query.as_slice());
 
     for endpoint in PUBLIC_DOH_ENDPOINTS {
@@ -634,7 +644,7 @@ async fn resolve_ipv4_doh_for_device(
         )
         .await
         {
-            Ok(body) => match parse_dns_a_response(body.as_slice(), query_id) {
+            Ok(body) => match parse_dns_address_response::<N>(body.as_slice(), query_id, qtype) {
                 Ok(ip) => return Ok(ip),
                 Err(err) => crate::log_info!(target: "net";
                     "dns: doh response parse failed host={} dev={} server={} err={:?}\n",
@@ -662,8 +672,17 @@ async fn resolve_ipv4_dot_for_device(
     host: &str,
     cfg: DnsConfig,
 ) -> Result<[u8; 4], DnsError> {
+    resolve_address_dot_for_device::<4>(device_index, host, cfg, DNS_QTYPE_A).await
+}
+
+async fn resolve_address_dot_for_device<const N: usize>(
+    device_index: usize,
+    host: &str,
+    cfg: DnsConfig,
+    qtype: u16,
+) -> Result<[u8; N], DnsError> {
     let timeout_ms = cfg.timeout_ms.max(1000);
-    let (query_id, query) = build_dns_query(host, DNS_QTYPE_A)?;
+    let (query_id, query) = build_dns_query(host, qtype)?;
     let mut payload = Vec::with_capacity(query.len() + 2);
     payload.extend_from_slice(&(query.len() as u16).to_be_bytes());
     payload.extend_from_slice(query.as_slice());
@@ -681,7 +700,7 @@ async fn resolve_ipv4_dot_for_device(
         )
         .await
         {
-            Ok(body) => match parse_dns_a_response(body.as_slice(), query_id) {
+            Ok(body) => match parse_dns_address_response::<N>(body.as_slice(), query_id, qtype) {
                 Ok(ip) => return Ok(ip),
                 Err(err) => crate::log_info!(target: "net";
                     "dns: dot response parse failed host={} dev={} server={} err={:?}\n",
@@ -714,28 +733,10 @@ pub async fn resolve_ipv6_for_device(
     if host.is_empty() {
         return Err(DnsError::BadName);
     }
-    let (query_id, query) = build_dns_query(host, 28)?;
-    let encoded = base64url_no_pad(&query);
-    for endpoint in PUBLIC_DOH_ENDPOINTS {
-        let payload = format!("GET {}?dns={} HTTP/1.1\r\nHost: {}\r\nAccept: application/dns-message\r\nConnection: close\r\n\r\n", endpoint.path, encoded, endpoint.tls_name).into_bytes();
-        if let Ok(body) = dns_tls_exchange_v4(
-            "dns-aaaa",
-            device_index,
-            endpoint.addr,
-            DOH_PORT,
-            endpoint.tls_name,
-            payload,
-            cfg.timeout_ms,
-            SecureTlsReply::HttpBody,
-        )
-        .await
-        {
-            if let Ok(ip) = parse_dns_address_response::<16>(&body, query_id, 28) {
-                return Ok(ip);
-            }
-        }
+    match resolve_address_doh_for_device::<16>(device_index, host, cfg, 28).await {
+        Ok(address) => Ok(address),
+        Err(_) => resolve_address_dot_for_device::<16>(device_index, host, cfg, 28).await,
     }
-    Err(DnsError::NoAnswer)
 }
 
 struct DnsConnectionCleanup(&'static Queue<TlsCommand>);
@@ -744,5 +745,38 @@ impl Drop for DnsConnectionCleanup {
         let _ = self.0.push(TlsCommand::CancelOwner {
             completion: alloc::sync::Arc::new(crate::net::tls_socket::TlsCancelCompletion::new()),
         });
+    }
+}
+
+#[cfg(test)]
+mod address_tests {
+    use super::*;
+    fn response(qtype: u16, address: &[u8]) -> Vec<u8> {
+        let mut packet = alloc::vec![0, 7, 0x81, 0x80, 0, 0, 0, 1, 0, 0, 0, 0, 0];
+        packet.extend_from_slice(&qtype.to_be_bytes());
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&0u32.to_be_bytes());
+        packet.extend_from_slice(&(address.len() as u16).to_be_bytes());
+        packet.extend_from_slice(address);
+        packet
+    }
+    #[test]
+    fn parses_a_and_aaaa_without_mixing_families() {
+        let v4 = response(1, &[1, 2, 3, 4]);
+        assert_eq!(parse_dns_a_response(&v4, 7), Ok([1, 2, 3, 4]));
+        let v6 = response(28, &[0x20; 16]);
+        assert_eq!(parse_dns_address_response::<16>(&v6, 7, 28), Ok([0x20; 16]));
+        assert_eq!(parse_dns_address_response::<16>(&v4, 7, 28), Err(DnsError::NoAnswer));
+    }
+    #[test]
+    fn rejects_wrong_id_truncated_and_wrong_size_aaaa() {
+        let mut v6 = response(28, &[0x20; 16]);
+        assert_eq!(parse_dns_address_response::<16>(&v6, 8, 28), Err(DnsError::NoAnswer));
+        v6.pop();
+        assert_eq!(parse_dns_address_response::<16>(&v6, 7, 28), Err(DnsError::NoAnswer));
+        assert_eq!(
+            parse_dns_address_response::<16>(&response(28, &[0; 4]), 7, 28),
+            Err(DnsError::NoAnswer)
+        );
     }
 }
