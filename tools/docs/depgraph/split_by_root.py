@@ -2452,6 +2452,7 @@ def render_html_index(root: str, root_children: list[str], edges: set[tuple[str,
 <body>
   <section class="control-panel" aria-label="Graph controls">
     <h1 class="control-title">TrueOS § Depth Graph</h1>
+    <p><a href="codex-cli/index.html">Codex CLI · TRUEOS pack depth and fold experiments</a></p>
     <div class="zoom-control">
       <label for="zoom-slider">Zoom</label>
       <input id="zoom-slider" type="range" min="0.01" max="4" step="0.001" value="1">

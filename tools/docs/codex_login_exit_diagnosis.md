@@ -87,3 +87,38 @@ and authenticated OAuth success remain to be tested with both rebuilt pieces.
 For a browser on another machine, the localhost callback also needs a route
 to the rig; device-code login avoids that callback routing requirement.
 Official guidance: <https://learn.chatgpt.com/docs/auth>.
+
+## Follow-up: authenticated startup and apparently missing input
+
+The subsequent capture is `trueos-baremetal.1.log`. After the browser reported
+successful sign-in, the UI remained on its provisional loading/composer frame.
+The capture records `thread_start_begin` at line 1637, followed by
+`thread_start_failed` at line 1668. The fatal diagnostic at line 2929 identifies
+the cause: loading `/etc/codex/rules` failed with `FS_ERR_BAD_PARAM`.
+
+Keyboard input was delivered: lines 2918-2920 contain the user's unsent draft.
+The missing usable composer was associated with failed session bootstrap.
+
+Two filesystem incompatibilities were found:
+
+- An absent directory in the mounted TRUEOSFS index returned `InvalidParam`.
+  The async CABI translated that to -4, while Codex accepts absent optional
+  rules directories only when the error is NotFound. The kernel now returns
+  `Ok(None)` for the missing directory, which the async CABI translates to its
+  existing -8 NotFound status. A file at that path remains an error.
+- TRUEOS Rust std's directory reader split async directory results on newline.
+  The async API actually returns binary TDL1 records with a 12-byte header,
+  typed entries and length-prefixed names. Its header's NUL bytes therefore
+  caused even valid empty listings to fail. The packer now installs a strict
+  TDL1 decoder into the pinned rust-src before std-based app builds. It checks
+  headers, counts, record boundaries, types and names, rejecting truncated
+  results while preserving filename bytes. Existing Tokio consumers already
+  decoded TDL1; the wire format is unchanged.
+
+The decoder's executable host tests passed for empty/typed directories,
+newline/non-UTF8 names, and malformed/truncated records. The kernel check also
+passed. The updated Codex package is rebuilt locally without publication.
+
+This new run also validates the previous process-exit repair: lines 2933-2940
+record `std-abi: exit`, terminal return and shutdown acknowledgement. Lines
+2962-2965 record clean process stop, terminal cleanup and zero native jobs.
