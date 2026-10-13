@@ -13,7 +13,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -31,11 +31,108 @@ use crate::wait::CompletionCell;
 const BROKER_QUEUE_CAP: usize = 256;
 
 static BROKER_ONLINE: AtomicBool = AtomicBool::new(false);
-static BROKER_REQUESTS: Mutex<VecDeque<Request>> = Mutex::new(VecDeque::new());
+static BROKER_REQUESTS: Mutex<VecDeque<OwnedRequest>> = Mutex::new(VecDeque::new());
 static BROKER_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static BROKER_REQUEST_SEQ: AtomicU64 = AtomicU64::new(1);
 
 type Completion<T> = Arc<CompletionCell<FsResult<T>>>;
+
+struct OwnedRequest {
+    request: Request,
+    owner: Option<u8>,
+}
+
+// Request ownership remains live when a native caller parks or is killed.
+// Streams retain a root write lease between requests and need separate tracking.
+struct OwnerState {
+    requests: BTreeMap<u64, (u8, Option<u32>)>,
+    streams: BTreeMap<u32, u8>,
+    retiring: BTreeSet<u8>,
+}
+
+impl OwnerState {
+    const fn new() -> Self {
+        Self {
+            requests: BTreeMap::new(),
+            streams: BTreeMap::new(),
+            retiring: BTreeSet::new(),
+        }
+    }
+
+    fn pending(&self, vm_id: u8) -> usize {
+        self.requests.values().filter(|(owner, _)| *owner == vm_id).count()
+    }
+
+    fn open_writes(&self, vm_id: u8) -> usize {
+        self.streams.values().filter(|owner| **owner == vm_id).count()
+    }
+
+    fn submit(&mut self, id: u64, owner: Option<u8>, stream: Option<u32>) {
+        if let Some(owner) = owner {
+            crate::allocators::with_host_alloc_domain_strong(|| {
+                assert!(self.requests.insert(id, (owner, stream)).is_none());
+            });
+        }
+    }
+
+    fn remember_write(&mut self, owner: Option<u8>, handle: u32) {
+        if let Some(owner) = owner {
+            self.streams.insert(handle, owner);
+        }
+    }
+
+    fn forget_write(&mut self, owner: Option<u8>, handle: u32) {
+        if self.streams.get(&handle).copied() == owner {
+            self.streams.remove(&handle);
+        }
+    }
+
+    fn abortable(&self) -> Vec<(u32, u8)> {
+        self.streams.iter().filter_map(|(handle, owner)| {
+            (self.retiring.contains(owner)
+                && !self.requests.values().any(|(_, stream)| *stream == Some(*handle)))
+                .then_some((*handle, *owner))
+        }).collect()
+    }
+
+    fn stream_turn(&self, id: u64, handle: u32) -> bool {
+        self.requests.iter().find(|(_, (_, stream))| *stream == Some(handle))
+            .is_none_or(|(first, _)| *first == id)
+    }
+}
+
+static BROKER_OWNERS: Mutex<OwnerState> = Mutex::new(OwnerState::new());
+
+pub(crate) fn pending_for_vm(vm_id: u8) -> usize {
+    BROKER_OWNERS.lock().pending(vm_id)
+}
+
+pub(crate) fn open_writes_for_vm(vm_id: u8) -> usize {
+    BROKER_OWNERS.lock().open_writes(vm_id)
+}
+
+/// Reopen a fresh VM incarnation only after every old disk operation drained.
+pub(crate) fn open_vm(vm_id: u8) -> bool {
+    let mut owners = BROKER_OWNERS.lock();
+    if owners.pending(vm_id) != 0 || owners.open_writes(vm_id) != 0 {
+        return false;
+    }
+    owners.retiring.remove(&vm_id);
+    true
+}
+
+/// Ask the BSP to abort forgotten streams through its ordinary broker pump.
+/// Already-running chunk/finish operations complete before an abort is queued.
+pub(crate) fn request_release_vm(vm_id: u8) -> usize {
+    let writes = {
+        let mut owners = BROKER_OWNERS.lock();
+        owners.retiring.insert(vm_id);
+        owners.open_writes(vm_id)
+    };
+    BROKER_WAIT.notify_one();
+    crate::remote_work_wake::wake_cpu_for_remote_work(0);
+    writes
+}
 
 enum Request {
     ReadFile {
@@ -146,6 +243,15 @@ enum Request {
 }
 
 impl Request {
+    fn stream_handle(&self) -> Option<u32> {
+        match self {
+            Self::WriteFileChunk { handle, .. }
+            | Self::WriteFileFinish { handle, .. }
+            | Self::WriteFileAbort { handle, .. } => Some(*handle),
+            _ => None,
+        }
+    }
+
     fn metadata(&self) -> (u64, &'static str) {
         match self {
             Self::ReadFile { id, .. } => (*id, "read-file"),
@@ -198,13 +304,17 @@ fn submit<T>(
     let id = BROKER_REQUEST_SEQ.fetch_add(1, Ordering::Relaxed);
     let completion = Arc::new(CompletionCell::new());
     let request = build(id, completion.clone());
+    let owner = crate::hv::current_guest_execution_context_vm_id();
     let (id, operation) = request.metadata();
     let queue_depth = {
         let mut requests = BROKER_REQUESTS.lock();
         if requests.len() >= BROKER_QUEUE_CAP {
             return Err(BlockingRequestError::QueueFull);
         }
-        requests.push_back(request);
+        BROKER_OWNERS.lock().submit(id, owner, request.stream_handle());
+        crate::allocators::with_host_alloc_domain_strong(|| {
+            requests.push_back(OwnedRequest { request, owner });
+        });
         requests.len()
     };
 
@@ -430,13 +540,54 @@ pub fn exists(
     })
 }
 
-async fn process_request(request: Request) {
+async fn process_request(owned: OwnedRequest) {
+    let OwnedRequest { request, owner } = owned;
     let (request_id, operation) = request.metadata();
     crate::log_trace!(target: "filesystem";
         "trueosfs-request-broker: begin id={} op={} realm=bsp\n",
         request_id,
         operation,
     );
+    // Once teardown starts, a queued competing begin must not acquire another
+    // root lease after the abandoned stream's abort wakes it.
+    if owner.is_some_and(|owner| BROKER_OWNERS.lock().retiring.contains(&owner))
+        && matches!(request, Request::WriteFileBegin { .. } | Request::WriteFileBeginTyped { .. })
+    {
+        match request {
+            Request::WriteFileBegin { id, completion, .. }
+            | Request::WriteFileBeginTyped { id, completion, .. } => {
+                finish(id, operation, completion, Err(FsError::Device(block::Error::NotReady)));
+            }
+            _ => unreachable!(),
+        }
+        complete_request(request_id);
+        return;
+    }
+    if let Some(handle) = request.stream_handle() {
+        // trueosfs temporarily removes a stream while its I/O future owns it.
+        // A second chunk must wait instead of mistaking that interval for an
+        // absent stream and dropping the owner's retained root lease record.
+        while owner.is_some() {
+            let observed = BROKER_WAIT.observe();
+            if BROKER_OWNERS.lock().stream_turn(request_id, handle) {
+                break;
+            }
+            BROKER_WAIT.wait_after(observed).await;
+        }
+        let stream_owner = BROKER_OWNERS.lock().streams.get(&handle).copied();
+        if stream_owner != owner {
+            match request {
+                Request::WriteFileChunk { id, completion, .. }
+                | Request::WriteFileFinish { id, completion, .. }
+                | Request::WriteFileAbort { id, completion, .. } => {
+                    finish(id, operation, completion, Err(FsError::BadPath));
+                }
+                _ => unreachable!(),
+            }
+            complete_request(request_id);
+            return;
+        }
+    }
     match request {
         Request::ReadFile {
             id,
@@ -549,6 +700,9 @@ async fn process_request(request: Request) {
                 }
                 Err(error) => Err(error.into()),
             };
+            if let Ok(handle) = &result {
+                BROKER_OWNERS.lock().remember_write(owner, *handle);
+            }
             finish(id, "write-file-begin", completion, result);
         }
         Request::WriteFileBeginTyped {
@@ -571,6 +725,9 @@ async fn process_request(request: Request) {
                 Ok(None) => Err(FsError::NoSpace),
                 Err(error) => Err(error.into()),
             };
+            if let Ok(handle) = &result {
+                BROKER_OWNERS.lock().remember_write(owner, *handle);
+            }
             finish(id, "write-file-begin-typed", completion, result);
         }
         Request::CreateDirAll {
@@ -591,6 +748,9 @@ async fn process_request(request: Request) {
             let result = super::trueosfs::file_write_chunk_async(handle, data.as_slice())
                 .await
                 .map_err(FsError::from);
+            if result.is_err() {
+                BROKER_OWNERS.lock().forget_write(owner, handle);
+            }
             finish(id, "write-file-chunk", completion, result);
         }
         Request::WriteFileFinish {
@@ -601,6 +761,7 @@ async fn process_request(request: Request) {
             let result = super::trueosfs::file_write_finish_async(handle)
                 .await
                 .map_err(FsError::from);
+            BROKER_OWNERS.lock().forget_write(owner, handle);
             finish(id, "write-file-finish", completion, result);
         }
         Request::WriteFileAbort {
@@ -611,6 +772,7 @@ async fn process_request(request: Request) {
             let result = super::trueosfs::file_write_abort_async(handle)
                 .await
                 .map_err(FsError::from);
+            BROKER_OWNERS.lock().forget_write(owner, handle);
             finish(id, "write-file-abort", completion, result);
         }
         Request::HtmlTree {
@@ -699,6 +861,32 @@ async fn process_request(request: Request) {
             finish(id, "exists", completion, result);
         }
     }
+    complete_request(request_id);
+}
+
+fn complete_request(id: u64) {
+    BROKER_OWNERS.lock().requests.remove(&id);
+    BROKER_WAIT.notify_all();
+}
+
+fn queue_retired_write_aborts() {
+    // Use the same lock order as submit. The request registry keeps an abort
+    // from being queued twice, including while its future is running.
+    let mut requests = BROKER_REQUESTS.lock();
+    let mut owners = BROKER_OWNERS.lock();
+    for (handle, owner) in owners.abortable() {
+        if requests.len() >= BROKER_QUEUE_CAP {
+            break;
+        }
+        let id = BROKER_REQUEST_SEQ.fetch_add(1, Ordering::Relaxed);
+        owners.submit(id, Some(owner), Some(handle));
+        requests.push_back(OwnedRequest {
+            request: Request::WriteFileAbort {
+                id, handle, completion: Arc::new(CompletionCell::new()),
+            },
+            owner: Some(owner),
+        });
+    }
 }
 
 async fn stat_async(disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
@@ -759,6 +947,7 @@ fn poll_request_batch(active: &mut Vec<ActiveRequest>, cx: &mut Context<'_>) {
     // each request serially lets a later writer block the very chunk/finish
     // requests that release that lease. Poll independent requests on this same
     // BSP task; never move the non-Send filesystem futures to an AP executor.
+    queue_retired_write_aborts();
     loop {
         let request = BROKER_REQUESTS.lock().pop_front();
         let Some(request) = request else {
@@ -773,6 +962,12 @@ fn poll_request_batch(active: &mut Vec<ActiveRequest>, cx: &mut Context<'_>) {
         } else {
             index += 1;
         }
+    }
+    // A begin/chunk can finish during this poll and expose another abandoned
+    // stream. Wake this task so the follow-up abort reaches the BSP promptly.
+    queue_retired_write_aborts();
+    if !BROKER_REQUESTS.lock().is_empty() {
+        cx.waker().wake_by_ref();
     }
 }
 

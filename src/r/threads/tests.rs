@@ -61,9 +61,10 @@ fn diagnostics_identify_the_parked_worker_and_retire_on_force_kill() {
         assert_eq!(wait(&queue, observed, 0), Some(true));
         panic!("killed continuation resumed");
     });
-    let diagnostic = diagnostics::JobDiagnostic::new(53, 19);
-    diagnostic.identify("std-thread", 53, 0);
-    thread.0._admission._owner = Some(GuestJobOwner { diagnostic });
+    assert!(crate::r::blocking::open_guest_jobs(53, 19));
+    let owner = crate::r::blocking::reserve_guest_job(53).unwrap();
+    owner.diagnostic.identify("std-thread", 53, 0);
+    thread.0._admission._owner = Some(owner);
     assert!(poll_thread(&mut thread).is_pending());
     let before = diagnostics::lines(53).join("\n");
     assert!(before.contains("name=tokio-voxygen-0 carrier=0 phase=wait-queue"));
@@ -260,4 +261,136 @@ fn kill_before_first_poll_never_calls_the_guest_closure() {
     assert!(poll_thread(&mut task).is_ready());
     drop(task);
     crate::hv::set_guest_kill_for_test(52, false);
+}
+
+#[cfg(thread_scheduler_harness)]
+#[test]
+fn pause_retains_native_frames_and_resumes_the_same_reservation() {
+    let _serial = SERIAL.lock().unwrap();
+    let progress = Arc::new(AtomicUsize::new(0));
+    let guest_progress = progress.clone();
+    let mut task = make_thread(54, move || {
+        let mut frame = [7usize; 32];
+        let address = frame.as_ptr() as usize;
+        guest_progress.store(1, Ordering::Release);
+        assert!(yield_now());
+        assert_eq!(frame.as_ptr() as usize, address);
+        frame[0] += 1;
+        assert_eq!(frame[0], 8);
+        guest_progress.store(2, Ordering::Release);
+    });
+    assert!(crate::r::blocking::open_guest_jobs(54, 19));
+    task.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(54).unwrap());
+    assert!(poll_thread(&mut task).is_pending());
+    assert_eq!(progress.load(Ordering::Acquire), 1);
+    assert_eq!(crate::r::blocking::pause_guest_jobs(54), 1);
+    assert!(!crate::r::blocking::guest_job_cancellation_requested(54));
+    crate::hv::set_guest_pause_for_test(54, true);
+    wake_guest_control(54);
+    assert!(poll_thread(&mut task).is_pending());
+    assert!(poll_thread(&mut task).is_pending());
+    assert!(crate::r::blocking::guest_jobs_quiescent(54));
+    assert_eq!(progress.load(Ordering::Acquire), 1);
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(54), 1);
+    assert!(crate::r::blocking::resume_guest_jobs(54, 19));
+    crate::hv::set_guest_pause_for_test(54, false);
+    wake_guest_control(54);
+    assert!(poll_thread(&mut task).is_ready());
+    assert_eq!(progress.load(Ordering::Acquire), 2);
+    drop(task);
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(54), 0);
+}
+
+#[cfg(thread_scheduler_harness)]
+#[test]
+fn filesystem_work_reaches_its_boundary_before_native_ram_parking() {
+    let _serial = SERIAL.lock().unwrap();
+    let progress = Arc::new(AtomicUsize::new(0));
+    let guest_progress = progress.clone();
+    let mut task = make_thread(55, move || {
+        guest_progress.store(1, Ordering::Release);
+        assert!(yield_now());
+        guest_progress.store(2, Ordering::Release);
+        assert!(yield_now());
+        guest_progress.store(3, Ordering::Release);
+    });
+    assert!(crate::r::blocking::open_guest_jobs(55, 19));
+    task.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(55).unwrap());
+    assert!(poll_thread(&mut task).is_pending());
+    crate::r::blocking::pause_guest_jobs(55);
+    crate::hv::set_guest_pause_for_test(55, true);
+    crate::hv::set_guest_io_for_test(55, true);
+    assert!(poll_thread(&mut task).is_pending());
+    assert_eq!(progress.load(Ordering::Acquire), 2);
+    assert!(!crate::r::blocking::guest_jobs_quiescent(55));
+    crate::hv::set_guest_io_for_test(55, false);
+    wake_guest_control(55);
+    assert!(poll_thread(&mut task).is_pending());
+    assert!(crate::r::blocking::guest_jobs_quiescent(55));
+    assert_eq!(progress.load(Ordering::Acquire), 2);
+    assert!(crate::r::blocking::resume_guest_jobs(55, 19));
+    crate::hv::set_guest_pause_for_test(55, false);
+    wake_guest_control(55);
+    assert!(poll_thread(&mut task).is_ready());
+    assert_eq!(progress.load(Ordering::Acquire), 3);
+    drop(task);
+}
+
+#[cfg(thread_scheduler_harness)]
+#[test]
+fn control_wakers_survive_repeated_pause_and_resume_notifications() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut task = make_thread(56, || {
+        suspend(Some(Box::pin(core::future::pending())));
+        panic!("unresolved wait resumed");
+    });
+    struct WakeCount(AtomicUsize);
+    impl std::task::Wake for WakeCount {
+        fn wake(self: Arc<Self>) { self.0.fetch_add(1, Ordering::AcqRel); }
+    }
+    let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+    let waker = std::task::Waker::from(wakes.clone());
+    let mut cx = Context::from_waker(&waker);
+    assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
+    wake_guest_control(56);
+    wake_guest_control(56);
+    assert_eq!(wakes.0.load(Ordering::Acquire), 2);
+    crate::hv::set_guest_pause_for_test(56, true);
+    assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
+    wake_guest_control(56);
+    assert_eq!(wakes.0.load(Ordering::Acquire), 3);
+    crate::hv::set_guest_pause_for_test(56, false);
+    crate::hv::set_guest_kill_for_test(56, true);
+    assert!(Pin::new(&mut task).poll(&mut cx).is_ready());
+    drop(task);
+    wake_guest_control(56);
+    assert_eq!(wakes.0.load(Ordering::Acquire), 3, "retired task kept a control waker");
+    crate::hv::set_guest_kill_for_test(56, false);
+}
+
+#[cfg(thread_scheduler_harness)]
+#[test]
+fn kill_of_a_paused_native_job_retires_its_counted_park() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut task = make_thread(57, || {
+        assert!(yield_now());
+        panic!("killed pause resumed");
+    });
+    assert!(crate::r::blocking::open_guest_jobs(57, 19));
+    task.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(57).unwrap());
+    assert!(poll_thread(&mut task).is_pending());
+    crate::r::blocking::pause_guest_jobs(57);
+    crate::hv::set_guest_pause_for_test(57, true);
+    assert!(poll_thread(&mut task).is_pending());
+    assert!(crate::r::blocking::guest_jobs_quiescent(57));
+    crate::hv::set_guest_kill_for_test(57, true);
+    crate::r::blocking::close_guest_jobs(57);
+    assert!(crate::r::blocking::guest_job_cancellation_requested(57));
+    wake_guest_control(57);
+    assert!(poll_thread(&mut task).is_ready());
+    drop(task);
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(57), 0);
+    assert!(!crate::r::blocking::resume_guest_jobs(57, 19));
+    crate::hv::set_guest_pause_for_test(57, false);
+    crate::hv::set_guest_kill_for_test(57, false);
 }

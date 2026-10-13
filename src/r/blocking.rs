@@ -18,6 +18,7 @@ pub(crate) mod diagnostics;
 pub(crate) use lifetime::reserve as reserve_guest_job;
 pub(crate) use lifetime::{
     GuestJobOwner, close_guest_jobs, drain_guest_jobs, guest_jobs_in_flight, open_guest_jobs,
+    pause_guest_jobs, resume_guest_jobs, guest_jobs_quiescent,
 };
 
 const BLOCKING_JOB_QUEUE_WARN_DEPTH: usize = 100;
@@ -1149,11 +1150,10 @@ pub extern "Rust" fn trueos_service_lane_available_capacity() -> usize {
     service_lane_available_capacity_for_vm(crate::hv::current_guest_execution_context_vm_id())
 }
 
-/// Cooperative cancellation for long-lived native jobs. VM exit cannot run
-/// the application's Rust destructors; jobs must observe closed admission and
-/// return before teardown can release their executable pages and heap.
+/// Cooperative cancellation for native jobs after irreversible closure.
+/// A RAM pause closes admission while accepted finite work finishes normally.
 pub(crate) fn guest_job_cancellation_requested(vm_id: u8) -> bool {
-    !lifetime::accepts_guest_jobs(vm_id)
+    lifetime::guest_jobs_closed(vm_id)
 }
 
 #[unsafe(no_mangle)]

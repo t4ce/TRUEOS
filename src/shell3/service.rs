@@ -797,20 +797,44 @@ pub(super) fn environment_lines(slot: Option<&str>, lifetime: Option<u64>) -> Ve
 
 pub(super) fn hv_status_lines() -> Vec<alloc::string::String> {
     let s = crate::hv::status();
-    let mut lines = alloc::vec![alloc::format!("VMs: running={} starting={} limit={} snapshots={}", s.running_count, s.starting_count, s.vm_id_limit, s.stored_vm_count),
+    let mut lines = alloc::vec![alloc::format!("VMs: running={} paused={} starting={} limit={}", s.running_count, s.paused_count, s.starting_count, s.vm_id_limit),
         alloc::format!("VMX: intel={} supported={} locked={} outside_smx={}", s.vendor_intel, s.has_vmx, s.feature_control_locked, s.feature_control_vmx_outside_smx),
         alloc::format!("Shared memory: total={} free={} stacks={} vmx={}", s.vm_shared_heap_total_bytes, s.vm_shared_heap_free_bytes, s.vm_shared_stack_bytes, s.vm_shared_vmx_bytes),
-        "vmid blueprint state store".into()];
+        "vmid blueprint state".into()];
     for id in 0..s.vm_id_limit {
         let id = id as u8;
         let state = crate::hv::vm_state(id);
         let label = crate::hv::app_vm_display_label(id);
-        let stored = crate::hv::store::has_committed_vm(id);
-        if label.is_none() && !stored && !state.running && !state.starting && !state.pause_latched { continue; }
-        let phase = if state.stop_requested { "stopping" } else if state.pause_latched { "paused" } else if state.starting { "starting" } else if state.running { "running" } else { "stopped" };
-        lines.push(alloc::format!("{} {} {} {}", id, label.as_deref().unwrap_or("-"), phase, if stored { "saved" } else { "-" }));
+        if label.is_none() && !state.running && !state.starting && !state.paused && !state.pause_requested { continue; }
+        let phase = hv_vm_phase(&state);
+        lines.push(alloc::format!("{} {} {}", id, label.as_deref().unwrap_or("-"), phase));
     }
     lines
+}
+
+pub(super) fn hv_vm_phase(state: &crate::hv::HvVmState) -> &'static str {
+    if state.stop_requested { "stopping" }
+    else if state.paused { "paused" }
+    else if state.pause_requested { "pausing" }
+    else if state.starting { "starting" }
+    else if state.running { "running" }
+    else { "stopped" }
+}
+
+pub(super) fn peer_lines() -> Vec<alloc::string::String> {
+    let peers = crate::r::net::trueos_peer::peer_snapshots();
+    let mut lines = alloc::vec![alloc::format!("Peers: {}", peers.len()), "id address port caps".into()];
+    for peer in peers {
+        lines.push(alloc::format!("{} {} {} 0x{:08x}", peer.id, crate::r::net::trueos_peer::peer_addr_text(&peer), peer.port, peer.caps));
+    }
+    lines
+}
+
+pub(super) fn probe_lines() -> Vec<alloc::string::String> {
+    let status = crate::hv::status();
+    alloc::vec![alloc::format!("VMX probe: intel={} msr={} vmx={} locked={} outside_smx={} guest_module={}",
+        status.vendor_intel, status.has_msr, status.has_vmx, status.feature_control_locked,
+        status.feature_control_vmx_outside_smx, status.guest_module_present)]
 }
 
 pub(crate) fn report_launch_error(error: alloc::string::String) { super::MatrixSlots::echo(None, None, error); }

@@ -50,6 +50,7 @@ enum Event {
     Choose,
     Quit,
     Click(usize, usize),
+    Move(usize, usize),
 }
 #[derive(Default)]
 struct GridInput {
@@ -128,6 +129,7 @@ impl GridInput {
                 }
                 match button & !28 {
                     0 => Some(Event::Click(row, col)),
+                    32..=35 => Some(Event::Move(row, col)),
                     64 => Some(Event::Up),
                     65 => Some(Event::Down),
                     _ => None,
@@ -148,23 +150,65 @@ fn effective(policy: P) -> S {
 struct Frame {
     lines: Vec<String>,
     focus: Option<(usize, usize)>,
+    highlights: Vec<Highlight>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Highlight {
+    row: usize,
+    col: usize,
+    width: usize,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HitKind {
+    Checkbox,
+    Word,
+    Range(bool),
+    Menu,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Hover {
+    item: usize,
+    column: usize,
+    kind: HitKind,
 }
 struct Hit {
     col: usize,
     width: usize,
     item: usize,
     column: Option<usize>,
+    kind: HitKind,
+}
+struct GridCell {
+    item: usize,
+    column: usize,
+    row: usize,
+    col: usize,
+    width: usize,
+    label_row: usize,
 }
 #[derive(Default)]
 struct Content {
     lines: Vec<String>,
     hits: Vec<Vec<Hit>>,
     focus: Option<(usize, usize)>,
+    cells: Vec<GridCell>,
+    highlights: Vec<Highlight>,
 }
 impl Content {
     fn push(&mut self, line: String, hits: Vec<Hit>) {
         self.lines.push(line);
         self.hits.push(hits);
+    }
+    fn overlay(&mut self, row: usize, col: usize, text: &str) {
+        let Some(line) = self.lines.get_mut(row) else {
+            return;
+        };
+        let mut chars: Vec<_> = line.chars().collect();
+        chars.resize(chars.len().max(col + text.chars().count()), ' ');
+        for (index, glyph) in text.chars().enumerate() {
+            chars[col + index] = glyph;
+        }
+        *line = chars.into_iter().collect();
     }
 }
 struct View {
@@ -176,6 +220,8 @@ struct View {
     scroll: usize,
     changes: u64,
     collecting: bool,
+    hover: Option<Hover>,
+    geometry: (usize, usize),
 }
 impl Default for View {
     fn default() -> Self {
@@ -188,6 +234,8 @@ impl Default for View {
             scroll: 0,
             changes: 0,
             collecting: false,
+            hover: None,
+            geometry: (0, 0),
         }
     }
 }
@@ -197,6 +245,7 @@ impl View {
         self.selected = 0;
         self.scroll = 0;
         self.status.clear();
+        self.hover = None;
     }
     fn back(&mut self) -> bool {
         if self.page == Page::Areas {
@@ -251,6 +300,49 @@ impl View {
                 }
             );
         }
+    }
+    fn range(&mut self, item: usize, column: usize, up: bool) {
+        let mut set = S::NONE;
+        // These actions follow the displayed checkbox order, including the
+        // hovered level. None is a clear action, never an emitted level.
+        for (index, level) in COLUMNS.iter().enumerate() {
+            if (up && index <= column) || (!up && index >= column) {
+                if let Some(level) = level {
+                    set = set.union(level.set());
+                }
+            }
+        }
+        let area = if self.page == Page::Areas {
+            Some(A::ALL[item])
+        } else {
+            None
+        };
+        let update = |area| {
+            if effective(policy::area_log_policy(area)) == set {
+                return false;
+            }
+            policy::set_area_log_policy(area, P::only(set));
+            true
+        };
+        let changed = if let Some(area) = area {
+            update(area)
+        } else {
+            let mut changed = false;
+            for area in A::ALL {
+                changed |= update(area);
+            }
+            changed
+        };
+        if changed {
+            self.changes = self.changes.wrapping_add(1);
+            self.status = format!(
+                "{}: {} through {}",
+                area.map_or("all areas", A::tag),
+                if up { "left" } else { "right" },
+                COLUMNS[column].map_or("none", L::tag)
+            );
+        }
+        self.hover = None;
     }
     fn count(&self) -> usize {
         match self.page {
@@ -311,16 +403,23 @@ impl View {
         }
     }
     fn grid_row(&self, content: &mut Content, area: Option<A>, item: usize, cols: usize) {
+        let label_row = content.lines.len();
         content.push(area.map_or("all areas", A::tag).into(), Vec::new());
         let mut line = String::new();
         let mut hits = Vec::new();
         let mut col = 0;
         for column in 0..COLUMNS.len() {
             let tag = COLUMNS[column].map_or("none", L::tag);
-            let width = tag.len() + 1;
+            // Keep enough horizontal room for the aligned four-cell `down`.
+            let width = if column == 0 {
+                tag.len() + 1
+            } else {
+                tag.len().max(4) + 1
+            };
             let gap = usize::from(col > 0);
             if col > 0 && col + gap + width > cols {
                 content.push(line, hits);
+                content.push(String::new(), Vec::new());
                 line = String::new();
                 hits = Vec::new();
                 col = 0;
@@ -337,6 +436,24 @@ impl View {
                 width: 1,
                 item,
                 column: Some(column),
+                kind: HitKind::Checkbox,
+            });
+            if column != 0 {
+                hits.push(Hit {
+                    col: col + 1,
+                    width: tag.len(),
+                    item,
+                    column: Some(column),
+                    kind: HitKind::Word,
+                });
+            }
+            content.cells.push(GridCell {
+                item,
+                column,
+                row: content.lines.len(),
+                col,
+                width: tag.len(),
+                label_row,
             });
             line.push(if self.checked(area, column) {
                 '🗹'
@@ -344,6 +461,7 @@ impl View {
                 '☐'
             });
             line.push_str(tag);
+            line.extend(core::iter::repeat_n(' ', width - tag.len() - 1));
             col += width;
         }
         content.push(line, hits);
@@ -359,7 +477,8 @@ impl View {
                 col: 2,
                 width: label.chars().count(),
                 item,
-                column: None
+                column: None,
+                kind: HitKind::Menu
             }],
         );
     }
@@ -395,20 +514,73 @@ impl View {
             }
             Page::Stream => {}
         }
+        self.decorate_hover(&mut content);
         content
+    }
+    fn decorate_hover(&self, content: &mut Content) {
+        let Some(hover) = self.hover else {
+            return;
+        };
+        let Some(cell) = content
+            .cells
+            .iter()
+            .find(|cell| cell.item == hover.item && cell.column == hover.column)
+        else {
+            return;
+        };
+        let (row, col, width, label_row) = (cell.row, cell.col + 1, cell.width, cell.label_row);
+        if hover.kind == HitKind::Checkbox {
+            content.highlights.push(Highlight {
+                row,
+                col: col - 1,
+                width: 1,
+            });
+            return;
+        }
+        if hover.column == 0 {
+            return;
+        }
+        content.highlights.push(Highlight { row, col, width });
+        if row - 1 == label_row && col < content.lines[label_row].chars().count() {
+            // Preserve the area name when an early level's up action would
+            // overlap it. Use the existing spacer, without moving hit cells.
+            content.lines[label_row - 1] = content.lines[label_row].clone();
+            content.lines[label_row].clear();
+        }
+        for (up, label, action_row) in [(true, "up", row - 1), (false, "down", row + 1)] {
+            content.overlay(action_row, col, label);
+            content.hits[action_row].push(Hit {
+                col,
+                width: label.len(),
+                item: hover.item,
+                column: Some(hover.column),
+                kind: HitKind::Range(up),
+            });
+            if hover.kind == HitKind::Range(up) {
+                content.highlights.push(Highlight {
+                    row: action_row,
+                    col,
+                    width: label.len(),
+                });
+            }
+        }
     }
     fn align_scroll(&mut self, content: &Content, rows: usize) {
         let visible = rows.saturating_sub(3);
         if let Some((row, _)) = content.focus {
-            if row < self.scroll {
+            if row <= self.scroll {
                 self.scroll = row.saturating_sub(1);
-            } else if row >= self.scroll + visible {
-                self.scroll = row.saturating_add(1).saturating_sub(visible);
+            } else if row + 1 >= self.scroll + visible {
+                self.scroll = row.saturating_add(2).saturating_sub(visible);
             }
         }
         self.scroll = self.scroll.min(content.lines.len().saturating_sub(visible));
     }
     fn event(&mut self, event: Event, cols: usize, rows: usize) -> bool {
+        self.resize(cols, rows);
+        if !matches!(event, Event::Move(..) | Event::Click(..)) {
+            self.hover = None;
+        }
         if event == Event::Quit {
             return self.back();
         }
@@ -434,28 +606,66 @@ impl View {
                 self.back();
             }
             Event::Choose => self.choose(),
-            Event::Click(row, col) if row >= 3 && row < rows && col < cols => {
+            Event::Move(row, col) | Event::Click(row, col)
+                if row >= 3 && row < rows && col < cols =>
+            {
                 let content = self.content(cols);
-                self.align_scroll(&content, rows);
+                if self.clipped_checkbox_row(&content, row, rows) {
+                    self.hover = None;
+                    return false;
+                }
+                // Pointer motion must not scroll the grid away from its target.
                 if let Some(hit) = content.hits.get(self.scroll + row - 3).and_then(|hits| {
                     hits.iter()
                         .find(|hit| (hit.col..hit.col + hit.width).contains(&col))
                 }) {
-                    self.selected = hit.item;
                     if let Some(column) = hit.column {
-                        self.column = column;
+                        if matches!(event, Event::Move(..)) {
+                            self.hover = Some(Hover {
+                                item: hit.item,
+                                column,
+                                kind: hit.kind,
+                            });
+                        } else {
+                            match hit.kind {
+                                HitKind::Checkbox => {
+                                    self.hover = Some(Hover {
+                                        item: hit.item,
+                                        column,
+                                        kind: HitKind::Checkbox,
+                                    });
+                                    self.selected = hit.item;
+                                    self.column = column;
+                                    self.choose();
+                                }
+                                HitKind::Range(up) => self.range(hit.item, column, up),
+                                _ => {}
+                            }
+                        }
+                    } else if matches!(event, Event::Click(..)) {
+                        self.selected = hit.item;
+                        self.hover = None;
+                        self.choose();
+                    } else {
+                        self.hover = None;
                     }
-                    self.choose();
+                } else {
+                    self.hover = None;
                 }
+            }
+            Event::Move(..) => {
+                self.hover = None;
             }
             _ => {}
         }
         false
     }
     fn frame(&mut self, cols: usize, rows: usize, stream: &VecDeque<String>) -> Frame {
+        self.resize(cols, rows);
         let mut frame = Frame {
             lines: alloc::vec![String::new(); rows],
             focus: None,
+            highlights: Vec::new(),
         };
         if rows < 5 {
             return frame;
@@ -497,7 +707,9 @@ impl View {
                 .take(rows - 3)
                 .enumerate()
             {
-                frame.lines[3 + index] = line.clone();
+                if !self.clipped_checkbox_row(&content, 3 + index, rows) {
+                    frame.lines[3 + index] = line.clone();
+                }
             }
             frame.focus = content.focus.and_then(|(row, col)| {
                 if (self.scroll..self.scroll + rows - 3).contains(&row) {
@@ -506,8 +718,37 @@ impl View {
                     None
                 }
             });
+            frame.highlights = content
+                .highlights
+                .into_iter()
+                .filter_map(|span| {
+                    if (self.scroll..self.scroll + rows - 3).contains(&span.row) {
+                        Some(Highlight {
+                            row: span.row - self.scroll + 3,
+                            ..span
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
         }
         frame
+    }
+    fn resize(&mut self, cols: usize, rows: usize) {
+        if self.geometry != (0, 0) && self.geometry != (cols, rows) {
+            self.hover = None;
+        }
+        self.geometry = (cols, rows);
+    }
+    fn clipped_checkbox_row(&self, content: &Content, row: usize, rows: usize) -> bool {
+        // A visible word needs a terminal row above and below for its actions.
+        // Partial checkbox rows at viewport edges stay blank and inactive.
+        (row == 3 || row + 1 == rows)
+            && content
+                .cells
+                .iter()
+                .any(|cell| cell.row == self.scroll + row - 3)
     }
 }
 
@@ -517,13 +758,14 @@ struct Screen {
     previous: Vec<String>,
     geometry: (usize, usize),
     focus: Option<(usize, usize)>,
+    highlights: Vec<Highlight>,
 }
 impl Screen {
     fn diff(&mut self, frame: &Frame, cols: usize, rows: usize) -> String {
         let resized = self.geometry != (cols, rows);
         let mut bytes = String::new();
         if resized {
-            bytes.push_str("\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[0m\x1b[2J");
+            bytes.push_str("\x1b[?25l\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[0m\x1b[2J");
             self.previous.clear();
             self.geometry = (cols, rows);
         }
@@ -537,7 +779,10 @@ impl Screen {
             let focus_changed = self.focus != frame.focus
                 && (self.focus.is_some_and(|cell| cell.0 == row)
                     || frame.focus.is_some_and(|cell| cell.0 == row));
-            if self.previous.get(row) != Some(&text) || focus_changed {
+            let hover_changed = self.highlights != frame.highlights
+                && (self.highlights.iter().any(|span| span.row == row)
+                    || frame.highlights.iter().any(|span| span.row == row));
+            if self.previous.get(row) != Some(&text) || focus_changed || hover_changed {
                 bytes.push_str(&format!(
                     "\x1b[{};1H{}{}\x1b[0m",
                     row + 1,
@@ -548,12 +793,37 @@ impl Screen {
                     },
                     text
                 ));
+                for span in frame
+                    .highlights
+                    .iter()
+                    .filter(|span| span.row == row && span.col < cols)
+                {
+                    let hovered: String = text
+                        .chars()
+                        .skip(span.col)
+                        .take(span.width.min(cols - span.col))
+                        .collect();
+                    bytes.push_str(&format!(
+                        "\x1b[{};{}H\x1b[48;2;48;48;48m{}\x1b[0m",
+                        row + 1,
+                        span.col + 1,
+                        hovered
+                    ));
+                }
                 if let Some((_, col)) = frame.focus.filter(|cell| cell.0 == row && cell.1 < cols) {
                     if let Some(glyph) = text.chars().nth(col) {
+                        let background = if frame.highlights.iter().any(|span| {
+                            span.row == row && (span.col..span.col + span.width).contains(&col)
+                        }) {
+                            "\x1b[48;2;48;48;48m"
+                        } else {
+                            ""
+                        };
                         bytes.push_str(&format!(
-                            "\x1b[{};{}H\x1b[4;38;2;255;105;180m{}\x1b[0m",
+                            "\x1b[{};{}H\x1b[4;38;2;255;105;180m{}{}\x1b[0m",
                             row + 1,
                             col + 1,
+                            background,
                             glyph
                         ));
                     }
@@ -566,6 +836,7 @@ impl Screen {
             }
         }
         self.focus = frame.focus;
+        self.highlights = frame.highlights.clone();
         bytes
     }
 }
@@ -823,6 +1094,209 @@ mod tests {
                 .contains("\x1b[2J")
         );
     }
+    fn pointer_cell(
+        view: &mut View,
+        item: usize,
+        column: usize,
+        cols: usize,
+    ) -> (usize, usize, usize) {
+        view.frame(cols, 200, &VecDeque::new());
+        let content = view.content(cols);
+        let cell = content
+            .cells
+            .iter()
+            .find(|cell| cell.item == item && cell.column == column)
+            .unwrap();
+        (cell.row + 3 - view.scroll, cell.col + 1, cell.width)
+    }
+    #[test]
+    fn checkbox_hover_changes_only_background_and_motion_tracking_is_enabled() {
+        use trueos_terminal::{MouseTracking, Terminal, TerminalColor};
+        reset();
+        let mut view = View::default();
+        let mut screen = Screen::default();
+        let mut terminal = Terminal::new(100, 200);
+        let frame = view.frame(100, 200, &VecDeque::new());
+        terminal.feed(screen.diff(&frame, 100, 200).as_bytes());
+        assert_eq!(terminal.mouse_options().tracking, MouseTracking::Any);
+        let (row, word_col, _) = pointer_cell(&mut view, 0, 0, 100);
+        let original_style = terminal.cells()[row * 100 + word_col - 1].style;
+        let report = terminal.mouse_motion(None, word_col - 1, row).unwrap();
+        let events = view.input.feed(&report, 0);
+        assert_eq!(events, [Event::Move(row, word_col - 1)]);
+        for event in events {
+            view.event(event, 100, 200);
+        }
+        let frame = view.frame(100, 200, &VecDeque::new());
+        terminal.feed(screen.diff(&frame, 100, 200).as_bytes());
+        let style = terminal.cells()[row * 100 + word_col - 1].style;
+        assert_eq!(
+            style.background,
+            TerminalColor::Rgb {
+                red: 48,
+                green: 48,
+                blue: 48
+            }
+        );
+        assert_eq!(style.foreground, original_style.foreground);
+        assert_eq!(style.underline, original_style.underline);
+        assert_eq!(frame.highlights.len(), 1);
+        assert_eq!(frame.highlights[0].width, 1);
+        assert_eq!(terminal.cells()[row * 100 + word_col].style.background, TerminalColor::Default);
+        view.event(Event::Move(row, word_col), 100, 200); // None's word has no popup.
+        let frame = view.frame(100, 200, &VecDeque::new());
+        terminal.feed(screen.diff(&frame, 100, 200).as_bytes());
+        assert!(frame.highlights.is_empty());
+        assert_eq!(
+            terminal.cells()[row * 100 + word_col - 1].style.background,
+            TerminalColor::Default
+        );
+        assert_eq!(view.changes, 0);
+    }
+    #[test]
+    fn every_cell_of_a_level_word_reveals_aligned_actions_without_moving_the_grid() {
+        reset();
+        let mut view = View::default();
+        let (row, col, width) = pointer_cell(&mut view, 0, 5, 100);
+        let original = view.frame(100, 200, &VecDeque::new()).lines[row].clone();
+        for offset in 0..width {
+            view.event(Event::Move(row, col + offset), 100, 200);
+            let frame = view.frame(100, 200, &VecDeque::new());
+            assert_eq!(frame.lines[row], original);
+            assert_eq!(
+                frame.lines[row - 1]
+                    .chars()
+                    .skip(col)
+                    .take(2)
+                    .collect::<String>(),
+                "up"
+            );
+            assert_eq!(
+                frame.lines[row + 1]
+                    .chars()
+                    .skip(col)
+                    .take(4)
+                    .collect::<String>(),
+                "down"
+            );
+        }
+        assert_eq!(view.changes, 0);
+    }
+    #[test]
+    fn up_and_down_select_displayed_ranges_and_are_consumed_once() {
+        reset();
+        let mut view = View::default();
+        let (row, col, _) = pointer_cell(&mut view, 0, 5, 100);
+        view.event(Event::Move(row, col), 100, 200);
+        view.event(Event::Move(row - 1, col + 1), 100, 200);
+        assert_eq!(view.hover.unwrap().kind, HitKind::Range(true));
+        view.event(Event::Click(row - 1, col + 1), 100, 200);
+        let left = S::ONCE
+            .union(S::USER)
+            .union(S::AI)
+            .union(S::ERROR)
+            .union(S::IMPORTANT);
+        assert_eq!(policy::area_log_policy(A::Global), P::only(left));
+        assert_eq!(view.changes, 1);
+        assert!(view.hover.is_none());
+        let frame = view.frame(100, 200, &VecDeque::new());
+        assert!(!frame.lines[row - 1].contains("up"));
+        assert!(!frame.lines[row + 1].contains("down"));
+        view.event(Event::Click(row - 1, col + 1), 100, 200);
+        assert_eq!(view.changes, 1);
+        view.event(Event::Move(row, col), 100, 200);
+        view.event(Event::Move(row + 1, col + 3), 100, 200);
+        assert_eq!(view.hover.unwrap().kind, HitKind::Range(false));
+        view.event(Event::Click(row + 1, col + 3), 100, 200);
+        let right = S::IMPORTANT
+            .union(S::WARN)
+            .union(S::INFO)
+            .union(S::DEBUG)
+            .union(S::TRACE);
+        assert_eq!(policy::area_log_policy(A::Global), P::only(right));
+        assert_eq!(view.changes, 2);
+        assert!(view.hover.is_none());
+        reset();
+    }
+    #[test]
+    fn leaving_the_word_or_actions_hides_them_and_checkbox_hover_still_works() {
+        reset();
+        let mut view = View::default();
+        let (row, col, width) = pointer_cell(&mut view, 0, 5, 100);
+        for destination in [
+            (row, col - 1),
+            (row, col + width),
+            (1, col),
+            (row + 1, col + 4),
+        ] {
+            view.event(Event::Move(row, col), 100, 200);
+            assert!(view.content(100).lines[row - 4].contains("up"));
+            view.event(Event::Move(destination.0, destination.1), 100, 200);
+            let frame = view.frame(100, 200, &VecDeque::new());
+            assert!(!frame.lines[row - 1].contains("up"));
+            assert!(!frame.lines[row + 1].contains("down"));
+        }
+        assert_eq!(view.changes, 0);
+        view.event(Event::Move(row, col), 100, 200);
+        view.frame(20, 200, &VecDeque::new());
+        assert!(view.hover.is_none());
+    }
+    #[test]
+    fn wrapped_hover_actions_do_not_overwrite_other_checkbox_rows_or_area_names() {
+        reset();
+        let mut view = View::default();
+        let (row, col, _) = pointer_cell(&mut view, 0, 3, 20);
+        let before = view.frame(20, 200, &VecDeque::new());
+        view.event(Event::Move(row, col + 1), 20, 200);
+        let after = view.frame(20, 200, &VecDeque::new());
+        assert_eq!(after.lines[row], before.lines[row]);
+        assert_eq!(
+            after.lines[row + 1]
+                .chars()
+                .skip(col)
+                .take(4)
+                .collect::<String>(),
+            "down"
+        );
+        assert!(after.lines[row + 1].chars().count() <= 20);
+        for (index, line) in before.lines.iter().enumerate() {
+            if line.contains('☐') || line.contains('🗹') {
+                assert_eq!(after.lines[index], *line);
+            }
+        }
+        view.hover = None;
+        let item = A::ALL
+            .iter()
+            .position(|area| *area == A::ExecutorRealm)
+            .unwrap();
+        let (row, col, _) = pointer_cell(&mut view, item, 1, 100);
+        view.event(Event::Move(row, col), 100, 200);
+        let frame = view.frame(100, 200, &VecDeque::new());
+        assert_eq!(frame.lines[row - 2], "executor-realm");
+        assert_eq!(
+            frame.lines[row - 1]
+                .chars()
+                .skip(col)
+                .take(2)
+                .collect::<String>(),
+            "up"
+        );
+    }
+    #[test]
+    fn hover_ranges_on_all_areas_replace_each_complete_set() {
+        reset();
+        let mut view = View::default();
+        view.open(Page::AllAreas);
+        let (row, col, _) = pointer_cell(&mut view, 0, 3, 100);
+        view.event(Event::Move(row, col), 100, 200);
+        view.event(Event::Click(row - 1, col), 100, 200);
+        let expected = S::ONCE.union(S::USER).union(S::AI);
+        for area in A::ALL {
+            assert_eq!(policy::area_log_policy(area), P::only(expected));
+        }
+        assert!(view.hover.is_none());
+        reset();
+    }
     #[test]
     fn live_reader_bounds_history_and_reports_loss_without_splicing_records() {
         let mut stream = Stream::default();
@@ -847,6 +1321,7 @@ async fn menu_task(target: MatrixTarget) {
     let mut buffer = [0u8; 4096];
     while let Some((bytes, notices)) = tui::native_read(&target) {
         if !tui::native_visible(&target) {
+            view.hover = None;
             Timer::after(Duration::from_millis(20)).await;
             continue;
         }
@@ -872,7 +1347,7 @@ async fn menu_task(target: MatrixTarget) {
         for action in actions {
             let before = view.changes;
             if view.event(action, cols, rows) {
-                tui::native_write(&target, b"\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[0m");
+                tui::native_write(&target, b"\x1b[?1000l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[0m");
                 tui::native_return(&target);
                 screen.geometry = (0, 0);
                 break;

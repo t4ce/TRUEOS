@@ -45,22 +45,51 @@ impl<T> Mutex<T> {
 }
 mod allcaps { pub mod hv { pub const VM_CPU_SLOT_LIMIT: usize = 1; pub const VM_ID_LIMIT: usize = 64; } }
 mod hv {
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use crate::trueos_time::{Timer, Duration as EmbassyDuration};
     pub fn current_hull_guest_context_vm_id() -> Option<u8> { None }
     static KILLED: [core::sync::atomic::AtomicBool; 64] = [const { core::sync::atomic::AtomicBool::new(false) }; 64];
     pub fn guest_kill_requested(vm: u8) -> bool { KILLED[vm as usize].load(core::sync::atomic::Ordering::Acquire) }
     pub fn set_guest_kill_for_test(vm: u8, value: bool) { KILLED[vm as usize].store(value, core::sync::atomic::Ordering::Release); }
-    fn vm_slot(vm: u8) -> Option<u8> { Some(vm) }
-    fn immediate_stop_requested(vm: u8) -> bool { guest_kill_requested(vm) }
+    struct Pause(AtomicBool);
+    impl Pause { fn requested(&self) -> bool { self.0.load(Ordering::Acquire) } }
+    struct Vm {
+        stop_req: AtomicBool,
+        execution_pause: Pause,
+        execution_pause_deadline_ms: AtomicU64,
+    }
+    static VMS: [Vm; 64] = [const { Vm {
+        stop_req: AtomicBool::new(false), execution_pause: Pause(AtomicBool::new(false)),
+        execution_pause_deadline_ms: AtomicU64::new(u64::MAX),
+    }}; 64];
+    static IO_ACTIVE: [core::sync::atomic::AtomicBool; 64] = [const { core::sync::atomic::AtomicBool::new(false) }; 64];
+    pub fn guest_pause_requested(vm: u8) -> bool { VMS[vm as usize].execution_pause.requested() }
+    pub fn guest_native_pause_requested(vm: u8) -> bool { guest_pause_requested(vm) && !IO_ACTIVE[vm as usize].load(core::sync::atomic::Ordering::Acquire) }
+    pub fn set_guest_pause_for_test(vm: u8, value: bool) { VMS[vm as usize].execution_pause.0.store(value, Ordering::Release); }
+    pub fn set_guest_io_for_test(vm: u8, value: bool) { IO_ACTIVE[vm as usize].store(value, core::sync::atomic::Ordering::Release); }
+    pub fn vm_run_generation(_: u8) -> Option<u64> { Some(19) }
+    fn vm_slot(vm: u8) -> Option<&'static Vm> { VMS.get(vm as usize) }
+    fn lifecycle_now_ms() -> u64 { crate::time_driver::now() }
     const TRUEOS_VM_ID_LIMIT: usize = 64;
     __CONTROL_BOUNDARY__
+    async fn park_vm_execution(vm: u8) -> bool {
+        loop {
+            let observed = VM_CONTROL_WAITS[vm as usize].observe();
+            if guest_kill_requested(vm) { return false; }
+            if !guest_pause_requested(vm) { return true; }
+            VM_CONTROL_WAITS[vm as usize].wait_after(observed).await;
+        }
+    }
     #[test]
     fn stop_or_kill_interrupts_an_indefinite_hull_wait() {
         let vm = 61;
         let mut future = core::pin::pin!(await_vm_control_boundary(vm, core::future::pending::<()>()));
         let mut cx = core::task::Context::from_waker(std::task::Waker::noop());
         assert!(core::future::Future::poll(future.as_mut(), &mut cx).is_pending());
+        set_guest_kill_for_test(vm, true);
         VM_CONTROL_WAITS[vm as usize].notify_all();
         assert_eq!(core::future::Future::poll(future.as_mut(), &mut cx), core::task::Poll::Ready(None));
+        set_guest_kill_for_test(vm, false);
     }
     #[test]
     fn latched_kill_does_not_wait_for_another_notification() {
@@ -70,6 +99,44 @@ mod hv {
         let mut cx = core::task::Context::from_waker(std::task::Waker::noop());
         assert_eq!(core::future::Future::poll(future.as_mut(), &mut cx), core::task::Poll::Ready(None));
         set_guest_kill_for_test(vm, false);
+    }
+    #[test]
+    fn pause_retains_the_original_pending_hull_wait_until_resume() {
+        use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let vm = 60;
+        let ready = AtomicBool::new(false);
+        let polls = AtomicUsize::new(0);
+        let inner = core::future::poll_fn(|_| {
+            polls.fetch_add(1, Ordering::AcqRel);
+            if ready.load(Ordering::Acquire) { core::task::Poll::Ready(42) }
+            else { core::task::Poll::Pending }
+        });
+        let mut future = core::pin::pin!(await_vm_control_boundary(vm, inner));
+        let mut cx = core::task::Context::from_waker(std::task::Waker::noop());
+        assert!(core::future::Future::poll(future.as_mut(), &mut cx).is_pending());
+        assert_eq!(polls.load(Ordering::Acquire), 1);
+        set_guest_pause_for_test(vm, true);
+        VM_CONTROL_WAITS[vm as usize].notify_all();
+        assert!(core::future::Future::poll(future.as_mut(), &mut cx).is_pending());
+        ready.store(true, Ordering::Release);
+        assert!(core::future::Future::poll(future.as_mut(), &mut cx).is_pending());
+        assert_eq!(polls.load(Ordering::Acquire), 1, "paused wait ran guest-associated work");
+        set_guest_pause_for_test(vm, false);
+        VM_CONTROL_WAITS[vm as usize].notify_all();
+        assert_eq!(core::future::Future::poll(future.as_mut(), &mut cx), core::task::Poll::Ready(Some(42)));
+        assert_eq!(polls.load(Ordering::Acquire), 2);
+    }
+    #[test]
+    fn cooperative_stop_returns_a_sleeping_hull_to_its_cleanup_code() {
+        let vm = 63;
+        let mut future = core::pin::pin!(await_vm_control_boundary(vm, core::future::pending::<()>()));
+        let mut cx = core::task::Context::from_waker(std::task::Waker::noop());
+        assert!(core::future::Future::poll(future.as_mut(), &mut cx).is_pending());
+        VMS[vm as usize].stop_req.store(true, Ordering::Release);
+        VM_CONTROL_WAITS[vm as usize].notify_all();
+        assert!(!guest_kill_requested(vm));
+        assert_eq!(core::future::Future::poll(future.as_mut(), &mut cx), core::task::Poll::Ready(None));
+        VMS[vm as usize].stop_req.store(false, Ordering::Release);
     }
 }
 mod percpu { pub fn current_slot() -> usize { 0 } }
@@ -87,8 +154,10 @@ mod wls {
     }
 }
 mod trueos_time {
+    pub use std::time::Duration;
     pub struct Timer(std::time::Instant);
     impl Timer {
+        pub fn after(duration: Duration) -> Self { Self(std::time::Instant::now() + duration) }
         pub fn after_millis(ms: u64) -> Self {
             Self(std::time::Instant::now() + std::time::Duration::from_millis(ms))
         }
@@ -126,7 +195,12 @@ mod wait {
     pub mod blocking {
         pub type BlockingJobFn = alloc::boxed::Box<dyn FnOnce() + Send + 'static>;
         __DIAGNOSTICS__
-        pub struct GuestJobOwner { pub diagnostic: diagnostics::JobDiagnostic }
+        mod lifetime { __LIFETIME__ }
+        pub(crate) use lifetime::{GuestJobOwner, open_guest_jobs, pause_guest_jobs, resume_guest_jobs,
+            close_guest_jobs, guest_jobs_in_flight, guest_jobs_quiescent};
+        pub(crate) use lifetime::reserve as reserve_guest_job;
+        fn now_ms() -> u64 { crate::time_driver::now() }
+        __CANCELLATION__
     }
     pub mod kernel_task_domain {
         pub enum KernelTaskDomain { HostService, VmGuestOwnedAlloc }
@@ -142,6 +216,7 @@ mod wait {
     support += scheduler + "\n}\n}\n"
     support += '''
 mod log_os { pub fn blueprint_important_line(_: core::fmt::Arguments<'_>) {} }
+#[macro_export] macro_rules! log_warn { ($($tokens:tt)*) => {} }
 mod time_driver {
     pub const TICK_HZ: u64 = 1000;
     pub fn now() -> u64 {
@@ -152,6 +227,13 @@ mod time_driver {
 '''
     diagnostic = (ROOT / 'src/r/blocking/diagnostics.rs').read_text().replace('embassy_time_driver::', 'crate::time_driver::')
     support = support.replace('__DIAGNOSTICS__', 'pub mod diagnostics {\n' + diagnostic.replace('//!', '//') + '\n}')
+    lifetime = (ROOT / 'src/r/blocking/lifetime.rs').read_text().replace('//!', '//')
+    lifetime = lifetime.replace('trueos_time::', 'crate::trueos_time::')
+    support = support.replace('__LIFETIME__', lifetime)
+    blocking = (ROOT / 'src/r/blocking.rs').read_text()
+    start = blocking.index('pub(crate) fn guest_job_cancellation_requested(')
+    end = blocking.index('\n}', start) + 2
+    support = support.replace('__CANCELLATION__', blocking[start:end])
     with tempfile.TemporaryDirectory(prefix="trueos-thread-scheduler-") as directory:
         folder = Path(directory)
         (folder / "src").mkdir()
@@ -164,6 +246,9 @@ mod time_driver {
             "cargo", "test", "--offline", "--target", "x86_64-unknown-linux-gnu",
             "--target-dir", str(ROOT / "bld/thread-scheduler-host-tests"),
             "--config", 'build.rustflags=["--cfg","thread_scheduler_harness"]',
+            # Realm/CURRENT mocks represent one physical carrier. Parallel
+            # host test threads must not share that simulated CPU state.
+            "--", "--test-threads=1",
         ], cwd=folder, check=True)
 
 

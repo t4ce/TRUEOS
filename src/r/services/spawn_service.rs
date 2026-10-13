@@ -53,8 +53,6 @@ define_started_flags!(
     VMEDIA_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
     TRUEOSFS_INDEX_SERVICE_STARTED,
-    HV_VM_STORE_STARTED,
-    HV_VM_STORE_NET_STARTED,
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
     NET_CACHE_SERVICE_STARTED,
@@ -117,6 +115,9 @@ define_started_flags!(
     EXECUTOR_REALM_MIGRATION_SMOKE_STARTED,
     UNIX_FD_PROBE_STARTED
 );
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+define_started_flags!(HV_VM_STORE_STARTED, HV_VM_STORE_NET_STARTED);
 
 macro_rules! define_stop_flags {
     ($($name:ident),* $(,)?) => {
@@ -505,10 +506,12 @@ fn spawn_trueosfs_index_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::fs::trueosfs::index_service_task())
 }
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 fn spawn_hv_vm_store(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::hv::store::vm_store_task())
 }
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 fn spawn_hv_vm_store_net(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::hv::store::vm_store_replication_task())
 }
@@ -1391,7 +1394,8 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 77
+const TASK_COUNT: usize = 75
+    + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize;
@@ -1513,7 +1517,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOSFS_INDEX_SERVICE_STARTED,
         spawn_trueosfs_index_service,
     ),
+    #[cfg(feature = "legacy_vm_checkpoint")]
     TaskSpec::enabled("hv-vm-store", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store),
+    #[cfg(feature = "legacy_vm_checkpoint")]
     TaskSpec::enabled(
         "hv-vm-store-net",
         crate::r::readiness::NET_ANY_CONFIGURED,

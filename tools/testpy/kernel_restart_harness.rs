@@ -240,6 +240,7 @@ fn entry(id: u8, resume: bool, replicate: bool) -> live_update::WarmVmRestartEnt
     }
 }
 #[test]
+#[cfg(feature = "legacy_vm_checkpoint")]
 fn warm_restores_only_running_apps_without_defaults() {
     setup(
         true,
@@ -259,6 +260,13 @@ fn warm_restores_only_running_apps_without_defaults() {
         || x == "eject:2"
         || x == "eject:4"));
     assert_eq!(e.last().unwrap(), "complete");
+}
+#[test]
+#[cfg(not(feature = "legacy_vm_checkpoint"))]
+fn warm_checkpoint_entries_are_ignored_without_launching_apps() {
+    setup(true, vec![entry(1, true, true), entry(2, true, false)]);
+    run(restart::restart_apps_task(Spawner));
+    assert_eq!(*EVENTS.lock().unwrap(), vec!["complete"]);
 }
 #[test]
 fn warm_with_no_running_apps_launches_nothing() {

@@ -1,5 +1,5 @@
 use alloc::{collections::VecDeque, vec::Vec};
-use core::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 
 use spin::Mutex;
 use v::vnet as api;
@@ -27,6 +27,73 @@ pub(crate) const READY_ERROR: u8 = 0b0000_0100;
 pub(crate) const READY_READ_CLOSED: u8 = 0b0000_1000;
 pub(crate) const READY_WRITE_CLOSED: u8 = 0b0001_0000;
 const TCP_LISTENER_PREPOST: usize = 32;
+
+const MIO_RX_OWNER_SLOTS: usize = 16_384;
+const MIO_RX_OWNER_TOMBSTONE: u64 = u64::MAX;
+// The adapter can run while Mio holds its own state lock. Separate atomic
+// ownership records let it apply TCP backpressure without taking that lock.
+static MIO_RX_OWNERS: [AtomicU64; MIO_RX_OWNER_SLOTS] =
+    [const { AtomicU64::new(0) }; MIO_RX_OWNER_SLOTS];
+static MIO_RX_DEVICE_INDEX: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+fn rx_owner(handle: u32) -> Option<u8> {
+    for step in 0..MIO_RX_OWNER_SLOTS {
+        let slot = (handle as usize).wrapping_add(step) % MIO_RX_OWNER_SLOTS;
+        let value = MIO_RX_OWNERS[slot].load(AtomicOrdering::Acquire);
+        if value == 0 {
+            return None;
+        }
+        if value != MIO_RX_OWNER_TOMBSTONE && value >> 8 == u64::from(handle) {
+            return Some((value as u8).saturating_sub(1));
+        }
+    }
+    None
+}
+
+// Writers already serialize through MIO_COMPAT. A tombstone preserves the
+// probe chain when another socket hashes to the same slot.
+fn publish_rx_owner(handle: u32, owner: Option<u8>) -> bool {
+    let mut available = None;
+    for step in 0..MIO_RX_OWNER_SLOTS {
+        let slot = (handle as usize).wrapping_add(step) % MIO_RX_OWNER_SLOTS;
+        let value = MIO_RX_OWNERS[slot].load(AtomicOrdering::Acquire);
+        if value != 0 && value != MIO_RX_OWNER_TOMBSTONE && value >> 8 == u64::from(handle) {
+            let value = owner.map_or(MIO_RX_OWNER_TOMBSTONE,
+                |owner| (u64::from(handle) << 8) | u64::from(owner.saturating_add(1)));
+            MIO_RX_OWNERS[slot].store(value, AtomicOrdering::Release);
+            return true;
+        }
+        if value == 0 || value == MIO_RX_OWNER_TOMBSTONE {
+            available.get_or_insert(slot);
+        }
+        if value == 0 {
+            break;
+        }
+    }
+    if let Some(owner) = owner {
+        if let Some(slot) = available {
+            MIO_RX_OWNERS[slot].store(
+                (u64::from(handle) << 8) | u64::from(owner.saturating_add(1)),
+                AtomicOrdering::Release,
+            );
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+pub(crate) fn tcp_receive_paused(device_index: usize, handle: u32) -> bool {
+    // Mio's shared bridge retains its initially assigned NIC; other NICs can reuse the
+    // same numeric NetHandle without sharing its ownership or pause state.
+    if device_index != MIO_RX_DEVICE_INDEX.load(AtomicOrdering::Acquire) {
+        return false;
+    }
+    if let Some(owner) = rx_owner(handle) {
+        return crate::hv::guest_pause_requested(owner);
+    }
+    false
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -533,7 +600,11 @@ impl MioCompat {
 
     fn ensure_net(&mut self) -> Result<(), i32> {
         if self.net.is_none() {
+            let device_index = crate::net::primary_device_index();
             self.net = VNetBridge::open_primary();
+            if self.net.is_some() {
+                MIO_RX_DEVICE_INDEX.store(device_index, AtomicOrdering::Release);
+            }
         }
         if self.net.is_some() {
             Ok(())
@@ -633,9 +704,11 @@ impl MioCompat {
         };
         let mut socket = self.sockets.remove(index);
         if let Some(handle) = socket.handle.take() {
+            publish_rx_owner(handle.0, None);
             let _ = self.submit(api::Command::Close { handle });
         }
         for handle in socket.listen_handles.drain(..) {
+            publish_rx_owner(handle.0, None);
             let _ = self.submit(api::Command::Close { handle });
         }
     }
@@ -806,6 +879,17 @@ impl MioCompat {
                     && let Some(pending) = self.pending_opens.remove(index)
                 {
                     let pending_open_count = self.pending_opens.len();
+                    let owner_vm = self.socket(pending.socket_id).and_then(|socket| socket.owner_vm);
+                    if kind == api::SocketKind::Tcp && !publish_rx_owner(handle.0, owner_vm) {
+                        // Only this new guest socket is refused at capacity;
+                        // unrelated SSH/HTTP control sockets keep receiving.
+                        let _ = self.submit(api::Command::Close { handle });
+                        if let Some(socket) = self.socket_mut(pending.socket_id) {
+                            socket.error = STATUS_RESOURCE_EXHAUSTED;
+                            socket.closed = true;
+                        }
+                        return;
+                    }
                     let Some(socket) = self.socket_mut(pending.socket_id) else {
                         return;
                     };
@@ -882,6 +966,7 @@ impl MioCompat {
                     let peer = event_peer.or(fallback_peer);
 
                     if !self.socket_capacity_available(owner_vm) {
+                        publish_rx_owner(handle.0, None);
                         let _ = self.submit(api::Command::Close { handle });
                         if port.is_some() {
                             self.ensure_tcp_listener_depth(listener_id);
@@ -1019,6 +1104,9 @@ impl MioCompat {
             }
             api::Event::UdpPacket { handle, from, data } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    if socket.owner_vm.is_some_and(crate::hv::guest_pause_requested) {
+                        return;
+                    }
                     socket.rx_dgrams.push_back((
                         CompatAddr::V4 {
                             addr: from.addr,
@@ -1030,6 +1118,9 @@ impl MioCompat {
             }
             api::Event::UdpPacketV6 { handle, from, data } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    if socket.owner_vm.is_some_and(crate::hv::guest_pause_requested) {
+                        return;
+                    }
                     socket.rx_dgrams.push_back((
                         CompatAddr::V6 {
                             addr: from.addr,
@@ -1040,6 +1131,7 @@ impl MioCompat {
                 }
             }
             api::Event::Closed { handle } => {
+                publish_rx_owner(handle.0, None);
                 let mut refill_listener = None;
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
                     if socket.kind == MioSocketKind::TcpListener {
@@ -1558,6 +1650,7 @@ pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
 
         compat.drop_pending_open(socket_id);
         for handle in handles {
+            publish_rx_owner(handle.0, None);
             let _ = compat.submit(api::Command::Close { handle });
         }
         compat.sockets.remove(socket_index);
@@ -1591,6 +1684,7 @@ pub(crate) fn close_sockets_for_vm(vm_id: u8) -> usize {
             compat.drop_pending_open(socket_id);
         }
         for handle in handles {
+            publish_rx_owner(handle.0, None);
             let _ = compat.submit(api::Command::Close { handle });
         }
         if closed != 0 {

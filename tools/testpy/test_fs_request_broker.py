@@ -72,6 +72,7 @@ async fn process_request(request:Request) {
         Request::Read => { STATE.lock().reads+=1; }
     }
 }
+fn queue_retired_write_aborts() {}
 #[derive(Default)] struct WakeCount(AtomicUsize);
 impl Wake for WakeCount { fn wake(self:Arc<Self>) { self.0.fetch_add(1,Ordering::Relaxed); } }
 fn enqueue(request:Request) { BROKER_REQUESTS.lock().push_back(request); BROKER_WAIT.notify(); }

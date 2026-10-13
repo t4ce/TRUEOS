@@ -243,9 +243,18 @@ pub(crate) fn publish_host_advertisement(advertisement: PeerHostAdvertisement) {
 }
 
 pub(crate) fn take_peer_advertisements() -> Vec<PeerAdvertisement> {
+    #[cfg(feature = "legacy_vm_checkpoint")]
     if !crate::hv::store::replication_online() {
         return Vec::new();
     }
+    #[cfg(not(feature = "legacy_vm_checkpoint"))]
+    if crate::r::readiness::mask() & crate::r::readiness::HTTP_TRUEOSFS_LISTENING == 0 {
+        return Vec::new();
+    }
+    #[cfg(feature = "legacy_vm_checkpoint")]
+    let (port, caps) = (crate::r::net::ports::VM_STORE_REPL_PORT, "registry,status,fs");
+    #[cfg(not(feature = "legacy_vm_checkpoint"))]
+    let (port, caps) = (crate::r::net::ports::HTTP_TRUEOSFS_TCP_PORT, "fs");
 
     let now = monotonic_ms();
     let last = LAST_ADVERTISE_MS.load(Ordering::Acquire);
@@ -260,10 +269,11 @@ pub(crate) fn take_peer_advertisements() -> Vec<PeerAdvertisement> {
     }
 
     let data = format!(
-        "{} v=1 node=0x{:016X} tcp={} caps=registry,status,fs",
+        "{} v=1 node=0x{:016X} tcp={} caps={}",
         PEER_ADVERTISEMENT_MAGIC,
         local_node_id(),
-        crate::r::net::ports::VM_STORE_REPL_PORT
+        port,
+        caps,
     )
     .into_bytes();
 
@@ -294,7 +304,7 @@ pub(crate) fn take_peer_advertisements() -> Vec<PeerAdvertisement> {
             local_ip.map(|ip| ip[1]).unwrap_or(0),
             local_ip.map(|ip| ip[2]).unwrap_or(0),
             local_ip.map(|ip| ip[3]).unwrap_or(0),
-            crate::r::net::ports::VM_STORE_REPL_PORT
+            port
         );
     }
 

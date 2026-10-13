@@ -84,6 +84,9 @@ trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
 wc3 = []
+# Compatibility experiments are excluded from the normal VMX lifecycle.
+# RAM pause/resume does not require checkpoint storage or replication.
+legacy_vm_checkpoint = []
 trueos_ttstt = [
     "dep:trueos-ttstt-cpu",
     "dep:trueos-kokoro-aot",

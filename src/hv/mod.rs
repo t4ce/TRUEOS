@@ -6,6 +6,7 @@ pub(crate) mod matrix;
 pub mod blueprint_net;
 pub mod control_kick;
 mod cooperative_stop;
+mod lifecycle;
 mod teardown_diagnostics;
 use teardown_diagnostics::Stage as TeardownStage;
 pub(crate) mod execution_policy;
@@ -15,8 +16,17 @@ pub mod hv_remote_restore_service;
 pub mod lane;
 pub mod memory;
 pub mod security;
+#[cfg(feature = "legacy_vm_checkpoint")]
 pub mod snapshot;
+#[cfg(feature = "legacy_vm_checkpoint")]
 pub mod store;
+#[cfg(feature = "legacy_vm_checkpoint")]
+#[path = "checkpoint_legacy.rs"]
+mod checkpoint;
+#[cfg(not(feature = "legacy_vm_checkpoint"))]
+#[path = "checkpoint_disabled.rs"]
+mod checkpoint;
+pub use checkpoint::*;
 pub mod sync;
 pub mod vmcall;
 pub mod vmx;
@@ -51,7 +61,6 @@ use crate::shell3::MatrixTarget;
 
 use guest_work::{VmLaneProfile, pick_vm_hull_lane};
 use memory::*;
-use snapshot::*;
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
 const MIB: usize = 1024 * 1024;
@@ -61,6 +70,8 @@ const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 #[cfg(not(feature = "wc3"))]
 const GUEST_FS_BASE_RESET: u64 = 0;
 const BLUEPRINT_PREPARE_PAUSE_TIMEOUT_MS: u64 = 15_000;
+const STOP_CLEANUP_TIMEOUT_MS: u64 = 2_000;
+const PAUSE_CHECKPOINT_TIMEOUT_MS: u64 = 15_000;
 const BLUEPRINT_LIFECYCLE_PHASE_RUNNING: u8 = 0;
 const BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE: u8 = 1;
 const BLUEPRINT_LIFECYCLE_PHASE_READY: u8 = 2;
@@ -95,24 +106,52 @@ static VM_CONTROL_WAITS: [crate::wait::WaitQueue; TRUEOS_VM_ID_LIMIT] =
 
 async fn await_vm_control_boundary<F: core::future::Future>(vm_id: u8, future: F) -> Option<F::Output> {
     let queue = &VM_CONTROL_WAITS[vm_id as usize];
-    let observed = queue.observe();
-    if vm_slot(vm_id).is_some_and(immediate_stop_requested) {
-        return None;
-    }
-    let mut control = core::pin::pin!(queue.wait_after(observed));
     let mut future = core::pin::pin!(future);
-    core::future::poll_fn(|cx| {
-        if control.as_mut().poll(cx).is_ready() {
-            return core::task::Poll::Ready(None);
+    loop {
+        let observed = queue.observe();
+        if !park_vm_execution(vm_id).await {
+            return None;
         }
-        future.as_mut().poll(cx).map(Some)
-    }).await
+        // A cooperative stop must return a sleeping guest to its cleanup
+        // code. Pause alone retains the original wait and its result.
+        if vm_slot(vm_id).is_some_and(|vm| vm.stop_req.load(Ordering::Acquire)) {
+            return None;
+        }
+        let mut control = core::pin::pin!(queue.wait_after(observed));
+        let deadline_ms = vm_slot(vm_id).filter(|vm| vm.execution_pause.requested())
+            .map(|vm| vm.execution_pause_deadline_ms.load(Ordering::Acquire));
+        let mut deadline = core::pin::pin!(async {
+            match deadline_ms {
+                Some(deadline) => Timer::after(EmbassyDuration::from_millis(
+                    deadline.saturating_sub(lifecycle_now_ms()).max(1),
+                )).await,
+                None => core::future::pending::<()>().await,
+            }
+        });
+        let result = core::future::poll_fn(|cx| {
+            // Poll control first. A paused wait retains its original future
+            // and request; it is never cancelled or completed with a fake result.
+            if control.as_mut().poll(cx).is_ready() {
+                return core::task::Poll::Ready(None);
+            }
+            if deadline.as_mut().poll(cx).is_ready() {
+                return core::task::Poll::Ready(None);
+            }
+            future.as_mut().poll(cx).map(Some)
+        }).await;
+        if let Some(result) = result {
+            return Some(result);
+        }
+    }
 }
 
 struct TrueosVmId {
     running: AtomicBool,
     starting: AtomicBool,
     stop_req: AtomicBool,
+    execution_pause: lifecycle::PauseControl,
+    execution_pause_deadline_ms: AtomicU64,
+    execution_pause_io_wait_logged: AtomicBool,
     cooperative_stop: cooperative_stop::CooperativeStop,
     lifecycle_control: spin::Mutex<()>,
     lifecycle_generation: AtomicU64,
@@ -140,6 +179,9 @@ impl TrueosVmId {
             running: AtomicBool::new(false),
             starting: AtomicBool::new(false),
             stop_req: AtomicBool::new(false),
+            execution_pause: lifecycle::PauseControl::new(),
+            execution_pause_deadline_ms: AtomicU64::new(0),
+            execution_pause_io_wait_logged: AtomicBool::new(false),
             cooperative_stop: cooperative_stop::CooperativeStop::new(),
             lifecycle_control: spin::Mutex::new(()),
             lifecycle_generation: AtomicU64::new(0),
@@ -219,6 +261,7 @@ static BLUEPRINT_LIFECYCLE_ARCHIVES: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_L
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_INSTANCE_IDENTITIES: [Mutex<Option<BlueprintInstanceIdentity>>;
     TRUEOS_VM_ID_LIMIT] = [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+#[cfg(feature = "legacy_vm_checkpoint")]
 static BLUEPRINT_REPLICATION_CHECKPOINTS: [Mutex<Option<BlueprintReplicationCheckpoint>>;
     TRUEOS_VM_ID_LIMIT] = [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 // This host-owned template survives the guest's one-shot consumption of its
@@ -241,6 +284,7 @@ pub static mut HV_HOST_GDTS: [[u64; 8]; TRUEOS_VM_CPU_SLOT_LIMIT] =
 pub static mut HV_HOST_TSSS: [[u8; 104]; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [[0u8; 104]; TRUEOS_VM_CPU_SLOT_LIMIT];
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 pub use snapshot::{RestoreError, SaveError};
 
 fn current_vmx_slot() -> Result<usize, &'static str> {
@@ -623,6 +667,7 @@ pub struct BlueprintLaunchState {
     pub identity: BlueprintInstanceIdentity,
 }
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 pub(crate) struct BlueprintRelaunchState {
     archive: AllocString,
     module_bytes: AllocVec<u8>,
@@ -959,6 +1004,7 @@ pub struct HvStatus {
     pub stored_vm_count: usize,
     pub vm_id_limit: usize,
     pub running_count: usize,
+    pub paused_count: usize,
     pub starting_count: usize,
     pub active_vm_ids: [Option<u8>; TRUEOS_VM_ID_LIMIT],
     pub vm_shared_heap_total_bytes: usize,
@@ -975,6 +1021,8 @@ pub struct HvVmState {
     pub running: bool,
     pub starting: bool,
     pub stop_requested: bool,
+    pub pause_requested: bool,
+    pub paused: bool,
     pub preserve_requested: bool,
     pub preserve_exit: bool,
     pub replicatable: bool,
@@ -1010,171 +1058,6 @@ pub(crate) fn vm_lifecycle_generation(vm_id: u8) -> Option<u64> {
 fn lifecycle_now_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     embassy_time_driver::now().saturating_mul(1000) / hz
-}
-
-fn reset_prepare_pause(vm: &TrueosVmId) {
-    vm.lifecycle_phase
-        .store(BLUEPRINT_LIFECYCLE_PHASE_RUNNING, Ordering::Release);
-    vm.lifecycle_operation.store(0, Ordering::Release);
-    vm.lifecycle_deadline_ms.store(0, Ordering::Release);
-    vm.lifecycle_checkpoint_version.store(0, Ordering::Release);
-}
-
-fn clear_blueprint_replication_checkpoint(vm_id: u8) {
-    if let Some(slot) = BLUEPRINT_REPLICATION_CHECKPOINTS.get(vm_id as usize) {
-        let _ = slot.lock().take();
-    }
-}
-
-pub(crate) fn submit_blueprint_replication_checkpoint(
-    vm_id: u8,
-    operation: u64,
-    version: u64,
-    bytes: &[u8],
-) -> bool {
-    let Some(vm) = vm_slot(vm_id) else {
-        return false;
-    };
-    if operation == 0
-        || version == 0
-        || version > u32::MAX as u64
-        || bytes.is_empty()
-        || bytes.len() > BLUEPRINT_REPLICATION_CHECKPOINT_MAX_BYTES
-        || vm.lifecycle_phase.load(Ordering::Acquire) != BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE
-        || vm.lifecycle_operation.load(Ordering::Acquire) != operation
-    {
-        return false;
-    }
-    let Some(slot) = BLUEPRINT_REPLICATION_CHECKPOINTS.get(vm_id as usize) else {
-        return false;
-    };
-    *slot.lock() = Some(BlueprintReplicationCheckpoint {
-        operation,
-        version,
-        bytes: bytes.to_vec(),
-    });
-    hvlogf(format_args!(
-        "hv: vm{} lifecycle: application checkpoint accepted operation={} version={} bytes={}",
-        vm_id,
-        operation,
-        version,
-        bytes.len()
-    ));
-    true
-}
-
-pub fn blueprint_replication_checkpoint(vm_id: u8) -> Option<BlueprintReplicationCheckpoint> {
-    BLUEPRINT_REPLICATION_CHECKPOINTS
-        .get(vm_id as usize)?
-        .lock()
-        .clone()
-}
-
-pub fn install_blueprint_replication_checkpoint(
-    vm_id: u8,
-    checkpoint: BlueprintReplicationCheckpoint,
-) -> bool {
-    let Some(slot) = BLUEPRINT_REPLICATION_CHECKPOINTS.get(vm_id as usize) else {
-        return false;
-    };
-    *slot.lock() = Some(checkpoint);
-    true
-}
-
-pub(crate) fn take_blueprint_replication_checkpoint(
-    vm_id: u8,
-) -> Option<BlueprintReplicationCheckpoint> {
-    BLUEPRINT_REPLICATION_CHECKPOINTS
-        .get(vm_id as usize)?
-        .lock()
-        .take()
-}
-
-fn expire_prepare_pause(vm_id: u8, vm: &TrueosVmId) {
-    if vm.lifecycle_phase.load(Ordering::Acquire) != BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE {
-        return;
-    }
-    let deadline = vm.lifecycle_deadline_ms.load(Ordering::Acquire);
-    if deadline == 0 || lifecycle_now_ms() <= deadline {
-        return;
-    }
-    if vm
-        .lifecycle_phase
-        .compare_exchange(
-            BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE,
-            BLUEPRINT_LIFECYCLE_PHASE_RUNNING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        )
-        .is_ok()
-    {
-        let operation = vm.lifecycle_operation.swap(0, Ordering::AcqRel);
-        vm.lifecycle_deadline_ms.store(0, Ordering::Release);
-        hvwarnf(format_args!(
-            "hv: vm{} lifecycle: PreparePause operation={} timed out; VM left running",
-            vm_id, operation
-        ));
-    }
-}
-
-pub(crate) fn blueprint_prepare_pause(vm_id: u8) -> Option<BlueprintPreparePause> {
-    let vm = vm_slot(vm_id)?;
-    expire_prepare_pause(vm_id, vm);
-    if vm.lifecycle_phase.load(Ordering::Acquire) != BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE {
-        return None;
-    }
-    Some(BlueprintPreparePause {
-        operation: vm.lifecycle_operation.load(Ordering::Acquire),
-        deadline_ms: vm.lifecycle_deadline_ms.load(Ordering::Acquire),
-        reason: BlueprintPauseReason::from_raw(vm.lifecycle_reason.load(Ordering::Acquire)),
-    })
-}
-
-pub(crate) fn acknowledge_blueprint_ready(
-    vm_id: u8,
-    operation: u64,
-    checkpoint_version: u64,
-) -> Option<BlueprintReadyDisposition> {
-    let Some(vm) = vm_slot(vm_id) else {
-        return None;
-    };
-    expire_prepare_pause(vm_id, vm);
-    if operation == 0
-        || vm.lifecycle_operation.load(Ordering::Acquire) != operation
-        || vm
-            .lifecycle_phase
-            .compare_exchange(
-                BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE,
-                BLUEPRINT_LIFECYCLE_PHASE_READY,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_err()
-    {
-        return None;
-    }
-    let reason = BlueprintPauseReason::from_raw(vm.lifecycle_reason.load(Ordering::Acquire));
-    let disposition = match reason {
-        BlueprintPauseReason::Pause => BlueprintReadyDisposition::Pause,
-        BlueprintPauseReason::Replicate | BlueprintPauseReason::Migrate => {
-            BlueprintReadyDisposition::Snapshot
-        }
-    };
-    vm.lifecycle_checkpoint_version
-        .store(checkpoint_version, Ordering::Release);
-    match prepare_preserve_mode(vm_id, PreserveMode::Pause) {
-        Ok(true) => {
-            hvlogf(format_args!(
-                "hv: vm{} lifecycle: Ready operation={} checkpoint_version={} reason={:?} disposition={:?}",
-                vm_id, operation, checkpoint_version, reason, disposition
-            ));
-            Some(disposition)
-        }
-        Ok(false) | Err(_) => {
-            reset_prepare_pause(vm);
-            None
-        }
-    }
 }
 
 pub(crate) fn blueprint_instance_identity(vm_id: u8) -> Option<BlueprintInstanceIdentity> {
@@ -1664,7 +1547,7 @@ fn vm_activity_snapshot() -> (usize, usize, [Option<u8>; TRUEOS_VM_ID_LIMIT]) {
         if running || starting {
             active_vm_ids[idx] = Some(idx as u8);
         }
-        if running {
+        if running && !slot.execution_pause.paused() {
             running_count = running_count.saturating_add(1);
         }
         if starting {
@@ -1683,6 +1566,8 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
             running: false,
             starting: false,
             stop_requested: false,
+            pause_requested: false,
+            paused: false,
             preserve_requested: false,
             preserve_exit: false,
             replicatable: false,
@@ -1695,15 +1580,20 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
     };
     expire_prepare_pause(vm_id, vm);
     let pause_latched = vm.pause_latched.load(Ordering::Acquire);
+    #[cfg(feature = "legacy_vm_checkpoint")]
     let pause_snapshot_ready = pause_latched
         && crate::hv::store::current_committed_seq(vm_id)
             > vm.pause_store_seq.load(Ordering::Acquire);
+    #[cfg(not(feature = "legacy_vm_checkpoint"))]
+    let pause_snapshot_ready = false;
     HvVmState {
         id: vm_id,
         supported: true,
         running: vm.running.load(Ordering::Acquire),
         starting: vm.starting.load(Ordering::Acquire),
         stop_requested: vm.stop_req.load(Ordering::Acquire),
+        pause_requested: vm.execution_pause.requested(),
+        paused: vm.execution_pause.paused(),
         preserve_requested: vm.preserve_req.load(Ordering::Acquire),
         preserve_exit: vm.preserve_exit.load(Ordering::Acquire),
         replicatable: vm.replicatable.load(Ordering::Acquire),
@@ -1855,6 +1745,7 @@ fn set_blueprint_lifecycle_capability(vm_id: u8, archive: &str, replicatable: bo
     let Some(vm) = vm_slot(vm_id) else {
         return;
     };
+    let replicatable = cfg!(feature = "legacy_vm_checkpoint") && replicatable;
     vm.replicatable.store(replicatable, Ordering::Release);
     vm.pause_latched.store(false, Ordering::Release);
     vm.resume_prepared.store(false, Ordering::Release);
@@ -2035,6 +1926,10 @@ pub fn hvwarnf(args: core::fmt::Arguments<'_>) {
     hvlog_at(log_os_core::LogLevel::Warn, args);
 }
 
+fn hvimportantf(args: core::fmt::Arguments<'_>) {
+    hvlog_at(log_os_core::LogLevel::Important, args);
+}
+
 pub fn hverrorf(args: core::fmt::Arguments<'_>) {
     hvlog_at(log_os_core::LogLevel::Error, args);
 }
@@ -2075,6 +1970,8 @@ fn hvlog_console_enabled(level: log_os_core::LogLevel) -> bool {
 pub fn status() -> HvStatus {
     let (vendor_intel, has_msr, has_vmx, fc_locked, fc_vmx_outside_smx) = vmx_caps();
     let (running_count, starting_count, active_vm_ids) = vm_activity_snapshot();
+    let paused_count = trueos_vm_ids.iter().filter(|vm| vm.running.load(Ordering::Acquire)
+        && vm.execution_pause.paused()).count();
     let vm_heap = crate::allocators::hv_guest_heap_stats_total();
     HvStatus {
         vendor_intel,
@@ -2083,9 +1980,13 @@ pub fn status() -> HvStatus {
         feature_control_locked: fc_locked,
         feature_control_vmx_outside_smx: fc_vmx_outside_smx,
         guest_module_present: crate::limine::guest_kernel_bytes().is_some(),
+        #[cfg(feature = "legacy_vm_checkpoint")]
         stored_vm_count: crate::hv::store::committed_vm_count(),
+        #[cfg(not(feature = "legacy_vm_checkpoint"))]
+        stored_vm_count: 0,
         vm_id_limit: TRUEOS_VM_ID_LIMIT,
         running_count,
+        paused_count,
         starting_count,
         active_vm_ids,
         vm_shared_heap_total_bytes: vm_heap.usable_total,
@@ -2474,22 +2375,201 @@ pub(crate) fn stop_for_generation(vm_id: u8, generation: u64) -> Result<bool, St
     stop_matching_generation(vm_id, Some(generation))
 }
 
+/// Park the live Hull at a VM-exit boundary. The task, VMCS, VPID, EPT,
+/// native stacks and carrier lease remain owned by the same incarnation.
+pub fn pause(vm_id: u8) -> Result<bool, StopError> {
+    pause_matching_owner(vm_id, None)
+}
+
+pub(crate) fn pause_for_matrix_slot(vm_id: u8, owner: &crate::shell3::MatrixSlotLease) -> Result<bool, StopError> {
+    pause_matching_owner(vm_id, Some(owner))
+}
+
+fn pause_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease>) -> Result<bool, StopError> {
+    let Some(vm) = vm_slot(vm_id) else { return Err(StopError::UnsupportedVmId); };
+    let _control = vm.lifecycle_control.lock();
+    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) { return Ok(false); }
+    if !vm.running.load(Ordering::Acquire)
+        || vm.starting.load(Ordering::Acquire)
+        || vm.stop_req.load(Ordering::Acquire)
+        || vm.pause_latched.load(Ordering::Acquire)
+        || !vm.execution_pause.request()
+    {
+        return Ok(false);
+    }
+    crate::r::blocking::pause_guest_jobs(vm_id);
+    vm.execution_pause_deadline_ms.store(lifecycle_now_ms().saturating_add(PAUSE_CHECKPOINT_TIMEOUT_MS), Ordering::Release);
+    vm.execution_pause_io_wait_logged.store(false, Ordering::Release);
+    VM_CONTROL_WAITS[vm_id as usize].notify_all();
+    crate::r::threads::wake_guest_control(vm_id);
+    nudge_vm_control(vm_id, control_kick::LifecycleKickAction::Nudge, "pause");
+    hvimportantf(format_args!("hv: vm{} lifecycle: pause requested contract=finish-or-abort-streamed-writes checkpoint=vm-exit-and-filesystem timeout_ms={} slot=retained", vm_id, PAUSE_CHECKPOINT_TIMEOUT_MS));
+    Ok(true)
+}
+
+/// Continue the same retained execution. No loader, restore, new identity or
+/// new carrier allocation participates in this transition.
+pub fn resume(vm_id: u8) -> Result<bool, StopError> {
+    resume_matching_owner(vm_id, None)
+}
+
+pub(crate) fn resume_for_matrix_slot(vm_id: u8, owner: &crate::shell3::MatrixSlotLease) -> Result<bool, StopError> {
+    resume_matching_owner(vm_id, Some(owner))
+}
+
+fn resume_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease>) -> Result<bool, StopError> {
+    let Some(vm) = vm_slot(vm_id) else { return Err(StopError::UnsupportedVmId); };
+    let _control = vm.lifecycle_control.lock();
+    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) { return Ok(false); }
+    if !vm.running.load(Ordering::Acquire)
+        || vm.stop_req.load(Ordering::Acquire)
+        || !vm.execution_pause.requested()
+    {
+        return Ok(false);
+    }
+    assert!(crate::r::blocking::resume_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
+    vm.execution_pause.resume();
+    crate::r::threads::wake_guest_control(vm_id);
+    VM_CONTROL_WAITS[vm_id as usize].notify_all();
+    hvlogf(format_args!("hv: vm{} lifecycle: resume requested same-vmcs=1 same-slot=1", vm_id));
+    Ok(true)
+}
+
+pub(crate) fn guest_pause_requested(vm_id: u8) -> bool {
+    vm_slot(vm_id).is_some_and(|vm| vm.execution_pause.requested())
+}
+
+pub(crate) fn guest_native_pause_requested(vm_id: u8) -> bool {
+    if vm_slot(vm_id).is_some_and(|vm| vm.execution_pause.paused()) { return true; }
+    guest_pause_requested(vm_id)
+        && crate::r::fs::request_broker::pending_for_vm(vm_id) == 0
+        && crate::r::fs::request_broker::open_writes_for_vm(vm_id) == 0
+}
+
+async fn park_vm_execution(vm_id: u8) -> bool {
+    let Some(vm) = vm_slot(vm_id) else { return false; };
+    loop {
+        let queue = &VM_CONTROL_WAITS[vm_id as usize];
+        let observed = queue.observe();
+        if immediate_stop_requested(vm) { return false; }
+        if !vm.execution_pause.requested() { return true; }
+        if !vm.execution_pause.paused() {
+            crate::r::threads::wake_guest_control(vm_id);
+            let _control = vm.lifecycle_control.lock();
+            if !vm.execution_pause.requested() { continue; }
+            let fs_pending = crate::r::fs::request_broker::pending_for_vm(vm_id);
+            let fs_writes = crate::r::fs::request_broker::open_writes_for_vm(vm_id);
+            let async_pending = crate::r::io::async_fs_cabi::pending_for_owner(
+                crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+            );
+            if lifecycle_now_ms() >= vm.execution_pause_deadline_ms.load(Ordering::Acquire) {
+                if !vm.stop_req.load(Ordering::Acquire) {
+                    assert!(crate::r::blocking::resume_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
+                    vm.execution_pause.resume();
+                    crate::r::threads::wake_guest_control(vm_id);
+                    hvimportantf(format_args!("hv: vm{} lifecycle: pause cancelled reason=checkpoint-timeout native_jobs={} fs_pending={} fs_streams={} async_fs_pending={} state=running contract=finish-or-abort-before-pause",
+                        vm_id, crate::r::blocking::guest_jobs_in_flight(vm_id), fs_pending, fs_writes, async_pending));
+                }
+                return true;
+            }
+            if fs_pending != 0 || fs_writes != 0 || async_pending != 0 {
+                if !vm.execution_pause_io_wait_logged.swap(true, Ordering::AcqRel) {
+                    hvimportantf(format_args!("hv: vm{} lifecycle: pause checkpoint waiting reason=filesystem fs_pending={} fs_streams={} async_fs_pending={} contract=stream-must-finish-or-abort guest=continues slot=retained",
+                        vm_id, fs_pending, fs_writes, async_pending));
+                }
+                // A streamed write may belong to the Hull itself. It must
+                // execute its remaining write/finish/abort calls; parking it
+                // here would freeze the owner of the root write lease.
+                return true;
+            }
+            if crate::r::blocking::guest_jobs_quiescent(vm_id) {
+                if vm.execution_pause.acknowledge() {
+                    if vm.execution_pause_io_wait_logged.load(Ordering::Acquire) {
+                        hvimportantf(format_args!("hv: vm{} lifecycle: pause filesystem checkpoint cleared fs_pending=0 fs_streams=0 async_fs_pending=0", vm_id));
+                    }
+                    hvimportantf(format_args!("hv: vm{} lifecycle: paused ram=retained carrier=retained vmcs=retained filesystem=quiescent", vm_id));
+                }
+            }
+        }
+        if vm.execution_pause.paused() {
+            if vm.execution_pause.requested() && !immediate_stop_requested(vm) {
+                queue.wait_after(observed).await;
+            }
+        } else {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+        }
+    }
+}
+
+#[task(pool_size = 64)]
+async fn stop_cleanup_deadline(vm_id: u8, generation: u64) {
+    Timer::after(EmbassyDuration::from_millis(STOP_CLEANUP_TIMEOUT_MS)).await;
+    let Some(vm) = vm_slot(vm_id) else { return; };
+    let _control = vm.lifecycle_control.lock();
+    if vm.lifecycle_generation.load(Ordering::Acquire) == generation
+        && vm.stop_req.load(Ordering::Acquire)
+        && (vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire))
+    {
+        hvwarnf(format_args!("hv: vm{} lifecycle: stop cleanup deadline reached; forcing discard", vm_id));
+        force_stop(vm_id, vm);
+    }
+}
+
+fn force_stop(vm_id: u8, vm: &TrueosVmId) {
+    vm.cooperative_stop.force();
+    vm.stop_req.store(true, Ordering::Release);
+    vm.execution_pause.resume();
+    vm.preserve_req.store(false, Ordering::Release);
+    vm.pause_latched.store(false, Ordering::Release);
+    vm.preserve_exit.store(false, Ordering::Release);
+    reset_prepare_pause(vm);
+    clear_blueprint_lifecycle_capability(vm_id);
+    crate::r::blocking::close_guest_jobs(vm_id);
+    let streams = crate::r::fs::request_broker::request_release_vm(vm_id);
+    if streams != 0 {
+        hvimportantf(format_args!("hv: vm{} lifecycle: discard filesystem rollback requested fs_streams={} owner=bsp slot=retained-until-abort", vm_id, streams));
+    }
+    crate::r::threads::wake_guest_control(vm_id);
+    VM_CONTROL_WAITS[vm_id as usize].notify_all();
+    nudge_vm_control(vm_id, control_kick::LifecycleKickAction::Stop, "kill");
+}
+
 fn stop_matching_generation(vm_id: u8, generation: Option<u64>) -> Result<bool, StopError> {
+    stop_matching_control(vm_id, generation, None)
+}
+
+pub(crate) fn stop_for_matrix_slot(vm_id: u8, owner: &crate::shell3::MatrixSlotLease) -> Result<bool, StopError> {
+    stop_matching_control(vm_id, None, Some(owner))
+}
+
+fn stop_matching_control(vm_id: u8, generation: Option<u64>, owner: Option<&crate::shell3::MatrixSlotLease>) -> Result<bool, StopError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
     };
 
     let _control = vm.lifecycle_control.lock();
+    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) { return Ok(false); }
     if generation.is_some_and(|run| vm.lifecycle_generation.load(Ordering::Acquire) != run) {
         return Ok(false);
     }
     if vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire) {
         let cooperative = vm.cooperative_stop.request();
-        if !cooperative {
-            crate::r::blocking::close_guest_jobs(vm_id);
-            clear_blueprint_lifecycle_capability(vm_id);
+        let first = !vm.stop_req.swap(true, Ordering::AcqRel);
+        if cooperative && vm.execution_pause.requested() {
+            assert!(crate::r::blocking::resume_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
+            vm.execution_pause.resume();
+            crate::r::threads::wake_guest_control(vm_id);
         }
-        vm.stop_req.store(true, Ordering::Release);
+        if cooperative && first {
+            let deadline = stop_cleanup_deadline(vm_id, vm.lifecycle_generation.load(Ordering::Acquire));
+            if let (Some(worker), Ok(task)) = (crate::workers::pick_background_spawner(), deadline) {
+                worker.spawn(task);
+            } else {
+                force_stop(vm_id, vm);
+            }
+        } else if !cooperative {
+            force_stop(vm_id, vm);
+        }
         VM_CONTROL_WAITS[vm_id as usize].notify_all();
         crate::log_os::blueprint_important_line(format_args!(
             "hv: vm{} lifecycle: stop requested cooperative={} native_jobs={} cleanup=guest-before-drain\n",
@@ -2529,16 +2609,7 @@ fn kill_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease>
     if !vm.running.load(Ordering::Acquire) && !vm.starting.load(Ordering::Acquire) {
         return eject_offline_vm(vm_id, false);
     }
-    vm.cooperative_stop.force();
-    vm.stop_req.store(true, Ordering::Release);
-    vm.preserve_req.store(false, Ordering::Release);
-    vm.pause_latched.store(false, Ordering::Release);
-    vm.preserve_exit.store(false, Ordering::Release);
-    reset_prepare_pause(vm);
-    clear_blueprint_lifecycle_capability(vm_id);
-    crate::r::blocking::close_guest_jobs(vm_id);
-    crate::r::threads::wake_killed_guest(vm_id);
-    VM_CONTROL_WAITS[vm_id as usize].notify_all();
+    force_stop(vm_id, vm);
     crate::log_os::blueprint_important_line(format_args!(
         "hv: vm{} lifecycle: kill requested cleanup=skipped checkpoint=none native_jobs={}\n",
         vm_id, crate::r::blocking::guest_jobs_in_flight(vm_id)
@@ -2569,6 +2640,7 @@ fn immediate_stop_requested(vm: &TrueosVmId) -> bool {
 
 /// Destroy an offline retained VM and its warm checkpoint. Named persistent
 /// images are independent and remain on TRUEOSFS.
+#[cfg(feature = "legacy_vm_checkpoint")]
 pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
     eject_offline_vm(vm_id, false)
 }
@@ -2599,7 +2671,9 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     }
     let had_state = vm.pause_latched.load(Ordering::Acquire)
         || blueprint_launch_active(vm_id)
-        || crate::hv::store::has_committed_vm(vm_id);
+        ;
+    #[cfg(feature = "legacy_vm_checkpoint")]
+    let had_state = had_state || crate::hv::store::has_committed_vm(vm_id);
     clear_blueprint_pending_launch(vm_id);
     memory::release_guest_rel_exec_for_vm(vm_id);
     let launch = take_blueprint_launch(vm_id);
@@ -2631,6 +2705,7 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
         ));
         return Err(EjectError::VgpuQuarantined);
     }
+    #[cfg(feature = "legacy_vm_checkpoint")]
     let _ = crate::hv::store::eject_warm(vm_id);
     vm.pause_latched.store(false, Ordering::Release);
     vm.resume_prepared.store(false, Ordering::Release);
@@ -2638,416 +2713,6 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     reset_prepare_pause(vm);
     if !allow_starting { matrix::retire_vm(vm_id); }
     Ok(had_state)
-}
-
-pub fn kick(vm_id: u8) -> Result<bool, StopError> {
-    let Some(vm) = vm_slot(vm_id) else {
-        return Err(StopError::UnsupportedVmId);
-    };
-    if !vm.running.load(Ordering::Acquire) {
-        return Ok(false);
-    }
-    Ok(nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Nudge, "manual"))
-}
-
-pub fn request_replicatable_pause(vm_id: u8) -> Result<bool, StopError> {
-    request_blueprint_prepare_pause(vm_id, BlueprintPauseReason::Pause)
-}
-
-pub fn request_replicatable_snapshot(vm_id: u8) -> Result<bool, StopError> {
-    request_blueprint_prepare_pause(vm_id, BlueprintPauseReason::Replicate)
-}
-
-pub fn request_blueprint_prepare_pause(
-    vm_id: u8,
-    reason: BlueprintPauseReason,
-) -> Result<bool, StopError> {
-    let Some(vm) = vm_slot(vm_id) else {
-        return Err(StopError::UnsupportedVmId);
-    };
-    let _control = vm.lifecycle_control.lock();
-    if vm.cooperative_stop.forced() { return Ok(false); }
-    let running = vm.running.load(Ordering::Acquire);
-    let starting = vm.starting.load(Ordering::Acquire);
-    if !running && !starting {
-        return Ok(false);
-    }
-    if !vm.replicatable.load(Ordering::Acquire) {
-        return Ok(false);
-    }
-    expire_prepare_pause(vm_id, vm);
-    if vm
-        .lifecycle_phase
-        .compare_exchange(
-            BLUEPRINT_LIFECYCLE_PHASE_RUNNING,
-            BLUEPRINT_LIFECYCLE_PHASE_ARMING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        )
-        .is_err()
-    {
-        return Ok(false);
-    }
-
-    clear_blueprint_replication_checkpoint(vm_id);
-
-    let operation = BLUEPRINT_LIFECYCLE_OPERATION_SEQ
-        .fetch_add(1, Ordering::AcqRel)
-        .max(1);
-    let deadline = lifecycle_now_ms().saturating_add(BLUEPRINT_PREPARE_PAUSE_TIMEOUT_MS);
-    vm.lifecycle_operation.store(operation, Ordering::Release);
-    vm.lifecycle_deadline_ms.store(deadline, Ordering::Release);
-    vm.lifecycle_reason.store(reason as u8, Ordering::Release);
-    vm.lifecycle_checkpoint_version.store(0, Ordering::Release);
-    vm.lifecycle_phase
-        .store(BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE, Ordering::Release);
-    hvlogf(format_args!(
-        "hv: vm{} lifecycle: PreparePause operation={} reason={:?} deadline_ms={}",
-        vm_id, operation, reason, deadline
-    ));
-    nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Nudge, "prepare-pause");
-    Ok(true)
-}
-
-pub fn request_preserve(vm_id: u8) -> Result<bool, StopError> {
-    request_preserve_mode(vm_id, PreserveMode::Stop)
-}
-
-pub fn request_preserve_mode(vm_id: u8, mode: PreserveMode) -> Result<bool, StopError> {
-    let Some(vm) = vm_slot(vm_id) else {
-        return Err(StopError::UnsupportedVmId);
-    };
-
-    let running = vm.running.load(Ordering::Acquire);
-    let starting = vm.starting.load(Ordering::Acquire);
-    if !running && !starting {
-        hvwarnf(format_args!(
-            "hv: vm{} lifecycle: preserve ignored mode={:?} (not running)",
-            vm_id, mode
-        ));
-        return Ok(false);
-    }
-
-    if !prepare_preserve_mode(vm_id, mode)? {
-        return Ok(false);
-    }
-
-    vm.preserve_req.store(true, Ordering::Release);
-    hvlogf(format_args!("hv: vm{} lifecycle: preserve requested mode={:?}", vm_id, mode));
-    let action = match mode {
-        PreserveMode::Stop => crate::hv::control_kick::LifecycleKickAction::PreserveStop,
-        PreserveMode::Pause => crate::hv::control_kick::LifecycleKickAction::PreservePause,
-    };
-    nudge_vm_control(vm_id, action, "preserve");
-    Ok(true)
-}
-
-/// Apply the lifecycle half of a preserve request.
-///
-/// Host requests call this before arming `preserve_req`; guest VMCALL requests
-/// call it while the VM is already stopped at a safe VM-exit boundary. Keeping
-/// both entry paths here prevents pause-mode resource retention from drifting.
-pub(crate) fn prepare_preserve_mode(vm_id: u8, mode: PreserveMode) -> Result<bool, StopError> {
-    let Some(vm) = vm_slot(vm_id) else {
-        return Err(StopError::UnsupportedVmId);
-    };
-    let _control = vm.lifecycle_control.lock();
-    if vm.cooperative_stop.forced() { return Ok(false); }
-
-    vm.pause_store_seq
-        .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
-    if mode == PreserveMode::Pause {
-        if !vm.replicatable.load(Ordering::Acquire) {
-            return Ok(false);
-        }
-        vm.pause_latched.store(true, Ordering::Release);
-    }
-    // Admission closes at the lifecycle boundary; resource suspension happens
-    // only after the VM exits and all native guest jobs have drained.
-    crate::r::blocking::close_guest_jobs(vm_id);
-    Ok(true)
-}
-
-fn prepare_replicatable_resume(vm_id: u8) {
-    if let Some(vm) = vm_slot(vm_id) {
-        if vm
-            .resume_prepared
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return;
-        }
-        reset_prepare_pause(vm);
-        if let Some(identity_slot) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) {
-            let mut identity = identity_slot.lock();
-            if let Some(identity) = identity.as_mut() {
-                identity.generation = identity.generation.saturating_add(1);
-                if let Some(context_slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)
-                    && let Some(context) = context_slot.lock().as_mut()
-                {
-                    context.vars.insert(
-                        AllocString::from("TRUEOS_APP_GENERATION"),
-                        alloc::format!("{}", identity.generation),
-                    );
-                }
-            }
-        }
-        resume_blueprint_process_context(vm_id);
-        crate::r::services::gridpaper_service::resume_owner_lifecycle(vm_id);
-    }
-}
-
-/// Commit an exact-continuation resume only after the guest has returned from
-/// its Ready boundary and requested the resumed identity. Until this
-/// handshake, teardown retains the reconstructed state so a failed VM entry
-/// remains retryable.
-pub(crate) fn commit_replicatable_resume(vm_id: u8) {
-    let Some(vm) = vm_slot(vm_id) else {
-        return;
-    };
-    if !vm.resume_prepared.swap(false, Ordering::AcqRel) {
-        return;
-    }
-    vm.pause_latched.store(false, Ordering::Release);
-    clear_blueprint_replication_checkpoint(vm_id);
-    hvlogf(format_args!("hv: vm{} lifecycle: resume committed at guest identity handshake", vm_id));
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub fn save_snapshot(vm_id: u8) -> Result<usize, SaveError> {
-    if vm_slot(vm_id).is_none() {
-        return Err(SaveError::UnsupportedVmId);
-    }
-
-    let bytes = snapshot_bytes(vm_id)?;
-    crate::hv::store::save_bytes(vm_id, bytes).map_err(map_store_save_error)
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub fn restore_snapshot(vm_id: u8) -> Result<usize, RestoreError> {
-    if vm_slot(vm_id).is_none() {
-        return Err(RestoreError::UnsupportedVmId);
-    }
-    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
-        return Err(RestoreError::VgpuQuarantined);
-    }
-
-    let bytes = crate::hv::store::load_bytes(vm_id).map_err(map_store_restore_error)?;
-
-    restore_snapshot_bytes(vm_id, bytes.as_slice())?;
-    Ok(bytes.len())
-}
-
-pub async fn restore_snapshot_async(vm_id: u8) -> Result<usize, RestoreError> {
-    if vm_slot(vm_id).is_none() {
-        return Err(RestoreError::UnsupportedVmId);
-    }
-    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
-        return Err(RestoreError::VgpuQuarantined);
-    }
-
-    let bytes = crate::hv::store::load_bytes_async(vm_id)
-        .await
-        .map_err(map_store_restore_error)?;
-
-    restore_snapshot_bytes(vm_id, bytes.as_slice())?;
-    Ok(bytes.len())
-}
-
-pub fn restore_persistent_image(
-    vm_id: u8,
-    image: &crate::hv::store::PersistentVmImage,
-    console_target: Option<MatrixTarget>,
-) -> Result<usize, RestoreError> {
-    if vm_slot(vm_id).is_none() {
-        return Err(RestoreError::UnsupportedVmId);
-    }
-    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
-        return Err(RestoreError::VgpuQuarantined);
-    }
-    if image.source_vm_id != vm_id && !cross_principal_snapshot_restore_supported() {
-        return Err(RestoreError::BadSnapshot);
-    }
-    let result = (|| {
-        crate::allocators::restore_hv_guest_heap(vm_id, image.guest_heap()).map_err(|reason| {
-            hvwarnf(format_args!(
-                "hv: vm{} persistent restore failed stage=guest-heap reason={}",
-                vm_id, reason
-            ));
-            RestoreError::BadSnapshot
-        })?;
-        memory::restore_guest_hull_rw_for_vm(vm_id, image.hull_rw()).map_err(|reason| {
-            hvwarnf(format_args!(
-                "hv: vm{} persistent restore failed stage=hull-rw reason={}",
-                vm_id, reason
-            ));
-            RestoreError::BadSnapshot
-        })?;
-        restore_blueprint_portable_state(vm_id, image.blueprint(), console_target).map_err(
-            |reason| {
-                hvwarnf(format_args!(
-                    "hv: vm{} persistent restore failed stage=blueprint reason={}",
-                    vm_id, reason
-                ));
-                RestoreError::BadSnapshot
-            },
-        )?;
-        restore_snapshot_bytes(vm_id, image.snapshot())?;
-        memory::rebind_restored_guest_memory_for_vm(vm_id, VmBootMode::Hull).map_err(|reason| {
-            hvwarnf(format_args!(
-                "hv: vm{} persistent restore failed stage=rebind reason={}",
-                vm_id, reason
-            ));
-            RestoreError::BadSnapshot
-        })?;
-        Ok(image.snapshot().len())
-    })();
-    if result.is_err() {
-        if let Some(vm) = vm_slot(vm_id) {
-            vm.restore_inflight.store(false, Ordering::Release);
-        }
-        let _ = eject(vm_id);
-    }
-    result
-}
-
-pub fn try_begin_restore(vm_id: u8) -> Result<bool, StopError> {
-    let Some(vm) = vm_slot(vm_id) else {
-        return Err(StopError::UnsupportedVmId);
-    };
-    if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
-        return Err(StopError::VgpuQuarantined);
-    }
-    Ok(vm
-        .restore_inflight
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok())
-}
-
-pub fn finish_restore(vm_id: u8) {
-    if let Some(vm) = vm_slot(vm_id) {
-        vm.restore_inflight.store(false, Ordering::Release);
-    }
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-fn map_store_save_error(err: crate::hv::store::VmStoreError) -> SaveError {
-    match err {
-        crate::hv::store::VmStoreError::ServiceOffline => {
-            SaveError::Io(crate::disc::block::Error::NotReady)
-        }
-        crate::hv::store::VmStoreError::QueueFull => {
-            SaveError::Io(crate::disc::block::Error::NotReady)
-        }
-        crate::hv::store::VmStoreError::Create(e)
-        | crate::hv::store::VmStoreError::Format(e)
-        | crate::hv::store::VmStoreError::BeginWrite(e)
-        | crate::hv::store::VmStoreError::Write(e)
-        | crate::hv::store::VmStoreError::Read(e) => SaveError::Io(e),
-        crate::hv::store::VmStoreError::MissingSnapshot => SaveError::BeginWrite,
-        crate::hv::store::VmStoreError::NoPersistentRoot => {
-            SaveError::Io(crate::disc::block::Error::NotReady)
-        }
-        crate::hv::store::VmStoreError::InvalidName
-        | crate::hv::store::VmStoreError::BadEnvelope => {
-            SaveError::Io(crate::disc::block::Error::InvalidParam)
-        }
-    }
-}
-
-fn map_store_restore_error(err: crate::hv::store::VmStoreError) -> RestoreError {
-    match err {
-        crate::hv::store::VmStoreError::MissingSnapshot => RestoreError::MissingFile,
-        crate::hv::store::VmStoreError::ServiceOffline => {
-            RestoreError::Read(crate::disc::block::Error::NotReady)
-        }
-        crate::hv::store::VmStoreError::QueueFull => {
-            RestoreError::Read(crate::disc::block::Error::NotReady)
-        }
-        crate::hv::store::VmStoreError::Create(e)
-        | crate::hv::store::VmStoreError::Format(e)
-        | crate::hv::store::VmStoreError::BeginWrite(e)
-        | crate::hv::store::VmStoreError::Read(e)
-        | crate::hv::store::VmStoreError::Write(e) => RestoreError::Read(e),
-        crate::hv::store::VmStoreError::NoPersistentRoot => {
-            RestoreError::Read(crate::disc::block::Error::NotReady)
-        }
-        crate::hv::store::VmStoreError::InvalidName
-        | crate::hv::store::VmStoreError::BadEnvelope => RestoreError::BadSnapshot,
-    }
-}
-
-fn vmexit_is_preserve(vm_id: u8, lr: LaunchResult) -> bool {
-    lr.entered != 0
-        && lr.launch_failed == 0
-        && vm_slot(vm_id)
-            .map(|vm| vm.preserve_exit.load(Ordering::Acquire))
-            .unwrap_or(false)
-}
-
-fn snapshot_on_preserve_exit(vm_id: u8) {
-    let saved = match snapshot_bytes(vm_id) {
-        Ok(bytes) => match crate::hv::store::save_bytes(vm_id, bytes) {
-            Ok(saved) => {
-                hvlogf(format_args!(
-                    "hv: vm{} reporting: preserve snapshot saved store=warm-arc path={} bytes={}",
-                    vm_id,
-                    snapshot_path(vm_id).as_str(),
-                    saved
-                ));
-                true
-            }
-            Err(e) => {
-                hvwarnf(format_args!(
-                    "hv: vm{} reporting: preserve snapshot save failed ({:?})",
-                    vm_id, e
-                ));
-                false
-            }
-        },
-        Err(e) => {
-            hvwarnf(format_args!(
-                "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
-                vm_id, e
-            ));
-            false
-        }
-    };
-    if saved {
-        if let Some(vm) = vm_slot(vm_id)
-            && !vm.pause_latched.swap(true, Ordering::AcqRel)
-        {
-            suspend_blueprint_process_context(vm_id);
-            hvlogf(format_args!(
-                "hv: vm{} lifecycle: successful preserve retained exact continuation state",
-                vm_id
-            ));
-        }
-    } else {
-        if let Some(vm) = vm_slot(vm_id) {
-            if vm.pause_latched.swap(false, Ordering::AcqRel) {
-                vm.pause_store_seq.store(0, Ordering::Release);
-                reset_prepare_pause(vm);
-                hvwarnf(format_args!(
-                    "hv: vm{} lifecycle: pause latch released after snapshot failure",
-                    vm_id
-                ));
-            }
-        }
-    }
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub fn request_preserve_active_vm() -> bool {
-    if let Some(vm_id) = current_vm_id() {
-        return request_preserve(vm_id).unwrap_or(false);
-    }
-    trueos_vm_ids
-        .iter()
-        .enumerate()
-        .find(|(_, vm)| vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire))
-        .map(|(vm_id, _)| request_preserve(vm_id as u8).unwrap_or(false))
-        .unwrap_or(false)
 }
 
 fn ceil_mib(bytes: usize) -> usize {
@@ -3584,383 +3249,6 @@ fn clear_blueprint_launch_script(vm_id: u8) {
     if let Some(slot) = BLUEPRINT_VMX_LAUNCH_SCRIPTS.get(vm_id as usize) {
         let _ = slot.lock().take();
     }
-}
-
-const BLUEPRINT_PORTABLE_MAGIC: u32 = u32::from_le_bytes(*b"BPS1");
-const BLUEPRINT_PORTABLE_VERSION_LEGACY: u32 = 1;
-const BLUEPRINT_PORTABLE_VERSION_WITHOUT_UNPACKED_ELF: u32 = 2;
-const BLUEPRINT_PORTABLE_VERSION: u32 = 3;
-const BLUEPRINT_RELAUNCH_MAGIC: u32 = u32::from_le_bytes(*b"BPR1");
-const BLUEPRINT_RELAUNCH_VERSION: u32 = 1;
-
-fn portable_push_u32(out: &mut AllocVec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn portable_push_u64(out: &mut AllocVec<u8>, value: u64) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn portable_push_bytes(out: &mut AllocVec<u8>, value: &[u8]) {
-    portable_push_u64(out, value.len() as u64);
-    out.extend_from_slice(value);
-}
-
-fn portable_push_optional_string(out: &mut AllocVec<u8>, value: Option<&str>) {
-    match value {
-        Some(value) => {
-            out.push(1);
-            portable_push_bytes(out, value.as_bytes());
-        }
-        None => out.push(0),
-    }
-}
-
-/// Serialize the host-owned part of a paused Blueprint. Guest execution state
-/// and guest-owned allocations live in the other persistent envelope members.
-pub fn snapshot_blueprint_portable_state(vm_id: u8) -> Result<AllocVec<u8>, &'static str> {
-    let state = blueprint_launch_snapshot(vm_id).ok_or("blueprint launch state missing")?;
-    let surface = BLUEPRINT_PROCESS_CONTEXTS
-        .get(vm_id as usize)
-        .and_then(|slot| slot.lock().as_ref().map(|context| context.console_surface))
-        .ok_or("blueprint process context missing")?;
-    let mut out = AllocVec::new();
-    portable_push_u32(&mut out, BLUEPRINT_PORTABLE_MAGIC);
-    portable_push_u32(&mut out, BLUEPRINT_PORTABLE_VERSION);
-    out.push(match surface {
-        BlueprintConsoleSurface::Text => 0,
-        BlueprintConsoleSurface::Terminal => 1,
-    });
-    let (exec_start, exec_end) = memory::active_guest_rel_exec_range_for_vm(vm_id)
-        .ok_or("blueprint executable range missing")?;
-    portable_push_u64(&mut out, exec_start);
-    portable_push_u64(&mut out, exec_end);
-    portable_push_bytes(&mut out, state.archive.as_bytes());
-    portable_push_bytes(&mut out, state.module_bytes.as_slice());
-    // The unpacked ELF is immutable and fully derivable from module_bytes.
-    // Persist the self-contained Blueprint module once and rebuild the normal
-    // runtime representation during restore.
-    portable_push_u32(&mut out, state.app_args.len() as u32);
-    for arg in state.app_args.iter() {
-        portable_push_bytes(&mut out, arg.as_bytes());
-    }
-    portable_push_bytes(&mut out, state.app_fs_root.as_bytes());
-    out.extend_from_slice(&state.identity.instance);
-    out.extend_from_slice(&state.identity.lineage);
-    portable_push_u64(&mut out, state.identity.generation);
-    out.push(state.identity.clone as u8);
-    portable_push_optional_string(&mut out, state.identity.name.as_deref());
-    portable_push_optional_string(&mut out, state.identity.peer.as_deref());
-    Ok(out)
-}
-
-fn portable_take_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
-    let end = offset.checked_add(4)?;
-    let raw = bytes.get(*offset..end)?.try_into().ok()?;
-    *offset = end;
-    Some(u32::from_le_bytes(raw))
-}
-
-fn portable_take_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
-    let end = offset.checked_add(8)?;
-    let raw = bytes.get(*offset..end)?.try_into().ok()?;
-    *offset = end;
-    Some(u64::from_le_bytes(raw))
-}
-
-fn portable_take_bytes<'a>(bytes: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
-    let len = usize::try_from(portable_take_u64(bytes, offset)?).ok()?;
-    let end = offset.checked_add(len)?;
-    let value = bytes.get(*offset..end)?;
-    *offset = end;
-    Some(value)
-}
-
-fn portable_take_string(bytes: &[u8], offset: &mut usize) -> Option<AllocString> {
-    Some(AllocString::from(core::str::from_utf8(portable_take_bytes(bytes, offset)?).ok()?))
-}
-
-fn portable_take_optional_string(bytes: &[u8], offset: &mut usize) -> Option<Option<AllocString>> {
-    let present = *bytes.get(*offset)?;
-    *offset += 1;
-    match present {
-        0 => Some(None),
-        1 => portable_take_string(bytes, offset).map(Some),
-        _ => None,
-    }
-}
-
-pub fn snapshot_blueprint_relaunch_state(vm_id: u8) -> Result<AllocVec<u8>, &'static str> {
-    let state = blueprint_launch_snapshot(vm_id).ok_or("blueprint launch state missing")?;
-    let surface = BLUEPRINT_PROCESS_CONTEXTS
-        .get(vm_id as usize)
-        .and_then(|slot| slot.lock().as_ref().map(|context| context.console_surface))
-        .ok_or("blueprint process context missing")?;
-    let mut out = AllocVec::new();
-    portable_push_u32(&mut out, BLUEPRINT_RELAUNCH_MAGIC);
-    portable_push_u32(&mut out, BLUEPRINT_RELAUNCH_VERSION);
-    out.push(match surface {
-        BlueprintConsoleSurface::Text => 0,
-        BlueprintConsoleSurface::Terminal => 1,
-    });
-    portable_push_bytes(&mut out, state.archive.as_bytes());
-    portable_push_bytes(&mut out, state.module_bytes.as_slice());
-    portable_push_u32(&mut out, state.app_args.len() as u32);
-    for arg in state.app_args.iter() {
-        portable_push_bytes(&mut out, arg.as_bytes());
-    }
-    portable_push_optional_string(&mut out, state.launch_script.as_deref());
-    portable_push_bytes(&mut out, state.app_fs_root.as_bytes());
-    out.extend_from_slice(&state.identity.instance);
-    out.extend_from_slice(&state.identity.lineage);
-    portable_push_u64(&mut out, state.identity.generation);
-    out.push(state.identity.clone as u8);
-    portable_push_optional_string(&mut out, state.identity.name.as_deref());
-    portable_push_optional_string(&mut out, state.identity.peer.as_deref());
-    Ok(out)
-}
-
-pub(crate) fn decode_blueprint_relaunch_state(
-    bytes: &[u8],
-) -> Result<BlueprintRelaunchState, &'static str> {
-    let mut offset = 0usize;
-    if portable_take_u32(bytes, &mut offset) != Some(BLUEPRINT_RELAUNCH_MAGIC)
-        || portable_take_u32(bytes, &mut offset) != Some(BLUEPRINT_RELAUNCH_VERSION)
-    {
-        return Err("bad blueprint relaunch image");
-    }
-    let console_surface = match bytes.get(offset).copied() {
-        Some(0) => BlueprintConsoleSurface::Text,
-        Some(1) => BlueprintConsoleSurface::Terminal,
-        _ => return Err("bad blueprint relaunch console surface"),
-    };
-    offset += 1;
-    let archive = portable_take_string(bytes, &mut offset).ok_or("blueprint relaunch archive")?;
-    let module_bytes = portable_take_bytes(bytes, &mut offset)
-        .ok_or("blueprint relaunch module")?
-        .to_vec();
-    let arg_count =
-        portable_take_u32(bytes, &mut offset).ok_or("blueprint relaunch args")? as usize;
-    let mut app_args = AllocVec::with_capacity(arg_count);
-    for _ in 0..arg_count {
-        app_args.push(portable_take_string(bytes, &mut offset).ok_or("blueprint relaunch arg")?);
-    }
-    let launch_script =
-        portable_take_optional_string(bytes, &mut offset).ok_or("blueprint relaunch script")?;
-    let app_fs_root =
-        portable_take_string(bytes, &mut offset).ok_or("blueprint relaunch fs root")?;
-    let instance_end = offset
-        .checked_add(16)
-        .ok_or("blueprint relaunch instance")?;
-    let instance = bytes
-        .get(offset..instance_end)
-        .and_then(|value| value.try_into().ok())
-        .ok_or("blueprint relaunch instance")?;
-    offset = instance_end;
-    let lineage_end = offset.checked_add(16).ok_or("blueprint relaunch lineage")?;
-    let lineage = bytes
-        .get(offset..lineage_end)
-        .and_then(|value| value.try_into().ok())
-        .ok_or("blueprint relaunch lineage")?;
-    offset = lineage_end;
-    let generation = portable_take_u64(bytes, &mut offset)
-        .ok_or("blueprint relaunch generation")?
-        .saturating_add(1);
-    let clone = match bytes.get(offset).copied() {
-        Some(0) => false,
-        Some(1) => true,
-        _ => return Err("blueprint relaunch clone flag"),
-    };
-    offset += 1;
-    let name =
-        portable_take_optional_string(bytes, &mut offset).ok_or("blueprint relaunch name")?;
-    let peer =
-        portable_take_optional_string(bytes, &mut offset).ok_or("blueprint relaunch peer")?;
-    if offset != bytes.len() {
-        return Err("trailing blueprint relaunch bytes");
-    }
-    Ok(BlueprintRelaunchState {
-        archive,
-        module_bytes,
-        app_args,
-        launch_script,
-        app_fs_root,
-        identity: BlueprintInstanceIdentity {
-            instance,
-            lineage,
-            generation,
-            clone,
-            name,
-            peer,
-        },
-        console_surface,
-    })
-}
-
-pub(crate) fn start_blueprint_replica_vm(
-    vm_id: u8,
-    spawner: &Spawner,
-    state: BlueprintRelaunchState,
-    checkpoint: BlueprintReplicationCheckpoint,
-) -> Result<(), StartError> {
-    let _ = spawner;
-    if !install_blueprint_replication_checkpoint(vm_id, checkpoint) {
-        return Err(StartError::UnsupportedVmId);
-    }
-    let instance = BlueprintInstanceRequest {
-        name: state.identity.name.clone(),
-        peer: state.identity.peer.clone(),
-    };
-    let result = start_with_mode(
-        vm_id,
-        VmBootMode::Hull,
-        None,
-        Some(BlueprintPendingLaunchState {
-            archive: state.archive,
-            module_bytes: state.module_bytes,
-            app_args: state.app_args,
-            launch_script: state.launch_script,
-            instance,
-            console_target: None,
-            console_surface: state.console_surface,
-            restored_identity: Some(state.identity),
-            restored_app_fs_root: Some(state.app_fs_root),
-        }),
-        false,
-    );
-    if result.is_err() {
-        clear_blueprint_replication_checkpoint(vm_id);
-    }
-    result
-}
-
-pub fn restore_blueprint_portable_state(
-    vm_id: u8,
-    bytes: &[u8],
-    console_target: Option<MatrixTarget>,
-) -> Result<(), &'static str> {
-    let vm = vm_slot(vm_id).ok_or("unsupported vm id")?;
-    if vm.running.load(Ordering::Acquire)
-        || vm.starting.load(Ordering::Acquire)
-        || blueprint_launch_active(vm_id)
-    {
-        return Err("vm slot is busy");
-    }
-    let mut offset = 0usize;
-    if portable_take_u32(bytes, &mut offset) != Some(BLUEPRINT_PORTABLE_MAGIC) {
-        return Err("bad blueprint state image");
-    }
-    let version = portable_take_u32(bytes, &mut offset).ok_or("blueprint state version")?;
-    if !matches!(
-        version,
-        BLUEPRINT_PORTABLE_VERSION_LEGACY
-            | BLUEPRINT_PORTABLE_VERSION_WITHOUT_UNPACKED_ELF
-            | BLUEPRINT_PORTABLE_VERSION
-    ) {
-        return Err("bad blueprint state image");
-    }
-    let surface = match bytes.get(offset).copied() {
-        Some(0) => BlueprintConsoleSurface::Text,
-        Some(1) => BlueprintConsoleSurface::Terminal,
-        _ => return Err("bad blueprint console surface"),
-    };
-    offset += 1;
-    let exec_range = if version == BLUEPRINT_PORTABLE_VERSION {
-        Some((
-            portable_take_u64(bytes, &mut offset).ok_or("blueprint executable start")?,
-            portable_take_u64(bytes, &mut offset).ok_or("blueprint executable end")?,
-        ))
-    } else {
-        None
-    };
-    let archive = portable_take_string(bytes, &mut offset).ok_or("blueprint archive")?;
-    let module_bytes = portable_take_bytes(bytes, &mut offset)
-        .ok_or("blueprint module")?
-        .to_vec();
-    let unpacked_bytes = if version == BLUEPRINT_PORTABLE_VERSION_LEGACY {
-        portable_take_bytes(bytes, &mut offset)
-            .ok_or("blueprint payload")?
-            .to_vec()
-    } else {
-        let module = crate::hv::blueprint::parse_blueprint(module_bytes.as_slice())
-            .map_err(|_| "blueprint module decode")?;
-        crate::hv::blueprint::unpack_blueprint(&module).map_err(|_| "blueprint payload decode")?
-    };
-    let arg_count = portable_take_u32(bytes, &mut offset).ok_or("blueprint args")? as usize;
-    let mut app_args = AllocVec::with_capacity(arg_count);
-    for _ in 0..arg_count {
-        app_args.push(portable_take_string(bytes, &mut offset).ok_or("blueprint arg")?);
-    }
-    let app_fs_root = portable_take_string(bytes, &mut offset).ok_or("blueprint fs root")?;
-    let identity_end = offset.checked_add(16).ok_or("blueprint instance")?;
-    let instance: [u8; 16] = bytes
-        .get(offset..identity_end)
-        .and_then(|value| value.try_into().ok())
-        .ok_or("blueprint instance")?;
-    offset = identity_end;
-    let lineage_end = offset.checked_add(16).ok_or("blueprint lineage")?;
-    let lineage: [u8; 16] = bytes
-        .get(offset..lineage_end)
-        .and_then(|value| value.try_into().ok())
-        .ok_or("blueprint lineage")?;
-    offset = lineage_end;
-    let generation = portable_take_u64(bytes, &mut offset).ok_or("blueprint generation")?;
-    let clone = match bytes.get(offset).copied() {
-        Some(0) => false,
-        Some(1) => true,
-        _ => return Err("blueprint clone flag"),
-    };
-    offset += 1;
-    let name = portable_take_optional_string(bytes, &mut offset).ok_or("blueprint name")?;
-    let peer = portable_take_optional_string(bytes, &mut offset).ok_or("blueprint peer")?;
-    if offset != bytes.len() {
-        return Err("trailing blueprint state bytes");
-    }
-    let identity = BlueprintInstanceIdentity {
-        instance,
-        lineage,
-        generation,
-        clone,
-        name,
-        peer,
-    };
-    if !memory::arm_guest_rel_exec_for_vm(vm_id) {
-        return Err("blueprint execute capability unavailable");
-    }
-    let Some((exec_start, exec_end)) = exec_range else {
-        memory::release_guest_rel_exec_for_vm(vm_id);
-        return Err("blueprint state predates executable-range persistence");
-    };
-    if memory::restore_guest_rel_exec_range_for_vm(vm_id, exec_start, exec_end).is_err() {
-        memory::release_guest_rel_exec_for_vm(vm_id);
-        return Err("blueprint executable range restore failed");
-    }
-    let state = BlueprintLaunchState {
-        archive: archive.clone(),
-        module_bytes,
-        unpacked_bytes,
-        app_args,
-        launch_script: None,
-        app_fs_root,
-        identity: identity.clone(),
-    };
-    if stage_blueprint_launch(vm_id, state, console_target, surface).is_err() {
-        memory::release_guest_rel_exec_for_vm(vm_id);
-        return Err("blueprint process reconstruction failed");
-    }
-    if let Some(slot) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) {
-        *slot.lock() = Some(identity);
-    }
-    if let Some(mode) = VM_BOOT_MODES.get(vm_id as usize) {
-        *mode.lock() = VmBootMode::Hull;
-    }
-    set_blueprint_lifecycle_capability(vm_id, archive.as_str(), true);
-    vm.pause_store_seq
-        .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
-    vm.pause_latched.store(true, Ordering::Release);
-    vm.resume_prepared.store(false, Ordering::Release);
-    suspend_blueprint_process_context(vm_id);
-    Ok(())
 }
 
 fn blueprint_launch_snapshot(vm_id: u8) -> Option<BlueprintLaunchState> {
@@ -4554,22 +3842,11 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
             );
         }
         "help" | "?" => {
-            let text = if blueprint_app_command_passthrough_enabled(vm_id) {
-                "VM controls: vmx_tui vmx_env vmx_smp vmx_leave vmx_stop vmx_pause vmx_snapshot vmx_preserve\n\
-                 Blueprint commands are entered without a prefix\n\
-                 stop: stop without a checkpoint\n\
-                 pause: preserve-pause; resume by vmid from F2 pause\n\
-                 snapshot: Blueprint Ready checkpoint; durable and resumable\n\
-                 preserve: preserve-stop; checkpoint first, then tear down"
-            } else {
-                "VMX controls: vmx_tui vmx_env vmx_smp vmx_leave vmx_stop vmx_pause vmx_snapshot vmx_preserve\n\
-                 vmx_tui: re-enter this Blueprint's terminal UI\n\
-                 vmx_leave: return to the default Matrix slot\n\
-                 vmx_stop: stop without a checkpoint\n\
-                 vmx_pause: preserve-pause; resume by vmid from F2 pause\n\
-                 vmx_snapshot: Blueprint Ready checkpoint; durable and resumable\n\
-                 vmx_preserve: preserve-stop; checkpoint first, then tear down"
-            };
+            let text = "VM controls: vmx_tui vmx_env vmx_smp vmx_leave vmx_stop vmx_pause vmx_resume vmx_kill\n\
+                        pause: park execution in RAM; keep the VMX slot\n\
+                        resume: continue the same execution\n\
+                        stop: request cleanup; force discard after the deadline\n\
+                        kill: discard without guest cleanup or a checkpoint";
             blueprint_control_shell_write_text(vm_id, text);
         }
         "tui" => {
@@ -4626,69 +3903,20 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
                 alloc::format!("vmx-shell: stop failed: {:?}", err).as_str(),
             ),
         },
-        "pause" => {
-            let state = vm_state(vm_id);
-            if !state.replicatable {
-                blueprint_control_shell_line(
-                    vm_id,
-                    "vmx-shell: app is not tagged replicatable; use preserve for a raw checkpoint",
-                );
-            } else if !state.running && !state.starting {
-                blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running");
-            } else {
-                // A successful replicatable pause detaches this console before
-                // returning, so publish the acknowledgement first.
-                blueprint_control_shell_line(
-                    vm_id,
-                    "vmx-shell: requesting replicatable pause; resume it from F2 pause by vmid",
-                );
-                match request_replicatable_pause(vm_id) {
-                    Ok(true) => {}
-                    Ok(false) => blueprint_control_shell_line(
-                        vm_id,
-                        "vmx-shell: replicatable pause was not accepted",
-                    ),
-                    Err(err) => blueprint_control_shell_line(
-                        vm_id,
-                        alloc::format!("vmx-shell: pause failed: {:?}", err).as_str(),
-                    ),
-                }
-            }
-        }
-        "snapshot" => {
-            let state = vm_state(vm_id);
-            if !state.replicatable {
-                blueprint_control_shell_line(
-                    vm_id,
-                    "vmx-shell: app is not tagged replicatable; use preserve for a raw checkpoint",
-                );
-            } else if !state.running && !state.starting {
-                blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running");
-            } else {
-                blueprint_control_shell_line(
-                    vm_id,
-                    "vmx-shell: requesting replicatable snapshot; waiting for Blueprint Ready",
-                );
-                match request_replicatable_snapshot(vm_id) {
-                    Ok(true) => {}
-                    Ok(false) => blueprint_control_shell_line(
-                        vm_id,
-                        "vmx-shell: replicatable snapshot was not accepted",
-                    ),
-                    Err(err) => blueprint_control_shell_line(
-                        vm_id,
-                        alloc::format!("vmx-shell: snapshot failed: {:?}", err).as_str(),
-                    ),
-                }
-            }
-        }
-        "preserve" => match request_preserve(vm_id) {
-            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: preserve requested"),
-            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
-            Err(err) => blueprint_control_shell_line(
-                vm_id,
-                alloc::format!("vmx-shell: preserve failed: {:?}", err).as_str(),
-            ),
+        "pause" => match pause(vm_id) {
+            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: pause requested; RAM and slot retained"),
+            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: pause unavailable in current state"),
+            Err(err) => blueprint_control_shell_line(vm_id, alloc::format!("vmx-shell: pause failed: {:?}", err).as_str()),
+        },
+        "resume" => match resume(vm_id) {
+            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: resume requested"),
+            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: VM is not paused"),
+            Err(err) => blueprint_control_shell_line(vm_id, alloc::format!("vmx-shell: resume failed: {:?}", err).as_str()),
+        },
+        "kill" => match kill(vm_id) {
+            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: kill requested"),
+            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: VM is stopped"),
+            Err(err) => blueprint_control_shell_line(vm_id, alloc::format!("vmx-shell: kill failed: {:?}", err).as_str()),
         },
         _ => blueprint_control_shell_line(vm_id, "unknown vmx command"),
     }
@@ -4907,7 +4135,6 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     };
     let lineage_record = LineageRecord::new();
     vm.running.store(true, Ordering::Release);
-    vm.starting.store(false, Ordering::Release);
     vm.preserve_req.store(false, Ordering::Release);
     vm.preserve_exit.store(false, Ordering::Release);
     vm.clean_exit.store(false, Ordering::Release);
@@ -5038,6 +4265,13 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // outstanding reservation here is an invariant failure, never permission
     // to replace live executable/heap state with a new generation.
     assert!(crate::r::blocking::open_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
+    assert!(crate::r::fs::request_broker::open_vm(vm_id));
+    // Publish pause eligibility only after native admission belongs to this
+    // incarnation. Earlier requests must see a starting VM, not a live Hull.
+    {
+        let _control = vm.lifecycle_control.lock();
+        vm.starting.store(false, Ordering::Release);
+    }
     if immediate_stop_requested(vm) || vm.preserve_req.load(Ordering::Acquire) {
         crate::r::blocking::close_guest_jobs(vm_id);
     }
@@ -5048,13 +4282,40 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         vm.run_generation.load(Ordering::Acquire),
     )
     .await;
+    #[cfg(feature = "legacy_vm_checkpoint")]
     if let Ok(lr) = launch_result {
-        capture_snapshot_meta(vm_id, lr);
+        snapshot::capture_snapshot_meta(vm_id, lr);
     }
     crate::log!("app-vm-run-queue: vm launch returned vm={} mode={:?}\n", vm_id, boot_mode);
     clear_current_vm_id();
     teardown_diagnostics::set(vm_id, TeardownStage::NativeDrain);
+    if !vm.pause_latched.load(Ordering::Acquire) {
+        crate::r::fs::request_broker::request_release_vm(vm_id);
+    }
     crate::r::blocking::drain_guest_jobs(vm_id).await;
+    // A killed continuation may have abandoned a streamed write. The BSP
+    // rolls it back before this incarnation's ownership can be forgotten.
+    let fs_pending = crate::r::fs::request_broker::pending_for_vm(vm_id);
+    let fs_writes = crate::r::fs::request_broker::open_writes_for_vm(vm_id);
+    let async_pending = crate::r::io::async_fs_cabi::pending_for_owner(
+        crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+    );
+    if fs_pending != 0 || fs_writes != 0 || async_pending != 0 {
+        hvimportantf(format_args!("hv: vm{} lifecycle: stop filesystem checkpoint waiting fs_pending={} fs_streams={} async_fs_pending={} owner=bsp slot=retained-until-complete", vm_id, fs_pending, fs_writes, async_pending));
+    }
+    while crate::r::fs::request_broker::pending_for_vm(vm_id) != 0
+        || crate::r::fs::request_broker::open_writes_for_vm(vm_id) != 0
+        || crate::r::io::async_fs_cabi::pending_for_owner(
+            crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+        ) != 0
+    {
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+    if !vm.pause_latched.load(Ordering::Acquire) {
+        assert!(crate::r::io::async_fs_cabi::release_owner(
+            crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+        ).is_ok());
+    }
     if vm.cooperative_stop.forced() {
         vm.pause_latched.store(false, Ordering::Release);
         vm.preserve_exit.store(false, Ordering::Release);
@@ -5299,11 +4560,12 @@ fn publish_vm_offline(vm_id: u8, vm: &TrueosVmId) {
     // Serialize destruction with a new claim, including failed preparation.
     let _control = vm.lifecycle_control.lock();
     vm.running.store(false, Ordering::Release);
+    vm.execution_pause.resume();
     teardown_diagnostics::set(vm_id, TeardownStage::Offline);
-    if vm.cooperative_stop.forced() {
+    if vm.cooperative_stop.forced() || !vm.pause_latched.load(Ordering::Acquire) {
         if let Err(error) = eject_offline_vm(vm_id, false) {
             hvwarnf(format_args!(
-                "hv: vm{} lifecycle: kill resource release retained reason={:?}", vm_id, error
+                "hv: vm{} lifecycle: resource release retained reason={:?}", vm_id, error
             ));
         }
     }
@@ -5448,6 +4710,12 @@ async fn vmx_launch_once_with_ept_vpid(
     let mut first = true;
     'vmexit: loop {
         crate::smp::poll();
+        if vm.is_some_and(|vm| vm.execution_pause.requested()) {
+            clear_current_vm_id();
+            let keep_running = park_vm_execution(vm_id).await;
+            set_current_vm_id(vm_id);
+            if !keep_running { break; }
+        }
         if vm
             .map(immediate_stop_requested)
             .unwrap_or(false)

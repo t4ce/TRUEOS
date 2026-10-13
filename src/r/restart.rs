@@ -2,7 +2,7 @@
 //!
 //! These paths are intentionally exclusive. A power-on, reset, or ACPI reboot
 //! starts local Blueprints from AppDB, falling back to Appstore pullbot. A live update
-//! resumes only running handoff entries; stopped apps and defaults stay closed.
+//! leaves applications closed unless the legacy checkpoint feature is enabled.
 
 use alloc::{string::String, vec::Vec};
 
@@ -10,8 +10,11 @@ use serde::Deserialize;
 use trueos_executor::Spawner;
 use trueos_time::{Duration, Timer};
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 const VM_STORE_READY_TIMEOUT_MS: u64 = 30_000;
+#[cfg(feature = "legacy_vm_checkpoint")]
 const VM_STORE_POLL_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(feature = "legacy_vm_checkpoint")]
 const VM_RESUME_SETTLE: Duration = Duration::from_millis(150);
 const COLD_START_BLUEPRINTS_JSON: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/startup.json"));
@@ -120,6 +123,8 @@ pub(crate) fn validate_startup_manifest(bytes: &[u8]) -> Result<Vec<(String, Str
 
 #[trueos_executor::task]
 pub(crate) async fn restart_apps_task(spawner: Spawner) {
+    #[cfg(not(feature = "legacy_vm_checkpoint"))]
+    let _ = spawner;
     if RestartPolicy::active() == RestartPolicy::ColdStart {
         crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
         super::startup_config::reload().await;
@@ -167,6 +172,19 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
     let Some(plan) = crate::live_update::warm_vm_restart_plan().await else {
         return;
     };
+    #[cfg(not(feature = "legacy_vm_checkpoint"))]
+    {
+        if !plan.entries.is_empty() {
+            crate::log!("restart: checkpoint handoff ignored entries={} feature=disabled\n", plan.entries.len());
+        }
+        crate::live_update::mark_post_boot_uplift_complete(plan.generation);
+    }
+    #[cfg(feature = "legacy_vm_checkpoint")]
+    restore_warm_checkpoints(spawner, plan).await;
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+async fn restore_warm_checkpoints(spawner: Spawner, plan: crate::live_update::WarmVmRestartPlan) {
     // No startup manifest, online launch, or fresh proof app runs on this path.
     if !plan.entries.iter().any(|entry| entry.resume) {
         crate::live_update::mark_post_boot_uplift_complete(plan.generation);

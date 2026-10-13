@@ -9,6 +9,7 @@ pub(crate) mod tlb;
 #[path = "system/vcpy.rs"]
 mod vcpy;
 mod helper;
+mod lifecycle;
 mod admin;
 mod os;
 pub(crate) use os::matrix_target_interrupted;
@@ -1381,6 +1382,16 @@ impl Shell3 {
             for line in service::hv_status_lines() {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
             }
+        } else if self.mode == Mode::HV && matches!(text.as_str(), "peer" | "probe") {
+            let lines = if text == "peer" { service::peer_lines() } else { service::probe_lines() };
+            for line in lines {
+                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+            }
+        } else if self.mode == Mode::HV && self.active_vmx_app().is_none() && lifecycle::recognizes(&text) {
+            match lifecycle::start(&text, self.tui_frontend()) {
+                Ok(()) => { self.select_matrix_slot_name(&text); }
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+            }
         } else if text == "Aka" {
             if let Err(error) = service::edit_aka(self.tui_frontend()) {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error);
@@ -1394,6 +1405,12 @@ impl Shell3 {
             self.launch_named_app(&text, true);
         } else if text == "stop" && self.active_vmx_app().is_some() {
             self.stop_active_vmx();
+        } else if lifecycle::recognizes(&text) && self.active_vmx_app().is_some() {
+            if let Some(app) = self.active_vmx_app() {
+                let lease = MatrixSlotLease::from_identity(app.slot.clone(), app.lifetime);
+                let message = lifecycle::control(&text, &lease);
+                MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), message);
+            }
         } else if text == "tui" && self.active_vmx_app().is_some() {
             self.latched_navigation = Some(LatchedNavigation::Resume {
                 name: self.active_matrix_slot.clone().unwrap_or_default(),
@@ -1813,9 +1830,9 @@ impl Shell3 {
 
     pub(super) fn stop_active_vmx(&mut self) -> bool {
         let Some(app) = self.active_vmx_app() else { return false };
-        let dropped = MatrixSlots::drop_slot(Some(&app.slot));
-        self.reconcile_matrix_selection();
-        dropped
+        let lease = MatrixSlotLease::from_identity(app.slot.clone(), app.lifetime);
+        MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), lifecycle::control("stop", &lease));
+        true
     }
 
     fn active_vmx_app(&self) -> Option<service::QueuedBlueprint> {

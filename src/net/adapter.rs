@@ -2912,7 +2912,7 @@ impl NetService {
             return TcpRoute::Network(data);
         };
         let owner = self.records[idx].owner;
-        let peer_owner = match self.records.iter().find(|r| r.handle == peer) {
+        let _peer_owner = match self.records.iter().find(|r| r.handle == peer) {
             Some(rec) => rec.owner,
             None => {
                 let _ = push_event(owner, NetEvent::Closed { handle });
@@ -2921,10 +2921,34 @@ impl NetService {
             }
         };
 
-        let len = data.len();
-        let _ = push_event(peer_owner, NetEvent::TcpData { handle: peer, data });
-        let _ = push_event(owner, NetEvent::TcpSent { handle, len });
+        // Loopback has no smoltcp receive buffer. Retain bytes in the sender's
+        // existing transmit queue until the paused peer can receive them.
+        self.records[idx].tcp_tx.push(data);
+        self.flush_loopback_tcp_tx(idx);
         TcpRoute::Loopback(Ok(()))
+    }
+
+    fn flush_loopback_tcp_tx(&mut self, idx: usize) {
+        let Some(peer) = self.records[idx].tcp_loopback_peer else { return; };
+        if crate::mio_compat::tcp_receive_paused(self.device_index, peer.0) {
+            return;
+        }
+        let Some(peer_owner) = self.records.iter().find(|record| record.handle == peer)
+            .map(|record| record.owner)
+        else { return; };
+        let owner = self.records[idx].owner;
+        let handle = self.records[idx].handle;
+        for _ in 0..64 {
+            let Some(chunk) = self.records[idx].tcp_tx.front() else { break; };
+            let len = chunk.len().min(v::vnet::MAX_MSG);
+            let data = chunk[..len].to_vec();
+            // Queue failure must consume zero bytes, just like physical TCP.
+            if !push_event(peer_owner, NetEvent::TcpData { handle: peer, data }) {
+                break;
+            }
+            self.records[idx].tcp_tx.advance(len);
+            let _ = push_event(owner, NetEvent::TcpSent { handle, len });
+        }
     }
 
     fn send_loopback_udp(
@@ -3032,6 +3056,10 @@ impl NetService {
 
     fn flush_tcp_tx(&mut self, idx: usize) {
         if self.records.get(idx).map(|r| r.kind) != Some(SocketKind::Tcp) {
+            return;
+        }
+        if self.records[idx].tcp_loopback_peer.is_some() {
+            self.flush_loopback_tcp_tx(idx);
             return;
         }
 
@@ -4494,6 +4522,7 @@ impl NetService {
             return false;
         }
         if self.records[idx].tcp_loopback_peer.is_some() {
+            self.flush_loopback_tcp_tx(idx);
             return false;
         }
 
@@ -4558,6 +4587,14 @@ impl NetService {
 
             if socket.is_active() && socket.may_recv() {
                 while socket.can_recv() {
+                    // Paused Mio owners keep their assigned sockets. Leaving
+                    // bytes in smoltcp's bounded RX buffer applies normal TCP
+                    // flow control instead of accumulating host VecDeque data
+                    // or silently deleting bytes from a TLS/HTTP stream.
+                    if crate::mio_compat::tcp_receive_paused(self.device_index, handle.0) {
+                        rx_backpressured = true;
+                        break;
+                    }
                     let result = socket.recv(|buf| {
                         let len = core::cmp::min(buf.len(), v::vnet::MAX_MSG);
                         if len == 0 {

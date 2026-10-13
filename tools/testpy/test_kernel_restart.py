@@ -14,6 +14,7 @@ def main():
         (project / "src").mkdir()
         (project / "Cargo.toml").write_text(
             '[package]\nname="trueos-restart-native"\nversion="0.1.0"\nedition="2024"\n'
+            '[features]\nlegacy_vm_checkpoint=[]\n'
             '[dependencies]\nserde={version="1",features=["derive"]}\nserde_json="1"\n'
         )
         (project / "startup.json").write_text(json.dumps({
@@ -48,12 +49,13 @@ def main():
             + (ROOT.parent / "TRUEOS-Blueprints/buildins/appstore/src/pullbot.rs").read_text().split("pub fn report")[0]
             + "\n}\n"
         )
-        subprocess.run([
+        command = [
             "cargo", "test", "--offline", "--manifest-path", str(project / "Cargo.toml"),
             "--target", "x86_64-unknown-linux-gnu", "--target-dir",
             str(pathlib.Path(tempfile.gettempdir()) / "trueos-kernel-restart-test-target"),
-            "--", "--test-threads=1",
-        ], cwd=project, check=True)
+        ]
+        subprocess.run(command + ["--", "--test-threads=1"], cwd=project, check=True)
+        subprocess.run(command + ["--features", "legacy_vm_checkpoint", "--", "--test-threads=1"], cwd=project, check=True)
 
 
 if __name__ == "__main__":

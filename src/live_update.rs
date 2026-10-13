@@ -1089,6 +1089,64 @@ fn finish_ap_preflight_abort(control: &TransitionControl, interrupts_were_enable
     }
 }
 
+/// Live RAM parking cannot survive replacement of the kernel that owns it.
+/// The normal lifecycle requires the existing explicit discard policy and
+/// leaves the handoff empty. An aborted update resumes the same live Hulls.
+#[cfg(not(feature = "legacy_vm_checkpoint"))]
+async fn checkpoint_active_vms(
+    _spawner: &Spawner,
+    target: &MatrixTarget,
+    policy: NonReplicatableVmPolicy,
+) -> Result<CheckpointPlan, LiveUpdateError> {
+    let mut paused_by_update = Vec::new();
+    for index in 0..VM_ID_LIMIT {
+        let vm = index as u8;
+        let state = crate::hv::vm_state(vm);
+        if !state.running && !state.starting { continue; }
+        if policy == NonReplicatableVmPolicy::Reject {
+            resume_checkpointed_vms(_spawner, target, &paused_by_update).await;
+            return Err(LiveUpdateError::VmNotReplicatable(vm));
+        }
+        if state.paused { continue; }
+        if !state.pause_requested {
+            match crate::hv::pause(vm) {
+                Ok(true) => paused_by_update.push(vm),
+                _ => {
+                    resume_checkpointed_vms(_spawner, target, &paused_by_update).await;
+                    return Err(LiveUpdateError::VmCheckpointRequest(vm));
+                }
+            }
+        }
+        let deadline = Instant::now().as_millis().saturating_add(VM_CHECKPOINT_TIMEOUT_MS);
+        loop {
+            let state = crate::hv::vm_state(vm);
+            if state.paused || (!state.running && !state.starting) { break; }
+            if !state.pause_requested || Instant::now().as_millis() >= deadline {
+                resume_checkpointed_vms(_spawner, target, &paused_by_update).await;
+                return Err(LiveUpdateError::VmCheckpointTimeout(vm));
+            }
+            Timer::after(EmbassyDuration::from_millis(10)).await;
+        }
+    }
+    report_update(target, "update live: VMs parked; confirmed discard at commit; VM restore disabled");
+    Ok(CheckpointPlan {
+        restore_mask: [0; RESTORE_WORDS],
+        resume_mask: [0; RESTORE_WORDS],
+        vm_heap_ranges: [WarmReservedRange::EMPTY; VM_ID_LIMIT],
+        paused_by_update,
+    })
+}
+
+#[cfg(not(feature = "legacy_vm_checkpoint"))]
+async fn resume_checkpointed_vms(_spawner: &Spawner, target: &MatrixTarget, vm_ids: &[u8]) {
+    for &vm in vm_ids {
+        if matches!(crate::hv::resume(vm), Ok(true)) {
+            report_update(target, format!("update live: vm{} resumed after abort", vm).as_str());
+        }
+    }
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
 async fn checkpoint_active_vms(
     spawner: &Spawner,
     target: &MatrixTarget,
@@ -1274,6 +1332,7 @@ async fn checkpoint_active_vms(
     })
 }
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 async fn checkpoint_abort(
     spawner: &Spawner,
     target: &MatrixTarget,
@@ -1284,6 +1343,7 @@ async fn checkpoint_abort(
     Err(error)
 }
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 async fn resume_checkpointed_vms(spawner: &Spawner, target: &MatrixTarget, vm_ids: &[u8]) {
     for &vm_id in vm_ids {
         // A PreparePause may cross its Ready boundary just after an update

@@ -60,11 +60,9 @@ fn container_shell_prompt() {
 }
 
 fn container_shell_help() {
-    attached_write_line("commands: env smp help stop pause snapshot preserve");
-    attached_write_line("  stop     stop without writing a checkpoint");
-    attached_write_line("  pause    preserve-pause; resume by vmid from F2 pause");
-    attached_write_line("  snapshot Blueprint Ready checkpoint; warm and resumable");
-    attached_write_line("  preserve preserve-stop; checkpoint first, then tear down");
+    attached_write_line("commands: env smp help stop pause");
+    attached_write_line("  stop  stop this VM");
+    attached_write_line("  pause park in RAM; resume or kill from the host by vmid");
 }
 
 fn container_shell_read_line(line: &mut Vec<u8>) {
@@ -136,34 +134,11 @@ fn container_shell_command(raw: &str) -> bool {
             );
         }
         "pause" => {
-            attached_write_line(
-                "vmx-shell: requesting Blueprint PreparePause; checkpoint waits for Blueprint Ready",
-            );
+            attached_write_line("vmx-shell: requesting RAM pause; resume from the host by vmid");
             let (status, _) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_LIFECYCLE_PAUSE, 0, 0);
             if status != trueos_vm::vmcall::STATUS_OK {
-                attached_write_line(
-                    "vmx-shell: replicatable pause unavailable; use preserve for a raw checkpoint",
-                );
-            } else {
-                attached_write_line("vmx-shell: PreparePause requested");
+                attached_write_line("vmx-shell: pause unavailable");
             }
-        }
-        "snapshot" | "snap" => {
-            attached_write_line("vmx-shell: requesting Blueprint PreparePause for warm snapshot");
-            let (status, _) =
-                trueos_vm::vmcall::call(trueos_vm::vmcall::OP_LIFECYCLE_SNAPSHOT, 0, 0);
-            if status != trueos_vm::vmcall::STATUS_OK {
-                attached_write_line(
-                    "vmx-shell: replicatable snapshot unavailable; use preserve for a raw checkpoint",
-                );
-            } else {
-                attached_write_line("vmx-shell: snapshot PreparePause requested");
-            }
-        }
-        "preserve" => {
-            attached_write_line("vmx-shell: requesting raw checkpoint-and-stop");
-            trueos_vm::vmcall::preserve();
-            attached_write_line("vmx-shell: resumed from raw checkpoint");
         }
         _ => attached_write_line("unknown vmx command"),
     }

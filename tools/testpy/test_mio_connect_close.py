@@ -59,6 +59,7 @@ fn with_compat<R>(f:impl FnOnce(&mut MioCompat)->R)->R { STATE.with(|s| f(&mut s
 fn current_owner_vm()->Option<u8> { None }
 fn tcp_flow_logging_enabled(_: &MioSocketState)->bool { false }
 fn log_tcp_endpoint(_: &str, _:u32, _:u32, _:CompatAddr) {}
+fn publish_rx_owner(_:u32, _:Option<u8>) -> bool { true }
 fn prepare(kind:MioSocketKind, connected:bool, error:i32) {
     with_compat(|c| {
         c.refills=0;

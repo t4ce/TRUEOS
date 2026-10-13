@@ -109,7 +109,77 @@ struct Operation {
 
 static ASYNC_FS_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 static ASYNC_FS_REQUESTS: Mutex<VecDeque<Request>> = Mutex::new(VecDeque::new());
+// Discarding a result does not cancel an already-running filesystem future.
+// Keep its owner visible until that future reaches its commit/abort boundary.
+static ASYNC_FS_ACTIVE_REQUEST: Mutex<Option<(u32, u32)>> = Mutex::new(None);
 static ASYNC_FS_OPERATIONS: Mutex<BTreeMap<u32, Operation>> = Mutex::new(BTreeMap::new());
+
+fn pending_in(
+    owner: u32,
+    requests: &VecDeque<Request>,
+    active: Option<(u32, u32)>,
+    operations: &BTreeMap<u32, Operation>,
+) -> usize {
+    let queued = requests.iter().filter(|request| request.owner == owner).count();
+    let running = usize::from(active.is_some_and(|(running_owner, _)| running_owner == owner));
+    // Submission publishes Pending before it enters the request queue. Include
+    // that short interval without counting queued/running operations twice.
+    let submitting = operations.iter().filter(|(id, operation)| {
+        operation.owner == owner
+            && matches!(operation.state, OperationState::Pending)
+            && !requests.iter().any(|request| request.owner == owner && request.id == **id)
+            && active != Some((owner, **id))
+    }).count();
+    queued + running + submitting
+}
+
+/// Queued, submitting, or running filesystem work owned by this Blueprint.
+/// An Upload contains staged RAM only and can remain intact during pause.
+pub(crate) fn pending_for_owner(owner: u32) -> usize {
+    // All multi-lock broker paths use requests -> active -> operations.
+    let requests = ASYNC_FS_REQUESTS.lock();
+    let active = ASYNC_FS_ACTIVE_REQUEST.lock();
+    let operations = ASYNC_FS_OPERATIONS.lock();
+    pending_in(owner, &requests, *active, &operations)
+}
+
+/// Release staged uploads and completed results after guest admission closes.
+/// Pending disk work must finish first; Err leaves all owner state intact.
+pub(crate) fn release_owner(owner: u32) -> Result<usize, usize> {
+    let requests = ASYNC_FS_REQUESTS.lock();
+    let active = ASYNC_FS_ACTIVE_REQUEST.lock();
+    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    let pending = pending_in(owner, &requests, *active, &operations);
+    if pending != 0 {
+        return Err(pending);
+    }
+    let before = operations.len();
+    operations.retain(|_, operation| operation.owner != owner);
+    Ok(before - operations.len())
+}
+
+fn take_request() -> Option<Request> {
+    let mut requests = ASYNC_FS_REQUESTS.lock();
+    let request = requests.pop_front()?;
+    let mut active = ASYNC_FS_ACTIVE_REQUEST.lock();
+    assert!(active.is_none(), "async filesystem service already processing a request");
+    *active = Some((request.owner, request.id));
+    Some(request)
+}
+
+fn finish_request(request: &Request, state: Option<OperationState>) {
+    let mut active = ASYNC_FS_ACTIVE_REQUEST.lock();
+    assert_eq!(*active, Some((request.owner, request.id)));
+    if let Some(state) = state {
+        let mut operations = ASYNC_FS_OPERATIONS.lock();
+        if let Some(operation) = operations.get_mut(&request.id)
+            .filter(|operation| operation.owner == request.owner)
+        {
+            operation.state = state;
+        }
+    }
+    *active = None;
+}
 
 fn encode_dir_listing(listing: &crate::r::fs::trueosfs::DirListing) -> Option<Vec<u8>> {
     let count = u32::try_from(listing.entries.len()).ok()?;
@@ -217,6 +287,10 @@ fn next_operation_id(operations: &BTreeMap<u32, Operation>) -> Option<u32> {
 }
 
 fn start(owner: u32, kind: RequestKind) -> i32 {
+    crate::allocators::with_host_alloc_domain_strong(|| start_inner(owner, kind))
+}
+
+fn start_inner(owner: u32, kind: RequestKind) -> i32 {
     let mut operations = ASYNC_FS_OPERATIONS.lock();
     if operations.len() >= ASYNC_FS_MAX_OPERATIONS {
         return FS_ERR_NO_SPACE;
@@ -266,6 +340,10 @@ pub(crate) fn start_read(owner: u32, path: String) -> i32 {
 }
 
 fn start_completed_read(owner: u32, bytes: Vec<u8>) -> i32 {
+    crate::allocators::with_host_alloc_domain_strong(|| start_completed_read_inner(owner, bytes))
+}
+
+fn start_completed_read_inner(owner: u32, bytes: Vec<u8>) -> i32 {
     if bytes.len() as u64 > ASYNC_FS_MAX_RESULT_BYTES {
         return FS_ERR_TOO_LARGE;
     }
@@ -312,6 +390,18 @@ pub(crate) fn start_write_typed(
 }
 
 fn start_write_inner(
+    owner: u32,
+    path: String,
+    total_len: usize,
+    content_type: crate::r::fs::trueosfs::ContentTypeId,
+    legacy_blob: bool,
+) -> i32 {
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        stage_write(owner, path, total_len, content_type, legacy_blob)
+    })
+}
+
+fn stage_write(
     owner: u32,
     path: String,
     total_len: usize,
@@ -418,7 +508,7 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
         }
         return FS_ERR_NO_SPACE;
     }
-    requests.push_back(request);
+    crate::allocators::with_host_alloc_domain_strong(|| requests.push_back(request));
     0
 }
 
@@ -972,23 +1062,18 @@ async fn process(request: &Request) -> OperationState {
 #[trueos_executor::task]
 pub async fn service_task() {
     loop {
-        let request = ASYNC_FS_REQUESTS.lock().pop_front();
+        let request = take_request();
         let Some(request) = request else {
             Timer::after(EmbassyDuration::from_millis(ASYNC_FS_IDLE_MS)).await;
             continue;
         };
 
         if status(request.owner, request.id) != 0 {
+            finish_request(&request, None);
             continue;
         }
         let state = process(&request).await;
-        let mut operations = ASYNC_FS_OPERATIONS.lock();
-        if let Some(operation) = operations
-            .get_mut(&request.id)
-            .filter(|operation| operation.owner == request.owner)
-        {
-            operation.state = state;
-        }
+        finish_request(&request, Some(state));
     }
 }
 

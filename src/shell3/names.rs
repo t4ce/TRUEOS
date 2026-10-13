@@ -29,37 +29,25 @@ const HV_GROUP_1: [NameEntry; 3] = [
     },
 ];
 
-const HV_GROUP_2: [NameEntry; 8] = [
+const HV_GROUP_2: [NameEntry; 5] = [
+    NameEntry {
+        name: "start",
+        color: RgbaColor::White,
+    },
+    NameEntry {
+        name: "stop",
+        color: RgbaColor::White,
+    },
     NameEntry {
         name: "pause",
         color: RgbaColor::White,
     },
     NameEntry {
-        name: "load",
+        name: "resume",
         color: RgbaColor::White,
     },
     NameEntry {
-        name: "store",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "snap",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "preserve",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "eject",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "delete",
-        color: RgbaColor::White,
-    },
-    NameEntry {
-        name: "kick",
+        name: "kill",
         color: RgbaColor::White,
     },
 ];
@@ -191,6 +179,18 @@ pub(super) const VME_GROUP: NameGroup = NameGroup {
         },
         NameEntry {
             name: "stop",
+            color: RgbaColor::White,
+        },
+        NameEntry {
+            name: "pause",
+            color: RgbaColor::White,
+        },
+        NameEntry {
+            name: "resume",
+            color: RgbaColor::White,
+        },
+        NameEntry {
+            name: "kill",
             color: RgbaColor::White,
         },
     ],

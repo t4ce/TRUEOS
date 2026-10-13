@@ -24,6 +24,16 @@ level across all areas, preserving each area's other selections. Its checkbox
 is checked when every area admits that level; None is checked when every area
 is empty.
 
+Mouse hover gives only the checkbox a slightly lighter background. Hovering
+any letter of a level word reveals `up` above it and `down` below, aligned to
+the word's first column. None has no range actions. Moving onto either action
+keeps it visible; moving onto a checkbox, a gap, or elsewhere hides both.
+One click consumes the actions: up selects the hovered level and every level
+to its left in the displayed row, while down selects it and every level to its
+right. All other levels are cleared. These are exact sets in presentation
+order, independent of the build's severity thresholds. The same actions in
+Set all areas replace every area's selection. Hovering does not start capture.
+
 Policies start from the effective compile-time profile matrix, including its
 override precedence. Edits immediately affect the common acceptance gate used
 by TCP and emulator UART logging. They last until reboot. Build defaults reapplies

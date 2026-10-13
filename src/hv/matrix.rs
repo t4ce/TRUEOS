@@ -145,6 +145,7 @@ pub(crate) fn working_slots() -> Vec<String> {
         .filter_map(|vm| {
             if !vm.running.load(core::sync::atomic::Ordering::Acquire)
                 || vm.pause_latched.load(core::sync::atomic::Ordering::Acquire)
+                || vm.execution_pause.paused()
             {
                 return None;
             }

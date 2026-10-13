@@ -23,18 +23,22 @@ const THREAD_LIMIT: usize = 256;
 const MAX_STACK_BYTES: usize = 64 * 1024 * 1024;
 static THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NEXT_CARRIER: AtomicUsize = AtomicUsize::new(0);
-// One registration per task lifetime, not per guest operation. Killing wakes
-// even a Condvar/sleep parked task whose ordinary wait never completes.
-static KILL_WAKERS: [spin::Mutex<alloc::vec::Vec<Waker>>; crate::allcaps::hv::VM_ID_LIMIT] =
+// Control wakes even a Condvar/sleep task whose ordinary wait never completes.
+// Keep registrations until task retirement so pause and resume can both wake.
+static CONTROL_WAKERS: [spin::Mutex<alloc::vec::Vec<Waker>>; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { spin::Mutex::new(alloc::vec::Vec::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
 
-pub(crate) fn wake_killed_guest(vm_id: u8) {
-    if let Some(wakers) = KILL_WAKERS.get(vm_id as usize) {
-        let pending = core::mem::take(&mut *wakers.lock());
+pub(crate) fn wake_guest_control(vm_id: u8) {
+    if let Some(wakers) = CONTROL_WAKERS.get(vm_id as usize) {
+        let pending = crate::allocators::with_host_alloc_domain_strong(|| wakers.lock().clone());
         for waker in pending {
             waker.wake();
         }
     }
+}
+
+pub(crate) fn wake_killed_guest(vm_id: u8) {
+    wake_guest_control(vm_id);
 }
 static CURRENT: [AtomicPtr<Thread>; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicPtr::new(core::ptr::null_mut()) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
@@ -218,35 +222,62 @@ unsafe extern "C" fn run(data: *mut ()) -> ! {
 
 struct ThreadTask(Box<Thread>);
 
+fn guest_control_boundary(thread: &mut Thread) -> Option<Poll<()>> {
+    let vm_id = thread.vm_id?;
+    // Never poll the ordinary wait or re-enter guest code/destructors after
+    // kill. Admission retires only when the host-owned stack has been dropped.
+    if crate::hv::guest_kill_requested(vm_id) {
+        diagnostic_phase(thread, diagnostics::CANCELLING, 0, 0);
+        thread.wait = None;
+        if let Some(job) = thread.job.take() {
+            core::mem::forget(job);
+        }
+        thread.done = true;
+        return Some(Poll::Ready(()));
+    }
+    if crate::hv::guest_native_pause_requested(vm_id) {
+        let parked = thread._admission._owner.as_mut().is_none_or(GuestJobOwner::park);
+        if parked {
+            return Some(Poll::Pending);
+        }
+        // Resume or kill may have closed the pause while its flag was read.
+        // A failed park cannot leave the continuation stranded.
+    }
+    if let Some(owner) = thread._admission._owner.as_mut() {
+        owner.unpark();
+    }
+    None
+}
+
 impl Future for ThreadTask {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let thread = &mut *self.get_mut().0;
         if let Some(vm_id) = thread.vm_id {
-            if thread.kill_waker.is_none() {
-                if let Some(wakers) = KILL_WAKERS.get(vm_id as usize) {
-                    crate::wait::register_waker_list(&mut wakers.lock(), cx.waker());
+            if thread.kill_waker.as_ref().is_none_or(|waker| !waker.will_wake(cx.waker())) {
+                if let Some(wakers) = CONTROL_WAKERS.get(vm_id as usize) {
+                    let mut wakers = wakers.lock();
+                    if let Some(old) = thread.kill_waker.take() {
+                        wakers.retain(|registered| !registered.will_wake(&old));
+                    }
+                    crate::wait::register_waker_list(&mut wakers, cx.waker());
                     thread.kill_waker = Some(cx.waker().clone());
                 }
             }
-            // Registration precedes the flag read: a racing kill either wakes
-            // us or is consumed here. Never poll the ordinary wait or re-enter
-            // guest code/destructors after this irreversible transition.
-            if crate::hv::guest_kill_requested(vm_id) {
-                diagnostic_phase(thread, diagnostics::CANCELLING, 0, 0);
-                thread.wait = None;
-                if let Some(job) = thread.job.take() {
-                    core::mem::forget(job);
-                }
-                thread.done = true;
-                return Poll::Ready(());
-            }
+        }
+        // Registration precedes the flag read: racing control either wakes
+        // this task or is consumed at this host boundary.
+        if let Some(result) = guest_control_boundary(thread) {
+            return result;
         }
         if let Some(wait) = thread.wait.as_mut() {
             if wait.as_mut().poll(cx).is_pending() {
                 return Poll::Pending;
             }
             thread.wait = None;
+        }
+        if let Some(result) = guest_control_boundary(thread) {
+            return result;
         }
         let ptr = thread as *mut Thread;
         diagnostic_phase(thread, diagnostics::RUNNING, 0, 0);
@@ -282,6 +313,11 @@ impl Future for ThreadTask {
             diagnostic_phase(thread, diagnostics::COMPLETED, 0, 0);
             Poll::Ready(())
         } else {
+            // Guest frames are now off the CPU and every carrier realm guard
+            // has been restored. Only this point may acknowledge RAM parking.
+            if let Some(result) = guest_control_boundary(thread) {
+                return result;
+            }
             if thread.wait.is_none() {
                 cx.waker().wake_by_ref();
             } else {
@@ -301,7 +337,7 @@ impl Drop for ThreadTask {
     fn drop(&mut self) {
         let thread = &mut *self.0;
         if let (Some(vm_id), Some(waker)) = (thread.vm_id, thread.kill_waker.take()) {
-            if let Some(wakers) = KILL_WAKERS.get(vm_id as usize) {
+            if let Some(wakers) = CONTROL_WAKERS.get(vm_id as usize) {
                 wakers.lock().retain(|registered| !registered.will_wake(&waker));
             }
         }
