@@ -150,6 +150,13 @@ pub enum TlsCommand {
         roots: TlsRoots,
         timeouts: TlsTimeouts,
     },
+    OpenTcpConnectV6 {
+        remote: vnet::EndpointV6,
+        server_name: String,
+        cfg: TlsClientConfig,
+        roots: TlsRoots,
+        timeouts: TlsTimeouts,
+    },
     /// Send plaintext application bytes.
     Send {
         handle: vnet::NetHandle,
@@ -335,6 +342,25 @@ fn tls_socket_tick_once() -> bool {
     }
     for (owner, cmds) in batches {
         for cmd in cmds {
+            let (cmd, remote_v6) = match cmd {
+                TlsCommand::OpenTcpConnectV6 {
+                    remote,
+                    server_name,
+                    cfg,
+                    roots,
+                    timeouts,
+                } => (
+                    TlsCommand::OpenTcpConnect {
+                        remote: vnet::EndpointV4::new([0; 4], remote.port),
+                        server_name,
+                        cfg,
+                        roots,
+                        timeouts,
+                    },
+                    Some(remote),
+                ),
+                cmd => (cmd, None),
+            };
             match cmd {
                 TlsCommand::OpenTcpConnect {
                     remote,
@@ -392,9 +418,14 @@ fn tls_socket_tick_once() -> bool {
                         timeouts,
                     };
 
-                    let _ = conn.net.submit(vnet::Command::OpenTcpConnect { remote });
+                    let command = match remote_v6 {
+                        Some(remote) => vnet::Command::OpenTcpConnectV6 { remote },
+                        None => vnet::Command::OpenTcpConnect { remote },
+                    };
+                    let _ = conn.net.submit(command);
                     conns.push(conn);
                 }
+                TlsCommand::OpenTcpConnectV6 { .. } => unreachable!(),
                 TlsCommand::Send { handle, data } => {
                     if let Some(conn) = conns.iter_mut().find(|c| c.matches_handle(handle)) {
                         conn.last_activity = Instant::now();

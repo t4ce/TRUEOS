@@ -301,6 +301,14 @@ fn skip_dns_name(buf: &[u8], mut offset: usize) -> Option<usize> {
 }
 
 fn parse_dns_a_response(buf: &[u8], expected_id: u16) -> Result<[u8; 4], DnsError> {
+    parse_dns_address_response::<4>(buf, expected_id, DNS_QTYPE_A)
+}
+
+fn parse_dns_address_response<const N: usize>(
+    buf: &[u8],
+    expected_id: u16,
+    qtype: u16,
+) -> Result<[u8; N], DnsError> {
     if buf.len() < 12 {
         return Err(DnsError::NoAnswer);
     }
@@ -335,13 +343,10 @@ fn parse_dns_a_response(buf: &[u8], expected_id: u16) -> Result<[u8; 4], DnsErro
         if offset + rdlen > buf.len() {
             return Err(DnsError::NoAnswer);
         }
-        if ty == DNS_QTYPE_A && class == 1 && rdlen == 4 {
-            return Ok([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ]);
+        if ty == qtype && class == 1 && rdlen == N {
+            let mut address = [0; N];
+            address.copy_from_slice(&buf[offset..offset + N]);
+            return Ok(address);
         }
         offset += rdlen;
     }
@@ -517,6 +522,7 @@ async fn dns_tls_exchange_v4(
 ) -> Result<Vec<u8>, DnsError> {
     let owner = dns_tls_owner(prefix, device_index);
     let (cmds, events) = dns_tls_queues(owner);
+    let _cleanup = DnsConnectionCleanup(cmds);
     let cfg = if port == DOH_PORT {
         TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"])
     } else {
@@ -696,4 +702,47 @@ async fn resolve_ipv4_dot_for_device(
     }
 
     Err(DnsError::NoAnswer)
+}
+
+/// Secure AAAA lookup; DNS transport remains independent of the target family.
+pub async fn resolve_ipv6_for_device(
+    device_index: usize,
+    host: &str,
+    cfg: DnsConfig,
+) -> Result<[u8; 16], DnsError> {
+    let host = host.trim().trim_end_matches('.');
+    if host.is_empty() {
+        return Err(DnsError::BadName);
+    }
+    let (query_id, query) = build_dns_query(host, 28)?;
+    let encoded = base64url_no_pad(&query);
+    for endpoint in PUBLIC_DOH_ENDPOINTS {
+        let payload = format!("GET {}?dns={} HTTP/1.1\r\nHost: {}\r\nAccept: application/dns-message\r\nConnection: close\r\n\r\n", endpoint.path, encoded, endpoint.tls_name).into_bytes();
+        if let Ok(body) = dns_tls_exchange_v4(
+            "dns-aaaa",
+            device_index,
+            endpoint.addr,
+            DOH_PORT,
+            endpoint.tls_name,
+            payload,
+            cfg.timeout_ms,
+            SecureTlsReply::HttpBody,
+        )
+        .await
+        {
+            if let Ok(ip) = parse_dns_address_response::<16>(&body, query_id, 28) {
+                return Ok(ip);
+            }
+        }
+    }
+    Err(DnsError::NoAnswer)
+}
+
+struct DnsConnectionCleanup(&'static Queue<TlsCommand>);
+impl Drop for DnsConnectionCleanup {
+    fn drop(&mut self) {
+        let _ = self.0.push(TlsCommand::CancelOwner {
+            completion: alloc::sync::Arc::new(crate::net::tls_socket::TlsCancelCompletion::new()),
+        });
+    }
 }

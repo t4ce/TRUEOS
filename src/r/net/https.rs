@@ -1,5 +1,8 @@
 extern crate alloc;
 
+#[path = "happy_eyeballs.rs"]
+mod happy_eyeballs;
+
 include!("../cabi_codes.rs");
 
 use alloc::boxed::Box;
@@ -1015,6 +1018,15 @@ async fn fetch_https_bytes(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
+    fetch_https_bytes_with_policy(target, timeout_ms, max_bytes, false).await
+}
+
+async fn fetch_https_bytes_with_policy(
+    target: &FetchTarget,
+    timeout_ms: u32,
+    max_bytes: usize,
+    happy_eyeballs: bool,
+) -> Result<Vec<u8>, String> {
     let request = HttpsRequest {
         method: "GET",
         content_type: None,
@@ -1038,14 +1050,26 @@ async fn fetch_https_bytes(
         if target.scheme != "https" {
             return Err(String::from("https redirect to insecure scheme"));
         }
-        let response = match request_https_response_once(
-            &target,
-            &request,
-            remaining.min(u32::MAX as u64) as u32,
-            max_bytes,
-        )
-        .await
-        {
+        let first = async {
+            if happy_eyeballs && hop == 0 {
+                request_https_happy_eyeballs(
+                    &target,
+                    &request,
+                    remaining.min(u32::MAX as u64) as u32,
+                    max_bytes,
+                )
+                .await
+            } else {
+                request_https_response_once(
+                    &target,
+                    &request,
+                    remaining.min(u32::MAX as u64) as u32,
+                    max_bytes,
+                )
+                .await
+            }
+        };
+        let response = match first.await {
             Err(err) if err.starts_with("bad response len=0 ") => {
                 let remaining = deadline
                     .saturating_duration_since(Instant::now())
@@ -1266,6 +1290,35 @@ async fn request_https_response(
     max_bytes: usize,
     cancellation: Option<&JsonPostCancellation>,
 ) -> Result<HttpsJsonResponse, String> {
+    request_https_response_preconnected(
+        target,
+        ip,
+        cmds,
+        events,
+        request,
+        tls_config,
+        roots,
+        timeout_ms,
+        max_bytes,
+        cancellation,
+        None,
+    )
+    .await
+}
+
+async fn request_https_response_preconnected(
+    target: &FetchTarget,
+    ip: [u8; 4],
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
+    request: &HttpsRequest<'_>,
+    tls_config: &TlsClientConfig,
+    roots: &TlsRoots,
+    timeout_ms: u32,
+    max_bytes: usize,
+    cancellation: Option<&JsonPostCancellation>,
+    connected: Option<vnet::NetHandle>,
+) -> Result<HttpsJsonResponse, String> {
     let request_data = build_http_request(target, request)?;
 
     if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
@@ -1277,29 +1330,38 @@ async fn request_https_response(
     // active for this client here, so discard such stale events before opening.
     let _ = events.drain(HTTPS_EVENT_QUEUE_DEPTH);
 
-    cmds.push(TlsCommand::OpenTcpConnect {
-        remote: vnet::EndpointV4 {
-            addr: ip,
-            port: target.port,
-        },
-        server_name: target.host.clone(),
-        cfg: tls_config.clone(),
-        roots: roots.clone(),
-        timeouts: TlsTimeouts {
-            connect_ms: timeout_ms,
-            tls_ms: timeout_ms,
-            idle_ms: timeout_ms,
-        },
-    })
-    .map_err(|_| String::from("tls queue full"))?;
+    if connected.is_none() {
+        cmds.push(TlsCommand::OpenTcpConnect {
+            remote: vnet::EndpointV4 {
+                addr: ip,
+                port: target.port,
+            },
+            server_name: target.host.clone(),
+            cfg: tls_config.clone(),
+            roots: roots.clone(),
+            timeouts: TlsTimeouts {
+                connect_ms: timeout_ms,
+                tls_ms: timeout_ms,
+                idle_ms: timeout_ms,
+            },
+        })
+        .map_err(|_| String::from("tls queue full"))?;
+    }
 
     if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
         return Err(String::from(HTTPS_REQUEST_CANCELLED));
     }
 
     let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
-    let mut tls_handle = None;
-    let mut sent_request = false;
+    let mut tls_handle = connected;
+    let mut sent_request = connected.is_some();
+    if let Some(handle) = connected {
+        cmds.push(TlsCommand::Send {
+            handle,
+            data: request_data.clone(),
+        })
+        .map_err(|_| String::from("tls send queue full"))?;
+    }
     let mut response = Vec::new();
 
     loop {
@@ -1654,7 +1716,13 @@ fn spawn_fetch_file(op_id: u32, url: String, path: String, timeout_ms: u32, max_
     });
 }
 
-fn spawn_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
+fn spawn_fetch_bytes(
+    op_id: u32,
+    url: String,
+    timeout_ms: u32,
+    max_bytes: usize,
+    happy_eyeballs: bool,
+) {
     crate::wait::spawn_local_detached(async move {
         let started = Instant::now();
         if crate::log_os::flags::HTTP_FETCH_DIAG_PROFILE_ENABLED {
@@ -1663,7 +1731,19 @@ fn spawn_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize)
                 .unwrap_or_default();
             crate::log_info!(target: "net"; "asset-fetch: begin id={} host={} timeout_ms={} max_bytes={}\n", op_id, host, timeout_ms, max_bytes);
         }
-        let (rc, body) = match fetch_bytes(url, timeout_ms, max_bytes).await {
+        let fetched = if happy_eyeballs {
+            match parse_fetch_url(&url) {
+                Ok(target) if target.scheme == "https" => {
+                    fetch_https_bytes_with_policy(&target, timeout_ms, max_bytes, true)
+                        .await
+                        .map_err(|err| fetch_error_to_code(&err))
+                }
+                _ => fetch_bytes(url, timeout_ms, max_bytes).await,
+            }
+        } else {
+            fetch_bytes(url, timeout_ms, max_bytes).await
+        };
+        let (rc, body) = match fetched {
             Ok(bytes) => (0, bytes),
             Err(rc) => (rc, Vec::new()),
         };
@@ -1790,6 +1870,15 @@ pub(crate) fn cabi_net_fetch_bytes_start_host(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> u32 {
+    cabi_net_fetch_bytes_start_with_policy_host(url_s, timeout_ms, max_bytes, false)
+}
+
+pub(crate) fn cabi_net_fetch_bytes_start_with_policy_host(
+    url_s: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+    happy_eyeballs: bool,
+) -> u32 {
     if url_s.trim().is_empty() {
         return 0;
     }
@@ -1797,7 +1886,7 @@ pub(crate) fn cabi_net_fetch_bytes_start_host(
     CABI_NET_FETCH_BYTES_RESULTS
         .lock()
         .insert(op_id, CabiNetFetchBytesResult::default());
-    spawn_fetch_bytes(op_id, String::from(url_s), timeout_ms.max(1), max_bytes);
+    spawn_fetch_bytes(op_id, String::from(url_s), timeout_ms.max(1), max_bytes, happy_eyeballs);
     op_id
 }
 
@@ -1894,13 +1983,13 @@ fn guest_vmcall_op_id(status: u32, value: u64) -> u32 {
     }
 }
 
-fn cabi_net_fetch_bytes_start_guest(url: &str) -> u32 {
+fn cabi_net_fetch_bytes_start_guest(url: &str, happy_eyeballs: bool) -> u32 {
     if url.len() > trueos_vm::vmcall::PAYLOAD_CAP {
         return 0;
     }
     let (status, value) = trueos_vm::vmcall::call_with_payload(
         trueos_vm::vmcall::OP_BP_FETCH_BYTES_START,
-        0,
+        u64::from(happy_eyeballs),
         0,
         url.as_bytes(),
         &mut [],
@@ -2021,7 +2110,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start(
         return 0;
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        cabi_net_fetch_bytes_start_guest(url)
+        cabi_net_fetch_bytes_start_guest(url, false)
     } else {
         cabi_net_fetch_bytes_start_host(url, 45_000, 8 * 1024 * 1024)
     }
@@ -2456,7 +2545,9 @@ mod http_fetch_tests {
         };
         let encoded = String::from_utf8(build_http_request(&target, &request).unwrap()).unwrap();
         assert!(encoded.contains("\r\nAccept: */*,text/html;q=0.9\r\n"));
-        request.headers.push((String::from("Accept"), String::from("application/json")));
+        request
+            .headers
+            .push((String::from("Accept"), String::from("application/json")));
         let encoded = String::from_utf8(build_http_request(&target, &request).unwrap()).unwrap();
         assert!(encoded.contains("\r\nAccept: application/json\r\n"));
         assert!(!encoded.contains("text/html"));
@@ -2507,4 +2598,145 @@ mod http_fetch_tests {
                 .is_err()
         );
     }
+}
+
+/// Opt in to an address-family race for only the initial HTTPS connection.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start_happy_eyeballs(
+    url_ptr: *const u8,
+    url_len: usize,
+) -> u32 {
+    let Some(url) = (unsafe { abi_str(url_ptr, url_len) }) else {
+        return 0;
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        cabi_net_fetch_bytes_start_guest(url, true)
+    } else {
+        cabi_net_fetch_bytes_start_with_policy_host(url, 45_000, 8 * 1024 * 1024, true)
+    }
+}
+
+async fn happy_connect(
+    target: &FetchTarget,
+    device: usize,
+    ipv6: bool,
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
+    timeout_ms: u32,
+) -> Result<vnet::NetHandle, String> {
+    let config = crate::r::net::dns::DnsConfig::for_device(device)
+        .with_timeout_ms((timeout_ms as u64).min(5_000));
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let roots = TlsRoots::mozilla();
+    let timeouts = TlsTimeouts {
+        connect_ms: timeout_ms,
+        tls_ms: timeout_ms,
+        idle_ms: timeout_ms,
+    };
+    let command = if ipv6 {
+        let addr = crate::r::net::dns::resolve_ipv6_for_device(device, &target.host, config)
+            .await
+            .map_err(|err| format!("dns AAAA {:?}", err))?;
+        TlsCommand::OpenTcpConnectV6 {
+            remote: vnet::EndpointV6::new(addr, target.port),
+            server_name: target.host.clone(),
+            cfg,
+            roots,
+            timeouts,
+        }
+    } else {
+        let addr = resolve_https_host(device, &target.host, timeout_ms).await?;
+        // DNS lookups run together; the IPv4 connection starts after a short stagger.
+        Timer::after(EmbassyDuration::from_millis(250)).await;
+        TlsCommand::OpenTcpConnect {
+            remote: vnet::EndpointV4::new(addr, target.port),
+            server_name: target.host.clone(),
+            cfg,
+            roots,
+            timeouts,
+        }
+    };
+    cmds.push(command)
+        .map_err(|_| String::from("tls queue full"))?;
+    loop {
+        for event in events.drain(HTTPS_EVENT_DRAIN_MAX) {
+            match event {
+                TlsEvent::Connected { handle } => return Ok(handle),
+                TlsEvent::Error { msg } => return Err(String::from(msg)),
+                TlsEvent::TlsError { err } => return Err(format!("tls {:?}", err)),
+                TlsEvent::Closed { .. } => return Err(String::from("connection closed")),
+                _ => {}
+            }
+        }
+        Timer::after(EmbassyDuration::from_millis(5)).await;
+    }
+}
+
+async fn request_https_happy_eyeballs(
+    target: &FetchTarget,
+    request: &HttpsRequest<'_>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<HttpsJsonResponse, String> {
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+    crate::r::readiness::wait_for_timeout(
+        crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
+        EmbassyDuration::from_millis(timeout_ms as u64),
+    )
+    .await
+    .then_some(())
+    .ok_or_else(|| String::from("timeout"))?;
+    let device = NetProfile::default()
+        .resolve_device_index()
+        .ok_or_else(|| String::from("no nic"))?;
+    let queues = core::array::from_fn::<_, 2, _>(|family| {
+        let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let owner = leak_str(format!("https-race-{}-{}@{}", seq, family, device));
+        let cmds = Queue::new_leaked(leak_str(format!("{}-cmd", owner)), HTTPS_COMMAND_QUEUE_DEPTH);
+        let events = Queue::new_leaked(leak_str(format!("{}-evt", owner)), HTTPS_EVENT_QUEUE_DEPTH);
+        register_tls_app_queues(owner, cmds, events);
+        (cmds, events)
+    });
+    let remaining = deadline
+        .saturating_duration_since(Instant::now())
+        .as_millis()
+        .min(u32::MAX as u64) as u32;
+    let race = happy_eyeballs::first_success(
+        happy_connect(target, device, true, queues[0].0, queues[0].1, remaining),
+        happy_connect(target, device, false, queues[1].0, queues[1].1, remaining),
+    );
+    let winner =
+        trueos_time::with_timeout(EmbassyDuration::from_millis(remaining as u64), race).await;
+    let result = match winner {
+        Ok(Ok((index, handle))) => {
+            // Cancel the loser before sending any HTTP bytes. Its pending DNS
+            // exchange also cancels its TLS owner when the race future drops.
+            let _ = fence_https_owner(queues[1 - index].0).await;
+            crate::log_info!(target: "net"; "https-fetch: happy-eyeballs host={} winner={}\n", target.host, if index == 0 { "ipv6" } else { "ipv4" });
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .min(u32::MAX as u64) as u32;
+            request_https_response_preconnected(
+                target,
+                [0; 4],
+                queues[index].0,
+                queues[index].1,
+                request,
+                &TlsClientConfig::new(),
+                &TlsRoots::mozilla(),
+                remaining,
+                max_bytes,
+                None,
+                Some(handle),
+            )
+            .await
+        }
+        Ok(Err(err)) => Err(err),
+        Err(_) => Err(String::from("timeout")),
+    };
+    for (cmds, _) in queues {
+        let _ = fence_https_owner(cmds).await;
+    }
+    result
 }

@@ -4335,7 +4335,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             const TIMEOUT_MS: u32 = 45_000;
             const MAX_BYTES: usize = 8 * 1024 * 1024;
             let op_id =
-                crate::r::net::https::cabi_net_fetch_bytes_start_host(url, TIMEOUT_MS, MAX_BYTES);
+                crate::r::net::https::cabi_net_fetch_bytes_start_with_policy_host(url, TIMEOUT_MS, MAX_BYTES, arg0 == 1);
             if op_id == 0 {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             } else {

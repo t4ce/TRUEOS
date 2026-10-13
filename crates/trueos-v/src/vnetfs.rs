@@ -30,6 +30,14 @@ pub fn fetch_bytes(url: &[u8]) -> Result<u32, i32> {
     Ok(op_id)
 }
 
+/// Race IPv6 and IPv4 only for the initial HTTPS connection of this fetch.
+#[inline]
+pub fn fetch_bytes_happy_eyeballs(url: &[u8]) -> Result<u32, i32> {
+    let id =
+        unsafe { vcabi::trueos_cabi_net_fetch_bytes_start_happy_eyeballs(url.as_ptr(), url.len()) };
+    if id == 0 { Err(-1) } else { Ok(id) }
+}
+
 #[inline]
 pub fn fetch_post_json_to_file(
     url: &[u8],
