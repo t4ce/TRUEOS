@@ -78,7 +78,9 @@ pub mod probes {
 }
 
 pub mod blueprint {
-    pub const PORTAL_IMAGE_CAP_BYTES: usize = 128 * 1024 * 1024;
+    // Codex's relocated CLI image exceeds 128 MiB; guest-heap bounds still
+    // independently constrain allocation and executable mappings.
+    pub const PORTAL_IMAGE_CAP_BYTES: usize = 256 * 1024 * 1024;
     // Retained-scene Blueprints keep their relocated REL image alongside
     // Picasso's runtime asset database. A large embedded GLB therefore needs
     // substantially more guest heap than the image itself. Keep this ceiling

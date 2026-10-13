@@ -44,7 +44,9 @@ pub(super) fn start(lease: MatrixSlotLease) -> Result<(), &'static str> {
     }
     if let Some(previous) = current.replace(tap) {
         previous.active.store(false, Ordering::Release);
+        MatrixSlots::set_background_active(&previous.lease, false);
     }
+    MatrixSlots::set_background_active(&lease, true);
     worker.spawn(task);
     Ok(())
 }
@@ -88,6 +90,7 @@ async fn drain(tap: Arc<Tap>, mut cursor: u64) {
         .is_some_and(|active| Arc::ptr_eq(active, &tap))
     {
         *current = None;
+        MatrixSlots::set_background_active(&tap.lease, false);
     }
 }
 

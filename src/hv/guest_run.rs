@@ -270,7 +270,15 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     // the host removes and drops the authoritative state after VM exit.
     let state = ManuallyDrop::new(state);
 
-    let log = |line: &str| crate::hv::hvlogf(format_args!("{}", line));
+    // Publish loader stages and failures through the host-owned log router,
+    // including failures before an application acquires its terminal.
+    let log = |line: &str| unsafe {
+        crate::r::io::cabi::trueos_cabi_log(
+            trueos_vm::vmcall::BP_LOG_LEVEL_IMPORTANT,
+            b"blueprint-loader".as_ptr(), b"blueprint-loader".len(),
+            line.as_ptr(), line.len(),
+        );
+    };
     let warn = |line: &str| crate::hv::hvwarnf(format_args!("{}", line));
 
     crate::hv::hvlogf(format_args!(
@@ -397,7 +405,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     }
 
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
-    crate::hv::hvlogf(format_args!("run: guest invoke alloc begin vm={}", vm_id));
+    log(alloc::format!("run: guest invoke alloc begin vm={}", vm_id).as_str());
     let invoke_result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
         let process_args = crate::hv::blueprint::build_process_args(
             state.archive.as_str(),

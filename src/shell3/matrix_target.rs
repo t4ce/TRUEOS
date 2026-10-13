@@ -78,6 +78,8 @@ pub(crate) fn attach_matrix_slot_resource(
 pub(super) fn retire_expired_attachments(slots: &mut super::MatrixSlotsState)
     -> alloc::vec::Vec<(MatrixSlotLease, alloc::sync::Arc<dyn MatrixSlotAttachment>)>
 {
+    slots.background_active.retain(|lease| slots.lifetimes.iter().any(|(name, generation)|
+        name == lease.name() && *generation == lease.lifetime_generation()));
     let mut retired = alloc::vec::Vec::new();
     let mut index = 0;
     while index < slots.attachments.len() {

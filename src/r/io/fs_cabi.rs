@@ -181,8 +181,8 @@ pub fn write_console_bytes(stream: ConsoleStream, bytes: &[u8]) {
         return;
     }
 
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let _ = guest_shell_attached_write(bytes);
+    if crate::hv::current_guest_execution_context_vm_id().is_some() {
+        let _ = unsafe { trueos_cabi_shell_attached_write(bytes.as_ptr(), bytes.len()) };
         return;
     }
 
@@ -2404,9 +2404,23 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_surface_snapshot_v1(
     if out_generation.is_null()
         || out_cols.is_null()
         || out_rows.is_null()
-        || crate::hv::current_hull_guest_context_vm_id().is_none()
     {
         return TERMINAL_LEASE_CABI_TRANSPORT_ERROR;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else {
+            return TERMINAL_LEASE_CABI_TRANSPORT_ERROR;
+        };
+        let snapshot = match crate::hv::blueprint_terminal_surface_snapshot(vm) {
+            Ok(snapshot) => snapshot,
+            Err(error) => return -(error.code() as i32),
+        };
+        unsafe {
+            out_generation.write(snapshot.generation);
+            out_cols.write(snapshot.cols);
+            out_rows.write(snapshot.rows);
+        }
+        return 0;
     }
 
     let mut record = [0u8; 16];

@@ -17,7 +17,7 @@ fn working_marker() -> char {
     GO2[(crate::chronos::monotonic_nanos() / 100_000_000 % GO2.len() as u64) as usize]
 }
 
-fn entries(ids: &[String], active: Option<&str>, aliases: &[String], working: &[String]) -> (Vec<Entry>, Vec<Entry>) {
+fn entries(ids: &[String], active: Option<&str>, aliases: &[String], working: &[String], background_active: &[String]) -> (Vec<Entry>, Vec<Entry>) {
     let marker = working_marker();
     let left = matrix_slots_meta(ids, active)
         .into_iter()
@@ -32,7 +32,11 @@ fn entries(ids: &[String], active: Option<&str>, aliases: &[String], working: &[
                 && working.contains(&ids[index / 3]) {
                 Some((MetaFmtStr { color: run.color, ..MetaFmtStr::new(alloc::format!("{marker}")) }, None))
             } else { None };
-            core::iter::once((run, target)).chain(suffix)
+            let background_suffix = if index % 3 == 2 && background_active.contains(&ids[index / 3]) {
+                let reverse = super::helper::reverse_spinner(crate::chronos::monotonic_nanos());
+                Some((MetaFmtStr { color: run.color, ..MetaFmtStr::new(alloc::format!("{reverse}")) }, None))
+            } else { None };
+            core::iter::once((run, target)).chain(suffix).chain(background_suffix)
         })
         .collect();
     let mut right = Vec::new();
@@ -48,7 +52,7 @@ fn entries(ids: &[String], active: Option<&str>, aliases: &[String], working: &[
 }
 
 pub(super) fn alias_runs(aliases: &[String]) -> Vec<MetaFmtStr> {
-    entries(&[], None, aliases, &[])
+    entries(&[], None, aliases, &[], &[])
         .1
         .into_iter()
         .map(|entry| entry.0)
@@ -62,7 +66,14 @@ pub(super) fn runs(
     hover: Option<&Target>,
     working: &[String],
 ) -> RowStrips {
-    let (left, right) = entries(ids, active, aliases, working);
+    runs_with_activity(ids, active, aliases, hover, working, &[])
+}
+
+pub(super) fn runs_with_activity(
+    ids: &[String], active: Option<&str>, aliases: &[String], hover: Option<&Target>,
+    working: &[String], background_active: &[String],
+) -> RowStrips {
+    let (left, right) = entries(ids, active, aliases, working, background_active);
     let style = |entries: Vec<Entry>| {
         entries
             .into_iter()
@@ -88,12 +99,17 @@ pub(super) fn hit(
     column: usize,
     working: &[String],
 ) -> Option<Target> {
-    hit_with_width(ids, aliases, columns, column, working, None)
+    hit_with_activity(ids, aliases, columns, column, working, &[])
+}
+
+pub(super) fn hit_with_activity(ids: &[String], aliases: &[String], columns: usize, column: usize,
+    working: &[String], background_active: &[String]) -> Option<Target> {
+    hit_with_width(ids, aliases, columns, column, working, background_active, None)
 }
 
 fn hit_with_width(ids: &[String], aliases: &[String], columns: usize, column: usize,
-    working: &[String], animated_width: Option<usize>) -> Option<Target> {
-    let (left, mut right) = entries(ids, None, aliases, working);
+    working: &[String], background_active: &[String], animated_width: Option<usize>) -> Option<Target> {
+    let (left, mut right) = entries(ids, None, aliases, working, background_active);
     if let Some(width) = animated_width {
         // Retiring aliases cannot launch stale apps. Keep the same footprint as
         // the animated snapshot so left-hand slot targets still clip correctly.
@@ -128,10 +144,11 @@ impl Shell3 {
     pub(super) fn handle_status_pointer(&mut self, column: Option<usize>, pressed: bool) -> bool {
         let target = column.and_then(|column| {
             let working = super::service::working_vmx_slots();
+            let background_active = super::MatrixSlots::background_active_slots();
             let slots = matrix_slots().lock();
             let width = self.aka_transition.frame(crate::chronos::monotonic_nanos())
                 .map(|frame| frame.source.iter().map(|run| run.text.chars().count()).sum());
-            hit_with_width(&slots.ids, &self.aka_names, self.columns, column, &working, width)
+            hit_with_width(&slots.ids, &self.aka_names, self.columns, column, &working, &background_active, width)
         });
         let changed = target != self.status_hover;
         self.status_hover = target.clone();

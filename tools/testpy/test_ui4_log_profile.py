@@ -12,7 +12,7 @@ TESTS = r'''
         for target in ["ui4", "ui4/input", "ui4/slot0", "vgpu"] {
             assert_eq!(log_os_core::target_log_area(target), A::Global);
         }
-        for level in [L::Error,L::Important,L::Warn,L::Once,L::Info,L::Debug,L::Trace] {
+        for &level in L::ALL {
             let expected = flags::UI4_DIAG_PROFILE_ENABLED || level <= L::Warn;
             assert_eq!(flags::area_log_enabled(A::Global, level), expected);
             assert_eq!(TRUEOS_LOG_ROUTER.enabled(A::Global, level), expected);
@@ -41,9 +41,10 @@ def main():
         env = dict(os.environ, RUSTUP_TOOLCHAIN="stable", CARGO_TARGET_DIR=str(work / "target"))
         for ui4,tgl,hv in [(False,True,False),(True,True,False),(True,False,False),(True,True,True)]:
             policy = flags
-            for name,value in [("UI4",ui4),("TGL_GPU",tgl),("BLUEPRINT_HV_DEBUG",hv)]:
-                policy = policy.replace(f"const {name}_DIAG_PROFILE_ENABLED: bool = false;", f"const {name}_DIAG_PROFILE_ENABLED: bool = {str(value).lower()};")
-            (work / "lib.rs").write_text(HOST + policy + adapters + TESTS)
+            for name,value in [("UI4_DIAG_PROFILE_ENABLED",ui4),("TGL_GPU_DIAG_PROFILE_ENABLED",tgl),("BLUEPRINT_HV_DEBUG_PROFILE_ENABLED",hv)]:
+                policy = re.sub(rf"(const {name}: bool = )(true|false);", rf"\g<1>{str(value).lower()};", policy)
+            live_policy = f'#[path="{ROOT}/src/log_policy.rs"] mod policy;\n'
+            (work / "lib.rs").write_text(HOST + policy + adapters + live_policy + TESTS)
             print(f"UI4={ui4} TGL={tgl} HV={hv}", flush=True)
             subprocess.run(["cargo","test","--lib","--manifest-path",str(work / "Cargo.toml"),"--","--test-threads=1"], cwd=work,env=env,check=True)
 if __name__ == "__main__": main()

@@ -1782,6 +1782,9 @@ pub(crate) fn build_process_env(
     vars.insert(String::from("PWD"), app_home.clone());
     vars.insert(String::from("HOME"), app_home.clone());
     let archive_stem = safe_archive_stem(archive);
+    if matches!(archive_stem.as_str(), "codex" | "codex-check") {
+        vars.insert(String::from("CODEX_STARTUP_TIMING_STDERR"), String::from("1"));
+    }
     if archive_stem == "voxy" {
         // Settings, profiles and logs survive replacement of the container.
         // The resolver exports only this app's shared userdata subtree.

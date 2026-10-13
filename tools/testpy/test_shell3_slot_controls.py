@@ -24,6 +24,9 @@ struct RowStrips {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
     source += f'#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
     for name in ('matrix_slots_meta', 'matrix_slots_text'):
         source += extract.item('src/shell3/shell3.rs', name)
+    helper = (ROOT/'src/shell3/helper.rs').read_text()
+    source += 'mod helper {\n' + re.search(r'^const GO:.*$', helper, re.M).group() + '\n'
+    source += extract.item('src/shell3/helper.rs', 'reverse_spinner') + '}\n'
     source += 'mod update {use super::*;\n' + extract.item('src/shell3/update.rs', 'fit_strips') + '}\n'
     status = (ROOT/'src/shell3/status.rs').read_text()
     status = status[status.index('#[derive'):status.index('impl Shell3')]
@@ -80,6 +83,21 @@ if pressed {if let Some(status::Target::Slot(name))=target {self.active=Some(nam
     let ids=vec!["sh1".into()];let working=ids.clone();let aliases=vec!["hello".into()];
     assert_eq!(status::hit(&ids,&aliases,30,4,&working),None);
     assert_eq!(status::hit(&ids,&aliases,30,25,&working),Some(status::Target::Alias("hello".into())));
+}
+#[test] fn background_activity_has_a_distinct_reverse_marker_and_matching_clipping() {
+    let ids=vec!["sh1".into(),"log".into()];let background=vec!["log".into()];
+    let row=status::runs_with_activity(&ids,None,&[],None,&[],&background);
+    assert_eq!(row.left.iter().map(|run|run.text.as_str()).collect::<String>(),"§sh1 §log⣿");
+    assert_eq!(status::hit_with_activity(&ids,&[],80,8,&[],&background),Some(status::Target::Slot("log".into())));
+    assert_eq!(status::hit_with_activity(&ids,&[],80,9,&[],&background),None);
+    assert_eq!(status::hit_with_activity(&ids,&[],9,9,&[],&background),None);
+    let row=status::runs_with_activity(&ids,None,&[],None,&background,&background);
+    assert_eq!(row.left.iter().map(|run|run.text.as_str()).collect::<String>(),"§sh1 §log⢈⣿");
+    assert_eq!(helper::reverse_spinner(100_000_000),'⣷');
+    assert_eq!(helper::reverse_spinner(800_000_000),'⣾');
+    assert_eq!(helper::reverse_spinner(900_000_000),'⣿');
+    let aliases=vec!["hello".into()];
+    assert_eq!(status::hit_with_activity(&ids,&aliases,30,25,&[],&background),Some(status::Target::Alias("hello".into())));
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-slot-controls-') as directory:

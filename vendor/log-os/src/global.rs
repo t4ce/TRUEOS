@@ -251,15 +251,7 @@ pub fn log<D: GlobalLogDispatch>(dispatch: &D, args: fmt::Arguments<'_>) {
 }
 
 pub const fn purpose_for_level(level: LogLevel) -> &'static str {
-    match level {
-        LogLevel::Error => "error",
-        LogLevel::Important => "important",
-        LogLevel::Warn => "warn",
-        LogLevel::Once => "once",
-        LogLevel::Info => "info",
-        LogLevel::Debug => "debug",
-        LogLevel::Trace => "trace",
-    }
+    level.tag()
 }
 
 pub fn log_with_area_level<D: GlobalLogDispatch>(

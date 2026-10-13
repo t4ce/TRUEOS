@@ -2,11 +2,11 @@
 //!
 //! A log record has two independent dimensions: an area and a level. Levels
 //! are ordered from least verbose/most severe to most verbose as
-//! `Error -> Important -> Warn -> Once -> Info -> Debug -> Trace`. Policies
+//! `Error -> User -> Ai -> Important -> Warn -> Once -> Info -> Debug -> Trace`. Policies
 //! use that order as follows:
 //!
 //! - `Up(level)` accepts `level` and every level to its left (more severe).
-//!   For example, `Up(Warn)` accepts Error, Important, and Warn.
+//!   For example, `Up(Warn)` accepts Error, User, Ai, Important, and Warn.
 //! - `Down(level)` accepts `level` and every level to its right (more verbose).
 //! - `Only(levels)` accepts exactly the selected set.
 //!
@@ -31,6 +31,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 extern crate alloc;
 
+#[path = "log_policy.rs"]
+pub(crate) mod policy;
+
 pub(crate) mod flags {
     use core::sync::atomic::AtomicBool;
 
@@ -45,7 +48,7 @@ pub(crate) mod flags {
     /// Render Info is intentionally NOT enabled: font-tessel polling and retry
     /// dumps exhausted the first capture. All areas retain Error/Important/Warn.
     /// See log_os.tgl_gpu_diag_profile.txt for the exact matrix and limitations.
-    pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = false;
 
     /// Archive action investigation: admit user-action breadcrumbs and codec
     /// phases even when another diagnostic profile suppresses these areas.
@@ -55,7 +58,7 @@ pub(crate) mod flags {
     /// Blueprint/hypervisor bring-up profile. Keep the semantic Blueprint and
     /// HV lanes fully visible while suppressing display, render, and GPU
     /// chatter that obscures Blueprint loading and VM lifecycle transitions.
-    pub(crate) const BLUEPRINT_HV_DEBUG_PROFILE_ENABLED: bool = false;
+    pub(crate) const BLUEPRINT_HV_DEBUG_PROFILE_ENABLED: bool = true;
 
     /// Compact font warm/coverage breadcrumbs, using the existing Gpgpu/Info
     /// policy and rate limiter. No Render/Info or screen-specific filter.
@@ -103,7 +106,7 @@ pub(crate) mod flags {
     /// motion - only appear once Global admits Trace. Enable this while
     /// working on the plane lease contract or the slot0 stack painter; it is
     /// noisy by design and belongs off in ordinary boots.
-    pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = false;
 
     /// Focused Shell2 single-keystroke/render latency profile.
     ///
@@ -232,8 +235,8 @@ pub(crate) mod flags {
 
     /// Returns the compile-time acceptance policy for one semantic log area.
     ///
-    /// Keep all area/profile choices here: both sinks consult this same policy.
-    pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
+    /// Seeds the live policies and supplies the Build defaults preset.
+    pub(crate) const fn build_area_log_policy(area: LogArea) -> LogLevelPolicy {
         // UI4 and vGPU targets resolve to Global. Honor this focused override
         // before early-return profiles, including the ordinary TGL policy.
         if UI4_DIAG_PROFILE_ENABLED && matches!(area, LogArea::Global) {
@@ -247,6 +250,8 @@ pub(crate) mod flags {
         if BLUEPRINT_HV_DEBUG_PROFILE_ENABLED {
             return match area {
                 LogArea::Hv | LogArea::Blueprint => LogLevelPolicy::up(LogLevelFilter::Trace),
+                // Native Blueprint workers write plain stdio through Global.
+                LogArea::Global => LogLevelPolicy::up(LogLevelFilter::Info),
                 LogArea::Gfx | LogArea::Gpgpu | LogArea::Render => {
                     LogLevelPolicy::up(LogLevelFilter::Warn)
                 }
@@ -280,6 +285,10 @@ pub(crate) mod flags {
             LogArea::IntelMediaNgin => INTEL_MEDIA_NGIN_LOG_LEVEL,
             LogArea::Blueprint => BLUEPRINT_LOG_LEVEL,
         }
+    }
+
+    pub(crate) fn area_log_policy(area: LogArea) -> LogLevelPolicy {
+        super::policy::area_log_policy(area)
     }
 
     /// True only when `level` survives `area`'s policy and may reach a sink.
@@ -757,6 +766,13 @@ pub fn log_once_with_target(
 
 pub fn init_global_dispatch() {
     log_os_core::install_global_log_dispatch(&TRUEOS_LOG_ROUTER);
+    if flags::BLUEPRINT_HV_DEBUG_PROFILE_ENABLED {
+        log_with_area_level(
+            flags::LogArea::Boot,
+            LogLevel::Important,
+            format_args!("log-profile=blueprint-cli-diag-v1 hv/blueprint=Up(Trace) global/apps/storage=Up(Info) gfx/gpgpu/render=Up(Warn) other=Up(Warn)\n"),
+        );
+    }
     if flags::ARCHIVE_DIAG_PROFILE_ENABLED {
         log_with_area_level(
             flags::LogArea::Boot,

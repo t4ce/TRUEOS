@@ -28,6 +28,8 @@ mod system_net;
 pub(crate) mod capture;
 pub(crate) mod matrix_target;
 mod log_tap;
+#[path = "system/log.rs"]
+mod system_log;
 pub(crate) use matrix_target::{matrix_target_print_line, MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
 mod metafmtstr;
 mod names;
@@ -187,6 +189,7 @@ struct MatrixSlotsState {
     lifetimes: Vec<(String, u64)>,
     next_lifetime: u64,
     attachments: Vec<(MatrixSlotLease, alloc::sync::Arc<dyn matrix_target::MatrixSlotAttachment>)>,
+    background_active: Vec<MatrixSlotLease>,
     echoes: Vec<(Option<String>, VecDeque<String>)>,
     generation: u64,
 }
@@ -198,6 +201,7 @@ impl MatrixSlotsState {
             lifetimes: Vec::new(),
             next_lifetime: 1,
             attachments: Vec::new(),
+            background_active: Vec::new(),
             echoes: Vec::new(),
             generation: 0,
         }
@@ -244,6 +248,27 @@ fn current_matrix_slots_text() -> String {
 
 impl MatrixSlots {
     pub const DEFAULT: &'static str = "§";
+
+    /// Background host activity is independent of selection and VMX affinity.
+    pub(super) fn set_background_active(lease: &MatrixSlotLease, active: bool) -> bool {
+        let mut slots = matrix_slots().lock();
+        if !slots.lifetimes.iter().any(|(name, lifetime)| name == lease.name() && *lifetime == lease.lifetime_generation()) {
+            return false;
+        }
+        if active && !slots.background_active.contains(lease) {
+            slots.background_active.push(lease.clone());
+        } else if !active {
+            slots.background_active.retain(|entry| entry != lease);
+        } else { return true; }
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
+        true
+    }
+
+    pub(super) fn background_active_slots() -> Vec<String> {
+        matrix_slots().lock().background_active.iter().map(|lease| lease.name().to_string()).collect()
+    }
 
     /// Shared across every Shell3. Names are supplied without the § prefix.
     pub fn set<T: AsRef<str>>(names: &[T]) {
@@ -1315,14 +1340,9 @@ impl Shell3 {
         let is_app = can_launch && self.appdb_names.iter().any(|name| name == &text);
         let is_alias = self.aka_names.iter().any(|name| name == &text);
         if self.mode == Mode::ADM && text == "log" {
-            if self.parse_operator("§log") {
-                let lifetime = matrix_slots().lock().lifetimes.iter().find(|(name, _)| name == "log").map(|(_, lifetime)| *lifetime);
-                if let Some(lifetime) = lifetime {
-                    let lease = MatrixSlotLease::from_identity("log".into(), lifetime);
-                    if let Err(error) = log_tap::start(lease) {
-                        MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error.into());
-                    }
-                }
+            match system_log::start(self.tui_frontend()) {
+                Ok(()) => { self.select_matrix_slot_name(&text); }
+                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
             }
         } else if text == "env" && (self.mode == Mode::ADM || self.active_vmx_app().is_some()) {
             for line in service::environment_lines(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) {
@@ -1581,8 +1601,9 @@ impl Shell3 {
         if row == SpecialRows::StatusRow {
             let active = self.active_matrix_slot_name();
             let working = service::working_vmx_slots();
+            let background_active = MatrixSlots::background_active_slots();
             let slots = matrix_slots().lock();
-            strips = status::runs(&slots.ids, active.as_deref(), &self.aka_names, self.status_hover.as_ref(), &working);
+            strips = status::runs_with_activity(&slots.ids, active.as_deref(), &self.aka_names, self.status_hover.as_ref(), &working, &background_active);
         }
         strips
     }

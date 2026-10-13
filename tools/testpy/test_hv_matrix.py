@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 shell = (ROOT / 'src/shell3/shell3.rs').read_text()
 state = re.search(r'^struct MatrixSlotsState \{.*?^}', shell, re.M | re.S).group()
 state_impl = re.search(r'^impl MatrixSlotsState \{.*?^}', shell, re.M | re.S).group()
-methods = '\n'.join(re.search(r'^    (?:pub\(crate\) )?fn '+name+r'\(.*?^    }', shell, re.M | re.S).group()
-                    for name in ('fresh_slot', 'drop_lease', 'drop_slot', 'drop_slot_inner'))
+methods = '\n'.join(re.search(r'^    (?:pub\((?:crate|super)\) )?fn '+name+r'\(.*?^    }', shell, re.M | re.S).group()
+                    for name in ('fresh_slot', 'drop_lease', 'drop_slot', 'drop_slot_inner', 'set_background_active', 'background_active_slots'))
 source = r'''#![allow(dead_code,non_upper_case_globals)]
 extern crate alloc;
 mod spin {
@@ -44,6 +44,27 @@ mod shell3 {
         pub fn release(_: &super::MatrixTarget,_:u8)->Option<bool> {Some(true)}
     }
     pub fn count()->usize {matrix_slots().lock().ids.len()}
+    #[test] fn background_activity_follows_the_exact_slot_lifetime() {
+        let (name, lifetime) = MatrixSlots::fresh_slot(None);
+        let lease = MatrixSlotLease::from_identity(name.clone(), lifetime);
+        assert!(!MatrixSlots::background_active_slots().contains(&name));
+        assert!(MatrixSlots::set_background_active(&lease, true));
+        assert!(MatrixSlots::set_background_active(&lease, true));
+        assert_eq!(MatrixSlots::background_active_slots().iter().filter(|id| *id == &name).count(), 1);
+        assert!(MatrixSlots::set_background_active(&lease, false));
+        assert!(!MatrixSlots::background_active_slots().contains(&name));
+        assert!(MatrixSlots::set_background_active(&lease, true));
+        MatrixSlots::drop_lease(&lease);
+        assert!(!MatrixSlots::background_active_slots().contains(&name));
+        let (new_name, new_lifetime) = MatrixSlots::fresh_slot(None);
+        assert_eq!(new_name, name);
+        assert_ne!(new_lifetime, lifetime);
+        let new_lease = MatrixSlotLease::from_identity(new_name, new_lifetime);
+        assert!(MatrixSlots::set_background_active(&new_lease, true));
+        assert!(!MatrixSlots::set_background_active(&lease, false));
+        assert!(MatrixSlots::background_active_slots().contains(&name));
+        MatrixSlots::drop_lease(&new_lease);
+    }
 }
 mod hv {
     use std::sync::atomic::{AtomicBool,AtomicU64,Ordering};
@@ -60,8 +81,8 @@ mod hv {
     }
     #[path="MATRIX"]pub mod matrix;
     struct TerminalLease;
-    impl TerminalLease {fn suppresses_terminal_output(&self)->bool {false}}
-    struct Context {console_attached:bool,terminal_lease:TerminalLease,console_target:Option<crate::shell3::MatrixTarget>,console_input:alloc::collections::VecDeque<u8>}
+    impl TerminalLease {fn accepts_console_input(&self,_:bool)->bool {true}}
+    struct Context {console_attached:bool,app_command_passthrough:bool,terminal_lease:TerminalLease,console_target:Option<crate::shell3::MatrixTarget>,console_input:alloc::collections::VecDeque<u8>}
     static BLUEPRINT_PROCESS_CONTEXTS:[spin::Mutex<Option<Context>>;2]=[const {spin::Mutex::new(None)};2];
     pub fn vm_run_generation(vm:u8)->Option<u64> {vm_slot(vm).map(|vm|vm.run_generation.load(Ordering::Acquire))}
     fn notify_blueprint_console_input(_:u8) {}
@@ -152,11 +173,12 @@ prompt_test = r'''
         struct Shell3 {prompt:Prompt,command_history:History,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>}
         impl Shell3 {
             fn set_prompt(&mut self,s:&str){self.prompt.text=s.into();}
+            fn active_vmx_app(&self)->Option<()> {Some(())}
             @PROMPT_METHOD@
         }
         let (target,receipt)=matrix::reserve("voxy.bp",b"voxy").unwrap();
         matrix::bind(0,"voxy.bp",b"voxy",Some(target.clone())).unwrap();
-        *BLUEPRINT_PROCESS_CONTEXTS[0].lock()=Some(Context {console_attached:true,terminal_lease:TerminalLease,console_target:Some(target.clone()),console_input:alloc::collections::VecDeque::new()});
+        *BLUEPRINT_PROCESS_CONTEXTS[0].lock()=Some(Context {console_attached:true,app_command_passthrough:false,terminal_lease:TerminalLease,console_target:Some(target.clone()),console_input:alloc::collections::VecDeque::new()});
         let mut shell=Shell3 {prompt:Prompt{text:"hello world".into()},command_history:History::default(),active_matrix_slot:Some(receipt.slot.clone()),active_matrix_lifetime:Some(receipt.lifetime)};
         assert!(shell.submit_app_prompt());
         assert_eq!(BLUEPRINT_PROCESS_CONTEXTS[0].lock().as_ref().unwrap().console_input.iter().copied().collect::<Vec<_>>(),b"hello world\n");

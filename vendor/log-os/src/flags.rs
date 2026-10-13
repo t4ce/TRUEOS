@@ -1,24 +1,45 @@
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum LogLevel {
-    Error,
-    Important,
-    Warn,
-    Once,
-    Info,
-    Debug,
-    Trace,
+// One ordered declaration generates the record levels, filters, sets and lists.
+// Off is a filter state only; it can never be emitted as a record.
+macro_rules! log_levels {
+    ($($level:ident => $set:ident, $tag:literal);+ $(;)?) => {
+        #[repr(u8)]
+        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+        pub enum LogLevel { $($level),+ }
+        #[repr(u8)]
+        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+        pub enum LogLevelFilter { Off, $($level),+ }
+        impl LogLevel {
+            pub const ALL: &'static [Self] = &[$(Self::$level),+];
+            pub const fn tag(self) -> &'static str {
+                match self { $(Self::$level => $tag),+ }
+            }
+            pub const fn filter(self) -> LogLevelFilter {
+                match self { $(Self::$level => LogLevelFilter::$level),+ }
+            }
+            pub const fn set(self) -> LogLevelSet { LogLevelSet(1 << self as u8) }
+        }
+        impl LogLevelFilter {
+            pub const ALL: &'static [Self] = &[Self::Off, $(Self::$level),+];
+            pub const fn level(self) -> Option<LogLevel> {
+                match self { Self::Off => None, $(Self::$level => Some(LogLevel::$level)),+ }
+            }
+            pub const fn tag(self) -> &'static str {
+                match self { Self::Off => "none", $(Self::$level => $tag),+ }
+            }
+        }
+        impl LogLevelSet { $(pub const $set: Self = LogLevel::$level.set();)+ }
+    };
 }
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum LogLevelFilter {
-    Off,
-    Error,
-    Important,
-    Warn,
-    Once,
-    Info,
-    Debug,
-    Trace,
+log_levels! {
+    Error => ERROR, "error";
+    User => USER, "user";
+    Ai => AI, "ai";
+    Important => IMPORTANT, "important";
+    Warn => WARN, "warn";
+    Once => ONCE, "once";
+    Info => INFO, "info";
+    Debug => DEBUG, "debug";
+    Trace => TRACE, "trace";
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +63,25 @@ pub enum LogArea {
 }
 
 impl LogArea {
+    pub const ALL: [Self; 16] = [
+        Self::Global,
+        Self::Boot,
+        Self::Service,
+        Self::Net,
+        Self::Usb,
+        Self::Storage,
+        Self::Gfx,
+        Self::Gpgpu,
+        Self::Render,
+        Self::Hda,
+        Self::Hv,
+        Self::Apps,
+        Self::ExecutorRealm,
+        Self::ExecutorCache,
+        Self::IntelMediaNgin,
+        Self::Blueprint,
+    ];
+
     pub const fn set(self) -> LogAreaSet {
         LogAreaSet(1 << self.index())
     }
@@ -67,7 +107,7 @@ impl LogArea {
         }
     }
 
-    const fn index(self) -> u32 {
+    pub const fn index(self) -> u32 {
         match self {
             Self::Global => 0,
             Self::Boot => 1,
@@ -126,25 +166,28 @@ impl LogAreaSet {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LogLevelSet(u8);
+pub struct LogLevelSet(u16);
 
 impl LogLevelSet {
     pub const NONE: Self = Self(0);
-    pub const ERROR: Self = Self(1 << 0);
-    pub const IMPORTANT: Self = Self(1 << 1);
-    pub const WARN: Self = Self(1 << 2);
-    pub const ONCE: Self = Self(1 << 3);
-    pub const INFO: Self = Self(1 << 4);
-    pub const DEBUG: Self = Self(1 << 5);
-    pub const TRACE: Self = Self(1 << 6);
-    pub const ALL: Self = Self((1 << 7) - 1);
+    pub const ALL: Self = Self((1 << LogLevel::ALL.len()) - 1);
+
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+    pub const fn from_bits(bits: u16) -> Self {
+        Self(bits & Self::ALL.0)
+    }
+    pub const fn toggle(self, level: LogLevel) -> Self {
+        Self(self.0 ^ level.set().0)
+    }
 
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
     pub const fn contains(self, level: LogLevel) -> bool {
-        (self.0 & level_bit(level).0) != 0
+        (self.0 & level.set().0) != 0
     }
 }
 
@@ -179,69 +222,17 @@ pub const fn area_tag(area: LogArea) -> &'static str {
     area.tag()
 }
 
-const fn level_bit(level: LogLevel) -> LogLevelSet {
-    match level {
-        LogLevel::Error => LogLevelSet::ERROR,
-        LogLevel::Important => LogLevelSet::IMPORTANT,
-        LogLevel::Warn => LogLevelSet::WARN,
-        LogLevel::Once => LogLevelSet::ONCE,
-        LogLevel::Info => LogLevelSet::INFO,
-        LogLevel::Debug => LogLevelSet::DEBUG,
-        LogLevel::Trace => LogLevelSet::TRACE,
-    }
-}
-
 pub const fn threshold_up_set(filter: LogLevelFilter) -> LogLevelSet {
-    match filter {
-        LogLevelFilter::Off => LogLevelSet::NONE,
-        LogLevelFilter::Error => LogLevelSet::ERROR,
-        LogLevelFilter::Important => LogLevelSet::ERROR.union(LogLevelSet::IMPORTANT),
-        LogLevelFilter::Warn => LogLevelSet::ERROR
-            .union(LogLevelSet::IMPORTANT)
-            .union(LogLevelSet::WARN),
-        LogLevelFilter::Once => LogLevelSet::ERROR
-            .union(LogLevelSet::IMPORTANT)
-            .union(LogLevelSet::WARN)
-            .union(LogLevelSet::ONCE),
-        LogLevelFilter::Info => LogLevelSet::ERROR
-            .union(LogLevelSet::IMPORTANT)
-            .union(LogLevelSet::WARN)
-            .union(LogLevelSet::ONCE)
-            .union(LogLevelSet::INFO),
-        LogLevelFilter::Debug => LogLevelSet::ERROR
-            .union(LogLevelSet::IMPORTANT)
-            .union(LogLevelSet::WARN)
-            .union(LogLevelSet::ONCE)
-            .union(LogLevelSet::INFO)
-            .union(LogLevelSet::DEBUG),
-        LogLevelFilter::Trace => LogLevelSet::ALL,
+    match filter.level() {
+        None => LogLevelSet::NONE,
+        Some(level) => LogLevelSet::from_bits((1 << (level as u8 + 1)) - 1),
     }
 }
 
 pub const fn threshold_down_set(filter: LogLevelFilter) -> LogLevelSet {
-    match filter {
-        LogLevelFilter::Off => LogLevelSet::NONE,
-        LogLevelFilter::Error => LogLevelSet::ALL,
-        LogLevelFilter::Important => LogLevelSet::IMPORTANT
-            .union(LogLevelSet::WARN)
-            .union(LogLevelSet::ONCE)
-            .union(LogLevelSet::INFO)
-            .union(LogLevelSet::DEBUG)
-            .union(LogLevelSet::TRACE),
-        LogLevelFilter::Warn => LogLevelSet::WARN
-            .union(LogLevelSet::ONCE)
-            .union(LogLevelSet::INFO)
-            .union(LogLevelSet::DEBUG)
-            .union(LogLevelSet::TRACE),
-        LogLevelFilter::Once => LogLevelSet::ONCE
-            .union(LogLevelSet::INFO)
-            .union(LogLevelSet::DEBUG)
-            .union(LogLevelSet::TRACE),
-        LogLevelFilter::Info => LogLevelSet::INFO
-            .union(LogLevelSet::DEBUG)
-            .union(LogLevelSet::TRACE),
-        LogLevelFilter::Debug => LogLevelSet::DEBUG.union(LogLevelSet::TRACE),
-        LogLevelFilter::Trace => LogLevelSet::TRACE,
+    match filter.level() {
+        None => LogLevelSet::NONE,
+        Some(level) => LogLevelSet::from_bits(!((1 << level as u8) - 1)),
     }
 }
 
@@ -346,6 +337,32 @@ mod tests {
         LogArea, LogLevel, LogLevelFilter, LogLevelSet, module_path_log_area, target_log_area,
         threshold_down_set, threshold_up_set,
     };
+
+    #[test]
+    fn every_level_has_a_unique_bit_and_both_threshold_directions() {
+        let mut union = LogLevelSet::NONE;
+        for &level in LogLevel::ALL {
+            assert!(!union.contains(level));
+            union = union.union(level.set());
+            assert_eq!(level.filter().level(), Some(level));
+            for &other in LogLevel::ALL {
+                assert_eq!(threshold_up_set(level.filter()).contains(other), other <= level);
+                assert_eq!(threshold_down_set(level.filter()).contains(other), other >= level);
+            }
+        }
+        assert_eq!(union, LogLevelSet::ALL);
+        assert_eq!(LogLevel::ALL.len(), 9);
+        assert!(LogLevel::Error < LogLevel::User);
+        assert!(LogLevel::User < LogLevel::Ai);
+        assert!(LogLevel::Ai < LogLevel::Important);
+        assert_eq!(
+            LogLevelSet::ALL
+                .toggle(LogLevel::Trace)
+                .toggle(LogLevel::Trace),
+            LogLevelSet::ALL
+        );
+        assert_eq!(LogLevelSet::from_bits(u16::MAX), LogLevelSet::ALL);
+    }
 
     #[test]
     fn upward_thresholds_follow_native_level_order() {

@@ -394,6 +394,9 @@ fn new(columns:usize)->Self {Self {update_baseline:update::Snapshot::new((column
     tty.output.clear();shell2::WORKING.lock().unwrap().clear();tty.reconcile_matrix_selection();assert!(String::from_utf8_lossy(&tty.output).contains('§'));tty.output.clear();chronos::NOW.store(200_000_000,std::sync::atomic::Ordering::SeqCst);tty.reconcile_matrix_selection();assert!(tty.output.is_empty());MatrixSlots::set(&[] as &[&str]);
 }
 """
+    helper = (ROOT/'src/shell3/helper.rs').read_text()
+    source += 'mod helper {\n' + re.search(r'^const GO:.*$', helper, re.M).group() + '\n'
+    source += extract.item('src/shell3/helper.rs', 'reverse_spinner') + '}\n'
     source += f'#[path="{ROOT}/src/shell3/status.rs"] mod status;\n'
     source += f'#[path="{ROOT}/src/shell3/update.rs"] mod update;\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')

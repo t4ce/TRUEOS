@@ -7,6 +7,9 @@ const GO: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '
 pub(super) fn spinner(now: u64) -> char {
     GO[(now / 100_000_000 % GO.len() as u64) as usize]
 }
+pub(super) fn reverse_spinner(now: u64) -> char {
+    GO[(GO.len() - (now / 100_000_000 % GO.len() as u64) as usize) % GO.len()]
+}
 
 /// Count finite work, rather than the lifetime or selection of its menu.
 pub(super) struct Work;
