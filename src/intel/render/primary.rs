@@ -1933,7 +1933,14 @@ fn stage_resident_churn_forward_secondary(
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
             ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
-        0,
+        // Maxpix has a dedicated POINTLIST pipeline; leave other point paths
+        // on their existing default footprint.
+        if core::ptr::eq(resident.pipeline.vs.code.as_ptr(),
+            crate::intel::shader::maxpix_tornado::pipeline().vs.code.as_ptr()) {
+            1
+        } else {
+            0
+        },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         front_end_contract,
         [0.0, 0.0],
