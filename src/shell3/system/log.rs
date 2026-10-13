@@ -568,10 +568,11 @@ impl View {
     fn align_scroll(&mut self, content: &Content, rows: usize) {
         let visible = rows.saturating_sub(3);
         if let Some((row, _)) = content.focus {
-            if row <= self.scroll {
+            let margin = usize::from(visible >= 3);
+            if row < self.scroll + margin {
                 self.scroll = row.saturating_sub(1);
-            } else if row + 1 >= self.scroll + visible {
-                self.scroll = row.saturating_add(2).saturating_sub(visible);
+            } else if row + margin >= self.scroll + visible {
+                self.scroll = row.saturating_add(1 + margin).saturating_sub(visible);
             }
         }
         self.scroll = self.scroll.min(content.lines.len().saturating_sub(visible));
@@ -744,7 +745,8 @@ impl View {
     fn clipped_checkbox_row(&self, content: &Content, row: usize, rows: usize) -> bool {
         // A visible word needs a terminal row above and below for its actions.
         // Partial checkbox rows at viewport edges stay blank and inactive.
-        (row == 3 || row + 1 == rows)
+        rows >= 6
+            && (row == 3 || row + 1 == rows)
             && content
                 .cells
                 .iter()
@@ -1281,6 +1283,37 @@ mod tests {
                 .collect::<String>(),
             "up"
         );
+    }
+    #[test]
+    fn scrolled_hover_keeps_both_actions_visible_and_smallest_terminal_keeps_its_checkbox() {
+        reset();
+        let mut view = View::default();
+        view.selected = 15;
+        view.column = 5;
+        let frame = view.frame(100, 8, &VecDeque::new());
+        let (row, box_col) = frame.focus.unwrap();
+        assert!(row > 3 && row < 7);
+        view.event(Event::Move(row, box_col + 1), 100, 8);
+        let frame = view.frame(100, 8, &VecDeque::new());
+        assert_eq!(
+            frame.lines[row - 1]
+                .chars()
+                .skip(box_col + 1)
+                .take(2)
+                .collect::<String>(),
+            "up"
+        );
+        assert_eq!(
+            frame.lines[row + 1]
+                .chars()
+                .skip(box_col + 1)
+                .take(4)
+                .collect::<String>(),
+            "down"
+        );
+        let frame = view.frame(100, 5, &VecDeque::new());
+        let (row, col) = frame.focus.unwrap();
+        assert!(matches!(frame.lines[row].chars().nth(col), Some('☐' | '🗹')));
     }
     #[test]
     fn hover_ranges_on_all_areas_replace_each_complete_set() {

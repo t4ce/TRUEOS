@@ -133,6 +133,7 @@ mod hv {
         VM.stop_req.store(false, Ordering::SeqCst);
         VM.lifecycle_generation.store(9, Ordering::SeqCst);
         VM.run_generation.store(9, Ordering::SeqCst);
+        *VM.matrix_owner.lock() = None;
         IMPORTANT.lock().clear();
         NOW.store(0, Ordering::SeqCst);
         JOBS_READY.store(true, Ordering::SeqCst);
@@ -242,6 +243,26 @@ mod hv {
         VM_CONTROL_WAITS[0].notify_all();
         assert_eq!(poll(future.as_mut()), Poll::Ready(None));
         assert!(!VM.cooperative_stop.forced());
+    }
+    #[test]
+    fn discard_logs_why_an_abandoned_stream_keeps_its_slot_owned() {
+        reset();
+        WRITES.store(1, Ordering::SeqCst);
+        force_stop(0, &VM);
+        assert!(IMPORTANT.lock().iter().any(|line| line.contains("rollback requested")
+            && line.contains("fs_streams=1") && line.contains("slot=retained-until-abort")));
+    }
+    #[test]
+    fn stale_slot_lease_cannot_pause_or_resume_a_new_occupant() {
+        reset();
+        *VM.matrix_owner.lock() = Some(crate::shell3::MatrixSlotLease(2));
+        let stale = crate::shell3::MatrixSlotLease(1);
+        let current = crate::shell3::MatrixSlotLease(2);
+        assert!(!pause_matching_owner(0, Some(&stale)).unwrap());
+        assert!(pause_matching_owner(0, Some(&current)).unwrap());
+        assert!(!resume_matching_owner(0, Some(&stale)).unwrap());
+        assert!(VM.execution_pause.requested());
+        assert!(resume_matching_owner(0, Some(&current)).unwrap());
     }
     #[test]
     fn cleanup_deadline_overrides_unresponsive_stop_but_not_a_new_incarnation() {
