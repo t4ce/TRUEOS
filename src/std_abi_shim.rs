@@ -2361,9 +2361,72 @@ fn trace_posix_file_world(path: Option<&str>) -> bool {
 }
 
 fn regular_file_metadata(path: &str) -> Result<crate::r::io::kfs::FsStat, c_int> {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return regular_file_metadata_from_cabi(path);
+    }
     let path = crate::r::io::env::resolve_fs_path(path, true).ok_or(TRUEOS_EINVAL)?;
     crate::r::io::kfs::stat(&path)
         .map_err(|error| fs_rc_to_errno(crate::r::io::fs_cabi::fs_error_to_code(error)))
+}
+
+fn regular_file_metadata_from_cabi(path: &str) -> Result<crate::r::io::kfs::FsStat, c_int> {
+    // Hulls have private mount globals. Read the committed host metadata through
+    // the same filesystem bridge as the file write, including its revision.
+    let id = unsafe {
+        crate::r::io::async_fs_cabi::trueos_cabi_async_fs_metadata_start_v2(
+            path.as_ptr(),
+            path.len(),
+        )
+    };
+    if id <= 0 {
+        return Err(fs_rc_to_errno(id));
+    }
+    let id = id as u32;
+    let result = (|| {
+        loop {
+            match crate::r::io::async_fs_cabi::trueos_cabi_async_fs_status(id) {
+                0 => crate::r::io::cabi::trueos_cabi_poll_once(),
+                1 => break,
+                error => return Err(fs_rc_to_errno(error)),
+            }
+        }
+        let len = crate::r::io::async_fs_cabi::trueos_cabi_async_fs_result_len(id);
+        if len < 0 {
+            return Err(fs_rc_to_errno(len as i32));
+        }
+        let mut wire = [0u8; 32];
+        if len as usize != wire.len() {
+            return Err(TRUEOS_EIO);
+        }
+        let got = unsafe {
+            crate::r::io::async_fs_cabi::trueos_cabi_async_fs_result_read(
+                id,
+                0,
+                wire.as_mut_ptr(),
+                wire.len(),
+            )
+        };
+        if got < 0 {
+            return Err(fs_rc_to_errno(got as i32));
+        }
+        if got as usize != wire.len() {
+            return Err(TRUEOS_EIO);
+        }
+        let kind = match u32::from_le_bytes(wire[0..4].try_into().unwrap()) {
+            1 => crate::r::io::kfs::FsNodeKind::File,
+            2 => crate::r::io::kfs::FsNodeKind::Directory,
+            _ => return Err(TRUEOS_EIO),
+        };
+        Ok(crate::r::io::kfs::FsStat {
+            kind,
+            len: u64::from_le_bytes(wire[4..12].try_into().unwrap()),
+            file_id: u64::from_le_bytes(wire[12..20].try_into().unwrap()),
+            root_id: u32::from_le_bytes(wire[20..24].try_into().unwrap()),
+            revision: u64::from_le_bytes(wire[24..32].try_into().unwrap()),
+        })
+    })();
+    let _ = crate::r::io::async_fs_cabi::trueos_cabi_async_fs_discard(id);
+    result
 }
 
 fn open_regular_file_world(

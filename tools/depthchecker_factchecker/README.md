@@ -7,6 +7,11 @@ The [probe source and expectations](../../../TRUEOS-Blueprints/probes/depthcheck
 document the fixtures. This directory supplies raw Cargo evidence, first-hit
 captures and a plain stack report; there is no generated SVG.
 
+The [completed experiment and before/after findings](../docs/depthchecker-factchecker-2026-10-14.md)
+link the raw artifacts. All seven scenarios and 14 selected captures passed.
+The native filesystem wait's active stack fell from 166,824 to 3,048 bytes after
+separating its guest-only scratch frame; the same 19-frame chain remained intact.
+
 Cargo dependency depth, physical call depth and async causal depth are distinct.
 `collect.py` preserves the exact staged unit graph and authenticated native
 archive inventory. `plan.py` chooses actual emitted symbols, and refuses absent

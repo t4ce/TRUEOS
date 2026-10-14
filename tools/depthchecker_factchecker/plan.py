@@ -44,11 +44,14 @@ def build_plan(mapped, graph):
             target("ZSTD_compressStream2", "zstd_sys", "Actual native C entry underneath Codex Request::into_prepared."),
             target("ZSTD_decompressStream", "zstd_sys", "Actual native C decode entry used to fact-check compressed bytes.") ]},
         {"id": "cabi_clock", "index": 5, "targets": [kernel("trueos_time_monotonic_nanos", "Imported TRUEOS clock ABI implementation.")]},
-        {"id": "native_thread", "index": 6, "allow_cross_thread": True, "targets": [text_leaf]},
+        {"id": "native_thread", "index": 6, "allow_cross_thread": True, "targets": [
+            text_leaf,
+            kernel("fsync", "Same real file roundtrip on the native continuation."),
+            kernel("trueos_thread_context_swap", "Actual native filesystem continuation parking leaf with probe ancestry.") ]},
         {"id": "filesystem", "index": 7, "targets": [
             kernel("fsync", "Regular file writeback ABI boundary."),
-            kernel("trueos_kernel_sync_fs_read_file", "Filesystem request bridge reached from std File::open."),
-            kernel("trueos_thread_context_swap", "Actual continuation parking leaf; the resumed async broker is a separate stack.") ]},
+            kernel("trueos_kernel_sync_fs_read_file", "Hull filesystem bridge reached from std File::open; uses VMCALL, not native context_swap."),
+            kernel("trueos_cabi_async_fs_metadata_start_v2", "Hull metadata is read through the host CABI, avoiding its private unmounted kfs globals.") ]},
     ]
     return {"version": 1, "stack_bytes": 262144, "max_frames": 128, "scenarios": rows,
             "scope": "Selected real emitted endpoints and ABI boundaries per deterministic path. Cargo leaves, machine frames and async causal chains have different depths. These samples do not claim exhaustive call tracing."}

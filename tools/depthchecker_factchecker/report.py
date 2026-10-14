@@ -43,12 +43,15 @@ def main():
             walk = capture["physical_stack"]
             frames = walk["frames"]
             rsp = frames[0]["rsp"]
+            rbps = [frame["rbp"] for frame in frames if frame.get("rbp")]
+            gaps = [after - before for before, after in zip(rbps, rbps[1:]) if after > before]
             row = {"scenario": scenario["id"], "target": target,
                    "entry_alignment_mod16": rsp % 16, "entry_alignment_expected_mod16": 8,
                    "physical_frames": len(frames), "termination": walk["termination"],
                    "recognized_physical_root": walk["complete"],
                    "raw_stack_bytes": capture["raw_stack"]["requested_bytes"],
                    "unreadable_bytes": capture["raw_stack"]["unreadable_bytes"],
+                   "largest_frame_pointer_gap_bytes": max(gaps, default=0),
                    "capture": str(path.resolve()), "first_hit_count": 1,
                    "scoped_identity": capture.get("scoped_identity", {}),
                    "register_origin": capture.get("register_origin", "see capture register enumeration"),
@@ -57,6 +60,8 @@ def main():
             stacks.append(f"{scenario['id']} :: {row['top_function']}\n"
                           f"first_hit=1 frames={len(frames)} rsp={rsp:#x} rsp_mod16={rsp % 16} "
                           f"termination={walk['termination']} complete={walk['complete']}\n"
+                          f"active_stack_bytes={row['raw_stack_bytes']} unreadable_bytes={row['unreadable_bytes']} "
+                          f"largest_rbp_gap_bytes={row['largest_frame_pointer_gap_bytes']}\n"
                           f"capture={path.resolve()}\n")
             for index, frame in enumerate(frames):
                 stacks.append(f"  {index:02d} {frame['pc']:#018x} {symbol(frame)}")
@@ -83,12 +88,16 @@ def main():
              f"{cargo['ordinary_target_units']} ordinary target units are reachable through "
              f"{cargo['ordinary_target_edges']} edges, with maximum dependency depth {cargo['max_dependency_depth']}. "
              "These counts describe compilation, not a runtime call stack.", "",
-             "| Scenario / entry | Physical frames | Entry RSP mod 16 | Termination |",
-             "| --- | ---: | ---: | --- |"]
-    lines.extend(f"| {r['scenario']} / `{r['top_function']}` | {r['physical_frames']} | {r['entry_alignment_mod16']} | {r['termination']} |" for r in rows)
+             "| Scenario / entry | Physical frames | Active stack bytes | Entry RSP mod 16 | Termination |",
+             "| --- | ---: | ---: | ---: | --- |"]
+    lines.extend(f"| {r['scenario']} / `{r['top_function']}` | {r['physical_frames']} | {r['raw_stack_bytes']} | {r['entry_alignment_mod16']} | {r['termination']} |" for r in rows)
     lines += ["", "Every capture retains register evidence, raw stack bytes with readable-range metadata, "
               "and the physical frame chain. The immediate caller at a pre-prologue stop is `[RSP]`. "
               "DWARF inline functions share a physical frame. Async continuations live on separate stacks.", "",
+              "Active stack bytes run from the captured RSP to the authenticated stack upper boundary; "
+              "they do not measure the whole reserved allocation or lifetime peak. `checks.json` also "
+              "records the largest adjacent frame-pointer gap. A gap includes the emitted caller's "
+              "stack reservation and call bookkeeping; its cause requires source and machine-code inspection.", "",
               "A recognized root establishes that this physical chain reached a known entry boundary. "
               "A frame limit, unreadable record, or invalid chain remains incomplete. Neither a passing "
               "probe nor a complete physical chain proves that every execution branch was observed.", "",

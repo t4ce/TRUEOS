@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -21,6 +23,11 @@ try:
     import gdb
 except ImportError:
     gdb = None
+
+
+def x86_u64(value):
+    """GDB's Rust register types can expose canonical pointers as signed i64."""
+    return int(value) & 0xffff_ffff_ffff_ffff
 
 
 def bounded_stack(read_memory, start, size, chunk_size=4096):
@@ -126,6 +133,79 @@ def decode_guest_snapshot(raw, expected_vm_id=None):
     return snapshot
 
 
+def parse_addr2line_batch(output, addresses):
+    """Bind inline source rows only to the exact requested -a delimiters."""
+    records, active, rows = {}, None, []
+    observed = []
+    for line in output.splitlines():
+        if not line.strip():
+            # elfutils emits blank separators after the final address block.
+            continue
+        if re.fullmatch(r"0x[0-9a-fA-F]{8,16}", line):
+            if active is not None:
+                records[active] = "\n".join(rows) + "\n"
+            active, rows = int(line, 16), []
+            observed.append(active)
+        elif active is None:
+            raise ValueError("addr2line emitted a row before its address delimiter")
+        else:
+            rows.append(line)
+    if active is not None:
+        records[active] = "\n".join(rows) + "\n"
+    if observed != list(addresses) or len(records) != len(addresses):
+        raise ValueError("addr2line address delimiters do not match the unique requested addresses")
+    if any(not value.strip() or len(value.splitlines()) % 2 for value in records.values()):
+        raise ValueError("addr2line function/source rows are incomplete")
+    return records
+
+
+class OfflineAddr2line:
+    """Bounded source metadata lookup; allocated symbol labels are separate."""
+    def __init__(self, runner=subprocess.run, timeout=10, tool=None):
+        self.runner, self.timeout, self.cache = runner, timeout, {}
+        # GNU addr2line rescans this very large Rust sidecar for each PC.
+        # elfutils accepts the same section/address flags and batches quickly.
+        self.tool = tool or shutil.which("eu-addr2line") or "addr2line"
+
+    def lookup(self, requests):
+        # Requests are (authenticated ELF path, optional ET_REL section, PC or
+        # section offset). This prevents identical offsets in separate sections
+        # from being confused and reuses metadata across captured stacks.
+        groups = {}
+        for path, section, address in dict.fromkeys(requests):
+            key = (path, section, address)
+            if key not in self.cache:
+                groups.setdefault((path, section), []).append(address)
+        for (path, section), addresses in groups.items():
+            command = [self.tool, "-a", "-C", "-f", "-i", "-e", path]
+            if section is not None:
+                command.extend(["-j", section])
+            command.extend(hex(address) for address in addresses)
+            started = time.monotonic()
+            try:
+                process = self.runner(command, capture_output=True, text=True, timeout=self.timeout)
+                common = dict(exit_code=process.returncode, stderr=process.stderr,
+                              batch_addresses=len(addresses), elapsed_seconds=time.monotonic()-started,
+                              tool=self.tool, method="addr2line -a with validated exact address delimiters")
+                if process.returncode:
+                    common.update(error="addr2line process returned a nonzero status", error_kind="process-error")
+                    records = {}
+                else:
+                    try:
+                        records = parse_addr2line_batch(process.stdout, addresses)
+                    except ValueError as error:
+                        common.update(error=str(error), error_kind="address-delimiter-validation")
+                        records = {}
+            except Exception as error:
+                common = dict(error=str(error), error_kind="process-timeout" if isinstance(error, subprocess.TimeoutExpired) else "process-exception",
+                              batch_addresses=len(addresses), elapsed_seconds=time.monotonic()-started,
+                              tool=self.tool, method="addr2line -a with validated exact address delimiters")
+                records = {}
+            for address in addresses:
+                self.cache[(path, section, address)] = dict(common, **(dict(output=records[address]) if address in records else {}))
+        return {key: dict(self.cache[key]) for key in requests}
+
+
 class CaptureController:
     def __init__(self, manifest, backend):
         self.gdb = backend
@@ -138,11 +218,13 @@ class CaptureController:
                         for i, s in self.scenarios.items()}
         self.events, self.breakpoints = [], []
         self.complete_seen = False
+        self.aborted = False
         self.pass_mask = None
         self.pending = None
         self.errors = []
         self.module_map = None
         self.kernel_map = None
+        self.source_metadata = OfflineAddr2line()
         self.guest_snapshot = None
         self.guest_memory = None
         self.install()
@@ -150,8 +232,8 @@ class CaptureController:
     def current_integer(self, register):
         if self.guest_snapshot is not None:
             key = "eflags" if register == "rflags" else register
-            return self.guest_snapshot["registers"][key]
-        return int(self.gdb.parse_and_eval("$" + register))
+            return x86_u64(self.guest_snapshot["registers"][key])
+        return x86_u64(self.gdb.parse_and_eval("$" + register))
 
     def event(self, kind, **fields):
         self.events.append(dict(kind=kind, wall_time_unix=time.time(), **fields))
@@ -164,6 +246,7 @@ class CaptureController:
             record["capture_ok"] = record["begins"] == 1 and record["ends"] == 1 and not record["missing_targets"] and not record["errors"]
             scenarios.append(record)
         return dict(version=1, complete_marker_seen=self.complete_seen, probe_pass_mask=self.pass_mask,
+                    aborted=self.aborted,
                     capture_ok=self.complete_seen and not self.errors and all(s["capture_ok"] for s in scenarios), scenarios=scenarios,
                     errors=self.errors,
                     events=self.events, physical_unwind_method="entry return word at RSP, then bounded frame-pointer records",
@@ -241,7 +324,7 @@ class CaptureController:
     def run(self):
         # Breakpoint.stop only queues an observation. Arming/disarming other
         # breakpoints happens here, outside GDB's stop callback restrictions.
-        while not self.complete_seen:
+        while not self.complete_seen and not self.aborted:
             self.pending = None
             try:
                 self.gdb.execute("continue", to_string=True)
@@ -289,7 +372,7 @@ class CaptureController:
     def handle_guest_hook(self):
         # Fixed repr(C), versioned kernel handoff: 23 u64 headers, 15 GPRs,
         # XSAVE mask/size and 832 raw bytes. This reads only the L1 snapshot.
-        pointer = int(self.gdb.parse_and_eval("$rdi"))
+        pointer = x86_u64(self.gdb.parse_and_eval("$rdi"))
         raw = bytes(self.gdb.selected_inferior().read_memory(pointer, 1152))
         snapshot = decode_guest_snapshot(raw, self.manifest.get("expected_vm_id"))
         registers = snapshot["registers"]
@@ -308,11 +391,18 @@ class CaptureController:
                 self.marker(breakpoint.kind)
             elif self.active == breakpoint.scenario_index:
                 self.handle_leaf(breakpoint)
+                if breakpoint.target["symbol"] not in self.records[breakpoint.scenario_index]["hits"]:
+                    # A same-RIP L2 resume must see the restored original
+                    # opcode. An ignored hit cannot leave INT3 armed without
+                    # a guest single-step mechanism; fail coverage explicitly.
+                    breakpoint.enabled = False
+                    self.records[breakpoint.scenario_index]["errors"].append(
+                        "Guest dependency entry was not accepted; breakpoint disabled before same-RIP resume")
             else:
                 raise ValueError("Guest leaf belongs to an inactive scenario")
         except Exception as error:
             self.errors.append("VMX guest handoff failed: " + str(error))
-            self.complete_seen = True
+            self.aborted = True
         finally:
             self.guest_snapshot = self.guest_memory = None
         self.write_summary()
@@ -364,26 +454,22 @@ class CaptureController:
         if label:
             frame["module"] = label
             if label["executable"]:
-                try:
-                    process = subprocess.run(["addr2line", "-C", "-f", "-i", "-e", self.manifest["module"]["debug_elf"],
-                                              "-j", label["section_name"], hex(label["section_offset"])],
-                                             capture_output=True, text=True, timeout=3)
-                    frame["offline_addr2line"] = dict(exit_code=process.returncode, output=process.stdout, stderr=process.stderr)
-                except Exception as error:
-                    frame["offline_addr2line"] = dict(error=str(error))
+                return (self.manifest["module"]["debug_elf"], label["section_name"], label["section_offset"])
         elif self.kernel_map and (kernel_label := self.kernel_map.at(lookup_pc)):
             frame["kernel"] = kernel_label
-            try:
-                process = subprocess.run(["addr2line", "-C", "-f", "-i", "-e", self.manifest["kernel_map"]["kernel_elf"], hex(lookup_pc)],
-                                         capture_output=True, text=True, timeout=3)
-                frame["offline_addr2line"] = dict(exit_code=process.returncode, output=process.stdout, stderr=process.stderr)
-            except Exception as error:
-                frame["offline_addr2line"] = dict(error=str(error))
+            return (self.manifest["kernel_map"]["kernel_elf"], None, lookup_pc)
         else:
             try:
                 frame["kernel_or_external_symbol"] = self.gdb.execute("info symbol 0x%x" % lookup_pc, to_string=True).strip()
             except Exception as error:
                 frame["symbol_error"] = str(error)
+
+    def label_frames(self, frames):
+        requests = [(frame, self.label_frame(frame)) for frame in frames]
+        metadata = self.source_metadata.lookup([key for _, key in requests if key is not None])
+        for frame, key in requests:
+            if key is not None:
+                frame["offline_addr2line"] = metadata[key]
 
     def scoped_identity(self, rsp):
         """Read current kernel identity; never execute a guest/helper function.
@@ -413,7 +499,7 @@ class CaptureController:
             if not gs:
                 raise ValueError("GS base is zero")
             value = self.gdb.Value(gs).cast(self.gdb.lookup_type("TRUEOS::percpu::PerCpu").pointer()).dereference()
-            if int(value["self_ptr"]) != gs:
+            if x86_u64(value["self_ptr"]) != gs:
                 raise ValueError("PerCpu self-pointer does not match GS base")
             slot = int(value["cpu_index"])
             result.update(cpu_slot=slot, lapic_id=int(value["lapic_id"]))
@@ -428,11 +514,11 @@ class CaptureController:
             if not 0 <= slot < current.type.sizeof // 8:
                 raise ValueError("CPU slot is outside CURRENT table")
             inferior = self.gdb.selected_inferior()
-            pointer = struct.unpack("<Q", bytes(inferior.read_memory(int(current.address) + slot * 8, 8)))[0]
+            pointer = struct.unpack("<Q", bytes(inferior.read_memory(x86_u64(current.address) + slot * 8, 8)))[0]
             result["current_thread_pointer"] = pointer
             try:
                 tags = symbol_value("TRUEOS::hv::CURRENT_VM_ID_BY_CPU")
-                tag = bytes(inferior.read_memory(int(tags.address) + slot, 1))[0]
+                tag = bytes(inferior.read_memory(x86_u64(tags.address) + slot, 1))[0]
                 result["vmx_vm_id_tag"] = tag
                 result["vmx_vm_id"] = tag - 1 if tag else None
             except Exception as error:
@@ -442,7 +528,7 @@ class CaptureController:
                 return result
             thread = self.gdb.Value(pointer).cast(self.gdb.lookup_type("TRUEOS::r::threads::Thread").pointer()).dereference()
             backing = thread["stack"]["backing"]
-            stack_start = int(backing["ptr"]["pointer"])
+            stack_start = x86_u64(backing["ptr"]["pointer"])
             stack_len = int(thread["stack"]["len"])
             if not 0 < stack_len <= 64 * 1024 * 1024:
                 raise ValueError("Invalid native stack length")
@@ -455,8 +541,8 @@ class CaptureController:
             result.update(native_thread_observed=True, context="host-carried-native-continuation",
                           logical_thread_id=int(thread["id"]), carrier_slot=int(thread["carrier"]),
                           vm_id_field=dict(type=str(vm.type), display=str(vm),
-                                           raw_hex=bytes(inferior.read_memory(int(vm.address), vm.type.sizeof)).hex()),
-                          child_saved_rsp=int(thread["child"]), parent_saved_rsp=int(thread["parent"]),
+                                           raw_hex=bytes(inferior.read_memory(x86_u64(vm.address), vm.type.sizeof)).hex()),
+                          child_saved_rsp=x86_u64(thread["child"]), parent_saved_rsp=x86_u64(thread["parent"]),
                           active_stack=dict(start=stack_start, end=stack_end, bytes=stack_len))
         except Exception as error:
             result["errors"].append("Scoped identity unavailable: " + str(error))
@@ -548,7 +634,7 @@ class CaptureController:
                 value = self.gdb.selected_frame().read_register(name)
                 row = dict(display=str(value))
                 try:
-                    row["integer"] = int(value)
+                    row["integer"] = x86_u64(value)
                 except Exception:
                     pass
                 values[name] = row
@@ -563,8 +649,7 @@ class CaptureController:
             stack_info["address_space"] = "Guest virtual addresses; reads use the kernel-exported host HHDM stack alias"
             for item in stack_info["ranges"]:
                 item["host_read_address"] = snapshot["stack_host_base"] + item["address"] - snapshot["guest_stack_base"]
-        for frame in walk["frames"]:
-            self.label_frame(frame)
+        self.label_frames(walk["frames"])
         known_roots = self.manifest.get("known_physical_roots", ["trueos_thread_context_start", "trueos_vmx_guest_entry", "_start"])
         recognize_physical_root(walk, known_roots)
         thread = self.gdb.selected_thread()

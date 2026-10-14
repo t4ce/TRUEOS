@@ -958,6 +958,8 @@ pub(crate) fn fs_remove_host(path: &str) -> i32 {
     }
 }
 
+// Keep the large VMcall scratch buffer off the native filesystem caller's stack.
+#[inline(never)]
 unsafe fn guest_fs_read_file(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
     if path_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
         return FS_ERR_TOO_LARGE as isize;

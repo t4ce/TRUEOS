@@ -41,7 +41,7 @@ def main():
                        TRUEOS_ENABLE_BUILDINS="1", TRUEOS_REQUIRE_BUILDINS="1",
                        CARGO_BUILD_JOBS="2")
     diagnostic_sources = {}
-    for name in ("src/hv/depthchecker_debug.rs", "src/hv/mod.rs", "src/std_abi_shim.rs",
+    for name in ("src/hv/depthchecker_debug.rs", "src/hv/mod.rs", "src/std_abi_shim.rs", "src/r/io/fs_cabi.rs",
                  "crates/trueos-vm/src/guest.rs"):
         source = ROOT / name
         destination = args.output / "kernel-sources" / name

@@ -11,9 +11,11 @@ import pty
 import re
 import select
 import signal
+import shutil
 import socket
 import struct
 import subprocess
+import sys
 import termios
 import time
 import urllib.request
@@ -137,6 +139,30 @@ def main():
         setattr(args, name, path)
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
+    original_files = {name: str(getattr(args, name)) for name in
+                      ("iso", "kernel", "debug_elf", "packed_elf", "bp", "plan")}
+    original_binding = verify_artifact_binding(args.bp, args.debug_elf, args.packed_elf)
+    inputs = args.output / "inputs"
+    inputs.mkdir()
+    # Reflink or independent copy; hardlinks would be truncated when the
+    # packer replaces dist sidecars. Pin code, symbols and boot inputs now.
+    names = {"iso": "trueos.iso", "kernel": "TRUEOS.full.elf",
+             "debug_elf": "depthchecker_factchecker.debug.o",
+             "packed_elf": "depthchecker_factchecker.packed.o",
+             "bp": "depthchecker_factchecker.bp", "plan": "plan.json"}
+    original_bp = args.bp
+    for name, filename in names.items():
+        destination = inputs / filename
+        subprocess.run(["cp", "--reflink=auto", "--", str(getattr(args, name)), str(destination)], check=True)
+        setattr(args, name, destination)
+    shutil.copy2(original_bp.with_suffix(".debug.json"), args.bp.with_suffix(".debug.json"))
+    overlay = original_bp.parent.parent / "probes/depthchecker_factchecker/target/trueos-blueprint/work/depthchecker_factchecker/source-overlay-app"
+    if overlay.is_dir():
+        shutil.copytree(overlay, inputs / "source-overlay-app")
+    capture_tools = args.output / "capture-tools"
+    capture_tools.mkdir()
+    for name in ("gdb_capture.py", "elfmap.py", "vmx_memory.py"):
+        shutil.copy2(Path(__file__).parent / name, capture_tools / name)
     ports = private_ports(3)
     serial = args.output / "serial.log"
     serial.touch()
@@ -151,7 +177,10 @@ def main():
     command = [str(ROOT / "tools/qemu/run.sh"), "iso", "-snapshot", "-qmp",
                f"unix:{qmp},server=on,wait=off", "-gdb", f"tcp:127.0.0.1:{ports[2]}"]
     binding = verify_artifact_binding(args.bp, args.debug_elf, args.packed_elf)
-    record = {"command": command, "artifact_binding": binding, "environment": {k: v for k, v in env.items() if k.startswith("QEMU_") or k == "ISO_PATH"},
+    record = {"command": command, "artifact_binding": binding, "original_files": original_files,
+              "original_artifact_binding_sha256": original_binding["sha256"],
+              "capture_tool_sha256": {p.name: digest(p) for p in capture_tools.iterdir()},
+              "environment": {k: v for k, v in env.items() if k.startswith("QEMU_") or k == "ISO_PATH"},
               "files": {name: {"path": str(getattr(args, name)), "sha256": digest(getattr(args, name))}
                         for name in ("iso", "kernel", "debug_elf", "packed_elf", "bp", "plan")},
               "ports": dict(zip(("ssh", "http", "gdb"), ports)), "outbound_network": False}
@@ -168,6 +197,13 @@ def main():
                 raise RuntimeError(f"QEMU exited during {label}")
             if time.monotonic() >= deadline:
                 raise TimeoutError(label)
+            text = serial.read_text(errors="replace")
+            panic = re.search(r"panicked at[^\r\n]*[\r\n]+([^\r\n]*)", text)
+            if panic:
+                raise RuntimeError("Probe/kernel panic: " + panic.group(0).strip())
+            failure = re.search(r"depthchecker_factchecker: FAIL[^\r\n]*", text)
+            if failure:
+                raise RuntimeError(failure.group(0))
             if terminal:
                 terminal.drain(.1)
             else:
@@ -233,6 +269,7 @@ def main():
                     "load_base": int(base, 16)}, output_dir=str(args.output / "captures"),
                     kernel_elf=str(args.kernel), markers={"gate": "DEPTHCHECKER_GATE"},
                     vmx_handoff_required=True, expected_vm_id=int(result["vm_id"]))
+        sys.path.insert(0, str(capture_tools))
         from elfmap import prepare_manifest
         plan = prepare_manifest(plan)
         manifest = args.output / "capture-manifest.json"
@@ -241,7 +278,7 @@ def main():
         script.write_text("set pagination off\nset confirm off\nset print pretty off\n"
             "set auto-load python-scripts off\nset debuginfod enabled off\n"
             f"file {args.kernel}\ntarget remote 127.0.0.1:{ports[2]}\n"
-            f"source {Path(__file__).parent / 'gdb_capture.py'}\ndepthchecker-run\nquit\n")
+            f"source {capture_tools / 'gdb_capture.py'}\ndepthchecker-run\nquit\n")
         debugger = subprocess.Popen(["gdb", "-nx", "-batch", "-x", str(script)],
                                     env=dict(os.environ, DEPTHCHECKER_CAPTURE_MANIFEST=str(manifest)),
                                     stdout=debug_log, stderr=subprocess.STDOUT, start_new_session=True)

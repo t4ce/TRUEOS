@@ -8,13 +8,120 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 from elfmap import KernelMap, ModuleMap, prepare_manifest
-from gdb_capture import bounded_stack, decode_guest_snapshot, entry_frame_walk, recognize_physical_root
+from gdb_capture import CaptureController, OfflineAddr2line, bounded_stack, decode_guest_snapshot, entry_frame_walk, parse_addr2line_batch, recognize_physical_root, x86_u64
 from vmx_memory import GuestMemory
 
 
 class MemoryEvidenceTests(unittest.TestCase):
+    def test_batched_source_rows_preserve_inline_functions_and_exact_address_binding(self):
+        output = "0x0000000000000010\ninline_leaf\nleaf.rs:8\ncaller\ncaller.rs:20\n0x0000000000000030\nother\nother.rs:50\n"
+        mapped = parse_addr2line_batch(output, [0x10, 0x30])
+        self.assertEqual(mapped[0x10], "inline_leaf\nleaf.rs:8\ncaller\ncaller.rs:20\n")
+        for incorrect in [output.replace("0x0000000000000030", "0x0000000000000010"),
+                          output.replace("0x0000000000000030", "0x0000000000000040"),
+                          "unexpected preamble\n" + output, output.rstrip().rsplit("\n", 1)[0] + "\n"]:
+            with self.assertRaises(ValueError):
+                parse_addr2line_batch(incorrect, [0x10, 0x30])
+
+    def test_source_lookup_batches_and_caches_without_cross_section_aliasing(self):
+        commands = []
+        def runner(command, **kwargs):
+            commands.append(command)
+            addresses = [int(value, 16) for value in command if value.startswith("0x")]
+            tag = command[command.index("-j") + 1] if "-j" in command else "kernel"
+            return SimpleNamespace(returncode=0, stderr="", stdout="".join(
+                f"0x{address:016x}\n{tag}-fn\nfile.rs:{address}\n" for address in addresses))
+        source = OfflineAddr2line(runner=runner)
+        first = ("module.o", ".text.a", 0x10)
+        second = ("module.o", ".text.a", 0x30)
+        separate = ("module.o", ".text.b", 0x10)
+        kernel = ("kernel.elf", None, 0x10)
+        result = source.lookup([first, second, first, separate, kernel])
+        self.assertEqual(len(commands), 3)
+        self.assertEqual(result[first]["batch_addresses"], 2)
+        self.assertIn(".text.a-fn", result[first]["output"])
+        self.assertIn(".text.b-fn", result[separate]["output"])
+        self.assertIn("kernel-fn", result[kernel]["output"])
+        source.lookup([kernel, separate, second])
+        self.assertEqual(len(commands), 3)
+
+    def test_metadata_failures_are_cached_errors_not_guessed_source(self):
+        cases = [(lambda command, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout="0x0000000000000020\nwrong\nwrong.rs:1\n"), "address-delimiter-validation"),
+                 (lambda command, **kwargs: SimpleNamespace(returncode=1, stderr="bad elf", stdout=""), "process-error")]
+        def timeout(command, **kwargs):
+            raise subprocess.TimeoutExpired(command, 10)
+        cases.append((timeout, "process-timeout"))
+        for runner, kind in cases:
+            source = OfflineAddr2line(runner=runner)
+            key = ("module.o", ".text", 0x10)
+            result = source.lookup([key])[key]
+            self.assertEqual(result["error_kind"], kind)
+            self.assertNotIn("output", result)
+            self.assertEqual(source.lookup([key])[key], result)
+
+    def test_guest_dispatch_failure_cannot_claim_a_complete_marker(self):
+        pc = 0xabcdef
+        header = [0x50414e5343464344, 1, 1152, 5, 0, 19, pc, 0x400100, 2, 0x5000] + [0]*13
+        header[18] = 0x1000 | (3 << 3)
+        header[19] = 0xffff800000000000
+        raw = struct.pack("<23Q15Q2Q", *header, *range(100, 115), 7, 832)+bytes(832)
+        controller = CaptureController.__new__(CaptureController)
+        controller.gdb = SimpleNamespace(parse_and_eval=lambda expression: 0x10000,
+                                        selected_inferior=lambda: SimpleNamespace(read_memory=lambda address, size: raw))
+        controller.breakpoints, controller.records, controller.scenarios = [], {}, {}
+        controller.manifest, controller.events, controller.errors = dict(expected_vm_id=0), [], []
+        controller.complete_seen, controller.aborted, controller.pass_mask = False, False, None
+        controller.write_summary = lambda: None
+        controller.handle_guest_hook()
+        summary = controller.summary()
+        self.assertTrue(summary["aborted"])
+        self.assertFalse(summary["complete_marker_seen"])
+        self.assertFalse(summary["capture_ok"])
+
+    def test_rust_signed_registers_preserve_unsigned_x86_address_bits(self):
+        address = 0xffff800212345678
+        signed = address - (1 << 64)
+        self.assertEqual(x86_u64(signed), address)
+        controller = CaptureController.__new__(CaptureController)
+        controller.guest_snapshot = None
+        controller.gdb = SimpleNamespace(parse_and_eval=lambda register: signed)
+        self.assertEqual(controller.current_integer("rdi"), address)
+        self.assertEqual(controller.current_integer("rsp"), address)
+
+    def test_ignored_l2_entry_restores_opcode_and_fails_coverage_instead_of_retrapping(self):
+        pc = 0xabcdef
+        header = [0x50414e5343464344, 1, 1152, 5, 0, 19, pc, 0x400100, 2, 0x5000] + [0]*13
+        header[18] = 0x1000 | (3 << 3)
+        header[19] = 0xffff800000000000
+        raw = struct.pack("<23Q15Q2Q", *header, *range(100, 115), 7, 832)+bytes(832)
+        controller = CaptureController.__new__(CaptureController)
+        pointer = 0xffff800212345678
+        reads = []
+        def read(address, size):
+            reads.append(address)
+            return raw
+        controller.gdb = SimpleNamespace(parse_and_eval=lambda expression: pointer-(1 << 64),
+                                        selected_inferior=lambda: SimpleNamespace(read_memory=read))
+        target = SimpleNamespace(enabled=True, address=pc, scenario_index=1, target=dict(symbol="kernel_leaf", scope="kernel"))
+        controller.breakpoints = [target]
+        controller.active = 1
+        controller.manifest = dict(expected_vm_id=0)
+        controller.records = {1: dict(hits={}, errors=[])}
+        controller.events = []
+        controller.errors = []
+        controller.complete_seen = False
+        controller.capture = lambda index, leaf: None
+        controller.write_summary = lambda: None
+        controller.handle_guest_hook()
+        self.assertFalse(target.enabled)
+        self.assertEqual(controller.records[1]["hits"], {})
+        self.assertIn("disabled before same-RIP resume", controller.records[1]["errors"][0])
+        self.assertIsNone(controller.guest_snapshot)
+        self.assertEqual(reads, [pointer])
+
     def test_guest_snapshot_is_versioned_scoped_and_keeps_guest_registers(self):
         header = [0x50414e5343464344, 1, 1152, 5, 2, 19, 0xabcdef, 0x400100, 2, 0x5000] + [0] * 13
         raw = struct.pack("<23Q15Q2Q", *header, *range(100, 115), 7, 832) + bytes(832)
@@ -201,6 +308,21 @@ int main(void) {
             self.assertEqual(prepared["scenarios"][0]["targets"][0]["resolved"]["address"], address)
             self.assertEqual(mapped.at(address)["symbol"], "fixture_leaf")
             self.assertEqual(prepared["kernel_map"]["elf_type"], "ET_EXEC")
+        finally:
+            mapped.close()
+
+    @unittest.skipUnless(shutil.which("addr2line"), "host addr2line unavailable")
+    def test_real_batched_addr2line_matches_section_offsets(self):
+        mapped = ModuleMap(self.debug, self.packed)
+        try:
+            symbols = [mapped.resolve(name) for name in ["fixture_leaf", "depthchecker_begin"]]
+            requests = [(str(self.debug), symbol["section_name"], symbol["value"]) for symbol in symbols]
+            result = OfflineAddr2line().lookup(requests)
+            for request, expected in zip(requests, ["fixture_leaf", "depthchecker_begin"]):
+                self.assertEqual(result[request]["exit_code"], 0)
+                self.assertIn(expected, result[request]["output"])
+                self.assertIn("fixture.c", result[request]["output"])
+                self.assertNotIn("error", result[request])
         finally:
             mapped.close()
 
