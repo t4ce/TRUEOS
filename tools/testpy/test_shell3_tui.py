@@ -207,7 +207,8 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     assert_eq!(hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed),before+2);
     assert_eq!(tui::claim(&t,24),Some(true));
     assert!(tui::active(other.id,Some("navigation-reentry")));
-    assert!(!tui::select_for_navigation(f,"navigation-reentry"));
+    assert!(tui::select_for_navigation(f,"navigation-reentry"));
+    assert!(!tui::active(f.id,Some("navigation-reentry")));
     shell2::free_name("navigation-reentry");
 }
 #[test] fn ui4_drag_endpoints_follow_the_exact_live_terminal_owner() {
@@ -230,6 +231,26 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     assert!(tui::select(f,None));assert!(tui::snapshot(f.id,Some("own")).is_none());
     tui::request(other,"own").unwrap();assert_eq!(tui::claim(&t,3),Some(true));assert!(tui::snapshot(other.id,Some("own")).is_some());
     shell2::free_name("own");let replacement=shell2::target("own",2);assert!(!tui::supports(&replacement));assert_eq!(tui::write(&t,3,b"freed"),None);
+}
+#[test] fn explicit_tui_takes_over_and_old_disconnect_preserves_new_attachment() {
+    let (old,t)=session("takeover",26,20,5);tui::bind_remote_frontend(old.id);
+    assert_eq!(tui::claim(&t,26),Some(true));
+    let next=frontend(40,9);tui::bind_remote_frontend(next.id);
+    assert!(tui::select_for_navigation(next,"takeover"));
+    assert!(tui::active(old.id,Some("takeover")));
+    assert!(!tui::active(next.id,Some("takeover")));
+    tui::request_takeover(next,"takeover").unwrap();
+    assert!(!tui::input(old.id,Some("takeover"),b"old input"));
+    assert!(!tui::remote_active(old.id));
+    assert_eq!(tui::claim(&t,26),Some(true));
+    assert!(tui::remote_active(next.id));
+    assert!(tui::input(next.id,Some("takeover"),b"new input"));
+    tui::detach(old.id);
+    assert!(tui::active(next.id,Some("takeover")));
+    assert_eq!(tui::write(&t,26,b"new frame"),Some(9));
+    assert_eq!(tui::surface(&t).unwrap().cols,40);
+    tui::request_takeover(next,"takeover").unwrap();
+    tui::detach(next.id);shell2::free_name("takeover");
 }
 #[test] fn crossterm_keys_mouse_and_replies_reach_only_the_active_owner() {
     use r::keyboard::*;

@@ -39,6 +39,7 @@ pub fn select(_:Frontend,_:Option<&str>)->bool {true}
 pub fn select_for_navigation(_:Frontend,_:&str)->bool {true}
 pub fn queue_launch(_:u64,_:service::QueuedBlueprint) {panic!("unexpected queue")}
 pub fn request(_:Frontend,_:&str)->Result<(),String> {Ok(())}
+pub fn request_takeover(_:Frontend,_:&str)->Result<(),String> {Ok(())}
 }
 #[derive(Default)] struct Slots {ids:Vec<String>,lifetimes:Vec<(String,u64)>,generation:u64}
 struct Mutex<T>(std::sync::Mutex<T>);

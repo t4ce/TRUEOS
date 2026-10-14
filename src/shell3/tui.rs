@@ -598,6 +598,12 @@ pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
 /// Explicit navigation reenters a wired terminal, including its current slot.
 /// Resize/repaint selection above never silently undoes an operator park.
 pub(super) fn select_for_navigation(frontend: Frontend, name: &str) -> bool {
+    // A busy Blueprint's command slot remains accessible for explicit `tui`.
+    let busy_blueprint = ROUTES.lock().routes.iter().any(|route| {
+        route.lease.name() == name && route.native.is_none() && route.vm.is_some()
+            && route.frontend != Some(frontend.id) && route.owner.is_some()
+    });
+    if busy_blueprint { return park(frontend.id); }
     if !select(frontend, Some(name)) {return false;}
     let blueprint = ROUTES.lock().routes.iter().any(|route| {
         route.lease.name() == name && route.native.is_none() && route.vm.is_some()
@@ -622,6 +628,39 @@ pub(super) fn select_for_navigation(frontend: Frontend, name: &str) -> bool {
     }
     true
 }
+/// Explicit `tui` releases the previous attachment before requesting reentry.
+/// Ordinary slot navigation continues to respect a live terminal owner.
+pub(super) fn request_takeover(frontend: Frontend, name: &str) -> Result<(), &'static str> {
+    let previous = {
+        let routes = ROUTES.lock();
+        routes.routes.iter().find(|route| route.lease.name() == name)
+            .filter(|route| route.frontend != Some(frontend.id))
+            .map(|route| (route.lease.clone(), route.frontend, route.vm, route.owner.is_some()))
+    };
+    if let Some((lease, old, vm, active)) = previous {
+        // Keep HV's terminal epoch handshake and SSH's end-of-TUI output intact.
+        if active && vm.is_some_and(|vm| !crate::hv::blueprint_console_return_to_cli(vm)) {
+            return Err("tui: could not release the previous terminal owner");
+        }
+        let mut routes = ROUTES.lock();
+        if let Some(route) = routes.routes.iter_mut().find(|route| route.lease == lease) {
+            if route.frontend != old || route.owner.is_some() {
+                return Err("tui: terminal attachment changed during takeover");
+            }
+            if let Some(native) = route.native.as_mut() {
+                native.active = false;
+                native.input.clear();
+                native.return_to_default = false;
+            }
+            route.frontend = None;
+            route.selected = false;
+            route.suppressed_text = None;
+            routes.changed(old);
+        }
+    }
+    request(frontend, name)
+}
+
 pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str> {
     if native_slot(name) {
         {

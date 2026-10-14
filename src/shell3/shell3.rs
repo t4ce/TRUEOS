@@ -1276,7 +1276,7 @@ impl Shell3 {
             }
             Some(LatchedNavigation::Resume { name, lifetime }) => {
                 if self.active_matrix_slot.as_deref() == Some(&name) && self.active_matrix_lifetime == lifetime {
-                    if let Err(error) = tui::request(self.tui_frontend(), &name) {
+                    if let Err(error) = tui::request_takeover(self.tui_frontend(), &name) {
                         MatrixSlots::echo(Some(&name), lifetime, error.into());
                     }
                 }
