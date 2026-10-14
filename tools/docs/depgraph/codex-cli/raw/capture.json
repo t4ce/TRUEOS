@@ -1,5 +1,5 @@
 {
-  "captured_at_unix": 1791879922.3173013,
+  "captured_at_unix": 1791891802.5544004,
   "manifest": "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml",
   "target": "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/x86_64-unknown-trueos.json",
   "rustflags": [
@@ -9,11 +9,12 @@
     "-C",
     "panic=abort"
   ],
+  "features": "sh3,trueos-blueprint",
   "inputs_sha256": {
-    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml": "b0182ea30daa6ee0353c6e207b3bced4d84c56c91b2dfdc697ad5051628aa394",
-    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.lock": "e138cb9b143a6f8ff6c28424eeb4931bd56554ccc5d585c964b66d16ebb11f96",
+    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml": "d84113d5df267650280a4436482c014497612f81720a68150534ff112a4f3021",
+    "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.lock": "3da59d58d3bdba8196638e6bb368a447cb7a805cf0576c644678239af2c009bf",
     "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/x86_64-unknown-trueos.json": "c124f4048fb623f2180a61568efeb08ba818c35981c667aff33a1d280f8ae87b",
-    "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml": "8fd1d1247f1a1283b1c37783d6a3e502cff0375b00ab7b556955dab61f8f79d1"
+    "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml": "5229fe1a659fbac031b15c75950a48e40635f724cff526be1eeeaee6fe9f6a15"
   },
   "commands": {
     "metadata": {
@@ -32,12 +33,12 @@
         "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml",
         "--no-default-features",
         "--features",
-        "trueos-blueprint,trueos/default-global-allocator",
+        "sh3,trueos-blueprint",
         "--config",
         "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml"
       ],
       "exit_code": 0,
-      "output_sha256": "6efa3d510faf5b573626ec554071592728a9a69b1c32a5613d41fd51e499a6db"
+      "output_sha256": "cbeb290f928d2a11df49dcefc42e007bb64a2485077940f22f1e165d8e5ebdd4"
     },
     "tree": {
       "argv": [
@@ -59,12 +60,12 @@
         "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml",
         "--no-default-features",
         "--features",
-        "trueos-blueprint,trueos/default-global-allocator",
+        "sh3,trueos-blueprint",
         "--config",
         "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml"
       ],
       "exit_code": 0,
-      "output_sha256": "a13e5c99c784315eddeaa2284f423f875826ab20d493522bd23067dfc4445cff"
+      "output_sha256": "43accd6bd9eebfe861f6b7261f5033c22fb43b8d11fb23954f91fb0cb18f86fa"
     },
     "unit-graph": {
       "argv": [
@@ -88,35 +89,35 @@
         "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/source-overlay-app/Cargo.toml",
         "--no-default-features",
         "--features",
-        "trueos-blueprint,trueos/default-global-allocator",
+        "sh3,trueos-blueprint",
         "--config",
         "/home/t4ce/Repos/TRUEOS/tools/docs/depgraph/codex-cli/raw/pack-config.toml"
       ],
       "exit_code": 0,
-      "output_sha256": "04a40186b0b7e2242211a555f0b8caf47bfdf510c0c17c0c81cf0c87f9d6d951"
+      "output_sha256": "72e0185d65654b3b72eed12434eb4da2d42827f1e2e8328cb2b9f7a85e8460b6"
     }
   },
   "scope": "Existing staged pack only. Unit graph plans a build; it does not compile or publish.",
   "inputs_unchanged": true,
   "rustc_identity": "rustc 1.99.0-nightly (af3d95584 2026-07-09)\nbinary: rustc\ncommit-hash: af3d95584dbddcae597890340995509a7fb47a50\ncommit-date: 2026-07-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8\n",
-  "native_root_sha256": "0a75aa4fbb2178cd35d00b85b84794f6ab1a3dbc8dbb32ea8ccf7d18f4a3b82a",
-  "native_inventory_sha256": "901b9455e6b32a7c203f96754b71092322b58d7e1efc5f6dc084a5bbe34de672",
+  "native_root_sha256": "abac54513e552342f446cd6e13fbafa02684301f22b4a6e3a3c2c7a1e13227b3",
+  "native_inventory_sha256": "a5a8fe1980252cbde3776d757fbf4bc567c4c91091249753c07d14bc48e7d32d",
   "existing_artifacts": {
     "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/module.o": {
-      "bytes": 433698816,
-      "mtime_unix": 1791879773.3551996
+      "bytes": 244686240,
+      "mtime_unix": 1791891707.2921374
     },
     "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/module.stripped.o": {
-      "bytes": 375038536,
-      "mtime_unix": 1791879795.0685704
+      "bytes": 243513936,
+      "mtime_unix": 1791891713.0862365
     },
     "/home/t4ce/Repos/codex/codex-rs/cli/target/trueos-blueprint/work/codex/module.stripped.tar.lz4": {
-      "bytes": 81959122,
-      "mtime_unix": 1791879795.0
+      "bytes": 67295564,
+      "mtime_unix": 1791891713.0
     },
     "/home/t4ce/Repos/TRUEOS-Blueprints/dist/codex.bp": {
-      "bytes": 81959146,
-      "mtime_unix": 1791879797.8646183
+      "bytes": 67295588,
+      "mtime_unix": 1791891715.3662753
     }
   }
 }

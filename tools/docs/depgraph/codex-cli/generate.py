@@ -82,6 +82,9 @@ def main():
     inventory_path = HERE / "raw/rlink-closure.json"
     inventory = json.loads(inventory_path.read_text()) if inventory_path.exists() else {}
     archives = inventory.get("rlibs", inventory.get("archives", []))
+    native_fold_path = HERE / "implementation/native-folds.json"
+    native_fold = json.loads(native_fold_path.read_text()) if native_fold_path.exists() else None
+    authenticated_packages = {archive["path"]: archive["package_id"] for archive in native_fold["archives"]} if native_fold else {}
     by_stem = defaultdict(list)
     for archive in archives:
         path = archive["path"] if isinstance(archive, dict) else archive
@@ -98,7 +101,9 @@ def main():
         name = p.get("name", first["target"]["name"].replace("_", "-"))
         stems = {units[i]["target"]["name"] for i in indices}
         directory = str(Path(p.get("manifest_path", first["target"]["src_path"])).parent)
-        mapped = [a for stem in stems for a, deptext in by_stem[stem] if directory + "/" in deptext]
+        mapped = [a for stem in stems for a, deptext in by_stem[stem]
+                  if authenticated_packages.get(a["path"]) == pkg
+                  or (a["path"] not in authenticated_packages and directory + "/" in deptext)]
         if pkg == units[plan["roots"][0]]["pkg_id"]:
             # The standalone root .d records src/... relative to its manifest.
             mapped.extend(a for stem in stems for a, deptext in by_stem[stem]
@@ -141,8 +146,23 @@ def main():
                        "Rlink selects archives; archive bytes include metadata and dead code. Actual BP payload requires relinking and loader validation.",
                        "Cargo unit profile panic field precedes the packer's explicit -C panic=abort. Rlink closure establishes the selected panic runtime."]}
     graph["folds"] = []
+    package_ids = set(grouped)
+    package_names = {node["name"] for node in nodes if not node["sysroot_only"]}
     for path in sorted((HERE / "experiments").glob("*/folds.json")):
-        graph["folds"].extend(json.loads(path.read_text()))
+        for fold in json.loads(path.read_text()):
+            required = set(fold.get("package_ids", fold["package_names"]))
+            available = package_ids if "package_ids" in fold else package_names
+            # Historical projections are retained in implementation/before.
+            # Removed source crates cannot be offered as an empty live fold.
+            if required <= available:
+                graph["folds"].append(fold)
+    if native_fold:
+        members = [member["pkg_id"] for member in native_fold["members"]]
+        if set(members) <= package_ids:
+            graph["folds"] = [fold for fold in graph["folds"] if fold["id"] != "network-owner"]
+            graph["folds"].insert(0, {"id": "network-owner", "title": "Native network ownership", "package_ids": members,
+                                      "package_names": [node["name"] for node in nodes if node["package_id"] in members],
+                                      "status": "implemented-response-fold", "note": native_fold["method"]})
     critical = [root]
     while edges[critical[-1]]:
         critical.append(max(sorted(edges[critical[-1]]), key=height))
@@ -151,7 +171,7 @@ def main():
     graph["summary"]["mapped_native_archives"] = sum(len(n["rlink_archives"]) for n in nodes)
     (HERE / "graph.json").write_text(json.dumps(graph, indent=2) + "\n")
     with (HERE / "packages.tsv").open("w") as file:
-        writer = csv.writer(file, delimiter="\t")
+        writer = csv.writer(file, delimiter="\t", lineterminator="\n")
         writer.writerow(["name", "version", "shortest_depth", "longest_remaining_depth", "children", "parents", "closure_packages", "root_branch_owners", "source", "package_id"])
         for n in graph["nodes"]:
             writer.writerow([n["name"], n["version"], n["depth"], n["height"], len(n["children"]), len(n["parents"]), n["closure"], n["direct_root_owners"], n["source"], n["package_id"]])

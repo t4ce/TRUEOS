@@ -39,10 +39,52 @@ pretty_assertions = "=1.4.1"
 '''
 
 
-def prepare(source, output):
+def historical_source(source, generated, revision):
+    """Read only the four utility source trees from the recorded Git revision."""
+    if revision is None:
+        capture = Path(__file__).resolve().parents[2] / "implementation" / "before" / "initial-state.json"
+        revision = json.loads(capture.read_text())["repositories"]["codex"]["head"]
+    repository = Path(subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], cwd=source, text=True,
+    ).strip()).resolve()
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=repository, text=True,
+    ).strip()
+    utilities_path = source.relative_to(repository)
+    extracted = generated / "historical-source"
+    files = []
+    for name in UTILITIES:
+        prefix = utilities_path / name / "src"
+        names = subprocess.check_output(
+            ["git", "ls-tree", "-r", "--name-only", "-z", commit, "--", prefix.as_posix()],
+            cwd=repository,
+        ).decode().split("\0")
+        names = [path for path in names if path]
+        if not names or (prefix / "lib.rs").as_posix() not in names:
+            raise ValueError(f"{commit} does not contain the original utility sources at {prefix}")
+        for name_in_repository in names:
+            relative = Path(name_in_repository).relative_to(utilities_path)
+            target = extracted / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(subprocess.check_output(
+                ["git", "show", f"{commit}:{name_in_repository}"], cwd=repository,
+            ))
+            files.append(name_in_repository)
+    return extracted, {
+        "kind": "historical_git_sources",
+        "repository": str(repository),
+        "requested_revision": revision,
+        "commit": commit,
+        "utility_source_path": utilities_path.as_posix(),
+        "files_extracted": files,
+    }
+
+
+def prepare(source, output, source_revision=None):
     generated = output / "generated"
     if generated.exists():
         shutil.rmtree(generated)
+    source, source_metadata = historical_source(source, generated, source_revision)
     baseline = generated / "baseline"
     baseline.mkdir(parents=True)
     members = ", ".join(json.dumps(name) for name in UTILITIES)
@@ -69,7 +111,7 @@ def prepare(source, output):
                 path.write_text(updated)
         roots.append(f'#[path = "{module}/lib.rs"]\npub mod {module};')
     (merged / "src" / "lib.rs").write_text("\n\n".join(roots) + "\n")
-    return baseline, merged, rewrites
+    return baseline, merged, rewrites, source_metadata
 
 
 def run(workspace, label, output, fresh):
@@ -138,15 +180,20 @@ def run(workspace, label, output, fresh):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codex-utils", type=Path, default=Path("/home/t4ce/Repos/codex/codex-rs/utils"))
+    parser.add_argument(
+        "--source-revision",
+        help="Git revision containing the original four utilities; defaults to the pre-migration Codex commit recorded in implementation/before/initial-state.json",
+    )
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--fresh", action="store_true", help="Remove only this experiment's ignored build directories")
     args = parser.parse_args()
     output = args.output.resolve()
-    baseline, merged, rewrites = prepare(args.codex_utils.resolve(), output)
+    baseline, merged, rewrites, source_metadata = prepare(args.codex_utils.resolve(), output, args.source_revision)
     results = {
         "schema_version": 1,
         "scope": "Host x86_64 Linux source fold, release opt-level=1/codegen-units=8, original tests retained. Not a TRUEOS package-size benchmark.",
         "source_crates": [f"codex-utils-{name}" for name in UTILITIES],
+        "source": source_metadata,
         "changes": rewrites,
         "baseline": run(baseline, "baseline", output, args.fresh),
         "merged": run(merged, "merged", output, args.fresh),

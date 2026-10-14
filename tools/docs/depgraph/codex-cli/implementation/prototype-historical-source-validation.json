@@ -1,0 +1,31 @@
+{
+  "source": {
+    "kind": "historical_git_sources",
+    "repository": "/home/t4ce/Repos/codex",
+    "requested_revision": "8ba74b60ef7bb61d90ef325646f3682c4ef4ec13",
+    "commit": "8ba74b60ef7bb61d90ef325646f3682c4ef4ec13",
+    "utility_source_path": "codex-rs/utils",
+    "files_extracted": [
+      "codex-rs/utils/elapsed/src/lib.rs",
+      "codex-rs/utils/fuzzy-match/src/lib.rs",
+      "codex-rs/utils/stream-parser/src/assistant_text.rs",
+      "codex-rs/utils/stream-parser/src/citation.rs",
+      "codex-rs/utils/stream-parser/src/inline_hidden_tag.rs",
+      "codex-rs/utils/stream-parser/src/lib.rs",
+      "codex-rs/utils/stream-parser/src/proposed_plan.rs",
+      "codex-rs/utils/stream-parser/src/stream_text.rs",
+      "codex-rs/utils/stream-parser/src/tagged_line_parser.rs",
+      "codex-rs/utils/stream-parser/src/utf8_stream.rs",
+      "codex-rs/utils/template/src/lib.rs"
+    ]
+  },
+  "default_revision_resolved": true,
+  "explicit_revision_resolved": true,
+  "baseline_tests_passed": 54,
+  "merged_tests_passed": 54,
+  "baseline_rlib_count": 4,
+  "merged_rlib_count": 1,
+  "historical_result_sha256_unchanged": "e6dc8ce338fe3558c005e06ba341c4331039b06fd8e65745226c06371954ac96",
+  "exit_code": 0,
+  "validation_scope": "Reproducer source extraction and original54tests in fresh disposable workspaces. Prior measured size/timing results were not overwritten."
+}

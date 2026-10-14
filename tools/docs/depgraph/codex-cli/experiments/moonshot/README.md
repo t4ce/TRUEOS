@@ -1,5 +1,7 @@
 # Moonshot: fold the network proxy's owned native subtree
 
+> Historical experiment: the source folds are now applied. Original graph inputs are preserved under [implementation/before/raw](../../implementation/before/raw/); the [current report](../../README.md) records the integrated package.
+
 The realistic large fold is `codex-network-proxy` plus its **exclusive**
 target dependencies. The full recursive closure has 271 units, but 226 of
 those are shared by other Codex subsystems. The owned subtree has 45 target

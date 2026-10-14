@@ -1,5 +1,7 @@
 # Three source crate folds, one rejected wider variant
 
+> Historical experiment: the source folds are now applied. Original graph inputs are preserved under [implementation/before/raw](../../implementation/before/raw/); the [current report](../../README.md) records the integrated package.
+
 The pure text utility fold works as a source prototype. Path and narrow HTTP folds preserve the dependency DAG in the exact staged unit graph. None reduces the complete graph's longest path. The wider HTTP fold creates a cycle and is rejected.
 
 These experiments change only copied source files and disposable local build directories. Codex sources, the pack stage, `.bp` packages, and shared Cargo caches are not modified.
@@ -26,6 +28,8 @@ The projected node counts in the rejected row describe the attempted contraction
 Merge `codex-utils-elapsed`, `codex-utils-fuzzy-match`, `codex-utils-stream-parser`, and `codex-utils-template` into four modules of one crate. All four have zero external normal dependencies in the actual target units. Their existing sources total 2,182 lines across 11 Rust files.
 
 [`prototype.py`](prototype.py) creates two isolated workspaces: the original four crates and a merged crate. It copies source code and original tests unchanged except for 28 `crate::` references in five stream-parser files, which are rebased to `crate::stream_parser::`. `pretty_assertions` remains a test dependency. Both use Rust 1.95.0, host x86_64 Linux, release `opt-level=1`, and `codegen-units=8`.
+
+After the production source migration removed those four package directories, the reproducer reads their original source trees from the pre-migration Codex Git commit recorded in `../../implementation/before/initial-state.json`. It extracts only those utility sources into the ignored `generated/historical-source` directory and records the resolved commit in new results. Use `--source-revision <commit>` to select another revision that still contains the original package paths. The historical results below remain the original measurement.
 
 | Measured host source prototype | Four crates | Merged crate |
 | --- | ---: | ---: |
@@ -89,7 +93,7 @@ Reproduce all graph attempts:
 
 ```sh
 python3 tools/docs/depgraph/codex-cli/experiments/small-folds/simulate.py \
-  --unit-graph tools/docs/depgraph/codex-cli/raw/unit-graph.json \
+  --unit-graph tools/docs/depgraph/codex-cli/implementation/before/raw/unit-graph.json \
   --output tools/docs/depgraph/codex-cli/experiments/small-folds/results.json
 ```
 

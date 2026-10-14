@@ -1,0 +1,105 @@
+{
+  "metrics": {
+    "metadata_packages": {
+      "before": 1063,
+      "after": 1054,
+      "delta": -9
+    },
+    "build_units": {
+      "before": 1277,
+      "after": 1268,
+      "delta": -9
+    },
+    "reachable_packages": {
+      "before": 799,
+      "after": 790,
+      "delta": -9
+    },
+    "codex_packages": {
+      "before": 135,
+      "after": 126,
+      "delta": -9
+    },
+    "reachable_ordinary_target_units": {
+      "before": 800,
+      "after": 791,
+      "delta": -9
+    },
+    "visible_edges": {
+      "before": 3831,
+      "after": 3743,
+      "delta": -88
+    },
+    "longest_path": {
+      "before": 35,
+      "after": 35,
+      "delta": 0
+    },
+    "selected_native_archives": {
+      "before": 783,
+      "after": 774,
+      "delta": -9
+    },
+    "blueprint_bytes": {
+      "before": 81959146,
+      "after": 67295588,
+      "saved": 14663558,
+      "saved_percent": 17.891
+    },
+    "elf_sections": {
+      "before": 711612,
+      "after": 15
+    },
+    "stripped_elf_bytes": {
+      "before": 375038536,
+      "after": 243513936
+    }
+  },
+  "source_folds": {
+    "original_packages": 13,
+    "replacement_packages": [
+      "codex-utils-text",
+      "codex-utils-paths",
+      "codex-transport",
+      "codex-network-foundation"
+    ],
+    "cycle_resolution": "Shared error, retry, revocation and TLS-provider definitions live below protocol and transport in the independent foundation crate."
+  },
+  "tests": {
+    "utility_text": 54,
+    "utility_paths": 124,
+    "transport_foundation_protocol": 720,
+    "packer": 94,
+    "total": 992,
+    "rustfmt_workspace_packages": 151,
+    "bazel": "Static source/label/fixture audit; executable unavailable."
+  },
+  "actual_pack": {
+    "path": "/home/t4ce/Repos/TRUEOS-Blueprints/dist/codex.bp",
+    "sha256": "239e3e113b2a59fb0efe2bb432692eeec1b910c842a782f79e59faf6edf7ea97",
+    "bytes": 67295588,
+    "version": 1,
+    "flags": 3,
+    "entry_hint": "0000000100059860",
+    "compressed_bytes": 67295564,
+    "raw_bytes": 243513936,
+    "decompressed_payload_matches_elf": true
+  },
+  "native_fold": {
+    "selected_archives": 774,
+    "owned_archives": 44,
+    "response_runs": 44,
+    "exclusive_units": 45,
+    "archive_order_preserved": true,
+    "input_hashes_unchanged": true,
+    "direct_link": {
+      "exit_code": 0,
+      "module_sha256": "abce45a7b38a5fd556d204593482e0e6103086733b475b5a4ee1402bab165e61",
+      "folded_module_sha256": "abce45a7b38a5fd556d204593482e0e6103086733b475b5a4ee1402bab165e61",
+      "byte_identical": true
+    }
+  },
+  "scope": "Actual integrated local TRUEOS package; original functionality retained, no command feature cuts.",
+  "attribution": "Baseline-to-final measurements include the contemporaneous std backend/cache revision change. The prior same-input experiment independently established 16.4% with coalescing and 17.8% with additional local-symbol cleanup; source fold sizes are not inferred from archive input sizes.",
+  "deployment": "Local dist/codex.bp rebuilt with apps publication disabled; no rig execution."
+}

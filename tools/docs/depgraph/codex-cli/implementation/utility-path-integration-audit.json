@@ -1334,5 +1334,66 @@
   ],
   "obsolete_readme_reference_fixed": "codex-rs/config/src/loader/README.md:61",
   "bp_obsolete_fixed_path_references_found": 0,
-  "source_mismatches": []
+  "source_mismatches": [],
+  "baseline_commit": "8ba74b60ef7bb61d90ef325646f3682c4ef4ec13",
+  "bundle_dependency_union_exact": true,
+  "path_external_normal_dependencies": [
+    "base64",
+    "dirs",
+    "dunce",
+    "schemars",
+    "serde",
+    "tempfile",
+    "thiserror",
+    "ts-rs",
+    "url",
+    "urlencoding"
+  ],
+  "windows_target_features_preserved": {
+    "cfg(windows)": {
+      "dependencies": {
+        "windows-sys": {
+          "workspace": true,
+          "features": [
+            "Win32_Foundation",
+            "Win32_System_Com",
+            "Win32_UI_Shell"
+          ]
+        }
+      }
+    }
+  },
+  "bazel": {
+    "new_build_targets": {
+      "//codex-rs/utils/text": "codex_utils_text",
+      "//codex-rs/utils/paths": "codex_utils_paths"
+    },
+    "source_glob": "src/**/*.rs",
+    "explicit_consumers": [
+      "codex-rs/core/tests/remote_env_windows/BUILD.bazel:18"
+    ],
+    "obsolete_labels_found": 0,
+    "dependency_generation": "MODULE.bazel crate.from_cargo reads central codex-rs Cargo.toml and Cargo.lock; no hand-maintained path dependency list.",
+    "validation": "static only, Bazel executable unavailable"
+  },
+  "schema_and_typescript": {
+    "types": [
+      "AbsolutePathBuf",
+      "PathUri",
+      "LegacyAppPathString",
+      "PathConvention"
+    ],
+    "schema_names_unchanged": true,
+    "serde_implementations_unchanged": true,
+    "typescript_derives_unchanged": true,
+    "typescript_default_output_paths": [
+      "AbsolutePathBuf.ts",
+      "PathUri.ts",
+      "LegacyAppPathString.ts",
+      "PathConvention.ts"
+    ],
+    "typescript_path_source": "ts-rs-macros11.1.0 default output_path generates <ts_name>.ts; no package-relative export_to attributes are present in bundle types.",
+    "schemars_internal_derived_schema_ids": "Derived AbsolutePathBuf and PathConvention IDs include new Rust module paths. This affects generator cache type identity; public schema_name and emitted definition names stay unchanged.",
+    "consumer_package_path_dependencies_found": 0
+  }
 }

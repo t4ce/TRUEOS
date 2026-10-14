@@ -241,14 +241,27 @@ def run_link(result):
 
 
 def main():
+    global GRAPH, WORK
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--link", action="store_true", help="perform isolated native archive fold and relink; never compiles or publishes")
+    historical = GRAPH / "implementation/before"
+    parser.add_argument("--graph-dir", type=Path, default=historical if historical.exists() else GRAPH)
+    parser.add_argument("--work", type=Path, help="original pre-migration module directory for historical native relinking")
+    parser.add_argument("--output", type=Path, help="new experiment result; original recorded result.json is retained")
     args = parser.parse_args()
+    GRAPH = args.graph_dir.resolve()
+    if args.work:
+        WORK = args.work.resolve()
+    if args.link and GRAPH == historical.resolve():
+        recorded = json.loads((HERE / "result.json").read_text())
+        if (WORK / "module.o").stat().st_size != recorded["baseline_elf"]["file_bytes"]:
+            parser.error("historical native relink requires --work with the original module; validate the applied pack with implementation/validate_pack.py")
     result = fold_graph()
     if args.link:
         result = run_link(result)
-    (HERE / "result.json").write_text(json.dumps(result, indent=2) + "\n")
-    (HERE / "folds.json").write_text(json.dumps([{"id": "network-owner", "title": "Network policy and proxy ownership (moonshot)",
+    output = args.output or HERE / ("link-result.json" if args.link else "simulation-result.json")
+    output.write_text(json.dumps(result, indent=2) + "\n")
+    (HERE / "simulation-folds.json").write_text(json.dumps([{"id": "network-owner", "title": "Network policy and proxy ownership (moonshot)",
                                                   "package_names": [row["package_name"] for row in result["members"]],
                                                   "package_ids": sorted({row["package_id"] for row in result["members"]}),
                                                   "status": result["status"],

@@ -1,0 +1,129 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/t4ce/Repos/TRUEOS-Blueprints/apps/prismq/crates/prism-q/Cargo.toml
+workspace: /home/t4ce/Repos/TRUEOS-Blueprints/Cargo.toml
+warning: patch `hickory-proto v0.25.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hickory-proto-0.25.2)` was not used in the crate graph
+warning: patch `hickory-resolver v0.25.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/hickory-resolver-0.25.2)` was not used in the crate graph
+warning: patch `if-watch v3.2.2 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/if-watch-3.2.2)` was not used in the crate graph
+warning: patch `quinn v0.11.9 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-0.11.9)` was not used in the crate graph
+warning: patch `quinn-proto v0.11.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-proto-0.11.14)` was not used in the crate graph
+warning: patch `quinn-udp v0.5.14 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/quinn-udp-0.5.14)` was not used in the crate graph
+warning: patch `sqlx-sqlite v0.9.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/sqlx-sqlite-0.9.0)` was not used in the crate graph
+warning: patch `tokio-tungstenite v0.29.0 (/home/t4ce/Repos/TRUEOS-Blueprints/vendor/tokio-tungstenite-0.29.0)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/main.rs (target/x86_64-unknown-linux-gnu/debug/deps/trueos_blueprint-28528a6a1d8acae5)
+
+running 94 tests
+test abi_guard::tests::loader_gate_rejects_the_unimplemented_gles_bridge ... ok
+test abi_guard::tests::loader_gate_rejects_all_removed_surfaces_together ... ok
+test abi_guard::tests::nested_function_pointer_arguments_split_correctly ... ok
+test abi_guard::tests::trueos_sibling_name_is_ascii_case_insensitive ... ok
+test abi_guard::tests::signatures_ignore_names_and_whitespace ... ok
+test abi_guard::tests::versioned_undefined_symbols_keep_the_name_before_the_version_index ... ok
+test app_catalog::tests::package_lookup_is_case_insensitive ... ok
+test abi_guard::tests::signature_hash_changes_with_argument_layout ... ok
+test app_catalog::tests::manifest_has_dependency_sees_target_dependencies ... ok
+test app_catalog::tests::reads_filesystem_independent_blueprint_metadata ... ok
+test app_catalog::tests::reads_replicatable_blueprint_metadata ... ok
+test app_catalog::tests::reads_sorted_rustc_payload_dependency_roots ... ok
+test app_catalog::tests::reads_argv_entry_abi_from_blueprint_metadata ... ok
+test app_catalog::tests::reads_native_rustc_contract_from_blueprint_metadata ... ok
+test app_catalog::tests::reads_trueosfs_scope_from_blueprint_metadata ... ok
+test app_catalog::tests::rejects_unknown_entry_abi ... ok
+test app_catalog::tests::resolves_pumpkin_workspace_package_and_legacy_lookup ... ok
+test app_catalog::tests::rejects_unknown_rustc_tier ... ok
+test artifact::tests::argv_entry_capability_keeps_the_payload_encoding ... ok
+test artifact::tests::abort_runtime_validation_rejects_unwind_runtime_and_requires_abort_runtime ... ok
+test artifact::tests::asset_bundle_rejects_u32_container_overflow ... ok
+test artifact::tests::asset_bundle_rejects_traversal_ambiguous_paths_and_duplicates ... ok
+test artifact::tests::asset_bundle_is_sorted_versioned_and_hashed ... ok
+test artifact::tests::filesystem_independent_capability_keeps_the_payload_encoding ... ok
+test artifact::tests::readobj_asset_flag_parser_distinguishes_allocated_sections ... ok
+test artifact::tests::replicatable_capability_keeps_the_payload_encoding ... ok
+test artifact::tests::trueosfs_scope_capability_keeps_the_payload_encoding ... ok
+test cargo_output::tests::build_std_anchor_couples_package_and_source_identity ... ok
+test artifact::tests::root_rlink_controls_link_closure_and_preserves_generic_unwind ... ok
+test artifact::tests::root_rlink_selects_complete_multi_codegen_unit_object_set ... ok
+test cargo_output::tests::build_std_anchor_must_emit_into_the_exact_deps_directory ... ok
+test cargo_output::tests::preserves_rendered_diagnostics_and_non_json_output ... ok
+test cli::tests::parse_cli_args_ignores_blank_app_names ... ok
+test cli::tests::parse_cli_args_keeps_nonblank_app_names ... ok
+test cargo_output::tests::ignores_known_names_without_a_rust_src_build_std_anchor ... ok
+test cli::tests::parse_cli_args_selects_probes ... ok
+test lock_parser_ignores_unused_patches ... ok
+test cargo_output::tests::collects_sorted_deduplicated_current_invocation_sysroot_metadata ... ok
+test cargo_output::tests::shuffled_panic_runtime_artifacts_are_stable_metadata_only ... ok
+test manifest_patch_alias_tests::different_versions_of_one_package_keep_both_patch_aliases ... ok
+test publish::tests::apps_and_probes_have_separate_default_publish_uris ... ok
+test manifest_patch_alias_tests::resident_tracing_pins_replace_application_aliases ... ok
+test publish::tests::percent_decode_preserves_the_double_section_delimiter ... ok
+test native_fold::tests::ownership_refuses_missing_conflicting_and_wrong_source_artifacts ... ok
+test publish::tests::buildins_manifest_excludes_apps_but_not_probes ... ok
+test publish::tests::ordinary_apps_remain_publishable ... ok
+test publish::tests::published_name_preserves_single_section_and_uses_double_separator ... ok
+test staged_patch_tests::dependency_is_not_an_existing_patch ... ok
+test staged_patch_tests::standalone_workspace_keeps_one_patch_table ... ok
+test native_fold::tests::planning_command_keeps_toolchain_source_flags_profile_and_environment ... ok
+test test::external_path_overlay_tests::git_patch_requires_an_immutable_revision ... ok
+test test::entrypoint_rewrite_does_not_modify_upstream_source_symlink ... ok
+test test::external_path_overlay_tests::app_path_patch_becomes_an_audited_source_overlay ... ok
+test test::external_path_overlay_tests::git_patch_selects_only_the_locked_fork_commit ... ok
+test std_backend::tests::filesystem_backend_changes_invalidate_std_cache ... ok
+test test::entrypoint_rewrite_preserves_std_and_explicit_no_std_sources ... ok
+test test::external_path_overlay_tests::overlay_version_audit_reads_workspace_inheritance ... ok
+test native_fold::tests::ownership_excludes_shared_host_sysroot_and_same_name_other_version ... ok
+test native_fold::tests::response_runs_preserve_native_input_order_and_exact_source_identities ... ok
+test test::rustc_payload_tests::isolated_payload_dependency_keeps_only_resolved_api_features ... ok
+test test::external_path_overlay_tests::staged_workspace_only_keeps_the_selected_root_package ... ok
+test test::external_path_overlay_tests::staged_relative_dependency_keeps_its_original_package_identity ... ok
+test test::rustc_payload_tests::payload_selection_rejects_alias_actual_name_collision ... ok
+test test::rustc_payload_tests::payload_selection_walks_normal_target_closure_by_package_id ... ok
+test test::terminal_platform_vendor_tests::terminal_stack_is_owned_by_the_blueprint_platform_vendor ... ok
+test test::source_rewrite_tests::rewrites_supported_collection_imports_without_touching_hash_map_internals ... ok
+test test::version_alignment_tests::resolved_dependency_name_normalizes_unrenamed_hyphens ... ok
+test test::version_alignment_tests::resolved_dependency_name_selects_the_matching_compatibility_alias ... ok
+test test::workspace_dependency_tests::absolute_workspace_path_is_not_a_workspace_inherited_dependency ... ok
+test test::workspace_dependency_tests::direct_blueprint_dependency_rewrite_supports_other_crates ... ok
+test test::workspace_dependency_tests::direct_trueos_dependency_rewrite_preserves_options ... ok
+test test::workspace_dependency_tests::trueos_workspace_dependency_uses_the_canonical_sdk_path ... ok
+test test::workspace_dependency_tests::vendored_workspace_dependency_keeps_the_overlay_canonical_path ... ok
+test toolchain::tests::accepts_and_parses_the_pinned_rustc_commit ... ok
+test toolchain::tests::bootstrap_environment_carries_the_verified_identity ... ok
+test toolchain::tests::explicit_root_wins_and_empty_root_uses_the_sibling ... ok
+test toolchain::tests::rejects_a_different_nightly_commit ... ok
+test toolchain::tests::direct_commands_do_not_use_rustup_selectors ... ok
+test toolchain::tests::workspace_toolchain_manifest_matches_the_builder_pin ... ok
+test toolchain::tests::locates_the_rustc_dev_compiler_tree ... ok
+test trueos_file_lock_tests::rejects_changed_std_lock_layout ... ok
+test trueos_file_lock_tests::enables_all_five_file_lock_methods_without_changing_other_cfgs ... ok
+test workspace_member_overlay_detection_uses_nearest_lockfile ... ok
+test test::terminal_platform_vendor_tests::terminal_platform_forks_use_persistent_mio_eventflow ... ok
+test app_catalog::tests::root_catalogs_keep_apps_and_probes_separate ... ok
+test test::terminal_platform_vendor_tests::crossterm_0_28_overlay_stages_the_complete_input_interface ... ok
+Read : 0 MiB   ==> 11.91%                                                                                  Compressed 2048 bytes into 244 bytes ==> 11.91%
+Read : 0 MiB   ==> 6.84%                                                                                  Compressed 2048 bytes into 140 bytes ==> 6.84%
+Read : 0 MiB   ==> 11.91%                                                                                  Compressed 2048 bytes into 244 bytes ==> 11.91%
+test test::external_path_overlay_tests::staged_external_workspace_materializes_package_and_dependency_inheritance ... ok
+test test::external_path_overlay_tests::staged_external_table_path_dependencies_resolve_from_original_manifest ... ok
+Read : 0 MiB   ==> 6.84%                                                                                  Compressed 2048 bytes into 140 bytes ==> 6.84%
+test artifact::tests::blueprint_tar_lz4_is_deterministic ... ok
+test toolchain::tests::adjacent_archive_is_coherent_when_present ... ok
+Read : 0 MiB   ==> 11.91%                                                                                  Compressed 2048 bytes into 244 bytes ==> 11.91%
+
+running 3 tests
+test empty_and_typed_entries_decode ... ok
+test names_preserve_newlines_and_non_utf8_bytes ... ok
+test malformed_and_truncated_records_are_rejected ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test test::trueos_std_directory_decoder_matches_tdl1 ... ok
+test test::entrypoint_rewrite_exits_after_main_returns ... ok
+test native_fold::tests::ordered_response_link_matches_original_with_duplicate_archive_member_names ... ok
+test artifact::tests::asset_tar_lz4_is_deterministic_and_elf_section_is_not_allocated ... ok
+
+test result: ok. 94 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+

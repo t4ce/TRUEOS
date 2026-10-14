@@ -1,0 +1,1425 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/t4ce/Repos/codex/codex-rs/vendor/tungstenite-0.27.0-openai/Cargo.toml
+workspace: /home/t4ce/Repos/codex/codex-rs/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/t4ce/Repos/codex/codex-rs/cli/Cargo.toml
+workspace: /home/t4ce/Repos/codex/codex-rs/Cargo.toml
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:20:17
+   |
+20 | #![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), no_std)]
+   |                 ^^^^^^^^^^^^--------
+   |                             |
+   |                             help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:22:11
+   |
+22 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:24:11
+   |
+24 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:27:9
+   |
+27 |     any(target_os = "trueos", target_os = "zkvm"),
+   |         ^^^^^^^^^^^^--------
+   |                     |
+   |                     help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:32:11
+   |
+32 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:35:15
+   |
+35 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+   |               ^^^^^^^^^^^^--------
+   |                           |
+   |                           help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:37:15
+   |
+37 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+   |               ^^^^^^^^^^^^--------
+   |                           |
+   |                           help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:39:11
+   |
+39 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:41:15
+   |
+41 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+   |               ^^^^^^^^^^^^--------
+   |                           |
+   |                           help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:43:15
+   |
+43 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+   |               ^^^^^^^^^^^^--------
+   |                           |
+   |                           help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:68:11
+   |
+68 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:73:11
+   |
+73 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:78:11
+   |
+78 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:83:11
+   |
+83 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:116:11
+    |
+116 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    |           ^^^^^^^^^^^^--------
+    |                       |
+    |                       help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/lib.rs:121:11
+    |
+121 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    |           ^^^^^^^^^^^^--------
+    |                       |
+    |                       help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+ --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/date.rs:4:11
+  |
+4 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+  |           ^^^^^^^^^^^^--------
+  |                       |
+  |                       help: there is a expected value with a similar name: `"teeos"`
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+ --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/date.rs:6:15
+  |
+6 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+  |               ^^^^^^^^^^^^--------
+  |                           |
+  |                           help: there is a expected value with a similar name: `"teeos"`
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+ --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/date.rs:8:15
+  |
+8 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+  |               ^^^^^^^^^^^^--------
+  |                           |
+  |                           help: there is a expected value with a similar name: `"teeos"`
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/date.rs:140:9
+    |
+140 |     any(target_os = "trueos", target_os = "zkvm"),
+    |         ^^^^^^^^^^^^--------
+    |                     |
+    |                     help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/httpdate-1.0.3/src/date.rs:186:9
+    |
+186 |     any(target_os = "trueos", target_os = "zkvm"),
+    |         ^^^^^^^^^^^^--------
+    |                     |
+    |                     help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: `httpdate` (lib) generated 21 warnings
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/async_impl/client.rs:2473:15
+     |
+2473 |     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+     |               ^^^^^^^^^^^^--------
+     |                           |
+     |                           help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+     = note: requested on the command line with `-W unexpected-cfgs`
+
+warning: unexpected `cfg` condition value: `trueos`
+ --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/async_impl/upgrade.rs:5:11
+  |
+5 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+  |           ^^^^^^^^^^^^--------
+  |                       |
+  |                       help: there is a expected value with a similar name: `"teeos"`
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+ --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/async_impl/upgrade.rs:8:15
+  |
+8 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+  |               ^^^^^^^^^^^^--------
+  |                           |
+  |                           help: there is a expected value with a similar name: `"teeos"`
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+ --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:7:11
+  |
+7 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+  |           ^^^^^^^^^^^^--------
+  |                       |
+  |                       help: there is a expected value with a similar name: `"teeos"`
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:20:15
+   |
+20 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+   |               ^^^^^^^^^^^^--------
+   |                           |
+   |                           help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1073:25
+     |
+1073 | #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                         ^^^^^^^^^^^^--------
+     |                                     |
+     |                                     help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1081:25
+     |
+1081 | #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                         ^^^^^^^^^^^^--------
+     |                                     |
+     |                                     help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1095:25
+     |
+1095 | #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                         ^^^^^^^^^^^^--------
+     |                                     |
+     |                                     help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1113:25
+     |
+1113 | #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                         ^^^^^^^^^^^^--------
+     |                                     |
+     |                                     help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1124:25
+     |
+1124 | #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                         ^^^^^^^^^^^^--------
+     |                                     |
+     |                                     help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1138:25
+     |
+1138 | #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                         ^^^^^^^^^^^^--------
+     |                                     |
+     |                                     help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1156:25
+     |
+1156 | #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                         ^^^^^^^^^^^^--------
+     |                                     |
+     |                                     help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:703:27
+    |
+703 |         all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    |                           ^^^^^^^^^^^^--------
+    |                                       |
+    |                                       help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:901:27
+    |
+901 |         all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    |                           ^^^^^^^^^^^^--------
+    |                                       |
+    |                                       help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:707:33
+    |
+707 |         #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    |                                 ^^^^^^^^^^^^--------
+    |                                             |
+    |                                             help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:905:33
+    |
+905 |         #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    |                                 ^^^^^^^^^^^^--------
+    |                                             |
+    |                                             help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:943:31
+    |
+943 |             all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    |                               ^^^^^^^^^^^^--------
+    |                                           |
+    |                                           help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1475:15
+     |
+1475 |     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+     |               ^^^^^^^^^^^^--------
+     |                           |
+     |                           help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1481:19
+     |
+1481 |     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+     |                   ^^^^^^^^^^^^--------
+     |                               |
+     |                               help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1533:29
+     |
+1533 |     #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                             ^^^^^^^^^^^^--------
+     |                                         |
+     |                                         help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1547:29
+     |
+1547 |     #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                             ^^^^^^^^^^^^--------
+     |                                         |
+     |                                         help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1664:15
+     |
+1664 |     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+     |               ^^^^^^^^^^^^--------
+     |                           |
+     |                           help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1670:19
+     |
+1670 |     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+     |                   ^^^^^^^^^^^^--------
+     |                               |
+     |                               help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1713:29
+     |
+1713 |     #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                             ^^^^^^^^^^^^--------
+     |                                         |
+     |                                         help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1730:29
+     |
+1730 |     #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+     |                             ^^^^^^^^^^^^--------
+     |                                         |
+     |                                         help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1964:15
+     |
+1964 |     #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+     |               ^^^^^^^^^^^^--------
+     |                           |
+     |                           help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+    --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/connect.rs:1970:19
+     |
+1970 |     #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+     |                   ^^^^^^^^^^^^--------
+     |                               |
+     |                               help: there is a expected value with a similar name: `"teeos"`
+     |
+     = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/util.rs:27:11
+   |
+27 | #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+   |           ^^^^^^^^^^^^--------
+   |                       |
+   |                       help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/util.rs:42:15
+   |
+42 | #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+   |               ^^^^^^^^^^^^--------
+   |                           |
+   |                           help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: function `rustls_der` is never used
+   --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/reqwest-0.13.3/src/tls.rs:638:15
+    |
+638 | pub(crate) fn rustls_der(
+    |               ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `reqwest` (lib) generated 30 warnings
+warning: unexpected `cfg` condition value: `trueos`
+  --> network-foundation/src/route_error.rs:58:23
+   |
+58 |             #[cfg(not(target_os = "trueos"))]
+   |                       ^^^^^^^^^^^^--------
+   |                                   |
+   |                                   help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: `codex-network-foundation` (lib) generated 1 warning
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/starlark-0.14.2-trueos/src/read_line.rs:21:39
+   |
+21 | #[cfg(not(any(target_arch = "wasm32", target_os = "trueos")))]
+   |                                       ^^^^^^^^^^^^--------
+   |                                                   |
+   |                                                   help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: requested on the command line with `-W unexpected-cfgs`
+
+warning: unexpected `cfg` condition value: `trueos`
+  --> /home/t4ce/Repos/TRUEOS-Blueprints/vendor/starlark-0.14.2-trueos/src/read_line.rs:73:35
+   |
+73 | #[cfg(any(target_arch = "wasm32", target_os = "trueos"))]
+   |                                   ^^^^^^^^^^^^--------
+   |                                               |
+   |                                               help: there is a expected value with a similar name: `"teeos"`
+   |
+   = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: `starlark` (lib) generated 2 warnings
+   Compiling codex-transport v0.0.0 (/home/t4ce/Repos/codex/codex-rs/transport)
+warning: unexpected `cfg` condition value: `trueos`
+   --> transport/src/http/client_builder.rs:372:23
+    |
+372 |             #[cfg(not(target_os = "trueos"))]
+    |                       ^^^^^^^^^^^^--------
+    |                                   |
+    |                                   help: there is a expected value with a similar name: `"teeos"`
+    |
+    = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `trueos`
+ --> transport/src/http/route_aware_tls_fallback_tests.rs:1:12
+  |
+1 | #![cfg(not(target_os = "trueos"))]
+  |            ^^^^^^^^^^^^--------
+  |                        |
+  |                        help: there is a expected value with a similar name: `"teeos"`
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `helenos`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `qurt`, `redox`, `rtems`, `solaris`, and `solid_asp3` and 14 more
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: `codex-transport` (lib test) generated 2 warnings
+warning: `codex-network-foundation` (lib test) generated 1 warning (1 duplicate)
+warning: `codex-transport` (lib) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.59s
+     Running unittests src/lib.rs (target/debug/deps/codex_network_foundation-ab09568da534a6fc)
+
+running 6 tests
+test network_policy::tests::invalidation_revokes_existing_permits_and_rejects_stale_publication ... ok
+test network_policy::tests::load_failure_recovers_current_account_but_cannot_revive_previous_account ... ok
+test network_policy::tests::restricted_policy_matches_exact_secure_hosts ... ok
+test network_policy::tests::unsupported_sdk_work_is_denied_and_running_work_is_cancelled ... ok
+test retry_after::tests::delta_seconds_count_down_to_zero ... ok
+test retry_after::tests::http_dates_and_invalid_advice ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/preinstalled.rs (target/debug/deps/preinstalled-cfd64c607dbe73d5)
+
+running 1 test
+test ensure_provider_preserves_preinstalled_provider ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/provider.rs (target/debug/deps/provider-4ac5e82a63c570b6)
+
+running 1 test
+test ensure_provider_installs_ecdsa_p256_sha256_support ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/codex_protocol-c0e9d02840f573ee)
+
+running 367 tests
+test account::tests::auth_plan_type_converts_to_account_plan_type ... ok
+test account::tests::business_plan_types_use_expected_wire_names ... ok
+test account::tests::plan_family_helpers_group_business_variants_with_existing_plans ... ok
+test account::tests::workspace_account_helper_includes_business_workspace_plans ... ok
+test agent_path::tests::invalid_names_and_paths_are_rejected ... ok
+test agent_path::tests::join_builds_child_paths ... ok
+test agent_path::tests::morpheus_has_expected_name ... ok
+test agent_path::tests::resolve_supports_relative_and_absolute_references ... ok
+test agent_path::tests::root_has_expected_name ... ok
+test approvals::tests::guardian_assessment_action_deserializes_command_shape ... ok
+test approvals::tests::guardian_assessment_action_round_trips_execve_shape ... ok
+test auth::tests::plan_type_deserializes_raw_aliases ... ok
+test config_types::tests::apply_mask_can_clear_optional_fields ... ok
+test capabilities::tests::environment_capability_root_accepts_foreign_file_uri ... ok
+test config_types::tests::approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent ... ok
+test config_types::tests::mode_kind_deserializes_alias_values_to_default ... ok
+test config_types::tests::profile_v2_name_rejects_paths_and_empty_names ... ok
+test config_types::tests::tui_visible_collaboration_modes_match_mode_kind_visibility ... ok
+test config_types::tests::web_search_location_merge_prefers_overlay_values ... ok
+test config_types::tests::web_search_mode_restrictions_never_expand_either_mode ... ok
+test config_types::tests::web_search_tool_config_merge_prefers_overlay_values ... ok
+test error::tests::retry_delay_distinguishes_server_advice_backoff_and_terminal_errors ... ok
+test error::tests::retryability_preserves_error_details_distinctions ... ok
+test error::tests::codex_err_debug_preserves_legacy_shape ... ok
+test error::tests::sandbox_denied_reports_both_streams_when_available ... ok
+test error::tests::sandbox_denied_reports_exit_code_when_no_output_available ... ok
+test error::tests::sandbox_denied_reports_stdout_when_no_stderr ... ok
+test error::tests::sandbox_denied_uses_aggregated_output_when_stderr_empty ... ok
+test error::tests::server_overloaded_maps_to_protocol ... ok
+test error::tests::unexpected_status_includes_cf_ray_and_request_id ... ok
+test error::tests::to_error_event_handles_response_stream_failed ... ok
+test error::tests::unexpected_status_includes_identity_auth_details ... ok
+test error::tests::unexpected_status_non_html_is_unchanged ... ok
+test error::tests::unexpected_status_prefers_error_message_when_present ... ok
+test error::tests::unexpected_status_truncates_long_body_with_ellipsis ... ok
+test error::tests::unexpected_status_uses_user_message_and_preserves_response_context ... ok
+test error::tests::usage_limit_reached_error_formats_business_plan_without_reset ... ok
+test error::tests::usage_limit_reached_error_formats_default_for_other_plans ... ok
+test error::tests::usage_limit_reached_error_formats_default_when_none ... ok
+test error::tests::usage_limit_reached_error_formats_enterprise_cbp_usage_based_plan ... ok
+test error::tests::usage_limit_reached_error_formats_free_plan ... ok
+test error::tests::usage_limit_reached_error_formats_go_plan ... ok
+test error::tests::usage_limit_reached_error_formats_plus_plan ... ok
+test error::tests::usage_limit_reached_error_formats_rate_limit_reached_types ... ok
+test error::tests::usage_limit_reached_error_formats_self_serve_business_prolite_plan ... ok
+test error::tests::usage_limit_reached_error_formats_pro_plan_with_reset ... ok
+test error::tests::usage_limit_reached_error_formats_self_serve_business_usage_based_plan ... ok
+test error::tests::usage_limit_reached_error_formats_team_plan ... ok
+test error::tests::usage_limit_reached_error_hides_upsell_for_non_codex_limit_name ... ok
+test error::tests::usage_limit_reached_includes_days_hours_minutes ... ok
+test error::tests::usage_limit_reached_includes_hours_and_minutes ... ok
+test error::tests::usage_limit_reached_includes_minutes_when_available ... ok
+test error::tests::usage_limit_reached_less_than_minute ... ok
+test error::tests::usage_limit_reached_with_promo_message ... ok
+test exec_output::tests::test_cp1251_shell_output ... ok
+test exec_output::tests::test_cp866_shell_output ... ok
+test exec_output::tests::test_invalid_bytes_still_fall_back_to_lossy ... ok
+test exec_output::tests::test_mixed_ascii_and_legacy_encoding ... ok
+test exec_output::tests::test_pure_latin1_shell_output ... ok
+test exec_output::tests::test_utf8_shell_output ... ok
+test exec_output::tests::test_smart_decoding_improves_over_lossy_utf8 ... ok
+test exec_output::tests::test_windows_1252_smart_decoding ... ok
+test items::tests::hook_prompt_parses_legacy_single_hook_run_id ... ok
+test items::tests::plugin_relative_paths_use_safe_wire_shape ... ok
+test items::tests::hook_prompt_roundtrips_multiple_fragments ... ok
+test items::tests::sleep_extension_item_preserves_type_and_kind ... ok
+test items::tests::user_message_item_extracts_audio_attachments ... ok
+test local_media::tests::rejects_oversized_local_media_without_reading_it ... ok
+test local_media::tests::rejects_invalid_local_media_without_changing_user_input ... ok
+test local_media::tests::snapshots_local_audio_user_input_with_supported_mime_types ... ok
+test mcp::tests::client_mcp_extensions_for_mcp_servers_excludes_client_only_extensions ... ok
+test mcp::tests::node_repl_backed_tool_recognizes_namespaces_and_legacy_names ... ok
+test mcp::tests::resource_size_deserializes_without_narrowing ... ok
+test models::configuration_update::tests::configuration_update_preserves_model_defined_effort ... ok
+test models::configuration_update::tests::configuration_update_round_trips_without_message_fields ... ok
+test local_media::tests::snapshots_local_image_user_input_with_requested_detail ... ok
+test models::executed_tool_calls::tests::inventory_loss_still_clears_completeness ... ok
+test models::executed_tool_calls::tests::message_budget_drops_only_the_sources_needed_to_fit ... ok
+test models::executed_tool_calls::tests::message_budget_preserves_call_inventory_when_arguments_are_truncated ... ok
+test models::executed_tool_calls::tests::message_budget_keeps_smaller_resource_evidence_when_larger_evidence_must_be_shed ... ok
+test models::executed_tool_calls::tests::metadata_byte_count_matches_serialized_fields ... ok
+test models::executed_tool_calls::tests::model_arguments_cannot_forge_executed_tool_call_truncation ... ok
+test models::executed_tool_calls::tests::message_budget_removes_generic_fields_before_resources_in_the_same_output ... ok
+test models::executed_tool_calls::tests::result_metadata_comparison_tracks_raw_values_and_call_bindings ... ok
+test models::executed_tool_calls::tests::tool_call_completeness_is_host_only_and_fail_closed ... ok
+test models::executed_tool_calls::tests::tool_result_metadata_is_host_only_and_redacted_without_a_per_result_limit ... ok
+test models::executed_tool_calls::tests::tool_result_source_snapshots_replace_atomically ... ok
+test models::executed_tool_calls::tests::wire_budget_helpers_preserve_resource_evidence_markers_and_small_values ... ok
+test models::item_metadata::tests::content_kinds_round_trip_without_restricting_future_values ... ok
+test models::item_metadata::tests::malformed_content_kinds_do_not_prevent_loading_response_item ... ok
+test models::tests::additional_permission_profile_is_empty_when_all_fields_are_none ... ok
+test models::tests::additional_permission_profile_is_not_empty_when_field_is_present_but_nested_empty ... ok
+test models::tests::base_instructions_preserve_provenance_and_accept_legacy_rollouts ... ok
+test models::tests::convert_mcp_audio_content_builds_data_urls_and_preserves_existing_data_urls ... ok
+test models::tests::convert_mcp_content_to_items_builds_data_urls_when_missing_prefix ... ok
+test models::tests::convert_mcp_content_to_items_converts_text_without_media ... ok
+test models::tests::convert_mcp_content_to_items_preserves_data_urls ... ok
+test models::tests::converts_unstructured_mcp_content_to_items ... ok
+test models::tests::deserializes_array_payload_into_items ... ok
+test models::tests::deserializes_compaction_alias ... ok
+test models::tests::deserializes_compaction_trigger_without_payload ... ok
+test models::tests::deserializes_context_compaction ... ok
+test models::tests::deserializes_encrypted_array_payload_into_items ... ok
+test models::tests::deserializes_legacy_ghost_snapshot_as_other ... ok
+test models::tests::disabled_permission_profile_ignores_runtime_network_policy ... ok
+test models::tests::file_image_user_input_serializes_file_id ... ok
+test models::tests::file_system_permissions_rejects_zero_glob_scan_depth ... ok
+test models::tests::file_system_permissions_with_glob_scan_depth_uses_canonical_json ... ok
+test models::tests::format_allow_prefixes_limits_output ... ok
+test models::tests::function_call_deserializes_optional_namespace ... ok
+test models::tests::function_call_output_body_to_text_returns_plain_text_content ... ok
+test models::tests::function_call_output_body_to_text_uses_content_item_fallback ... ok
+test models::tests::function_call_output_content_items_to_text_ignores_blank_text_and_media ... ok
+test models::tests::function_call_output_content_items_to_text_joins_text_segments ... ok
+test models::tests::function_call_preserves_empty_encrypted_function_args ... ok
+test models::tests::image_detail_roundtrips_all_wire_values ... ok
+test models::tests::image_user_input_preserves_requested_detail ... ok
+test models::tests::local_image_non_image_adds_placeholder ... ok
+test models::tests::local_image_open_tag_preserves_path ... ok
+test models::tests::local_image_read_error_adds_placeholder ... ok
+test models::tests::local_image_unsupported_image_format_adds_placeholder ... ok
+test models::tests::local_image_user_input_preserves_requested_detail ... ok
+test models::tests::mixed_remote_and_local_audio_share_label_sequence ... ok
+test models::tests::mixed_remote_and_local_images_share_label_sequence ... ok
+test models::tests::named_unpaired_function_call_output_round_trips_without_call_id ... ok
+test models::tests::paired_function_call_output_preserves_existing_wire_shape ... ok
+test models::tests::permission_profile_deserializes_legacy_rollout_shape ... ok
+test models::tests::permission_profile_from_runtime_permissions_preserves_external_sandbox ... ok
+test models::tests::permission_profile_from_runtime_permissions_preserves_unrestricted_managed_network ... ok
+test models::tests::permission_profile_presets_match_legacy_defaults ... ok
+test models::tests::permission_profile_round_trip_preserves_ambiguous_native_denies ... ok
+test models::tests::permission_profile_round_trip_preserves_disabled_sandbox ... ok
+test models::tests::permission_profile_round_trip_preserves_external_sandbox ... ok
+test models::tests::permission_profile_round_trip_preserves_glob_scan_max_depth ... ok
+test models::tests::plaintext_agent_message_content_rejects_mixed_encrypted_content ... ok
+test models::tests::preserves_existing_image_data_urls ... ok
+test models::tests::preserves_original_detail_metadata_on_mcp_images ... ok
+test models::tests::preserves_standard_detail_metadata_on_mcp_images ... ok
+test models::tests::preserves_structured_mcp_content ... ok
+test models::tests::render_command_prefix_list_limits_output_to_max_prefixes ... ok
+test models::tests::render_command_prefix_list_sorts_by_len_then_total_len_then_alphabetical ... ok
+test models::tests::replaces_unreadable_local_audio_with_placeholder ... ok
+test models::tests::replaces_unsupported_local_audio_format_with_placeholder ... ok
+test models::tests::response_input_message_conversion_preserves_phase ... ok
+test models::tests::response_item_id_getter_and_setter ... ok
+test models::tests::response_item_parses_image_generation_call ... ok
+test models::tests::response_item_parses_image_generation_call_without_revised_prompt ... ok
+test models::tests::response_item_passthrough_metadata_round_trips_and_stamps_turn_ids ... ok
+test models::tests::roundtrips_web_search_call_actions ... ok
+test models::tests::sandbox_permissions_helpers_match_documented_semantics ... ok
+test models::tests::serializes_audio_outputs_as_array ... ok
+test models::tests::serializes_audio_user_input_without_tags ... ok
+test models::tests::serializes_compaction_trigger_without_payload ... ok
+test models::tests::serializes_custom_tool_image_outputs_as_array ... ok
+test models::tests::serializes_encrypted_function_output_content_as_array ... ok
+test models::tests::serializes_failure_as_string ... ok
+test models::tests::serializes_image_outputs_as_array ... ok
+test models::tests::serializes_image_user_input_without_tags ... ok
+test models::tests::serializes_local_audio_user_input_with_label_and_data_url ... ok
+test models::tests::serializes_success_as_plain_string ... ok
+test models::tests::tool_search_call_roundtrips ... ok
+test models::tests::tool_search_output_roundtrips ... ok
+test models::tests::tool_search_server_items_allow_null_call_id ... ok
+test models::tests::user_input_image_indices_survive_content_expansion ... ok
+test openai_models::access_programs::tests::selects_only_advertised_programs_with_blue_preferred ... ok
+test openai_models::guardian::tests::guardian_policy_is_optional_and_tolerates_future_config ... ok
+test openai_models::guardian::tests::guardian_policy_overrides_the_legacy_cua_bit_only_when_present ... ok
+test openai_models::reasoning_effort::tests::preserves_native_efforts_and_translates_persistent_mode ... ok
+test openai_models::reasoning_effort::tests::resolves_ultra_using_model_override_and_supported_fallbacks ... ok
+test openai_models::tests::approval_messages_preserve_missing_and_empty_values ... ok
+test openai_models::tests::auto_review_messages_preserve_missing_and_empty_values ... ok
+test openai_models::tests::collaboration_mode_messages_preserve_missing_and_empty_values ... ok
+test openai_models::tests::legacy_shell_model_metadata_deserializes_as_unified_exec ... ok
+test openai_models::tests::model_access_programs_preserve_explicit_selection_availability ... ok
+test openai_models::tests::model_context_window_limits_preserve_their_distinct_meanings ... ok
+test openai_models::tests::model_info_defaults_availability_nux_to_none_when_omitted ... ok
+test openai_models::tests::model_info_deserializes_known_tool_mode ... ok
+test openai_models::tests::model_info_deserializes_multi_agent_reasoning_effort ... ok
+test openai_models::tests::model_info_deserializes_optional_upgrade_retirement_at ... ok
+test openai_models::tests::model_info_preserves_explicit_apps_guidance_opt_out ... ok
+test openai_models::tests::model_info_treats_unknown_multi_agent_version_as_omitted ... ok
+test openai_models::tests::model_info_treats_unknown_tool_mode_as_omitted ... ok
+test openai_models::tests::model_messages_deserialize_without_optional_sections ... ok
+test openai_models::tests::model_preset_preserves_availability_nux ... ok
+test openai_models::tests::model_preset_supports_fast_mode_from_service_tiers ... ok
+test openai_models::tests::models_response_prefers_template_and_preserves_message_siblings ... ok
+test openai_models::tests::models_response_promotes_legacy_base_instructions ... ok
+test openai_models::tests::models_response_rejects_model_without_instruction_source ... ok
+test openai_models::tests::models_response_serializes_literal_legacy_base_instructions ... ok
+test openai_models::tests::multi_agent_messages_preserve_missing_and_empty_values ... ok
+test openai_models::tests::permission_messages_preserve_missing_and_empty_values ... ok
+test openai_models::tests::reasoning_effort_accepts_known_and_custom_values ... ok
+test openai_models::tests::reasoning_effort_json_schema_is_an_open_string ... ok
+test openai_models::tests::reasoning_effort_rejects_empty_values ... ok
+test openai_models::tests::resolved_context_window_falls_back_to_max_context_window ... ok
+test openai_models::tests::resolved_context_window_prefers_context_window ... ok
+test openai_models::tests::send_user_message_async_description_preserves_missing_null_and_empty_values ... ok
+test openai_models::tests::service_tier_for_request_filters_unsupported_tiers ... ok
+test openai_models::tests::service_tier_for_request_omits_explicit_default_tier ... ok
+test openai_models::tests::service_tier_for_request_preserves_flex_without_catalog_support ... ok
+test openai_models::tests::spawn_agent_messages_preserve_sparse_and_empty_values ... ok
+test permission_profile_intersection::tests::canonical_grants_cannot_escape_through_readable_or_writable_symlinks ... ok
+test permission_profile_intersection::tests::effective_workspace_intersection_preserves_network_metadata_and_temp ... ok
+test permission_profile_intersection::tests::exact_denies_nested_read_carveouts_and_reopened_writes_are_preserved ... ok
+test permission_profile_intersection::tests::identical_unrestricted_and_disabled_profiles_keep_existing_enforcement ... ok
+test permission_profile_intersection::tests::temporary_directory_restrictions_fail_closed ... ok
+test permission_profile_intersection::tests::unsupported_unresolved_and_optional_policy_shapes_fail_closed ... ok
+test permission_profile_snapshot::tests::executor_profile_root_case_changes_update_snapshot ... ok
+test permissions::target::approved_materialization_tests::approved_command_declines_root_or_unresolvable_denials ... ok
+test permissions::target::approved_materialization_tests::approved_command_discards_other_volume_grants_before_materialization ... ok
+test permissions::target::approved_materialization_tests::approved_command_grants_root_metadata_unless_explicitly_denied ... ok
+test permissions::target::approved_materialization_tests::linux_root_metadata_writes_inherit_the_root_without_reopening_other_paths ... ok
+test permissions::target::tests::full_disk_read_policy_uses_the_executor_convention ... ok
+test permissions::target::tests::malformed_or_unresolvable_denials_fail_closed ... ok
+test permissions::target::tests::managed_denials_preserve_native_metadata_read_rejections ... ok
+test permissions::target::tests::managed_denials_reject_concrete_read_and_write_grants ... ok
+test permissions::target::tests::materializing_legacy_home_relative_workspace_denials_removes_all_grants ... ok
+test permissions::target::tests::read_denials_use_target_paths_and_native_glob_semantics ... ok
+test permissions::target::tests::read_globs_reject_metacharacters_in_home_and_cwd_facts ... ok
+test permissions::target::tests::remote_workspace_write_keeps_metadata_protected ... ok
+test permissions::target::tests::slash_tmp_denials_follow_the_executor_convention ... ok
+test permissions::target::tests::workspace_globs_fail_closed_on_literal_root_metacharacters_on_every_host ... ok
+test permissions::tests::duplicate_root_deny_prevents_full_disk_write_access ... ok
+test permissions::tests::effective_runtime_roots_preserve_symlinked_paths ... ok
+test permissions::tests::exact_path_and_descendants_are_denied ... ok
+test permissions::tests::file_system_access_mode_orders_by_conflict_precedence ... ok
+test permissions::tests::filesystem_policy_blocks_protected_metadata_path_writes_by_default ... ok
+test permissions::tests::glob_patterns_deny_matching_paths ... ok
+test permissions::tests::glob_patterns_do_not_cross_path_separators ... ok
+test permissions::tests::globstar_patterns_deny_root_and_nested_matches ... ok
+test permissions::tests::legacy_bridge_preserves_explicit_deny_entries ... ok
+test permissions::tests::legacy_current_working_directory_special_path_deserializes_as_project_roots ... ok
+test permissions::tests::legacy_projection_runtime_enforcement_ignores_entry_order ... ok
+test permissions::tests::legacy_workspace_write_projection_accepts_relative_cwd ... ok
+test permissions::tests::legacy_workspace_write_projection_preserves_symbolic_project_root ... ok
+test permissions::tests::literal_patterns_and_globs_are_denied ... ok
+test permissions::tests::materialize_project_roots_with_workspace_roots_expands_exact_and_glob_entries ... ok
+test permissions::tests::missing_symbolic_metadata_carveouts_need_direct_runtime_enforcement ... ok
+test permissions::tests::native_ambiguous_permission_paths_keep_deny_semantics ... ok
+test permissions::tests::native_read_deny_matching_uses_uri_matcher_semantics ... ok
+test permissions::tests::permission_paths_preserve_native_strings_across_path_conventions ... ok
+test permissions::tests::preserving_deny_entries_keeps_unrestricted_policy_enforceable ... ok
+test models::executed_tool_calls::tests::result_metadata_shedding_keeps_smaller_results_within_one_output ... ok
+test permissions::tests::project_roots_special_path_preserves_symlinked_root ... ok
+test permissions::tests::resolve_access_for_local_path_with_cwd_uses_most_specific_entry ... ok
+test permissions::tests::root_deny_does_not_materialize_as_unreadable_root ... ok
+test permissions::tests::root_write_with_read_only_child_is_not_full_disk_write ... ok
+test permissions::tests::same_specificity_write_override_keeps_full_disk_write_access ... ok
+test permissions::tests::split_only_nested_carveouts_need_direct_runtime_enforcement ... ok
+test permissions::tests::tmpdir_special_path_preserves_symlinked_tmpdir ... ok
+test permissions::tests::unclosed_character_classes_match_literal_brackets ... ok
+test permissions::tests::unknown_special_paths_are_ignored_by_legacy_bridge ... ok
+test permissions::tests::uri_deny_and_metadata_matcher_use_executor_paths ... ok
+test permissions::tests::uri_deny_globs_use_executor_home ... ok
+test permissions::tests::uri_matcher_fails_closed_without_executor_roots_or_lexical_paths ... ok
+test permissions::tests::uri_matcher_resolves_selected_executor_paths ... ok
+test permissions::tests::uri_matcher_uses_validated_native_components_for_precedence ... ok
+test permissions::tests::with_additional_legacy_workspace_writable_roots_protects_metadata ... ok
+test permissions::tests::with_additional_readable_roots_skips_existing_effective_access ... ok
+test permissions::tests::with_additional_writable_roots_adds_new_root ... ok
+test permissions::tests::with_additional_writable_roots_skips_existing_effective_access ... ok
+test permissions::tests::writable_root_presence_matches_materialized_roots ... ok
+test permissions::tests::writable_roots_preserve_explicit_symlinked_carveouts_that_alias_root ... ok
+test permissions::tests::writable_roots_preserve_explicit_symlinked_carveouts_that_escape_root ... ok
+test permissions::tests::writable_roots_preserve_explicit_symlinked_carveouts_under_symlinked_roots ... ok
+test permissions::tests::writable_roots_preserve_symlinked_protected_subpaths ... ok
+test permissions::tests::writable_roots_proactively_protect_missing_dot_codex ... ok
+test permissions::tests::writable_roots_protect_gitdir_target_outside_alias_root ... ok
+test permissions::tests::writable_roots_skip_default_metadata_when_explicit_user_rule_exists ... ok
+test protocol::conversation_start_params_tests::realtime_start_debug_redacts_text_and_transport ... ok
+test protocol::tests::active_turn_not_steerable_error_does_not_affect_turn_status ... ok
+test protocol::tests::audio_only_user_message_has_placeholder_preview ... ok
+test protocol::tests::command_execution_item_lifecycle_emits_legacy_exec_events ... ok
+test protocol::tests::deserialize_legacy_session_configured_event_uses_sandbox_policy ... ok
+test protocol::tests::dynamic_tool_call_item_lifecycle_emits_legacy_dynamic_tool_events ... ok
+test protocol::tests::external_sandbox_reports_full_access_flags ... ok
+test protocol::tests::feature_thread_source_serializes_as_its_app_owned_label ... ok
+test protocol::tests::file_only_user_message_has_placeholder_preview ... ok
+test protocol::tests::file_system_policy_rejects_legacy_bridge_for_non_workspace_writes ... ok
+test protocol::tests::generic_error_affects_turn_status ... ok
+test protocol::tests::granular_approval_config_defaults_missing_optional_flags_to_false ... ok
+test protocol::tests::granular_approval_config_mcp_elicitation_flag_is_field_driven ... ok
+test protocol::tests::granular_approval_config_request_permissions_flag_is_field_driven ... ok
+test protocol::tests::granular_approval_config_skill_approval_flag_is_field_driven ... ok
+test protocol::tests::hook_builtin_classification_stays_internal ... ok
+test protocol::tests::inter_agent_communication_response_input_item_preserves_commentary_phase ... ok
+test protocol::tests::item_completed_event_defaults_missing_completed_at_ms ... ok
+test protocol::tests::item_completed_event_from_file_change_emits_patch_end_event ... ok
+test protocol::tests::item_completed_event_from_image_generation_emits_end_event ... ok
+test protocol::tests::item_completed_event_from_mcp_tool_call_emits_end_event ... ok
+test protocol::tests::item_started_event_from_file_change_emits_patch_begin_event ... ok
+test protocol::tests::item_started_event_from_image_generation_emits_begin_event ... ok
+test protocol::tests::item_started_event_from_mcp_tool_call_emits_begin_event ... ok
+test protocol::tests::item_started_event_from_non_web_search_emits_no_legacy_events ... ok
+test protocol::tests::item_started_event_from_web_search_emits_begin_event ... ok
+test protocol::tests::item_started_event_requires_started_at_ms ... ok
+test protocol::tests::legacy_sandbox_policy_semantics_survive_split_bridge ... ok
+test protocol::tests::misalignment_explanation_and_steer_are_never_serialized_into_error_events ... ok
+test protocol::tests::old_turn_started_records_have_no_root_attribution ... ok
+test protocol::tests::queued_encrypted_inter_agent_communication_renders_message_envelope ... ok
+test protocol::tests::read_only_reports_network_access_flags ... ok
+test protocol::tests::realtime_conversation_started_event_uses_realtime_session_id ... ok
+test protocol::tests::realtime_voice_list_is_stable ... ok
+test protocol::tests::restricted_file_system_policy_derives_effective_paths ... ok
+test protocol::tests::restricted_file_system_policy_reports_full_access_from_root_entries ... ok
+test protocol::tests::restricted_file_system_policy_treats_read_entries_as_read_only_subpaths ... ok
+test protocol::tests::restricted_file_system_policy_treats_root_with_carveouts_as_scoped_access ... ok
+test protocol::tests::review_decision_denied_round_trip ... ok
+test protocol::tests::review_mode_events_deserialize_legacy_payloads ... ok
+test protocol::tests::review_mode_item_completion_emits_legacy_events_with_ids ... ok
+test protocol::tests::rollback_failed_error_does_not_affect_turn_status ... ok
+test protocol::tests::serialize_event ... ok
+test protocol::tests::serialize_mcp_startup_complete_event ... ok
+test protocol::tests::serialize_mcp_startup_update_event ... ok
+test protocol::tests::session_meta_defaults_legacy_history_mode ... ok
+test protocol::tests::session_meta_normalizes_legacy_dynamic_tools ... ok
+test protocol::tests::session_source_from_startup_arg_maps_known_values ... ok
+test protocol::tests::session_source_from_startup_arg_normalizes_custom_values ... ok
+test protocol::tests::session_source_matches_product_restriction ... ok
+test protocol::tests::session_source_restriction_product_defaults_non_subagent_sources_to_codex ... ok
+test protocol::tests::session_source_restriction_product_does_not_guess_subagent_products ... ok
+test protocol::tests::session_source_restriction_product_maps_custom_sources_to_products ... ok
+test protocol::tests::token_usage_info_new_or_append_preserves_context_window_when_not_provided ... ok
+test protocol::tests::token_usage_info_new_or_append_updates_context_window_when_provided ... ok
+test protocol::tests::turn_aborted_event_deserializes_without_turn_id ... ok
+test protocol::tests::turn_context_item_deserializes_legacy_on_failure_as_on_request ... ok
+test protocol::tests::turn_context_item_deserializes_without_summary ... ok
+test protocol::tests::turn_context_item_serializes_split_policy_and_summary ... ok
+test protocol::tests::user_input_text_serializes_empty_text_elements ... ok
+test protocol::tests::user_message_event_deserializes_without_image_detail_fields ... ok
+test protocol::tests::user_message_event_serializes_empty_metadata_vectors ... ok
+test protocol::tests::user_message_item_legacy_event_preserves_attachments ... ok
+test protocol::tests::vec_u8_as_base64_serialization_and_deserialization ... ok
+test request_user_input::tests::request_user_input_event_defaults_legacy_missing_is_blocking_to_true ... ok
+test response_item_id::tests::accepts_server_ids_verbatim ... ok
+test response_item_id::tests::creates_prefixed_ids_with_explicit_suffix ... ok
+test response_item_id::tests::creates_prefixed_uuid_v7_ids ... ok
+test response_item_id::tests::deserializes_arbitrary_ids_as_strings ... ok
+test response_item_id::tests::recognizes_non_empty_prefix_and_suffix ... ok
+test sanitized_git_url::tests::deserialization_sanitizes_credentials ... ok
+test sanitized_git_url::tests::git_info_deserialization_accepts_missing_repository_url ... ok
+test sanitized_git_url::tests::git_info_deserialization_accepts_null_repository_url ... ok
+test sanitized_git_url::tests::git_info_deserialization_discards_malformed_legacy_remote ... ok
+test sanitized_git_url::tests::git_info_deserialization_sanitizes_legacy_remote_credentials ... ok
+test sanitized_git_url::tests::preserves_git_ssh_username ... ok
+test sanitized_git_url::tests::preserves_https_remote_without_credentials ... ok
+test sanitized_git_url::tests::preserves_opaque_scp_style_ipv6_paths ... ok
+test sanitized_git_url::tests::preserves_percent_encoded_path_delimiters ... ok
+test sanitized_git_url::tests::rejects_malformed_urls_without_exposing_input ... ok
+test sanitized_git_url::tests::rejects_remote_helper_command_payloads ... ok
+test sanitized_git_url::tests::removes_file_url_credentials ... ok
+test sanitized_git_url::tests::removes_https_username_and_password ... ok
+test sanitized_git_url::tests::removes_https_username_without_password ... ok
+test sanitized_git_url::tests::removes_other_ssh_usernames ... ok
+test sanitized_git_url::tests::removes_percent_encoded_credentials ... ok
+test sanitized_git_url::tests::removes_ssh_password_for_git_username ... ok
+test sanitized_git_url::tests::sanitizes_deeply_nested_remote_helpers_without_recursion ... ok
+test sanitized_git_url::tests::sanitizes_remote_helper_urls ... ok
+test sanitized_git_url::tests::sanitizes_scp_style_ipv6_remotes_with_usernames ... ok
+test session_id::tests::converts_to_and_from_thread_id ... ok
+test session_id::tests::test_session_id_default_is_not_zeroes ... ok
+test shell_environment::non_windows_tests::core_inherit_preserves_non_windows_core_vars_case_insensitively ... ok
+test shell_environment::tests::command_scrubber_removes_names_from_real_child_environment ... ok
+test shell_environment::tests::non_inheritable_environment_is_removed_after_policy_overrides ... ok
+test shell_environment::tests::tool_call_id_replaces_platform_equivalent_names ... ok
+test thread_id::tests::test_thread_id_default_is_not_zeroes ... ok
+test permissions::tests::preserving_writable_roots_cannot_be_rebound_during_projection ... ok
+
+test result: ok. 367 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+     Running unittests src/lib.rs (target/debug/deps/codex_transport-e672dc758c749a1a)
+
+running 315 tests
+test api::api_bridge::tests::map_api_error_copies_rate_limit_reached_type_to_usage_limit_snapshot ... ok
+test api::api_bridge::tests::http_retry_deadline_survives_mapping_and_respects_terminal_errors ... ok
+test api::api_bridge::tests::map_api_error_distinguishes_capacity_from_slow_down ... ok
+test api::api_bridge::tests::map_api_error_distinguishes_http_quota_errors_from_rate_limits ... ok
+test api::api_bridge::tests::map_api_error_does_not_fallback_limit_name_to_limit_id ... ok
+test api::api_bridge::tests::map_api_error_extracts_identity_auth_details_from_headers ... ok
+test api::api_bridge::tests::map_api_error_keeps_other_400_errors_generic ... ok
+test api::api_bridge::tests::map_api_error_ignores_unparseable_rate_limit_reached_type_headers ... ok
+test api::api_bridge::tests::map_api_error_maps_cloudflare_blocked_response_to_user_message ... ok
+test api::api_bridge::tests::map_api_error_maps_cyber_policy_from_400_body ... ok
+test api::api_bridge::tests::map_api_error_maps_misalignment_policy_violation_from_400_body ... ok
+test api::api_bridge::tests::map_api_error_maps_misalignment_policy_violation_from_403_body ... ok
+test api::api_bridge::tests::map_api_error_maps_server_overloaded ... ok
+test api::api_bridge::tests::map_api_error_maps_http_and_wrapped_websocket_typed_errors ... ok
+test api::api_bridge::tests::map_api_error_maps_usage_limit_limit_name_header ... ok
+test api::api_bridge::tests::map_api_error_maps_wrapped_websocket_cyber_policy_from_400_body ... ok
+test api::api_bridge::tests::map_api_error_preserves_content_filter_retry_and_public_error ... ok
+test api::api_bridge::tests::map_api_error_preserves_misalignment_details_from_403_body ... ok
+test api::api_bridge::tests::map_api_error_preserves_misalignment_details_from_wrapped_websocket_error ... ok
+test api::api_bridge::tests::map_api_error_preserves_retry_delay ... ok
+test api::api_bridge::tests::map_api_error_preserves_optional_usage_limit_window ... ok
+test api::api_bridge::tests::map_api_error_preserves_typed_errors ... ok
+test api::api_bridge::tests::map_api_error_uses_cyber_policy_fallback_for_missing_message ... ok
+test api::endpoint::images::tests::generate_posts_typed_request_and_parses_image_response ... ok
+test api::endpoint::images::tests::edit_posts_typed_request_and_parses_image_response ... ok
+test api::endpoint::images::tests::image_response_requires_image_data ... ok
+test api::endpoint::images::tests::preserves_distinct_generation_ids_on_image_data ... ok
+test api::endpoint::memories::tests::path_is_memories_trace_summarize_for_wire_compatibility ... ok
+test api::endpoint::models::tests::appends_client_version_query ... ok
+test api::endpoint::memories::tests::summarize_input_posts_expected_payload_and_parses_output ... ok
+test api::endpoint::models::tests::catalog_request_url_rejects_relative_urls ... ok
+test api::endpoint::models::tests::catalog_request_url_preserves_routing_and_encodes_queries ... ok
+test api::endpoint::models::tests::list_models_includes_etag ... ok
+test api::endpoint::models::tests::parses_models_response ... ok
+test api::endpoint::realtime_call::tests::accepts_uuid_call_id_from_location ... ok
+test api::endpoint::realtime_call::tests::errors_when_location_is_missing ... ok
+test api::endpoint::realtime_call::tests::extracts_call_id_from_forwarded_backend_location ... ok
+test api::endpoint::realtime_call::tests::rejects_location_without_call_id ... ok
+test api::endpoint::realtime_call::tests::rejects_v2_session_call_before_sending_request ... ok
+test api::endpoint::realtime_call::tests::sends_api_session_call_as_multipart_body ... ok
+test api::endpoint::realtime_call::tests::sends_backend_frameless_session_call_to_realtime_calls ... ok
+test api::endpoint::realtime_call::tests::sends_backend_session_call_as_json_body ... ok
+test api::endpoint::realtime_call::tests::sends_frameless_session_call_to_live_without_legacy_query_params ... ok
+test api::endpoint::realtime_call::tests::sends_sdp_offer_as_raw_body ... ok
+test api::endpoint::realtime_call::tests::sends_session_call_with_avas_query_params ... ok
+test api::endpoint::realtime_websocket::methods::tests::active_transcript_retains_a_bounded_suffix ... ok
+test api::endpoint::models::tests::response_body_limit_survives_auth_retry_without_limiting_other_models_requests ... ok
+test api::endpoint::realtime_websocket::methods::tests::frameless_websocket_url_encodes_call_id_as_one_path_segment ... ok
+test api::endpoint::realtime_websocket::methods::tests::frameless_websocket_url_rejects_dot_only_call_ids ... ok
+test api::endpoint::realtime_websocket::methods::tests::frameless_websocket_url_rewrites_existing_realtime_path ... ok
+test api::endpoint::realtime_websocket::methods::tests::merge_request_headers_matches_http_precedence ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_audio_delta_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_conversation_item_added_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_conversation_item_done_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_handoff_requested_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_input_transcript_delta_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_output_transcript_delta_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_conversation_item_created_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_handoff_tool_call_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_input_audio_transcription_delta_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_item_done_output_text_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_noop_tool_call_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_output_audio_delta_defaults_audio_shape ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_output_audio_transcript_done_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_output_text_done_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_response_audio_delta_with_item_id ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_response_cancelled_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_response_created_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_response_done_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_realtime_v2_speech_started_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_session_updated_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_v1_input_audio_transcription_completed_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_v1_input_audio_transcription_delta_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_v1_input_transcript_turn_marked_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_v1_item_done_output_text_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_v1_output_audio_transcript_delta_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::parse_v1_output_audio_transcript_done_event ... ok
+test api::endpoint::realtime_websocket::methods::tests::realtime_v2_session_update_includes_background_agent_tool_and_handoff_output_item ... ok
+test api::endpoint::realtime_websocket::methods::tests::e2e_connect_and_exchange_events_against_mock_ws_server ... ok
+test api::endpoint::realtime_websocket::methods::tests::takes_only_transcript_after_last_handoff_once ... ok
+test api::endpoint::realtime_websocket::methods::tests::terminal_sideband_handshake_statuses_are_not_retryable ... ok
+test api::endpoint::realtime_websocket::methods::tests::transcript_state_survives_reconnect_and_reconciles_done ... ok
+test api::endpoint::realtime_websocket::methods::tests::transcription_mode_session_update_omits_output_audio_and_instructions ... ok
+test api::endpoint::realtime_websocket::methods::tests::send_does_not_block_while_next_event_waits_for_inbound_data ... ok
+test api::endpoint::realtime_websocket::methods::tests::webrtc_frameless_sideband_ignores_provider_base_url ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_handshake_error_preserves_http_status ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_termination_classification_preserves_protocol_behavior ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_for_call_id_joins_existing_realtime_session ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_from_http_base_defaults_to_ws_path ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_from_nested_v1_base_appends_realtime_path ... ok
+test api::endpoint::realtime_websocket::methods::tests::v1_transcription_mode_is_treated_as_conversational ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_from_v1_base_appends_realtime_path ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_from_ws_base_defaults_to_ws_path ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_omits_intent_for_realtime_v2_transcription_mode ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_preserves_existing_realtime_path_and_extra_query_params ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_v1_ignores_transcription_mode ... ok
+test api::endpoint::realtime_websocket::methods::tests::websocket_url_omits_intent_for_realtime_v2_conversational_mode ... ok
+test api::endpoint::realtime_websocket::methods::transcript_tests::completed_utterances_keep_repeated_speech_and_final_only_turns_distinct ... ok
+test api::endpoint::realtime_websocket::methods::transcript_tests::interleaved_transcripts_reconcile_across_reconnect_in_either_completion_order ... ok
+test api::endpoint::realtime_websocket::methods_common::tests::completed_handoff_only_prefixes_v1_payload_text ... ok
+test api::endpoint::realtime_websocket::methods_common::tests::context_append_channel_only_encodes_for_frameless_handoff_output ... ok
+test api::endpoint::realtime_websocket::methods_common::tests::frameless_session_update_encodes_explicit_delegation_ack_filler ... ok
+test api::endpoint::realtime_websocket::methods_common::tests::standalone_handoff_uses_session_context_for_frameless ... ok
+test api::endpoint::realtime_websocket::methods_frameless_bidi::tests::context_append_chunks_preserve_text_within_wire_limit ... ok
+test api::endpoint::realtime_websocket::methods_frameless_bidi::tests::session_json_encodes_role_bearing_initial_items ... ok
+test api::endpoint::realtime_websocket::methods_frameless_bidi::tests::session_json_omits_initial_items_when_empty ... ok
+test api::endpoint::realtime_websocket::protocol_frameless_bidi::tests::frameless_transcript_and_audio_events_reuse_existing_internal_events ... ok
+test api::endpoint::realtime_websocket::protocol_frameless_bidi::tests::legacy_and_frameless_delegations_decode_to_the_same_handoff ... ok
+test api::endpoint::responses_websocket::tests::direct_serialization_preserves_websocket_request_payload ... ok
+test api::endpoint::responses_websocket::tests::merge_request_headers_matches_http_precedence ... ok
+test api::endpoint::responses_websocket::tests::parse_wrapped_websocket_error_event_ignores_non_error_payloads ... ok
+test api::endpoint::responses_websocket::tests::parse_wrapped_websocket_error_event_maps_to_transport_http ... ok
+test api::endpoint::responses_websocket::tests::parse_wrapped_websocket_error_event_with_connection_limit_maps_retryable ... ok
+test api::endpoint::responses_websocket::tests::parse_wrapped_websocket_error_event_with_status_maps_invalid_request ... ok
+test api::endpoint::responses_websocket::tests::parse_wrapped_websocket_error_event_without_status_is_not_mapped ... ok
+test api::endpoint::responses_websocket::tests::websocket_config_enables_permessage_deflate ... ok
+test api::endpoint::responses_websocket::tests::websocket_safety_buffering_event_controls_visibility_when_header_disables_it ... ok
+test api::endpoint::responses_websocket::tests::websocket_safety_buffering_uses_event_before_header_fallback ... ok
+test api::endpoint::responses_websocket::tests::wrapped_websocket_retry_after_uses_http_header_validation ... ok
+test api::endpoint::responses_websocket::tests::wrapped_websocket_usage_limit_preserves_optional_window ... ok
+test api::endpoint::search::tests::search_posts_typed_request_and_parses_output ... ok
+test api::endpoint::search::tests::search_response_defaults_missing_results_for_older_endpoints ... ok
+test api::endpoint::search::tests::search_response_preserves_supported_empty_results ... ok
+test api::files::retry_tests::reopening_cannot_extend_the_shared_upload_deadline ... ok
+test api::endpoint::realtime_websocket::methods::tests::writer_policy_failure_reaches_realtime_events ... ok
+test api::files::retry_tests::retries_transient_upload_statuses_within_budget ... ok
+test api::files::retry_tests::server_retry_delays_accept_milliseconds_seconds_and_http_dates ... ok
+test api::files::retry_tests::reopens_after_a_stream_closure_and_sends_the_complete_body ... ok
+test api::files::tests::upload_hosted_app_context_and_finalizes_reservation ... ok
+test api::files::tests::upload_hosted_app_preserves_empty_finalization_for_older_servers ... ok
+test api::files::tests::upload_openai_file_reports_blob_response_diagnostics_without_sas ... ok
+test api::files::tests::upload_openai_file_returns_canonical_uri ... ok
+test api::files::tests::upload_openai_file_reuses_client_pool_across_uploads ... ok
+test api::provider::tests::detects_azure_responses_base_urls ... ok
+test api::rate_limits::tests::parse_all_rate_limits_includes_default_codex_snapshot ... ok
+test api::rate_limits::tests::parse_all_rate_limits_reads_all_limit_families ... ok
+test api::rate_limits::tests::parse_rate_limit_for_limit_defaults_to_codex_headers ... ok
+test api::rate_limits::tests::parse_rate_limit_for_limit_prefers_limit_name_header ... ok
+test api::rate_limits::tests::parse_rate_limit_for_limit_reads_secondary_headers ... ok
+test api::safety_buffering::tests::buffering_enabled_header_does_not_gate_the_faster_model_fallback ... ok
+test api::safety_buffering::tests::reads_treatment_from_http_headers ... ok
+test api::sse::responses::error_tests::flex_failure_with_retry_header_ends_stream_immediately ... ok
+test api::sse::responses::error_tests::rate_limit_plaintext_loses_to_valid_error_header ... ok
+test api::sse::responses::error_tests::retry_header_does_not_override_terminal_errors ... ok
+test api::sse::responses::error_tests::retry_header_survives_other_failed_responses ... ok
+test api::sse::responses::error_tests::streamed_retry_after_uses_http_header_validation ... ok
+test api::sse::responses::tests::content_policy_errors_without_type_preserve_their_classification ... ok
+test api::sse::responses::tests::context_window_error_is_fatal ... ok
+test api::sse::responses::tests::context_window_error_with_newline_is_fatal ... ok
+test api::sse::responses::tests::cyber_policy_error_is_fatal ... ok
+test api::sse::responses::tests::cyber_policy_error_uses_fallback_for_empty_message ... ok
+test api::sse::responses::tests::emits_completed_without_stream_end ... ok
+test api::sse::responses::tests::error_when_missing_completed ... ok
+test api::sse::responses::tests::failed_response_classification_uses_error_code ... ok
+test api::sse::responses::tests::malformed_failed_responses_use_stream_error ... ok
+test api::sse::responses::tests::malformed_misalignment_details_preserve_the_fatal_policy_error ... ok
+test api::sse::responses::tests::misalignment_policy_violation_error_is_fatal ... ok
+test api::sse::responses::tests::misalignment_policy_violation_preserves_public_continuation_details ... ok
+test api::sse::responses::tests::misalignment_policy_violation_uses_fallback_for_blank_message ... ok
+test api::sse::responses::tests::parses_cache_write_token_usage ... ok
+test api::sse::responses::tests::parses_items_and_completed ... ok
+test api::sse::responses::tests::parses_reasoning_summary_done ... ok
+test api::sse::responses::tests::parses_tool_call_input_deltas ... ok
+test api::sse::responses::tests::parses_tool_search_call_items ... ok
+test api::sse::responses::tests::partial_answer_phase_survives_item_start_and_completion ... ok
+test api::sse::responses::tests::process_sse_emits_all_safety_buffering_notifications_without_dropping_response_events ... ok
+test api::sse::responses::tests::process_sse_emits_model_verification_field ... ok
+test api::sse::responses::tests::process_sse_emits_server_model_from_response_headers_payload ... ok
+test api::sse::responses::tests::process_sse_emits_turn_moderation_metadata_field ... ok
+test api::sse::responses::tests::process_sse_ignores_response_model_field_in_payload ... ok
+test api::sse::responses::tests::quota_exceeded_error_is_fatal ... ok
+test api::sse::responses::tests::rate_limit_error_preserves_retry_delay ... ok
+test api::sse::responses::tests::responses_stream_event_model_verification_ignores_non_array_field ... ok
+test api::sse::responses::tests::responses_stream_event_model_verification_ignores_unknown_field ... ok
+test api::sse::responses::tests::responses_stream_event_model_verification_reads_metadata_field ... ok
+test api::sse::responses::tests::responses_stream_event_response_model_prefers_response_headers ... ok
+test api::sse::responses::tests::responses_stream_event_response_model_reads_top_level_headers ... ok
+test api::sse::responses::tests::safety_buffering_falls_back_to_response_metadata ... ok
+test api::sse::responses::tests::safety_buffering_ignores_metadata_field_for_other_event_kinds ... ok
+test api::sse::responses::tests::safety_buffering_ignores_response_metadata_without_safety_buffering_type ... ok
+test api::sse::responses::tests::safety_buffering_prefers_wire_retry_model_and_only_falls_back_when_omitted ... ok
+test api::sse::responses::tests::safety_buffering_top_level_presence_wins_over_response_metadata ... ok
+test api::sse::responses::tests::spawn_response_stream_emits_header_events ... ok
+test api::sse::responses::tests::spawn_response_stream_ignores_model_verification_header ... ok
+test api::sse::responses::tests::table_driven_event_kinds ... ok
+test api::sse::responses::tests::typed_errors_handle_missing_or_blank_message ... ok
+test api::sse::responses_error::tests::test_try_parse_retry_delay ... ok
+test api::sse::responses_error::tests::test_try_parse_retry_delay_azure ... ok
+test api::sse::responses_error::tests::test_try_parse_retry_delay_no_delay ... ok
+test http::chatgpt_cloudflare_cookies::tests::additional_cookies_are_restricted_to_https_chatgpt_hosts ... ok
+test http::chatgpt_cloudflare_cookies::tests::additional_cookies_use_current_path_scoped_cloudflare_cookies ... ok
+test http::chatgpt_cloudflare_cookies::tests::allows_only_known_cloudflare_cookie_names ... ok
+test http::chatgpt_cloudflare_cookies::tests::does_not_return_chatgpt_cloudflare_cookies_for_other_hosts ... ok
+test http::chatgpt_cloudflare_cookies::tests::http_and_websocket_cookies_share_the_factory_store ... ok
+test http::chatgpt_cloudflare_cookies::tests::ignores_mixed_non_cloudflare_cookies_for_chatgpt_hosts ... ok
+test http::chatgpt_cloudflare_cookies::tests::ignores_non_chatgpt_cookies ... ok
+test http::chatgpt_cloudflare_cookies::tests::ignores_non_cloudflare_cookies_for_chatgpt_hosts ... ok
+test http::chatgpt_cloudflare_cookies::tests::oailb_cookies_are_replayed_with_scope_and_expiration ... ok
+test http::chatgpt_cloudflare_cookies::tests::only_allows_https_urls ... ok
+test http::chatgpt_cloudflare_cookies::tests::rejects_plain_http_chatgpt_cookie_urls ... ok
+test http::chatgpt_cloudflare_cookies::tests::stores_and_returns_cloudflare_cookies_for_chatgpt_hosts ... ok
+test http::chatgpt_hosts::tests::recognizes_chatgpt_hosts_without_suffix_tricks ... ok
+test http::client::tests::inject_trace_headers_uses_current_span_context ... ok
+test http::client_builder::tests::connection_close_prevents_reuse_when_server_ignores_it ... ok
+test http::client_builder::tests::custom_ca_fallback_preserves_builder_configuration ... ok
+test http::custom_ca::tests::ca_path_falls_back_to_ssl_cert_file ... ok
+test http::custom_ca::tests::ca_path_ignores_empty_values ... ok
+test http::custom_ca::tests::ca_path_prefers_codex_env ... ok
+test http::custom_ca::tests::rustls_config_reports_invalid_ca_file ... ok
+test http::custom_ca::tests::rustls_config_uses_custom_ca_bundle_when_configured ... ok
+test http::custom_ca::tls_tests::custom_intermediate_trust_preserves_hostname_validation ... ok
+test http::outbound_proxy::redirect_integration_tests::route_aware_pool_re_resolves_redirects_and_logs_only_final_outcome ... ok
+test http::outbound_proxy::tests::cloned_factories_share_chatgpt_cookie_stores_without_changing_value_equality ... ok
+test http::outbound_proxy::tests::enabled_environment_proxy_routes_request_through_proxy ... ok
+test http::outbound_proxy::tests::environment_fallback_reads_injected_proxy_environment ... ok
+test http::outbound_proxy::tests::no_proxy_matches_exact_suffix_wildcard_and_port ... ok
+test http::outbound_proxy::tests::parses_pac_proxy_tokens ... ok
+test http::outbound_proxy::tests::parses_static_winhttp_proxy_entries_for_target_scheme ... ok
+test http::outbound_proxy::tests::proxy_env_value_matches_reqwest_casing_precedence ... ok
+test http::outbound_proxy::tests::redirect_coverage_tests::route_aware_pool_retains_credentials_for_same_origin_and_route ... ok
+test http::outbound_proxy::tests::redirect_coverage_tests::route_aware_pool_sanitizes_redirected_failure_logs ... ok
+test http::outbound_proxy::tests::redirect_coverage_tests::route_aware_pool_strips_credentials_on_cross_origin_redirect ... ok
+test http::outbound_proxy::tests::redirect_coverage_tests::transport_classifies_connection_failures_without_request_urls ... ok
+test http::outbound_proxy::tests::redirect_coverage_tests::transport_classifies_route_construction_failures_as_build_errors ... ok
+test http::outbound_proxy::tests::redirect_coverage_tests::transport_resolves_routes_for_execute_and_stream_redirects ... ok
+test http::outbound_proxy::tests::reports_direct_and_unsupported_proxy_tokens ... ok
+test http::outbound_proxy::tests::reqwest_default_route_preserves_transport_proxy_behavior ... ok
+test http::outbound_proxy::tests::route_aware_builder_preserves_default_headers ... ok
+test http::outbound_proxy::tests::route_aware_pool_logs_only_the_final_redirect_outcome ... ok
+test http::outbound_proxy::tests::route_aware_pool_uses_respect_system_proxy_route_for_exact_url ... ok
+test http::outbound_proxy::tests::system_proxy_cache_is_bounded ... ok
+test http::outbound_proxy::tests::system_proxy_cache_key_preserves_url_specific_pac_decisions ... ok
+test http::outbound_proxy::tests::system_proxy_resolution_is_single_flight ... ok
+test http::outbound_proxy::tests::unavailable_system_proxy_decision_is_cached ... ok
+test http::outbound_proxy::tests::unavailable_system_route_preserves_wss_http_proxy_fallback ... ok
+test http::outbound_proxy::tests::unavailable_system_route_resolves_environment_or_direct_explicitly ... ok
+test http::outbound_proxy::tests::websocket_route_uses_http_equivalent_for_system_resolution ... ok
+test http::request::tests::into_prepared_stores_compressed_body_for_reuse ... ok
+test http::request::tests::prepare_body_for_send_rejects_existing_content_encoding_when_compressing ... ok
+test http::request::tests::prepare_body_for_send_serializes_json_and_sets_content_type ... ok
+test http::request_builder::tests::request_draft_preserves_reqwest_url_auth_and_header_precedence ... ok
+test http::route_aware_client_pool::policy_tests::account_change_cancels_redirect_route_selection ... ok
+test http::route_aware_client_pool::policy_tests::managed_redirect_failure_is_tracked_before_proxy_retry ... ok
+test http::route_aware_client_pool::policy_tests::unavailable_policy_does_not_connect ... ok
+test http::route_aware_client_pool::tests::bounds_cached_routes_and_rebuilds_an_evicted_route ... ok
+test http::route_aware_client_pool::tests::cached_tls_backend_only_changes_its_destination_and_route ... ok
+test http::route_aware_client_pool::tests::direct_and_routed_clients_build_equivalent_requests ... ok
+test http::route_aware_client_pool::tests::disabled_pool_logging_does_not_expose_request_or_response_data ... ok
+test http::route_aware_client_pool::tests::fixed_transport_preserves_url_auth_and_explicit_authorization ... ok
+test http::route_aware_client_pool::tests::forwards_exact_urls_and_caches_clients_by_resolved_route ... ok
+test http::route_aware_client_pool::tests::initial_url_auth_is_built_once_after_routing_and_retained_only_on_same_origin_redirects ... ok
+test http::route_aware_client_pool::tests::legacy_custom_ca_fallback_is_limited_to_reqwest_default ... ok
+test http::route_aware_client_pool::tests::managed_request_timeout_covers_queued_transport_construction ... ok
+test http::route_aware_client_pool::tests::no_redirect_pool_returns_redirect_response ... ok
+test http::route_aware_client_pool::tests::rejects_redirects_beyond_the_limit ... ok
+test http::route_aware_client_pool::tests::rejects_replayable_redirect_to_unsupported_scheme ... ok
+test http::route_aware_client_pool::tests::request_builder_debug_redacts_url_secrets ... ok
+test http::route_aware_client_pool::tests::request_failures_classify_https_proxy_authentication_challenges ... ok
+test http::route_aware_client_pool::tests::request_failures_classify_real_untrusted_certificate_handshakes ... ok
+test http::route_aware_client_pool::tests::request_timeout_covers_route_selection ... ok
+test api::files::tests::upload_openai_file_reports_blob_transport_diagnostics_without_sas ... ok
+test http::route_aware_client_pool::tests::reqwest_default_route_preserves_transport_redirects ... ok
+test http::route_aware_client_pool::tests::streams_request_bodies_without_exposing_reqwest_body ... ok
+test http::route_aware_client_pool::tests::tls_fallback_pool_reselects_routes_for_each_redirect_hop ... ok
+test http::route_aware_client_pool::tests::without_url_redacts_transport_error_urls ... ok
+test http::route_aware_client_pool::tls_fallback_tests::default_pool_does_not_retry_a_native_tls_protocol_failure ... ok
+test http::route_aware_client_pool::tls_fallback_tests::does_not_retry_a_cached_rustls_tls_protocol_failure ... ok
+test http::route_aware_client_pool::tls_fallback_tests::does_not_retry_a_non_replayable_streaming_request ... ok
+test http::route_aware_client_pool::tls_fallback_tests::retries_a_native_tls_failure_after_another_request_caches_rustls ... ok
+test http::route_aware_client_pool::tls_fallback_tests::retries_a_native_tls_protocol_failure_once_with_rustls ... ok
+test http::route_aware_client_pool::tls_fallback_tests::retries_a_tls_protocol_failure_when_request_url_contains_certificate_markers ... ok
+test http::route_aware_client_pool::tls_fallback_tests::successful_rustls_fallback_replays_the_request_and_reuses_the_destination ... ok
+test http::route_aware_redirect::tests::non_replayable_redirect_is_not_followed_regardless_of_target_scheme ... ok
+test http::route_aware_redirect::tests::redirect_credentials_are_retained_only_for_the_same_origin ... ok
+test http::route_aware_redirect::tests::redirect_referer_follows_strict_origin_when_cross_origin ... ok
+test http::route_aware_redirect::tests::redirects_match_reqwest_method_and_body_rules ... ok
+test http::tls_backend_fallback::tests::cached_rustls_clients_are_reused_for_the_same_outbound_route ... ok
+test http::tls_backend_fallback::tests::cached_rustls_destinations_remain_bounded_while_sharing_a_route_client ... ok
+test http::tls_backend_fallback::tests::certificate_errors_in_an_error_source_never_enable_fallback ... ok
+test http::tls_backend_fallback::tests::evicting_a_destination_removes_its_unshared_route_client ... ok
+test http::tls_backend_fallback::tests::recognizes_platform_specific_tls_protocol_negotiation_failures ... ok
+test http::tls_backend_fallback::tests::recognizes_schannel_protocol_version_error_codes ... ok
+test http::tls_backend_fallback::tests::rustls_fallback_decisions_are_scoped_to_origin_and_outbound_route ... ok
+test http::transport::limit_tests::accepts_complete_bodies_at_the_limit ... ok
+test http::transport::limit_tests::bounded_errors_preserve_status_when_the_body_is_interrupted ... ok
+test http::transport::limit_tests::bounded_stream_retains_account_revocation ... ok
+test http::transport::limit_tests::bounded_streamed_errors_preserve_text_decoding ... ok
+test http::transport::limit_tests::bounded_successes_report_interrupted_bodies_as_network_errors ... ok
+test http::transport::limit_tests::preserves_http_failures_within_the_limit ... ok
+test http::transport::limit_tests::rejects_oversized_declared_lengths_before_reading_the_body ... ok
+test http::transport::limit_tests::rejects_oversized_success_and_error_bodies_without_sensitive_diagnostics ... ok
+test http::transport::limit_tests::shared_transport_keeps_each_requests_response_limit_independent ... ok
+test http::transport::limit_tests::streaming_limit_counts_across_chunks_and_terminates_on_error ... ok
+test http::transport::tests::connection_failures_are_classified_without_exposing_request_urls ... ok
+test http::transport::tests::disabled_request_logging_suppresses_transport_url_and_body ... ok
+test http::transport::tests::enabled_request_logging_emits_transport_url_and_body ... ok
+test websocket::cookie_tests::websocket_handshakes_share_routing_cookies_and_respect_cookie_scope ... ok
+test websocket::dialer::tests::direct_route_connects_secure_websocket ... ok
+test websocket::dialer::tests::environment_proxy_route_honors_no_proxy_in_a_subprocess ... ok
+test websocket::dialer::tests::happy_eyeballs_does_not_wait_for_stalled_preferred_family ... ok
+test websocket::dialer::tests::http_proxy_tunnels_secure_websocket_before_handshake ... ok
+test websocket::dialer::tests::https_proxy_defaults_to_port_443_and_preserves_explicit_port ... ok
+test websocket::dialer::tests::https_proxy_tunnels_secure_websocket_before_handshake ... ok
+test websocket::dialer::tests::loopback_direct_drops_non_loopback_resolved_addresses ... ok
+test websocket::dialer::tests::loopback_direct_rejects_localhost_resolution_without_loopback_addresses ... ok
+test websocket::dialer::tests::no_proxy_subprocess_probe ... ok
+test websocket::dialer::tests::public_connector_enables_tcp_nodelay_when_requested ... ok
+test websocket::dialer::tests::public_connector_uses_factory_and_exposes_stream_and_sink ... ok
+test websocket::dialer::tests::routed_tcp_connections_only_enable_nodelay_when_requested ... ok
+test websocket::dialer::tests::tungstenite_default_tls_mode_ignores_invalid_custom_ca_in_a_subprocess ... ok
+test websocket::dialer::tests::tungstenite_default_tls_mode_subprocess_probe ... ok
+test websocket::network_policy_tests::revocation_wakes_split_reader_and_survives_writer_observing_it_first ... ok
+test websocket::tests::recognizes_loopback_websocket_destinations ... ok
+test websocket::tests::rejects_non_loopback_websocket_destinations ... ok
+test http::route_aware_client_pool::tests::request_timeout_is_shared_across_redirect_hops ... ok
+
+test result: ok. 315 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.69s
+
+     Running unittests src/bin/custom_ca_probe.rs (target/debug/deps/custom_ca_probe-1a9c1dbb498b004e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api_clients.rs (target/debug/deps/api_clients-99759e69d1c58a4a)
+
+running 9 tests
+test responses_client_sends_extra_headers ... ok
+test azure_store_sends_ids_and_headers ... ok
+test responses_client_stream_request_preserves_item_ids ... ok
+test responses_client_uses_responses_path ... ok
+test streaming_client_adds_auth_headers ... ok
+test streaming_client_does_not_retry_auth_build_error ... ok
+test streaming_client_retries_on_transient_auth_error ... ok
+test streaming_client_retries_on_transport_error ... ok
+test responses_client_stream_request_sends_routing_fields_ahead_of_large_input ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/api_models_integration.rs (target/debug/deps/api_models_integration-1706b860c8fee1a6)
+
+running 2 tests
+test models_client_hits_models_endpoint ... ok
+test invalid_models_response_reports_bounded_decode_metadata ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/api_realtime_websocket_e2e.rs (target/debug/deps/api_realtime_websocket_e2e-62c9a39fc8397e8c)
+
+running 7 tests
+test realtime_ws_e2e_disconnected_emitted_once ... ok
+test realtime_ws_e2e_ignores_unknown_text_events ... ok
+test realtime_ws_e2e_realtime_v2_parser_emits_handoff_requested ... ok
+test realtime_ws_e2e_send_while_next_event_waits ... ok
+test realtime_ws_e2e_session_create_and_event_flow ... ok
+test realtime_ws_connect_webrtc_sideband_retries_join_until_server_is_available ... ok
+test realtime_ws_existing_call_retries_activation_404_with_a_bounded_budget ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+
+     Running tests/api_realtime_websocket_tls.rs (target/debug/deps/api_realtime_websocket_tls-e6e6ea2946d8c50d)
+
+running 1 test
+test realtime_tls_selects_system_and_custom_trust ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/api_sse_end_to_end.rs (target/debug/deps/api_sse_end_to_end-4249dede14232c70)
+
+running 1 test
+test responses_stream_parses_items_and_completed_end_to_end ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/http_ca_env.rs (target/debug/deps/http_ca_env-39f6dddd7c0b3e9c)
+
+running 10 tests
+test accepts_bundle_with_crl ... ok
+test accepts_openssl_trusted_certificate ... ok
+test falls_back_to_ssl_cert_file ... ok
+test handles_multi_certificate_bundle ... ok
+test posts_to_tls13_server_using_custom_ca_bundle ... ok
+test prefers_codex_ca_cert_over_ssl_cert_file ... ok
+test posts_to_token_origin_through_tls_intercepting_proxy_with_custom_ca_bundle ... ok
+test rejects_empty_pem_file_with_hint ... ok
+test rejects_malformed_pem_with_hint ... ok
+test uses_codex_ca_cert_env ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+

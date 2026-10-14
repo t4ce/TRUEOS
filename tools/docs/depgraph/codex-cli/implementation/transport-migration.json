@@ -44,7 +44,16 @@
     "protocol/src/error.rs imports canonical foundation HttpError and RetryAfter",
     "network-proxy source and manifest provider dependency migrated to codex-network-foundation"
   ],
-  "test_command": "CODEX_CA_CERTIFICATE= SSL_CERT_FILE= cargo test --offline -p codex-network-foundation -p codex-transport -p codex-protocol --lib --tests -j 2",
+  "test_command": "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='env -u CODEX_CA_CERTIFICATE -u SSL_CERT_FILE' cargo test --offline -p codex-network-foundation -p codex-transport -p codex-protocol --lib --tests -j 2 -- --test-threads=2",
   "cycle_resolution": "Protocol error identity/retry advice and proxy TLS provider remain in codex-network-foundation; API/client/HTTP/WebSocket execution folded into codex-transport.",
-  "test_environment": "Explicit empty CA environment values prevent rustup/Cargo injection of SSL_CERT_FILE from changing the native TLS test fixture into a Rustls custom-CA fixture; application CA precedence and TLS classifiers are unchanged."
+  "test_environment": "Cargo/rustup injects SSL_CERT_FILE even when the invoking shell has none or an empty value. The test runner clears inherited CA variables at the binary execution boundary so native TLS fallback fixtures use their intended backend. Individual CA subprocess probes still set their own overrides. Application CA precedence and TLS classifiers are unchanged. The consolidated transport suite runs with two test threads because original socket fixtures can contend when formerly separate package suites execute concurrently.",
+  "validation": {
+    "passed": 720,
+    "failed": 0,
+    "foundation_unit_and_provider_tests": 8,
+    "protocol_unit_tests": 367,
+    "transport_unit_tests": 315,
+    "transport_integration_tests": 30,
+    "log": "/tmp/codex-transport-tests.log"
+  }
 }

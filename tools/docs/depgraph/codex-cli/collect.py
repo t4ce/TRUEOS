@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
+import tomllib
 
 
 HERE = Path(__file__).resolve().parent
@@ -23,6 +24,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repos", type=Path, default=REPOS)
     parser.add_argument("--rlink", type=Path, help="existing root .rlink; default is the captured pack's root")
+    parser.add_argument("--pack-log", type=Path, help="capture the current pack's exact source-overlay configuration")
+    parser.add_argument("--features", help="explicit feature selection; otherwise infer from the packer's current unit plan")
     args = parser.parse_args()
     repos = args.repos.resolve()
     toolchain = repos / "TRUEOS-Rust-Toolchain-nightly-2026-07-10"
@@ -31,6 +34,20 @@ def main():
     target = cli / "target/trueos-blueprint/x86_64-unknown-trueos.json"
     raw = HERE / "raw"
     config = raw / "pack-config.toml"
+    if args.pack_log:
+        prefix = "trueos-blueprint: source overlay crates: "
+        rows = [line[len(prefix):] for line in args.pack_log.read_text().splitlines() if line.startswith(prefix)]
+        if len(rows) != 1:
+            parser.error("pack log must contain exactly one Codex source-overlay selection")
+        patches = []
+        for row in rows[0].split(","):
+            key, directory = row.split("=", 1)
+            path = Path(directory).resolve()
+            package = tomllib.loads((path / "Cargo.toml").read_text())["package"]["name"]
+            patches.append(key + " = { path = " + json.dumps(str(path)) +
+                           (", package = " + json.dumps(package) if key != package else "") + " }")
+        config.write_text("[patch.crates-io]\n" + "\n".join(patches) + "\n")
+        (raw / "pack-config-source.txt").write_text(prefix + rows[0] + "\n")
     for path in [manifest, target, config, toolchain / "bin/cargo", toolchain / "bin/rustc"]:
         if not path.is_file():
             parser.error(f"required existing pack evidence is missing: {path}")
@@ -40,8 +57,20 @@ def main():
     env["RUSTC_BOOTSTRAP_SYNTHETIC_TARGET"] = "1"
     flags = ['--check-cfg=cfg(target_os,values("trueos","zkvm"))', "-A", "warnings", "-C", "panic=abort"]
     env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
+    native_plan_path = manifest.parent.parent / "native-unit-graph.json"
+    features = args.features
+    if features is None and native_plan_path.exists():
+        native_plan = json.loads(native_plan_path.read_text())
+        root_features = sorted({feature for index in native_plan["roots"] for feature in native_plan["units"][index]["features"]})
+        # Root feature expansion (e.g. trueos-blueprint -> sh3) is equivalent;
+        # allocator ownership can change independently of the CLI feature.
+        if any("default-global-allocator" in unit["features"] for unit in native_plan["units"] if unit["target"]["name"] == "trueos"):
+            root_features.append("trueos/default-global-allocator")
+        features = ",".join(root_features)
+    if features is None:
+        features = "trueos-blueprint,trueos/default-global-allocator"
     shared = ["--locked", "--offline", "-Z", "json-target-spec", "--manifest-path", str(manifest),
-              "--no-default-features", "--features", "trueos-blueprint,trueos/default-global-allocator",
+              "--no-default-features", "--features", features,
               "--config", str(config)]
     commands = {
         "metadata": ["metadata", "--format-version", "1", "--filter-platform", str(target), *shared],
@@ -54,7 +83,7 @@ def main():
     evidence = [manifest, manifest.with_name("Cargo.lock"), target, config]
     before = {str(path): digest(path) for path in evidence}
     capture = {"captured_at_unix": time.time(), "manifest": str(manifest), "target": str(target),
-               "rustflags": flags, "inputs_sha256": before, "commands": {},
+               "rustflags": flags, "features": features, "inputs_sha256": before, "commands": {},
                "scope": "Existing staged pack only. Unit graph plans a build; it does not compile or publish."}
     for name, tail in commands.items():
         command = [str(toolchain / "bin/cargo"), *tail]
