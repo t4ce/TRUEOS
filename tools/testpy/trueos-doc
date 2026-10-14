@@ -360,9 +360,11 @@ def repo_root() -> Path:
     candidates: list[Path] = []
     if value := os.environ.get("TRUEOS_REPO"):
         candidates.append(Path(value))
-    candidates.extend([Path(__file__).resolve().parent.parent, Path.cwd(), *Path.cwd().parents])
+    candidates.extend([Path(__file__).resolve().parents[2], Path.cwd(), *Path.cwd().parents])
     for candidate in candidates:
-        if (candidate / "src/shell2/shell2_cmd_registry.rs").is_file():
+        # Shell2's retired registry is no longer a repository marker. Topics
+        # such as logs/references remain useful with the current Shell3 tree.
+        if (candidate / "Cargo.toml").is_file() and (candidate / "src/hv/mod.rs").is_file():
             return candidate.resolve()
     raise DocError("TRUEOS repo not found; set TRUEOS_REPO")
 

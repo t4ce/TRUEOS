@@ -13,6 +13,7 @@ trueos_vmx_guest_entry:
 .Lcall_idle:
     call trueos_vm_guest_idle
     ud2
+    .size trueos_vmx_guest_entry, .-trueos_vmx_guest_entry
 
     .global trueos_vmx_hull_text_end
 trueos_vmx_hull_text_end:

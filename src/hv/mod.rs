@@ -6,6 +6,7 @@ pub(crate) mod matrix;
 pub mod blueprint_net;
 pub mod control_kick;
 mod cooperative_stop;
+mod depthchecker_debug;
 mod lifecycle;
 mod teardown_diagnostics;
 use teardown_diagnostics::Stage as TeardownStage;
@@ -4777,6 +4778,9 @@ async fn vmx_launch_once_with_ept_vpid(
         let reason = lr.exit_reason & 0xFFFF;
         crate::hv::vmx::log_vmexit_interrupt_info("vmexit");
         if reason == 0x0 {
+            if depthchecker_debug::try_handoff(vm_id, &lr)? {
+                continue;
+            }
             let guest_exception = guest_exception_summary();
             if let Some((vector, vector_name, kind, info, err)) = guest_exception {
                 hverrorf(format_args!(

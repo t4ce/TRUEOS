@@ -2372,17 +2372,46 @@ fn open_regular_file_world(
     should_truncate: bool,
     writable: bool,
 ) -> Result<(Arc<Mutex<RegularFileWorld>>, bool), c_int> {
-    let mut registry = REGULAR_FILE_WORLDS.lock();
-    if let Some(world) = registry.get(path) {
-        if should_truncate && writable {
-            let mut world = world.lock();
-            world.bytes.clear();
-            world.dirty = true;
-            world.revision = world.revision.wrapping_add(1);
+    let cached = { REGULAR_FILE_WORLDS.lock().get(path) };
+    let (world, reused) = match cached {
+        Some(world) => (world, true),
+        None => {
+            // Both the read and metadata bridge can park this continuation.
+            // Keep the registry unlocked so another thread on the same AP
+            // cannot spin on a lock whose owner is waiting for an executor turn.
+            let materialized = materialize_regular_file_world(
+                path, should_create, should_truncate, writable,
+            );
+            let mut registry = REGULAR_FILE_WORLDS.lock();
+            if let Some(world) = registry.get(path) {
+                // A peer may publish or modify the shared world while we park.
+                // Reuse it, even if our independent disk lookup failed.
+                (world, true)
+            } else {
+                let world = materialized?;
+                if !registry.insert(String::from(path), Arc::clone(&world)) {
+                    return Err(TRUEOS_EAGAIN);
+                }
+                (world, false)
+            }
         }
-        return Ok((world, true));
+    };
+    // Do not hold the registry lock while acquiring a world's lock.
+    if reused && should_truncate && writable {
+        let mut world = world.lock();
+        world.bytes.clear();
+        world.dirty = true;
+        world.revision = world.revision.wrapping_add(1);
     }
+    Ok((world, reused))
+}
 
+fn materialize_regular_file_world(
+    path: &str,
+    should_create: bool,
+    should_truncate: bool,
+    writable: bool,
+) -> Result<Arc<Mutex<RegularFileWorld>>, c_int> {
     let mut dirty = false;
     let mut bytes = if should_truncate && writable && should_create {
         dirty = true;
@@ -2407,18 +2436,14 @@ fn open_regular_file_world(
         Err(TRUEOS_ENOENT) if should_create => None,
         Err(errno) => return Err(errno),
     };
-    let world = Arc::new(Mutex::new(RegularFileWorld {
+    Ok(Arc::new(Mutex::new(RegularFileWorld {
         disk_revision: metadata.map_or(0, |metadata| metadata.revision),
         file_id: metadata.map_or(0, |metadata| metadata.file_id),
         root_id: metadata.map_or(0, |metadata| metadata.root_id),
         bytes,
         dirty,
         revision: u64::from(dirty),
-    }));
-    if !registry.insert(String::from(path), Arc::clone(&world)) {
-        return Err(TRUEOS_EAGAIN);
-    }
-    Ok((world, false))
+    })))
 }
 
 fn writeback_regular_file_world(
@@ -5803,8 +5828,10 @@ pub unsafe extern "C" fn fsync(fd: c_int) -> c_int {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     }
-    let table = OPEN_FILES.lock();
-    let Some(OpenFile::Regular { path, world, .. }) = table.get(fd) else {
+    // Keep the open description alive across writeback, including its advisory
+    // lock owner, but release the descriptor table before filesystem calls park.
+    let file = { OPEN_FILES.lock().get(fd).cloned() };
+    let Some(OpenFile::Regular { path, world, .. }) = file.as_ref() else {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };

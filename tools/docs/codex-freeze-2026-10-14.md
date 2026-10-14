@@ -1,5 +1,10 @@
 # Codex LastAP freeze observation — 2026-10-14
 
+The newer instrumented hardware capture and the mapping to the user's concerns
+are in [codex-concern-evidence-2026-10-14.md](codex-concern-evidence-2026-10-14.md).
+The initial observations below describe the earlier run, before those probes
+were deployed; times and snapshot line numbers belong to that earlier run.
+
 This is a read-only investigation. No scheduler, polling, runtime or deployment
 changes were made. The log selected by `LatestOfThree.logs` resolved to
 `bld/baremetal-logs/trueos-baremetal.0.log`. A copy taken before the live SMP
