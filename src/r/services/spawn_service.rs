@@ -36,6 +36,7 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     JOB_RUNNER_STARTED,
+    CODEX_PROGRESS_STARTED,
     BLUEPRINT_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_REQUEST_BROKER_STARTED,
     DNS_REQUEST_BROKER_STARTED,
@@ -632,20 +633,22 @@ fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn microfont_log_gate() -> bool {
-    super::microfont_log_service::enabled() && crate::workers::last_ap_service_worker().is_some()
+    super::microfont_log_service::enabled()
 }
 
-fn spawn_microfont_log(_spawner: Spawner) -> SpawnAttempt {
-    let Some((slot, _kind, lastap_spawner)) = crate::workers::last_ap_service_worker() else {
-        return SpawnAttempt::Skipped;
-    };
-    match super::microfont_log_service::microfont_log_task(slot) {
-        Ok(token) => {
-            lastap_spawner.spawn(token);
-            SpawnAttempt::Spawned
-        }
-        Err(error) => SpawnAttempt::Failed(error),
-    }
+fn codex_progress_gate() -> bool {
+    crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED
+        && crate::workers::codex_application_spawner().is_some()
+}
+
+fn spawn_codex_progress(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| super::codex_progress_service::codex_progress_task())
+}
+
+fn spawn_microfont_log(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_eff_worker(spawner, |worker| {
+        super::microfont_log_service::microfont_log_task(worker.cpu_slot())
+    })
 }
 
 fn ui4_slot4_service_gate() -> bool {
@@ -1394,13 +1397,20 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 75
+const TASK_COUNT: usize = 76
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
-    // Only the retained surface and exact LastAP executor are required.
+    TaskSpec::enabled_gated(
+        "codex-progress-observer",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        codex_progress_gate,
+        &CODEX_PROGRESS_STARTED,
+        spawn_codex_progress,
+    ),
+    // The retained surface uses the regular E-core-preferred service policy.
     // In particular this has no NET, filesystem, GuC or UI4-ready dependency.
     TaskSpec::enabled_gated(
         "microfont-log",

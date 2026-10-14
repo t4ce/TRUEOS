@@ -136,13 +136,20 @@ pub(super) fn remote_active(frontend: u64) -> bool {
 }
 
 pub(super) fn take_remote_output(frontend: u64, available: usize) -> Option<RemoteDrain> {
+    static AGE: crate::r::input_timing::Site = crate::r::input_timing::Site::new("ssh-app-output-queue-age");
     let mut routes = ROUTES.lock();
     // Startup may claim and buffer its first frame while command feedback
     // still owns presentation. Do not send app ANSI bytes until navigation.
     if routes.navigation_holds.contains(&frontend) { return None; }
     let active = routes.routes.iter().any(|route| route.frontend == Some(frontend) && route.owner.is_some());
     let output = &mut routes.remote_frontends.iter_mut().find(|entry| entry.0 == frontend)?.1;
-    Some(output.take(available, active))
+    let since = output.queued_since_ms();
+    let drained = output.take(available, active);
+    drop(routes);
+    if !drained.bytes.is_empty() {
+        if let Some(since) = since { AGE.record(crate::r::input_timing::now_ms().saturating_sub(since)); }
+    }
+    Some(drained)
 }
 
 struct Attachment;
@@ -357,7 +364,7 @@ fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
         }
         let frontend = route.frontend;
         if let Some((_, output)) = routes.remote_frontends.iter_mut().find(|entry| Some(entry.0) == frontend) {
-            let written = output.write(bytes);
+            let written = output.write_at(bytes, crate::r::input_timing::now_ms());
             drop(routes);
             super::service::notify_work();
             return Some(written);

@@ -130,35 +130,22 @@ PEN_TESTS = r'''
 }
 '''
 POLICY_HARNESS = r'''
-mod r { pub mod services { pub mod microfont_log_service {
-    pub fn enabled() -> bool { crate::policy::ACTIVE.load(core::sync::atomic::Ordering::Relaxed) }
-} } }
+mod allcaps {
+    pub mod hv { pub const CODEX_EXECUTOR_EXPERIMENT_ENABLED: bool = false; }
+    pub mod wls { pub const CPU_TRACK_COUNT: usize = 256; }
+}
 mod policy {
-    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    pub static ACTIVE: AtomicBool = AtomicBool::new(false);
-    static COUNT: AtomicUsize = AtomicUsize::new(8);
-    const FIRST_BACKGROUND_SLOT: u32 = 2;
     const WORKER_SLOT_LIMIT: usize = 256;
-    fn topology_core_slot_count() -> usize { COUNT.load(Ordering::Relaxed) }
-    fn is_background_worker_slot(slot: u32) -> bool { slot >= FIRST_BACKGROUND_SLOT }
-    // Actual production functions follow. Only the input topology/profile are mocked.
+    fn topology_core_slot_count() -> usize { 8 }
+    fn is_background_worker_slot(slot: u32) -> bool { slot >= 2 }
+    #[path = "../application_policy.rs"] mod application_policy;
     __FUNCTIONS__
-    #[test] fn reservation_is_final_topology_slot_and_profile_only() {
+    #[test] fn microfont_does_not_reserve_last_ap() {
         assert_eq!(last_ap_service_slot(), None);
         assert!(is_general_background_worker_slot(7));
-        ACTIVE.store(true, Ordering::Relaxed);
-        assert_eq!(last_ap_service_slot(), Some(7));
-        assert!(!is_general_background_worker_slot(7));
         assert!(is_general_background_worker_slot(6));
         assert!(!is_general_background_worker_slot(0));
         assert!(!is_general_background_worker_slot(1));
-        COUNT.store(2, Ordering::Relaxed);
-        assert_eq!(last_ap_service_slot(), None);
-        COUNT.store(256, Ordering::Relaxed);
-        assert_eq!(last_ap_service_slot(), Some(255));
-        COUNT.store(257, Ordering::Relaxed);
-        assert_eq!(last_ap_service_slot(), None);
-        ACTIVE.store(false, Ordering::Relaxed);
     }
 }
 '''
@@ -172,17 +159,18 @@ def main():
     panel = (ROOT / 'src/intel/tgl_native_panel.rs').read_text()
     assert 'fn copy_for_screen' in log and 'written: u64' in log
     assert 'last_ap_service_slot' in workers and '!is_last_ap_service_slot(cpu_slot)' in workers
-    assert 'last_ap_service_worker()' in spawn and 'lastap_spawner.spawn(token)' in spawn
-    assert 'const TASK_COUNT: usize = 77' in spawn
+    microfont_spawn = spawn[spawn.index('fn spawn_microfont_log('):spawn.index('fn ui4_slot4_service_gate(')]
+    assert 'spawn_on_eff_worker' in microfont_spawn and 'worker.cpu_slot()' in microfont_spawn
+    assert 'last_ap_service_worker' not in microfont_spawn
+    assert 'microfont_log_service' not in workers[workers.index('pub fn last_ap_service_slot('):workers.index('pub fn is_last_ap_service_slot(')]
     assert 'microfont-log' in spawn and 'ui4_slot4_service_gate' in spawn
     assert 'if readback_ok {' in panel and 'microfont_log_service::install' in panel
-    assert 'pub(crate) const SPIRIT_RESEALED: bool = false;' in panel
     assert 'microfont_log_boot_surface' in display and 'screenlog::owns_plane' in display
     assert 'Timer::after' in service and 'from_millis(PERIOD_MS)' in service
     assert 'spin_loop' not in service and 'PAGE:' not in service
     assert 'copy_for_screen' not in service and 'paint_verdict(surface, assigned)' in service
     assert 'ASSIGNMENT_WAIT_MS: u64 = 30_000' in service
-    print('PASS: real last-AP placement, existing log ring, bounded task, native/UI4 handoff intact', flush=True)
+    print('PASS: regular E-core-preferred placement, existing log ring, bounded task, native/UI4 handoff intact', flush=True)
     start = log.index('pub mod logtotcp {') + len('pub mod logtotcp {')
     end = log.index('    #[trueos_executor::task]', start)
     ring = log[start:end]
@@ -223,11 +211,13 @@ path = "lib.rs"
 spin = "0.10"
 microfont = "=3.7.8"
 ''')
+        (work / 'policy').mkdir()
+        (work / 'application_policy.rs').write_text((ROOT / 'src/workers/application_policy.rs').read_text())
         (work / 'service.rs').write_text(service + PEN_TESTS)
         (work / 'lib.rs').write_text(harness)
         env = dict(os.environ, RUSTUP_TOOLCHAIN='stable', RUST_MIN_STACK=str(16*1024*1024))
         subprocess.run(['cargo', 'test', '--offline', '--lib', '--manifest-path', str(work / 'Cargo.toml'), '--', '--test-threads=1'], cwd=work, env=env, check=True)
-    print('PASS: actual ring, LastAP selector and centered 4x Yes/No renderer tested (not a full kernel build)', flush=True)
+    print('PASS: actual ring, unreserved background selector and centered 4x Yes/No renderer tested (not a full kernel build)', flush=True)
 
 if __name__ == '__main__':
     main()

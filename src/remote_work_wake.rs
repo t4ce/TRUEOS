@@ -60,9 +60,11 @@ pub(crate) fn wake_cpu_for_remote_work(cpu_slot: u32) -> bool {
     }
 
     if send_fixed_x2apic_ipi(cpu_slot, REMOTE_WORK_WAKE_VECTOR) {
+        crate::r::progress_probe::ipi_sent(cpu_slot as usize, true);
         REMOTE_WORK_WAKE_SENT.fetch_add(1, Ordering::AcqRel);
         true
     } else {
+        crate::r::progress_probe::ipi_sent(cpu_slot as usize, false);
         REMOTE_WORK_WAKE_FAILED.fetch_add(1, Ordering::AcqRel);
         false
     }
@@ -140,6 +142,7 @@ pub(crate) fn local_eoi() {
 
 #[allow(non_snake_case)]
 extern "x86-interrupt" fn remote_work_wake_isr(_stack_frame: InterruptStackFrame) {
+    crate::r::progress_probe::ipi_received(crate::percpu::current_slot_via_cpuid());
     REMOTE_WORK_WAKE_INTERRUPTS.fetch_add(1, Ordering::AcqRel);
     local_eoi();
 }

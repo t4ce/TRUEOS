@@ -172,6 +172,7 @@ pub(crate) fn disarm_local_timer() {
 
 #[allow(non_snake_case)]
 pub(crate) extern "x86-interrupt" fn CHRONOS_TIMER(_stack_frame: InterruptStackFrame) {
+    crate::r::progress_probe::timer_received(crate::percpu::current_slot_via_cpuid());
     let seq = WATCH_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     let _ = refresh_snapshot(seq);
     unsafe {

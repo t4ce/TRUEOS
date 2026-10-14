@@ -35,6 +35,10 @@ pub use crate::shell2::{MatrixSlotAttachment,attach_matrix_slot_resource,matrix_
 pub const TRANSPORT_NET_TCP_SCOPE:u8=1;pub const TRANSPORT_LOCAL_SCOPE:u8=2;
 }
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
+mod r {pub mod input_timing {
+    pub fn now_ms()->u64 {0}
+    pub struct Site; impl Site {pub const fn new(_: &str)->Self {Self} pub fn record(&self,_:u64) {}}
+}}
 mod shell2 {
     pub mod cmds {pub mod run {pub struct QueuedBlueprint;}}
     use super::*;

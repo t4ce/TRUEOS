@@ -17,7 +17,7 @@ def main():
     thread_path = ROOT / "src/r/threads.rs"
     thread_source = thread_path.read_text()
     scheduler = thread_source[:thread_source.index("#[trueos_executor::task(")]
-    scheduler = re.sub(r"^mod (context|stack|tests);$", lambda match:
+    scheduler = re.sub(r"^mod (context|stack|tests|timing);$", lambda match:
         f'#[path="{ROOT / "src/r/threads" / (match[1] + ".rs")}"] mod {match[1]};',
         scheduler, flags=re.MULTILINE)
     if not re.search(r"mod tests;", scheduler):
@@ -43,7 +43,13 @@ impl<T> Mutex<T> {
     const fn new(value: T) -> Self { Self(std::sync::Mutex::new(value)) }
     fn lock(&self) -> std::sync::MutexGuard<'_, T> { self.0.lock().unwrap() }
 }
-mod allcaps { pub mod hv { pub const VM_CPU_SLOT_LIMIT: usize = 1; pub const VM_ID_LIMIT: usize = 64; } }
+mod allcaps {
+    pub mod hv {
+        pub const VM_CPU_SLOT_LIMIT: usize = 1; pub const VM_ID_LIMIT: usize = 64;
+        pub const INPUT_TIMING_ENABLED: bool = true; pub const CODEX_PROGRESS_PROBES_ENABLED: bool = true;
+    }
+    pub mod wls { pub const CPU_TRACK_COUNT: usize = 1; }
+}
 mod hv {
     use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use crate::trueos_time::{Timer, Duration as EmbassyDuration};
@@ -191,7 +197,11 @@ mod wait {
     control = hv_source[hv_source.index("static VM_CONTROL_WAITS:"):hv_source.index("\nstruct TrueosVmId")]
     support = support.replace("__CONTROL_BOUNDARY__", control)
     support += registers + wait_items + platform_items + "\n}\n"
-    support += '''mod r {
+    timing = (ROOT / 'src/r/input_timing.rs').read_text().replace('embassy_time_driver::', 'crate::time_driver::').replace('//!', '//')
+    probe = (ROOT / 'src/r/progress_probe.rs').read_text().replace('//!', '//')
+    support += 'mod r { pub mod progress_probe {\n' + probe + '\n}\n'
+    support += 'pub mod input_timing {\n' + timing + '\n}\n'
+    support += '''
     pub mod blocking {
         pub type BlockingJobFn = alloc::boxed::Box<dyn FnOnce() + Send + 'static>;
         __DIAGNOSTICS__
@@ -217,6 +227,7 @@ mod wait {
     support += '''
 mod log_os { pub fn blueprint_important_line(_: core::fmt::Arguments<'_>) {} }
 #[macro_export] macro_rules! log_warn { ($($tokens:tt)*) => {} }
+#[macro_export] macro_rules! log_info { ($($tokens:tt)*) => {} }
 mod time_driver {
     pub const TICK_HZ: u64 = 1000;
     pub fn now() -> u64 {

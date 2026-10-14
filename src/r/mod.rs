@@ -8,6 +8,8 @@ pub mod cursor;
 pub mod disc;
 pub mod fs;
 pub mod io;
+pub(crate) mod input_timing;
+pub(crate) mod progress_probe;
 pub mod kernel_task_domain;
 pub mod keyboard;
 pub mod lz4;

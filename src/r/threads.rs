@@ -13,6 +13,7 @@ use core::task::{Context, Poll, Waker};
 
 mod context;
 mod stack;
+mod timing;
 #[cfg(test)]
 mod tests;
 use crate::r::blocking::{BlockingJobFn, GuestJobOwner};
@@ -72,6 +73,9 @@ struct Thread {
     done: bool,
     kill_waker: Option<Waker>,
     wait: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    timed: bool,
+    submitted_ms: u64,
+    timing: Option<timing::Timing>,
     domain: (u32, u8),
     allocation: [u32; 4],
     wls: (u64, u32),
@@ -130,6 +134,10 @@ fn diagnostic_phase(thread: &Thread, phase: usize, wait: usize, timeout: u64) {
     }
 }
 
+fn progress_boundary(thread: &Thread, stage: usize) {
+    if let Some(owner) = &thread._admission._owner { owner.diagnostic.progress(stage); }
+}
+
 /// Suspend with an owned wait future. The future is polled on the carrier
 /// stack after restoring its realm, so no other task observes this thread's
 /// TLS or allocation-domain guards while the thread is parked.
@@ -160,6 +168,7 @@ pub(crate) fn sleep(ms: u64) -> bool {
         return yield_now();
     }
     unsafe { diagnostic_phase(&*active(), diagnostics::SLEEPING, 0, ms); }
+    unsafe { if let Some(timing) = (*active()).timing.as_mut() { timing.begin_wait(Some(ms)); } }
     let timer = crate::allocators::with_host_alloc_domain_strong(|| {
         Box::pin(async move {
             // Keep even very large std durations within the timer driver's
@@ -181,6 +190,7 @@ pub(crate) fn wait(queue: &crate::wait::WaitQueue, observed: u32, timeout_ms: u6
     }
     let queue_ptr = queue as *const crate::wait::WaitQueue as usize;
     unsafe { diagnostic_phase(&*active(), diagnostics::WAITING, queue_ptr, timeout_ms); }
+    unsafe { if let Some(timing) = (*active()).timing.as_mut() { timing.begin_wait(None); } }
     let result = crate::allocators::with_host_alloc_domain_strong(|| {
         alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false))
     });
@@ -253,6 +263,16 @@ impl Future for ThreadTask {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let thread = &mut *self.get_mut().0;
+        progress_boundary(thread, diagnostics::POLL_BEGIN);
+        if thread.timed && thread.timing.is_none() {
+            thread.timing = Some(timing::Timing::new(cx, thread.submitted_ms));
+        }
+        let timed_waker = thread.timing.as_ref().map(|timing| {
+            timing.begin_poll(cx);
+            timing.waker()
+        });
+        let mut timed_cx = Context::from_waker(timed_waker.as_ref().unwrap_or(cx.waker()));
+        let cx = &mut timed_cx;
         if let Some(vm_id) = thread.vm_id {
             if thread.kill_waker.as_ref().is_none_or(|waker| !waker.will_wake(cx.waker())) {
                 if let Some(wakers) = CONTROL_WAKERS.get(vm_id as usize) {
@@ -267,19 +287,27 @@ impl Future for ThreadTask {
         }
         // Registration precedes the flag read: racing control either wakes
         // this task or is consumed at this host boundary.
+        progress_boundary(thread, diagnostics::CONTROL_CHECK);
         if let Some(result) = guest_control_boundary(thread) {
+            progress_boundary(thread, diagnostics::POLL_RETURN);
             return result;
         }
-        if let Some(wait) = thread.wait.as_mut() {
+        if thread.wait.is_some() {
+            progress_boundary(thread, diagnostics::WAIT_POLL);
+            let wait = thread.wait.as_mut().unwrap();
             if wait.as_mut().poll(cx).is_pending() {
+                progress_boundary(thread, diagnostics::WAIT_PENDING);
                 return Poll::Pending;
             }
             thread.wait = None;
         }
+        progress_boundary(thread, diagnostics::CONTROL_CHECK);
         if let Some(result) = guest_control_boundary(thread) {
+            progress_boundary(thread, diagnostics::POLL_RETURN);
             return result;
         }
         let ptr = thread as *mut Thread;
+        if let Some(timing) = thread.timing.as_mut() { timing.resumed(); }
         diagnostic_phase(thread, diagnostics::RUNNING, 0, 0);
         assert_eq!(
             crate::percpu::current_slot() as u32,
@@ -291,6 +319,7 @@ impl Future for ThreadTask {
         }
         let slot = &CURRENT[crate::percpu::current_slot()];
         assert!(slot.load(Ordering::Relaxed).is_null(), "recursive thread carrier poll");
+        progress_boundary(thread, diagnostics::CONTEXT_INSTALL);
         let parent_domain = kernel_task_domain::replace_context(thread.domain);
         let parent_alloc = crate::allocators::replace_thread_context(thread.allocation);
         let parent_wls = crate::wls::replace_thread_context(thread.wls);
@@ -300,7 +329,11 @@ impl Future for ThreadTask {
             .address_space
             .as_ref()
             .map(|space| unsafe { context::replace_address_space(space.cr3()) });
+        let run_started = crate::r::input_timing::now_ms();
+        progress_boundary(thread, diagnostics::GUEST_ENTER);
         unsafe { context::swap(&mut (*ptr).parent, &(*ptr).child) };
+        progress_boundary(thread, diagnostics::GUEST_RETURN);
+        progress_boundary(thread, diagnostics::CONTEXT_RESTORE);
         #[cfg(not(target_os = "linux"))]
         if let Some(parent_cr3) = parent_cr3 {
             unsafe { context::replace_address_space(parent_cr3) };
@@ -309,13 +342,17 @@ impl Future for ThreadTask {
         thread.wls = crate::wls::replace_thread_context(parent_wls);
         thread.allocation = crate::allocators::replace_thread_context(parent_alloc);
         thread.domain = kernel_task_domain::replace_context(parent_domain);
+        progress_boundary(thread, diagnostics::CONTEXT_RESTORED);
+        if thread.timed { timing::Timing::ran(run_started); }
         if thread.done {
             diagnostic_phase(thread, diagnostics::COMPLETED, 0, 0);
+            progress_boundary(thread, diagnostics::POLL_RETURN);
             Poll::Ready(())
         } else {
             // Guest frames are now off the CPU and every carrier realm guard
             // has been restored. Only this point may acknowledge RAM parking.
             if let Some(result) = guest_control_boundary(thread) {
+                progress_boundary(thread, diagnostics::POLL_RETURN);
                 return result;
             }
             if thread.wait.is_none() {
@@ -323,11 +360,13 @@ impl Future for ThreadTask {
             } else {
                 // Register immediately; a notification before this poll is
                 // retained by the wait generation, so no wake can be lost.
+                progress_boundary(thread, diagnostics::WAIT_POLL);
                 if thread.wait.as_mut().unwrap().as_mut().poll(cx).is_ready() {
                     thread.wait = None;
                     cx.waker().wake_by_ref();
                 }
             }
+            progress_boundary(thread, diagnostics::POLL_RETURN);
             Poll::Pending
         }
     }
@@ -351,27 +390,44 @@ async fn thread_task(thread: ThreadTask) {
     thread.await
 }
 
+/// Separate executor task entry, with no std-thread carrier selection.
+#[trueos_executor::task(pool_size = THREAD_LIMIT)]
+async fn codex_application_task(thread: ThreadTask) {
+    thread.await
+}
+
 fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i32> {
     if stack > MAX_STACK_BYTES {
         return Err(22);
     }
-    let slots = crate::workers::background_worker_slots()
-        .into_iter()
-        .filter(|slot| crate::workers::is_general_background_worker_slot(*slot))
-        .filter(|slot| (*slot as usize) < crate::allcaps::wls::CPU_TRACK_COUNT)
-        .collect::<alloc::vec::Vec<_>>();
-    if slots.is_empty() {
-        return Err(11);
-    }
-    let start = NEXT_CARRIER.fetch_add(1, Ordering::Relaxed);
-    let slot = slots[start % slots.len()];
-    let spawner = crate::workers::spawner_for_slot(slot).ok_or(11)?;
+    let is_codex = vm_id.and_then(crate::hv::app_vm_archive)
+        .is_some_and(|archive| crate::workers::application_policy::is_codex_archive(&archive));
+    let experimental = crate::allcaps::hv::CODEX_EXECUTOR_EXPERIMENT_ENABLED && is_codex;
+    let spawner = if experimental {
+        // Fail explicitly if LastAP is unavailable; a silent fallback would
+        // make the placement experiment and its measurements misleading.
+        crate::workers::codex_application_spawner().ok_or(11)?
+    } else {
+        let slots = crate::workers::background_worker_slots()
+            .into_iter()
+            .filter(|slot| crate::workers::is_general_background_worker_slot(*slot))
+            .filter(|slot| (*slot as usize) < crate::allcaps::wls::CPU_TRACK_COUNT)
+            .collect::<alloc::vec::Vec<_>>();
+        if slots.is_empty() {
+            return Err(11);
+        }
+        let start = NEXT_CARRIER.fetch_add(1, Ordering::Relaxed);
+        let slot = slots[start % slots.len()];
+        crate::workers::spawner_for_slot(slot).ok_or(11)?
+    };
+    let slot = spawner.cpu_slot();
     let owner = match vm_id {
         Some(vm) => Some(crate::r::blocking::reserve_guest_job(vm).ok_or(11)?),
         None => None,
     };
     if let Some(owner) = &owner {
-        owner.diagnostic.identify("std-thread", id, slot as usize);
+        if is_codex { owner.diagnostic.enable_progress_probe(); }
+        owner.diagnostic.identify(if experimental { "codex-executor-task" } else { "std-thread" }, id, slot as usize);
     }
     if THREAD_COUNT
         .try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < THREAD_LIMIT).then_some(n + 1))
@@ -403,6 +459,9 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
             done: false,
             kill_waker: None,
             wait: None,
+            timed: crate::allcaps::hv::INPUT_TIMING_ENABLED && is_codex,
+            submitted_ms: crate::r::input_timing::now_ms(),
+            timing: None,
             domain: (
                 if vm_id.is_some() {
                     KernelTaskDomain::VmGuestOwnedAlloc as u32
@@ -419,13 +478,17 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     });
     let mut thread = prepared?;
     thread.job = Some(job);
-    match thread_task(ThreadTask(thread)) {
-        Ok(task) => {
-            spawner.spawn(task);
-            Ok(())
-        }
-        Err(_) => Err(11),
+    if experimental {
+        let task = codex_application_task(ThreadTask(thread)).map_err(|_| 11)?;
+        crate::log_rate_limited!(target: "blueprint"; level: crate::log_os::LogLevel::Info; first: 2; every: 64;
+            "codex-executor: vm={:?} thread={} carrier={} owner=codex task=codex_application_task placement=lastap\n",
+            vm_id, id, slot);
+        spawner.spawn(task);
+    } else {
+        let task = thread_task(ThreadTask(thread)).map_err(|_| 11)?;
+        spawner.spawn(task);
     }
+    Ok(())
 }
 
 pub(crate) fn spawn(

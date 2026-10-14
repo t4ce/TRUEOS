@@ -884,6 +884,7 @@ pub(crate) struct BlueprintProcessContext {
     terminal_lease: BlueprintTerminalLeaseState,
     terminal_surface_generation: u64,
     console_input: VecDeque<u8>,
+    console_input_since_ms: Option<u64>,
     control_shell_line: AllocVec<u8>,
     exit_reason: Option<AllocString>,
 }
@@ -3189,6 +3190,7 @@ pub fn stage_blueprint_launch(
         terminal_lease: BlueprintTerminalLeaseState::for_surface(console_surface),
         terminal_surface_generation: 1,
         console_input: VecDeque::new(),
+        console_input_since_ms: None,
         control_shell_line: AllocVec::new(),
         exit_reason: None,
     };
@@ -3998,6 +4000,9 @@ fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option
             || context.console_target.as_ref().map(crate::shell3::matrix_target_slot_lease).as_ref() != Some(lease)
         { return 0; }
     }
+    if context.console_input.is_empty() {
+        context.console_input_since_ms = Some(crate::r::input_timing::now_ms());
+    }
     for &byte in data {
         if context.console_input.len() >= MAX_CONSOLE_INPUT {
             let _ = context.console_input.pop_front();
@@ -4041,12 +4046,19 @@ pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
 }
 
 pub(crate) fn blueprint_console_read(vm_id: u8, out: &mut [u8]) -> usize {
+    static AGE: crate::r::input_timing::Site = crate::r::input_timing::Site::new("app-stdin-queue-age");
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else { return 0; };
     let mut guard = slot.lock();
     let Some(context) = guard.as_mut() else { return 0; };
     if !context.console_attached || !context.terminal_lease.accepts_console_input(context.app_command_passthrough) { return 0; }
     let count = out.len().min(context.console_input.len());
+    let since = context.console_input_since_ms;
     for byte in &mut out[..count] { *byte = context.console_input.pop_front().unwrap(); }
+    if context.console_input.is_empty() { context.console_input_since_ms = None; }
+    drop(guard);
+    if count != 0 {
+        if let Some(since) = since { AGE.record(crate::r::input_timing::now_ms().saturating_sub(since)); }
+    }
     count
 }
 

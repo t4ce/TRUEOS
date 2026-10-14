@@ -33,6 +33,9 @@ fn make_thread(id: usize, job: impl FnOnce() + Send + 'static) -> ThreadTask {
         done: false,
         kill_waker: None,
         wait: None,
+        timed: false,
+        submitted_ms: 0,
+        timing: None,
         domain: (77, id as u8),
         allocation: [0; 4],
         wls: (0, id as u32),
@@ -64,12 +67,15 @@ fn diagnostics_identify_the_parked_worker_and_retire_on_force_kill() {
     assert!(crate::r::blocking::open_guest_jobs(53, 19));
     let owner = crate::r::blocking::reserve_guest_job(53).unwrap();
     owner.diagnostic.identify("std-thread", 53, 0);
+    owner.diagnostic.enable_progress_probe();
     thread.0._admission._owner = Some(owner);
     assert!(poll_thread(&mut thread).is_pending());
     let before = diagnostics::lines(53).join("\n");
+    assert!(diagnostics::progress_lines(53, 1)[0].contains("stage=poll-return"));
     assert!(before.contains("name=tokio-voxygen-0 carrier=0 phase=wait-queue"));
     // Re-polling a parked task does not falsely count as guest progress.
     assert!(poll_thread(&mut thread).is_pending());
+    assert!(diagnostics::progress_lines(53, 1)[0].contains("stage=wait-pending"));
     assert!(diagnostics::lines(53)[0].contains("boundary=2"));
     crate::hv::set_guest_kill_for_test(53, true);
     wake_killed_guest(53);
@@ -148,6 +154,25 @@ fn notification_before_registration_is_retained() {
 }
 
 #[test]
+fn experimental_continuation_keeps_identity_and_wait_semantics() {
+    let _serial = SERIAL.lock().unwrap();
+    let queue = Arc::new(crate::wait::WaitQueue::new());
+    let waited = queue.clone();
+    let mut thread = make_thread(22, move || {
+        assert_eq!(current_id(), Some(22));
+        assert_eq!(current_vm_id(), Some(22));
+        assert_eq!(wait(&waited, waited.observe(), 0), Some(true));
+        assert_eq!(current_id(), Some(22));
+    });
+    thread.0.timed = true;
+    thread.0.submitted_ms = crate::r::input_timing::now_ms();
+    assert!(poll_thread(&mut thread).is_pending());
+    assert!(poll_thread(&mut thread).is_pending());
+    queue.notify_all();
+    assert!(poll_thread(&mut thread).is_ready());
+}
+
+#[test]
 fn parked_continuation_leaves_carrier_free_for_the_notifier() {
     let _serial = SERIAL.lock().unwrap();
     let queue = Arc::new(crate::wait::WaitQueue::new());
@@ -172,6 +197,57 @@ fn parked_continuation_leaves_carrier_free_for_the_notifier() {
     assert!(poll_thread(&mut notifier).is_ready());
     assert!(poll_thread(&mut waiter).is_ready());
     assert_eq!(progress.load(Ordering::Acquire), 3);
+}
+
+#[test]
+fn external_notification_does_not_preempt_a_running_continuation() {
+    // This injects an external host notification, not a hardware interrupt.
+    // The production continuation remains on the simulated single carrier.
+    let _serial = SERIAL.lock().unwrap();
+    use core::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+    struct WakeCount(AtomicUsize);
+    impl std::task::Wake for WakeCount {
+        fn wake(self: Arc<Self>) { self.0.fetch_add(1, Ordering::AcqRel); }
+    }
+    let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+    let waker = Waker::from(wakes.clone());
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let sibling_progress = Arc::new(AtomicUsize::new(0));
+    let progress = sibling_progress.clone();
+    let mut sibling = make_thread(36, move || { progress.store(1, Ordering::Release); });
+    let running = entered.clone();
+    let stop = release.clone();
+    let peer = sibling_progress.clone();
+    let mut spinner = make_thread(35, move || {
+        running.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !stop.load(Ordering::Acquire) && Instant::now() < deadline {
+            core::hint::spin_loop();
+        }
+        assert!(stop.load(Ordering::Acquire), "external probe deadline expired");
+        assert_eq!(peer.load(Ordering::Acquire), 0, "sibling ran inside an active poll");
+    });
+    let notify = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !entered.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let active = entered.load(Ordering::Acquire);
+        waker.wake_by_ref();
+        // The observer and release live outside the suspect carrier, ensuring
+        // the negative case is bounded instead of deadlocking the harness.
+        std::thread::sleep(Duration::from_millis(5));
+        release.store(true, Ordering::Release);
+        active
+    });
+    assert!(poll_thread(&mut spinner).is_ready());
+    assert!(notify.join().unwrap());
+    assert_eq!(wakes.0.load(Ordering::Acquire), 1);
+    assert_eq!(sibling_progress.load(Ordering::Acquire), 0);
+    assert!(poll_thread(&mut sibling).is_ready());
+    assert_eq!(sibling_progress.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -240,6 +316,7 @@ fn kill_discards_a_parked_stack_without_guest_drops_or_resuming() {
     let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
     let waker = std::task::Waker::from(wakes.clone());
     let mut cx = Context::from_waker(&waker);
+    task.0.timed = true;
     assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
     assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
     crate::hv::set_guest_kill_for_test(51, true);
@@ -280,6 +357,7 @@ fn pause_retains_native_frames_and_resumes_the_same_reservation() {
         guest_progress.store(2, Ordering::Release);
     });
     assert!(crate::r::blocking::open_guest_jobs(54, 19));
+    task.0.timed = true;
     task.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(54).unwrap());
     assert!(poll_thread(&mut task).is_pending());
     assert_eq!(progress.load(Ordering::Acquire), 1);

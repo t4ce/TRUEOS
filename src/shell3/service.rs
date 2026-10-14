@@ -488,7 +488,11 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
     let mut terminals = super::net::WorkerTerminals::new(expected_slot);
     let mut command_sessions = super::sessions::Worker::new(expected_slot);
 
+    static PASS: crate::r::input_timing::Site = crate::r::input_timing::Site::new("shell3-service-pass");
+    static OVERRUN: crate::r::input_timing::Site = crate::r::input_timing::Site::new("shell3-service-sleep-overrun");
+
     loop {
+        let pass_started = crate::r::input_timing::now_ms();
         terminals.poll();
         command_sessions.poll();
         for shell in &mut owned_shells.shells {
@@ -734,13 +738,16 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             }
         }
 
+        PASS.record(crate::r::input_timing::now_ms().saturating_sub(pass_started));
         if owned_shells.is_empty() && terminals.is_empty() && command_sessions.is_empty() {
             let observed = SHELL_WORK_AVAILABLE.observe();
             if !has_pending_for_executor(expected_slot) && !terminals.has_events() && !command_sessions.pending() {
                 SHELL_WORK_AVAILABLE.wait_after(observed).await;
             }
         } else {
+            let sleeping = crate::r::input_timing::now_ms();
             Timer::after(Duration::from_millis(10)).await;
+            OVERRUN.record(crate::r::input_timing::now_ms().saturating_sub(sleeping).saturating_sub(10));
         }
     }
 }

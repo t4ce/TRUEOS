@@ -54,6 +54,67 @@ different execution path unless evidence shows the workload uses it.
 
 ## Two investigation tracks
 
+The current experiment changes only Codex continuation placement and adds
+timing summaries. It does not change the polling intervals described above.
+
+`src/allcaps.rs` exposes two independent switches:
+`CODEX_EXECUTOR_EXPERIMENT_ENABLED` and `INPUT_TIMING_ENABLED`, both enabled
+for this experiment. Codex and codex-check native continuations (including
+their std/Tokio child threads) use `codex_application_task`, submitted with
+TRUEOS's Spawner to LastAP. The existing stackful continuation keeps pthread
+identity, errno, realm restoration, wait queues and pause/kill handling.
+The ordinary std-thread round-robin selector is bypassed for these archives.
+
+LastAP is selected by topology identity, never registration order. Ordinary
+std threads, service lanes, compute placement and Hull lane selection exclude
+it. There is no preceding-AP reservation. Laptop MicroFont remains a regular
+service with its existing iGPU identity gating. On insufficient topology
+(fewer than four slots or LastAP outside the tracked slot limit), experimental
+Codex admission fails with EAGAIN instead of silently changing placement.
+Disable the placement switch to restore the general selector.
+Codex continuation timings remain enabled in that mode, allowing the same
+metrics to compare ordinary and reserved placement. Disabling the timing
+switch also removes Codex's wrapped timing waker.
+
+Timing sites aggregate per carrier. Each emits the first observation and then
+at most one Info summary per five seconds of activity, with sample count,
+integer mean/max milliseconds and counts at or above 10/50 ms. All samples
+contribute; per-character content is never logged. Pending summaries emit on
+the next observation after the period; there is no new logging task. Admission
+logs use the existing callsite limiter (first two, then every 64 admissions).
+The summaries use the Blueprint logging area, whose Info policy already
+admits them without widening Service or Global logging.
+
+Validation: `cargo check --offline` passes. The production scheduler/wait,
+remote terminal, Matrix, MicroFont and reservation-policy host harnesses pass
+67 tests in total, including wake forwarding/replacement, timed pause/kill,
+bounded summary accounting and partial output drain age. This change has not
+been rebuilt into the running QEMU ISO or deployed to the physical rig; the
+baseline above predates the experiment and is not a measured improvement.
+
+| Site | Meaning |
+| --- | --- |
+| `codex-ready-to-poll` | Earliest pending wake to executor poll; initial sample is admission to first poll |
+| `codex-run-slice` | Synchronous guest execution until yield/wait/return; excludes host summary logging |
+| `codex-sleep-overrun` | Actual suspended sleep minus requested duration, clamped to zero |
+| `codex-wait-elapsed` | Entire wait-queue suspension; includes legitimate idle waiting |
+| `ssh-routing-pass` | Work performed during one SSH routing pass |
+| `ssh-routing-sleep-overrun` | Actual 10 ms routing sleep minus 10 ms |
+| `shell3-service-pass` | Work performed during one terminal service pass |
+| `shell3-service-sleep-overrun` | Actual 10 ms service sleep minus 10 ms |
+| `app-stdin-queue-age` | SSH/terminal bytes enqueued to app read; oldest queued burst age for partial reads |
+| `ssh-app-output-queue-age` | App bytes enqueued to remote frontend drain; oldest queued burst age for partial drains |
+
+Queue timings exclude earlier SSH transport and later socket flushing. They
+are not a complete input-to-visible-frame measurement. The wrapped app waker
+retains the earliest outstanding notification and forwards every wake to the
+original executor waker. Millisecond timer resolution cannot distinguish
+submillisecond work. A deliberate lifecycle pause can extend wait/sleep times;
+use native lifecycle diagnostics when interpreting those samples.
+
+The following broader investigation is deferred until this placement/timing
+experiment is measured:
+
 1. Attribute latency with correlated timestamps at network event admission,
    SSH routing, Shell3 input dispatch, app stdin read, Codex key handling,
    frame request/draw/flush, remote output enqueue, and SSH output drain.

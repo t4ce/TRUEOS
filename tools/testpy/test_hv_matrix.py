@@ -13,6 +13,7 @@ methods = '\n'.join(re.search(r'^    (?:pub\((?:crate|super)\) )?fn '+name+r'\(.
                     for name in ('fresh_slot', 'drop_lease', 'drop_slot', 'drop_slot_inner', 'set_background_active', 'background_active_slots'))
 source = r'''#![allow(dead_code,non_upper_case_globals)]
 extern crate alloc;
+mod r {pub mod input_timing {pub fn now_ms()->u64 {0}}}
 mod spin {
     pub struct Mutex<T>(std::sync::Mutex<T>);
     impl<T> Mutex<T> {
@@ -69,8 +70,10 @@ mod shell3 {
 mod hv {
     use std::sync::atomic::{AtomicBool,AtomicU64,Ordering};
     use crate::{spin,shell3::MatrixSlotLease};
-    struct Vm {matrix_owner:spin::Mutex<Option<MatrixSlotLease>>,running:AtomicBool,pause_latched:AtomicBool,run_generation:AtomicU64}
-    impl Vm {const fn new()->Self {Self {matrix_owner:spin::Mutex::new(None),running:AtomicBool::new(false),pause_latched:AtomicBool::new(false),run_generation:AtomicU64::new(1)}}}
+    struct ExecutionPause;
+    impl ExecutionPause {fn paused(&self)->bool {false}}
+    struct Vm {matrix_owner:spin::Mutex<Option<MatrixSlotLease>>,running:AtomicBool,pause_latched:AtomicBool,execution_pause:ExecutionPause,run_generation:AtomicU64}
+    impl Vm {const fn new()->Self {Self {matrix_owner:spin::Mutex::new(None),running:AtomicBool::new(false),pause_latched:AtomicBool::new(false),execution_pause:ExecutionPause,run_generation:AtomicU64::new(1)}}}
     static trueos_vm_ids:[Vm;2]=[const {Vm::new()};2];
     fn vm_slot(vm:u8)->Option<&'static Vm> {trueos_vm_ids.get(vm as usize)}
     static KILLED:spin::Mutex<Vec<u8>>=spin::Mutex::new(Vec::new());
@@ -82,7 +85,7 @@ mod hv {
     #[path="MATRIX"]pub mod matrix;
     struct TerminalLease;
     impl TerminalLease {fn accepts_console_input(&self,_:bool)->bool {true}}
-    struct Context {console_attached:bool,app_command_passthrough:bool,terminal_lease:TerminalLease,console_target:Option<crate::shell3::MatrixTarget>,console_input:alloc::collections::VecDeque<u8>}
+    struct Context {console_attached:bool,app_command_passthrough:bool,terminal_lease:TerminalLease,console_target:Option<crate::shell3::MatrixTarget>,console_input:alloc::collections::VecDeque<u8>,console_input_since_ms:Option<u64>}
     static BLUEPRINT_PROCESS_CONTEXTS:[spin::Mutex<Option<Context>>;2]=[const {spin::Mutex::new(None)};2];
     pub fn vm_run_generation(vm:u8)->Option<u64> {vm_slot(vm).map(|vm|vm.run_generation.load(Ordering::Acquire))}
     fn notify_blueprint_console_input(_:u8) {}
@@ -178,7 +181,7 @@ prompt_test = r'''
         }
         let (target,receipt)=matrix::reserve("voxy.bp",b"voxy").unwrap();
         matrix::bind(0,"voxy.bp",b"voxy",Some(target.clone())).unwrap();
-        *BLUEPRINT_PROCESS_CONTEXTS[0].lock()=Some(Context {console_attached:true,app_command_passthrough:false,terminal_lease:TerminalLease,console_target:Some(target.clone()),console_input:alloc::collections::VecDeque::new()});
+        *BLUEPRINT_PROCESS_CONTEXTS[0].lock()=Some(Context {console_attached:true,app_command_passthrough:false,terminal_lease:TerminalLease,console_target:Some(target.clone()),console_input:alloc::collections::VecDeque::new(),console_input_since_ms:None});
         let mut shell=Shell3 {prompt:Prompt{text:"hello world".into()},command_history:History::default(),active_matrix_slot:Some(receipt.slot.clone()),active_matrix_lifetime:Some(receipt.lifetime)};
         assert!(shell.submit_app_prompt());
         assert_eq!(BLUEPRINT_PROCESS_CONTEXTS[0].lock().as_ref().unwrap().console_input.iter().copied().collect::<Vec<_>>(),b"hello world\n");

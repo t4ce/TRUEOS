@@ -141,6 +141,14 @@ pub mod hv {
     // A Rust spin hint must not become a millisecond host sleep. Hardware
     // preemption bounds native spinning; false restores PAUSE interception.
     pub const VMX_NATIVE_PAUSE_WITH_TIMER: bool = true;
+    // Bringup experiment: Codex continuations use a separate executor task on
+    // LastAP, outside ordinary std-thread placement. False restores the
+    // general carrier selector. Laptop MicroFont stays a regular service.
+    pub const CODEX_EXECUTOR_EXPERIMENT_ENABLED: bool = true;
+    pub const INPUT_TIMING_ENABLED: bool = true;
+    // Passive cross-carrier progress/interrupt probes. No forced interrupts,
+    // preemption, timeout recovery or scheduler policy changes.
+    pub const CODEX_PROGRESS_PROBES_ENABLED: bool = true;
     // Transient WC3 x86 contexts rebuild their VMCS after every timer exit.
     // Give the guest a longer carrier slice without delaying Hull lifecycle
     // stop checks, which retain the separate 125 ms quantum above.

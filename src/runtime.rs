@@ -30,7 +30,9 @@ pub fn poll_local_executor() {
         return;
     }
     crate::executor_cache::warm_bsp_executor(cpu, executor);
+    crate::r::progress_probe::poll_begin(cpu.cpu_index() as usize);
     unsafe { executor.poll() };
+    crate::r::progress_probe::poll_end(cpu.cpu_index() as usize);
     cpu.leave_executor_poll();
 }
 
@@ -70,6 +72,7 @@ pub fn run_ap_forever() -> ! {
 #[inline(always)]
 fn try_sti_hlt(sleep_ticks: u64) -> bool {
     let armed_timer = crate::chronos::arm_local_tsc_deadline_after_ticks(sleep_ticks);
+    if armed_timer { crate::r::progress_probe::timer_armed(crate::percpu::current_slot_via_cpuid()); }
     if sleep_ticks != u64::MAX && !armed_timer {
         return false;
     }

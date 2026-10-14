@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use spin::Mutex;
 use trueos_executor::{SendSpawner, SpawnToken, Spawner};
+pub(crate) mod application_policy;
 
 pub const CORE_KIND_UNKNOWN: u8 = 0;
 pub const CORE_KIND_PERF: u8 = 1;
@@ -18,8 +19,8 @@ const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const REGISTERED_SLOT_WORD_BITS: usize = u64::BITS as usize;
 const REGISTERED_SLOT_WORDS: usize =
     (WORKER_SLOT_LIMIT + REGISTERED_SLOT_WORD_BITS - 1) / REGISTERED_SLOT_WORD_BITS;
-// Media capture/encode stay on BSP. The laptop's CPU screen-log profile
-// reuses the former LastAP isolation policy, enabled before AP registration.
+// Media capture/encode stay on BSP. Codex's experimental application task
+// reserves LastAP before AP registration; laptop MicroFont is a regular service.
 
 static CORE_SPAWNER_BY_SLOT: [Mutex<Option<SendSpawner>>; WORKER_SLOT_LIMIT] =
     [const { Mutex::new(None) }; WORKER_SLOT_LIMIT];
@@ -289,14 +290,11 @@ pub fn ap1_ui_core_spawner() -> Option<WorkerSpawner> {
 
 /// The former RDP encoder policy: topology identity, never registration order.
 pub fn last_ap_service_slot() -> Option<u32> {
-    if !crate::r::services::microfont_log_service::enabled() {
-        return None;
+    if crate::allcaps::hv::CODEX_EXECUTOR_EXPERIMENT_ENABLED {
+        return application_policy::reserved_slot(topology_core_slot_count(),
+            WORKER_SLOT_LIMIT.min(crate::allcaps::wls::CPU_TRACK_COUNT));
     }
-    let slot = topology_core_slot_count().checked_sub(1)?;
-    if slot < FIRST_BACKGROUND_SLOT as usize || slot >= WORKER_SLOT_LIMIT {
-        return None;
-    }
-    Some(slot as u32)
+    None
 }
 
 pub fn is_last_ap_service_slot(cpu_slot: u32) -> bool {
@@ -310,6 +308,17 @@ pub fn last_ap_service_worker() -> Option<(u32, u8, WorkerSpawner)> {
 
 pub fn is_general_background_worker_slot(cpu_slot: u32) -> bool {
     is_background_worker_slot(cpu_slot) && !is_last_ap_service_slot(cpu_slot)
+}
+
+/// Reservation is decided from topology before ordinary worker admission.
+/// Only the Codex application experiment reserves LastAP.
+pub(crate) fn codex_application_slot() -> Option<u32> {
+    if !crate::allcaps::hv::CODEX_EXECUTOR_EXPERIMENT_ENABLED { return None; }
+    last_ap_service_slot()
+}
+
+pub(crate) fn codex_application_spawner() -> Option<WorkerSpawner> {
+    spawner_for_slot(codex_application_slot()?)
 }
 
 pub fn background_slot_range() -> core::ops::Range<u32> {
@@ -364,7 +373,7 @@ pub fn app_visible_parallelism() -> usize {
     }
 
     (first_app_slot..registered_slot_end().max(first_app_slot))
-        .filter(|slot| is_slot_registered(*slot) && !is_last_ap_service_slot(*slot))
+        .filter(|slot| is_slot_registered(*slot) && is_general_background_worker_slot(*slot))
         .count()
         .max(1)
 }

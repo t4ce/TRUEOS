@@ -267,7 +267,11 @@ pub async fn terminal_task() {
     let mut rejected = None;
     let mut errors = 0u64;
 
+    static PASS: crate::r::input_timing::Site = crate::r::input_timing::Site::new("ssh-routing-pass");
+    static OVERRUN: crate::r::input_timing::Site = crate::r::input_timing::Site::new("ssh-routing-sleep-overrun");
+
     loop {
+        let pass_started = crate::r::input_timing::now_ms();
         if let Some(handle) = rejected {
             if commands.push(NetCommand::Close { handle }).is_ok() {
                 rejected = None;
@@ -378,6 +382,9 @@ pub async fn terminal_task() {
                 })
                 .is_ok();
         }
+        PASS.record(crate::r::input_timing::now_ms().saturating_sub(pass_started));
+        let sleeping = crate::r::input_timing::now_ms();
         Timer::after(Duration::from_millis(10)).await;
+        OVERRUN.record(crate::r::input_timing::now_ms().saturating_sub(sleeping).saturating_sub(10));
     }
 }

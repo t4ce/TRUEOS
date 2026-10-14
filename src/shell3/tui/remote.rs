@@ -9,6 +9,7 @@ pub(super) struct Output {
     bytes: VecDeque<u8>,
     repaint: bool,
     failed: bool,
+    queued_since_ms: Option<u64>,
 }
 
 pub(crate) struct Drain {
@@ -21,7 +22,7 @@ pub(crate) struct Drain {
 
 impl Output {
     pub const fn new() -> Self {
-        Self { bytes: VecDeque::new(), repaint: false, failed: false }
+        Self { bytes: VecDeque::new(), repaint: false, failed: false, queued_since_ms: None }
     }
 
     pub fn begin(&mut self) -> bool {
@@ -42,6 +43,14 @@ impl Output {
         bytes.len()
     }
 
+    pub fn write_at(&mut self, bytes: &[u8], now_ms: u64) -> usize {
+        let written = self.write(bytes);
+        if written != 0 && self.queued_since_ms.is_none() { self.queued_since_ms = Some(now_ms); }
+        written
+    }
+
+    pub fn queued_since_ms(&self) -> Option<u64> { self.queued_since_ms }
+
     pub fn end(&mut self) {
         if self.bytes.len() + RESET.len() <= LIMIT {
             self.bytes.extend(RESET.iter().copied());
@@ -53,6 +62,7 @@ impl Output {
         let count = available.min(self.bytes.len());
         let bytes = self.bytes.drain(..count).collect();
         let pending = !self.bytes.is_empty();
+        if !pending { self.queued_since_ms = None; }
         // Shell3 must not paint until all app bytes and its release reset drain.
         let repaint = !pending && core::mem::take(&mut self.repaint);
         Drain {bytes, pending, repaint, failed: self.failed, active}
@@ -62,6 +72,20 @@ impl Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queue_age_survives_partial_drains_and_resets_for_the_next_burst() {
+        let mut output = Output::new();
+        assert_eq!(output.write_at(b"abc", 100), 3);
+        assert_eq!(output.write_at(b"def", 200), 3);
+        assert_eq!(output.queued_since_ms(), Some(100));
+        assert_eq!(output.take(2, true).bytes, b"ab");
+        assert_eq!(output.queued_since_ms(), Some(100));
+        assert_eq!(output.take(LIMIT, true).bytes, b"cdef");
+        assert_eq!(output.queued_since_ms(), None);
+        assert_eq!(output.write_at(b"g", 300), 1);
+        assert_eq!(output.queued_since_ms(), Some(300));
+    }
 
     #[test]
     fn output_preserves_fragmented_ansi_unicode_and_queries() {
