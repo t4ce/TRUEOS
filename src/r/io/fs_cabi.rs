@@ -2323,8 +2323,39 @@ unsafe fn blueprint_terminal_lease_v1(
     out_value: *mut u64,
     pending_is_success: bool,
 ) -> i32 {
-    if out_value.is_null() || crate::hv::current_hull_guest_context_vm_id().is_none() {
+    if out_value.is_null() {
         return TERMINAL_LEASE_CABI_TRANSPORT_ERROR;
+    }
+    // Native std/Tokio carriers retain the Blueprint's execution context but
+    // must call the host lease implementation directly, rather than vmcall.
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else {
+            return TERMINAL_LEASE_CABI_TRANSPORT_ERROR;
+        };
+        let result = match operation {
+            trueos_vm::vmcall::OP_BP_TERMINAL_LEASE_CURRENT_V1 => {
+                crate::hv::blueprint_terminal_lease_current(vm, value).map(Some)
+            }
+            trueos_vm::vmcall::OP_BP_TERMINAL_LEASE_RELEASE_V1 => {
+                crate::hv::blueprint_terminal_lease_release(vm, value).map(Some)
+            }
+            trueos_vm::vmcall::OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1 => {
+                crate::hv::blueprint_terminal_lease_poll_reentry(vm, value).map(|poll| match poll {
+                    crate::hv::BlueprintTerminalReentryPoll::Pending => None,
+                    crate::hv::BlueprintTerminalReentryPoll::Ready(epoch) => Some(epoch),
+                })
+            }
+            _ => return TERMINAL_LEASE_CABI_TRANSPORT_ERROR,
+        };
+        return match result {
+            Ok(Some(epoch)) if epoch != 0 => {
+                unsafe { out_value.write(epoch) };
+                0
+            }
+            Ok(None) if pending_is_success => 1,
+            Ok(_) => TERMINAL_LEASE_CABI_TRANSPORT_ERROR,
+            Err(error) => -(error.code() as i32),
+        };
     }
     let (status, data) = trueos_vm::vmcall::call(operation, value, 0);
     if status != trueos_vm::vmcall::STATUS_OK {
@@ -2647,13 +2678,8 @@ pub extern "C" fn trueos_cabi_shell_attached_readable_len() -> usize {
 /// programs (Crossterm, `poll(2)` loops, and direct `read(2)` users), which do
 /// not know about the TrueOS lease ABI but have already declared their intent
 /// by operating on the terminal stdin descriptor.
-static TERMINAL_IO_CLAIMED: AtomicBool = AtomicBool::new(false);
-
 pub(crate) fn claim_attached_console_for_terminal_io() {
-    if crate::hv::current_hull_guest_context_vm_id().is_none() {
-        return;
-    }
-    if TERMINAL_IO_CLAIMED.load(Ordering::Acquire) {
+    if crate::hv::current_guest_execution_context_vm_id().is_none() {
         return;
     }
 
@@ -2661,9 +2687,9 @@ pub(crate) fn claim_attached_console_for_terminal_io() {
     // A failure means that the process has no terminal surface, is parked, or
     // is already being torn down.  Preserve the Unix operation's own result;
     // the lease API remains authoritative for callers that need diagnostics.
-    if unsafe { trueos_cabi_blueprint_terminal_lease_current_v1(0, &mut epoch) } == 0 {
-        TERMINAL_IO_CLAIMED.store(true, Ordering::Release);
-    }
+    // The lease is already idempotent. A process-global success cache becomes
+    // stale after release/reentry or VM reuse and cannot represent ownership.
+    let _ = unsafe { trueos_cabi_blueprint_terminal_lease_current_v1(0, &mut epoch) };
 }
 
 /// Wait for attached terminal input or a typed terminal-surface change.

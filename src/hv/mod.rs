@@ -3581,6 +3581,10 @@ pub(crate) fn blueprint_terminal_lease_current(
     if crate::shell3::tui::claim(&target, vm_id) != Some(true) { return Err(BlueprintTerminalLeaseError::Busy); }
     let mut guard = slot.lock(); let c = guard.as_mut().ok_or(BlueprintTerminalLeaseError::Detached)?;
     c.terminal_lease = BlueprintTerminalLeaseState::Active { epoch, observed: true, ready: true };
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-lifecycle: vm={} phase=lease-claim state=active epoch={}\n",
+        vm_id, epoch,
+    ));
     Ok(epoch)
 }
 

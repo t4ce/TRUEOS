@@ -249,3 +249,46 @@ Local kernel: `tgt/x86_64-unknown-trueos/release/TRUEOS`.
 Kernel SHA-256:
 `cb811ca2f198d8f3475a178cce394eb440bc1267167e76ea06d7f4344aa6241f`.
 Neither artifact was deployed to the rig during this repair.
+
+## ANSI reaching the Matrix transcript after moving the UI to a carrier
+
+The October 14 capture (`trueos-baremetal.1.log`) starts Codex on a native std
+thread and reaches terminal setup at 94 ms. Its mode sequences and full first
+frame match the raw ANSI visible in the supplied Matrix transcript. The
+stdout route itself is consistent: `blueprint_console_write` forwards to
+`shell3::tui::write_stdout`, which appends text lines to the Matrix transcript
+until the exact VM/run owns its terminal. Owned output instead reaches the
+terminal parser or the byte-preserving SSH output queue.
+
+The implicit claim at `tcsetattr` was restricted to Hull execution, while
+stdout already supported native carriers retaining their VM context. The
+terminal lease CABI bridge had the same Hull-only restriction. Thus native
+terminal setup could succeed without ever claiming the output surface. Its
+process-global `TERMINAL_IO_CLAIMED` flag also could not track parking or VM
+reuse. Separately, upstream Codex emits EnableBracketedPaste before raw mode,
+so that first escape preceded even a successful implicit raw-mode claim.
+
+The kernel lease CABI now dispatches current/release/reentry directly through
+the owning VM for native carriers, and retains VMX transport for Hull calls.
+The implicit claim rechecks authoritative ownership rather than caching a
+global success. Codex's TRUEOS setup explicitly verifies an active lease before
+its first ANSI write and returns an error on rejection. Successful initial
+claims now log `terminal-lifecycle ... phase=lease-claim state=active epoch=...`.
+
+Five compiled-production CABI tests cover carrier and Hull claims, release,
+pending/ready reentry, exact error codes, missing contexts and stale-cache
+regressions. All 29 existing Shell3 terminal tests and the kernel check pass.
+The baremetal log's raw ANSI mirror in `blueprint_console_text_lines` is a
+separate diagnostic copy and remains intentional. Application-level mode
+restoration and redraw after parking are not supplied by these startup fixes.
+
+Both release builds pass. The package's CABI check now verifies 37 imports,
+including the existing terminal lease-current API, with unchanged kernel
+contract. The packed module imports that API and its extracted payload matches
+the linked module (`17159eeb4bf185807df9e88c8d7033837a893b1d458311ade9389827dcd32fae`).
+Updated package: 67,305,147 bytes, SHA-256
+`67d39c2e94e049699000adec5562a6e9a427dfa17685ce89ea1993adef9da620`.
+Updated kernel SHA-256:
+`80e11d883c7dad0788d912a6b2726aab5648945920a6c02dae5eab8509e34154`.
+These local artifacts were not deployed; startup routing still requires a rig
+run using both artifacts and checking the new lease-claim marker.
