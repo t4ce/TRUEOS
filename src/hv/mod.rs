@@ -3052,6 +3052,11 @@ fn prepare_blueprint_launch_on_lane(
             stats.entries, stats.bytes
         ));
     }
+    if crate::hv::blueprint::uses_volatile_codex_files(pending.archive.as_str()) {
+        log(format_args!("apps: vm{} preparing boot-local Codex files from {}", vm_id, app_fs_root));
+        crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str())
+            .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
+    }
     drop(host_alloc_guard);
 
     if !memory::arm_guest_rel_exec_for_vm(vm_id) {

@@ -292,3 +292,103 @@ Updated kernel SHA-256:
 `80e11d883c7dad0788d912a6b2726aab5648945920a6c02dae5eab8509e34154`.
 These local artifacts were not deployed; startup routing still requires a rig
 run using both artifacts and checking the new lease-claim marker.
+
+## Early startup delay: stale arg0 cleanup now executes
+
+The next `trueos-baremetal.0.log` run reaches `arg0_cleanup_begin` at 20 ms,
+before the main std thread and terminal setup. It keeps advancing through old
+`apps/codex/.codex/tmp/arg0/codex-arg0...` directories (list-dir IDs 25, 32,
+39 and later), while the cleanup completion marker remains absent. Filesystem
+index diagnostics record 81.098- and 77.456-second waits and repeat comparable
+waits for subsequent directories. The working `try_lock` implementation now
+lets Codex's janitor remove stale directories that the unsupported-lock path
+previously skipped.
+
+The expensive removal code resolved every node with `lookup_node_record`,
+which reconstructs the live namespace by scanning the entire historical log.
+Directory deletion then called `delete_tree`, which repeated that scan. Even
+deleting a tiny `.lock` file took this path. After deletion, unconditional index
+invalidation forced additional builds and races with subsequent removals.
+
+Mounted removal now warms the index before acquiring the root write lease,
+rechecks the indexed record after waiting, reads that physical record directly,
+and appends the appropriate node/tree tombstone. It updates the live index in
+place, removes descendants using an exact slash-delimited prefix, invalidates
+file-cache entries and notifies watchers. A new engine `delete_tree_at_record`
+validates the directory reference before writing one durable tombstone; its
+contract requires the mounted caller to serialize writes and use its current
+logical path, including after a RenameTree.
+
+All 33 engine tests pass, including deletion with a constant read budget after
+unrelated log growth and renamed-tree replay. Five compiled-production mounted
+removal tests cover retained indexes, exact siblings, failure/corruption,
+changed records after lease waits, and rebuilding invalidated indexes outside
+the write lease. The kernel check passes. This repair changes the kernel and
+filesystem engine only; the existing Codex package does not need rebuilding.
+
+The release kernel build also passes. The new local ELF is
+`tgt/x86_64-unknown-trueos/release/TRUEOS`; hardware validation is pending.
+
+The same audit found further history scans in native file and directory moves.
+Those mounted paths now use indexed engine helpers and preserve the live index.
+Both file and directory moves append a namespace record without copying payloads
+or deleting the old physical record. Generic file-only
+deletion also rechecks its indexed source after acquiring the lease. See
+[TRUEOSFS indexed mutations](trueosfs_indexed_mutations.md) for the platform
+contracts, tests and remaining compatibility rename limitations.
+
+For the requested all-state experiment, Codex's private files are now seeded
+from their existing disk paths into a private RAM filesystem before app entry.
+Login, sessions, caches, temporary files and databases all use that RAM copy;
+Shell3 tool/workspace storage keeps its persistent root. See
+[Codex volatile files](codex_volatile_files.md) for launch, failure, reboot and
+capacity behavior. The disk seed is retained and there is no writeback.
+
+## First model request: WebSocket TLS setup fails before response events
+
+The next physical run (`trueos-baremetal.1.log`) confirms the RAM experiment is
+active: line 6052 reports `source_disc=2 ram_disc=3 files=1041 bytes=344742516`.
+The prompt reaches `stream_responses_websocket`. Lines 12077/12099 and
+13009/13034 record connection attempts to
+`wss://chatgpt.com/backend-api/codex/responses`, followed by
+`failed to connect to websocket: IO error: invalid data`. The corresponding
+telemetry reports `success=false` and roughly four seconds per connection.
+The same turn retries five times; no successful WebSocket upgrade or model
+response stream is established. The long Working/Reconnecting display does
+not demonstrate that the greeting reached model execution.
+
+The port's tokio-rustls adapter discarded the `rustls::Error` returned by
+`process_new_packets()` and emitted bare `InvalidData`. Its std/Tokio error
+conversions also discarded messages, typed sources and OS codes. The TRUEOS
+tokio-tungstenite adapter discarded errors again as `Other: tokio io error`,
+including WouldBlock. These adapters now preserve the original I/O error and
+TLS source; a failed alert write cannot replace the primary TLS error.
+
+A concrete trust-store mismatch also exists. Codex's explicit WebSocket config
+started with an empty store and added native certificates from Unix disk paths.
+With no installed CA bundle, this admits no public roots. Reqwest's normal
+rustls configuration instead includes bundled WebPKI/Mozilla roots. TRUEOS
+WebSocket config now adds that same bundled baseline, then native and custom
+roots. Certificate chain and hostname verification stay enabled; other OS
+behavior is unchanged. Numeric native/bundled root counts are logged without
+certificate contents or authentication data.
+
+The original adapter erased the failure variant, so UnknownIssuer is a likely
+cause rather than a captured runtime verdict. HTTP inspection reset its
+connection, and a separate read-only SSH session did not complete its help
+request; that session was closed. The next package run must confirm the root
+counts and either `successfully connected to websocket` or the now-specific TLS
+error. No credentials were changed and no model prompt was submitted by the
+investigation.
+
+Eight focused Codex custom-CA tests pass, including bundled/custom coexistence,
+untrusted-certificate rejection and hostname validation. Seven compiled
+production adapter tests pass, covering TLS source preservation, raw OS errors,
+WouldBlock/Pending, valid reads and primary-error precedence. The repair changes
+the Codex package and vendored transport adapters; it needs no additional
+kernel changes. The release package rebuild passes, including the CABI guard,
+with publication disabled. The new `TRUEOS-Blueprints/dist/codex.bp` is
+66,613,873 bytes, SHA-256
+`f23753197a86a9bca799f0be47cca47c629721f40b9517485df17136505d7886`.
+Hardware confirmation requires relaunching with that package; no reboot or
+additional kernel rebuild is needed for these transport changes.

@@ -2548,7 +2548,7 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(u32, 
         crate::log!("std-abi-shim: async-write failed stage=resolve errno={}\n", TRUEOS_EINVAL);
         return Err(TRUEOS_EINVAL);
     };
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+    let Some(disk) = crate::r::fs::volatile_files::selected_disk(path.as_str()) else {
         crate::log!(
             "std-abi-shim: async-write failed stage=root path={} errno={}\n",
             path.as_str(),
@@ -5951,7 +5951,7 @@ pub(crate) fn file_lock_try_host(fd: c_int, operation: c_int) -> c_int {
         Some(_) => return TRUEOS_EINVAL,
         None => return TRUEOS_EBADF,
     };
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+    let Some(disk) = crate::r::fs::volatile_files::selected_disk(&lock.path) else {
         return TRUEOS_EIO;
     };
     let acquired = crate::allocators::with_host_alloc_domain_strong(|| {
@@ -6149,6 +6149,7 @@ pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_in
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char) -> c_int {
+    const EEXIST: c_int = 17;
     if old_path.is_null() || new_path.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
@@ -6180,28 +6181,54 @@ pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char
     let old_resolved = old_resolved.to_relative_string();
     let new_resolved = new_resolved.to_relative_string();
 
-    let bytes = match read_file_from_cabi(old_path.as_str()) {
-        Ok(bytes) => bytes,
-        Err(errno) => {
-            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
-            return -1;
-        }
-    };
     if old_resolved == new_resolved {
-        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-        return 0;
-    }
-    if let Err(errno) = write_file_to_cabi(new_path.as_str(), bytes.as_slice()) {
-        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+        let exists = unsafe {
+            crate::r::io::cabi::trueos_cabi_fs_exists(old_resolved.as_ptr(), old_resolved.len())
+        };
+        if exists == 1 {
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            return 0;
+        }
+        TRUEOS_ERRNO.store(
+            if exists == 0 { TRUEOS_ENOENT } else { fs_rc_to_errno(exists) },
+            Ordering::Relaxed,
+        );
         return -1;
     }
 
-    // TRUEOSFS currently exposes copy + best-effort delete as its file-rename
-    // primitive. Once the destination is committed, match that contract and
-    // do not turn a cleanup failure into a false report that no rename occurred.
-    let _ = unsafe { crate::r::io::cabi::trueos_cabi_fs_remove(old_path.as_ptr(), old_path.len()) };
-    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    0
+    let id = unsafe {
+        crate::r::io::async_fs_cabi::trueos_cabi_async_fs_rename_start(
+            old_resolved.as_ptr(), old_resolved.len(), new_resolved.as_ptr(), new_resolved.len(),
+        )
+    };
+    if id <= 0 {
+        TRUEOS_ERRNO.store(
+            if id == crate::r::io::async_fs_cabi::FS_ERR_ALREADY_EXISTS {
+                EEXIST
+            } else {
+                fs_rc_to_errno(id)
+            },
+            Ordering::Relaxed,
+        );
+        return -1;
+    }
+    let id = id as u32;
+    let result = loop {
+        match crate::r::io::async_fs_cabi::trueos_cabi_async_fs_status(id) {
+            0 => crate::r::io::cabi::trueos_cabi_poll_once(),
+            1 => break 0,
+            error => {
+                break if error == crate::r::io::async_fs_cabi::FS_ERR_ALREADY_EXISTS {
+                    EEXIST
+                } else {
+                    fs_rc_to_errno(error)
+                };
+            }
+        }
+    };
+    let _ = crate::r::io::async_fs_cabi::trueos_cabi_async_fs_discard(id);
+    TRUEOS_ERRNO.store(result, Ordering::Relaxed);
+    if result == 0 { 0 } else { -1 }
 }
 
 fn renameat_dirfd_check(dirfd: c_int, path: &str) -> Result<(), c_int> {

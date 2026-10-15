@@ -219,6 +219,18 @@ fn create_labeled(
     Ok(block::register_device(desc, dev))
 }
 
+/// Private sparse storage: no public disk picker entry or automatic root mount.
+pub(crate) fn create_private(
+    size_bytes: u64,
+    block_size: u32,
+    label: impl Into<String>,
+) -> Result<block::DeviceHandle, block::Error> {
+    let dev = RamdiskDevice::new(size_bytes, block_size)?;
+    let mut desc = block::DeviceDescriptor::new(block::DeviceKind::Ramdisk).with_label(label);
+    desc.user_visible = false;
+    Ok(block::register_device_deferred_mount(desc, dev))
+}
+
 pub async fn create_trueos_public(
     size_bytes: u64,
     block_size: u32,

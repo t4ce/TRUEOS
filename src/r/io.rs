@@ -68,6 +68,16 @@ pub mod kfs {
             .map_err(|_| FsError::BadPath)
     }
 
+    fn path_disk(path: &str, allow_empty: bool) -> Result<(block::DeviceHandle, String)> {
+        let name = normalize_rel(path, allow_empty)?;
+        let disk = crate::r::fs::volatile_files::selected_disk(&name).ok_or(FsError::NoRoot)?;
+        Ok((disk, name))
+    }
+
+    pub(crate) fn prepare_volatile_files(root: &str) -> Result<crate::r::fs::volatile_files::SeedStats> {
+        wait_for_filesystem(crate::r::fs::request_broker::prepare_volatile_files(String::from(root)))
+    }
+
     /// Compatibility boundary for APIs whose public contract is synchronous.
     ///
     /// The caller must already be on a background AP service lane. Only typed,
@@ -96,15 +106,13 @@ pub mod kfs {
 
     #[inline]
     pub fn read_file(path: &str) -> Result<Vec<u8>> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
+        let (disk, name) = path_disk(path, false)?;
         wait_for_filesystem(crate::r::fs::request_broker::read_file(disk, name))
     }
 
     #[inline]
     pub fn read_file_len(path: &str) -> Result<usize> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
+        let (disk, name) = path_disk(path, false)?;
         wait_for_filesystem(crate::r::fs::request_broker::read_file_len(disk, name))
     }
 
@@ -114,8 +122,7 @@ pub mod kfs {
             return Ok(0);
         }
 
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
+        let (disk, name) = path_disk(path, false)?;
         let cap = out.len();
         let bytes = wait_for_filesystem(crate::r::fs::request_broker::read_file_range(
             disk, name, offset, cap,
@@ -127,15 +134,13 @@ pub mod kfs {
 
     #[inline]
     pub fn stat(path: &str) -> Result<FsStat> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, true)?;
+        let (disk, name) = path_disk(path, true)?;
         wait_for_filesystem(crate::r::fs::request_broker::stat(disk, name))
     }
 
     #[inline]
     pub fn typed_stat(path: &str) -> Result<TypedFsStat> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, true)?;
+        let (disk, name) = path_disk(path, true)?;
         let (stat, content_type) =
             wait_for_filesystem(crate::r::fs::request_broker::typed_stat(disk, name))?;
         Ok(TypedFsStat {
@@ -147,8 +152,7 @@ pub mod kfs {
 
     #[inline]
     pub fn write_file_begin(path: &str, total_len: u64) -> Result<u32> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
+        let (disk, name) = path_disk(path, false)?;
         wait_for_filesystem(crate::r::fs::request_broker::write_file_begin(disk, name, total_len))
     }
 
@@ -158,8 +162,7 @@ pub mod kfs {
         total_len: u64,
         content_type: crate::r::fs::trueosfs::ContentTypeId,
     ) -> Result<u32> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
+        let (disk, name) = path_disk(path, false)?;
         wait_for_filesystem(crate::r::fs::request_broker::write_file_begin_typed(
             disk,
             name,
@@ -174,8 +177,7 @@ pub mod kfs {
             "kfs: synchronous create_dir_all compatibility path used path={} action=continue migrate=async-fs\n",
             path,
         );
-        let disk = root_disk()?;
-        let name = normalize_rel(path, true)?;
+        let (disk, name) = path_disk(path, true)?;
         if name.is_empty() {
             return Ok(());
         }
@@ -218,29 +220,25 @@ pub mod kfs {
             return Err(FsError::BadPath);
         }
 
-        let disk = root_disk()?;
-        let name = normalize_rel(path, true)?;
+        let (disk, name) = path_disk(path, true)?;
         wait_for_filesystem(crate::r::fs::request_broker::list_dir(disk, name))
     }
 
     #[inline]
     pub fn list_dir_typed(path: &str) -> Result<crate::r::fs::trueosfs::DirListing> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, true)?;
+        let (disk, name) = path_disk(path, true)?;
         wait_for_filesystem(crate::r::fs::request_broker::typed_list_dir(disk, name))
     }
 
     #[inline]
     pub fn remove(path: &str) -> Result<()> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
+        let (disk, name) = path_disk(path, false)?;
         wait_for_filesystem(crate::r::fs::request_broker::remove(disk, name))
     }
 
     #[inline]
     pub fn exists(path: &str) -> Result<bool> {
-        let disk = root_disk()?;
-        let name = normalize_rel(path, false)?;
+        let (disk, name) = path_disk(path, false)?;
         wait_for_filesystem(crate::r::fs::request_broker::exists(disk, name))
     }
 }

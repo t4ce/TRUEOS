@@ -1782,8 +1782,20 @@ pub(crate) fn build_process_env(
     vars.insert(String::from("PWD"), app_home.clone());
     vars.insert(String::from("HOME"), app_home.clone());
     let archive_stem = safe_archive_stem(archive);
-    if matches!(archive_stem.as_str(), "codex" | "codex-check") {
+    if uses_volatile_codex_files(archive) {
         vars.insert(String::from("CODEX_STARTUP_TIMING_STDERR"), String::from("1"));
+        // Preserve HOME/CODEX_HOME paths while every private file is served
+        // from the seeded RAM root. Shell3 command sessions own their disk scope.
+        for (key, leaf) in [
+            ("CODEX_HOME", ".codex"),
+            ("TMPDIR", "tmp"),
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("XDG_DATA_HOME", ".local/share"),
+            ("XDG_STATE_HOME", ".local/state"),
+        ] {
+            vars.insert(String::from(key), alloc::format!("{}/{leaf}", app_home.trim_end_matches('/')));
+        }
     }
     if archive_stem == "voxy" {
         // Settings, profiles and logs survive replacement of the container.
@@ -1899,6 +1911,10 @@ fn safe_archive_stem(archive: &str) -> String {
     } else {
         out
     }
+}
+
+pub(crate) fn uses_volatile_codex_files(archive: &str) -> bool {
+    matches!(safe_archive_stem(archive).as_str(), "codex" | "codex-check")
 }
 
 pub(crate) fn app_fs_root_for_archive(archive: &str, _module_bytes: &[u8]) -> String {

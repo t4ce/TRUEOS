@@ -896,6 +896,28 @@ pub async fn mount_root_async(
     Ok(Some(disk_id))
 }
 
+/// Keep a consistent source namespace/payload snapshot during a private copy.
+/// Build the index before taking the writer gate: publication may checkpoint.
+pub(crate) struct RootSnapshotLease {
+    _activity: crate::disc::access::Activity,
+    _writer: write_gate::RootWriteLease,
+}
+
+pub(crate) async fn read_snapshot_lease_async(
+    disk: block::DeviceHandle,
+) -> Result<RootSnapshotLease, block::Error> {
+    let activity = crate::disc::access::Activity::begin(disk)?;
+    let placement = placement_for_io_async(disk).await?.ok_or(block::Error::NotReady)?;
+    loop {
+        ensure_index_async(disk, &placement).await?;
+        let writer = write_gate::RootWriteLease::acquire(disk.id()).await;
+        if ROOTS.lock().iter().any(|m| m.disk_id == disk.id() && m.index.is_some()) {
+            return Ok(RootSnapshotLease { _activity: activity, _writer: writer });
+        }
+        drop(writer);
+    }
+}
+
 /// Async remount path used after destructive operations that replace the on-disk
 /// TRUEOSFS contents on an already-mounted disk.
 ///
@@ -963,8 +985,11 @@ fn register_root_mount(
         }
     }
 
-    PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
-    PRIMARY_ROOT_HANDLE_RAW.store(disk.into_raw(), Ordering::Release);
+    // Private RAM storage must never replace the shell's persistent root.
+    if disk.info().user_visible {
+        PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
+        PRIMARY_ROOT_HANDLE_RAW.store(disk.into_raw(), Ordering::Release);
+    }
 
     file_record_cache_invalidate_disk(disk_id);
 
@@ -1164,6 +1189,31 @@ fn update_root_index_delete(disk_id: block::DiscId, path: &str) -> bool {
     index.remove(path.as_bytes());
     mount.writes_since_checkpoint = mount.writes_since_checkpoint.saturating_add(1);
     true
+}
+
+fn remove_index_subtree(index: &mut TrueosFsIndex, path: &str) {
+    let prefix = normalized_dir_prefix(path);
+    index.retain(|key, _| key.as_slice() != path.as_bytes() && !key.starts_with(prefix.as_bytes()));
+}
+
+fn update_root_index_delete_tree(disk_id: block::DiscId, path: &str) -> bool {
+    let mut roots = ROOTS.lock();
+    let Some(mount) = roots.iter_mut().find(|m| m.disk_id == disk_id) else {
+        return false;
+    };
+    let Some(index) = mount.index.as_mut() else {
+        return false;
+    };
+    remove_index_subtree(index, path);
+    mount.writes_since_checkpoint = mount.writes_since_checkpoint.saturating_add(1);
+    true
+}
+
+fn indexed_removal_entry(disk_id: block::DiscId, path: &str) -> Result<Option<IndexRef>, block::Error> {
+    let roots = ROOTS.lock();
+    let mount = roots.iter().find(|m| m.disk_id == disk_id).ok_or(block::Error::NotReady)?;
+    let index = mount.index.as_ref().ok_or(block::Error::NotReady)?;
+    Ok(index.get(path.as_bytes()).copied())
 }
 
 fn update_root_index_rename_tree(
@@ -1562,7 +1612,7 @@ pub async fn file_write_begin_with_key_async(
     .await
 }
 
-async fn file_write_begin_with_metadata_async(
+pub(crate) async fn file_write_begin_with_metadata_async(
     disk: block::DeviceHandle,
     name: &str,
     total_len: u64,
@@ -2318,26 +2368,29 @@ pub async fn file_delete_async(
     let io = KernelBlockIo::new(disk);
 
     let disk_id = disk.id();
-    let record = match file_record_cache_lookup(disk_id, name) {
-        Some(record) => Some(record),
-        None => {
-            let record = lookup_via_index_async(disk, &placement, name).await?;
-            if let Some(record) = record {
-                file_record_cache_insert(disk_id, name, record);
-            }
-            record
+    let (_write_lease, entry) = loop {
+        ensure_index_async(disk, &placement).await?;
+        let lease = write_gate::RootWriteLease::acquire(disk_id).await;
+        match indexed_removal_entry(disk_id, name) {
+            Ok(Some(entry)) if entry.kind == trueos_fs::LogKind::Put => break (lease, entry),
+            Ok(_) => return Ok(false),
+            Err(block::Error::NotReady) => { drop(lease); }
+            Err(error) => return Err(error),
         }
     };
-    let Some(record) = record else {
-        return Ok(false);
+    let Some(record) = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
+        .await.map_err(map_engine_err)?
+    else {
+        return Err(block::Error::Corrupted);
     };
-
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
-    let ok = trueos_fs::delete_file_at_record(&io, &params, name, &record)
+    if record.kind != NodeKind::File || record.content_type != entry.content_type {
+        return Err(block::Error::Corrupted);
+    }
+    let ok = trueos_fs::delete_node_at_record(&io, &params, name, &record)
         .await
         .map_err(map_engine_err)?;
     if ok {
-            bump_root_cache_gen(disk_id);
+        bump_root_cache_gen(disk_id);
         file_record_cache_invalidate_path(disk_id, name);
         if !update_root_index_delete(disk_id, name) {
             invalidate_root_index(disk_id);
@@ -2359,45 +2412,89 @@ pub async fn remove_recursive_async(
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
-    let Some(record) = trueos_fs::lookup_node_record(
-        &KernelBlockIo::new(disk),
-        &trueos_fs::FsParams {
-            super_lba: placement.super_lba,
-            data_lba: placement.data_lba,
-            data_end_lba_exclusive: placement.data_end_lba_exclusive,
-        },
-        name,
-    )
-    .await
-    .map_err(map_engine_err)?
-    else {
-        return Ok(false);
-    };
     let params = trueos_fs::FsParams {
         super_lba: placement.super_lba,
         data_lba: placement.data_lba,
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+    // Build before taking the write lease: index publication may checkpoint
+    // and need that same lease. Recheck the authoritative record after waiting
+    // for a writer, so a concurrent rename/replacement cannot stale the lookup.
+    let (_write_lease, entry) = loop {
+        ensure_index_async(disk, &placement).await?;
+        let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        match indexed_removal_entry(disk.id(), name) {
+            Ok(Some(entry)) => break (lease, entry),
+            Ok(None) => return Ok(false),
+            Err(block::Error::NotReady) => { drop(lease); }
+            Err(error) => return Err(error),
+        }
+    };
+    let Some(record) = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
+        .await.map_err(map_engine_err)?
+    else {
+        return Err(block::Error::Corrupted);
+    };
+    let expected_kind = match entry.kind {
+        trueos_fs::LogKind::Put => NodeKind::File,
+        trueos_fs::LogKind::Directory => NodeKind::Directory,
+        _ => return Err(block::Error::Corrupted),
+    };
+    if record.kind != expected_kind || record.content_type != entry.content_type {
+        return Err(block::Error::Corrupted);
+    }
     let ok = match record.kind {
         NodeKind::File => trueos_fs::delete_node_at_record(&io, &params, name, &record).await,
-        NodeKind::Directory => trueos_fs::delete_tree(&io, &params, name).await,
+        NodeKind::Directory => trueos_fs::delete_tree_at_record(&io, &params, name, &record).await,
     }
     .map_err(map_engine_err)?;
     if ok {
         bump_root_cache_gen(disk.id());
         file_record_cache_invalidate_prefix(disk.id(), normalized_dir_prefix(name).as_str());
         file_record_cache_invalidate_path(disk.id(), name);
-        invalidate_root_index(disk.id());
+        let updated = match record.kind {
+            NodeKind::File => update_root_index_delete(disk.id(), name),
+            NodeKind::Directory => update_root_index_delete_tree(disk.id(), name),
+        };
+        if !updated { invalidate_root_index(disk.id()); }
+        super::file_watch::changed(disk.id(), name);
     }
     Ok(ok)
 }
 
-/// Async TRUEOSFS: best-effort rename (copy + delete).
+/// Validate move endpoints against the current index under the root write lease.
+fn indexed_move_entry(
+    disk_id: block::DiscId,
+    src: &str,
+    dst: &str,
+    kind: trueos_fs::LogKind,
+) -> Result<Option<IndexRef>, block::Error> {
+    let roots = ROOTS.lock();
+    let mount = roots.iter().find(|m| m.disk_id == disk_id).ok_or(block::Error::NotReady)?;
+    let index = mount.index.as_ref().ok_or(block::Error::NotReady)?;
+    let Some(source) = index.get(src.as_bytes()).filter(|entry| entry.kind == kind) else {
+        return Ok(None);
+    };
+    let dst_prefix = normalized_dir_prefix(dst);
+    if index.contains_key(dst.as_bytes())
+        || index.range(dst_prefix.as_bytes().to_vec()..).next()
+            .is_some_and(|(key, _)| key.starts_with(dst_prefix.as_bytes()))
+    {
+        return Ok(None);
+    }
+    if let Some((parent, _)) = dst.rsplit_once('/')
+        && !index.get(parent.as_bytes()).is_some_and(|entry| entry.kind == trueos_fs::LogKind::Directory)
+    {
+        return Ok(None);
+    }
+    Ok(Some(*source))
+}
+
+/// Async TRUEOSFS: move a file with one durable namespace record.
 ///
 /// Returns:
-/// - `Ok(true)` if `src` was copied to `dst` (and `src` was best-effort deleted)
+/// - `Ok(true)` if the indexed file name moved from `src` to `dst`
 /// - `Ok(false)` if `src` is missing, `dst` already exists, or the filesystem is unavailable
 pub async fn file_rename_async(
     disk: block::DeviceHandle,
@@ -2414,14 +2511,6 @@ pub async fn file_rename_async(
         return Err(block::Error::InvalidParam);
     }
 
-    // Conservative: never overwrite an existing destination.
-    if node_info_async(disk, dst).await?.is_some() {
-        return Ok(false);
-    }
-
-    let Some(source_record) = lookup_file_record_async(disk, src).await? else {
-        return Ok(false);
-    };
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
@@ -2431,35 +2520,47 @@ pub async fn file_rename_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
-    let ok = trueos_fs::move_file_from_record(&io, &params, src, &source_record, dst)
-        .await
-        .map_err(map_engine_err)?;
-    if !ok {
-        return Ok(false);
-    }
-
-    // The engine copy is a direct physical operation, so publish the new
-    // record into every kernel-side view before removing the old logical name.
-    let Some(destination_record) = trueos_fs::lookup_file_record(&io, &params, dst)
+    let (_write_lease, entry) = loop {
+        ensure_index_async(disk, &placement).await?;
+        let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        match indexed_move_entry(disk.id(), src, dst, trueos_fs::LogKind::Put) {
+            Ok(Some(entry)) => break (lease, entry),
+            Ok(None) => return Ok(false),
+            Err(block::Error::NotReady) => { drop(lease); }
+            Err(error) => return Err(error),
+        }
+    };
+    let Some(source) = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
         .await
         .map_err(map_engine_err)?
     else {
-        invalidate_root_index(disk.id());
         return Err(block::Error::Corrupted);
     };
-    record_successful_content_commit(destination_record.content_type, false);
-    super::file_watch::changed(disk.id(), dst);
+    if source.kind != NodeKind::File || source.content_type != entry.content_type {
+        return Err(block::Error::Corrupted);
+    }
+    let source_record = trueos_fs::FileRecordRef {
+        file_id: source.file_id, entry_lba: source.entry_lba, data_lba: source.data_lba,
+        data_len: source.data_len, content_type: source.content_type, record_key: source.record_key,
+    };
+    let renamed = trueos_fs::rename_file_at_record(&io, &params, src, dst, &source_record)
+        .await
+        .map_err(map_engine_err)?;
+    if !renamed {
+        return Ok(false);
+    }
     bump_root_cache_gen(disk.id());
+    file_record_cache_invalidate_path(disk.id(), src);
     file_record_cache_invalidate_path(disk.id(), dst);
-    file_record_cache_insert(disk.id(), dst, destination_record);
-    if !update_root_index_put(disk.id(), dst, destination_record) {
+    file_record_cache_insert(disk.id(), dst, source_record);
+    if !update_root_index_rename_tree(
+        disk.id(),
+        &[(String::from(src), String::from(dst), entry)],
+    ) {
         invalidate_root_index(disk.id());
     }
-
-    drop(_write_lease);
-    // Best-effort cleanup; ignore failure.
-    let _ = file_delete_async(disk, src).await;
+    super::file_watch::changed(disk.id(), src);
+    super::file_watch::changed(disk.id(), dst);
     Ok(true)
 }
 
@@ -2548,20 +2649,20 @@ pub async fn dir_rename_async(
     if src.is_empty() || dst.is_empty() || src == dst {
         return Ok(false);
     }
-    if let Some((parent, _)) = dst.rsplit_once('/')
-        && !parent.is_empty()
-        && !dir_exists_async(disk, parent).await?
-    {
-        return Ok(false);
-    }
-
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
-    ensure_index_async(disk, &placement).await?;
-
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let disk_id = disk.id();
+    let (_write_lease, entry) = loop {
+        ensure_index_async(disk, &placement).await?;
+        let lease = write_gate::RootWriteLease::acquire(disk_id).await;
+        match indexed_move_entry(disk_id, &src, &dst, trueos_fs::LogKind::Directory) {
+            Ok(Some(entry)) => break (lease, entry),
+            Ok(None) => return Ok(false),
+            Err(block::Error::NotReady) => { drop(lease); }
+            Err(error) => return Err(error),
+        }
+    };
     let Some(moves) = collect_index_tree_moves(disk_id, src.as_str(), dst.as_str()) else {
         return Ok(false);
     };
@@ -2579,7 +2680,15 @@ pub async fn dir_rename_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let ok = trueos_fs::rename_tree(&io, &params, src.as_str(), dst.as_str())
+    let Some(source) = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
+        .await.map_err(map_engine_err)?
+    else {
+        return Err(block::Error::Corrupted);
+    };
+    if source.kind != NodeKind::Directory || source.content_type != entry.content_type {
+        return Err(block::Error::Corrupted);
+    }
+    let ok = trueos_fs::rename_tree_at_record(&io, &params, src.as_str(), dst.as_str(), &source)
         .await
         .map_err(map_engine_err)?;
     if !ok {
@@ -2589,9 +2698,13 @@ pub async fn dir_rename_async(
     bump_root_cache_gen(disk_id);
     file_record_cache_invalidate_prefix(disk_id, normalized_dir_prefix(src.as_str()).as_str());
     file_record_cache_invalidate_prefix(disk_id, normalized_dir_prefix(dst.as_str()).as_str());
+    file_record_cache_invalidate_path(disk_id, &src);
+    file_record_cache_invalidate_path(disk_id, &dst);
     if !update_root_index_rename_tree(disk_id, moves.as_slice()) {
         invalidate_root_index(disk_id);
     }
+    super::file_watch::changed(disk_id, &src);
+    super::file_watch::changed(disk_id, &dst);
     Ok(true)
 }
 
@@ -2608,7 +2721,7 @@ pub async fn list_dir_async(
 
 // Content selection has its own explicit result budget and must not inherit
 // the small interactive directory-listing cap.
-async fn list_dir_with_limit_async(
+pub(crate) async fn list_dir_with_limit_async(
     disk: block::DeviceHandle,
     dir: &str,
     entry_cap: usize,
@@ -3356,6 +3469,9 @@ pub fn list_roots() -> Vec<RootInfo> {
     let index_queue = INDEX_QUEUE.lock();
     let mut out: Vec<RootInfo> = Vec::with_capacity(roots.len());
     for m in roots.iter() {
+        if !block::device_handle(m.disk_id).is_some_and(|disk| disk.info().user_visible) {
+            continue;
+        }
         out.push(RootInfo {
             disk_id: m.disk_id,
             seq: m.seq,
@@ -3530,7 +3646,9 @@ pub fn primary_root_id() -> Option<block::DiscId> {
     }
 
     let roots = ROOTS.lock();
-    let picked = roots.iter().max_by_key(|m| m.seq).map(|m| m.disk_id);
+    let picked = roots.iter()
+        .filter(|m| block::device_handle(m.disk_id).is_some_and(|disk| disk.info().user_visible))
+        .max_by_key(|m| m.seq).map(|m| m.disk_id);
     if let Some(disk_id) = picked {
         PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
         if let Some(disk) = block::device_handle(disk_id) {

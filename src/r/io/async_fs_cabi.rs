@@ -660,7 +660,7 @@ pub(crate) fn discard(owner: u32, id: u32) -> i32 {
 fn selected_disk(path: &str) -> Result<(crate::disc::block::DeviceHandle, &str), i32> {
     const PREFIX: &str = "trueosfs:disc";
     let Some(selector) = path.strip_prefix(PREFIX) else {
-        return crate::r::fs::trueosfs::primary_root_handle()
+        return crate::r::fs::volatile_files::selected_disk(path)
             .map(|disk| (disk, path))
             .ok_or(FS_ERR_NOT_FOUND);
     };
@@ -774,7 +774,11 @@ async fn process(request: &Request) -> OperationState {
             return OperationState::Failed(FS_ERR_BAD_PATH);
         }
         if source_path == destination_path {
-            return OperationState::Unit;
+            return match path_kind_async(source_disk, source_path).await {
+                Ok(Some(_)) => OperationState::Unit,
+                Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => OperationState::Failed(map_block_error(error)),
+            };
         }
         match path_kind_async(destination_disk, destination_path).await {
             Ok(Some(_)) => return OperationState::Failed(FS_ERR_ALREADY_EXISTS),
@@ -800,7 +804,11 @@ async fn process(request: &Request) -> OperationState {
         };
         return match result {
             Ok(true) => OperationState::Unit,
-            Ok(false) => OperationState::Failed(FS_ERR_NOT_FOUND),
+            Ok(false) => match path_kind_async(destination_disk, destination_path).await {
+                Ok(Some(_)) => OperationState::Failed(FS_ERR_ALREADY_EXISTS),
+                Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => OperationState::Failed(map_block_error(error)),
+            },
             Err(error) => OperationState::Failed(map_block_error(error)),
         };
     }

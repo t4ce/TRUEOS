@@ -135,6 +135,11 @@ pub(crate) fn request_release_vm(vm_id: u8) -> usize {
 }
 
 enum Request {
+    PrepareVolatileFiles {
+        id: u64,
+        root: String,
+        completion: Completion<super::volatile_files::SeedStats>,
+    },
     ReadFile {
         id: u64,
         disk: block::DeviceHandle,
@@ -254,6 +259,7 @@ impl Request {
 
     fn metadata(&self) -> (u64, &'static str) {
         match self {
+            Self::PrepareVolatileFiles { id, .. } => (*id, "prepare-volatile-files"),
             Self::ReadFile { id, .. } => (*id, "read-file"),
             Self::ReadFileLen { id, .. } => (*id, "read-file-len"),
             Self::ReadFileRange { id, .. } => (*id, "read-file-range"),
@@ -341,6 +347,12 @@ pub fn read_file(
         path,
         completion,
     })
+}
+
+pub(crate) fn prepare_volatile_files(
+    root: String,
+) -> core::result::Result<FsResult<super::volatile_files::SeedStats>, BlockingRequestError> {
+    submit(|id, completion| Request::PrepareVolatileFiles { id, root, completion })
 }
 
 pub fn read_file_len(
@@ -589,6 +601,10 @@ async fn process_request(owned: OwnedRequest) {
         }
     }
     match request {
+        Request::PrepareVolatileFiles { id, root, completion } => {
+            let result = super::volatile_files::prepare(&root).await;
+            finish(id, "prepare-volatile-files", completion, result);
+        }
         Request::ReadFile {
             id,
             disk,

@@ -742,7 +742,6 @@ where
     register_boxed_device(descriptor, Box::new(device), true)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn register_device_deferred_mount<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
 where
     D: BlockDevice + 'static,

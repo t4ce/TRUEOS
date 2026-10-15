@@ -2512,8 +2512,7 @@ pub async fn copy_file_from_record<D: BlockIo>(
     copy_file_record_inner(dev, params, source_name, source, destination_name, false).await
 }
 
-/// Publish the destination record of a rename while preserving object identity.
-/// The caller must remove the source after success under its namespace write lease.
+/// Move a file by appending one durable namespace rename record.
 pub async fn move_file_from_record<D: BlockIo>(
     dev: &D,
     params: &FsParams,
@@ -2521,7 +2520,50 @@ pub async fn move_file_from_record<D: BlockIo>(
     source: &FileRecordRef,
     destination_name: &str,
 ) -> Result<bool, FsError<D::Error>> {
-    copy_file_record_inner(dev, params, source_name, source, destination_name, true).await
+    if lookup_node_record(dev, params, source_name).await? != Some((*source).into())
+        || lookup_node_record(dev, params, destination_name).await?.is_some()
+    {
+        return Ok(false);
+    }
+    if let Some((parent, _)) = destination_name.rsplit_once('/')
+        && lookup_node_record(dev, params, parent)
+            .await?
+            .is_none_or(|record| record.kind != NodeKind::Directory)
+    {
+        return Ok(false);
+    }
+    Ok(move_file_from_record_prevalidated(dev, params, source_name, source, destination_name)
+        .await?
+        .is_some())
+}
+
+/// Move a file at a destination already checked by the mounted index.
+///
+/// The caller holds the namespace write lease, verifies that `source_name` is
+/// live, and that `destination_name` is absent with a directory parent. The
+/// original file record remains at the same LBA; no payload is copied and no
+/// source tombstone is needed. A previous RenameTree may have changed the
+/// source's logical path without changing the physical record name.
+pub async fn move_file_from_record_prevalidated<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    source_name: &str,
+    source: &FileRecordRef,
+    destination_name: &str,
+) -> Result<Option<FileRecordRef>, FsError<D::Error>> {
+    if !is_normalized_nonempty_path(source_name)
+        || !is_normalized_nonempty_path(destination_name)
+        || source_name == destination_name
+        || source_name.len() > (u16::MAX as usize)
+        || destination_name.len() > (u16::MAX as usize)
+    {
+        return Ok(None);
+    }
+    if rename_file_at_record(dev, params, source_name, destination_name, source).await? {
+        Ok(Some(*source))
+    } else {
+        Ok(None)
+    }
 }
 
 async fn copy_file_record_inner<D: BlockIo>(
@@ -3112,6 +3154,9 @@ pub async fn delete_file<D: BlockIo>(
 }
 
 /// Delete `name` and every descendant with one durable tree tombstone.
+///
+/// Mounted callers with a serialized namespace index should use
+/// [`delete_tree_at_record`] to avoid scanning the complete log.
 pub async fn delete_tree<D: BlockIo>(
     dev: &D,
     params: &FsParams,
@@ -3129,6 +3174,36 @@ pub async fn delete_tree<D: BlockIo>(
         return Ok(false);
     };
     let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::DeleteTree).await?;
+    advance_log_head(dev, params, sb, blocks).await?;
+    Ok(true)
+}
+
+/// Append a tree tombstone for a directory already resolved by the mounted index.
+///
+/// The caller must serialize namespace writes and supply the directory's current
+/// logical path. A RenameTree changes that path without changing its physical
+/// record, so comparing the stored name would incorrectly reject renamed trees.
+/// This validates the physical record but does not reconstruct the live index.
+pub async fn delete_tree_at_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    logical_name: &str,
+    record: &NodeRecordRef,
+) -> Result<bool, FsError<D::Error>> {
+    if !is_normalized_nonempty_path(logical_name)
+        || logical_name.as_bytes().len() > (u16::MAX as usize)
+        || record.kind != NodeKind::Directory
+    {
+        return Ok(false);
+    }
+    if get_node_record_by_lba(dev, params, record.entry_lba).await? != Some(*record) {
+        return Ok(false);
+    }
+    let Some((sb, entry_lba, _)) = check_space_for_put(dev, params, logical_name.len(), 0).await?
+    else {
+        return Ok(false);
+    };
+    let blocks = write_empty_node_entry(dev, entry_lba, logical_name, LogKind::DeleteTree).await?;
     advance_log_head(dev, params, sb, blocks).await?;
     Ok(true)
 }
@@ -3153,12 +3228,22 @@ pub async fn rename_tree<D: BlockIo>(
     {
         return Ok(false);
     }
-    if src.len() > (u16::MAX as usize) || dst.len() > 4096 {
+    if src.len() > 4096 || dst.len() > 4096 {
         return Ok(false);
     }
     let live = build_live_nodes(dev, params).await?;
+    let dst_prefix = normalized_dir_prefix_str(dst.as_str());
     if live.get(src.as_str()).map(|record| record.kind) != Some(NodeKind::Directory)
         || live.contains_key(dst.as_str())
+        || live
+            .range(dst_prefix.clone()..)
+            .next()
+            .is_some_and(|(path, _)| path.starts_with(dst_prefix.as_str()))
+    {
+        return Ok(false);
+    }
+    if let Some((parent, _)) = dst.rsplit_once('/')
+        && live.get(parent).map(|record| record.kind) != Some(NodeKind::Directory)
     {
         return Ok(false);
     }
@@ -3181,6 +3266,78 @@ pub async fn rename_tree<D: BlockIo>(
 
     let written_blocks =
         write_rename_tree_entry(dev, entry_lba, src.as_str(), dst.as_str()).await?;
+    advance_log_head(dev, params, sb, written_blocks).await?;
+    Ok(true)
+}
+
+/// Move one indexed file with a namespace-only log record.
+///
+/// The caller holds the namespace write lease and verifies source liveness,
+/// destination absence, and destination parent. The file record and payload
+/// blocks remain in place, including after an earlier directory rename.
+pub async fn rename_file_at_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    src_name: &str,
+    dst_name: &str,
+    source: &FileRecordRef,
+) -> Result<bool, FsError<D::Error>> {
+    append_rename_at_record(dev, params, src_name, dst_name, &(*source).into(), NodeKind::File).await
+}
+
+/// Append a RenameTree for a directory resolved by the mounted namespace index.
+///
+/// The caller holds the namespace write lease and checks the destination parent,
+/// destination absence, and subtree collisions. The physical record's stored
+/// name may differ from `src_dir` after an earlier RenameTree.
+pub async fn rename_tree_at_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    src_dir: &str,
+    dst_dir: &str,
+    source: &NodeRecordRef,
+) -> Result<bool, FsError<D::Error>> {
+    append_rename_at_record(dev, params, src_dir, dst_dir, source, NodeKind::Directory).await
+}
+
+async fn append_rename_at_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    source_name: &str,
+    destination_name: &str,
+    source: &NodeRecordRef,
+    expected_kind: NodeKind,
+) -> Result<bool, FsError<D::Error>> {
+    if !is_normalized_nonempty_path(source_name)
+        || !is_normalized_nonempty_path(destination_name)
+        || source_name == destination_name
+        || source_name.len() > 4096
+        || destination_name.len() > 4096
+        || (expected_kind == NodeKind::Directory
+            && destination_name.starts_with(normalized_dir_prefix_str(source_name).as_str()))
+        || source.kind != expected_kind
+    {
+        return Ok(false);
+    }
+    if get_node_record_by_lba(dev, params, source.entry_lba).await? != Some(*source) {
+        return Ok(false);
+    }
+
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+    let sb_block = read_one_block(dev, params.super_lba).await?;
+    let Some(sb) = parse_superblock(&sb_block) else {
+        return Err(FsError::Corrupted);
+    };
+    let entry_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
+    let blocks = entry_blocks(bs, source_name.len(), destination_name.len());
+    if entry_lba.saturating_add(blocks) > disk_data_end_lba_exclusive(dev, params) {
+        return Ok(false);
+    }
+    let written_blocks =
+        write_rename_tree_entry(dev, entry_lba, source_name, destination_name).await?;
     advance_log_head(dev, params, sb, written_blocks).await?;
     Ok(true)
 }
@@ -3560,8 +3717,9 @@ mod tests {
             let copy = lookup_file_record(&disk, &params, "copy").await.unwrap().unwrap();
             assert_ne!(copy.file_id, first.file_id);
             assert_eq!(move_file_from_record(&disk, &params, "history", &updated, "renamed").await, Ok(true));
-            assert_eq!(delete_file(&disk, &params, "history").await, Ok(true));
+            assert_eq!(lookup_file_record(&disk, &params, "history").await, Ok(None));
             assert_eq!(lookup_file_record(&disk, &params, "renamed").await.unwrap().unwrap().file_id, first.file_id);
+            assert_eq!(lookup_file_record(&disk, &params, "renamed").await, Ok(Some(updated)));
             assert_eq!(write_file(&disk, &params, "history", b"new").await, Ok(true));
             assert_ne!(lookup_file_record(&disk, &params, "history").await.unwrap().unwrap().file_id, first.file_id);
         });
@@ -4463,6 +4621,70 @@ mod tests {
     }
 
     #[test]
+    fn indexed_tree_delete_has_bounded_reads_and_uses_renamed_logical_path() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "old").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "old/leaf", b"x").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "old-sibling", b"stay").await, Ok(true));
+            let record = lookup_node_record(&disk, &params, "old")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(rename_tree(&disk, &params, "old", "new").await, Ok(true));
+            assert_eq!(lookup_node_record(&disk, &params, "new").await, Ok(Some(record)));
+
+            for index in 0..64 {
+                let name = alloc::format!("filler-{index:02}");
+                assert_eq!(write_file(&disk, &params, &name, b"x").await, Ok(true));
+            }
+
+            disk.reset_reads();
+            assert_eq!(delete_tree_at_record(&disk, &params, "new", &record).await, Ok(true));
+            assert!(
+                disk.read_count() <= 3,
+                "indexed tree delete read {} blocks",
+                disk.read_count()
+            );
+            assert_eq!(lookup_node_record(&disk, &params, "new").await, Ok(None));
+            assert_eq!(lookup_node_record(&disk, &params, "new/leaf").await, Ok(None));
+            assert_eq!(read_file(&disk, &params, "old-sibling").await, Ok(Some(b"stay".to_vec())));
+            assert_eq!(lookup_node_record(&disk, &params, "old").await, Ok(None));
+        });
+    }
+
+    #[test]
+    fn indexed_tree_delete_rejects_bad_paths_and_record_refs_without_writing() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "tree").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "file", b"x").await, Ok(true));
+            let record = lookup_node_record(&disk, &params, "tree")
+                .await
+                .unwrap()
+                .unwrap();
+            let file = lookup_node_record(&disk, &params, "file")
+                .await
+                .unwrap()
+                .unwrap();
+            let mut stale = record;
+            stale.file_id = stale.file_id.wrapping_add(1);
+            let head = disk.log_head();
+
+            for path in ["", "tree/../other", "/tree", "tree/"] {
+                assert_eq!(delete_tree_at_record(&disk, &params, path, &record).await, Ok(false));
+            }
+            assert_eq!(delete_tree_at_record(&disk, &params, "tree", &stale).await, Ok(false));
+            assert_eq!(delete_tree_at_record(&disk, &params, "file", &file).await, Ok(false));
+            assert_eq!(disk.log_head(), head);
+            assert_eq!(lookup_node_record(&disk, &params, "tree").await, Ok(Some(record)));
+            assert_eq!(lookup_node_record(&disk, &params, "file").await, Ok(Some(file)));
+        });
+    }
+
+    #[test]
     fn rename_tree_moves_directory_identity_and_keeps_files_readable() {
         block_on(async {
             let disk = MemoryBlockIo::new();
@@ -4500,6 +4722,147 @@ mod tests {
                     },
                 ])
             );
+        });
+    }
+
+    #[test]
+    fn compatibility_directory_rename_requires_parent_and_vacant_subtree() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "source").await, Ok(true));
+            assert_eq!(create_directory(&disk, &params, "occupied").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "occupied/child", b"x").await, Ok(true));
+            let head = disk.log_head();
+            assert_eq!(rename_tree(&disk, &params, "source", "missing/dst").await, Ok(false));
+            assert_eq!(rename_tree(&disk, &params, "source", "occupied").await, Ok(false));
+            assert_eq!(disk.log_head(), head);
+            assert_eq!(lookup_node_record(&disk, &params, "source").await.unwrap().unwrap().kind, NodeKind::Directory);
+        });
+    }
+
+    #[test]
+    fn indexed_move_preserves_opaque_type_key_and_identity_after_parent_rename() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let key = RecordKey::Key(test_key());
+            assert_eq!(create_directory(&disk, &params, "old").await, Ok(true));
+            assert_eq!(
+                write_file_with_metadata(
+                    &disk,
+                    &params,
+                    "old/file",
+                    b"payload",
+                    FileWriteMetadata {
+                        file_id: 0,
+                        content_type: ContentTypeId::PNG,
+                        record_key: key,
+                    },
+                )
+                .await,
+                Ok(true)
+            );
+            let original = lookup_file_record(&disk, &params, "old/file").await.unwrap().unwrap();
+            let future = ContentTypeId::from_raw(0x00fe_1234);
+            disk.set_content_type(original.entry_lba, future);
+            let source = lookup_file_record(&disk, &params, "old/file").await.unwrap().unwrap();
+            let parent = lookup_node_record(&disk, &params, "old").await.unwrap().unwrap();
+            assert_eq!(rename_tree_at_record(&disk, &params, "old", "alias", &parent).await, Ok(true));
+
+            let head = disk.log_head();
+            let mut stale = source;
+            stale.data_len = stale.data_len.saturating_add(1);
+            for (src, dst) in [
+                ("", "destination"),
+                ("alias/file", ""),
+                ("alias/file", "alias/file"),
+                ("alias/../file", "destination"),
+                ("alias/file", "/destination"),
+            ] {
+                assert_eq!(
+                    move_file_from_record_prevalidated(&disk, &params, src, &source, dst).await,
+                    Ok(None)
+                );
+            }
+            assert_eq!(
+                move_file_from_record_prevalidated(&disk, &params, "alias/file", &stale, "destination").await,
+                Ok(None)
+            );
+            assert_eq!(disk.log_head(), head);
+
+            for index in 0..64 {
+                let name = alloc::format!("filler-{index:02}");
+                assert_eq!(write_file(&disk, &params, &name, b"x").await, Ok(true));
+            }
+            disk.reset_reads();
+            let moved = move_file_from_record_prevalidated(
+                &disk,
+                &params,
+                "alias/file",
+                &source,
+                "destination",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(disk.read_count() <= 2, "indexed move read {} blocks", disk.read_count());
+            assert_eq!(moved, source, "metadata-only move must retain the physical record");
+            assert_eq!(moved.file_id, source.file_id);
+            assert_eq!(moved.content_type, future);
+            assert_eq!(moved.record_key, key);
+            assert_eq!(lookup_file_record(&disk, &params, "destination").await, Ok(Some(moved)));
+            assert_eq!(read_file(&disk, &params, "destination").await, Ok(Some(b"payload".to_vec())));
+            assert_eq!(lookup_file_record(&disk, &params, "alias/file").await, Ok(None));
+        });
+    }
+
+    #[test]
+    fn indexed_rename_replays_twice_with_bounded_reads_and_rejects_bad_inputs() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "source").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "source/leaf", b"x").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "source-sibling", b"stay").await, Ok(true));
+            let record = lookup_node_record(&disk, &params, "source").await.unwrap().unwrap();
+            let file = lookup_file_record(&disk, &params, "source-sibling").await.unwrap().unwrap();
+            let mut stale = record;
+            stale.file_id = stale.file_id.wrapping_add(1);
+            let head = disk.log_head();
+            for (src, dst) in [
+                ("", "other"),
+                ("source", "source/child"),
+                ("source", "source"),
+                ("source/../bad", "other"),
+                ("source", "/other"),
+            ] {
+                assert_eq!(rename_tree_at_record(&disk, &params, src, dst, &record).await, Ok(false));
+            }
+            assert_eq!(rename_tree_at_record(&disk, &params, "source", "other", &stale).await, Ok(false));
+            assert_eq!(rename_tree_at_record(&disk, &params, "source-sibling", "other", &file.into()).await, Ok(false));
+            let too_long = "x".repeat(4097);
+            disk.reset_reads();
+            for (src, dst) in [(too_long.as_str(), "other"), ("source", too_long.as_str())] {
+                assert_eq!(rename_tree_at_record(&disk, &params, src, dst, &record).await, Ok(false));
+                assert_eq!(rename_tree(&disk, &params, src, dst).await, Ok(false));
+            }
+            assert_eq!(disk.read_count(), 0, "oversized rename paths must fail before I/O");
+            assert_eq!(disk.log_head(), head);
+
+            for index in 0..64 {
+                let name = alloc::format!("filler-{index:02}");
+                assert_eq!(write_file(&disk, &params, &name, b"x").await, Ok(true));
+            }
+            disk.reset_reads();
+            assert_eq!(rename_tree_at_record(&disk, &params, "source", "alias", &record).await, Ok(true));
+            assert!(disk.read_count() <= 2, "indexed rename read {} blocks", disk.read_count());
+            disk.reset_reads();
+            assert_eq!(rename_tree_at_record(&disk, &params, "alias", "final", &record).await, Ok(true));
+            assert!(disk.read_count() <= 2, "renamed alias read {} blocks", disk.read_count());
+            assert_eq!(lookup_node_record(&disk, &params, "final").await, Ok(Some(record)));
+            assert_eq!(read_file(&disk, &params, "final/leaf").await, Ok(Some(b"x".to_vec())));
+            assert_eq!(read_file(&disk, &params, "source-sibling").await, Ok(Some(b"stay".to_vec())));
         });
     }
 }
