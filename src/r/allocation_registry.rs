@@ -1,12 +1,16 @@
 //! Fixed-capacity pointer registry for C allocation tracking.
 //!
-//! Linear probing keeps lookup and insertion local to a pointer's hash
-//! bucket. Removal shifts the following cluster backward, so repeated
-//! free/alloc cycles never accumulate tombstones. The registry itself never
-//! allocates; the caller supplies its entire capacity at compile time.
+//! This is optional allocation metadata: insertion may fail while the caller
+//! retains the allocation and its authoritative allocator-owned tag. Limit
+//! each search to one page's worth of entries so saturation cannot turn every
+//! ordinary malloc/free into a scan of the complete table. Deleted entries
+//! remain tombstones and are reused without moving another live allocation.
+//! The registry itself never allocates or evicts a live record.
+
+const PROBE_BYTES: usize = 4096;
 
 pub struct AllocationRegistry<V, const N: usize> {
-    entries: [Option<Entry<V>>; N],
+    entries: [Slot<V>; N],
 }
 
 struct Entry<V> {
@@ -14,10 +18,16 @@ struct Entry<V> {
     value: V,
 }
 
+enum Slot<V> {
+    Empty,
+    Deleted,
+    Occupied(Entry<V>),
+}
+
 impl<V, const N: usize> AllocationRegistry<V, N> {
     pub const fn new() -> Self {
         Self {
-            entries: [const { None }; N],
+            entries: [const { Slot::Empty }; N],
         }
     }
 
@@ -44,8 +54,8 @@ impl<V, const N: usize> AllocationRegistry<V, N> {
     }
 
     #[inline]
-    fn distance(from: usize, to: usize) -> usize {
-        if to >= from { to - from } else { N - from + to }
+    fn probe_limit() -> usize {
+        N.min((PROBE_BYTES / core::mem::size_of::<Slot<V>>()).max(1))
     }
 
     pub fn insert(&mut self, key: usize, value: V) -> Result<(), V> {
@@ -53,41 +63,45 @@ impl<V, const N: usize> AllocationRegistry<V, N> {
             return Err(value);
         }
         let mut index = Self::bucket(key);
-        for _ in 0..N {
-            match self.entries[index].as_mut() {
-                Some(entry) if entry.key == key => {
+        let mut deleted = None;
+        for _ in 0..Self::probe_limit() {
+            match &mut self.entries[index] {
+                Slot::Occupied(entry) if entry.key == key => {
                     entry.value = value;
                     return Ok(());
                 }
-                None => {
-                    self.entries[index] = Some(Entry { key, value });
+                Slot::Empty => {
+                    self.entries[deleted.unwrap_or(index)] = Slot::Occupied(Entry { key, value });
                     return Ok(());
                 }
-                Some(_) => index = Self::next(index),
+                Slot::Deleted => { deleted.get_or_insert(index); }
+                Slot::Occupied(_) => {}
             }
+            index = Self::next(index);
+        }
+        // A tombstone may precede an existing key. Search the complete bounded
+        // chain before reusing it, rather than publishing a duplicate mapping.
+        if let Some(index) = deleted {
+            self.entries[index] = Slot::Occupied(Entry { key, value });
+            return Ok(());
         }
         Err(value)
     }
 
     pub fn get(&self, key: usize) -> Option<&V> {
         let index = self.find_index(key)?;
-        self.entries[index].as_ref().map(|entry| &entry.value)
+        match &self.entries[index] {
+            Slot::Occupied(entry) => Some(&entry.value),
+            _ => unreachable!("find_index returned an unoccupied slot"),
+        }
     }
 
     pub fn remove(&mut self, key: usize) -> Option<V> {
         let index = self.find_index(key)?;
-        let value = self.entries[index].take()?.value;
-        let mut hole = index;
-        let mut scan = Self::next(hole);
-        while let Some(entry) = self.entries[scan].as_ref() {
-            let home = Self::bucket(entry.key);
-            if Self::distance(home, hole) < Self::distance(home, scan) {
-                self.entries[hole] = self.entries[scan].take();
-                hole = scan;
-            }
-            scan = Self::next(scan);
+        match core::mem::replace(&mut self.entries[index], Slot::Deleted) {
+            Slot::Occupied(entry) => Some(entry.value),
+            _ => unreachable!("find_index returned an unoccupied slot"),
         }
-        Some(value)
     }
 
     fn find_index(&self, key: usize) -> Option<usize> {
@@ -95,11 +109,11 @@ impl<V, const N: usize> AllocationRegistry<V, N> {
             return None;
         }
         let mut index = Self::bucket(key);
-        for _ in 0..N {
-            match self.entries[index].as_ref() {
-                Some(entry) if entry.key == key => return Some(index),
-                None => return None,
-                Some(_) => index = Self::next(index),
+        for _ in 0..Self::probe_limit() {
+            match &self.entries[index] {
+                Slot::Occupied(entry) if entry.key == key => return Some(index),
+                Slot::Empty => return None,
+                Slot::Deleted | Slot::Occupied(_) => index = Self::next(index),
             }
         }
         None
@@ -118,7 +132,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn len<V, const N: usize>(table: &AllocationRegistry<V, N>) -> usize {
-        table.entries.iter().filter(|entry| entry.is_some()).count()
+        table.entries.iter().filter(|entry| matches!(entry, Slot::Occupied(_))).count()
     }
 
     fn collisions<const N: usize>(bucket: usize, count: usize) -> Vec<usize> {
@@ -175,6 +189,86 @@ mod tests {
     }
 
     #[test]
+    fn bounded_wrapped_collision_window_reuses_tombstones_without_duplicate_keys() {
+        const N: usize = 4096;
+        type Table = AllocationRegistry<(usize, usize), N>;
+        let limit = Table::probe_limit();
+        assert_eq!(limit, 128);
+        assert!(limit * core::mem::size_of::<Slot<(usize, usize)>>() <= PROBE_BYTES);
+        let keys: Vec<_> = (1usize..)
+            .map(|key| key * 16)
+            .filter(|&key| Table::bucket(key) == N - 3)
+            .take(limit + 1).collect();
+        let mut table = Table::new();
+        for (index, &key) in keys[..limit].iter().enumerate() {
+            table.insert(key, (index, 16)).unwrap();
+        }
+        assert_eq!(table.insert(keys[limit], (limit, 16)), Err((limit, 16)));
+        assert_eq!(table.get(keys[limit]), None);
+        assert_eq!(table.remove(keys[limit]), None);
+        assert_eq!(len(&table), limit, "probe exhaustion must not evict a live record");
+        assert_eq!(table.remove(keys[1]), Some((1, 16)));
+        table.insert(keys[limit - 1], (777, 32)).unwrap();
+        assert_eq!(len(&table), limit - 1, "updating beyond a tombstone cannot duplicate a key");
+        assert_eq!(table.remove(keys[limit - 1]), Some((777, 32)));
+        assert_eq!(table.get(keys[limit - 1]), None);
+        table.insert(keys[limit], (limit, 16)).unwrap();
+        for (index, &key) in keys[..limit - 1].iter().enumerate() {
+            assert_eq!(table.get(key).copied(), (index != 1).then_some((index, 16)));
+        }
+        assert_eq!(table.get(keys[limit]), Some(&(limit, 16)));
+    }
+
+    #[test]
+    fn repeated_full_delete_and_reinsert_cycles_do_not_exhaust_tombstones() {
+        const N: usize = 16;
+        let mut table = AllocationRegistry::<usize, N>::new();
+        for wave in 0..1000 {
+            for key in 0..N { table.insert(key + wave * N, key).unwrap(); }
+            assert_eq!(len(&table), N);
+            for key in 0..N { assert_eq!(table.remove(key + wave * N), Some(key)); }
+            assert_eq!(len(&table), 0);
+            assert_eq!(table.get(usize::MAX), None);
+        }
+    }
+
+    #[test]
+    fn replacement_removal_and_rejection_preserve_value_ownership() {
+        use std::rc::Rc;
+        use std::cell::Cell;
+        struct Value(Rc<Cell<usize>>);
+        impl Drop for Value { fn drop(&mut self) { self.0.set(self.0.get() + 1); } }
+        let drops = Rc::new(Cell::new(0));
+        let mut table = AllocationRegistry::<Value, 1>::new();
+        assert!(table.insert(1, Value(drops.clone())).is_ok());
+        assert!(table.insert(1, Value(drops.clone())).is_ok());
+        assert_eq!(drops.get(), 1, "replacement drops only the previous value");
+        let rejected = table.insert(2, Value(drops.clone())).err().unwrap();
+        assert_eq!(drops.get(), 1, "rejected value remains owned by caller");
+        let removed = table.remove(1).unwrap();
+        assert_eq!(drops.get(), 1, "removed value remains owned by caller");
+        drop(removed); drop(rejected);
+        assert_eq!(drops.get(), 3);
+        assert!(table.insert(3, Value(drops.clone())).is_ok());
+        drop(table);
+        assert_eq!(drops.get(), 4);
+    }
+
+    #[test]
+    fn larger_values_still_admit_one_entry_per_probe_window() {
+        type Table = AllocationRegistry<[u8; PROBE_BYTES + 1], 2>;
+        assert_eq!(Table::probe_limit(), 1);
+        let key = 7;
+        let collision = (key + 1..).find(|&other| Table::bucket(other) == Table::bucket(key)).unwrap();
+        let mut table = Table::new();
+        assert!(table.insert(key, [3; PROBE_BYTES + 1]).is_ok());
+        assert!(table.insert(collision, [4; PROBE_BYTES + 1]).is_err());
+        assert_eq!(table.get(key).unwrap()[0], 3);
+        assert!(table.remove(key).is_some());
+        assert!(table.insert(collision, [4; PROBE_BYTES + 1]).is_ok());
+    }
+
+    #[test]
     fn randomized_differential_with_repeated_churn() {
         let mut table = AllocationRegistry::<u64, 32>::new();
         let mut reference = HashMap::<usize, u64>::new();
@@ -206,6 +300,41 @@ mod tests {
     }
 
     #[test]
+    fn bounded_search_randomized_differential_preserves_every_accepted_record() {
+        const N: usize = 257;
+        let mut table = AllocationRegistry::<u64, N>::new();
+        assert!(AllocationRegistry::<u64, N>::probe_limit() < N);
+        let mut reference = HashMap::<usize, u64>::new();
+        let mut random = 0xa37e_8129_ebfc_504du64;
+        let mut peak = 0;
+        for iteration in 0..50_000 {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            let key = ((random >> 20) as usize % (N * 2)) * 16;
+            match random & 3 {
+                0 | 1 => match table.insert(key, random) {
+                    Ok(()) => { reference.insert(key, random); }
+                    Err(value) => {
+                        assert_eq!(value, random);
+                        assert!(!reference.contains_key(&key), "an existing record must remain updatable");
+                    }
+                },
+                2 => assert_eq!(table.remove(key), reference.remove(&key)),
+                _ => assert_eq!(table.get(key).copied(), reference.get(&key).copied()),
+            }
+            assert_eq!(len(&table), reference.len());
+            peak = peak.max(reference.len());
+            if iteration % 127 == 0 {
+                for (&key, &value) in &reference { assert_eq!(table.get(key), Some(&value)); }
+            }
+        }
+        assert!(peak > N * 3 / 4);
+        for (key, value) in reference { assert_eq!(table.remove(key), Some(value)); }
+        assert_eq!(len(&table), 0);
+    }
+
+    #[test]
     #[ignore = "run explicitly for a host lookup timing comparison"]
     fn lookup_benchmark() {
         use std::hint::black_box;
@@ -213,10 +342,13 @@ mod tests {
         const N: usize = 4096;
         let mut table = AllocationRegistry::<usize, N>::new();
         let mut linear = [None; N];
+        let mut accepted = 0;
         for i in 0..N {
             let key = (i + 1) * 4096;
-            table.insert(key, i).unwrap();
-            linear[i] = Some((key, i));
+            if table.insert(key, i).is_ok() {
+                linear[i] = Some((key, i));
+                accepted += 1;
+            }
         }
         let keys: Vec<_> = (0..200_000).map(|i| ((i * 997) % N + 1) * 4096).collect();
         let started = Instant::now();
@@ -233,6 +365,6 @@ mod tests {
             );
         }
         let scanned = started.elapsed();
-        eprintln!("lookup 200k at 4096 entries: hash={hashed:?} linear={scanned:?}");
+        eprintln!("lookup 200k at {accepted} tracked entries: hash={hashed:?} linear={scanned:?}");
     }
 }

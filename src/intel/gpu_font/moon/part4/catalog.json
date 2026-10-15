@@ -1,0 +1,2612 @@
+{
+  "detail": 6,
+  "scale": 8,
+  "width": 2560,
+  "height": 1152,
+  "columns": 16,
+  "tile_width": 160,
+  "tile_height": 128,
+  "model": "tissue",
+  "recipe": {
+    "model": "tissue",
+    "reach": 1.76,
+    "sigma": 0.45,
+    "level": 0.75,
+    "balance": 1,
+    "stretch": 1.75,
+    "bias": 0,
+    "smartBias": true,
+    "diagAssist": 0,
+    "diagSnap": 0,
+    "prune": true,
+    "cross": false,
+    "contours": false,
+    "route": "field"
+  },
+  "route": "field",
+  "source_sha256": "50b9f22403b6bf9500550e5b36010afeed33ccb7b8d1e14a8f3cf1dc5d45ccad",
+  "set": "studio",
+  "part": 4,
+  "part_count": 4,
+  "path": "microfonttothemoon-8x-4.png",
+  "glyph_count": 112,
+  "mesh_sha256": "65178190887fb259b761949c7d011646cdd2fc355ab215a0773d75f06585b5ee",
+  "glyphs": [
+    {
+      "slot": 304,
+      "char": "⡐",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 130,
+      "triangles": 176,
+      "gpuTriangles": 176,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 305,
+      "char": "⡑",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 306,
+      "char": "⡒",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 307,
+      "char": "⡓",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 308,
+      "char": "⡔",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 309,
+      "char": "⡕",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 310,
+      "char": "⡖",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 311,
+      "char": "⡗",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 312,
+      "char": "⡘",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 313,
+      "char": "⡙",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 314,
+      "char": "⡚",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 315,
+      "char": "⡛",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 316,
+      "char": "⡜",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 317,
+      "char": "⡝",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 318,
+      "char": "⡞",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 319,
+      "char": "⡟",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 336,
+      "char": "⡰",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 337,
+      "char": "⡱",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 338,
+      "char": "⡲",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 339,
+      "char": "⡳",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 340,
+      "char": "⡴",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 341,
+      "char": "⡵",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 342,
+      "char": "⡶",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 343,
+      "char": "⡷",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 344,
+      "char": "⡸",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 345,
+      "char": "⡹",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 346,
+      "char": "⡺",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 347,
+      "char": "⡻",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 348,
+      "char": "⡼",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 349,
+      "char": "⡽",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 350,
+      "char": "⡾",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 351,
+      "char": "⡿",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 455,
+      "triangles": 616,
+      "gpuTriangles": 616,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 368,
+      "char": "⢐",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 130,
+      "triangles": 176,
+      "gpuTriangles": 176,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 369,
+      "char": "⢑",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 370,
+      "char": "⢒",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 371,
+      "char": "⢓",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 372,
+      "char": "⢔",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 373,
+      "char": "⢕",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 374,
+      "char": "⢖",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 375,
+      "char": "⢗",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 376,
+      "char": "⢘",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 377,
+      "char": "⢙",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 378,
+      "char": "⢚",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 379,
+      "char": "⢛",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 380,
+      "char": "⢜",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 381,
+      "char": "⢝",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 382,
+      "char": "⢞",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 383,
+      "char": "⢟",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 400,
+      "char": "⢰",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 401,
+      "char": "⢱",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 402,
+      "char": "⢲",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 403,
+      "char": "⢳",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 404,
+      "char": "⢴",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 405,
+      "char": "⢵",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 406,
+      "char": "⢶",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 407,
+      "char": "⢷",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 408,
+      "char": "⢸",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 409,
+      "char": "⢹",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 410,
+      "char": "⢺",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 411,
+      "char": "⢻",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 412,
+      "char": "⢼",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 413,
+      "char": "⢽",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 414,
+      "char": "⢾",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 415,
+      "char": "⢿",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 455,
+      "triangles": 616,
+      "gpuTriangles": 616,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 432,
+      "char": "⣐",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 195,
+      "triangles": 264,
+      "gpuTriangles": 264,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 433,
+      "char": "⣑",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 434,
+      "char": "⣒",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 435,
+      "char": "⣓",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 436,
+      "char": "⣔",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 437,
+      "char": "⣕",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 438,
+      "char": "⣖",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 439,
+      "char": "⣗",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 440,
+      "char": "⣘",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 441,
+      "char": "⣙",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 442,
+      "char": "⣚",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 443,
+      "char": "⣛",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 444,
+      "char": "⣜",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 445,
+      "char": "⣝",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 446,
+      "char": "⣞",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 447,
+      "char": "⣟",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 455,
+      "triangles": 616,
+      "gpuTriangles": 616,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 464,
+      "char": "⣰",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 260,
+      "triangles": 352,
+      "gpuTriangles": 352,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 465,
+      "char": "⣱",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 466,
+      "char": "⣲",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 467,
+      "char": "⣳",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 468,
+      "char": "⣴",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 469,
+      "char": "⣵",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 470,
+      "char": "⣶",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 471,
+      "char": "⣷",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 455,
+      "triangles": 616,
+      "gpuTriangles": 616,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 472,
+      "char": "⣸",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 325,
+      "triangles": 440,
+      "gpuTriangles": 440,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 473,
+      "char": "⣹",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 474,
+      "char": "⣺",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 475,
+      "char": "⣻",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 455,
+      "triangles": 616,
+      "gpuTriangles": 616,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 476,
+      "char": "⣼",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 390,
+      "triangles": 528,
+      "gpuTriangles": 528,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 477,
+      "char": "⣽",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 455,
+      "triangles": 616,
+      "gpuTriangles": 616,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 478,
+      "char": "⣾",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 455,
+      "triangles": 616,
+      "gpuTriangles": 616,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 479,
+      "char": "⣿",
+      "kind": "braille",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 520,
+      "triangles": 704,
+      "gpuTriangles": 704,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 496,
+      "char": "▐",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 998,
+      "triangles": 1506,
+      "gpuTriangles": 1506,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 497,
+      "char": "░",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 1105,
+      "triangles": 1496,
+      "gpuTriangles": 1496,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 498,
+      "char": "▒",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 2657,
+      "triangles": 3672,
+      "gpuTriangles": 3672,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 499,
+      "char": "▓",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 2749,
+      "triangles": 4302,
+      "gpuTriangles": 4302,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 500,
+      "char": "▔",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 314,
+      "triangles": 418,
+      "gpuTriangles": 418,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 501,
+      "char": "▕",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 774,
+      "triangles": 1158,
+      "gpuTriangles": 1158,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 502,
+      "char": "▖",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 641,
+      "triangles": 972,
+      "gpuTriangles": 972,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 503,
+      "char": "▗",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 641,
+      "triangles": 972,
+      "gpuTriangles": 972,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 504,
+      "char": "▘",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 575,
+      "triangles": 880,
+      "gpuTriangles": 880,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 505,
+      "char": "▙",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 1266,
+      "triangles": 1926,
+      "gpuTriangles": 1926,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 506,
+      "char": "▚",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 1230,
+      "triangles": 1872,
+      "gpuTriangles": 1872,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 507,
+      "char": "▛",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 1279,
+      "triangles": 1954,
+      "gpuTriangles": 1954,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 508,
+      "char": "▜",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 1279,
+      "triangles": 1954,
+      "gpuTriangles": 1954,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 509,
+      "char": "▝",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 575,
+      "triangles": 880,
+      "gpuTriangles": 880,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 510,
+      "char": "▞",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 1230,
+      "triangles": 1872,
+      "gpuTriangles": 1872,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    },
+    {
+      "slot": 511,
+      "char": "▟",
+      "kind": "block",
+      "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
+      "route": "field",
+      "spacing": 0.16666666666666666,
+      "vertices": 1266,
+      "triangles": 1926,
+      "gpuTriangles": 1926,
+      "collapsedFaces": 0,
+      "float32FlippedFaces": 0
+    }
+  ]
+}

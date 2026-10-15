@@ -1,5 +1,7 @@
 // Generated geometry configuration.
-const WIDTH: u32 = 2560;
-const HEIGHT: u32 = 1088;
-const DETAIL: u32 = 6;
-const RECIPE: &str = "model=tissue reach=1.76 sigma=0.45 level=0.75 balance=1 stretch=1.75 bias=0 smartBias=true diagAssist=0 diagSnap=0 prune=true cross=false contours=false route=field";
+pub(super) const STAMPS: [Stamp; 4] = [
+    Stamp { mesh: include_bytes!("part1/draft.mesh"), path: "microfonttothemoon-han-8x-1.png", width: 2560, height: 1152, scale: 8, tile_width: 160, tile_height: 128, detail: 6, glyphs: 144, part: 1, recipe: "model=tissue reach=1.76 sigma=0.45 level=0.75 balance=1 stretch=1.75 bias=0 smartBias=true diagAssist=0 diagSnap=0 prune=true cross=false contours=false route=field" },
+    Stamp { mesh: include_bytes!("part2/draft.mesh"), path: "microfonttothemoon-han-8x-2.png", width: 2560, height: 1152, scale: 8, tile_width: 160, tile_height: 128, detail: 6, glyphs: 144, part: 2, recipe: "model=tissue reach=1.76 sigma=0.45 level=0.75 balance=1 stretch=1.75 bias=0 smartBias=true diagAssist=0 diagSnap=0 prune=true cross=false contours=false route=field" },
+    Stamp { mesh: include_bytes!("part3/draft.mesh"), path: "microfonttothemoon-han-8x-3.png", width: 2560, height: 1152, scale: 8, tile_width: 160, tile_height: 128, detail: 6, glyphs: 112, part: 3, recipe: "model=tissue reach=1.76 sigma=0.45 level=0.75 balance=1 stretch=1.75 bias=0 smartBias=true diagAssist=0 diagSnap=0 prune=true cross=false contours=false route=field" },
+    Stamp { mesh: include_bytes!("part4/draft.mesh"), path: "microfonttothemoon-han-8x-4.png", width: 2560, height: 1152, scale: 8, tile_width: 160, tile_height: 128, detail: 6, glyphs: 112, part: 4, recipe: "model=tissue reach=1.76 sigma=0.45 level=0.75 balance=1 stretch=1.75 bias=0 smartBias=true diagAssist=0 diagSnap=0 prune=true cross=false contours=false route=field" },
+];

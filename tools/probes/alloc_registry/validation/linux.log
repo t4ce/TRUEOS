@@ -1,0 +1,22 @@
+     Locking 43 packages to latest Rust 1.99.0-nightly compatible versions
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding serde v1.0.228 (available: v1.0.229)
+      Adding serde_core v1.0.228 (available: v1.0.229)
+      Adding serde_derive v1.0.228 (available: v1.0.229)
+      Adding serde_json v1.0.150 (available: v1.0.154)
+      Adding sha1 v0.10.6 (available: v0.10.7)
+   Compiling alloc_registry v0.1.0 (/home/t4ce/Repos/TRUEOS/tools/probes/alloc_registry)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.15s
+     Running `tgt/x86_64-unknown-linux-gnu/debug/alloc_registry`
+alloc_registry: BEGIN live=70000 ops=0 elapsed_us=0 max_batch_us=0 batch=256
+alloc_registry: FILL_PROGRESS live=70000 ops=16384 elapsed_us=5141 max_batch_us=3099 batch=256
+alloc_registry: FILL_PROGRESS live=70000 ops=32768 elapsed_us=9734 max_batch_us=3229 batch=256
+alloc_registry: FILL_PROGRESS live=70000 ops=49152 elapsed_us=11594 max_batch_us=3229 batch=256
+alloc_registry: FILL_PROGRESS live=70000 ops=65536 elapsed_us=13004 max_batch_us=3229 batch=256
+alloc_registry: FILLED live=70000 ops=70000 elapsed_us=13404 max_batch_us=3229 batch=256
+alloc_registry: REALLOC_AT_CAPACITY live=70000 ops=1072 elapsed_us=531 max_batch_us=0 batch=256
+alloc_registry: HALF_FREED live=70000 ops=35000 elapsed_us=6421 max_batch_us=0 batch=256
+alloc_registry: REFILLED live=70000 ops=35000 elapsed_us=3865 max_batch_us=0 batch=256
+alloc_registry: REALLOC_AFTER_CHURN live=70000 ops=620 elapsed_us=653 max_batch_us=0 batch=256
+alloc_registry: FREED live=70000 ops=70000 elapsed_us=22337 max_batch_us=0 batch=256
+alloc_registry: ALL_PASS live=70000 ops=211692 elapsed_us=47730 max_batch_us=0 batch=256

@@ -1,56 +1,40 @@
-//! Produce the studio and Han demo PNGs in two one-shot passes per boot.
+//! Produce four studio and four Han inspection PNGs once per boot.
 //! No font warming, atlas publication, cache, or Shell3 changes.
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use embassy_sync::signal::Signal;
 use trueos_time::{Duration, Timer};
 
-include!("../../intel/gpu_font/moon/config.rs");
 #[derive(Clone, Copy)]
 struct Stamp {
     mesh: &'static [u8],
     path: &'static str,
     width: u32,
     height: u32,
+    scale: u32,
+    tile_width: u32,
+    tile_height: u32,
     detail: u32,
     glyphs: usize,
+    part: u32,
     recipe: &'static str,
 }
+include!("../../intel/gpu_font/moon/config.rs");
 mod han {
     use super::Stamp;
     include!("../../intel/gpu_font/moon/han/config.rs");
-    pub(super) const STAMP: Stamp = Stamp {
-        mesh: include_bytes!("../../intel/gpu_font/moon/han/draft.mesh"),
-        path: "microfonttothemoon-han-4x.png",
-        width: WIDTH,
-        height: HEIGHT,
-        detail: DETAIL,
-        glyphs: 512,
-        recipe: RECIPE,
-    };
 }
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, Result<Vec<u8>, &'static str>>;
 
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn microfonttothemoon_task() {
-    for stamp in [
-        Stamp {
-            mesh: include_bytes!("../../intel/gpu_font/moon/draft.mesh"),
-            path: "microfonttothemoon-4x.png",
-            width: WIDTH,
-            height: HEIGHT,
-            detail: DETAIL,
-            glyphs: 514,
-            recipe: RECIPE,
-        },
-        han::STAMP,
-    ] {
+    for stamp in STAMPS.into_iter().chain(han::STAMPS) {
         run_stamp(stamp).await;
     }
 }
 
 async fn run_stamp(stamp: Stamp) {
     crate::log_important!(target: "microfonttothemoon";
-        "microfonttothemoon: start glyphs={} scale=4 cell=24x44 tile=80x64 image={}x{} detail={} destination={} recipe={}\n", stamp.glyphs, stamp.width, stamp.height, stamp.detail, stamp.path, stamp.recipe);
+        "microfonttothemoon: start part={}/4 glyphs={} scale={} cell={}x{} tile={}x{} image={}x{} detail={} destination={} recipe={}\n", stamp.part, stamp.glyphs, stamp.scale, 6 * stamp.scale, 11 * stamp.scale, stamp.tile_width, stamp.tile_height, stamp.width, stamp.height, stamp.detail, stamp.path, stamp.recipe);
     let reply = Arc::new(Reply::new());
     let png = loop {
         // Queue admission may wait; accepted GPU work is never replayed.

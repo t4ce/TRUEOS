@@ -1,5 +1,151 @@
 # Codex → Shell3 → Gridpaper, 2026-10-15
 
+## Physical success and remaining local delay
+
+The operator's later run of **Codex `c970a622`**, GPT-6 Luna / low, completed
+the automatic `gri` request. Gridpaper is visible behind Codex in the supplied
+screenshot. The corresponding physical capture independently records a new
+Gridpaper presentation attaching at line 14816 and a frame publishing at line
+14839. Codex then received the command-session result and completed its turn;
+the screenshot reports **9m13s**. Its final answer says it sent Ctrl+C after
+observing the application. The screenshot still lists a background terminal,
+so terminal cleanup is not established by turn completion.
+
+This supersedes the earlier sections' pending end-to-end observation. Code Mode,
+native tool dispatch, Shell3 alias resolution and Gridpaper presentation now
+work together with the requested model. MCP connector startup is a separate
+dependency from local execution through Code Mode.
+
+The measured delay is predominantly **before the first real model request**:
+
+| Boundary | Elapsed time |
+| --- | ---: |
+| Prompt telemetry to first real WebSocket request | approximately 533 s |
+| Record turn context | 47.847 s |
+| Session-start hooks and their preparation | 21.397 s |
+| Inspect hooks and record input | 429.806 s |
+| First real response stream TTFT | 1.124 s |
+| Subsequent response stream TTFTs | 0.794 s, 0.699 s |
+
+The hook/input label encloses transcript preparation, input recording and
+durability barriers; it does not prove that hook handlers executed or consumed
+that time. These spans include waits and synchronous work. They are not CPU
+samples and are not added to overlapping startup captures. The cross-event
+533-second interval uses wall timestamps with roughly one-second precision.
+
+Safe baseline metadata and allowlisted measurements are retained in
+`bld/codex-gridpaper-success-20261015/baseline.json`. The captured prefix of
+`trueos-baremetal.2.log` is 2,724,996 bytes, SHA-256
+`1b08349c8f531b37b28c197d65ca05359a94f29aa743beefc14505f960c656a7`.
+The physical runtime's SHA-256 is
+`0059ba562cc963b1a604240020be791cc3947ed7c2ce6b708a80adb24c1a2043`,
+matching `bld/artifacts/debug-50fce22f84e2/TRUEOS.elf` (**debug / opt1**).
+It already contains the shared WLS pool, allocator address fences and admitted
+heap-watermark diagnostics. The separately tested release kernel has a
+different identity; its timings must not be substituted for this physical run.
+
+Three concrete local issues are being checked against these boundaries:
+
+- The fixed C allocation registry becomes full in this capture. Its existing
+  missing-key operations scan up to 65,536 entries under a shared mutex.
+- Thread-history projection checks for a local SQLite file even when the SQLx
+  backend keeps the database on the service. This falsely reports no projection
+  checkpoint and triggers repeated replay attempts.
+- Hook requests prepare a durable transcript before determining whether any
+  configured handlers match. The observed hook phase therefore includes work
+  even when no handlers execute.
+
+The fixes and subsequent acceptance results must be distinguished from this
+baseline; it predates them. The old capability warnings and pending results
+below document earlier artifacts rather than this successful run.
+
+### Repairs following the successful run
+
+The C allocation registry now limits each operation to one page's worth of
+entries: 128 for its 32-byte metadata records. Tombstones preserve lookup chains
+and reuse deleted slots without moving or evicting live records. Exhaustion
+retains the existing untracked allocation fallback, using authoritative shared
+allocator tags for free/realloc. Neither the 65,536-record capacity nor its
+2 MiB storage increased. Ten production registry tests pass, including bounded
+collision chains, wrapped deletion, full/tombstone reuse, ownership drops and
+randomized differential checks.
+
+An instrumented production-sized host fixture changes 100 saturated
+insert/get/remove cycles from 19,660,800 to 38,400 slot visits (**512× fewer**).
+Those counters establish the algorithmic bound, not a physical turn speedup.
+
+The unchanged native `alloc_registry` probe keeps 70,000 C allocations live,
+checks realloc contents before and after alternating free/refill churn, and
+verifies/releases every allocation. Both isolated release-kernel runs pass:
+
+| Native probe boundary | Previous registry | Bounded registry |
+| --- | ---: | ---: |
+| Fill 70,000 allocations | 222 ms | 28 ms |
+| 1,072 reallocations at capacity | 147 ms | 1 ms |
+| Free alternate 35,000 allocations | 178 ms | 249 ms |
+| Refill 35,000 allocations | 120 ms | 12 ms |
+| 620 reallocations after churn | 112 ms | 1 ms |
+| Check/free 70,000 allocations | 242 ms | 10 ms |
+| Complete probe | 1,030 ms | 307 ms |
+
+These are single-run, millisecond-resolution native measurements. The slower
+alternate-free phase remains visible; this is not a claim that every operation
+improved. Both release probe runs differ from the physical debug/opt1 Codex
+workload, and their total difference does not account for its full delay.
+The probe and before/after/package-readback receipts are under
+`tools/probes/alloc_registry/validation/`. Package `35ac4304` is published to the
+requested Apps share, registered only as a probe. Its bytes are identical in
+both runs. The repaired isolated kernel is
+`bld/registry-saturation-fixed/TrueOS.lz4`; its runtime SHA-256 is
+`4e7ac5fe20910d4cd94efb16ad1a1513b81744c62a4a4ffe9ede7cad46e02c00`.
+The physical rig was not reset or replaced during these tests.
+
+`SqliteConfig::database_exists()` now asks the backend that owns the database.
+Ordinary hosts retain filesystem existence/error semantics; TRUEOS uses a
+read-only, non-creating service connection. Initialized history/memory stores
+reuse their pool rather than opening an existence connection per append.
+Thread-history projection/deletion and memory reset/deletion share this
+contract. No local marker files substitute for remote state. This fixes the
+observed false missing-checkpoint/replay failure. Two state-existence tests,
+32 existing history materialization tests and eight remote adapter tests pass.
+An integration harness uses the production checkpoint/deletion functions and
+real remote SQLx adapter/service without a client database file; checkpoint
+advancement, reopen, deletion, no-create absence and error fidelity all pass.
+
+The RPC trace now adds only a static operation label, distinguishing
+open/execute/prepare/transaction/ping/close work without SQL or payloads.
+Established header waits in the baseline, including a 30.417-second wait next
+to a 30.551-second pool acquisition, remain service/scheduling attribution
+questions. They overlap across connections and are not summed as critical-path
+time. A health ping can wait too; the baseline cannot distinguish it from SQL.
+
+Startup and prompt-hook requests now select matching handlers before preparing
+a durable transcript, using the same captured Hooks snapshot for selection and
+dispatch. No-match requests still dispatch normally but omit the unused
+transcript barrier. Matching synchronous/asynchronous hooks retain their actual
+materialized transcript. Stop/Interrupt/executor-hook semantics and final input
+durability are unchanged. Eight static subphases distinguish hook inspection,
+transcript lookup/persistence, input preparation/history recording, UI events
+and final persistence. These measurements preserve unfinished/cancelled states;
+no input content or transcript paths are logged.
+
+All 25 core transcript regressions pass, including the new no-match case and
+matching synchronous/asynchronous handlers reading actual durable SessionMeta.
+The production timing-helper tests pass (5); parser/gate checks pass (17),
+including two Rust tests compiling the actual TRUEOS-only telemetry method.
+
+The native Codex release build and C ABI guard passed. The updated package is
+**`codex.bp§§f3156fab46e1573357f7988454f5983e083d64674c1b9511ca018fb846e80e49`**,
+66,675,754 bytes, published to the requested Apps share. A complete remote
+readback has the same SHA-256. Its title prefix is `f3156fab`. The cached
+QuickJS source was verified at the native backend's pinned revision
+`c2eaa5fb7a5f8f04e084412560dd48d02bd00d8d` for the offline build. Package/source
+identities are in `bld/codex-gridpaper-success-20261015/updated-app.json`.
+Luna/low, Code Mode, MCP settings and the automatic `gri` request are retained.
+Publication does not replace the running `c970a622` session. The complete
+physical turn has not yet been timed with this app and the registry-repair
+kernel together.
+
 The next functional smoke test replaces the greeting with an actual Shell3
 operation: execute the `gri` alias and observe a new Gridpaper presentation in
 UI4. A greeting already proved authenticated request/response delivery. This

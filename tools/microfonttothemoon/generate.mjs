@@ -25,12 +25,20 @@ const cell={stroke:.64,doubleGap:.70,edgeGhosts:true,continuations:true,boxSourc
 const recipe=JSON.parse(fs.readFileSync('tools/microfonttothemoon/recipe.json','utf8'));
 const settings={...recipe,cell,detail};
 const recipeNote=Object.entries(recipe).map(([key,value])=>`${key}=${value}`).join(' ');
+// Preserve the original 32-column layout, doubled from 4x to 8x. Split
+// on tile boundaries into a 2x2 set, padding to 18 rows so no glyph is cut.
+const scale=8,columns=32,partColumns=16,partRows=9,partCount=4;
+const tileWidth=20*scale,tileHeight=16*scale;
+const width=partColumns*tileWidth,height=partRows*tileHeight;
+if(width>2560||height>1440)throw new Error(`inspection part exceeds Render0: ${width}x${height}`);
+const pages=Array.from({length:partCount},()=>({vertices:[],indices:[],stats:[]}));
+const sourceHash=crypto.createHash('sha256').update(html).digest('hex');
+const hanHash=han?crypto.createHash('sha256').update(hanSource).digest('hex'):undefined;
 function sites(g) {
  const points=[]; const cells=g.cells||[g.bits]; const count=g.kind==='custom'||g.full66?66:64;
  cells.forEach((bits,k)=>{for(let i=0;i<count;i++)if((bits>>BigInt(count-1-i))&1n)points.push({x:k*6+i%6+.5,y:Math.floor(i/6)+.5,group:0});});
  return points;
 }
-const vertices=[],indices=[],stats=[];
 for(let slot=0;slot<glyphs.length;slot++) {
  const g=glyphs[slot],cp=g.char.codePointAt(0);
  const family=cp>=0x2500&&cp<=0x257f?'box':cp>=0x2580&&cp<=0x259f?'block':cp>=0x2800&&cp<=0x28ff?'braille':g.char===' '||g.char==='\u00a0'?'space':'field';
@@ -40,10 +48,20 @@ for(let slot=0;slot<glyphs.length;slot++) {
  context.input=input;
  const mesh=vm.runInContext('buildShape(input)',context);
  if(mesh.stats.openLoops||mesh.stats.nonmanifold)throw new Error(`invalid mesh slot ${slot}`);
+ const column=slot%columns,row=Math.floor(slot/columns);
+ const part=Math.floor(row/partRows)*2+Math.floor(column/partColumns);
+ if(part>=partCount)throw new Error(`glyph ${slot} exceeds four inspection parts`);
+ const {vertices,indices,stats}=pages[part];
  const base=vertices.length/3;
- const ox=(slot%32)*80+4,oy=Math.floor(slot/32)*64+10;
+ const placement=[column%partColumns,row%partRows,1];
+ const ox=placement[0]*tileWidth+scale,oy=placement[1]*tileHeight+2.5*scale;
  // Render0 accepts clip-position vertices. Positive source Y points down.
- for(let i=0;i<mesh.positions.length;i+=2)vertices.push(Math.fround((ox+mesh.positions[i]*4)/2560*2-1),Math.fround(1-(oy+mesh.positions[i+1]*4)/1088*2),.5);
+ for(let i=0;i<mesh.positions.length;i+=2) {
+  const x=ox+mesh.positions[i]*scale,y=oy+mesh.positions[i+1]*scale;
+  if(x<placement[0]*tileWidth||x>(placement[0]+placement[2])*tileWidth||y<placement[1]*tileHeight||y>(placement[1]+1)*tileHeight)
+   throw new Error(`glyph ${slot} exceeds its tile`);
+  vertices.push(Math.fround(x/width*2-1),Math.fround(1-y/height*2),.5);
+ }
  let gpuTriangles=0,collapsedFaces=0,float32FlippedFaces=0;
  for(let i=0;i<mesh.indices.length;i+=3) {
   const ids=[base+mesh.indices[i],base+mesh.indices[i+2],base+mesh.indices[i+1]];
@@ -55,15 +73,31 @@ for(let slot=0;slot<glyphs.length;slot++) {
   if(area<0){[ids[1],ids[2]]=[ids[2],ids[1]];float32FlippedFaces++;}
   indices.push(...ids);gpuTriangles++;
  }
- stats.push({slot,char:g.char,kind:g.kind,width:g.width,byte:g.byte,route:mesh.route,spacing:mesh.stats.spacing,vertices:mesh.stats.vertices,triangles:mesh.stats.triangles,gpuTriangles,collapsedFaces,float32FlippedFaces});
+ stats.push({slot,char:g.char,kind:g.kind,width:g.width,byte:g.byte,part:part+1,origin:[ox,oy],tile:placement,route:mesh.route,spacing:mesh.stats.spacing,vertices:mesh.stats.vertices,triangles:mesh.stats.triangles,gpuTriangles,collapsedFaces,float32FlippedFaces});
 }
-const bytes=Buffer.alloc(16+vertices.length*4+indices.length*4);
-bytes.write('MOONMSH1',0);bytes.writeUInt32LE(vertices.length/3,8);bytes.writeUInt32LE(indices.length,12);
-vertices.forEach((x,i)=>bytes.writeFloatLE(x,16+i*4));
-indices.forEach((x,i)=>bytes.writeUInt32LE(x,16+vertices.length*4+i*4));
 const root=(process.argv[3]||'src/intel/gpu_font/moon').replace(/\/$/,'')+'/';
 fs.mkdirSync(root,{recursive:true});
-fs.writeFileSync(root+'draft.mesh',bytes);
-fs.writeFileSync(root+'config.rs',`// Generated geometry configuration.\nconst WIDTH: u32 = 2560;\nconst HEIGHT: u32 = 1088;\nconst DETAIL: u32 = ${detail};\nconst RECIPE: &str = ${JSON.stringify(recipeNote)};\n`);
-fs.writeFileSync(root+'catalog.json',JSON.stringify({detail,scale:4,width:2560,height:1088,model:recipe.model,recipe,route:recipe.route,source_sha256:crypto.createHash('sha256').update(html).digest('hex'),set:han?'gui-han':'studio',glyph_count:glyphs.length,han_source_sha256:han?crypto.createHash('sha256').update(hanSource).digest('hex'):undefined,mesh_sha256:crypto.createHash('sha256').update(bytes).digest('hex'),glyphs:stats},null,2)+'\n');
-console.log(`Detail ${detail}: ${glyphs.length} glyphs, ${vertices.length/3} vertices, ${indices.length/3} triangles, ${bytes.length} bytes`);
+const common={detail,scale,width,height,columns:partColumns,tile_width:tileWidth,tile_height:tileHeight,model:recipe.model,recipe,route:recipe.route,source_sha256:sourceHash,set:han?'gui-han':'studio',han_source_sha256:hanHash};
+const parts=[];
+let configuration=`// Generated geometry configuration.\n${han?'pub(super) ':''}const STAMPS: [Stamp; 4] = [\n`;
+for(let page=0;page<pages.length;page++) {
+ const {vertices,indices,stats}=pages[page],part=page+1;
+ const bytes=Buffer.alloc(16+vertices.length*4+indices.length*4);
+ bytes.write('MOONMSH1',0);bytes.writeUInt32LE(vertices.length/3,8);bytes.writeUInt32LE(indices.length,12);
+ vertices.forEach((x,i)=>bytes.writeFloatLE(x,16+i*4));
+ indices.forEach((x,i)=>bytes.writeUInt32LE(x,16+vertices.length*4+i*4));
+ const directory=`part${part}`,path=`microfonttothemoon${han?'-han':''}-${scale}x-${part}.png`;
+ fs.mkdirSync(root+directory,{recursive:true});
+ fs.writeFileSync(root+directory+'/draft.mesh',bytes);
+ const meshHash=crypto.createHash('sha256').update(bytes).digest('hex');
+ fs.writeFileSync(root+directory+'/catalog.json',JSON.stringify({...common,part,part_count:partCount,path,glyph_count:stats.length,mesh_sha256:meshHash,glyphs:stats},null,2)+'\n');
+ parts.push({directory,path,glyph_count:stats.length,mesh_sha256:meshHash});
+ configuration+=`    Stamp { mesh: include_bytes!("${directory}/draft.mesh"), path: "${path}", width: ${width}, height: ${height}, scale: ${scale}, tile_width: ${tileWidth}, tile_height: ${tileHeight}, detail: ${detail}, glyphs: ${stats.length}, part: ${part}, recipe: ${JSON.stringify(recipeNote)} },\n`;
+ console.log(`${path}: ${width}x${height}, ${stats.length} glyphs, ${vertices.length/3} vertices, ${indices.length/3} triangles`);
+}
+configuration+='];\n';
+fs.writeFileSync(root+'config.rs',configuration);
+fs.writeFileSync(root+'catalog.json',JSON.stringify({...common,part_count:partCount,glyph_count:glyphs.length,sheet_columns:columns,sheet_width:width*2,sheet_height:height*2,parts,glyphs:pages.flatMap(p=>p.stats).sort((a,b)=>a.slot-b.slot)},null,2)+'\n');
+// The root manifest now refers only to the four meshes. Remove the obsolete
+// one-image mesh after every part has been generated successfully.
+fs.rmSync(root+'draft.mesh',{force:true});

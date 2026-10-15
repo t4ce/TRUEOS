@@ -1,8 +1,11 @@
 {
   "detail": 6,
-  "scale": 4,
+  "scale": 8,
   "width": 2560,
-  "height": 1088,
+  "height": 1152,
+  "columns": 16,
+  "tile_width": 160,
+  "tile_height": 128,
   "model": "tissue",
   "recipe": {
     "model": "tissue",
@@ -23,8 +26,37 @@
   "route": "field",
   "source_sha256": "50b9f22403b6bf9500550e5b36010afeed33ccb7b8d1e14a8f3cf1dc5d45ccad",
   "set": "studio",
+  "part_count": 4,
   "glyph_count": 514,
-  "mesh_sha256": "b0e0241ec22ef9ad702e6902c8ecd9f543a6f49d23ec2f9f875bce22c659dc81",
+  "sheet_columns": 32,
+  "sheet_width": 5120,
+  "sheet_height": 2304,
+  "parts": [
+    {
+      "directory": "part1",
+      "path": "microfonttothemoon-8x-1.png",
+      "glyph_count": 144,
+      "mesh_sha256": "9f03827d16c686988027e36bf324746df4cb842246b1b5f0f19fc527c32d8844"
+    },
+    {
+      "directory": "part2",
+      "path": "microfonttothemoon-8x-2.png",
+      "glyph_count": 144,
+      "mesh_sha256": "70ba7ebfe83ae7f4f553f880e206bca8b74099722278ef7bfc6872e4377afd2e"
+    },
+    {
+      "directory": "part3",
+      "path": "microfonttothemoon-8x-3.png",
+      "glyph_count": 114,
+      "mesh_sha256": "a7f0b3cad8125b3e65d6f7b094bfef74d3aad2e3177e4aee2c6735a436a47de3"
+    },
+    {
+      "directory": "part4",
+      "path": "microfonttothemoon-8x-4.png",
+      "glyph_count": 112,
+      "mesh_sha256": "65178190887fb259b761949c7d011646cdd2fc355ab215a0773d75f06585b5ee"
+    }
+  ],
   "glyphs": [
     {
       "slot": 0,
@@ -32,6 +64,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 32,
+      "part": 1,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 0,
@@ -46,6 +88,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 33,
+      "part": 1,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 627,
@@ -60,6 +112,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 34,
+      "part": 1,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 424,
@@ -74,6 +136,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 35,
+      "part": 1,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1404,
@@ -88,6 +160,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 36,
+      "part": 1,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1611,
@@ -102,12 +184,22 @@
       "kind": "ascii",
       "width": 6,
       "byte": 37,
+      "part": 1,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1537,
       "triangles": 2300,
-      "gpuTriangles": 2297,
-      "collapsedFaces": 3,
+      "gpuTriangles": 2300,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -116,6 +208,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 38,
+      "part": 1,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1787,
@@ -130,6 +232,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 39,
+      "part": 1,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 212,
@@ -144,6 +256,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 40,
+      "part": 1,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 822,
@@ -158,6 +280,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 41,
+      "part": 1,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 822,
@@ -172,6 +304,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 42,
+      "part": 1,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 817,
@@ -186,6 +328,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 43,
+      "part": 1,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 551,
@@ -200,6 +352,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 44,
+      "part": 1,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 279,
@@ -214,6 +376,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 45,
+      "part": 1,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 271,
@@ -228,6 +400,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 46,
+      "part": 1,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 207,
@@ -242,6 +424,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 47,
+      "part": 1,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 802,
@@ -256,6 +448,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 48,
+      "part": 2,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1662,
@@ -270,6 +472,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 49,
+      "part": 2,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1010,
@@ -284,6 +496,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 50,
+      "part": 2,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1472,
@@ -298,6 +520,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 51,
+      "part": 2,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1568,
@@ -312,6 +544,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 52,
+      "part": 2,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1208,
@@ -326,6 +568,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 53,
+      "part": 2,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1444,
@@ -340,6 +592,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 54,
+      "part": 2,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1691,
@@ -354,6 +616,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 55,
+      "part": 2,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1041,
@@ -368,6 +640,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 56,
+      "part": 2,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1795,
@@ -382,6 +664,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 57,
+      "part": 2,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1694,
@@ -396,6 +688,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 58,
+      "part": 2,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 414,
@@ -410,6 +712,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 59,
+      "part": 2,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 583,
@@ -424,6 +736,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 60,
+      "part": 2,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 707,
@@ -438,6 +760,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 61,
+      "part": 2,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 580,
@@ -452,6 +784,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 62,
+      "part": 2,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 703,
@@ -466,6 +808,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 63,
+      "part": 2,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1142,
@@ -480,6 +832,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 64,
+      "part": 1,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 2522,
@@ -494,6 +856,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 65,
+      "part": 1,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1385,
@@ -508,6 +880,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 66,
+      "part": 1,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1844,
@@ -522,6 +904,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 67,
+      "part": 1,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1284,
@@ -536,6 +928,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 68,
+      "part": 1,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1696,
@@ -550,6 +952,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 69,
+      "part": 1,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1355,
@@ -564,6 +976,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 70,
+      "part": 1,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1103,
@@ -578,6 +1000,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 71,
+      "part": 1,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1633,
@@ -592,6 +1024,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 72,
+      "part": 1,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1478,
@@ -606,6 +1048,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 73,
+      "part": 1,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1182,
@@ -620,6 +1072,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 74,
+      "part": 1,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1226,
@@ -634,6 +1096,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 75,
+      "part": 1,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1473,
@@ -648,6 +1120,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 76,
+      "part": 1,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 893,
@@ -662,6 +1144,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 77,
+      "part": 1,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1568,
@@ -676,6 +1168,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 78,
+      "part": 1,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1676,
@@ -690,6 +1192,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 79,
+      "part": 1,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1732,
@@ -704,6 +1216,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 80,
+      "part": 2,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1378,
@@ -718,6 +1240,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 81,
+      "part": 2,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1726,
@@ -732,6 +1264,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 82,
+      "part": 2,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1739,
@@ -746,6 +1288,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 83,
+      "part": 2,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1532,
@@ -760,6 +1312,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 84,
+      "part": 2,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 903,
@@ -774,6 +1336,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 85,
+      "part": 2,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1451,
@@ -788,6 +1360,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 86,
+      "part": 2,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1320,
@@ -802,6 +1384,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 87,
+      "part": 2,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1501,
@@ -816,6 +1408,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 88,
+      "part": 2,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1471,
@@ -830,6 +1432,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 89,
+      "part": 2,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1076,
@@ -844,6 +1456,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 90,
+      "part": 2,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1305,
@@ -858,6 +1480,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 91,
+      "part": 2,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 890,
@@ -872,6 +1504,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 92,
+      "part": 2,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 802,
@@ -886,6 +1528,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 93,
+      "part": 2,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 900,
@@ -900,6 +1552,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 94,
+      "part": 2,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 501,
@@ -914,6 +1576,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 95,
+      "part": 2,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 271,
@@ -928,6 +1600,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 96,
+      "part": 1,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 196,
@@ -942,6 +1624,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 97,
+      "part": 1,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1110,
@@ -956,6 +1648,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 98,
+      "part": 1,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1378,
@@ -970,6 +1672,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 99,
+      "part": 1,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 865,
@@ -984,6 +1696,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 100,
+      "part": 1,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1385,
@@ -998,6 +1720,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 101,
+      "part": 1,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1187,
@@ -1012,6 +1744,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 102,
+      "part": 1,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 859,
@@ -1026,6 +1768,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 103,
+      "part": 1,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1438,
@@ -1040,6 +1792,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 104,
+      "part": 1,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1180,
@@ -1054,6 +1816,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 105,
+      "part": 1,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 382,
@@ -1068,6 +1840,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 106,
+      "part": 1,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 729,
@@ -1082,6 +1864,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 107,
+      "part": 1,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1098,
@@ -1096,6 +1888,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 108,
+      "part": 1,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 759,
@@ -1110,6 +1912,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 109,
+      "part": 1,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1180,
@@ -1124,6 +1936,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 110,
+      "part": 1,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 917,
@@ -1138,6 +1960,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 111,
+      "part": 1,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1080,
@@ -1152,6 +1984,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 112,
+      "part": 2,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1086,
@@ -1166,6 +2008,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 113,
+      "part": 2,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1086,
@@ -1180,6 +2032,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 114,
+      "part": 2,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 623,
@@ -1194,6 +2056,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 115,
+      "part": 2,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 987,
@@ -1208,6 +2080,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 116,
+      "part": 2,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 859,
@@ -1222,6 +2104,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 117,
+      "part": 2,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 921,
@@ -1236,6 +2128,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 118,
+      "part": 2,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 807,
@@ -1250,6 +2152,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 119,
+      "part": 2,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 898,
@@ -1264,6 +2176,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 120,
+      "part": 2,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 928,
@@ -1278,6 +2200,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 121,
+      "part": 2,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1002,
@@ -1292,6 +2224,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 122,
+      "part": 2,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 846,
@@ -1306,6 +2248,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 123,
+      "part": 2,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 838,
@@ -1320,6 +2272,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 124,
+      "part": 2,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 624,
@@ -1334,6 +2296,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 125,
+      "part": 2,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 834,
@@ -1348,6 +2320,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 126,
+      "part": 2,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 575,
@@ -1362,6 +2344,16 @@
       "kind": "ascii",
       "width": 6,
       "byte": 127,
+      "part": 2,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 0,
@@ -1376,6 +2368,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 128,
+      "part": 1,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1416,
@@ -1390,6 +2392,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 129,
+      "part": 1,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1047,
@@ -1404,6 +2416,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 130,
+      "part": 1,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1418,
@@ -1418,6 +2440,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 131,
+      "part": 1,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1481,
@@ -1432,6 +2464,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 132,
+      "part": 1,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1240,
@@ -1446,6 +2488,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 133,
+      "part": 1,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1329,
@@ -1460,6 +2512,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 134,
+      "part": 1,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1402,
@@ -1474,6 +2536,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 135,
+      "part": 1,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1028,
@@ -1488,6 +2560,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 136,
+      "part": 1,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1561,
@@ -1502,6 +2584,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 137,
+      "part": 1,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1317,
@@ -1516,6 +2608,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 138,
+      "part": 1,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1411,
@@ -1530,6 +2632,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 139,
+      "part": 1,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 454,
@@ -1544,6 +2656,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 140,
+      "part": 1,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 685,
@@ -1558,6 +2680,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 141,
+      "part": 1,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 550,
@@ -1572,6 +2704,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 142,
+      "part": 1,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1515,
@@ -1586,6 +2728,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 143,
+      "part": 1,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1381,
@@ -1600,6 +2752,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 144,
+      "part": 2,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1342,
@@ -1614,6 +2776,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 145,
+      "part": 2,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1493,
@@ -1628,6 +2800,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 146,
+      "part": 2,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1782,
@@ -1642,6 +2824,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 147,
+      "part": 2,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1445,
@@ -1656,6 +2848,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 148,
+      "part": 2,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1210,
@@ -1670,6 +2872,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 149,
+      "part": 2,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1293,
@@ -1684,6 +2896,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 150,
+      "part": 2,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1448,
@@ -1698,6 +2920,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 151,
+      "part": 2,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1125,
@@ -1712,6 +2944,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 152,
+      "part": 2,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1134,
@@ -1726,6 +2968,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 153,
+      "part": 2,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1570,
@@ -1740,6 +2992,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 154,
+      "part": 2,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1285,
@@ -1754,6 +3016,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 155,
+      "part": 2,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1357,
@@ -1768,6 +3040,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 156,
+      "part": 2,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1212,
@@ -1782,6 +3064,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 157,
+      "part": 2,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1504,
@@ -1796,6 +3088,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 158,
+      "part": 2,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 928,
@@ -1810,6 +3112,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 159,
+      "part": 2,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 995,
@@ -1824,6 +3136,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 160,
+      "part": 1,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1328,
@@ -1838,6 +3160,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 161,
+      "part": 1,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 550,
@@ -1852,6 +3184,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 162,
+      "part": 1,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1289,
@@ -1866,6 +3208,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 163,
+      "part": 1,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1127,
@@ -1880,6 +3232,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 164,
+      "part": 1,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1429,
@@ -1894,6 +3256,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 165,
+      "part": 1,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1751,
@@ -1908,6 +3280,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 166,
+      "part": 1,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1187,
@@ -1922,6 +3304,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 167,
+      "part": 1,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1365,
@@ -1936,6 +3328,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 168,
+      "part": 1,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1146,
@@ -1950,6 +3352,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 169,
+      "part": 1,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 2212,
@@ -1964,6 +3376,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 170,
+      "part": 1,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 413,
@@ -1978,12 +3400,22 @@
       "kind": "extended",
       "width": 6,
       "byte": 171,
+      "part": 1,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1634,
       "triangles": 2500,
-      "gpuTriangles": 2499,
-      "collapsedFaces": 1,
+      "gpuTriangles": 2500,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -1992,6 +3424,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 172,
+      "part": 1,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1614,
@@ -2006,6 +3448,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 173,
+      "part": 1,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 627,
@@ -2020,6 +3472,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 174,
+      "part": 1,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1024,
@@ -2034,6 +3496,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 175,
+      "part": 1,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1024,
@@ -2048,6 +3520,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 176,
+      "part": 2,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 650,
@@ -2062,6 +3544,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 177,
+      "part": 2,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 2241,
@@ -2076,6 +3568,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 178,
+      "part": 2,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 2430,
@@ -2090,6 +3592,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 179,
+      "part": 2,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 774,
@@ -2104,6 +3616,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 180,
+      "part": 2,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 885,
@@ -2118,6 +3640,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 181,
+      "part": 2,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1228,
@@ -2132,6 +3664,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 182,
+      "part": 2,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1387,
@@ -2146,6 +3688,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 183,
+      "part": 2,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1228,
@@ -2160,6 +3712,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 184,
+      "part": 2,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 2173,
@@ -2174,6 +3736,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 185,
+      "part": 2,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1660,
@@ -2188,6 +3760,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 186,
+      "part": 2,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1548,
@@ -2202,6 +3784,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 187,
+      "part": 2,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1137,
@@ -2216,6 +3808,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 188,
+      "part": 2,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1137,
@@ -2230,6 +3832,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 189,
+      "part": 2,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1574,
@@ -2244,6 +3856,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 190,
+      "part": 2,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1256,
@@ -2258,6 +3880,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 191,
+      "part": 2,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 551,
@@ -2272,6 +3904,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 192,
+      "part": 1,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 628,
@@ -2286,6 +3928,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 193,
+      "part": 1,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 735,
@@ -2300,6 +3952,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 194,
+      "part": 1,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 735,
@@ -2314,6 +3976,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 195,
+      "part": 1,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 972,
@@ -2328,6 +4000,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 196,
+      "part": 1,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 343,
@@ -2342,6 +4024,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 197,
+      "part": 1,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1033,
@@ -2356,6 +4048,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 198,
+      "part": 1,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1696,
@@ -2370,6 +4072,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 199,
+      "part": 1,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1582,
@@ -2384,6 +4096,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 200,
+      "part": 1,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1232,
@@ -2398,6 +4120,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 201,
+      "part": 1,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1232,
@@ -2412,12 +4144,22 @@
       "kind": "extended",
       "width": 6,
       "byte": 202,
+      "part": 1,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1254,
       "triangles": 1798,
-      "gpuTriangles": 1796,
-      "collapsedFaces": 2,
+      "gpuTriangles": 1798,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -2426,12 +4168,22 @@
       "kind": "extended",
       "width": 6,
       "byte": 203,
+      "part": 1,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1254,
       "triangles": 1798,
-      "gpuTriangles": 1796,
-      "collapsedFaces": 2,
+      "gpuTriangles": 1798,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -2440,6 +4192,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 204,
+      "part": 1,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1764,
@@ -2454,6 +4216,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 205,
+      "part": 1,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 628,
@@ -2468,6 +4240,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 206,
+      "part": 1,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1884,
@@ -2482,6 +4264,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 207,
+      "part": 1,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1490,
@@ -2496,6 +4288,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 208,
+      "part": 2,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1642,
@@ -2510,6 +4312,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 209,
+      "part": 2,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1657,
@@ -2524,6 +4336,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 210,
+      "part": 2,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1466,
@@ -2538,6 +4360,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 211,
+      "part": 2,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1328,
@@ -2552,6 +4384,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 212,
+      "part": 2,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1394,
@@ -2566,6 +4408,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 213,
+      "part": 2,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 707,
@@ -2580,12 +4432,22 @@
       "kind": "extended",
       "width": 6,
       "byte": 214,
+      "part": 2,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1183,
       "triangles": 1770,
-      "gpuTriangles": 1769,
-      "collapsedFaces": 1,
+      "gpuTriangles": 1770,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -2594,6 +4456,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 215,
+      "part": 2,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1372,
@@ -2608,6 +4480,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 216,
+      "part": 2,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1109,
@@ -2622,6 +4504,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 217,
+      "part": 2,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 551,
@@ -2636,6 +4528,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 218,
+      "part": 2,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 628,
@@ -2650,6 +4552,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 219,
+      "part": 2,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1133,
@@ -2664,6 +4576,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 220,
+      "part": 2,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 774,
@@ -2678,6 +4600,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 221,
+      "part": 2,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 550,
@@ -2692,12 +4624,22 @@
       "kind": "extended",
       "width": 6,
       "byte": 222,
+      "part": 2,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1183,
       "triangles": 1770,
-      "gpuTriangles": 1769,
-      "collapsedFaces": 1,
+      "gpuTriangles": 1770,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -2706,6 +4648,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 223,
+      "part": 2,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 844,
@@ -2720,6 +4672,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 224,
+      "part": 1,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1500,
@@ -2734,6 +4696,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 225,
+      "part": 1,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1382,
@@ -2748,6 +4720,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 226,
+      "part": 1,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1777,
@@ -2762,6 +4744,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 227,
+      "part": 1,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1500,
@@ -2776,6 +4768,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 228,
+      "part": 1,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1664,
@@ -2790,6 +4792,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 229,
+      "part": 1,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1808,
@@ -2804,12 +4816,22 @@
       "kind": "extended",
       "width": 6,
       "byte": 230,
+      "part": 1,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1040,
       "triangles": 1540,
-      "gpuTriangles": 1539,
-      "collapsedFaces": 1,
+      "gpuTriangles": 1540,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -2818,6 +4840,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 231,
+      "part": 1,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1632,
@@ -2832,6 +4864,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 232,
+      "part": 1,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1349,
@@ -2846,6 +4888,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 233,
+      "part": 1,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1410,
@@ -2860,6 +4912,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 234,
+      "part": 1,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1590,
@@ -2874,6 +4936,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 235,
+      "part": 1,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1410,
@@ -2888,6 +4960,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 236,
+      "part": 1,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1196,
@@ -2902,6 +4984,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 237,
+      "part": 1,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1273,
@@ -2916,6 +5008,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 238,
+      "part": 1,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 271,
@@ -2930,6 +5032,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 239,
+      "part": 1,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 196,
@@ -2944,6 +5056,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 240,
+      "part": 2,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 179,
@@ -2958,6 +5080,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 241,
+      "part": 2,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 897,
@@ -2972,6 +5104,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 242,
+      "part": 2,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 580,
@@ -2986,6 +5128,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 243,
+      "part": 2,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1870,
@@ -3000,6 +5152,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 244,
+      "part": 2,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1536,
@@ -3014,6 +5176,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 245,
+      "part": 2,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1732,
@@ -3028,6 +5200,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 246,
+      "part": 2,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 401,
@@ -3042,6 +5224,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 247,
+      "part": 2,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 169,
@@ -3056,6 +5248,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 248,
+      "part": 2,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 646,
@@ -3070,6 +5272,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 249,
+      "part": 2,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3084,6 +5296,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 250,
+      "part": 2,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -3098,6 +5320,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 251,
+      "part": 2,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 499,
@@ -3112,6 +5344,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 252,
+      "part": 2,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 656,
@@ -3126,6 +5368,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 253,
+      "part": 2,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 664,
@@ -3140,6 +5392,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 254,
+      "part": 2,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 848,
@@ -3154,6 +5416,16 @@
       "kind": "extended",
       "width": 6,
       "byte": 255,
+      "part": 2,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 0,
@@ -3167,6 +5439,16 @@
       "char": "⠀",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        916
+      ],
+      "tile": [
+        0,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 0,
@@ -3180,6 +5462,16 @@
       "char": "⠁",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        916
+      ],
+      "tile": [
+        1,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -3193,6 +5485,16 @@
       "char": "⠂",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        916
+      ],
+      "tile": [
+        2,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -3206,6 +5508,16 @@
       "char": "⠃",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        916
+      ],
+      "tile": [
+        3,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3219,6 +5531,16 @@
       "char": "⠄",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        916
+      ],
+      "tile": [
+        4,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -3232,6 +5554,16 @@
       "char": "⠅",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        916
+      ],
+      "tile": [
+        5,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3245,6 +5577,16 @@
       "char": "⠆",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        916
+      ],
+      "tile": [
+        6,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3258,6 +5600,16 @@
       "char": "⠇",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        916
+      ],
+      "tile": [
+        7,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3271,6 +5623,16 @@
       "char": "⠈",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        916
+      ],
+      "tile": [
+        8,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -3284,6 +5646,16 @@
       "char": "⠉",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        916
+      ],
+      "tile": [
+        9,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3297,6 +5669,16 @@
       "char": "⠊",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        916
+      ],
+      "tile": [
+        10,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3310,6 +5692,16 @@
       "char": "⠋",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        916
+      ],
+      "tile": [
+        11,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3323,6 +5715,16 @@
       "char": "⠌",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        916
+      ],
+      "tile": [
+        12,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3336,6 +5738,16 @@
       "char": "⠍",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        916
+      ],
+      "tile": [
+        13,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3349,6 +5761,16 @@
       "char": "⠎",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        916
+      ],
+      "tile": [
+        14,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3362,6 +5784,16 @@
       "char": "⠏",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        916
+      ],
+      "tile": [
+        15,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3375,6 +5807,16 @@
       "char": "⠐",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        916
+      ],
+      "tile": [
+        0,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -3388,6 +5830,16 @@
       "char": "⠑",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        916
+      ],
+      "tile": [
+        1,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3401,6 +5853,16 @@
       "char": "⠒",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        916
+      ],
+      "tile": [
+        2,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3414,6 +5876,16 @@
       "char": "⠓",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        916
+      ],
+      "tile": [
+        3,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3427,6 +5899,16 @@
       "char": "⠔",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        916
+      ],
+      "tile": [
+        4,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3440,6 +5922,16 @@
       "char": "⠕",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        916
+      ],
+      "tile": [
+        5,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3453,6 +5945,16 @@
       "char": "⠖",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        916
+      ],
+      "tile": [
+        6,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3466,6 +5968,16 @@
       "char": "⠗",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        916
+      ],
+      "tile": [
+        7,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3479,6 +5991,16 @@
       "char": "⠘",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        916
+      ],
+      "tile": [
+        8,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3492,6 +6014,16 @@
       "char": "⠙",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        916
+      ],
+      "tile": [
+        9,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3505,6 +6037,16 @@
       "char": "⠚",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        916
+      ],
+      "tile": [
+        10,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3518,6 +6060,16 @@
       "char": "⠛",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        916
+      ],
+      "tile": [
+        11,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3531,6 +6083,16 @@
       "char": "⠜",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        916
+      ],
+      "tile": [
+        12,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3544,6 +6106,16 @@
       "char": "⠝",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        916
+      ],
+      "tile": [
+        13,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3557,6 +6129,16 @@
       "char": "⠞",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        916
+      ],
+      "tile": [
+        14,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3570,6 +6152,16 @@
       "char": "⠟",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        916
+      ],
+      "tile": [
+        15,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -3583,6 +6175,16 @@
       "char": "⠠",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        1044
+      ],
+      "tile": [
+        0,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -3596,6 +6198,16 @@
       "char": "⠡",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        1044
+      ],
+      "tile": [
+        1,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3609,6 +6221,16 @@
       "char": "⠢",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        1044
+      ],
+      "tile": [
+        2,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3622,6 +6244,16 @@
       "char": "⠣",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        1044
+      ],
+      "tile": [
+        3,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3635,6 +6267,16 @@
       "char": "⠤",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        1044
+      ],
+      "tile": [
+        4,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3648,6 +6290,16 @@
       "char": "⠥",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        1044
+      ],
+      "tile": [
+        5,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3661,6 +6313,16 @@
       "char": "⠦",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        1044
+      ],
+      "tile": [
+        6,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3674,6 +6336,16 @@
       "char": "⠧",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        1044
+      ],
+      "tile": [
+        7,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3687,6 +6359,16 @@
       "char": "⠨",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        1044
+      ],
+      "tile": [
+        8,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3700,6 +6382,16 @@
       "char": "⠩",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        1044
+      ],
+      "tile": [
+        9,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3713,6 +6405,16 @@
       "char": "⠪",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        1044
+      ],
+      "tile": [
+        10,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3726,6 +6428,16 @@
       "char": "⠫",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        1044
+      ],
+      "tile": [
+        11,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3739,6 +6451,16 @@
       "char": "⠬",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        1044
+      ],
+      "tile": [
+        12,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3752,6 +6474,16 @@
       "char": "⠭",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        1044
+      ],
+      "tile": [
+        13,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3765,6 +6497,16 @@
       "char": "⠮",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        1044
+      ],
+      "tile": [
+        14,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3778,6 +6520,16 @@
       "char": "⠯",
       "kind": "braille",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        1044
+      ],
+      "tile": [
+        15,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -3791,6 +6543,16 @@
       "char": "⠰",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        1044
+      ],
+      "tile": [
+        0,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -3804,6 +6566,16 @@
       "char": "⠱",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        1044
+      ],
+      "tile": [
+        1,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3817,6 +6589,16 @@
       "char": "⠲",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        1044
+      ],
+      "tile": [
+        2,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3830,6 +6612,16 @@
       "char": "⠳",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        1044
+      ],
+      "tile": [
+        3,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3843,6 +6635,16 @@
       "char": "⠴",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        1044
+      ],
+      "tile": [
+        4,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3856,6 +6658,16 @@
       "char": "⠵",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        1044
+      ],
+      "tile": [
+        5,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3869,6 +6681,16 @@
       "char": "⠶",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        1044
+      ],
+      "tile": [
+        6,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3882,6 +6704,16 @@
       "char": "⠷",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        1044
+      ],
+      "tile": [
+        7,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -3895,6 +6727,16 @@
       "char": "⠸",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        1044
+      ],
+      "tile": [
+        8,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -3908,6 +6750,16 @@
       "char": "⠹",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        1044
+      ],
+      "tile": [
+        9,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3921,6 +6773,16 @@
       "char": "⠺",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        1044
+      ],
+      "tile": [
+        10,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3934,6 +6796,16 @@
       "char": "⠻",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        1044
+      ],
+      "tile": [
+        11,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -3947,6 +6819,16 @@
       "char": "⠼",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        1044
+      ],
+      "tile": [
+        12,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -3960,6 +6842,16 @@
       "char": "⠽",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        1044
+      ],
+      "tile": [
+        13,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -3973,6 +6865,16 @@
       "char": "⠾",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        1044
+      ],
+      "tile": [
+        14,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -3986,6 +6888,16 @@
       "char": "⠿",
       "kind": "braille",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        1044
+      ],
+      "tile": [
+        15,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -3999,6 +6911,16 @@
       "char": "⡀",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -4012,6 +6934,16 @@
       "char": "⡁",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4025,6 +6957,16 @@
       "char": "⡂",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4038,6 +6980,16 @@
       "char": "⡃",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4051,6 +7003,16 @@
       "char": "⡄",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4064,6 +7026,16 @@
       "char": "⡅",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4077,6 +7049,16 @@
       "char": "⡆",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4090,6 +7072,16 @@
       "char": "⡇",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4103,6 +7095,16 @@
       "char": "⡈",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4116,6 +7118,16 @@
       "char": "⡉",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4129,6 +7141,16 @@
       "char": "⡊",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4142,6 +7164,16 @@
       "char": "⡋",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4155,6 +7187,16 @@
       "char": "⡌",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4168,6 +7210,16 @@
       "char": "⡍",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4181,6 +7233,16 @@
       "char": "⡎",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4194,6 +7256,16 @@
       "char": "⡏",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4207,6 +7279,16 @@
       "char": "⡐",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4220,6 +7302,16 @@
       "char": "⡑",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4233,6 +7325,16 @@
       "char": "⡒",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4246,6 +7348,16 @@
       "char": "⡓",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4259,6 +7371,16 @@
       "char": "⡔",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4272,6 +7394,16 @@
       "char": "⡕",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4285,6 +7417,16 @@
       "char": "⡖",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4298,6 +7440,16 @@
       "char": "⡗",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4311,6 +7463,16 @@
       "char": "⡘",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4324,6 +7486,16 @@
       "char": "⡙",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4337,6 +7509,16 @@
       "char": "⡚",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4350,6 +7532,16 @@
       "char": "⡛",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4363,6 +7555,16 @@
       "char": "⡜",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4376,6 +7578,16 @@
       "char": "⡝",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4389,6 +7601,16 @@
       "char": "⡞",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4402,6 +7624,16 @@
       "char": "⡟",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -4415,6 +7647,16 @@
       "char": "⡠",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4428,6 +7670,16 @@
       "char": "⡡",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4441,6 +7693,16 @@
       "char": "⡢",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4454,6 +7716,16 @@
       "char": "⡣",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4467,6 +7739,16 @@
       "char": "⡤",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4480,6 +7762,16 @@
       "char": "⡥",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4493,6 +7785,16 @@
       "char": "⡦",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4506,6 +7808,16 @@
       "char": "⡧",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4519,6 +7831,16 @@
       "char": "⡨",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4532,6 +7854,16 @@
       "char": "⡩",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4545,6 +7877,16 @@
       "char": "⡪",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4558,6 +7900,16 @@
       "char": "⡫",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4571,6 +7923,16 @@
       "char": "⡬",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4584,6 +7946,16 @@
       "char": "⡭",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4597,6 +7969,16 @@
       "char": "⡮",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4610,6 +7992,16 @@
       "char": "⡯",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -4623,6 +8015,16 @@
       "char": "⡰",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4636,6 +8038,16 @@
       "char": "⡱",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4649,6 +8061,16 @@
       "char": "⡲",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4662,6 +8084,16 @@
       "char": "⡳",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4675,6 +8107,16 @@
       "char": "⡴",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4688,6 +8130,16 @@
       "char": "⡵",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4701,6 +8153,16 @@
       "char": "⡶",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4714,6 +8176,16 @@
       "char": "⡷",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -4727,6 +8199,16 @@
       "char": "⡸",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4740,6 +8222,16 @@
       "char": "⡹",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4753,6 +8245,16 @@
       "char": "⡺",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4766,6 +8268,16 @@
       "char": "⡻",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -4779,6 +8291,16 @@
       "char": "⡼",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -4792,6 +8314,16 @@
       "char": "⡽",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -4805,6 +8337,16 @@
       "char": "⡾",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -4818,6 +8360,16 @@
       "char": "⡿",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 455,
@@ -4831,6 +8383,16 @@
       "char": "⢀",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 65,
@@ -4844,6 +8406,16 @@
       "char": "⢁",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4857,6 +8429,16 @@
       "char": "⢂",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4870,6 +8452,16 @@
       "char": "⢃",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4883,6 +8475,16 @@
       "char": "⢄",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4896,6 +8498,16 @@
       "char": "⢅",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4909,6 +8521,16 @@
       "char": "⢆",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4922,6 +8544,16 @@
       "char": "⢇",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4935,6 +8567,16 @@
       "char": "⢈",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -4948,6 +8590,16 @@
       "char": "⢉",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4961,6 +8613,16 @@
       "char": "⢊",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -4974,6 +8636,16 @@
       "char": "⢋",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -4987,6 +8659,16 @@
       "char": "⢌",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5000,6 +8682,16 @@
       "char": "⢍",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5013,6 +8705,16 @@
       "char": "⢎",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5026,6 +8728,16 @@
       "char": "⢏",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5039,6 +8751,16 @@
       "char": "⢐",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -5052,6 +8774,16 @@
       "char": "⢑",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5065,6 +8797,16 @@
       "char": "⢒",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5078,6 +8820,16 @@
       "char": "⢓",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5091,6 +8843,16 @@
       "char": "⢔",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5104,6 +8866,16 @@
       "char": "⢕",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5117,6 +8889,16 @@
       "char": "⢖",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5130,6 +8912,16 @@
       "char": "⢗",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5143,6 +8935,16 @@
       "char": "⢘",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5156,6 +8958,16 @@
       "char": "⢙",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5169,6 +8981,16 @@
       "char": "⢚",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5182,6 +9004,16 @@
       "char": "⢛",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5195,6 +9027,16 @@
       "char": "⢜",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5208,6 +9050,16 @@
       "char": "⢝",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5221,6 +9073,16 @@
       "char": "⢞",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5234,6 +9096,16 @@
       "char": "⢟",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -5247,6 +9119,16 @@
       "char": "⢠",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -5260,6 +9142,16 @@
       "char": "⢡",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5273,6 +9165,16 @@
       "char": "⢢",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5286,6 +9188,16 @@
       "char": "⢣",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5299,6 +9211,16 @@
       "char": "⢤",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5312,6 +9234,16 @@
       "char": "⢥",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5325,6 +9257,16 @@
       "char": "⢦",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5338,6 +9280,16 @@
       "char": "⢧",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5351,6 +9303,16 @@
       "char": "⢨",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5364,6 +9326,16 @@
       "char": "⢩",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5377,6 +9349,16 @@
       "char": "⢪",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5390,6 +9372,16 @@
       "char": "⢫",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5403,6 +9395,16 @@
       "char": "⢬",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5416,6 +9418,16 @@
       "char": "⢭",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5429,6 +9441,16 @@
       "char": "⢮",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5442,6 +9464,16 @@
       "char": "⢯",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -5455,6 +9487,16 @@
       "char": "⢰",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5468,6 +9510,16 @@
       "char": "⢱",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5481,6 +9533,16 @@
       "char": "⢲",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5494,6 +9556,16 @@
       "char": "⢳",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5507,6 +9579,16 @@
       "char": "⢴",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5520,6 +9602,16 @@
       "char": "⢵",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5533,6 +9625,16 @@
       "char": "⢶",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5546,6 +9648,16 @@
       "char": "⢷",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -5559,6 +9671,16 @@
       "char": "⢸",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5572,6 +9694,16 @@
       "char": "⢹",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5585,6 +9717,16 @@
       "char": "⢺",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5598,6 +9740,16 @@
       "char": "⢻",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -5611,6 +9763,16 @@
       "char": "⢼",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5624,6 +9786,16 @@
       "char": "⢽",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -5637,6 +9809,16 @@
       "char": "⢾",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -5650,6 +9832,16 @@
       "char": "⢿",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 455,
@@ -5663,6 +9855,16 @@
       "char": "⣀",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 130,
@@ -5676,6 +9878,16 @@
       "char": "⣁",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5689,6 +9901,16 @@
       "char": "⣂",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5702,6 +9924,16 @@
       "char": "⣃",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5715,6 +9947,16 @@
       "char": "⣄",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5728,6 +9970,16 @@
       "char": "⣅",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5741,6 +9993,16 @@
       "char": "⣆",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5754,6 +10016,16 @@
       "char": "⣇",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5767,6 +10039,16 @@
       "char": "⣈",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5780,6 +10062,16 @@
       "char": "⣉",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5793,6 +10085,16 @@
       "char": "⣊",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5806,6 +10108,16 @@
       "char": "⣋",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5819,6 +10131,16 @@
       "char": "⣌",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5832,6 +10154,16 @@
       "char": "⣍",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5845,6 +10177,16 @@
       "char": "⣎",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5858,6 +10200,16 @@
       "char": "⣏",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -5871,6 +10223,16 @@
       "char": "⣐",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -5884,6 +10246,16 @@
       "char": "⣑",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5897,6 +10269,16 @@
       "char": "⣒",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5910,6 +10292,16 @@
       "char": "⣓",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5923,6 +10315,16 @@
       "char": "⣔",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5936,6 +10338,16 @@
       "char": "⣕",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5949,6 +10361,16 @@
       "char": "⣖",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -5962,6 +10384,16 @@
       "char": "⣗",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -5975,6 +10407,16 @@
       "char": "⣘",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -5988,6 +10430,16 @@
       "char": "⣙",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6001,6 +10453,16 @@
       "char": "⣚",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6014,6 +10476,16 @@
       "char": "⣛",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6027,6 +10499,16 @@
       "char": "⣜",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6040,6 +10522,16 @@
       "char": "⣝",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6053,6 +10545,16 @@
       "char": "⣞",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6066,6 +10568,16 @@
       "char": "⣟",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 455,
@@ -6079,6 +10591,16 @@
       "char": "⣠",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -6092,6 +10614,16 @@
       "char": "⣡",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -6105,6 +10637,16 @@
       "char": "⣢",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -6118,6 +10660,16 @@
       "char": "⣣",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6131,6 +10683,16 @@
       "char": "⣤",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -6144,6 +10706,16 @@
       "char": "⣥",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6157,6 +10729,16 @@
       "char": "⣦",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6170,6 +10752,16 @@
       "char": "⣧",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6183,6 +10775,16 @@
       "char": "⣨",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -6196,6 +10798,16 @@
       "char": "⣩",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6209,6 +10821,16 @@
       "char": "⣪",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6222,6 +10844,16 @@
       "char": "⣫",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6235,6 +10867,16 @@
       "char": "⣬",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6248,6 +10890,16 @@
       "char": "⣭",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6261,6 +10913,16 @@
       "char": "⣮",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6274,6 +10936,16 @@
       "char": "⣯",
       "kind": "braille",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 455,
@@ -6287,6 +10959,16 @@
       "char": "⣰",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 260,
@@ -6300,6 +10982,16 @@
       "char": "⣱",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6313,6 +11005,16 @@
       "char": "⣲",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6326,6 +11028,16 @@
       "char": "⣳",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6339,6 +11051,16 @@
       "char": "⣴",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6352,6 +11074,16 @@
       "char": "⣵",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6365,6 +11097,16 @@
       "char": "⣶",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6378,6 +11120,16 @@
       "char": "⣷",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 455,
@@ -6391,6 +11143,16 @@
       "char": "⣸",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 325,
@@ -6404,6 +11166,16 @@
       "char": "⣹",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6417,6 +11189,16 @@
       "char": "⣺",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6430,6 +11212,16 @@
       "char": "⣻",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 455,
@@ -6443,6 +11235,16 @@
       "char": "⣼",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 390,
@@ -6456,6 +11258,16 @@
       "char": "⣽",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 455,
@@ -6469,6 +11281,16 @@
       "char": "⣾",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 455,
@@ -6482,6 +11304,16 @@
       "char": "⣿",
       "kind": "braille",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 520,
@@ -6495,6 +11327,16 @@
       "char": "▀",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 844,
@@ -6508,6 +11350,16 @@
       "char": "▁",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 314,
@@ -6521,6 +11373,16 @@
       "char": "▂",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 719,
@@ -6534,6 +11396,16 @@
       "char": "▃",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 757,
@@ -6547,6 +11419,16 @@
       "char": "▄",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 886,
@@ -6560,6 +11442,16 @@
       "char": "▅",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 988,
@@ -6573,6 +11465,16 @@
       "char": "▆",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1019,
@@ -6586,6 +11488,16 @@
       "char": "▇",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1133,
@@ -6599,6 +11511,16 @@
       "char": "█",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1239,
@@ -6612,6 +11534,16 @@
       "char": "▉",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1149,
@@ -6625,6 +11557,16 @@
       "char": "▊",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1149,
@@ -6638,6 +11580,16 @@
       "char": "▋",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1056,
@@ -6651,6 +11603,16 @@
       "char": "▌",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 998,
@@ -6664,6 +11626,16 @@
       "char": "▍",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 756,
@@ -6677,6 +11649,16 @@
       "char": "▎",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 756,
@@ -6690,6 +11672,16 @@
       "char": "▏",
       "kind": "block",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 774,
@@ -6703,6 +11695,16 @@
       "char": "▐",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 998,
@@ -6716,6 +11718,16 @@
       "char": "░",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1105,
@@ -6729,6 +11741,16 @@
       "char": "▒",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 2657,
@@ -6742,6 +11764,16 @@
       "char": "▓",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 2749,
@@ -6755,6 +11787,16 @@
       "char": "▔",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 314,
@@ -6768,6 +11810,16 @@
       "char": "▕",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 774,
@@ -6781,6 +11833,16 @@
       "char": "▖",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 641,
@@ -6794,6 +11856,16 @@
       "char": "▗",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 641,
@@ -6807,6 +11879,16 @@
       "char": "▘",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 575,
@@ -6820,6 +11902,16 @@
       "char": "▙",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1266,
@@ -6833,6 +11925,16 @@
       "char": "▚",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1230,
@@ -6846,6 +11948,16 @@
       "char": "▛",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1279,
@@ -6859,6 +11971,16 @@
       "char": "▜",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1279,
@@ -6872,6 +11994,16 @@
       "char": "▝",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 575,
@@ -6885,6 +12017,16 @@
       "char": "▞",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1230,
@@ -6898,6 +12040,16 @@
       "char": "▟",
       "kind": "block",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1266,
@@ -6911,6 +12063,16 @@
       "char": "🗺",
       "kind": "custom",
       "width": 18,
+      "part": 3,
+      "origin": [
+        8,
+        916
+      ],
+      "tile": [
+        0,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 6888,
@@ -6924,6 +12086,16 @@
       "char": "⌨",
       "kind": "custom",
       "width": 12,
+      "part": 3,
+      "origin": [
+        168,
+        916
+      ],
+      "tile": [
+        1,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 3692,

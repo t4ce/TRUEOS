@@ -15,14 +15,15 @@ from pathlib import Path
 import re
 
 EVENTS = frozenset("api_request conversation_starts startup_phase step_context_phase mcp_phase websocket_connect websocket_request user_prompt sse_event turn_ttft tool_result".split())
-MCP_PHASES = frozenset("prepare headers body first_body_byte json_decode first_sse_event operation".split())
+MCP_PHASES = frozenset("prepare headers body body_progress first_body_byte json_decode first_sse_event operation".split())
 MCP_METHODS = frozenset({"initialize", "notifications/initialized", "tools/list", "server/discover"})
 MCP_STATES = frozenset({"started", "complete", "cancelled", "error"})
 SQLX_SETUP_PHASES = frozenset("setup_total connect_headers service_ready connect_headers_retry upgrade open".split())
 SQLX_RPC_PHASES = frozenset("serialize write read_header read_body parse complete".split())
+SQLX_OPERATIONS = frozenset("open execute prepare begin commit rollback ping close".split())
 SLICE_REASONS = frozenset({"Yield", "Sleep", "Wait", "Complete"})
 SLICE_STOPS = frozenset({"End", "Bounds", "Unaligned", "NonIncreasing", "NonExecutable", "Limit"})
-STEP_PHASES = frozenset("capture active_turn_snapshot environment_ready instructions capability_roots capability_discovery mcp_ready recommendations selected_contributors build_router conversation_snapshot retain_context turn_record_context turn_display_roots turn_skills_plugins turn_start_hooks turn_hooks_inputs sampling_base_instructions sampling_incremental_tools sampling_build_prompt sampling_metadata sampling_stream".split())
+STEP_PHASES = frozenset("capture active_turn_snapshot environment_ready instructions capability_roots capability_discovery mcp_ready recommendations selected_contributors build_router conversation_snapshot retain_context turn_record_context context_world_state context_render context_record_items context_persist_snapshot context_checkpoint turn_display_roots turn_skills_plugins turn_start_hooks turn_hooks_inputs input_inspect_hooks input_record hook_transcript_path hook_transcript_persist input_prepare input_record_history input_emit_items input_persist sampling_base_instructions sampling_incremental_tools sampling_build_prompt sampling_metadata sampling_stream".split())
 PHASES = frozenset("thread_start_create_thread thread_start_total startup_prewarm_create_turn_context startup_prewarm_build_tools startup_prewarm_build_prompt startup_prewarm_websocket_warmup startup_prewarm_total startup_prewarm_resolve".split())
 STAGES = frozenset("account_status_begin account_status_done app_server_begin app_server_done arg0_cleanup_begin arg0_cleanup_done arg0_dispatch_done cli_begin cli_entering_tui cloud_auth_storage_begin cloud_auth_storage_done cloud_config_begin cloud_config_done crossterm_backend_created dotenv_begin dotenv_done editable_composer_visible first_frame_backend_flushed first_frame_render_begin first_frame_render_done full_config_begin full_config_done main_thread_entered main_thread_spawn_begin main_thread_spawn_done motion_begin motion_done path_aliases_begin path_aliases_done presentation_config_begin presentation_config_done process_main ratatui_terminal_begin ratatui_terminal_created runtime_begin runtime_done screen_reader_begin screen_reader_done session_prompt_ready state_db_begin state_db_done terminal_checks_begin terminal_checks_done terminal_init_begin terminal_init_done terminal_modes_begin terminal_modes_done terminal_queries_begin terminal_queries_done terminal_stderr_guard_done thread_start_begin thread_start_done tui_draft_begin tui_event_loop_created tui_preflight_begin".split())
 SPAN_NAMES = frozenset("app_server.request app_server.thread_start.create_thread endpoint_session.execute_with list_models model_client.stream_responses_websocket model_client.websocket_connection responses_websocket.stream_request session_init session_loop submission_dispatch thread_spawn turn".split())
@@ -82,6 +83,8 @@ def _sqlx_record(line: str, line_no: int, run: int) -> tuple[str, dict] | None:
     if fields.get('completed') in {'true', 'false'}:
         record['completed'] = fields['completed'] == 'true'
     if kind == 'rpc':
+        if fields.get('operation') in SQLX_OPERATIONS:
+            record['operation'] = fields['operation']
         for key in ('serialize_ms', 'write_ms', 'header_ms', 'body_ms', 'parse_ms'):
             record[key] = _optional_number(fields.get(key))
     return kind, record
@@ -109,6 +112,49 @@ def _slice_record(line: str, line_no: int, run: int) -> dict | None:
             addresses = [int(value, 16) for value in values]
     record['frames'] = addresses
     return record
+
+
+
+def _async_fs_record(line: str, line_no: int, run: int) -> tuple[str, dict] | None:
+    match = re.match(r'^(?:\[[^\]\r\n]*\]\s*)*(blueprint-async-fs-timing|codex-progress-fs)\s+(.*)', line)
+    if not match:
+        return None
+    fields = _fields(match[2])
+    record = dict(line=line_no, run=run or None)
+    if match[1] == 'codex-progress-fs' and 'registry_waiters' in fields:
+        record['kind'] = 'registry'
+        keys = ('registry_waiters', 'pending', 'missed')
+        kind = 'pending'
+    else:
+        keys = ('owner', 'id', 'class', 'phase')
+        if match[1] == 'blueprint-async-fs-timing':
+            keys += ('queued_ms', 'service_ms', 'consumer_ms', 'skipped')
+            kind = 'timing'
+        else:
+            keys += ('admitted_age_ms', 'queued_ms', 'service_ms', 'unobserved_ms')
+            record['kind'] = 'operation'
+            kind = 'pending'
+    for key in keys:
+        value = _number(fields.get(key))
+        if value is None:
+            return None
+        record[key] = value
+    if 'class' in record and not (1 <= record['class'] <= 14 and 1 <= record['phase'] <= 4):
+        return None
+    return kind, record
+
+
+def _async_fs_summaries(records: list[dict]) -> list[dict]:
+    groups = {}
+    for record in records:
+        key = (record['run'], record['owner'], record['class'])
+        group = groups.setdefault(key, dict(run=record['run'], owner=record['owner'],
+            class_id=record['class'], records=0, max_queued_ms=0,
+            max_service_ms=0, max_consumer_ms=0, max_skipped=0))
+        group['records'] += 1
+        for field in ('queued_ms', 'service_ms', 'consumer_ms', 'skipped'):
+            group['max_' + field] = max(group['max_' + field], record[field])
+    return list(groups.values())
 
 
 def _mcp_captures(events: list[dict]) -> list[dict]:
@@ -170,6 +216,7 @@ def _slice_summaries(records: list[dict]) -> list[dict]:
 def parse_log_text(text: str) -> dict:
     markers, events = [], []
     sqlx_setup, sqlx_rpc, slice_exits = [], [], []
+    async_fs, async_fs_pending = [], []
     startup_runs = []
     startup_run = 0
     pid_elapsed: dict[int, float] = {}
@@ -200,6 +247,9 @@ def parse_log_text(text: str) -> dict:
             sqlx = _sqlx_record(line, line_no, startup_run)
             if sqlx:
                 (sqlx_setup if sqlx[0] == 'setup' else sqlx_rpc).append(sqlx[1])
+            fs_record = _async_fs_record(line, line_no, startup_run)
+            if fs_record:
+                (async_fs if fs_record[0] == 'timing' else async_fs_pending).append(fs_record[1])
             trace = _slice_record(line, line_no, startup_run)
             if trace:
                 slice_exits.append(trace)
@@ -358,7 +408,9 @@ def parse_log_text(text: str) -> dict:
         'Slice frames are bounded return addresses from the exit call stack, not sampled current RIPs or evidence of where CPU time was spent. These traces appear only after a continuation yields or finishes.',
         'Diagnostic groups use observed startup runs; without lifecycle markers, reused process-local IDs cannot be reliably separated across restarts.',
         'SQLx records carry no VM identity; connection summaries must not be treated as authoritative cross-process joins when several emitters share a capture.',
-    ], startup_runs=startup_runs, startup_markers=markers, startup_spans=startup_spans, events=events, turns=turns, captures=list(captures.values()), mcp_captures=_mcp_captures(events), sqlx_setup=sqlx_setup, sqlx_rpc=sqlx_rpc, sqlx_connections=_sqlx_connections(sqlx_setup, sqlx_rpc), slice_exits=slice_exits, slice_summaries=_slice_summaries(slice_exits))
+        'MCP body_progress records are cumulative byte observations at elapsed body times, not extra completed body intervals. Repeated same-offset samples remain separate.',
+        'Async filesystem records are sampled diagnostics. Owner/class summaries show independent maxima, never an additive critical path or a total operation count; skipped values describe omitted samples.',
+    ], startup_runs=startup_runs, startup_markers=markers, startup_spans=startup_spans, events=events, turns=turns, captures=list(captures.values()), mcp_captures=_mcp_captures(events), sqlx_setup=sqlx_setup, sqlx_rpc=sqlx_rpc, sqlx_connections=_sqlx_connections(sqlx_setup, sqlx_rpc), slice_exits=slice_exits, slice_summaries=_slice_summaries(slice_exits), async_fs=async_fs, async_fs_pending=async_fs_pending, async_fs_summary=_async_fs_summaries(async_fs))
 
 
 def markdown(report: dict) -> str:
@@ -369,8 +421,8 @@ def markdown(report: dict) -> str:
         details = {k: v for k, v in event.items() if k not in {'line', 'event', 'session', 'spans'}}
         lines.append(f"- L{event['line']} {event['session']} {event['event']}: {json.dumps(details, sort_keys=True)}")
     lines += ['', 'Turns:', json.dumps(report['turns'], indent=2), '', 'Step-context capture timelines:', json.dumps(report['captures'], indent=2)]
-    for label, key in [('MCP phase timelines', 'mcp_captures'), ('SQLx connection summaries', 'sqlx_connections'), ('SQLx setup phases', 'sqlx_setup'), ('SQLx RPC phases', 'sqlx_rpc'), ('Continuation exit-callstack summaries', 'slice_summaries'), ('Continuation exit call stacks', 'slice_exits')]:
-        lines += ['', label + ':', json.dumps(report[key], indent=2)]
+    for label, key in [('MCP phase timelines', 'mcp_captures'), ('SQLx connection summaries', 'sqlx_connections'), ('SQLx setup phases', 'sqlx_setup'), ('SQLx RPC phases', 'sqlx_rpc'), ('Async filesystem timing summaries', 'async_fs_summary'), ('Async filesystem timing samples', 'async_fs'), ('Pending async filesystem observations', 'async_fs_pending'), ('Continuation exit-callstack summaries', 'slice_summaries'), ('Continuation exit call stacks', 'slice_exits')]:
+        lines += ['', label + ':', json.dumps(report.get(key, []), indent=2)]
     lines += ['', *report['notes']]
     return '\n'.join(lines)
 

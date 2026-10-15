@@ -363,6 +363,10 @@ const FREE_ADDRESS_FENCES: usize = 256;
 struct FreeList {
     head: Option<NonNull<FreeBlock>>,
     address_fences: [Option<NonNull<FreeBlock>>; FREE_ADDRESS_FENCES],
+    // A preceding successful free is often the nearest insertion neighbor
+    // during batched destruction. Allocation and heap replacement invalidate
+    // this hint before they can remove or replace its node.
+    free_finger: Option<NonNull<FreeBlock>>,
     initialized: bool,
     heap_virt_start: usize,
     heap_len: usize,
@@ -377,6 +381,7 @@ impl FreeList {
         Self {
             head: None,
             address_fences: [None; FREE_ADDRESS_FENCES],
+            free_finger: None,
             initialized: false,
             heap_virt_start: 0,
             heap_len: 0,
@@ -411,6 +416,7 @@ impl FreeList {
     }
 
     unsafe fn alloc(&mut self, domain: AllocDomain, layout: Layout) -> *mut u8 {
+        self.free_finger = None;
         if !self.initialized {
             self.init_once();
         }
@@ -607,9 +613,11 @@ impl FreeList {
 
         self.try_merge_with_next(new_node);
 
-        if let Some(p) = prev {
-            self.try_merge_with_next(p);
-        }
+        let survivor = match prev {
+            Some(p) if self.try_merge_with_next(p) => p,
+            _ => new_node,
+        };
+        self.free_finger = Some(survivor);
     }
 
     /// Return the payload capacity recorded in the allocator-owned in-band
@@ -768,6 +776,21 @@ impl FreeList {
             }
             None => self.head,
         };
+        // Keep the fence's validation above even when a nearer hint exists.
+        // The finger names an allocator-owned surviving free node. Validate
+        // it by the same bounds/order rules and never skip an overlap with
+        // the proposed allocation. Reverse-order frees retain the fence path.
+        if let Some(finger) = self.free_finger
+            && finger.as_ptr() as usize <= block_start
+            && prev.is_none_or(|previous| (previous.as_ptr() as usize) < finger.as_ptr() as usize)
+        {
+            let free_end = unsafe { self.checked_free_block_end(finger)? };
+            if free_end > block_start {
+                return None;
+            }
+            prev = Some(finger);
+            current = unsafe { finger.as_ref().next };
+        }
         let mut remaining = self.heap_len / minimum_block_size() + 1;
         while let Some(node) = current {
             if remaining == 0 {
@@ -845,6 +868,7 @@ impl FreeList {
     /// Used once after loading a validated heap image; the index is derived
     /// allocator state and is deliberately absent from the image format.
     unsafe fn rebuild_address_fences(&mut self) {
+        self.free_finger = None;
         self.address_fences.fill(None);
         let mut current = self.head;
         while let Some(node) = current {
@@ -856,6 +880,7 @@ impl FreeList {
 
     fn install_heap(&mut self, virt_start: usize, phys_start: usize, len: usize) {
         self.head = None;
+        self.free_finger = None;
         self.address_fences.fill(None);
         self.initialized = false;
         self.heap_virt_start = virt_start;
@@ -885,7 +910,7 @@ impl FreeList {
             && block_start.is_multiple_of(align_of::<FreeBlock>())
     }
 
-    unsafe fn try_merge_with_next(&mut self, mut node: NonNull<FreeBlock>) {
+    unsafe fn try_merge_with_next(&mut self, mut node: NonNull<FreeBlock>) -> bool {
         let node_size = node.as_ref().size;
         let node_end = (node.as_ptr() as usize).saturating_add(node_size);
 
@@ -899,8 +924,10 @@ impl FreeList {
                 let node_mut = node.as_mut();
                 node_mut.size = new_size;
                 node_mut.next = next_next;
+                return true;
             }
         }
+        false
     }
 }
 

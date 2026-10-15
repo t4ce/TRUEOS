@@ -1937,7 +1937,7 @@ fn log_c_allocation_track_overflow(ptr: *mut u8, record: AllocationRecord) {
         .is_ok()
     {
         crate::log!(
-            "std-abi: c allocation tracking full; returning untracked ptr=0x{:X} size={} align={} cap={}\n",
+            "std-abi: c allocation tracking window exhausted; returning untracked ptr=0x{:X} size={} align={} cap={}\n",
             ptr as usize,
             record.size,
             record.align,

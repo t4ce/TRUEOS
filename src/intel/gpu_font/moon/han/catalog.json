@@ -1,8 +1,11 @@
 {
   "detail": 6,
-  "scale": 4,
+  "scale": 8,
   "width": 2560,
-  "height": 1088,
+  "height": 1152,
+  "columns": 16,
+  "tile_width": 160,
+  "tile_height": 128,
   "model": "tissue",
   "recipe": {
     "model": "tissue",
@@ -23,15 +26,54 @@
   "route": "field",
   "source_sha256": "50b9f22403b6bf9500550e5b36010afeed33ccb7b8d1e14a8f3cf1dc5d45ccad",
   "set": "gui-han",
-  "glyph_count": 512,
   "han_source_sha256": "8b02d9136b06cc855af97e894a613432662e1d7f33beb4339ed92fe4a5268572",
-  "mesh_sha256": "46fc5e7c459e05331090354cc272c0a206c1c4ec19669535d1fb89edc44901fa",
+  "part_count": 4,
+  "glyph_count": 512,
+  "sheet_columns": 32,
+  "sheet_width": 5120,
+  "sheet_height": 2304,
+  "parts": [
+    {
+      "directory": "part1",
+      "path": "microfonttothemoon-han-8x-1.png",
+      "glyph_count": 144,
+      "mesh_sha256": "11a7ae5b69ff0d5a3d88aeacdbcdbaf38d5162d0d92b02360a797ade7ff6c540"
+    },
+    {
+      "directory": "part2",
+      "path": "microfonttothemoon-han-8x-2.png",
+      "glyph_count": 144,
+      "mesh_sha256": "380d9cb3438c0c2b070070adc20627396b61dbcdf26aa8467583ba511ca2b56f"
+    },
+    {
+      "directory": "part3",
+      "path": "microfonttothemoon-han-8x-3.png",
+      "glyph_count": 112,
+      "mesh_sha256": "f3f9df39b37ac325e72c2c8fb45058afba41897ad0b0b0f39f76cc5b223c31bb"
+    },
+    {
+      "directory": "part4",
+      "path": "microfonttothemoon-han-8x-4.png",
+      "glyph_count": 112,
+      "mesh_sha256": "f324f2059789ec09bf0dd28618ae8ecac4e8e4461473a11aa46c3d26c2009532"
+    }
+  ],
   "glyphs": [
     {
       "slot": 0,
       "char": "—",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 290,
@@ -45,6 +87,16 @@
       "char": "‘",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 347,
@@ -58,6 +110,16 @@
       "char": "’",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 347,
@@ -71,6 +133,16 @@
       "char": "“",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 727,
@@ -84,6 +156,16 @@
       "char": "”",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 736,
@@ -97,6 +179,16 @@
       "char": "…",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 195,
@@ -110,6 +202,16 @@
       "char": "、",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 196,
@@ -123,6 +225,16 @@
       "char": "。",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 292,
@@ -136,6 +248,16 @@
       "char": "《",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1148,
@@ -149,6 +271,16 @@
       "char": "》",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1148,
@@ -162,6 +294,16 @@
       "char": "【",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 746,
@@ -175,6 +317,16 @@
       "char": "】",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 746,
@@ -188,6 +340,16 @@
       "char": "一",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 372,
@@ -201,6 +363,16 @@
       "char": "三",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 749,
@@ -214,6 +386,16 @@
       "char": "上",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 818,
@@ -227,6 +409,16 @@
       "char": "下",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 936,
@@ -240,6 +432,16 @@
       "char": "不",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1088,
@@ -253,6 +455,16 @@
       "char": "与",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1231,
@@ -266,6 +478,16 @@
       "char": "世",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1638,
@@ -279,6 +501,16 @@
       "char": "业",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1248,
@@ -292,12 +524,22 @@
       "char": "东",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1236,
       "triangles": 1857,
-      "gpuTriangles": 1856,
-      "collapsedFaces": 1,
+      "gpuTriangles": 1854,
+      "collapsedFaces": 3,
       "float32FlippedFaces": 0
     },
     {
@@ -305,6 +547,16 @@
       "char": "两",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1552,
@@ -318,6 +570,16 @@
       "char": "个",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 880,
@@ -331,6 +593,16 @@
       "char": "中",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1327,
@@ -344,6 +616,16 @@
       "char": "为",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1334,
@@ -357,6 +639,16 @@
       "char": "主",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1115,
@@ -370,6 +662,16 @@
       "char": "久",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1135,
@@ -383,6 +685,16 @@
       "char": "么",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1083,
@@ -396,6 +708,16 @@
       "char": "义",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1203,
@@ -409,6 +731,16 @@
       "char": "之",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1170,
@@ -422,6 +754,16 @@
       "char": "乐",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1300,
@@ -435,6 +777,16 @@
       "char": "也",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1211,
@@ -448,6 +800,16 @@
       "char": "书",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1128,
@@ -461,6 +823,16 @@
       "char": "了",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 829,
@@ -474,6 +846,16 @@
       "char": "事",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 988,
@@ -487,6 +869,16 @@
       "char": "二",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 601,
@@ -500,6 +892,16 @@
       "char": "于",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 906,
@@ -513,6 +915,16 @@
       "char": "五",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1095,
@@ -526,6 +938,16 @@
       "char": "些",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1154,
@@ -539,6 +961,16 @@
       "char": "产",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 997,
@@ -552,6 +984,16 @@
       "char": "亮",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1493,
@@ -565,6 +1007,16 @@
       "char": "人",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 839,
@@ -578,6 +1030,16 @@
       "char": "什",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1101,
@@ -591,6 +1053,16 @@
       "char": "从",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1305,
@@ -604,6 +1076,16 @@
       "char": "他",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1108,
@@ -617,6 +1099,16 @@
       "char": "代",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1258,
@@ -630,6 +1122,16 @@
       "char": "以",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1295,
@@ -643,6 +1145,16 @@
       "char": "们",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1267,
@@ -656,6 +1168,16 @@
       "char": "件",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1159,
@@ -669,6 +1191,16 @@
       "char": "任",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1312,
@@ -682,6 +1214,16 @@
       "char": "休",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1145,
@@ -695,6 +1237,16 @@
       "char": "会",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1361,
@@ -708,6 +1260,16 @@
       "char": "传",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1299,
@@ -721,6 +1283,16 @@
       "char": "但",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1407,
@@ -734,6 +1306,16 @@
       "char": "位",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1416,
@@ -747,6 +1329,16 @@
       "char": "体",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1296,
@@ -760,6 +1352,16 @@
       "char": "何",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1509,
@@ -773,6 +1375,16 @@
       "char": "余",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1191,
@@ -786,6 +1398,16 @@
       "char": "作",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1218,
@@ -799,6 +1421,16 @@
       "char": "你",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1136,
@@ -812,6 +1444,16 @@
       "char": "使",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1268,
@@ -825,6 +1467,16 @@
       "char": "便",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1294,
@@ -838,6 +1490,16 @@
       "char": "保",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1384,
@@ -851,6 +1513,16 @@
       "char": "信",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1153,
@@ -864,6 +1536,16 @@
       "char": "修",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1312,
@@ -877,6 +1559,16 @@
       "char": "做",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1253,
@@ -890,6 +1582,16 @@
       "char": "停",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1319,
@@ -903,6 +1605,16 @@
       "char": "储",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1182,
@@ -916,6 +1628,16 @@
       "char": "儿",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1114,
@@ -929,6 +1651,16 @@
       "char": "允",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1268,
@@ -942,6 +1674,16 @@
       "char": "先",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1266,
@@ -955,6 +1697,16 @@
       "char": "光",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1160,
@@ -968,6 +1720,16 @@
       "char": "克",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1252,
@@ -981,6 +1743,16 @@
       "char": "入",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 936,
@@ -994,6 +1766,16 @@
       "char": "全",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1212,
@@ -1007,6 +1789,16 @@
       "char": "公",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1231,
@@ -1020,6 +1812,16 @@
       "char": "关",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1286,
@@ -1033,6 +1835,16 @@
       "char": "其",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1011,
@@ -1046,6 +1858,16 @@
       "char": "具",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1158,
@@ -1059,6 +1881,16 @@
       "char": "内",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1500,
@@ -1072,6 +1904,16 @@
       "char": "再",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1126,
@@ -1085,6 +1927,16 @@
       "char": "写",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1549,
@@ -1098,6 +1950,16 @@
       "char": "军",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1248,
@@ -1111,6 +1973,16 @@
       "char": "冲",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1296,
@@ -1124,6 +1996,16 @@
       "char": "决",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1303,
@@ -1137,6 +2019,16 @@
       "char": "准",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1221,
@@ -1150,6 +2042,16 @@
       "char": "几",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1261,
@@ -1163,6 +2065,16 @@
       "char": "出",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1566,
@@ -1176,6 +2088,16 @@
       "char": "击",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1339,
@@ -1189,6 +2111,16 @@
       "char": "分",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1334,
@@ -1202,6 +2134,16 @@
       "char": "切",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1189,
@@ -1215,6 +2157,16 @@
       "char": "列",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1481,
@@ -1228,6 +2180,16 @@
       "char": "则",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1570,
@@ -1241,6 +2203,16 @@
       "char": "删",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1401,
@@ -1254,6 +2226,16 @@
       "char": "利",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1554,
@@ -1267,6 +2249,16 @@
       "char": "别",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1544,
@@ -1280,6 +2272,16 @@
       "char": "到",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1413,
@@ -1293,6 +2295,16 @@
       "char": "制",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1454,
@@ -1306,6 +2318,16 @@
       "char": "刷",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1543,
@@ -1319,6 +2341,16 @@
       "char": "前",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1434,
@@ -1332,6 +2364,16 @@
       "char": "剩",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1446,
@@ -1345,6 +2387,16 @@
       "char": "剪",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1483,
@@ -1358,6 +2410,16 @@
       "char": "力",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1304,
@@ -1371,6 +2433,16 @@
       "char": "功",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1204,
@@ -1384,6 +2456,16 @@
       "char": "加",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1425,
@@ -1397,6 +2479,16 @@
       "char": "务",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1434,
@@ -1410,6 +2502,16 @@
       "char": "动",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1435,
@@ -1423,6 +2525,16 @@
       "char": "助",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1294,
@@ -1436,6 +2548,16 @@
       "char": "化",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1280,
@@ -1449,6 +2571,16 @@
       "char": "区",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1548,
@@ -1462,6 +2594,16 @@
       "char": "十",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 719,
@@ -1475,6 +2617,16 @@
       "char": "单",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1422,
@@ -1488,6 +2640,16 @@
       "char": "却",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1415,
@@ -1501,6 +2663,16 @@
       "char": "卸",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1353,
@@ -1514,6 +2686,16 @@
       "char": "压",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1417,
@@ -1527,6 +2709,16 @@
       "char": "原",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1480,
@@ -1540,6 +2732,16 @@
       "char": "去",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1198,
@@ -1553,6 +2755,16 @@
       "char": "又",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1277,
@@ -1566,6 +2778,16 @@
       "char": "及",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1525,
@@ -1579,6 +2801,16 @@
       "char": "双",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1615,
@@ -1592,6 +2824,16 @@
       "char": "反",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1407,
@@ -1605,6 +2847,16 @@
       "char": "发",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1482,
@@ -1618,12 +2870,22 @@
       "char": "取",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1203,
       "triangles": 1856,
-      "gpuTriangles": 1855,
-      "collapsedFaces": 1,
+      "gpuTriangles": 1856,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -1631,6 +2893,16 @@
       "char": "受",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1593,
@@ -1644,6 +2916,16 @@
       "char": "变",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1323,
@@ -1657,6 +2939,16 @@
       "char": "口",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1242,
@@ -1670,6 +2962,16 @@
       "char": "另",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1574,
@@ -1683,6 +2985,16 @@
       "char": "只",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1504,
@@ -1696,6 +3008,16 @@
       "char": "可",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1210,
@@ -1709,6 +3031,16 @@
       "char": "司",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1209,
@@ -1722,6 +3054,16 @@
       "char": "各",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1298,
@@ -1735,6 +3077,16 @@
       "char": "合",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1265,
@@ -1748,6 +3100,16 @@
       "char": "同",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1478,
@@ -1761,6 +3123,16 @@
       "char": "名",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1402,
@@ -1774,6 +3146,16 @@
       "char": "后",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1144,
@@ -1787,6 +3169,16 @@
       "char": "向",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1375,
@@ -1800,6 +3192,16 @@
       "char": "否",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1375,
@@ -1813,6 +3215,16 @@
       "char": "听",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1425,
@@ -1826,6 +3238,16 @@
       "char": "启",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1277,
@@ -1839,6 +3261,16 @@
       "char": "告",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1181,
@@ -1852,6 +3284,16 @@
       "char": "员",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1528,
@@ -1865,6 +3307,16 @@
       "char": "命",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1093,
@@ -1878,6 +3330,16 @@
       "char": "和",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1259,
@@ -1891,6 +3353,16 @@
       "char": "哈",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1385,
@@ -1904,6 +3376,16 @@
       "char": "四",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1397,
@@ -1917,6 +3399,16 @@
       "char": "回",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1708,
@@ -1930,6 +3422,16 @@
       "char": "因",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1859,
@@ -1943,6 +3445,16 @@
       "char": "国",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1503,
@@ -1956,6 +3468,16 @@
       "char": "图",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1782,
@@ -1969,6 +3491,16 @@
       "char": "在",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1275,
@@ -1982,6 +3514,16 @@
       "char": "地",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1198,
@@ -1995,6 +3537,16 @@
       "char": "场",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1517,
@@ -2008,6 +3560,16 @@
       "char": "址",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1272,
@@ -2021,6 +3583,16 @@
       "char": "坏",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1329,
@@ -2034,6 +3606,16 @@
       "char": "型",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1446,
@@ -2047,6 +3629,16 @@
       "char": "基",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1415,
@@ -2060,6 +3652,16 @@
       "char": "声",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1213,
@@ -2073,19 +3675,39 @@
       "char": "处",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1368,
       "triangles": 2096,
-      "gpuTriangles": 2092,
-      "collapsedFaces": 4,
-      "float32FlippedFaces": 1
+      "gpuTriangles": 2095,
+      "collapsedFaces": 1,
+      "float32FlippedFaces": 0
     },
     {
       "slot": 158,
       "char": "备",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1029,
@@ -2099,6 +3721,16 @@
       "char": "复",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1202,
@@ -2112,6 +3744,16 @@
       "char": "外",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1156,
@@ -2125,6 +3767,16 @@
       "char": "多",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1242,
@@ -2138,6 +3790,16 @@
       "char": "大",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 987,
@@ -2151,6 +3813,16 @@
       "char": "天",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1164,
@@ -2164,6 +3836,16 @@
       "char": "太",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1218,
@@ -2177,6 +3859,16 @@
       "char": "失",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1295,
@@ -2190,6 +3882,16 @@
       "char": "头",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1032,
@@ -2203,6 +3905,16 @@
       "char": "夹",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1371,
@@ -2216,6 +3928,16 @@
       "char": "女",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1085,
@@ -2229,6 +3951,16 @@
       "char": "她",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1371,
@@ -2242,6 +3974,16 @@
       "char": "好",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1459,
@@ -2255,6 +3997,16 @@
       "char": "如",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1261,
@@ -2268,6 +4020,16 @@
       "char": "子",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 952,
@@ -2281,6 +4043,16 @@
       "char": "字",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1182,
@@ -2294,6 +4066,16 @@
       "char": "存",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1266,
@@ -2307,6 +4089,16 @@
       "char": "学",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1270,
@@ -2320,6 +4112,16 @@
       "char": "它",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1394,
@@ -2333,6 +4135,16 @@
       "char": "安",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1474,
@@ -2346,6 +4158,16 @@
       "char": "完",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1488,
@@ -2359,12 +4181,22 @@
       "char": "定",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1309,
       "triangles": 1973,
-      "gpuTriangles": 1973,
-      "collapsedFaces": 0,
+      "gpuTriangles": 1970,
+      "collapsedFaces": 3,
       "float32FlippedFaces": 0
     },
     {
@@ -2372,6 +4204,16 @@
       "char": "实",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1392,
@@ -2385,6 +4227,16 @@
       "char": "家",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1581,
@@ -2398,6 +4250,16 @@
       "char": "容",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1225,
@@ -2411,6 +4273,16 @@
       "char": "宽",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1529,
@@ -2424,6 +4296,16 @@
       "char": "密",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1567,
@@ -2437,12 +4319,22 @@
       "char": "对",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1451,
       "triangles": 2220,
-      "gpuTriangles": 2217,
-      "collapsedFaces": 3,
+      "gpuTriangles": 2220,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -2450,6 +4342,16 @@
       "char": "导",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1317,
@@ -2463,6 +4365,16 @@
       "char": "将",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1593,
@@ -2476,6 +4388,16 @@
       "char": "小",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1002,
@@ -2489,6 +4411,16 @@
       "char": "少",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1145,
@@ -2502,6 +4434,16 @@
       "char": "尔",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1411,
@@ -2515,6 +4457,16 @@
       "char": "就",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1337,
@@ -2528,6 +4480,16 @@
       "char": "展",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1604,
@@ -2541,6 +4503,16 @@
       "char": "属",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1515,
@@ -2554,6 +4526,16 @@
       "char": "山",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1341,
@@ -2567,6 +4549,16 @@
       "char": "工",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 813,
@@ -2580,6 +4572,16 @@
       "char": "己",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1308,
@@ -2593,6 +4595,16 @@
       "char": "已",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1500,
@@ -2606,6 +4618,16 @@
       "char": "市",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1155,
@@ -2619,6 +4641,16 @@
       "char": "希",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1356,
@@ -2632,6 +4664,16 @@
       "char": "帮",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1435,
@@ -2645,6 +4687,16 @@
       "char": "常",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1312,
@@ -2658,6 +4710,16 @@
       "char": "平",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1108,
@@ -2671,6 +4733,16 @@
       "char": "年",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1225,
@@ -2684,6 +4756,16 @@
       "char": "并",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1099,
@@ -2697,6 +4779,16 @@
       "char": "序",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1419,
@@ -2710,6 +4802,16 @@
       "char": "应",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1419,
@@ -2723,6 +4825,16 @@
       "char": "度",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1484,
@@ -2736,6 +4848,16 @@
       "char": "建",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1482,
@@ -2749,6 +4871,16 @@
       "char": "开",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1281,
@@ -2762,6 +4894,16 @@
       "char": "式",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1291,
@@ -2775,6 +4917,16 @@
       "char": "强",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1501,
@@ -2788,6 +4940,16 @@
       "char": "归",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1516,
@@ -2801,12 +4963,22 @@
       "char": "当",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1324,
       "triangles": 1932,
-      "gpuTriangles": 1932,
-      "collapsedFaces": 0,
+      "gpuTriangles": 1930,
+      "collapsedFaces": 2,
       "float32FlippedFaces": 0
     },
     {
@@ -2814,6 +4986,16 @@
       "char": "录",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1477,
@@ -2827,6 +5009,16 @@
       "char": "形",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1375,
@@ -2840,6 +5032,16 @@
       "char": "径",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1587,
@@ -2853,6 +5055,16 @@
       "char": "待",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1402,
@@ -2866,6 +5078,16 @@
       "char": "很",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1472,
@@ -2879,6 +5101,16 @@
       "char": "得",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1489,
@@ -2892,6 +5124,16 @@
       "char": "德",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1360,
@@ -2905,6 +5147,16 @@
       "char": "心",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1084,
@@ -2918,6 +5170,16 @@
       "char": "必",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1292,
@@ -2931,6 +5193,16 @@
       "char": "快",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1329,
@@ -2944,6 +5216,16 @@
       "char": "忽",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        916
+      ],
+      "tile": [
+        0,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1526,
@@ -2957,6 +5239,16 @@
       "char": "态",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        916
+      ],
+      "tile": [
+        1,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1468,
@@ -2970,6 +5262,16 @@
       "char": "性",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        916
+      ],
+      "tile": [
+        2,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1298,
@@ -2983,6 +5285,16 @@
       "char": "总",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        916
+      ],
+      "tile": [
+        3,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1617,
@@ -2996,6 +5308,16 @@
       "char": "恢",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        916
+      ],
+      "tile": [
+        4,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1255,
@@ -3009,6 +5331,16 @@
       "char": "息",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        916
+      ],
+      "tile": [
+        5,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1272,
@@ -3022,6 +5354,16 @@
       "char": "情",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        916
+      ],
+      "tile": [
+        6,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1271,
@@ -3035,6 +5377,16 @@
       "char": "想",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        916
+      ],
+      "tile": [
+        7,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1376,
@@ -3048,6 +5400,16 @@
       "char": "意",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        916
+      ],
+      "tile": [
+        8,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1450,
@@ -3061,6 +5423,16 @@
       "char": "感",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        916
+      ],
+      "tile": [
+        9,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1342,
@@ -3074,6 +5446,16 @@
       "char": "成",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        916
+      ],
+      "tile": [
+        10,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1471,
@@ -3087,6 +5469,16 @@
       "char": "我",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        916
+      ],
+      "tile": [
+        11,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1372,
@@ -3100,6 +5492,16 @@
       "char": "或",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        916
+      ],
+      "tile": [
+        12,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1222,
@@ -3113,6 +5515,16 @@
       "char": "战",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        916
+      ],
+      "tile": [
+        13,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1466,
@@ -3126,6 +5538,16 @@
       "char": "户",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        916
+      ],
+      "tile": [
+        14,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1057,
@@ -3139,6 +5561,16 @@
       "char": "所",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        916
+      ],
+      "tile": [
+        15,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1430,
@@ -3152,6 +5584,16 @@
       "char": "手",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        916
+      ],
+      "tile": [
+        0,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1113,
@@ -3165,6 +5607,16 @@
       "char": "才",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        916
+      ],
+      "tile": [
+        1,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1058,
@@ -3178,6 +5630,16 @@
       "char": "打",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        916
+      ],
+      "tile": [
+        2,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1590,
@@ -3191,6 +5653,16 @@
       "char": "执",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        916
+      ],
+      "tile": [
+        3,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1388,
@@ -3204,6 +5676,16 @@
       "char": "扫",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        916
+      ],
+      "tile": [
+        4,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1547,
@@ -3217,6 +5699,16 @@
       "char": "找",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        916
+      ],
+      "tile": [
+        5,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1510,
@@ -3230,6 +5722,16 @@
       "char": "把",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        916
+      ],
+      "tile": [
+        6,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1583,
@@ -3243,6 +5745,16 @@
       "char": "报",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        916
+      ],
+      "tile": [
+        7,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1583,
@@ -3256,6 +5768,16 @@
       "char": "拒",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        916
+      ],
+      "tile": [
+        8,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1418,
@@ -3269,6 +5791,16 @@
       "char": "拖",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        916
+      ],
+      "tile": [
+        9,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1327,
@@ -3282,6 +5814,16 @@
       "char": "择",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        916
+      ],
+      "tile": [
+        10,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1576,
@@ -3295,6 +5837,16 @@
       "char": "挂",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        916
+      ],
+      "tile": [
+        11,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1372,
@@ -3308,6 +5860,16 @@
       "char": "指",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        916
+      ],
+      "tile": [
+        12,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1371,
@@ -3321,6 +5883,16 @@
       "char": "损",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        916
+      ],
+      "tile": [
+        13,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1500,
@@ -3334,6 +5906,16 @@
       "char": "换",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        916
+      ],
+      "tile": [
+        14,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1482,
@@ -3347,6 +5929,16 @@
       "char": "捷",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        916
+      ],
+      "tile": [
+        15,
+        7,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1404,
@@ -3360,6 +5952,16 @@
       "char": "排",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        8,
+        1044
+      ],
+      "tile": [
+        0,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1196,
@@ -3373,12 +5975,22 @@
       "char": "接",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        168,
+        1044
+      ],
+      "tile": [
+        1,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1551,
       "triangles": 2404,
-      "gpuTriangles": 2403,
-      "collapsedFaces": 1,
+      "gpuTriangles": 2404,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -3386,6 +5998,16 @@
       "char": "描",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        328,
+        1044
+      ],
+      "tile": [
+        2,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1268,
@@ -3399,6 +6021,16 @@
       "char": "提",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        488,
+        1044
+      ],
+      "tile": [
+        3,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1466,
@@ -3412,6 +6044,16 @@
       "char": "搜",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        648,
+        1044
+      ],
+      "tile": [
+        4,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1552,
@@ -3425,6 +6067,16 @@
       "char": "撤",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        808,
+        1044
+      ],
+      "tile": [
+        5,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1270,
@@ -3438,6 +6090,16 @@
       "char": "播",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        968,
+        1044
+      ],
+      "tile": [
+        6,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1580,
@@ -3451,6 +6113,16 @@
       "char": "操",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1128,
+        1044
+      ],
+      "tile": [
+        7,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1213,
@@ -3464,6 +6136,16 @@
       "char": "收",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1288,
+        1044
+      ],
+      "tile": [
+        8,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1463,
@@ -3477,6 +6159,16 @@
       "char": "改",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1448,
+        1044
+      ],
+      "tile": [
+        9,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1685,
@@ -3490,6 +6182,16 @@
       "char": "放",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1608,
+        1044
+      ],
+      "tile": [
+        10,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1292,
@@ -3503,6 +6205,16 @@
       "char": "政",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1768,
+        1044
+      ],
+      "tile": [
+        11,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1424,
@@ -3516,6 +6228,16 @@
       "char": "教",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        1928,
+        1044
+      ],
+      "tile": [
+        12,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1289,
@@ -3529,6 +6251,16 @@
       "char": "数",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2088,
+        1044
+      ],
+      "tile": [
+        13,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1775,
@@ -3542,6 +6274,16 @@
       "char": "整",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2248,
+        1044
+      ],
+      "tile": [
+        14,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1541,
@@ -3555,6 +6297,16 @@
       "char": "文",
       "kind": "han",
       "width": 6,
+      "part": 1,
+      "origin": [
+        2408,
+        1044
+      ],
+      "tile": [
+        15,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1190,
@@ -3568,6 +6320,16 @@
       "char": "断",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        8,
+        1044
+      ],
+      "tile": [
+        0,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1588,
@@ -3581,6 +6343,16 @@
       "char": "斯",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        168,
+        1044
+      ],
+      "tile": [
+        1,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1273,
@@ -3594,6 +6366,16 @@
       "char": "新",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        328,
+        1044
+      ],
+      "tile": [
+        2,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1412,
@@ -3607,6 +6389,16 @@
       "char": "方",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        488,
+        1044
+      ],
+      "tile": [
+        3,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1310,
@@ -3620,6 +6412,16 @@
       "char": "无",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        648,
+        1044
+      ],
+      "tile": [
+        4,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1252,
@@ -3633,6 +6435,16 @@
       "char": "日",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        808,
+        1044
+      ],
+      "tile": [
+        5,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1607,
@@ -3646,6 +6458,16 @@
       "char": "时",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        968,
+        1044
+      ],
+      "tile": [
+        6,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1257,
@@ -3659,6 +6481,16 @@
       "char": "明",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1128,
+        1044
+      ],
+      "tile": [
+        7,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1792,
@@ -3672,6 +6504,16 @@
       "char": "是",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1288,
+        1044
+      ],
+      "tile": [
+        8,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1278,
@@ -3685,6 +6527,16 @@
       "char": "显",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1448,
+        1044
+      ],
+      "tile": [
+        9,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1673,
@@ -3698,6 +6550,16 @@
       "char": "暂",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1608,
+        1044
+      ],
+      "tile": [
+        10,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1372,
@@ -3711,6 +6573,16 @@
       "char": "更",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1768,
+        1044
+      ],
+      "tile": [
+        11,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1062,
@@ -3724,6 +6596,16 @@
       "char": "替",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        1928,
+        1044
+      ],
+      "tile": [
+        12,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1346,
@@ -3737,6 +6619,16 @@
       "char": "最",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2088,
+        1044
+      ],
+      "tile": [
+        13,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1282,
@@ -3750,6 +6642,16 @@
       "char": "月",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2248,
+        1044
+      ],
+      "tile": [
+        14,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1541,
@@ -3763,6 +6665,16 @@
       "char": "有",
       "kind": "han",
       "width": 6,
+      "part": 2,
+      "origin": [
+        2408,
+        1044
+      ],
+      "tile": [
+        15,
+        8,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1215,
@@ -3776,6 +6688,16 @@
       "char": "期",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1085,
@@ -3789,6 +6711,16 @@
       "char": "未",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1092,
@@ -3802,6 +6734,16 @@
       "char": "本",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1163,
@@ -3815,6 +6757,16 @@
       "char": "机",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1156,
@@ -3828,6 +6780,16 @@
       "char": "权",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1561,
@@ -3841,6 +6803,16 @@
       "char": "条",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1311,
@@ -3854,6 +6826,16 @@
       "char": "来",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1294,
@@ -3867,6 +6849,16 @@
       "char": "果",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1659,
@@ -3880,6 +6872,16 @@
       "char": "查",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1294,
@@ -3893,6 +6895,16 @@
       "char": "标",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1251,
@@ -3906,6 +6918,16 @@
       "char": "栏",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1314,
@@ -3919,6 +6941,16 @@
       "char": "校",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1467,
@@ -3932,6 +6964,16 @@
       "char": "样",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1339,
@@ -3945,6 +6987,16 @@
       "char": "根",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1372,
@@ -3958,6 +7010,16 @@
       "char": "格",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1425,
@@ -3971,6 +7033,16 @@
       "char": "桌",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1157,
@@ -3984,6 +7056,16 @@
       "char": "档",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        20
+      ],
+      "tile": [
+        0,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1542,
@@ -3997,6 +7079,16 @@
       "char": "检",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        20
+      ],
+      "tile": [
+        1,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1485,
@@ -4010,6 +7102,16 @@
       "char": "次",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        20
+      ],
+      "tile": [
+        2,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1284,
@@ -4023,6 +7125,16 @@
       "char": "止",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        20
+      ],
+      "tile": [
+        3,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1040,
@@ -4036,6 +7148,16 @@
       "char": "正",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        20
+      ],
+      "tile": [
+        4,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1217,
@@ -4049,6 +7171,16 @@
       "char": "此",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        20
+      ],
+      "tile": [
+        5,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1209,
@@ -4062,6 +7194,16 @@
       "char": "每",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        20
+      ],
+      "tile": [
+        6,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1146,
@@ -4075,6 +7217,16 @@
       "char": "比",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        20
+      ],
+      "tile": [
+        7,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1247,
@@ -4088,6 +7240,16 @@
       "char": "民",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        20
+      ],
+      "tile": [
+        8,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1575,
@@ -4101,6 +7263,16 @@
       "char": "气",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        20
+      ],
+      "tile": [
+        9,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 966,
@@ -4114,6 +7286,16 @@
       "char": "水",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        20
+      ],
+      "tile": [
+        10,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1105,
@@ -4127,6 +7309,16 @@
       "char": "永",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        20
+      ],
+      "tile": [
+        11,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1155,
@@ -4140,6 +7332,16 @@
       "char": "池",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        20
+      ],
+      "tile": [
+        12,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1466,
@@ -4153,6 +7355,16 @@
       "char": "没",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        20
+      ],
+      "tile": [
+        13,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1528,
@@ -4166,6 +7378,16 @@
       "char": "治",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        20
+      ],
+      "tile": [
+        14,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1214,
@@ -4179,6 +7401,16 @@
       "char": "法",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        20
+      ],
+      "tile": [
+        15,
+        0,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1365,
@@ -4192,6 +7424,16 @@
       "char": "注",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1086,
@@ -4205,6 +7447,16 @@
       "char": "活",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1384,
@@ -4218,6 +7470,16 @@
       "char": "浅",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1571,
@@ -4231,19 +7493,39 @@
       "char": "海",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1257,
       "triangles": 1890,
-      "gpuTriangles": 1890,
-      "collapsedFaces": 0,
-      "float32FlippedFaces": 0
+      "gpuTriangles": 1888,
+      "collapsedFaces": 2,
+      "float32FlippedFaces": 1
     },
     {
       "slot": 324,
       "char": "消",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1443,
@@ -4257,6 +7539,16 @@
       "char": "深",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1679,
@@ -4270,6 +7562,16 @@
       "char": "清",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1452,
@@ -4283,6 +7585,16 @@
       "char": "源",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1378,
@@ -4296,6 +7608,16 @@
       "char": "点",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 786,
@@ -4309,6 +7631,16 @@
       "char": "然",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1279,
@@ -4322,6 +7654,16 @@
       "char": "片",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1236,
@@ -4335,6 +7677,16 @@
       "char": "版",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1549,
@@ -4348,6 +7700,16 @@
       "char": "物",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1516,
@@ -4361,6 +7723,16 @@
       "char": "特",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1444,
@@ -4374,6 +7746,16 @@
       "char": "状",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1399,
@@ -4387,6 +7769,16 @@
       "char": "率",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1546,
@@ -4400,6 +7792,16 @@
       "char": "现",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        148
+      ],
+      "tile": [
+        0,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1502,
@@ -4413,6 +7815,16 @@
       "char": "理",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        148
+      ],
+      "tile": [
+        1,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1290,
@@ -4426,6 +7838,16 @@
       "char": "生",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        148
+      ],
+      "tile": [
+        2,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1152,
@@ -4439,6 +7861,16 @@
       "char": "用",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        148
+      ],
+      "tile": [
+        3,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1804,
@@ -4452,6 +7884,16 @@
       "char": "由",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        148
+      ],
+      "tile": [
+        4,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1560,
@@ -4465,6 +7907,16 @@
       "char": "电",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        148
+      ],
+      "tile": [
+        5,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1375,
@@ -4478,6 +7930,16 @@
       "char": "界",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        148
+      ],
+      "tile": [
+        6,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1610,
@@ -4491,6 +7953,16 @@
       "char": "略",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        148
+      ],
+      "tile": [
+        7,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1273,
@@ -4504,6 +7976,16 @@
       "char": "登",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        148
+      ],
+      "tile": [
+        8,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1490,
@@ -4517,6 +7999,16 @@
       "char": "白",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        148
+      ],
+      "tile": [
+        9,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1577,
@@ -4530,6 +8022,16 @@
       "char": "百",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        148
+      ],
+      "tile": [
+        10,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1301,
@@ -4543,6 +8045,16 @@
       "char": "的",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        148
+      ],
+      "tile": [
+        11,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1300,
@@ -4556,6 +8068,16 @@
       "char": "盖",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        148
+      ],
+      "tile": [
+        12,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1240,
@@ -4569,6 +8091,16 @@
       "char": "盘",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        148
+      ],
+      "tile": [
+        13,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1220,
@@ -4582,6 +8114,16 @@
       "char": "目",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        148
+      ],
+      "tile": [
+        14,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1854,
@@ -4595,6 +8137,16 @@
       "char": "直",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        148
+      ],
+      "tile": [
+        15,
+        1,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1145,
@@ -4608,6 +8160,16 @@
       "char": "相",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1471,
@@ -4621,6 +8183,16 @@
       "char": "看",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1043,
@@ -4634,6 +8206,16 @@
       "char": "真",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 838,
@@ -4647,6 +8229,16 @@
       "char": "眠",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1475,
@@ -4660,6 +8252,16 @@
       "char": "眼",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1882,
@@ -4673,6 +8275,16 @@
       "char": "着",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1139,
@@ -4686,6 +8298,16 @@
       "char": "知",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1328,
@@ -4699,6 +8321,16 @@
       "char": "码",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1452,
@@ -4712,6 +8344,16 @@
       "char": "确",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1392,
@@ -4725,6 +8367,16 @@
       "char": "磁",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1430,
@@ -4738,6 +8390,16 @@
       "char": "示",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1312,
@@ -4751,6 +8413,16 @@
       "char": "社",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1292,
@@ -4764,6 +8436,16 @@
       "char": "神",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1405,
@@ -4777,6 +8459,16 @@
       "char": "禁",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1239,
@@ -4790,6 +8482,16 @@
       "char": "种",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1359,
@@ -4803,6 +8505,16 @@
       "char": "科",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1439,
@@ -4816,6 +8528,16 @@
       "char": "秒",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        276
+      ],
+      "tile": [
+        0,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1298,
@@ -4829,6 +8551,16 @@
       "char": "称",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        276
+      ],
+      "tile": [
+        1,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1224,
@@ -4842,6 +8574,16 @@
       "char": "移",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        276
+      ],
+      "tile": [
+        2,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1604,
@@ -4855,6 +8597,16 @@
       "char": "程",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        276
+      ],
+      "tile": [
+        3,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1457,
@@ -4868,6 +8620,16 @@
       "char": "空",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        276
+      ],
+      "tile": [
+        4,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1130,
@@ -4881,6 +8643,16 @@
       "char": "突",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        276
+      ],
+      "tile": [
+        5,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1393,
@@ -4894,6 +8666,16 @@
       "char": "窗",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        276
+      ],
+      "tile": [
+        6,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 945,
@@ -4907,6 +8689,16 @@
       "char": "立",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        276
+      ],
+      "tile": [
+        7,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1178,
@@ -4920,6 +8712,16 @@
       "char": "站",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        276
+      ],
+      "tile": [
+        8,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1418,
@@ -4933,6 +8735,16 @@
       "char": "端",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        276
+      ],
+      "tile": [
+        9,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1475,
@@ -4946,6 +8758,16 @@
       "char": "第",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        276
+      ],
+      "tile": [
+        10,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1622,
@@ -4959,6 +8781,16 @@
       "char": "等",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        276
+      ],
+      "tile": [
+        11,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1316,
@@ -4972,12 +8804,22 @@
       "char": "筛",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        276
+      ],
+      "tile": [
+        12,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1324,
       "triangles": 2056,
-      "gpuTriangles": 2055,
-      "collapsedFaces": 1,
+      "gpuTriangles": 2056,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -4985,6 +8827,16 @@
       "char": "简",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        276
+      ],
+      "tile": [
+        13,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1533,
@@ -4998,6 +8850,16 @@
       "char": "算",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        276
+      ],
+      "tile": [
+        14,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1320,
@@ -5011,6 +8873,16 @@
       "char": "管",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        276
+      ],
+      "tile": [
+        15,
+        2,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1318,
@@ -5024,6 +8896,16 @@
       "char": "类",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1438,
@@ -5037,6 +8919,16 @@
       "char": "粘",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1522,
@@ -5050,6 +8942,16 @@
       "char": "系",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1107,
@@ -5063,6 +8965,16 @@
       "char": "索",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1306,
@@ -5076,6 +8988,16 @@
       "char": "级",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1683,
@@ -5089,6 +9011,16 @@
       "char": "组",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1366,
@@ -5102,6 +9034,16 @@
       "char": "细",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1226,
@@ -5115,6 +9057,16 @@
       "char": "经",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1695,
@@ -5128,6 +9080,16 @@
       "char": "结",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1445,
@@ -5141,6 +9103,16 @@
       "char": "给",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1693,
@@ -5154,6 +9126,16 @@
       "char": "络",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1613,
@@ -5167,6 +9149,16 @@
       "char": "绝",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1661,
@@ -5180,12 +9172,22 @@
       "char": "统",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1464,
       "triangles": 2210,
-      "gpuTriangles": 2207,
-      "collapsedFaces": 3,
+      "gpuTriangles": 2209,
+      "collapsedFaces": 1,
       "float32FlippedFaces": 0
     },
     {
@@ -5193,6 +9195,16 @@
       "char": "继",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1571,
@@ -5206,6 +9218,16 @@
       "char": "绪",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1466,
@@ -5219,6 +9241,16 @@
       "char": "续",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1543,
@@ -5232,6 +9264,16 @@
       "char": "编",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        404
+      ],
+      "tile": [
+        0,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1449,
@@ -5245,6 +9287,16 @@
       "char": "缩",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        404
+      ],
+      "tile": [
+        1,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1429,
@@ -5258,6 +9310,16 @@
       "char": "网",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        404
+      ],
+      "tile": [
+        2,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1774,
@@ -5271,6 +9333,16 @@
       "char": "置",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        404
+      ],
+      "tile": [
+        3,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1332,
@@ -5284,6 +9356,16 @@
       "char": "美",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        404
+      ],
+      "tile": [
+        4,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1259,
@@ -5297,6 +9379,16 @@
       "char": "老",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        404
+      ],
+      "tile": [
+        5,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1154,
@@ -5310,6 +9402,16 @@
       "char": "者",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        404
+      ],
+      "tile": [
+        6,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1135,
@@ -5323,6 +9425,16 @@
       "char": "而",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        404
+      ],
+      "tile": [
+        7,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1534,
@@ -5336,6 +9448,16 @@
       "char": "能",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        404
+      ],
+      "tile": [
+        8,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1395,
@@ -5349,6 +9471,16 @@
       "char": "自",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        404
+      ],
+      "tile": [
+        9,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1629,
@@ -5362,6 +9494,16 @@
       "char": "至",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        404
+      ],
+      "tile": [
+        10,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1380,
@@ -5375,6 +9517,16 @@
       "char": "色",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        404
+      ],
+      "tile": [
+        11,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1326,
@@ -5388,6 +9540,16 @@
       "char": "菜",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        404
+      ],
+      "tile": [
+        12,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1272,
@@ -5401,6 +9563,16 @@
       "char": "藏",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        404
+      ],
+      "tile": [
+        13,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1393,
@@ -5414,6 +9586,16 @@
       "char": "行",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        404
+      ],
+      "tile": [
+        14,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1461,
@@ -5427,6 +9609,16 @@
       "char": "表",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        404
+      ],
+      "tile": [
+        15,
+        3,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1257,
@@ -5440,6 +9632,16 @@
       "char": "被",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1443,
@@ -5453,6 +9655,16 @@
       "char": "装",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1355,
@@ -5466,6 +9678,16 @@
       "char": "西",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1564,
@@ -5479,6 +9701,16 @@
       "char": "要",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1231,
@@ -5492,6 +9724,16 @@
       "char": "覆",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1420,
@@ -5505,6 +9747,16 @@
       "char": "见",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1676,
@@ -5518,6 +9770,16 @@
       "char": "视",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1452,
@@ -5531,6 +9793,16 @@
       "char": "览",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1570,
@@ -5544,6 +9816,16 @@
       "char": "解",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1500,
@@ -5557,6 +9839,16 @@
       "char": "言",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 910,
@@ -5570,6 +9862,16 @@
       "char": "警",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1326,
@@ -5583,6 +9885,16 @@
       "char": "计",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1020,
@@ -5596,6 +9908,16 @@
       "char": "认",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1099,
@@ -5609,6 +9931,16 @@
       "char": "许",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1112,
@@ -5622,6 +9954,16 @@
       "char": "论",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1300,
@@ -5635,6 +9977,16 @@
       "char": "设",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1465,
@@ -5648,6 +10000,16 @@
       "char": "访",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        532
+      ],
+      "tile": [
+        0,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1370,
@@ -5661,6 +10023,16 @@
       "char": "证",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        532
+      ],
+      "tile": [
+        1,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1247,
@@ -5674,6 +10046,16 @@
       "char": "试",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        532
+      ],
+      "tile": [
+        2,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1167,
@@ -5687,6 +10069,16 @@
       "char": "话",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        532
+      ],
+      "tile": [
+        3,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1301,
@@ -5700,6 +10092,16 @@
       "char": "详",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        532
+      ],
+      "tile": [
+        4,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1335,
@@ -5713,6 +10115,16 @@
       "char": "语",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        532
+      ],
+      "tile": [
+        5,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1143,
@@ -5726,6 +10138,16 @@
       "char": "误",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        532
+      ],
+      "tile": [
+        6,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1439,
@@ -5739,6 +10161,16 @@
       "char": "说",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        532
+      ],
+      "tile": [
+        7,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1394,
@@ -5752,6 +10184,16 @@
       "char": "读",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        532
+      ],
+      "tile": [
+        8,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1229,
@@ -5765,6 +10207,16 @@
       "char": "败",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        532
+      ],
+      "tile": [
+        9,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1571,
@@ -5778,6 +10230,16 @@
       "char": "账",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        532
+      ],
+      "tile": [
+        10,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1466,
@@ -5791,6 +10253,16 @@
       "char": "贴",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        532
+      ],
+      "tile": [
+        11,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1535,
@@ -5804,6 +10276,16 @@
       "char": "资",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        532
+      ],
+      "tile": [
+        12,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1487,
@@ -5817,6 +10299,16 @@
       "char": "走",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        532
+      ],
+      "tile": [
+        13,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1111,
@@ -5830,6 +10322,16 @@
       "char": "起",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        532
+      ],
+      "tile": [
+        14,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1529,
@@ -5843,6 +10345,16 @@
       "char": "超",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        532
+      ],
+      "tile": [
+        15,
+        4,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1461,
@@ -5856,6 +10368,16 @@
       "char": "足",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1171,
@@ -5869,6 +10391,16 @@
       "char": "路",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1476,
@@ -5882,6 +10414,16 @@
       "char": "跳",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1266,
@@ -5895,6 +10437,16 @@
       "char": "身",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1107,
@@ -5908,6 +10460,16 @@
       "char": "载",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1388,
@@ -5921,6 +10483,16 @@
       "char": "辑",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1266,
@@ -5934,6 +10506,16 @@
       "char": "输",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1384,
@@ -5947,6 +10529,16 @@
       "char": "辨",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1556,
@@ -5960,6 +10552,16 @@
       "char": "达",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1304,
@@ -5973,6 +10575,16 @@
       "char": "过",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1325,
@@ -5986,6 +10598,16 @@
       "char": "近",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1269,
@@ -5999,6 +10621,16 @@
       "char": "返",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1521,
@@ -6012,6 +10644,16 @@
       "char": "还",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1331,
@@ -6025,6 +10667,16 @@
       "char": "这",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1621,
@@ -6038,6 +10690,16 @@
       "char": "进",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1681,
@@ -6051,6 +10713,16 @@
       "char": "远",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1360,
@@ -6064,6 +10736,16 @@
       "char": "连",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        660
+      ],
+      "tile": [
+        0,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1432,
@@ -6077,6 +10759,16 @@
       "char": "退",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        660
+      ],
+      "tile": [
+        1,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1724,
@@ -6090,6 +10782,16 @@
       "char": "选",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        660
+      ],
+      "tile": [
+        2,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1476,
@@ -6103,6 +10805,16 @@
       "char": "通",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        660
+      ],
+      "tile": [
+        3,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1302,
@@ -6116,6 +10828,16 @@
       "char": "速",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        660
+      ],
+      "tile": [
+        4,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1416,
@@ -6129,6 +10851,16 @@
       "char": "道",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        660
+      ],
+      "tile": [
+        5,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1723,
@@ -6142,6 +10874,16 @@
       "char": "那",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        660
+      ],
+      "tile": [
+        6,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1493,
@@ -6155,6 +10897,16 @@
       "char": "部",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        660
+      ],
+      "tile": [
+        7,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1298,
@@ -6168,6 +10920,16 @@
       "char": "都",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        660
+      ],
+      "tile": [
+        8,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1334,
@@ -6181,6 +10943,16 @@
       "char": "里",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        660
+      ],
+      "tile": [
+        9,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1596,
@@ -6194,6 +10966,16 @@
       "char": "重",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        660
+      ],
+      "tile": [
+        10,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1044,
@@ -6207,6 +10989,16 @@
       "char": "量",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        660
+      ],
+      "tile": [
+        11,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1246,
@@ -6220,6 +11012,16 @@
       "char": "金",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        660
+      ],
+      "tile": [
+        12,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1213,
@@ -6233,6 +11035,16 @@
       "char": "链",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        660
+      ],
+      "tile": [
+        13,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1426,
@@ -6246,6 +11058,16 @@
       "char": "销",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        660
+      ],
+      "tile": [
+        14,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1469,
@@ -6259,6 +11081,16 @@
       "char": "错",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        660
+      ],
+      "tile": [
+        15,
+        5,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1505,
@@ -6272,6 +11104,16 @@
       "char": "键",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1658,
@@ -6285,6 +11127,16 @@
       "char": "长",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1273,
@@ -6298,6 +11150,16 @@
       "char": "门",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1129,
@@ -6311,6 +11173,16 @@
       "char": "闭",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1366,
@@ -6324,6 +11196,16 @@
       "char": "问",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1521,
@@ -6337,6 +11219,16 @@
       "char": "间",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1662,
@@ -6350,6 +11242,16 @@
       "char": "队",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1371,
@@ -6363,6 +11265,16 @@
       "char": "限",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1662,
@@ -6376,6 +11288,16 @@
       "char": "除",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1415,
@@ -6389,6 +11311,16 @@
       "char": "隐",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1542,
@@ -6402,12 +11334,22 @@
       "char": "静",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1408,
       "triangles": 2178,
-      "gpuTriangles": 2177,
-      "collapsedFaces": 1,
+      "gpuTriangles": 2178,
+      "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
     {
@@ -6415,6 +11357,16 @@
       "char": "非",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1377,
@@ -6428,6 +11380,16 @@
       "char": "面",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1386,
@@ -6441,6 +11403,16 @@
       "char": "音",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1278,
@@ -6454,6 +11426,16 @@
       "char": "项",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1402,
@@ -6467,6 +11449,16 @@
       "char": "预",
       "kind": "han",
       "width": 6,
+      "part": 3,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1653,
@@ -6480,6 +11472,16 @@
       "char": "频",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        8,
+        788
+      ],
+      "tile": [
+        0,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1453,
@@ -6493,6 +11495,16 @@
       "char": "题",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        168,
+        788
+      ],
+      "tile": [
+        1,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1587,
@@ -6506,6 +11518,16 @@
       "char": "颜",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        328,
+        788
+      ],
+      "tile": [
+        2,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1607,
@@ -6519,6 +11541,16 @@
       "char": "首",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        488,
+        788
+      ],
+      "tile": [
+        3,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1260,
@@ -6532,6 +11564,16 @@
       "char": "马",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        648,
+        788
+      ],
+      "tile": [
+        4,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1357,
@@ -6545,6 +11587,16 @@
       "char": "验",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        808,
+        788
+      ],
+      "tile": [
+        5,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1658,
@@ -6558,6 +11610,16 @@
       "char": "高",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        968,
+        788
+      ],
+      "tile": [
+        6,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1260,
@@ -6571,6 +11633,16 @@
       "char": "默",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1128,
+        788
+      ],
+      "tile": [
+        7,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1463,
@@ -6584,6 +11656,16 @@
       "char": "鼠",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1288,
+        788
+      ],
+      "tile": [
+        8,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 1695,
@@ -6597,6 +11679,16 @@
       "char": "！",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1448,
+        788
+      ],
+      "tile": [
+        9,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 382,
@@ -6610,6 +11702,16 @@
       "char": "（",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1608,
+        788
+      ],
+      "tile": [
+        10,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 662,
@@ -6623,6 +11725,16 @@
       "char": "）",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1768,
+        788
+      ],
+      "tile": [
+        11,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 671,
@@ -6636,6 +11748,16 @@
       "char": "，",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        1928,
+        788
+      ],
+      "tile": [
+        12,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 347,
@@ -6649,6 +11771,16 @@
       "char": "：",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2088,
+        788
+      ],
+      "tile": [
+        13,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 424,
@@ -6662,6 +11794,16 @@
       "char": "；",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2248,
+        788
+      ],
+      "tile": [
+        14,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 559,
@@ -6675,6 +11817,16 @@
       "char": "？",
       "kind": "han",
       "width": 6,
+      "part": 4,
+      "origin": [
+        2408,
+        788
+      ],
+      "tile": [
+        15,
+        6,
+        1
+      ],
       "route": "field",
       "spacing": 0.16666666666666666,
       "vertices": 820,
