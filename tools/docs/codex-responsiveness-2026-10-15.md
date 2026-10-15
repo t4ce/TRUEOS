@@ -1137,3 +1137,54 @@ Both are retained under `final/artifacts/` for exact subsequent symbolization.
 scope of each native run. Both owned QEMU instances were stopped after capture.
 The physical rig and its boot image were left untouched; physical full-turn
 responsiveness remains to be observed with the updated kernel and app together.
+
+
+## Model catalog filtering by the compiled client version
+
+The TRUEOS and Ubuntu source builds reported workspace version `0.0.0`.
+That value is also used by `models-manager::client_version_to_whole()` in the
+`/models?client_version=...` request. Replacing the visible TRUEOS title with
+its packed hash did not change the protocol version.
+
+A read-only comparison using the same existing host ChatGPT login returned:
+
+| Catalog query version | User-agent version | GPT-6 Luna advertised |
+| --- | --- | --- |
+| `0.0.0` | `0.0.0` | no |
+| `0.162.0` | `0.162.0` | yes |
+| `0.0.0` | `0.162.0` | no |
+| `0.162.0` | `0.0.0` | yes |
+
+All four requests returned HTTP 200. Version zero lists Astra and the three
+GPT-5.6 models, matching the operator's Ubuntu picker. Version 0.162.0 also
+lists GPT-6.1 Sol, GPT-6 Sol and GPT-6 Luna. This isolates the query-version
+filter for this login; the initial unsupported-model response alone did not
+establish an account-entitlement restriction. Catalog discovery is distinct
+from a completed inference request.
+
+At the operator's request, the shared Cargo workspace version is now `0.162.0`.
+Cargo updated its workspace lockfile entries accordingly. This changes the
+catalog query, user-agent and compiled application version consistently for
+Ubuntu and TRUEOS. The TRUEOS title continues to identify its packed artifact.
+The GPT-6 Luna/low bring-up default and automatic Gridpaper request are retained.
+No catalog metadata or access flags were fabricated, and no credentials were
+written into the evidence. Safe comparison metadata is retained at
+`bld/codex-version162-validation/catalog-version-comparison.json`.
+
+
+Both version-stamped builds passed. The Ubuntu binary at
+`../codex/codex-rs/target/debug/codex` reports `codex-cli 0.162.0`. An actual
+host ChatGPT-authenticated, ephemeral read-only execution explicitly selecting
+`gpt-6-luna` / `low` completed successfully with the exact reply `OK` in
+4,329 ms and no tool calls. It also reported the existing standalone Code Mode
+feature-unavailable startup notice; this no-tools probe does not validate Ubuntu
+Code Mode execution. It verifies model execution access, beyond configuration
+parsing and catalog visibility, and does not time the physical rig or Gridpaper.
+
+The TRUEOS native release build and ABI guard passed. Apps-share readback verifies
+`codex.bp§§c970a622f6aed98925ab2bda7c8bc5a521d69ee5f5881eae1ef64189c05267b9`,
+66,663,629 bytes. This supersedes `368201f3` for the version-stamping fix while
+retaining the requested Luna/low setting and automatic `gri` prompt. Artifact
+identities and safe live-result metadata are in
+`bld/codex-version162-validation/acceptance.json`. The physical rig was left
+untouched by this validation.

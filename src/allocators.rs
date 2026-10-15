@@ -352,8 +352,17 @@ impl Drop for HvGuestDmaPinReservation {
     }
 }
 
+// An address fence is the last free node before an equal-sized address band.
+// It bounds live-range checks and insertion searches to the allocation's band
+// instead of walking every free node in a fragmented multi-GiB arena. Keep
+// this allocator-owned index in the existing shared 4 KiB state page; free
+// node and allocation tag layouts, and therefore saved heap images, do not
+// change.
+const FREE_ADDRESS_FENCES: usize = 256;
+
 struct FreeList {
     head: Option<NonNull<FreeBlock>>,
+    address_fences: [Option<NonNull<FreeBlock>>; FREE_ADDRESS_FENCES],
     initialized: bool,
     heap_virt_start: usize,
     heap_len: usize,
@@ -367,6 +376,7 @@ impl FreeList {
     const fn new() -> Self {
         Self {
             head: None,
+            address_fences: [None; FREE_ADDRESS_FENCES],
             initialized: false,
             heap_virt_start: 0,
             heap_len: 0,
@@ -396,6 +406,7 @@ impl FreeList {
         let block = block_start as *mut FreeBlock;
         block.write(FreeBlock { size, next: None });
         self.head = Some(NonNull::new_unchecked(block));
+        self.insert_address_fences(NonNull::new_unchecked(block), None);
         self.initialized = true;
     }
 
@@ -409,9 +420,10 @@ impl FreeList {
         let mut current = self.head;
         trace_alloc_entry(trace_enabled, layout, current);
         let mut prev: Option<NonNull<FreeBlock>> = None;
+        let mut last_rejected = None;
 
         while let Some(mut block_ptr) = current {
-            if !self.is_plausible_free_block_ptr(block_ptr.as_ptr() as usize) {
+            if self.checked_free_block_end(block_ptr).is_none() {
                 trace_alloc_invalid_ptr(trace_enabled, block_ptr.as_ptr() as usize);
                 return null_mut();
             }
@@ -443,14 +455,18 @@ impl FreeList {
             // If we split, the next free-list node must be properly aligned for `FreeBlock`.
             // This padding is accounted to the allocated block size.
             let aligned_used = align_up(total_used, align_of::<FreeBlock>());
-            trace_alloc_block(trace_enabled, block, block_start, payload_start, aligned_used);
-            trace_alloc_compare(trace_enabled);
 
             if aligned_used > block.size {
+                last_rejected = Some((block_ptr, payload_start, aligned_used));
                 prev = Some(block_ptr);
                 current = block.next;
                 continue;
             }
+
+            // Preserve the selected block in crash diagnostics without seven
+            // shared atomic writes on every rejected first-fit candidate.
+            trace_alloc_block(trace_enabled, block, block_start, payload_start, aligned_used);
+            trace_alloc_compare(trace_enabled);
 
             let mut remaining = block.size.saturating_sub(aligned_used);
 
@@ -473,6 +489,11 @@ impl FreeList {
             };
             block.size = alloc_block_size;
 
+            self.remove_address_fences(block_ptr, prev, block.next);
+            if remaining != 0 {
+                self.insert_address_fences(next_block.unwrap(), block.next);
+            }
+
             match prev {
                 Some(mut p) => p.as_mut().next = next_block,
                 None => self.head = next_block,
@@ -491,6 +512,16 @@ impl FreeList {
             return payload_start as *mut u8;
         }
 
+        if let Some((node, payload_start, aligned_used)) = last_rejected {
+            trace_alloc_block(
+                trace_enabled,
+                node.as_ref(),
+                node.as_ptr() as usize,
+                payload_start,
+                aligned_used,
+            );
+            trace_alloc_compare(trace_enabled);
+        }
         null_mut()
     }
 
@@ -533,7 +564,6 @@ impl FreeList {
         if !self.is_plausible_alloc_block(block_start, block_size)
             || tag_addr < block_start
             || ptr_addr >= block_end
-            || !unsafe { self.allocation_block_is_live(block_start, block_end) }
         {
             crate::log!(
                 "alloc: ignored invalid dealloc ptr=0x{:016X} tag_block=0x{:016X} tag_size={} tag_domain={}\n",
@@ -549,28 +579,25 @@ impl FreeList {
             // list. The definitive PPGTT unmap path owns the matching token.
             return;
         }
+        let Some((prev, current)) =
+            (unsafe { self.free_neighbors_for_live_block(block_start, block_end) })
+        else {
+            crate::log!(
+                "alloc: ignored invalid dealloc ptr=0x{:016X} tag_block=0x{:016X} tag_size={} tag_domain={}\n",
+                ptr as usize,
+                block_start,
+                block_size,
+                tag.domain
+            );
+            return;
+        };
         let block_ptr = block_start as *mut FreeBlock;
         block_ptr.write(FreeBlock {
             size: block_size,
-            next: None,
+            next: current,
         });
-
-        let mut prev: Option<NonNull<FreeBlock>> = None;
-        let mut current = self.head;
-
-        while let Some(node) = current {
-            if (node.as_ptr() as usize) > block_start {
-                break;
-            }
-            prev = current;
-            current = node.as_ref().next;
-        }
-
-        let mut new_node = NonNull::new_unchecked(block_ptr);
-        {
-            let new_block = new_node.as_mut();
-            new_block.next = current;
-        }
+        let new_node = NonNull::new_unchecked(block_ptr);
+        self.insert_address_fences(new_node, current);
 
         if let Some(mut p) = prev {
             p.as_mut().next = Some(new_node);
@@ -707,28 +734,129 @@ impl FreeList {
     }
 
     unsafe fn allocation_block_is_live(&mut self, block_start: usize, block_end: usize) -> bool {
-        let mut current = self.head;
+        unsafe { self.free_neighbors_for_live_block(block_start, block_end).is_some() }
+    }
+
+    /// The list is ordered and disjoint after init, split, insertion, coalescing
+    /// and restore. Start at the fence before this address band, check that
+    /// predecessor for overlap, then check every node through the first node
+    /// after the proposed allocation. This proves both liveness and the exact
+    /// insertion neighbors under the same heap lock.
+    unsafe fn free_neighbors_for_live_block(
+        &mut self,
+        block_start: usize,
+        block_end: usize,
+    ) -> Option<(Option<NonNull<FreeBlock>>, Option<NonNull<FreeBlock>>)> {
+        let heap_end = self.heap_virt_start.checked_add(self.heap_len)?;
+        if block_start < self.heap_virt_start || block_start >= block_end || block_end > heap_end {
+            return None;
+        }
+        let band = self.address_band(block_start);
+        let mut prev = self.address_fences[band];
+        let mut current = match prev {
+            Some(node) => {
+                // A fence always names a node in an earlier band. Validate it
+                // before dereferencing; coalescing may make it span this one.
+                if self.address_band(node.as_ptr() as usize) >= band {
+                    return None;
+                }
+                let free_end = unsafe { self.checked_free_block_end(node)? };
+                if free_end > block_start {
+                    return None;
+                }
+                unsafe { node.as_ref().next }
+            }
+            None => self.head,
+        };
         let mut remaining = self.heap_len / minimum_block_size() + 1;
         while let Some(node) = current {
-            if remaining == 0 || !self.is_plausible_free_block_ptr(node.as_ptr() as usize) {
-                return false;
+            if remaining == 0 {
+                return None;
             }
             remaining -= 1;
+            let free_end = unsafe { self.checked_free_block_end(node)? };
             let free = unsafe { node.as_ref() };
             let free_start = node.as_ptr() as usize;
-            let Some(free_end) = free_start.checked_add(free.size) else {
-                return false;
-            };
-            if block_start < free_end && free_start < block_end {
-                return false;
+            if free_start >= block_end {
+                return Some((prev, current));
             }
+            if block_start < free_end && free_start < block_end {
+                return None;
+            }
+            prev = current;
             current = free.next;
         }
-        true
+        Some((prev, None))
+    }
+
+    #[inline]
+    fn address_band(&self, address: usize) -> usize {
+        let width = self.heap_len / FREE_ADDRESS_FENCES
+            + usize::from(self.heap_len % FREE_ADDRESS_FENCES != 0);
+        address.saturating_sub(self.heap_virt_start) / width.max(1)
+    }
+
+    unsafe fn checked_free_block_end(&mut self, node: NonNull<FreeBlock>) -> Option<usize> {
+        let start = node.as_ptr() as usize;
+        if !self.is_plausible_free_block_ptr(start) {
+            return None;
+        }
+        let free = unsafe { node.as_ref() };
+        let end = start.checked_add(free.size)?;
+        if free.size < minimum_block_size()
+            || end > self.heap_virt_start.checked_add(self.heap_len)?
+        {
+            return None;
+        }
+        if let Some(next) = free.next {
+            let next_start = next.as_ptr() as usize;
+            if next_start < end || !self.is_plausible_free_block_ptr(next_start) {
+                return None;
+            }
+        }
+        Some(end)
+    }
+
+    fn insert_address_fences(
+        &mut self,
+        node: NonNull<FreeBlock>,
+        next: Option<NonNull<FreeBlock>>,
+    ) {
+        let first = self.address_band(node.as_ptr() as usize) + 1;
+        let end = next
+            .map(|next| self.address_band(next.as_ptr() as usize) + 1)
+            .unwrap_or(FREE_ADDRESS_FENCES);
+        self.address_fences[first..end].fill(Some(node));
+    }
+
+    fn remove_address_fences(
+        &mut self,
+        node: NonNull<FreeBlock>,
+        prev: Option<NonNull<FreeBlock>>,
+        next: Option<NonNull<FreeBlock>>,
+    ) {
+        let first = self.address_band(node.as_ptr() as usize) + 1;
+        let end = next
+            .map(|next| self.address_band(next.as_ptr() as usize) + 1)
+            .unwrap_or(FREE_ADDRESS_FENCES);
+        self.address_fences[first..end].fill(prev);
+    }
+
+    /// Used once after loading a validated heap image; the index is derived
+    /// allocator state and is deliberately absent from the image format.
+    unsafe fn rebuild_address_fences(&mut self) {
+        self.address_fences.fill(None);
+        let mut current = self.head;
+        while let Some(node) = current {
+            let next = unsafe { node.as_ref().next };
+            self.insert_address_fences(node, next);
+            current = next;
+        }
     }
 
     fn install_heap(&mut self, virt_start: usize, phys_start: usize, len: usize) {
         self.head = None;
+        self.address_fences.fill(None);
         self.initialized = false;
         self.heap_virt_start = virt_start;
         self.heap_len = len;
@@ -766,6 +894,7 @@ impl FreeList {
             if node_end == next_start {
                 let next_size = next_ptr.as_ref().size;
                 let next_next = next_ptr.as_ref().next;
+                self.remove_address_fences(next_ptr, Some(node), next_next);
                 let new_size = node_size + next_size;
                 let node_mut = node.as_mut();
                 node_mut.size = new_size;
@@ -1837,6 +1966,7 @@ pub fn restore_hv_guest_heap(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str
         }
     }
     guard.head = next;
+    unsafe { guard.rebuild_address_fences() };
     drop(guard);
     publish_hv_guest_heap_range(vm_id, arena.virt_start, arena.length);
     page.ready.store(1, Ordering::Release);

@@ -35,9 +35,8 @@ def harness():
         function(SOURCE, 'heap_stats_from_guard'), function(SOURCE, 'align_up'),
         handler, old,
     ])
-    methods = '\n'.join(function(SOURCE, name) for name in (
-        'allocation_block_is_live', 'is_plausible_free_block_ptr'))
-    return SUPPORT.replace('@ROOT@', str(ROOT)) + defs + '\nimpl FreeList {\n' + methods + '\n}\n' + TESTS
+    fence_line = next(line for line in source.splitlines() if line.startswith('const FREE_ADDRESS_FENCES:'))
+    return SUPPORT.replace('@ROOT@', str(ROOT)) + fence_line + '\n' + defs + TESTS
 
 
 SUPPORT = r'''
@@ -91,7 +90,7 @@ fn install(page_stride:bool)->Arena{
   let next=offsets.get(i+1).map(|(next,_)|unsafe{NonNull::new_unchecked(ptr.as_ptr().add(*next).cast::<FreeBlock>())});
   unsafe{ptr.as_ptr().add(offset).cast::<FreeBlock>().write(FreeBlock{size,next})};
  }
- *HEAP.lock().unwrap()=Some(FreeList{head:Some(ptr.cast()),initialized:true,heap_virt_start:start,heap_len:bytes,heap_phys_start:0,heap_source:HeapSourceKind::Arena});
+ *HEAP.lock().unwrap()=Some(FreeList{head:Some(ptr.cast()),address_fences:[None;FREE_ADDRESS_FENCES],initialized:true,heap_virt_start:start,heap_len:bytes,heap_phys_start:0,heap_source:HeapSourceKind::Arena});
  let stats=hv_guest_heap_stats(0);assert_eq!((stats.free_blocks,stats.free_bytes,stats.largest_free_block),(NODES,FREE,LARGE));
  Arena{ptr,layout,first_gap:(start+gap.0,start+gap.1)}
 }
@@ -114,11 +113,6 @@ TESTS = r'''
   let old=measure(&format!("{shape}_old"),base,old_log_hv_guest_alloc_watermark);
   let new=measure(&format!("{shape}_gated"),base,log_hv_guest_alloc_watermark);
   assert_eq!(old,(200,200*46_920));assert_eq!(new,(1,46_920));assert_eq!(DOMAIN_ENTRIES.load(Ordering::Relaxed),1);
-  // Successful free validation is a separate production full-list traversal.
-  let started=Instant::now();for _ in 0..200{
-   assert!(unsafe{HEAP.lock().unwrap().as_mut().unwrap().allocation_block_is_live(black_box(arena.first_gap.0),black_box(arena.first_gap.1))});
-  }
-  println!("watermark_fixture case={shape}_retained_free_validation calls=200 node_visits={} host_elapsed_ns={}",200*46_920,started.elapsed().as_nanos());
   CLOCK_MS.store(base+1000,Ordering::Relaxed);log_hv_guest_alloc_watermark(0,Layout::from_size_align(64,8).unwrap(),std::ptr::null_mut(),"global");
   assert_eq!(SAMPLES.load(Ordering::Relaxed),2);
   CLOCK_MS.store(base+1001,Ordering::Relaxed);log_hv_guest_alloc_watermark(0,Layout::from_size_align(1024*1024,8).unwrap(),std::ptr::null_mut(),"global");
