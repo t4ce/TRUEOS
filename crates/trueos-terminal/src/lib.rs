@@ -86,6 +86,7 @@ pub struct CellStyle {
     pub foreground: TerminalColor,
     pub background: TerminalColor,
     pub underline: bool,
+    pub reversed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,6 +103,7 @@ impl Cell {
                 foreground: TerminalColor::Default,
                 background: TerminalColor::Default,
                 underline: false,
+                reversed: false,
             },
         }
     }
@@ -110,7 +112,7 @@ impl Cell {
 /// A compact, fixed-cell terminal screen for the UI4 shell frontend.
 ///
 /// Every Unicode scalar occupies exactly one cell. Foreground, background,
-/// and underline SGR state is captured on each written cell; unsupported
+/// underline, and reverse-video SGR state is captured on each written cell; unsupported
 /// styling remains ignored.
 pub struct Terminal {
     cols: usize,
@@ -469,9 +471,17 @@ impl Terminal {
     }
 
     fn execute_csi(&mut self, final_byte: u8) {
-        let (private, params) = parse_csi_params(&self.csi_buf);
+        let Some((private, params)) = parse_csi_params(&self.csi_buf) else {
+            return;
+        };
+        // DEC private modes have their own namespace. In particular, Kitty's
+        // CSI ? u query must not be mistaken for ANSI cursor restore (CSI u).
+        if private && !matches!(final_byte, b'h' | b'l') {
+            return;
+        }
         self.pending_wrap = false;
         match final_byte {
+            b'@' => self.insert_chars(count_param(&params)),
             b'A' => self.move_cursor_vertical(-cursor_count(&params)),
             b'B' => self.move_cursor_vertical(cursor_count(&params)),
             b'C' => self.move_cursor_horizontal(cursor_count(&params)),
@@ -501,10 +511,12 @@ impl Terminal {
             b'K' => self.erase_line(params.first().copied().unwrap_or(0)),
             b'L' => self.insert_lines(count_param(&params)),
             b'M' => self.delete_lines(count_param(&params)),
+            b'P' => self.delete_chars(count_param(&params)),
             b'S' => self.shift_lines_up(self.scroll_top, self.scroll_bottom, count_param(&params)),
             b'T' => {
                 self.shift_lines_down(self.scroll_top, self.scroll_bottom, count_param(&params))
             }
+            b'X' => self.erase_chars(count_param(&params)),
             b'r' if !private => self.set_scroll_region(&params),
             b's' => {
                 self.saved_col = self.cursor_col;
@@ -543,7 +555,9 @@ impl Terminal {
             match params[index] {
                 0 => self.current_style = CellStyle::default(),
                 4 => self.current_style.underline = true,
+                7 => self.current_style.reversed = true,
                 24 => self.current_style.underline = false,
+                27 => self.current_style.reversed = false,
                 30..=37 => {
                     self.current_style.foreground =
                         TerminalColor::Indexed((params[index] - 30) as u8);
@@ -801,6 +815,29 @@ impl Terminal {
         }
     }
 
+    fn insert_chars(&mut self, count: usize) {
+        let count = count.max(1).min(self.cols - self.cursor_col);
+        let start = self.cursor_row * self.cols + self.cursor_col;
+        let end = (self.cursor_row + 1) * self.cols;
+        // Move complete cells, including their styling, and discard only the
+        // cells that pass the right edge of this row.
+        self.cells.copy_within(start..end - count, start + count);
+        self.clear_line_range(self.cursor_row, self.cursor_col, self.cursor_col + count);
+    }
+
+    fn delete_chars(&mut self, count: usize) {
+        let count = count.max(1).min(self.cols - self.cursor_col);
+        let start = self.cursor_row * self.cols + self.cursor_col;
+        let end = (self.cursor_row + 1) * self.cols;
+        self.cells.copy_within(start + count..end, start);
+        self.clear_line_range(self.cursor_row, self.cols - count, self.cols);
+    }
+
+    fn erase_chars(&mut self, count: usize) {
+        let count = count.max(1).min(self.cols - self.cursor_col);
+        self.clear_line_range(self.cursor_row, self.cursor_col, self.cursor_col + count);
+    }
+
     fn clear_all(&mut self) {
         let blank = self.erase_blank();
         self.cells.fill(blank);
@@ -829,6 +866,7 @@ impl Terminal {
                 foreground: TerminalColor::Default,
                 background: self.current_style.background,
                 underline: false,
+                reversed: false,
             },
         }
     }
@@ -905,29 +943,29 @@ impl Terminal {
     }
 }
 
-fn parse_csi_params(raw: &[u8]) -> (bool, Vec<usize>) {
+fn parse_csi_params(raw: &[u8]) -> Option<(bool, Vec<usize>)> {
     let private = raw.first() == Some(&b'?');
     let raw = if private { &raw[1..] } else { raw };
     if raw.is_empty() {
-        return (private, Vec::new());
+        return Some((private, Vec::new()));
     }
 
     let mut params = Vec::new();
     for field in raw.split(|byte| *byte == b';') {
         let mut value = 0usize;
-        let mut valid = !field.is_empty();
         for &byte in field {
             if !byte.is_ascii_digit() {
-                valid = false;
-                break;
+                // Unsupported parameter prefixes (>, <, =) and intermediate
+                // or colon bytes must not turn into zero-valued ANSI commands.
+                return None;
             }
             value = value
                 .saturating_mul(10)
                 .saturating_add((byte - b'0') as usize);
         }
-        params.push(if valid { value } else { 0 });
+        params.push(value);
     }
-    (private, params)
+    Some((private, params))
 }
 
 fn count_param(params: &[usize]) -> usize {
@@ -1008,6 +1046,141 @@ mod tests {
     }
 
     #[test]
+    fn raw_character_editing_specimen_survives_every_chunk_boundary() {
+        let specimen = b"ABCDEFGHIJ\r\nABCDEFGHIJ\r\nABCDEFGHIJ\x1b[1;3H\x1b[2@\x1b[2;3H\x1b[2P\x1b[3;3H\x1b[2X";
+        for split in 0..=specimen.len() {
+            let mut terminal = Terminal::new(10, 3);
+            terminal.feed(&specimen[..split]);
+            terminal.feed(&specimen[split..]);
+
+            assert_eq!(rows(&terminal), ["AB  CDEFGH", "ABEFGHIJ  ", "AB  EFGHIJ"]);
+            assert_eq!(terminal.cursor(), Cursor { col: 2, row: 2, visible: true });
+        }
+    }
+
+    #[test]
+    fn character_editing_defaults_zero_and_omitted_counts_to_one() {
+        for (command, expected) in [
+            (b'@', "ab cdefghi"),
+            (b'P', "abdefghij "),
+            (b'X', "ab defghij"),
+        ] {
+            for prefix in [b"\x1b[".as_slice(), b"\x1b[0"] {
+                let mut terminal = Terminal::new(10, 1);
+                terminal.feed(b"abcdefghij\x1b[1;3H");
+                terminal.take_dirty();
+                let cursor = terminal.cursor();
+                terminal.feed(prefix);
+                terminal.feed(&[command]);
+
+                assert_eq!(rows(&terminal), [expected]);
+                assert_eq!(terminal.cursor(), cursor);
+                assert!(terminal.take_dirty());
+            }
+        }
+    }
+
+    #[test]
+    fn character_editing_clamps_huge_counts_to_the_current_row() {
+        for command in [b'@', b'P', b'X'] {
+            let mut terminal = Terminal::new(10, 3);
+            terminal.feed(b"ABCDEFGHIJ\r\nabcdefghij\r\n0123456789\x1b[2;6H");
+            let cursor = terminal.cursor();
+            terminal.feed(b"\x1b[999999999999999999999999999999999999999999999999999999999999");
+            terminal.feed(&[command]);
+
+            assert_eq!(rows(&terminal), ["ABCDEFGHIJ", "abcde     ", "0123456789"]);
+            assert_eq!(terminal.cursor(), cursor);
+        }
+    }
+
+    #[test]
+    fn character_editing_moves_styles_and_uses_background_only_for_blanks() {
+        for command in [b'@', b'P', b'X'] {
+            let mut terminal = Terminal::new(8, 1);
+            terminal.feed(b"\x1b[31mAB\x1b[32;4mCD\x1b[33;7mEF\x1b[34mGH\x1b[35;44;4;7m\x1b[1;3H");
+            let before = terminal.cells().to_vec();
+            terminal.feed(&[0x1b, b'[', b'2', command]);
+            let cells = terminal.cells();
+            assert_eq!(&cells[..2], &before[..2]);
+            let blanks = match command {
+                b'@' => {
+                    assert_eq!(&cells[4..], &before[2..6]);
+                    &cells[2..4]
+                }
+                b'P' => {
+                    assert_eq!(&cells[2..6], &before[4..]);
+                    &cells[6..]
+                }
+                _ => {
+                    assert_eq!(&cells[4..], &before[4..]);
+                    &cells[2..4]
+                }
+            };
+            assert!(blanks.iter().all(|cell| *cell == Cell {
+                glyph: ' ',
+                style: CellStyle { background: TerminalColor::Indexed(4), ..CellStyle::default() },
+            }));
+
+            terminal.feed(b"Z");
+            assert_eq!(terminal.cells()[2], Cell {
+                glyph: 'Z',
+                style: CellStyle {
+                    foreground: TerminalColor::Indexed(5),
+                    background: TerminalColor::Indexed(4),
+                    underline: true,
+                    reversed: true,
+                },
+            });
+        }
+    }
+
+    #[test]
+    fn character_editing_cancels_pending_wrap_without_overwriting_saved_cursor() {
+        for command in [b'@', b'P', b'X'] {
+            let mut terminal = Terminal::new(4, 2);
+            terminal.feed(b"\x1b[2;2H\x1b[s\x1b[Habcd");
+            terminal.feed(&[0x1b, b'[', command]);
+            assert_eq!(terminal.cursor(), Cursor { col: 3, row: 0, visible: true });
+            terminal.feed(b"Z");
+            assert_eq!(rows(&terminal), ["abcZ", "    "]);
+            terminal.feed(b"Y\x1b[u");
+            assert_eq!(rows(&terminal), ["abcZ", "Y   "]);
+            assert_eq!(terminal.cursor(), Cursor { col: 1, row: 1, visible: true });
+        }
+    }
+
+    #[test]
+    fn character_editing_keeps_the_existing_unicode_scalar_cell_model() {
+        for (command, expected) in [
+            (b'@', "a 界e\u{301}λ"),
+            (b'P', "ae\u{301}λz "),
+            (b'X', "a e\u{301}λz"),
+        ] {
+            let mut terminal = Terminal::new(6, 1);
+            terminal.feed("a界e\u{301}λz\x1b[1;2H".as_bytes());
+            terminal.feed(&[0x1b, b'[', command]);
+            assert_eq!(rows(&terminal), [expected]);
+        }
+    }
+
+    #[test]
+    fn private_and_intermediate_edit_commands_do_not_modify_cells_or_pending_wrap() {
+        let mut terminal = Terminal::new(4, 2);
+        terminal.feed(b"abcd");
+        let cursor = terminal.cursor();
+        terminal.take_dirty();
+        for sequence in [b"\x1b[?2@".as_slice(), b"\x1b[2 @", b"\x1b[>2P", b"\x1b[2$X"] {
+            terminal.feed(sequence);
+            assert_eq!(rows(&terminal), ["abcd", "    "]);
+            assert_eq!(terminal.cursor(), cursor);
+            assert!(!terminal.take_dirty());
+        }
+        terminal.feed(b"Z");
+        assert_eq!(rows(&terminal), ["abcd", "Z   "]);
+    }
+
+    #[test]
     fn records_standard_bright_indexed_and_truecolor_foregrounds() {
         let mut terminal = Terminal::new(8, 1);
         terminal.feed(b"\x1b[30mA\x1b[37mB\x1b[90mC\x1b[97mD\x1b[38;5;202mE\x1b[38;2;1;2;3mF");
@@ -1075,6 +1248,39 @@ mod tests {
         for cell in &terminal.cells()[1..4] {
             assert_eq!(cell.style.background, TerminalColor::Default);
         }
+    }
+
+    #[test]
+    fn records_reverse_video_until_its_own_or_full_reset() {
+        let mut terminal = Terminal::new(8, 1);
+        terminal.feed(b"\x1b[31;44;4;7mA\x1b[27mB\x1b[7mC\x1b[mD\x1b[7mE\x1b[0mF");
+
+        let cells = terminal.cells();
+        assert!(cells[0].style.reversed);
+        assert!(!cells[1].style.reversed);
+        assert_eq!(cells[0].style.foreground, TerminalColor::Indexed(1));
+        assert_eq!(cells[0].style.background, TerminalColor::Indexed(4));
+        assert_eq!(cells[0].style.foreground, cells[1].style.foreground);
+        assert_eq!(cells[0].style.background, cells[1].style.background);
+        assert!(cells[0].style.underline && cells[1].style.underline);
+        assert!(cells[2].style.reversed);
+        assert_eq!(cells[3].style, CellStyle::default());
+        assert!(cells[4].style.reversed);
+        assert_eq!(cells[5].style, CellStyle::default());
+    }
+
+    #[test]
+    fn erased_reverse_video_cells_keep_background_without_inheriting_selection() {
+        let mut terminal = Terminal::new(4, 1);
+        terminal.feed(b"\x1b[31;44;7mAB\r\x1b[K");
+
+        assert!(terminal.cells().iter().all(|cell| {
+            cell.glyph == ' '
+                && cell.style.background == TerminalColor::Indexed(4)
+                && !cell.style.reversed
+        }));
+        terminal.feed(b"C");
+        assert!(terminal.cells()[0].style.reversed);
     }
 
     #[test]
@@ -1154,6 +1360,43 @@ mod tests {
 
         assert_eq!(terminal.take_responses(), b"\x1b[1;2R\x1b[?1;2c");
         assert!(terminal.take_responses().is_empty());
+    }
+
+    #[test]
+    fn unsupported_keyboard_protocol_queries_and_modes_do_not_restore_cursor() {
+        let mut terminal = Terminal::new(20, 4);
+        terminal.feed(b"saved\x1b[s\x1b[3;8H");
+        let cursor = terminal.cursor();
+        let cells = terminal.cells().to_vec();
+        terminal.take_dirty();
+
+        for sequence in [b"\x1b[?u".as_slice(), b"\x1b[>1u", b"\x1b[<u", b"\x1b[=1u"] {
+            terminal.feed(sequence);
+            assert_eq!(terminal.cursor(), cursor);
+            assert_eq!(terminal.cells(), cells);
+            assert!(terminal.take_responses().is_empty());
+            assert!(!terminal.is_dirty());
+        }
+
+        terminal.feed(b"\x1b[u");
+        assert_eq!(terminal.cursor().col, 5);
+        assert_eq!(terminal.cursor().row, 0);
+    }
+
+    #[test]
+    fn secondary_device_attributes_query_does_not_return_primary_identity() {
+        let mut terminal = Terminal::new(8, 2);
+        terminal.feed(b"\x1b[>0c");
+        assert!(terminal.take_responses().is_empty());
+        terminal.feed(b"\x1b[c");
+        assert_eq!(terminal.take_responses(), b"\x1b[?1;2c");
+    }
+
+    #[test]
+    fn unsupported_sgr_subparameters_do_not_reset_current_colors() {
+        let mut terminal = Terminal::new(2, 1);
+        terminal.feed(b"\x1b[31m\x1b[4:2mA");
+        assert_eq!(terminal.cells()[0].style.foreground, TerminalColor::Indexed(1));
     }
 
     #[test]

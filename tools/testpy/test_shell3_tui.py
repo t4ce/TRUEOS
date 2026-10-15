@@ -30,7 +30,13 @@ impl MatrixSlots {
 fn echo_output(lease:&shell2::MatrixSlotLease,line:String) {if shell2::matrix_slot_is_live(lease) {TRANSCRIPTS.lock().unwrap().push((lease.clone(),line));}}
 fn drop_lease(lease:&shell2::MatrixSlotLease)->bool {shell2::free_name(lease.name());true}
 fn drop_slot(name:Option<&str>)->bool {if let Some(name)=name {shell2::free_name(name);}true}}
-mod r {pub mod keyboard {
+mod r {
+pub mod input_timing {
+    pub struct Site;
+    impl Site {pub const fn new(_: &str)->Self {Self} pub fn record(&self,_:u64) {}}
+    pub fn now_ms()->u64 {0}
+}
+pub mod keyboard {
 '''
     keyboard = (ROOT/'src/r/keyboard.rs').read_text()
     source += '\n'.join(re.findall(r'^pub const KEYBOARD_(?:KEY_\w+|OUTPUT_\w+):[^\n]+', keyboard, re.M))

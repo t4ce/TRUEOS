@@ -4639,7 +4639,10 @@ impl NetService {
 
             let mut rx_backpressured = false;
 
-            if socket.is_active() && socket.may_recv() {
+            // FIN and the final payload can arrive in one poll and move the
+            // socket into TIME-WAIT. It is no longer active there, but its
+            // receive buffer must still be drained before reporting EOF.
+            if socket.may_recv() {
                 while socket.can_recv() {
                     // Paused Mio owners keep their assigned sockets. Leaving
                     // bytes in smoltcp's bounded RX buffer applies normal TCP
@@ -4705,7 +4708,7 @@ impl NetService {
                 state = socket.state();
             }
 
-            if !socket.is_open() {
+            if !socket.is_open() && !socket.can_recv() && !rx_backpressured {
                 should_remove = true;
             }
         }
@@ -4745,7 +4748,10 @@ impl NetService {
         }
 
         if should_remove {
-            let _ = push_event(owner, NetEvent::Closed { handle });
+            // Preserve the record until EOF can follow the delivered data.
+            if !push_event(owner, NetEvent::Closed { handle }) {
+                return false;
+            }
             self.remove_record(handle);
             return true;
         }

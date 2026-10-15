@@ -16,9 +16,15 @@ def main() -> None:
         "rx_owner", "publish_rx_owner", "tcp_receive_paused",
     ))
     adapter = (ROOT / "src/net/adapter.rs").read_text()
-    start = adapter.index("            if socket.is_active() && socket.may_recv() {")
+    start = adapter.index("            if socket.may_recv() {")
     end = adapter.index("\n            }", start) + len("\n            }")
     receive = adapter[start:end]
+    start = adapter.index("            if !socket.is_open()")
+    end = adapter.index("\n            }", start) + len("\n            }")
+    retirement = adapter[start:end]
+    start = adapter.index("        if should_remove {")
+    end = adapter.index("\n        }", start) + len("\n        }")
+    close = adapter[start:end]
     start = adapter.index("    fn flush_loopback_tcp_tx(")
     end = adapter.index("\n    }", start) + len("\n    }")
     loopback = adapter[start:end]
@@ -34,6 +40,7 @@ static MIO_RX_OWNERS: [AtomicU64; MIO_RX_OWNER_SLOTS] =
 static MIO_RX_DEVICE_INDEX: AtomicUsize = AtomicUsize::new(2);
 static PAUSED: AtomicU64 = AtomicU64::new(0);
 static DELIVERY_ALLOWED: AtomicBool = AtomicBool::new(true);
+static DELIVERY_BUDGET: AtomicUsize = AtomicUsize::new(usize::MAX);
 static SENT_CREDIT: AtomicU64 = AtomicU64::new(0);
 static EOF_COUNT: AtomicU64 = AtomicU64::new(0);
 static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -50,21 +57,30 @@ enum NetEvent {
     TcpData { handle: NetHandle, data: Vec<u8> },
     TcpSent { handle: NetHandle, len: usize },
     TcpReadClosed { handle: NetHandle },
+    Closed { handle: NetHandle },
 }
+std::thread_local! { static EVENTS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) }; }
 std::thread_local! { static DELIVERED: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) }; }
 fn push_event(_: &'static str, event: NetEvent) -> bool {
     if !DELIVERY_ALLOWED.load(AtomicOrdering::Acquire) { return false; }
+    if DELIVERY_BUDGET.load(AtomicOrdering::Acquire) == 0 { return false; }
+    DELIVERY_BUDGET.fetch_sub(1, AtomicOrdering::AcqRel);
     match event {
-        NetEvent::TcpData { data, .. } => DELIVERED.with(|out| out.borrow_mut().extend(data)),
+        NetEvent::TcpData { data, .. } => {
+            EVENTS.with(|out| out.borrow_mut().push("data"));
+            DELIVERED.with(|out| out.borrow_mut().extend(data));
+        }
         NetEvent::TcpSent { len, .. } => { SENT_CREDIT.fetch_add(len as u64, AtomicOrdering::Relaxed); }
         NetEvent::TcpReadClosed { .. } => { EOF_COUNT.fetch_add(1, AtomicOrdering::Relaxed); }
+        NetEvent::Closed { .. } => EVENTS.with(|out|out.borrow_mut().push("closed")),
     }
     true
 }
-struct Socket { bytes: Vec<u8> }
+struct Socket { bytes: Vec<u8>, active: bool, open: bool }
 impl Socket {
-    fn is_active(&self) -> bool { true }
-    fn may_recv(&self) -> bool { true }
+    fn is_active(&self) -> bool { self.active }
+    fn is_open(&self) -> bool { self.open }
+    fn may_recv(&self) -> bool { self.active || self.can_recv() }
     fn can_recv(&self) -> bool { !self.bytes.is_empty() }
     fn recv<T>(&mut self, f: impl FnOnce(&[u8]) -> (usize, T)) -> Result<T, ()> {
         let (consumed, result) = f(&self.bytes);
@@ -80,6 +96,21 @@ struct Record {
 struct Service { device_index: usize, records: Vec<Record> }
 impl Service {
     @LOOPBACK@
+    fn remove_record(&mut self, handle: NetHandle) {
+        self.records.retain(|record| record.handle != handle);
+    }
+    fn receive_and_retire(&mut self, socket: &mut Socket, handle: NetHandle) -> bool {
+        let owner = "mio-test";
+        let mut rx_backpressured = false;
+        let mut rx_bytes_this_poll = 0usize;
+        let mut rx_events_this_poll = 0usize;
+        let mut rx_event_drops_this_poll = 0usize;
+        let mut should_remove = false;
+        @RECEIVE@
+        @RETIREMENT@
+        @CLOSE@
+        false
+    }
     fn receive(&self, socket: &mut Socket, handle: NetHandle) -> bool {
         let owner = "mio-test";
         let mut rx_backpressured = false;
@@ -95,6 +126,8 @@ fn reset() -> std::sync::MutexGuard<'static, ()> {
     for slot in &MIO_RX_OWNERS { slot.store(0, AtomicOrdering::Release); }
     PAUSED.store(0, AtomicOrdering::Release);
     DELIVERY_ALLOWED.store(true, AtomicOrdering::Release);
+    DELIVERY_BUDGET.store(usize::MAX, AtomicOrdering::Release);
+    EVENTS.with(|out|out.borrow_mut().clear());
     SENT_CREDIT.store(0, AtomicOrdering::Release);
     EOF_COUNT.store(0, AtomicOrdering::Release);
     DELIVERED.with(|out| out.borrow_mut().clear());
@@ -105,7 +138,7 @@ fn pause_preserves_tcp_bytes_and_resume_delivers_the_exact_stream() {
     let _serial = reset();
     assert!(publish_rx_owner(1, Some(3)));
     let service = Service { device_index: 2, records: Vec::new() };
-    let mut socket = Socket { bytes: b"TLS ordered byte stream".to_vec() };
+    let mut socket = Socket { bytes: b"TLS ordered byte stream".to_vec(), active: true, open: true };
     PAUSED.store(1 << 3, AtomicOrdering::Release);
     assert!(service.receive(&mut socket, NetHandle(1)));
     assert_eq!(socket.bytes, b"TLS ordered byte stream");
@@ -217,8 +250,65 @@ fn finish_retries_eof_when_event_queue_is_full_even_without_data() {
     assert!(service.records[0].tcp_write_closed);
     assert_eq!(EOF_COUNT.load(AtomicOrdering::Acquire), 1);
 }
+fn physical_service() -> Service {
+    Service { device_index: 2, records: vec![
+        Record { owner: "mio-test", handle: NetHandle(1), tcp_loopback_peer: None,
+            tcp_tx: TcpTxQueue::new(), tcp_finish_pending: false, tcp_write_closed: true },
+    ] }
+}
+#[test]
+fn inactive_timewait_drains_final_reply_before_closed_and_retirement() {
+    let _serial = reset();
+    let mut service = physical_service();
+    let mut socket = Socket { bytes: b"reply:307200!".to_vec(), active: false, open: false };
+    assert!(!socket.is_active() && socket.may_recv() && socket.can_recv());
+    assert!(service.receive_and_retire(&mut socket, NetHandle(1)));
+    DELIVERED.with(|out| assert_eq!(*out.borrow(), b"reply:307200!"));
+    EVENTS.with(|out| assert_eq!(*out.borrow(), ["data", "data", "data", "data", "closed"]));
+    assert!(socket.bytes.is_empty());
+    assert!(service.records.is_empty());
+}
+#[test]
+fn inactive_timewait_retains_final_receive_when_paused_or_queue_full() {
+    let _serial = reset();
+    assert!(publish_rx_owner(1, Some(3)));
+    let mut service = physical_service();
+    let mut socket = Socket { bytes: b"reply:307200!".to_vec(), active: false, open: false };
+    PAUSED.store(1 << 3, AtomicOrdering::Release);
+    assert!(!service.receive_and_retire(&mut socket, NetHandle(1)));
+    assert_eq!(service.records.len(), 1);
+    assert_eq!(socket.bytes, b"reply:307200!");
+    PAUSED.store(0, AtomicOrdering::Release);
+    DELIVERY_ALLOWED.store(false, AtomicOrdering::Release);
+    assert!(!service.receive_and_retire(&mut socket, NetHandle(1)));
+    assert_eq!(service.records.len(), 1);
+    assert_eq!(socket.bytes, b"reply:307200!");
+    EVENTS.with(|out| assert!(out.borrow().is_empty()));
+    DELIVERY_ALLOWED.store(true, AtomicOrdering::Release);
+    assert!(service.receive_and_retire(&mut socket, NetHandle(1)));
+    DELIVERED.with(|out| assert_eq!(*out.borrow(), b"reply:307200!"));
+}
+#[test]
+fn final_data_can_fill_event_queue_and_closed_is_retried_without_replaying_bytes() {
+    let _serial = reset();
+    let mut service = physical_service();
+    let mut socket = Socket { bytes: b"reply:307200!".to_vec(), active: false, open: false };
+    DELIVERY_BUDGET.store(4, AtomicOrdering::Release);
+    assert!(!service.receive_and_retire(&mut socket, NetHandle(1)));
+    assert!(socket.bytes.is_empty());
+    assert_eq!(service.records.len(), 1, "retain until Closed can be queued");
+    EVENTS.with(|out| assert_eq!(*out.borrow(), ["data", "data", "data", "data"]));
+    assert!(!service.receive_and_retire(&mut socket, NetHandle(1)));
+    assert_eq!(service.records.len(), 1);
+    DELIVERY_BUDGET.store(1, AtomicOrdering::Release);
+    assert!(service.receive_and_retire(&mut socket, NetHandle(1)));
+    assert!(service.records.is_empty());
+    DELIVERED.with(|out| assert_eq!(*out.borrow(), b"reply:307200!"));
+    EVENTS.with(|out| assert_eq!(*out.borrow(), ["data", "data", "data", "data", "closed"]));
+}
 '''
     harness = harness.replace("@RECEIVE@", receive).replace("@LOOPBACK@", loopback)
+    harness = harness.replace("@RETIREMENT@", retirement).replace("@CLOSE@", close)
     harness = harness.replace("@TCP_QUEUE@", str(ROOT / "src/net/tcp_tx_queue.rs"))
     with tempfile.TemporaryDirectory(prefix="trueos-mio-pause-") as directory:
         path = Path(directory)

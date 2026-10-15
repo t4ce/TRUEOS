@@ -779,18 +779,10 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
                 row.iter()
                     .enumerate()
                     .map(|(col, cell)| {
-                        let mut foreground = color(cell.style.foreground, [255, 255, 255, 255]);
-                        let mut background = color(cell.style.background, default_background);
-                        if cursor.visible && cursor.row == row_index && cursor.col == col {
-                            core::mem::swap(&mut foreground, &mut background);
-                        }
-                        (
-                            cell.glyph,
-                            Some(RgbaColor::Terminal {
-                                foreground,
-                                background,
-                                underline: cell.style.underline,
-                            }),
+                        rendered_cell(
+                            cell,
+                            default_background,
+                            cursor.visible && cursor.row == row_index && cursor.col == col,
                         )
                     })
                     .collect()
@@ -798,6 +790,70 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
             .collect(),
     )
 }
+
+fn rendered_cell(
+    cell: &trueos_terminal::Cell,
+    default_background: [u8; 4],
+    cursor: bool,
+) -> (char, Option<RgbaColor>) {
+    let mut foreground = color(cell.style.foreground, [255, 255, 255, 255]);
+    let mut background = color(cell.style.background, default_background);
+    // Resolve terminal defaults before swapping: a reversed default style is
+    // the selection highlight used throughout Codex. The block cursor inverts
+    // the resulting colors again so it stays visible on selected text.
+    if cell.style.reversed != cursor {
+        core::mem::swap(&mut foreground, &mut background);
+    }
+    (
+        cell.glyph,
+        Some(RgbaColor::Terminal {
+            foreground,
+            background,
+            underline: cell.style.underline,
+        }),
+    )
+}
+
+#[cfg(test)]
+mod rendered_cell_tests {
+    use super::*;
+
+    #[test]
+    fn codex_reverse_video_selection_resolves_default_colors() {
+        let mut terminal = Terminal::new(2, 1);
+        terminal.feed(b"\x1b[7mA\x1b[27mB");
+        let background = [16, 16, 16, 255];
+        let selected = rendered_cell(&terminal.cells()[0], background, false).1.unwrap();
+        let normal = rendered_cell(&terminal.cells()[1], background, false).1.unwrap();
+        assert_eq!(selected.rgba(), background);
+        assert_eq!(selected.background(), Some([255, 255, 255, 255]));
+        assert_eq!(normal.rgba(), [255, 255, 255, 255]);
+        assert_eq!(normal.background(), Some(background));
+    }
+
+    #[test]
+    fn reverse_video_keeps_explicit_colors_and_underlines() {
+        let mut terminal = Terminal::new(2, 1);
+        terminal.feed(b"\x1b[38;2;1;2;3m\x1b[48;5;196m\x1b[4;7mA");
+        let cell = rendered_cell(&terminal.cells()[0], [0; 4], false);
+        let style = cell.1.unwrap();
+        assert_eq!(cell.0, 'A');
+        assert_eq!(style.rgba(), [255, 0, 0, 255]);
+        assert_eq!(style.background(), Some([1, 2, 3, 255]));
+        assert!(style.underline());
+    }
+
+    #[test]
+    fn block_cursor_inverts_selected_text_again() {
+        let mut terminal = Terminal::new(2, 1);
+        terminal.feed(b"\x1b[31;44;7mA");
+        let selected = rendered_cell(&terminal.cells()[0], [0; 4], false).1.unwrap();
+        let cursor = rendered_cell(&terminal.cells()[0], [0; 4], true).1.unwrap();
+        assert_eq!(cursor.rgba(), selected.background().unwrap());
+        assert_eq!(cursor.background(), Some(selected.rgba()));
+    }
+}
+
 fn color(color: TerminalColor, default: [u8; 4]) -> [u8; 4] {
     match color {
         TerminalColor::Default => default,

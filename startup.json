@@ -3,7 +3,8 @@
     { "name": "cub", "blueprint": "cubes.bp" },
     { "name": "grid", "blueprint": "gridpaper" },
     { "name": "td", "blueprint": "termdir" },
-    { "name": "apps", "blueprint": "appstore.bp" }
+    { "name": "apps", "blueprint": "appstore.bp" },
+    { "name": "cdx", "blueprint": "codex.bp" }
   ],
   "solara": {
     "bookmarks": [
