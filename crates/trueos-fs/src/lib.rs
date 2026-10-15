@@ -3273,7 +3273,8 @@ pub async fn rename_tree<D: BlockIo>(
 /// Move one indexed file with a namespace-only log record.
 ///
 /// The caller holds the namespace write lease and verifies source liveness,
-/// destination absence, and destination parent. The file record and payload
+/// destination absence or file replacement eligibility, and destination parent.
+/// The file record and payload
 /// blocks remain in place, including after an earlier directory rename.
 pub async fn rename_file_at_record<D: BlockIo>(
     dev: &D,
@@ -4814,6 +4815,39 @@ mod tests {
             assert_eq!(lookup_file_record(&disk, &params, "destination").await, Ok(Some(moved)));
             assert_eq!(read_file(&disk, &params, "destination").await, Ok(Some(b"payload".to_vec())));
             assert_eq!(lookup_file_record(&disk, &params, "alias/file").await, Ok(None));
+        });
+    }
+
+    #[test]
+    fn indexed_file_replacement_replays_after_remount_without_copying_payload() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let key = RecordKey::Key(test_key());
+            let payload = vec![0x5a; 64 * 1024];
+            assert_eq!(write_file_with_metadata(&disk, &params, "temporary", &payload,
+                FileWriteMetadata { file_id: 0, content_type: ContentTypeId::PNG, record_key: key }).await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "config", b"old").await, Ok(true));
+            let source = lookup_file_record(&disk, &params, "temporary").await.unwrap().unwrap();
+            let old = lookup_file_record(&disk, &params, "config").await.unwrap().unwrap();
+            let head = disk.log_head();
+            let mut stale = source;
+            stale.file_id = stale.file_id.wrapping_add(1);
+            assert_eq!(rename_file_at_record(&disk, &params, "temporary", "config", &stale).await, Ok(false));
+            assert_eq!(disk.log_head(), head);
+            assert_eq!(lookup_file_record(&disk, &params, "config").await, Ok(Some(old)));
+            assert_eq!(lookup_file_record(&disk, &params, "temporary").await, Ok(Some(source)));
+            disk.reset_reads();
+            assert_eq!(rename_file_at_record(&disk, &params, "temporary", "config", &source).await, Ok(true));
+            assert!(disk.read_count() <= 2);
+            assert_eq!(disk.log_head() - head, 3, "only header and two namespace blocks are appended");
+            let remounted = MemoryBlockIo { bytes: Mutex::new(disk.bytes.lock().unwrap().clone()), reads: AtomicUsize::new(0) };
+            assert_eq!(lookup_file_record(&remounted, &params, "config").await, Ok(Some(source)));
+            assert_eq!(lookup_file_record(&remounted, &params, "temporary").await, Ok(None));
+            assert_eq!(read_file(&remounted, &params, "config").await, Ok(Some(payload)));
+            let live = build_live_nodes(&remounted, &params).await.unwrap();
+            assert_eq!(live.get("config"), Some(&source.into()));
+            assert!(!live.contains_key("temporary"));
         });
     }
 

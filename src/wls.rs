@@ -15,7 +15,7 @@ const WLS_BLUEPRINT_WORKER_BASE: usize =
     WLS_BLUEPRINT_RUNTIME_BASE + crate::allcaps::hv::VM_ID_LIMIT;
 // Keep the complete 64-VM WLS layout within the 4096 slots baked into the
 // TRUEOS std/Tokio ports. Runtime and worker identities remain unique per VM;
-// Blueprint-created and carrier-created threads each retain 20 distinct slots.
+// Blueprint-created and carrier-created threads each lease 20 live slots.
 const WLS_BLUEPRINT_THREAD_SLOTS_PER_VM: usize = 40;
 const WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM: usize = WLS_BLUEPRINT_THREAD_SLOTS_PER_VM / 2;
 const WLS_BLUEPRINT_THREAD_BASE: usize =
@@ -47,6 +47,42 @@ static LOGGED_BLUEPRINT_THREAD_WLS_SLOT: [AtomicBool; crate::allcaps::hv::VM_ID_
 static LOGGED_HOST_WLS_FALLBACK: AtomicBool = AtomicBool::new(false);
 static CURRENT_BLUEPRINT_THREAD_ID_BY_CPU: [AtomicU32; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicU32::new(NO_BLUEPRINT_THREAD_ID) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
+
+// Opaque pthread sequence numbers are never slot indexes. Admission serializes
+// each small realm table; lookup and release use only atomic scalar accesses.
+static BLUEPRINT_THREAD_IDS: [[AtomicU32; WLS_BLUEPRINT_THREAD_SLOTS_PER_VM]; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { [const { AtomicU32::new(0) }; WLS_BLUEPRINT_THREAD_SLOTS_PER_VM] }; crate::allcaps::hv::VM_ID_LIMIT];
+static BLUEPRINT_THREAD_ADMISSION: [[spin::Mutex<()>; 2]; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { [const { spin::Mutex::new(()) }; 2] }; crate::allcaps::hv::VM_ID_LIMIT];
+
+pub(crate) struct BlueprintThreadIdentityLease {
+    vm_id: u8,
+    thread_id: u32,
+    index: usize,
+}
+
+pub(crate) fn try_lease_blueprint_thread_identity(vm_id: u8, thread_id: usize) -> Option<BlueprintThreadIdentityLease> {
+    let thread_id = u32::try_from(thread_id).ok()?;
+    if thread_id & !BLUEPRINT_THREAD_CARRIER_TAG == 0 { return None; }
+    let ids = BLUEPRINT_THREAD_IDS.get(vm_id as usize)?;
+    let realm = usize::from(thread_id & BLUEPRINT_THREAD_CARRIER_TAG != 0);
+    let _admission = BLUEPRINT_THREAD_ADMISSION[vm_id as usize][realm].lock();
+    let base = realm * WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM;
+    let realm_ids = &ids[base..base + WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM];
+    if realm_ids.iter().any(|id| id.load(Ordering::Acquire) == thread_id) { return None; }
+    let index = base + realm_ids.iter().position(|id| id.load(Ordering::Acquire) == 0)?;
+    ids[index].store(thread_id, Ordering::Release);
+    Some(BlueprintThreadIdentityLease { vm_id, thread_id, index })
+}
+
+impl Drop for BlueprintThreadIdentityLease {
+    fn drop(&mut self) {
+        // The Thread owns this lease until its stack/address space and guest
+        // frames have retired. pthread detach/join table removal is unrelated.
+        let _ = BLUEPRINT_THREAD_IDS[self.vm_id as usize][self.index]
+            .compare_exchange(self.thread_id, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct WorkerIdentityLease {
@@ -230,23 +266,13 @@ fn wls_blueprint_worker_slot(vm_id: u8, worker_id: usize) -> u32 {
 }
 
 #[inline]
-fn wls_blueprint_thread_slot(vm_id: u8, thread_id: u32) -> u32 {
-    // Hull-created and carrier-created pthread handles use independent counters,
-    // so keep them in separate halves of each VM's thread range.
-    let carrier = (thread_id & BLUEPRINT_THREAD_CARRIER_TAG) != 0;
-    let sequence = thread_id & !BLUEPRINT_THREAD_CARRIER_TAG;
-    let realm_base = if carrier {
-        WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM
-    } else {
-        0
-    };
-    let thread_index = realm_base
-        + sequence
-            .saturating_sub(1)
-            .min((WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM - 1) as u32) as usize;
-    WLS_BLUEPRINT_THREAD_BASE
-        .saturating_add((vm_id as usize).saturating_mul(WLS_BLUEPRINT_THREAD_SLOTS_PER_VM))
-        .saturating_add(thread_index) as u32
+fn wls_blueprint_thread_slot(vm_id: u8, thread_id: u32) -> Option<u32> {
+    if thread_id & !BLUEPRINT_THREAD_CARRIER_TAG == 0 { return None; }
+    let ids = BLUEPRINT_THREAD_IDS.get(vm_id as usize)?;
+    let base = usize::from(thread_id & BLUEPRINT_THREAD_CARRIER_TAG != 0) * WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM;
+    let index = base + ids[base..base + WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM].iter()
+        .position(|id| id.load(Ordering::Acquire) == thread_id)?;
+    Some((WLS_BLUEPRINT_THREAD_BASE + vm_id as usize * WLS_BLUEPRINT_THREAD_SLOTS_PER_VM + index) as u32)
 }
 
 #[inline]
@@ -323,7 +349,8 @@ pub extern "C" fn trueos_cabi_wls_current_slot() -> u32 {
 
     if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         if let Some(thread_id) = current_blueprint_thread_id() {
-            let slot = wls_blueprint_thread_slot(vm_id, thread_id);
+            let slot = wls_blueprint_thread_slot(vm_id, thread_id)
+                .expect("running Blueprint thread has no live WLS identity lease");
             let vm_index = vm_id as usize;
             if vm_index < LOGGED_BLUEPRINT_THREAD_WLS_SLOT.len()
                 && !LOGGED_BLUEPRINT_THREAD_WLS_SLOT[vm_index].swap(true, Ordering::AcqRel)
@@ -358,4 +385,77 @@ pub extern "C" fn trueos_cabi_wls_current_slot() -> u32 {
         crate::log!("wls: host fallback source=cpu cpu_slot={} slot={}\n", cpu_slot, slot);
     }
     slot
+}
+
+#[cfg(test)]
+mod thread_identity_tests {
+    extern crate std;
+    use super::*;
+    use std::vec::Vec;
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn opaque_sequences_above_twenty_keep_distinct_live_slots() {
+        let _serial = SERIAL.lock().unwrap();
+        let ids = [20, 21, 1000, BLUEPRINT_THREAD_CARRIER_TAG | 20, BLUEPRINT_THREAD_CARRIER_TAG | 21];
+        let leases: Vec<_> = ids.iter().map(|&id| try_lease_blueprint_thread_identity(60, id as usize).unwrap()).collect();
+        let mut slots: Vec<_> = ids.iter().map(|&id| wls_blueprint_thread_slot(60, id).unwrap()).collect();
+        slots.sort_unstable(); slots.dedup();
+        assert_eq!(slots.len(), ids.len());
+        drop(leases);
+        for id in ids { assert!(wls_blueprint_thread_slot(60, id).is_none()); }
+    }
+
+    #[test]
+    fn exhaustion_is_per_vm_realm_and_recycles_only_released_slots() {
+        let _serial = SERIAL.lock().unwrap();
+        let mut hull: Vec<_> = (1..=20).map(|id| try_lease_blueprint_thread_identity(61, id).unwrap()).collect();
+        let carrier: Vec<_> = (1..=20).map(|id| try_lease_blueprint_thread_identity(61, BLUEPRINT_THREAD_CARRIER_TAG as usize | id).unwrap()).collect();
+        let before: Vec<_> = (1..=20).map(|id| wls_blueprint_thread_slot(61, id).unwrap()).collect();
+        assert!(try_lease_blueprint_thread_identity(61, 21).is_none());
+        assert!(try_lease_blueprint_thread_identity(61, BLUEPRINT_THREAD_CARRIER_TAG as usize | 21).is_none());
+        assert!(try_lease_blueprint_thread_identity(61, 1).is_none(), "duplicate opaque ID must not gain another lease");
+        let other_vm = try_lease_blueprint_thread_identity(62, 1).unwrap();
+        assert_ne!(wls_blueprint_thread_slot(62, 1), wls_blueprint_thread_slot(61, 1));
+        drop(hull.remove(5));
+        let replacement = try_lease_blueprint_thread_identity(61, 1000).unwrap();
+        assert_eq!(wls_blueprint_thread_slot(61, 1000), Some(before[5]));
+        for id in (1..=20).filter(|&id| id != 6) { assert_eq!(wls_blueprint_thread_slot(61, id), Some(before[id as usize - 1])); }
+        drop((hull, carrier, other_vm, replacement));
+    }
+
+    #[test]
+    fn thousands_of_sequential_creations_do_not_exhaust_or_alias_live_peer() {
+        let _serial = SERIAL.lock().unwrap();
+        let peer = try_lease_blueprint_thread_identity(63, BLUEPRINT_THREAD_CARRIER_TAG as usize | 1).unwrap();
+        let peer_slot = wls_blueprint_thread_slot(63, BLUEPRINT_THREAD_CARRIER_TAG | 1).unwrap();
+        for sequence in 2..2002 {
+            let id = BLUEPRINT_THREAD_CARRIER_TAG | sequence;
+            let lease = try_lease_blueprint_thread_identity(63, id as usize).unwrap();
+            assert_ne!(wls_blueprint_thread_slot(63, id), Some(peer_slot));
+            drop(lease);
+            assert!(wls_blueprint_thread_slot(63, id).is_none());
+            assert_eq!(wls_blueprint_thread_slot(63, BLUEPRINT_THREAD_CARRIER_TAG | 1), Some(peer_slot));
+        }
+        drop(peer);
+        assert!(try_lease_blueprint_thread_identity(63, 0).is_none());
+        assert!(try_lease_blueprint_thread_identity(63, BLUEPRINT_THREAD_CARRIER_TAG as usize).is_none());
+        assert!(try_lease_blueprint_thread_identity(64, 1).is_none());
+        assert!(try_lease_blueprint_thread_identity(63, u32::MAX as usize + 1).is_none());
+    }
+
+    #[test]
+    fn simultaneous_duplicate_admissions_never_publish_two_live_mappings() {
+        let _serial = SERIAL.lock().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let jobs: Vec<_> = (0..8).map(|_| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || { barrier.wait(); try_lease_blueprint_thread_identity(59, 1234) })
+        }).collect();
+        let leases: Vec<_> = jobs.into_iter().filter_map(|job| job.join().unwrap()).collect();
+        assert_eq!(leases.len(), 1);
+        assert!(wls_blueprint_thread_slot(59, 1234).is_some());
+        drop(leases);
+        assert!(wls_blueprint_thread_slot(59, 1234).is_none());
+    }
 }

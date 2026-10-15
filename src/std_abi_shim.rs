@@ -96,6 +96,7 @@ const TRUEOS_ENOTCONN: c_int = 107;
 pub(crate) const TRUEOS_EINVAL: c_int = 22;
 const TRUEOS_ENAMETOOLONG: c_int = 36;
 const TRUEOS_ERANGE: c_int = 34;
+const TRUEOS_EOVERFLOW: c_int = 75;
 const TRUEOS_ENOSYS: c_int = 38;
 const TRUEOS_EIO: c_int = 5;
 pub(crate) const TRUEOS_EBADF: c_int = 9;
@@ -309,6 +310,8 @@ struct TrueosTm {
 
 static GAI_STRERROR_SYSTEM: &[u8] = b"trueos getaddrinfo unavailable\0";
 static TRUEOS_UTC_TZ: &[u8] = b"UTC\0";
+static TRUEOS_CET_TZ: &[u8] = b"CET\0";
+static TRUEOS_CEST_TZ: &[u8] = b"CEST\0";
 
 #[derive(Clone, Copy)]
 struct AllocationRecord {
@@ -3408,7 +3411,29 @@ pub unsafe extern "C" fn localtime_r(timep: *const i64, result: *mut c_void) -> 
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return ptr::null_mut();
     };
-    let tm = unix_seconds_to_utc_tm(seconds);
+    if unix_seconds_to_utc_tm(seconds).is_none() {
+        TRUEOS_ERRNO.store(TRUEOS_EOVERFLOW, Ordering::Relaxed);
+        return ptr::null_mut();
+    }
+    // Realtime timestamps remain UTC. Only the broken-down civil-time view
+    // uses the configured zone, as Shell3's clock already does.
+    let instant = seconds.max(0) as u64;
+    let offset = crate::locale::utc_offset_seconds(instant);
+    let Some(local_seconds) = seconds.checked_add(i64::from(offset)) else {
+        TRUEOS_ERRNO.store(TRUEOS_EOVERFLOW, Ordering::Relaxed);
+        return ptr::null_mut();
+    };
+    let Some(mut tm) = unix_seconds_to_utc_tm(local_seconds) else {
+        TRUEOS_ERRNO.store(TRUEOS_EOVERFLOW, Ordering::Relaxed);
+        return ptr::null_mut();
+    };
+    tm.tm_gmtoff = offset as c_long;
+    tm.tm_isdst = c_int::from(crate::locale::timezone_is_dst(instant));
+    tm.tm_zone = match crate::locale::timezone_abbreviation(instant) {
+        "CET" => TRUEOS_CET_TZ,
+        "CEST" => TRUEOS_CEST_TZ,
+        _ => TRUEOS_UTC_TZ,
+    }.as_ptr().cast::<c_char>();
     if !copy_to_abi_out(result.cast::<u8>(), unsafe {
         slice::from_raw_parts(
             (&tm as *const TrueosTm).cast::<u8>(),
@@ -3422,24 +3447,24 @@ pub unsafe extern "C" fn localtime_r(timep: *const i64, result: *mut c_void) -> 
     result
 }
 
-fn unix_seconds_to_utc_tm(seconds: i64) -> TrueosTm {
+fn unix_seconds_to_utc_tm(seconds: i64) -> Option<TrueosTm> {
     let days = seconds.div_euclid(86_400);
     let seconds_of_day = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
     let yday = day_of_year(year, month, day);
-    TrueosTm {
+    Some(TrueosTm {
         tm_sec: (seconds_of_day % 60) as c_int,
         tm_min: ((seconds_of_day / 60) % 60) as c_int,
         tm_hour: (seconds_of_day / 3600) as c_int,
         tm_mday: day as c_int,
         tm_mon: month as c_int - 1,
-        tm_year: year as c_int - 1900,
+        tm_year: c_int::try_from(year - 1900).ok()?,
         tm_wday: ((days + 4).rem_euclid(7)) as c_int,
         tm_yday: yday as c_int,
         tm_isdst: 0,
         tm_gmtoff: 0,
         tm_zone: TRUEOS_UTC_TZ.as_ptr().cast::<c_char>(),
-    }
+    })
 }
 
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
@@ -5911,8 +5936,10 @@ pub unsafe extern "C" fn fsync(fd: c_int) -> c_int {
         return -1;
     };
     let Some(path) = path.as_deref() else {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-        return -1;
+        // A replaced file remains a valid open description. Its retained
+        // memory world has no namespace destination to publish on sync.
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return 0;
     };
     let trace_file_world = trace_posix_file_world(Some(path));
     if trace_file_world {
@@ -6159,6 +6186,66 @@ pub unsafe extern "C" fn unlinkat(dirfd: c_int, path: *const c_char, flags: c_in
     unsafe { unlink(path) }
 }
 
+// Resolve registry spellings only after releasing the registry: path resolution
+// may enter the guest filesystem boundary. Open files retain the spelling used
+// at open(), which can differ from the normalized namespace request.
+fn rename_regular_file_worlds(path: &str) -> Vec<Arc<Mutex<RegularFileWorld>>> {
+    let entries: Vec<_> = REGULAR_FILE_WORLDS
+        .lock()
+        .entries
+        .iter()
+        .flatten()
+        .map(|entry| (entry.path.clone(), Arc::clone(&entry.world)))
+        .collect();
+    entries
+        .into_iter()
+        .filter_map(|(name, world)| {
+            let resolved = crate::r::io::env::resolve_fs_path(&name, false)?;
+            let normalized = crate::r::path::FsPath::parse(&resolved, false)
+                .ok()?
+                .to_relative_string();
+            (normalized == path).then_some(world)
+        })
+        .collect()
+}
+
+fn commit_regular_file_rename(
+    sources: &[Arc<Mutex<RegularFileWorld>>],
+    replaced: &[Arc<Mutex<RegularFileWorld>>],
+    destination: &str,
+) {
+    let contains = |world: &Arc<Mutex<RegularFileWorld>>,
+                    candidates: &[Arc<Mutex<RegularFileWorld>>]| {
+        candidates
+            .iter()
+            .any(|candidate| Arc::ptr_eq(world, candidate))
+    };
+    {
+        let mut files = OPEN_FILES.lock();
+        for file in files.values_mut() {
+            if let OpenFile::Regular { path, world, .. } = file {
+                if contains(world, sources) {
+                    *path = Some(String::from(destination));
+                } else if contains(world, replaced) {
+                    // Keep the old open description alive, but never write its
+                    // bytes back over the newly published destination.
+                    *path = None;
+                }
+            }
+        }
+    }
+    let mut registry = REGULAR_FILE_WORLDS.lock();
+    for slot in &mut registry.entries {
+        if let Some(entry) = slot {
+            if contains(&entry.world, sources) {
+                entry.path = String::from(destination);
+            } else if contains(&entry.world, replaced) {
+                *slot = None;
+            }
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char) -> c_int {
     const EEXIST: c_int = 17;
@@ -6208,8 +6295,19 @@ pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char
         return -1;
     }
 
+    let sources = rename_regular_file_worlds(&old_resolved);
+    let replaced = rename_regular_file_worlds(&new_resolved);
+    // NamedTempFile::persist renames before closing the writable descriptor.
+    // Publish dirty source bytes with no registry, descriptor or world guard
+    // held while filesystem operations can suspend this continuation.
+    for world in &sources {
+        if let Err(errno) = writeback_regular_file_world(&old_resolved, world) {
+            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+            return -1;
+        }
+    }
     let id = unsafe {
-        crate::r::io::async_fs_cabi::trueos_cabi_async_fs_rename_start(
+        crate::r::io::async_fs_cabi::rename_replace_start(
             old_resolved.as_ptr(), old_resolved.len(), new_resolved.as_ptr(), new_resolved.len(),
         )
     };
@@ -6239,6 +6337,9 @@ pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char
         }
     };
     let _ = crate::r::io::async_fs_cabi::trueos_cabi_async_fs_discard(id);
+    if result == 0 {
+        commit_regular_file_rename(&sources, &replaced, &new_path);
+    }
     TRUEOS_ERRNO.store(result, Ordering::Relaxed);
     if result == 0 { 0 } else { -1 }
 }

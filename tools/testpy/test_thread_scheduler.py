@@ -17,7 +17,7 @@ def main():
     thread_path = ROOT / "src/r/threads.rs"
     thread_source = thread_path.read_text()
     scheduler = thread_source[:thread_source.index("#[trueos_executor::task(")]
-    scheduler = re.sub(r"^mod (context|stack|tests|timing);$", lambda match:
+    scheduler = re.sub(r"^mod (context|stack|tests|timing|exit_trace);$", lambda match:
         f'#[path="{ROOT / "src/r/threads" / (match[1] + ".rs")}"] mod {match[1]};',
         scheduler, flags=re.MULTILINE)
     if not re.search(r"mod tests;", scheduler):
@@ -48,12 +48,13 @@ mod allcaps {
         pub const VM_CPU_SLOT_LIMIT: usize = 1; pub const VM_ID_LIMIT: usize = 64;
         pub const INPUT_TIMING_ENABLED: bool = true; pub const CODEX_PROGRESS_PROBES_ENABLED: bool = true;
     }
-    pub mod wls { pub const CPU_TRACK_COUNT: usize = 1; }
+    pub mod wls { pub const CPU_TRACK_COUNT: usize = 1; pub const WORKER_SLOT_COUNT: usize = 16; pub const TLS_SLOT_COUNT: usize = 4096; }
 }
 mod hv {
     use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use crate::trueos_time::{Timer, Duration as EmbassyDuration};
     pub fn current_hull_guest_context_vm_id() -> Option<u8> { None }
+    pub fn current_guest_execution_context_vm_id() -> Option<u8> { crate::r::threads::current_vm_id() }
     static KILLED: [core::sync::atomic::AtomicBool; 64] = [const { core::sync::atomic::AtomicBool::new(false) }; 64];
     pub fn guest_kill_requested(vm: u8) -> bool { KILLED[vm as usize].load(core::sync::atomic::Ordering::Acquire) }
     pub fn set_guest_kill_for_test(vm: u8, value: bool) { KILLED[vm as usize].store(value, core::sync::atomic::Ordering::Release); }
@@ -153,12 +154,7 @@ mod allocators {
     }
     pub fn with_host_alloc_domain_strong<T>(f: impl FnOnce() -> T) -> T { f() }
 }
-mod wls {
-    static STATE: std::sync::Mutex<(u64, u32)> = std::sync::Mutex::new((0, 0));
-    pub fn replace_thread_context(value: (u64, u32)) -> (u64, u32) {
-        std::mem::replace(&mut *STATE.lock().unwrap(), value)
-    }
-}
+__WLS__
 mod trueos_time {
     pub use std::time::Duration;
     pub struct Timer(std::time::Instant);
@@ -227,7 +223,16 @@ mod wait {
     support += '''
 mod log_os { pub fn blueprint_important_line(_: core::fmt::Arguments<'_>) {} }
 #[macro_export] macro_rules! log_warn { ($($tokens:tt)*) => {} }
-#[macro_export] macro_rules! log_info { ($($tokens:tt)*) => {} }
+#[macro_export] macro_rules! log { ($($tokens:tt)*) => {} }
+static SLICE_LOGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+fn capture_log(args: core::fmt::Arguments<'_>) {
+    let line = args.to_string();
+    if line.starts_with("codex-slice-exit ") {
+        assert_eq!(crate::r::threads::current_id(), None, "slice formatted before clearing guest execution context");
+        SLICE_LOGS.lock().unwrap().push(line);
+    }
+}
+#[macro_export] macro_rules! log_info { (target: $target:expr; $($tokens:tt)*) => { crate::capture_log(format_args!($($tokens)*)) } }
 mod time_driver {
     pub const TICK_HZ: u64 = 1000;
     pub fn now() -> u64 {
@@ -237,6 +242,7 @@ mod time_driver {
 }
 '''
     diagnostic = (ROOT / 'src/r/blocking/diagnostics.rs').read_text().replace('embassy_time_driver::', 'crate::time_driver::')
+    support = support.replace('__WLS__', f'#[path="{ROOT / "src/wls.rs"}"] mod wls;')
     support = support.replace('__DIAGNOSTICS__', 'pub mod diagnostics {\n' + diagnostic.replace('//!', '//') + '\n}')
     lifetime = (ROOT / 'src/r/blocking/lifetime.rs').read_text().replace('//!', '//')
     lifetime = lifetime.replace('trueos_time::', 'crate::trueos_time::')
@@ -256,7 +262,7 @@ mod time_driver {
         subprocess.run([
             "cargo", "test", "--offline", "--target", "x86_64-unknown-linux-gnu",
             "--target-dir", str(ROOT / "bld/thread-scheduler-host-tests"),
-            "--config", 'build.rustflags=["--cfg","thread_scheduler_harness"]',
+            "--config", 'build.rustflags=["--cfg","thread_scheduler_harness","-C","force-frame-pointers=yes"]',
             # Realm/CURRENT mocks represent one physical carrier. Parallel
             # host test threads must not share that simulated CPU state.
             "--", "--test-threads=1",

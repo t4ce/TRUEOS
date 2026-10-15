@@ -36,9 +36,11 @@ fn make_thread(id: usize, job: impl FnOnce() + Send + 'static) -> ThreadTask {
         timed: false,
         submitted_ms: 0,
         timing: None,
+        exit_trace: exit_trace::State::new(),
         domain: (77, id as u8),
         allocation: [0; 4],
         wls: (0, id as u32),
+        _wls_lease: None,
         _admission: Admission { _owner: None },
     }))
 }
@@ -51,6 +53,48 @@ fn poll_thread(thread: &mut ThreadTask) -> Poll<()> {
     assert!(current_errno().is_none());
     assert_eq!(realm(), parent, "carrier realm leaked across a suspension");
     result
+}
+
+#[test]
+#[cfg(thread_scheduler_harness)]
+fn slow_slice_captures_live_child_frames_and_formats_after_context_restore() {
+    let _serial = SERIAL.lock().unwrap();
+    crate::SLICE_LOGS.lock().unwrap().clear();
+    let mut thread = make_thread(52, || {
+        std::thread::sleep(std::time::Duration::from_millis(115));
+        assert!(yield_now());
+    });
+    thread.0.timed = true;
+    assert!(poll_thread(&mut thread).is_pending());
+    assert!(thread.0.exit_trace.last_slice_ms >= 110);
+    let logs = crate::SLICE_LOGS.lock().unwrap();
+    assert_eq!(logs.len(), 1);
+    let line = &logs[0];
+    assert!(line.contains("vm=52 id=52 carrier=0"));
+    assert!(line.contains("reason=Yield kind=exit-callstack cpu_attribution=none"));
+    assert!(!line.contains("frames=[]"), "live stack walk lost all executable return frames");
+    drop(logs);
+    assert!(poll_thread(&mut thread).is_ready());
+    assert!(thread.0.exit_trace.last_slice_ms < 100, "latest slice must exclude the preceding sleep/slice");
+    assert_eq!(crate::SLICE_LOGS.lock().unwrap().len(), 1);
+}
+
+#[test]
+#[cfg(thread_scheduler_harness)]
+fn wls_lease_survives_suspension_and_completion_until_task_retirement() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut thread = make_thread(51, || {
+        let first = crate::wls::trueos_cabi_wls_current_slot();
+        assert!(yield_now());
+        assert_eq!(crate::wls::trueos_cabi_wls_current_slot(), first);
+    });
+    thread.0._wls_lease = Some(crate::wls::try_lease_blueprint_thread_identity(51, 51).unwrap());
+    assert!(poll_thread(&mut thread).is_pending());
+    assert!(crate::wls::try_lease_blueprint_thread_identity(51, 51).is_none());
+    assert!(poll_thread(&mut thread).is_ready());
+    assert!(crate::wls::try_lease_blueprint_thread_identity(51, 51).is_none(), "completion alone cannot release a live Thread's lease");
+    drop(thread);
+    assert!(crate::wls::try_lease_blueprint_thread_identity(51, 51).is_some());
 }
 
 #[test]
@@ -306,7 +350,7 @@ fn kill_discards_a_parked_stack_without_guest_drops_or_resuming() {
     let drop_counter = drops.clone();
     let mut task = make_thread(51, move || {
         let _guest = GuestDrop(drop_counter);
-        suspend(Some(Box::pin(core::future::pending())));
+        suspend(Some(Box::pin(core::future::pending())), exit_trace::Reason::Wait);
         panic!("killed guest resumed");
     });
     struct WakeCount(AtomicUsize);
@@ -419,7 +463,7 @@ fn filesystem_work_reaches_its_boundary_before_native_ram_parking() {
 fn control_wakers_survive_repeated_pause_and_resume_notifications() {
     let _serial = SERIAL.lock().unwrap();
     let mut task = make_thread(56, || {
-        suspend(Some(Box::pin(core::future::pending())));
+        suspend(Some(Box::pin(core::future::pending())), exit_trace::Reason::Wait);
         panic!("unresolved wait resumed");
     });
     struct WakeCount(AtomicUsize);

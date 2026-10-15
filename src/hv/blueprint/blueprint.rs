@@ -1719,7 +1719,7 @@ pub(crate) fn build_host_env() -> BTreeMap<String, String> {
         String::from("TRUEOS_LOCALE"),
         String::from(crate::locale::current_intl_locale_code()),
     );
-    vars.insert(String::from("TZ"), String::from(crate::locale::current_timezone_name()));
+    vars.insert(String::from("TZ"), String::from(crate::locale::current_posix_timezone()));
     vars.insert(
         String::from("TRUEOS_TIMEZONE"),
         String::from(crate::locale::current_timezone_name()),
@@ -1770,6 +1770,7 @@ pub(crate) fn build_host_env() -> BTreeMap<String, String> {
 
 pub(crate) fn build_process_env(
     archive: &str,
+    module_bytes: &[u8],
     app_fs_root: Option<&str>,
     identity: Option<&crate::hv::BlueprintInstanceIdentity>,
     launch_script: Option<&str>,
@@ -1832,6 +1833,9 @@ pub(crate) fn build_process_env(
         vars.insert(String::from("PRISM_MAX_EXPORT_QUBITS"), String::from("26"));
     }
     vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
+    // Identify the exact packed archive retained for this launch. Looking up
+    // its name in mutable AppDB could instead identify a later replacement.
+    vars.insert(String::from("TRUEOS_APP_SHA256"), sha256_hex(module_bytes));
     // Filesystem scope is an explicit capability, either sealed into the
     // Blueprint header by package metadata or supplied by a host launch vFile.
     // Ordinary apps retain their app/common confinement.
@@ -1878,7 +1882,6 @@ pub(crate) fn build_process_env(
     vars
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn sha256_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(bytes);

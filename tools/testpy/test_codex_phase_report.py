@@ -125,6 +125,87 @@ class CodexPhaseReportTests(unittest.TestCase):
         report = parse_log_text(raw)
         self.assertEqual([c['run'] for c in report['captures']], [1, 2])
 
+    def test_mcp_exact_target_whitelist_and_missing_phase_end(self):
+        def mcp(sequence, phase, state, offset=0, duration=0, method='tools/list', layer='http'):
+            return (f'[apps] [info] codex_rmcp_client::phase: event.name="codex.mcp_phase" sequence={sequence} '
+                    f'layer="{layer}" method="{method}" phase="{phase}" state="{state}" offset_ms={offset} '
+                    f'duration_ms={duration} bytes=12 deadline_ms=30000 status_code=200 '
+                    'account_id=ACCOUNT_SECRET url="https://URL_SECRET" body="BODY_SECRET"\n')
+        raw = mcp(1, 'headers', 'started') + mcp(1, 'headers', 'cancelled', duration=30000)
+        raw += mcp(1, 'body', 'started', offset=30000)
+        raw += mcp(2, 'operation', 'started', layer='operation')
+        raw += mcp(2, 'operation', 'error', duration=30001, layer='operation')
+        raw += mcp(3, 'headers', 'complete', method='tools/call/PRIVATE_METHOD')
+        raw += mcp(4, 'PRIVATE_PHASE', 'complete')
+        raw += mcp(5, 'headers', 'PRIVATE_STATE')
+        raw += mcp(6, 'headers', 'complete', layer='PRIVATE_LAYER')
+        raw += event('mcp_phase', 'sequence=1 layer=http method=tools/list phase=headers state=cancelled duration_ms=30000', target='trace_safe')
+        raw += mcp(7, 'headers', 'complete').replace('codex_rmcp_client::phase:', 'arbitrary_target:')
+        report = parse_log_text(raw)
+        http, operation = report['mcp_captures']
+        self.assertEqual(len(report['events']), 5)
+        self.assertEqual(http['phases'][0]['duration_ms'], 30000)
+        self.assertEqual(http['phases'][0]['state'], 'cancelled')
+        self.assertEqual(http['phases'][0]['end_line'], 2)
+        self.assertIsNone(http['phases'][1]['duration_ms'])
+        self.assertIsNone(http['duration_ms'], 'HTTP phases do not imply a measured operation total')
+        self.assertEqual(operation['duration_ms'], 30001)
+        self.assertEqual(operation['layer'], 'operation')
+        self.assertEqual(operation['phases'][0]['end_ms'], 30001)
+        self.assertEqual((operation['phases'][0]['begin_line'], operation['phases'][0]['end_line']), (4, 5))
+        for output in (json.dumps(report), markdown(report)):
+            for private in ('ACCOUNT_SECRET', 'URL_SECRET', 'BODY_SECRET', 'PRIVATE_METHOD', 'PRIVATE_PHASE', 'PRIVATE_STATE', 'PRIVATE_LAYER'):
+                self.assertNotIn(private, output)
+
+    def test_sqlx_fixed_schema_optional_stages_and_connection_summary(self):
+        target = '[apps] [info] sqlx_sqlite::remote_timing: '
+        raw = target + 'SQLite setup phase connection_id=3 phase="connect_headers" elapsed_ms=20 completed=true\n'
+        raw += target + 'SQLite setup phase connection_id=3 phase="setup_total" elapsed_ms=30000 completed=false\n'
+        raw += target + 'SQLite RPC timing connection_id=3 request_id=12 phase="read_body" queued_ms=150 elapsed_ms=400 serialize_ms=Some(1) write_ms=Some(2) header_ms=Some(397) body_ms=None parse_ms=None completed=false sql="SQL_SECRET" database=DATABASE_SECRET endpoint=URL_SECRET error=ERROR_SECRET\n'
+        raw += target + 'SQLite RPC timing connection_id=3 request_id=13 phase="complete" queued_ms=0 elapsed_ms=200 serialize_ms=0 write_ms=2 header_ms=100 body_ms=90 parse_ms=8 completed=true\n'
+        raw += target + 'SQLite RPC timing connection_id=3 phase="PRIVATE_PHASE" elapsed_ms=1\n'
+        raw += (target + 'SQLite setup phase connection_id=4 phase="open" elapsed_ms=999\n').replace('sqlx_sqlite::remote_timing:', 'arbitrary_target:')
+        report = parse_log_text(raw)
+        self.assertEqual(len(report['sqlx_setup']), 2)
+        self.assertEqual(len(report['sqlx_rpc']), 2)
+        rpc = report['sqlx_rpc'][0]
+        self.assertEqual(rpc['serialize_ms'], 1)
+        self.assertIsNone(rpc['body_ms'])
+        self.assertIsNone(rpc['parse_ms'])
+        summary = report['sqlx_connections'][0]
+        self.assertEqual(summary['setup_duration_ms'], 30000)
+        self.assertFalse(summary['setup_completed'])
+        self.assertEqual((summary['max_queue_ms'], summary['max_wire_ms']), (150, 400))
+        self.assertNotIn('session', summary)
+        for output in (json.dumps(report), markdown(report)):
+            for private in ('SQL_SECRET', 'DATABASE_SECRET', 'URL_SECRET', 'ERROR_SECRET', 'PRIVATE_PHASE'):
+                self.assertNotIn(private, output)
+
+    def test_slice_exit_numeric_frames_are_bounded_and_not_cpu_attribution(self):
+        prefix = '[blueprint] [info] codex-slice-exit vm=1 id=2147483650 carrier=19 ended_ms=12345 duration_ms=18576 reason=Wait kind=exit-callstack cpu_attribution=none '
+        raw = prefix + 'frames=[FFFFFFFF8033F4AB, 0x1234] stop=Bounds account_id=ACCOUNT_SECRET\n'
+        raw += prefix + 'frames=[FRAME_SECRET] stop=NonExecutable\n'
+        raw += prefix + 'frames=[' + ', '.join(['1234'] * 13) + '] stop=Limit\n'
+        raw += (prefix + 'frames=[] stop=End\n').replace('reason=Wait', 'reason=PRIVATE_REASON')
+        raw += (prefix + 'frames=[] stop=End\n').replace('cpu_attribution=none', 'cpu_attribution=PRIVATE_CPU')
+        raw += (prefix + 'frames=[] stop=End\n').replace('stop=End', 'stop=PRIVATE_STOP')
+        report = parse_log_text(raw)
+        self.assertEqual(len(report['slice_exits']), 3)
+        self.assertEqual(report['slice_exits'][0]['frames'], [0xFFFFFFFF8033F4AB, 0x1234])
+        self.assertIsNone(report['slice_exits'][1]['frames'])
+        self.assertIsNone(report['slice_exits'][2]['frames'])
+        self.assertEqual(report['slice_summaries'][0]['max_duration_ms'], 18576)
+        self.assertEqual(report['slice_summaries'][0]['records'], 3)
+        for output in (json.dumps(report), markdown(report)):
+            for private in ('ACCOUNT_SECRET', 'FRAME_SECRET', 'PRIVATE_REASON', 'PRIVATE_CPU', 'PRIVATE_STOP'):
+                self.assertNotIn(private, output)
+
+    def test_payload_text_cannot_impersonate_numeric_span_context(self):
+        raw = event('user_prompt', 'prompt="PRIVATE [span=987654321 turn]"', '[span=5 submission_dispatch]')
+        report = parse_log_text(raw)
+        self.assertEqual(report['events'][0]['spans'], [{'id': 5, 'name': 'submission_dispatch'}])
+        self.assertNotIn('987654321', json.dumps(report))
+
     def test_cli_json_and_markdown(self):
         script = Path(__file__).with_name('codex_phase_report.py')
         with tempfile.TemporaryDirectory() as directory:

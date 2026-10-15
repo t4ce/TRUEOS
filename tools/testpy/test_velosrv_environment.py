@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     blueprint = ROOT / "src/hv/blueprint/blueprint.rs"
     builder = function(blueprint, "build_process_env")
-    locale_functions = sorted(set(re.findall(r"crate::locale::(\w+)\(\)", builder)))
+    locale_functions = sorted(set(re.findall(r"crate::locale::(\w+)\(\)", builder + function(blueprint, "build_host_env"))))
     locales = "\n".join(
         f'pub fn {name}() -> &\'static str {{ "test" }}' for name in locale_functions
     )
@@ -29,6 +29,8 @@ use alloc::{collections::BTreeMap, string::String};
 std::thread_local! {
     static ENV: std::cell::RefCell<BTreeMap<String, String>> = Default::default();
 }
+// Hashing is verified with real SHA-256 by test_blueprint_package_identity.py.
+fn sha256_hex(_: &[u8]) -> String { "fixture-package-digest".into() }
 fn var(key: &str) -> Option<String> { ENV.with(|e| e.borrow().get(key).cloned()) }
 fn current_app_fs_root() -> Option<String> { var("TRUEOS_APP_FS_ROOT") }
 mod hv {
@@ -58,7 +60,7 @@ mod r {
 fn voxy_userdata_is_shared_across_container_launches() {
     for root in ["apps/voxy", "apps/voxy/container_1--first", "apps/voxy/container_1--second"] {
         for broad in [false, true] {
-            let env = build_process_env("voxy.bp", Some(root), None, None, broad);
+            let env = build_process_env("voxy.bp", b"fixture", Some(root), None, None, broad);
             assert_eq!(env["VELOREN_USERDATA"], "/apps/voxy/userdata");
             assert_eq!(env.contains_key("TRUEOS_FS_SCOPE"), broad);
             ENV.with(|e| *e.borrow_mut() = env);
@@ -73,7 +75,7 @@ fn voxy_userdata_is_shared_across_container_launches() {
 #[test]
 fn shared_app_userdata_is_scoped_and_relative_paths_stay_private() {
     let root = "apps/voxy/container_1--uuid";
-    ENV.with(|e| *e.borrow_mut() = build_process_env("voxy.bp", Some(root), None, None, false));
+    ENV.with(|e| *e.borrow_mut() = build_process_env("voxy.bp", b"fixture", Some(root), None, None, false));
     assert_eq!(resolve_fs_path("/apps/voxy/userdata/voxygen/settings.ron", false),
                Some("apps/voxy/userdata/voxygen/settings.ron".into()));
     assert_eq!(resolve_fs_path("userdata/voxygen/settings.ron", false),
@@ -90,7 +92,7 @@ fn shared_app_userdata_is_scoped_and_relative_paths_stay_private() {
 fn userdata_stays_in_its_instance_even_with_broader_scope() {
     for root in ["apps/velosrv", "apps/velosrv/first--uuid", "apps/velosrv/second--uuid"] {
         for broad in [false, true] {
-            let env = build_process_env("velosrv.bp", Some(root), None, None, broad);
+            let env = build_process_env("velosrv.bp", b"fixture", Some(root), None, None, broad);
             let data = env["VELOREN_USERDATA"].clone();
             assert_eq!(data, format!("/{root}/userdata"));
             assert_eq!(env.contains_key("TRUEOS_FS_SCOPE"), broad);
@@ -104,7 +106,7 @@ fn userdata_stays_in_its_instance_even_with_broader_scope() {
 
 #[test]
 fn shared_userdata_override_uses_existing_common_scope() {
-    let mut env = build_process_env("velosrv.bp", Some("apps/velosrv"), None, None, false);
+    let mut env = build_process_env("velosrv.bp", b"fixture", Some("apps/velosrv"), None, None, false);
     env.insert("VELOREN_USERDATA".into(), "common/veloren/userdata".into());
     let data = env["VELOREN_USERDATA"].clone();
     ENV.with(|e| *e.borrow_mut() = env);
@@ -116,19 +118,19 @@ fn shared_userdata_override_uses_existing_common_scope() {
 #[test]
 fn bridge_is_specific_to_the_server_and_never_grants_global_fs() {
     for archive in ["velosrv", "VeLoSrV.bp"] {
-        let env = build_process_env(archive, Some("apps/velosrv"), None, None, false);
+        let env = build_process_env(archive, b"fixture", Some("apps/velosrv"), None, None, false);
         assert_eq!(env["VELOREN_USERDATA"], "/apps/velosrv/userdata");
         assert!(!env.contains_key("TRUEOS_FS_SCOPE"));
     }
     for archive in ["other.bp", "velosrv-helper.bp"] {
-        assert!(!build_process_env(archive, Some("apps/other"), None, None, false)
+        assert!(!build_process_env(archive, b"fixture", Some("apps/other"), None, None, false)
             .contains_key("VELOREN_USERDATA"));
     }
 }
 #[test]
 fn screenshots_have_shared_pictures_and_private_instance_defaults() {
     for root in ["apps/voxy", "apps/voxy/container--uuid"] {
-        let env = build_process_env("voxy.bp", Some(root), None, None, false);
+        let env = build_process_env("voxy.bp", b"fixture", Some(root), None, None, false);
         assert_eq!(env["VOXYGEN_SCREENSHOT"], format!("/{root}/screenshots"));
         assert_eq!(env["XDG_PICTURES_DIR"], "/screenshots");
         ENV.with(|e| *e.borrow_mut() = env);
@@ -139,14 +141,14 @@ fn screenshots_have_shared_pictures_and_private_instance_defaults() {
         assert_eq!(resolve_fs_path("/other/file", false), Some(format!("{root}/other/file")));
         assert!(!trueosfs_scope_granted());
     }
-    assert!(!build_process_env("other.bp", Some("apps/other"), None, None, false).contains_key("VOXYGEN_SCREENSHOT"));
+    assert!(!build_process_env("other.bp", b"fixture", Some("apps/other"), None, None, false).contains_key("VOXYGEN_SCREENSHOT"));
 }
 
 #[test]
 fn absolute_ram_archive_path_survives_guest_transport_for_each_instance() {
     let archive = "/apps/voxy/voxygen-assets.tar.lz4";
     for root in ["apps/voxy", "apps/voxy/container_1--uuid", "apps/voxy/container_2--uuid"] {
-        ENV.with(|e| *e.borrow_mut() = build_process_env("voxy.bp", Some(root), None, None, false));
+        ENV.with(|e| *e.borrow_mut() = build_process_env("voxy.bp", b"fixture", Some(root), None, None, false));
         // The CABI must send the original path; the VM handler resolves it once.
         let transported = archive::parse_raw_path(archive.as_ptr(), archive.len()).unwrap();
         assert_eq!(transported, archive);
@@ -157,7 +159,7 @@ fn absolute_ram_archive_path_survives_guest_transport_for_each_instance() {
 }
 '''
     production = "\n".join(function(blueprint, name) for name in (
-        "build_process_env", "safe_archive_stem", "app_fs_common_root"
+        "build_process_env", "build_host_env", "safe_archive_stem", "uses_volatile_codex_files", "app_fs_common_root"
     ))
     production += "\n" + "\n".join(function(ROOT / "src/r/io.rs", name) for name in (
         "trueosfs_scope_granted", "normalize_app_path", "resolve_fs_path"

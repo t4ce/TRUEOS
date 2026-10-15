@@ -14,6 +14,7 @@ use core::task::{Context, Poll, Waker};
 mod context;
 mod stack;
 mod timing;
+mod exit_trace;
 #[cfg(test)]
 mod tests;
 use crate::r::blocking::{BlockingJobFn, GuestJobOwner};
@@ -76,9 +77,11 @@ struct Thread {
     timed: bool,
     submitted_ms: u64,
     timing: Option<timing::Timing>,
+    exit_trace: exit_trace::State,
     domain: (u32, u8),
     allocation: [u32; 4],
     wls: (u64, u32),
+    _wls_lease: Option<crate::wls::BlueprintThreadIdentityLease>,
     _admission: Admission,
 }
 
@@ -141,7 +144,21 @@ fn progress_boundary(thread: &Thread, stage: usize) {
 /// Suspend with an owned wait future. The future is polled on the carrier
 /// stack after restoring its realm, so no other task observes this thread's
 /// TLS or allocation-domain guards while the thread is parked.
-fn suspend(wait: Option<Pin<Box<dyn Future<Output = ()> + Send>>>) -> bool {
+#[inline(never)]
+unsafe fn capture_slice_exit(ptr: *mut Thread, reason: exit_trace::Reason) {
+    if !unsafe { (*ptr).timed } || !crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { return; }
+    let now = crate::r::input_timing::now_ms();
+    let (rsp, rbp): (usize, usize);
+    unsafe {
+        core::arch::asm!("mov {}, rsp", "mov {}, rbp", out(reg) rsp, out(reg) rbp, options(nomem, nostack, preserves_flags));
+        let low = (*ptr).stack.ptr().as_ptr() as usize;
+        // This Stack owns this exact mapped region; neither guard is included.
+        let high = low.checked_add((*ptr).stack.len()).unwrap_or(low);
+        (*ptr).exit_trace.capture(now, reason, low, high, rsp, rbp);
+    }
+}
+
+fn suspend(wait: Option<Pin<Box<dyn Future<Output = ()> + Send>>>, reason: exit_trace::Reason) -> bool {
     let ptr = active();
     if ptr.is_null() {
         return false;
@@ -151,13 +168,14 @@ fn suspend(wait: Option<Pin<Box<dyn Future<Output = ()> + Send>>>) -> bool {
             diagnostic_phase(&*ptr, diagnostics::YIELDED, 0, 0);
         }
         (*ptr).wait = wait;
+        capture_slice_exit(ptr, reason);
         context::swap(&mut (*ptr).child, &(*ptr).parent);
     }
     true
 }
 
 pub(crate) fn yield_now() -> bool {
-    suspend(None)
+    suspend(None, exit_trace::Reason::Yield)
 }
 
 pub(crate) fn sleep(ms: u64) -> bool {
@@ -181,7 +199,7 @@ pub(crate) fn sleep(ms: u64) -> bool {
             }
         })
     });
-    suspend(Some(timer))
+    suspend(Some(timer), exit_trace::Reason::Sleep)
 }
 
 pub(crate) fn wait(queue: &crate::wait::WaitQueue, observed: u32, timeout_ms: u64) -> Option<bool> {
@@ -209,7 +227,7 @@ pub(crate) fn wait(queue: &crate::wait::WaitQueue, observed: u32, timeout_ms: u6
             out.store(woke, Ordering::Release);
         })
     });
-    suspend(Some(future));
+    suspend(Some(future), exit_trace::Reason::Wait);
     Some(result.load(Ordering::Acquire))
 }
 
@@ -225,6 +243,7 @@ unsafe extern "C" fn run(data: *mut ()) -> ! {
     }
     unsafe {
         (*ptr).done = true;
+        capture_slice_exit(ptr, exit_trace::Reason::Complete);
         context::swap(&mut (*ptr).child, &(*ptr).parent);
     }
     unreachable!("completed thread resumed")
@@ -266,6 +285,7 @@ impl Future for ThreadTask {
         progress_boundary(thread, diagnostics::POLL_BEGIN);
         if thread.timed && thread.timing.is_none() {
             thread.timing = Some(timing::Timing::new(cx, thread.submitted_ms));
+            if crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { thread.exit_trace.configure(thread.vm_id); }
         }
         let timed_waker = thread.timing.as_ref().map(|timing| {
             timing.begin_poll(cx);
@@ -330,6 +350,7 @@ impl Future for ThreadTask {
             .as_ref()
             .map(|space| unsafe { context::replace_address_space(space.cr3()) });
         let run_started = crate::r::input_timing::now_ms();
+        if thread.timed && crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { thread.exit_trace.begin(run_started); }
         progress_boundary(thread, diagnostics::GUEST_ENTER);
         unsafe { context::swap(&mut (*ptr).parent, &(*ptr).child) };
         progress_boundary(thread, diagnostics::GUEST_RETURN);
@@ -343,6 +364,15 @@ impl Future for ThreadTask {
         thread.allocation = crate::allocators::replace_thread_context(parent_alloc);
         thread.domain = kernel_task_domain::replace_context(parent_domain);
         progress_boundary(thread, diagnostics::CONTEXT_RESTORED);
+        // Snapshot memory belongs to Thread. Guest TLS, WLS, allocation domain
+        // and address space are restored before any formatting/logging occurs.
+        if let Some(trace) = thread.exit_trace.take(crate::r::input_timing::now_ms()) {
+            crate::log_info!(target: "blueprint";
+                "codex-slice-exit vm={} id={} carrier={} ended_ms={} duration_ms={} reason={:?} kind=exit-callstack cpu_attribution=none frames={:X?} stop={:?}\n",
+                thread.vm_id.unwrap_or(u8::MAX), thread.id, thread.carrier,
+                trace.ended_ms, trace.duration_ms, trace.reason,
+                &trace.frames.addresses[..trace.frames.count], trace.frames.stop);
+        }
         if thread.timed { timing::Timing::ran(run_started); }
         if thread.done {
             diagnostic_phase(thread, diagnostics::COMPLETED, 0, 0);
@@ -439,6 +469,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     // Scheduler storage belongs to the host even when spawned from guest
     // code. Guest closure execution/destruction uses its retained VM realm.
     let prepared = crate::allocators::with_host_alloc_domain_strong(|| {
+        let wls_lease = vm_id.map(|vm| crate::wls::try_lease_blueprint_thread_identity(vm, id).ok_or(11)).transpose()?;
         let stack = context::Stack::new_for_vm(stack, vm_id).ok_or(11)?;
         #[cfg(not(target_os = "linux"))]
         let address_space = vm_id
@@ -462,6 +493,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
             timed: crate::allcaps::hv::INPUT_TIMING_ENABLED && is_codex,
             submitted_ms: crate::r::input_timing::now_ms(),
             timing: None,
+            exit_trace: exit_trace::State::new(),
             domain: (
                 if vm_id.is_some() {
                     KernelTaskDomain::VmGuestOwnedAlloc as u32
@@ -472,6 +504,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
             ),
             allocation: [0; 4],
             wls: (0, id as u32),
+            _wls_lease: wls_lease,
             _admission: admission,
         });
         Ok::<_, i32>(thread)

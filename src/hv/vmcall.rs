@@ -5318,6 +5318,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_ASYNC_FS_RENAME_START => {
+            // Bit zero requests POSIX replacement of a file. Existing native
+            // callers send zero and retain no-replace namespace moves.
+            if arg0 > 1 || arg1 != 0 {
+                write_response(vm_id, seq, STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -5409,10 +5416,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 );
                 return DispatchOutcome::Resume;
             }
-            let rc = crate::r::io::async_fs_cabi::start_rename(
+            let rc = crate::r::io::async_fs_cabi::start_rename_with_policy(
                 crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
                 source,
                 destination,
+                arg0 == 1,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

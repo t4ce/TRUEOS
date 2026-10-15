@@ -76,6 +76,7 @@ enum RequestKind {
     Rename {
         source: String,
         destination: String,
+        replace_file: bool,
     },
 }
 
@@ -584,11 +585,21 @@ pub(crate) fn start_remove(owner: u32, path: String) -> i32 {
 }
 
 pub(crate) fn start_rename(owner: u32, source: String, destination: String) -> i32 {
+    start_rename_with_policy(owner, source, destination, false)
+}
+
+pub(crate) fn start_rename_with_policy(
+    owner: u32,
+    source: String,
+    destination: String,
+    replace_file: bool,
+) -> i32 {
     start(
         owner,
         RequestKind::Rename {
             source,
             destination,
+            replace_file,
         },
     )
 }
@@ -757,6 +768,7 @@ async fn process(request: &Request) -> OperationState {
     if let RequestKind::Rename {
         source,
         destination,
+        replace_file,
     } = &request.kind
     {
         let (source_disk, source_path) = match selected_disk(source) {
@@ -780,20 +792,27 @@ async fn process(request: &Request) -> OperationState {
                 Err(error) => OperationState::Failed(map_block_error(error)),
             };
         }
-        match path_kind_async(destination_disk, destination_path).await {
+        let destination_is_file = match path_kind_async(destination_disk, destination_path).await {
+            Ok(Some(true)) if *replace_file => true,
             Ok(Some(_)) => return OperationState::Failed(FS_ERR_ALREADY_EXISTS),
-            Ok(None) => {}
+            Ok(None) => false,
             Err(error) => return OperationState::Failed(map_block_error(error)),
-        }
+        };
 
         let result = match path_kind_async(source_disk, source_path).await {
             Ok(Some(true)) => {
-                crate::r::fs::trueosfs::file_rename_async(
-                    source_disk,
-                    source_path,
-                    destination_path,
-                )
-                .await
+                if *replace_file {
+                    crate::r::fs::trueosfs::file_rename_replace_async(
+                        source_disk, source_path, destination_path,
+                    ).await
+                } else {
+                    crate::r::fs::trueosfs::file_rename_async(
+                        source_disk, source_path, destination_path,
+                    ).await
+                }
+            }
+            Ok(Some(false)) if destination_is_file => {
+                return OperationState::Failed(FS_ERR_ALREADY_EXISTS);
             }
             Ok(Some(false)) => {
                 crate::r::fs::trueosfs::dir_rename_async(source_disk, source_path, destination_path)
@@ -1146,7 +1165,7 @@ fn guest_typed_write_begin(path: &str, total_len: usize, content_type: u32) -> i
     }
 }
 
-fn guest_rename_start(source: &str, destination: &str) -> i32 {
+fn guest_rename_start(source: &str, destination: &str, replace_file: bool) -> i32 {
     let Some(payload_len) = 4usize
         .checked_add(source.len())
         .and_then(|len| len.checked_add(destination.len()))
@@ -1162,7 +1181,7 @@ fn guest_rename_start(source: &str, destination: &str) -> i32 {
     payload.extend_from_slice(destination.as_bytes());
     let (status, value) = trueos_vm::vmcall::call_with_payload(
         trueos_vm::vmcall::OP_BP_ASYNC_FS_RENAME_START,
-        0,
+        u64::from(replace_file),
         0,
         payload.as_slice(),
         &mut [],
@@ -1474,6 +1493,31 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_rename_start(
     destination_ptr: *const u8,
     destination_len: usize,
 ) -> i32 {
+    unsafe {
+        rename_start_with_policy(source_ptr, source_len, destination_ptr, destination_len, false)
+    }
+}
+
+/// POSIX file replacement uses the same operation and ownership transport as
+/// ordinary rename. Native no-replace callers retain their existing contract.
+pub(crate) unsafe fn rename_replace_start(
+    source_ptr: *const u8,
+    source_len: usize,
+    destination_ptr: *const u8,
+    destination_len: usize,
+) -> i32 {
+    unsafe {
+        rename_start_with_policy(source_ptr, source_len, destination_ptr, destination_len, true)
+    }
+}
+
+unsafe fn rename_start_with_policy(
+    source_ptr: *const u8,
+    source_len: usize,
+    destination_ptr: *const u8,
+    destination_len: usize,
+    replace_file: bool,
+) -> i32 {
     let source = match parse_path(source_ptr, source_len, false) {
         Ok(path) => path,
         Err(code) => return code,
@@ -1483,9 +1527,9 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_rename_start(
         Err(code) => return code,
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_rename_start(source.as_str(), destination.as_str())
+        guest_rename_start(source.as_str(), destination.as_str(), replace_file)
     } else {
-        start_rename(direct_owner(), source, destination)
+        start_rename_with_policy(direct_owner(), source, destination, replace_file)
     }
 }
 

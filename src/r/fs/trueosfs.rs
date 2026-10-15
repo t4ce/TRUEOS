@@ -2470,6 +2470,16 @@ fn indexed_move_entry(
     dst: &str,
     kind: trueos_fs::LogKind,
 ) -> Result<Option<IndexRef>, block::Error> {
+    indexed_move_entry_with_policy(disk_id, src, dst, kind, false)
+}
+
+fn indexed_move_entry_with_policy(
+    disk_id: block::DiscId,
+    src: &str,
+    dst: &str,
+    kind: trueos_fs::LogKind,
+    replace_existing: bool,
+) -> Result<Option<IndexRef>, block::Error> {
     let roots = ROOTS.lock();
     let mount = roots.iter().find(|m| m.disk_id == disk_id).ok_or(block::Error::NotReady)?;
     let index = mount.index.as_ref().ok_or(block::Error::NotReady)?;
@@ -2477,7 +2487,11 @@ fn indexed_move_entry(
         return Ok(None);
     };
     let dst_prefix = normalized_dir_prefix(dst);
-    if index.contains_key(dst.as_bytes())
+    if index.get(dst.as_bytes()).is_some_and(|destination| {
+        !replace_existing
+            || kind != trueos_fs::LogKind::Put
+            || destination.kind != trueos_fs::LogKind::Put
+    })
         || index.range(dst_prefix.as_bytes().to_vec()..).next()
             .is_some_and(|(key, _)| key.starts_with(dst_prefix.as_bytes()))
     {
@@ -2501,8 +2515,29 @@ pub async fn file_rename_async(
     src: &str,
     dst: &str,
 ) -> Result<bool, block::Error> {
+    file_rename_with_policy_async(disk, src, dst, false).await
+}
+
+/// Atomically move a file, replacing an existing file at the destination.
+/// Directories are never replaced. Both names are validated under the same
+/// root write lease and published by one namespace record, without copying
+/// file payloads or exposing an intermediate missing destination.
+pub async fn file_rename_replace_async(
+    disk: block::DeviceHandle,
+    src: &str,
+    dst: &str,
+) -> Result<bool, block::Error> {
+    file_rename_with_policy_async(disk, src, dst, true).await
+}
+
+async fn file_rename_with_policy_async(
+    disk: block::DeviceHandle,
+    src: &str,
+    dst: &str,
+    replace_existing: bool,
+) -> Result<bool, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
-    if src == dst {
+    if src == dst && !replace_existing {
         return Ok(true);
     }
 
@@ -2523,13 +2558,18 @@ pub async fn file_rename_async(
     let (_write_lease, entry) = loop {
         ensure_index_async(disk, &placement).await?;
         let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
-        match indexed_move_entry(disk.id(), src, dst, trueos_fs::LogKind::Put) {
+        match indexed_move_entry_with_policy(
+            disk.id(), src, dst, trueos_fs::LogKind::Put, replace_existing,
+        ) {
             Ok(Some(entry)) => break (lease, entry),
             Ok(None) => return Ok(false),
             Err(block::Error::NotReady) => { drop(lease); }
             Err(error) => return Err(error),
         }
     };
+    if src == dst {
+        return Ok(true);
+    }
     let Some(source) = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
         .await
         .map_err(map_engine_err)?
