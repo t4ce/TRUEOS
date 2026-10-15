@@ -7,14 +7,14 @@ use std::sync::Mutex;
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
-type Realm = ((u32, u8), [u32; 4], (u64, u32));
+type Realm = ((u32, u8), [u32; 4], crate::wls::ThreadContext);
 
 fn realm() -> Realm {
     let domain = kernel_task_domain::replace_context((0, u8::MAX));
     kernel_task_domain::replace_context(domain);
     let allocation = crate::allocators::replace_thread_context([0; 4]);
     crate::allocators::replace_thread_context(allocation);
-    let wls = crate::wls::replace_thread_context((0, 0));
+    let wls = crate::wls::replace_thread_context((0, 0, None));
     crate::wls::replace_thread_context(wls);
     (domain, allocation, wls)
 }
@@ -39,7 +39,7 @@ fn make_thread(id: usize, job: impl FnOnce() + Send + 'static) -> ThreadTask {
         exit_trace: exit_trace::State::new(),
         domain: (77, id as u8),
         allocation: [0; 4],
-        wls: (0, id as u32),
+        wls: (0, id as u32, None),
         _wls_lease: None,
         _admission: Admission { _owner: None },
     }))
@@ -89,6 +89,7 @@ fn wls_lease_survives_suspension_and_completion_until_task_retirement() {
         assert_eq!(crate::wls::trueos_cabi_wls_current_slot(), first);
     });
     thread.0._wls_lease = Some(crate::wls::try_lease_blueprint_thread_identity(51, 51).unwrap());
+    thread.0.wls.2 = thread.0._wls_lease.as_ref().map(crate::wls::BlueprintThreadIdentityLease::slot);
     assert!(poll_thread(&mut thread).is_pending());
     assert!(crate::wls::try_lease_blueprint_thread_identity(51, 51).is_none());
     assert!(poll_thread(&mut thread).is_ready());
@@ -135,7 +136,7 @@ fn two_continuations_keep_frames_realm_and_errno_on_one_carrier() {
     let _serial = SERIAL.lock().unwrap();
     kernel_task_domain::replace_context((91, 92));
     crate::allocators::replace_thread_context([1, 2, 3, 4]);
-    crate::wls::replace_thread_context((17, 18));
+    crate::wls::replace_thread_context((17, 18, None));
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut tasks = Vec::new();
     for id in [11usize, 12] {
@@ -143,12 +144,12 @@ fn two_continuations_keep_frames_realm_and_errno_on_one_carrier() {
         tasks.push(make_thread(id, move || {
             assert_eq!(current_id(), Some(id));
             assert_eq!(current_vm_id(), Some(id as u8));
-            assert_eq!(realm(), ((77, id as u8), [0; 4], (0, id as u32)));
+            assert_eq!(realm(), ((77, id as u8), [0; 4], (0, id as u32, None)));
             let mut frame = [id; 128];
             let frame_address = frame.as_ptr() as usize;
             kernel_task_domain::replace_context((101, id as u8));
             crate::allocators::replace_thread_context([id as u32; 4]);
-            crate::wls::replace_thread_context((id as u64 + 100, id as u32));
+            crate::wls::replace_thread_context((id as u64 + 100, id as u32, None));
             let errno = current_errno().unwrap().as_ptr();
             current_errno()
                 .unwrap()
@@ -159,7 +160,7 @@ fn two_continuations_keep_frames_realm_and_errno_on_one_carrier() {
                 assert_eq!(current_id(), Some(id));
                 assert_eq!(
                     realm(),
-                    ((101, id as u8), [id as u32; 4], (id as u64 + 100, id as u32))
+                    ((101, id as u8), [id as u32; 4], (id as u64 + 100, id as u32, None))
                 );
                 assert_eq!(current_errno().unwrap().as_ptr(), errno);
                 assert_eq!(current_errno().unwrap().load(Ordering::Relaxed), id as i32 + 30);

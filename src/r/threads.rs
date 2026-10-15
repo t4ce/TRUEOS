@@ -25,6 +25,20 @@ const THREAD_LIMIT: usize = 256;
 const MAX_STACK_BYTES: usize = 64 * 1024 * 1024;
 static THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NEXT_CARRIER: AtomicUsize = AtomicUsize::new(0);
+static ADMISSION_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+fn admission_rejected(vm_id: Option<u8>, id: usize, stack: usize, reason: &'static str) -> i32 {
+    // EAGAIN has several independent causes. Preserve the resource boundary
+    // without exposing a thread name, closure, argument, or guest stack data.
+    let sequence = ADMISSION_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if sequence < 32 || sequence % 64 == 0 {
+        crate::log_info!(target: "blueprint";
+            "thread-admission vm={} thread={} reason={} rc=11 live={} limit={} stack_bytes={} failure_seq={}\n",
+            vm_id.map_or(usize::MAX, usize::from), id, reason,
+            THREAD_COUNT.load(Ordering::Acquire), THREAD_LIMIT, stack, sequence);
+    }
+    11
+}
 // Control wakes even a Condvar/sleep task whose ordinary wait never completes.
 // Keep registrations until task retirement so pause and resume can both wake.
 static CONTROL_WAKERS: [spin::Mutex<alloc::vec::Vec<Waker>>; crate::allcaps::hv::VM_ID_LIMIT] =
@@ -80,7 +94,7 @@ struct Thread {
     exit_trace: exit_trace::State,
     domain: (u32, u8),
     allocation: [u32; 4],
-    wls: (u64, u32),
+    wls: crate::wls::ThreadContext,
     _wls_lease: Option<crate::wls::BlueprintThreadIdentityLease>,
     _admission: Admission,
 }
@@ -456,7 +470,8 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     let spawner = if experimental {
         // Fail explicitly if LastAP is unavailable; a silent fallback would
         // make the placement experiment and its measurements misleading.
-        crate::workers::codex_application_spawner().ok_or(11)?
+        crate::workers::codex_application_spawner()
+            .ok_or_else(|| admission_rejected(vm_id, id, stack, "codex_carrier_unavailable"))?
     } else {
         let slots = crate::workers::background_worker_slots()
             .into_iter()
@@ -464,15 +479,17 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
             .filter(|slot| (*slot as usize) < crate::allcaps::wls::CPU_TRACK_COUNT)
             .collect::<alloc::vec::Vec<_>>();
         if slots.is_empty() {
-            return Err(11);
+            return Err(admission_rejected(vm_id, id, stack, "carrier_unavailable"));
         }
         let start = NEXT_CARRIER.fetch_add(1, Ordering::Relaxed);
         let slot = slots[start % slots.len()];
-        crate::workers::spawner_for_slot(slot).ok_or(11)?
+        crate::workers::spawner_for_slot(slot)
+            .ok_or_else(|| admission_rejected(vm_id, id, stack, "carrier_unavailable"))?
     };
     let slot = spawner.cpu_slot();
     let owner = match vm_id {
-        Some(vm) => Some(crate::r::blocking::reserve_guest_job(vm).ok_or(11)?),
+        Some(vm) => Some(crate::r::blocking::reserve_guest_job(vm)
+            .ok_or_else(|| admission_rejected(vm_id, id, stack, "guest_closed"))?),
         None => None,
     };
     if let Some(owner) = &owner {
@@ -483,19 +500,22 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
         .try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < THREAD_LIMIT).then_some(n + 1))
         .is_err()
     {
-        return Err(11);
+        return Err(admission_rejected(vm_id, id, stack, "global_limit"));
     }
     let admission = Admission { _owner: owner };
     // Scheduler storage belongs to the host even when spawned from guest
     // code. Guest closure execution/destruction uses its retained VM realm.
     let prepared = crate::allocators::with_host_alloc_domain_strong(|| {
-        let wls_lease = vm_id.map(|vm| crate::wls::try_lease_blueprint_thread_identity(vm, id).ok_or(11)).transpose()?;
-        let stack = context::Stack::new_for_vm(stack, vm_id).ok_or(11)?;
+        let wls_lease = vm_id.map(|vm| crate::wls::try_lease_blueprint_thread_identity(vm, id)
+            .ok_or_else(|| admission_rejected(vm_id, id, stack, "wls_identity"))).transpose()?;
+        let requested_stack = stack;
+        let stack = context::Stack::new_for_vm(stack, vm_id)
+            .ok_or_else(|| admission_rejected(vm_id, id, stack, "stack"))?;
         #[cfg(not(target_os = "linux"))]
         let address_space = vm_id
             .map(|vm| unsafe { crate::hv::memory::CarrierAddressSpace::new(vm) })
             .transpose()
-            .map_err(|_| 11)?;
+            .map_err(|_| admission_rejected(vm_id, id, requested_stack, "address_space"))?;
         let thread = Box::new(Thread {
             stack,
             #[cfg(not(target_os = "linux"))]
@@ -523,7 +543,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
                 vm_id.unwrap_or(u8::MAX),
             ),
             allocation: [0; 4],
-            wls: (0, id as u32),
+            wls: (0, id as u32, wls_lease.as_ref().map(crate::wls::BlueprintThreadIdentityLease::slot)),
             _wls_lease: wls_lease,
             _admission: admission,
         });
@@ -532,13 +552,15 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     let mut thread = prepared?;
     thread.job = Some(job);
     if experimental {
-        let task = codex_application_task(ThreadTask(thread)).map_err(|_| 11)?;
+        let task = codex_application_task(ThreadTask(thread))
+            .map_err(|_| admission_rejected(vm_id, id, stack, "executor_pool"))?;
         crate::log_rate_limited!(target: "blueprint"; level: crate::log_os::LogLevel::Info; first: 2; every: 64;
             "codex-executor: vm={:?} thread={} carrier={} owner=codex task=codex_application_task placement=lastap\n",
             vm_id, id, slot);
         spawner.spawn(task);
     } else {
-        let task = thread_task(ThreadTask(thread)).map_err(|_| 11)?;
+        let task = thread_task(ThreadTask(thread))
+            .map_err(|_| admission_rejected(vm_id, id, stack, "executor_pool"))?;
         spawner.spawn(task);
     }
     Ok(())

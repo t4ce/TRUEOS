@@ -1304,9 +1304,13 @@ fn pthread_sync_trace(op: &str, key: usize) {
     }
 }
 
-fn pthread_create_trace(thread_id: usize, rc: c_int) {
+fn pthread_create_trace(thread_id: usize, stack: usize, rc: c_int, reason: &'static str) {
     let seq = PTHREAD_CREATE_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
-    if seq < PTHREAD_CREATE_TRACE_LIMIT {
+    // The bounded success sample must never hide the admission rejection that
+    // made std::thread::Scope::spawn panic. Count only scalar registry state;
+    // neither the entry routine nor its argument belongs in diagnostics.
+    if rc != 0 || seq < PTHREAD_CREATE_TRACE_LIMIT {
+        let join_live = PTHREAD_THREADS.lock().values().count();
         let origin = if (thread_id & PTHREAD_THREAD_CARRIER_TAG) != 0 {
             "carrier"
         } else {
@@ -1317,12 +1321,16 @@ fn pthread_create_trace(thread_id: usize, rc: c_int) {
             log_os_core::LogLevel::Info,
             Some("pthread-realm"),
             format_args!(
-                "create seq={} thread={} origin={} local_seq={} rc={} owner={}\n",
+                "create seq={} thread={} origin={} local_seq={} rc={} reason={} stack_bytes={} join_live={} join_capacity={} owner={}\n",
                 seq,
                 thread_id,
                 origin,
                 thread_id & PTHREAD_THREAD_SEQUENCE_MASK,
                 rc,
+                reason,
+                stack,
+                join_live,
+                PTHREAD_THREAD_CAPACITY,
                 pthread_current_id()
             ),
         );
@@ -7722,12 +7730,14 @@ pub unsafe extern "C" fn pthread_create(
     arg: *mut c_void,
 ) -> c_int {
     if start_routine.is_null() {
+        pthread_create_trace(0, 0, TRUEOS_EINVAL, "invalid_entry");
         return TRUEOS_EINVAL;
     }
     let stack = if attr.is_null() {
         0
     } else {
         let Some(stack) = abi_read_struct(attr.cast::<usize>()) else {
+            pthread_create_trace(0, 0, TRUEOS_EINVAL, "invalid_attributes");
             return TRUEOS_EINVAL;
         };
         stack
@@ -7748,6 +7758,7 @@ pub unsafe extern "C" fn trueos_cabi_thread_spawn(
     thread: *mut usize,
 ) -> c_int {
     if thread.is_null() {
+        pthread_create_trace(0, stack, TRUEOS_EINVAL, "invalid_thread_output");
         return TRUEOS_EINVAL;
     }
 
@@ -7758,13 +7769,16 @@ pub unsafe extern "C" fn trueos_cabi_thread_spawn(
         joining: false,
     };
 
-    if PTHREAD_THREADS.lock().insert(thread_id, state).is_err() {
+    let registered = PTHREAD_THREADS.lock().insert(thread_id, state).is_ok();
+    if !registered {
+        pthread_create_trace(thread_id, stack, TRUEOS_EAGAIN, "join_registry_full");
         return TRUEOS_EAGAIN;
     }
 
     let id_bytes = thread_id.to_ne_bytes();
     let Some(out) = abi_write_bytes(thread.cast::<u8>(), core::mem::size_of::<usize>()) else {
         let _ = PTHREAD_THREADS.lock().remove(thread_id);
+        pthread_create_trace(thread_id, stack, TRUEOS_EINVAL, "invalid_thread_output");
         return TRUEOS_EINVAL;
     };
     out.copy_from_slice(&id_bytes);
@@ -7783,11 +7797,12 @@ pub unsafe extern "C" fn trueos_cabi_thread_spawn(
         Ok(()) => 0,
         Err(error) => error,
     };
-    pthread_create_trace(thread_id, rc);
     if rc == 0 {
+        pthread_create_trace(thread_id, stack, 0, "admitted");
         0
     } else {
         let _ = PTHREAD_THREADS.lock().remove(thread_id);
+        pthread_create_trace(thread_id, stack, rc, "scheduler_rejected");
         rc
     }
 }
