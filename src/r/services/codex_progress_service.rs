@@ -33,6 +33,9 @@ pub(crate) async fn codex_progress_task() {
                 counters.ipi_failed.wrapping_sub(previous.ipi_failed),
                 counters.timer_armed.wrapping_sub(previous.timer_armed),
                 counters.timer_received.wrapping_sub(previous.timer_received));
+            for line in crate::r::io::async_fs_cabi::progress_lines(4) {
+                crate::log_info!(target: "blueprint"; "{}\n", line);
+            }
             // Fixed global output bound, including when multiple VMs exist.
             // try_lock keeps suspect bookkeeping locks from blocking us.
             let mut remaining = JOB_LINES_PER_SAMPLE;

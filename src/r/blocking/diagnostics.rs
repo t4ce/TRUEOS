@@ -22,6 +22,9 @@ pub(crate) const CONTEXT_RESTORE: usize = 7;
 pub(crate) const CONTEXT_RESTORED: usize = 8;
 pub(crate) const POLL_RETURN: usize = 9;
 
+#[path = "abi_breadcrumb.rs"] mod abi_breadcrumb;
+pub(crate) use abi_breadcrumb::{AbiOperation, Guard as AbiGuard};
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static RECORDS: [Mutex<Vec<Arc<Record>>>; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { Mutex::new(Vec::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
@@ -31,6 +34,7 @@ fn now_ms() -> u64 {
 }
 
 struct Record {
+    abi: abi_breadcrumb::State,
     id: u64,
     generation: u64,
     identity: Mutex<(&'static str, usize, heapless::String<31>)>,
@@ -56,6 +60,7 @@ impl JobDiagnostic {
     pub(crate) fn new(vm_id: u8, generation: u64) -> Self {
         crate::allocators::with_host_alloc_domain_strong(|| {
             let record = Arc::new(Record {
+                abi: abi_breadcrumb::State::new(),
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed), generation,
                 identity: Mutex::new(("native", 0, heapless::String::new())),
                 carrier: AtomicUsize::new(usize::MAX), phase: AtomicUsize::new(QUEUED),
@@ -68,6 +73,18 @@ impl JobDiagnostic {
             RECORDS[vm_id as usize].lock().push(record.clone());
             Self { vm_id, record }
         })
+    }
+
+    /// # Safety
+    /// Guard must remain on the owner Thread stack and never outlive the record.
+    pub(crate) unsafe fn abi_scope(&self, operation: AbiOperation) -> AbiGuard {
+        if self.record.progress_enabled.load(Ordering::Relaxed) == 0 {
+            return AbiGuard::inactive();
+        }
+        // Record is owned by the pinned Thread's admission. A boundary guard
+        // lives on that Thread's child stack; task retirement discards the
+        // stack before releasing admission, including on forced cancellation.
+        unsafe { self.record.abi.enter(operation, now_ms()) }
     }
 
     pub(crate) fn identify(&self, kind: &'static str, id: usize, carrier: usize) {
@@ -155,12 +172,20 @@ pub(crate) fn progress_lines(vm_id: u8, limit: usize) -> Vec<String> {
                 out.push(alloc::format!("codex-progress-job vm={} id={} snapshot=changing", vm_id, identity.1));
                 continue;
             }
+            let abi = record.abi.snapshot();
+            let abi_line = if let Some(abi) = abi {
+                alloc::format!(" abi={} abi_age_ms={} abi_since_ms={} abi_depth={} abi_entered={} abi_exited={} abi_seq={} abi_last={} abi_last_exit_ms={}",
+                    AbiOperation::name(abi.operation),
+                    if abi.operation == 0 { 0 } else { now.saturating_sub(abi.since_ms) },
+                    abi.since_ms, abi.depth, abi.entered, abi.exited, abi.sequence,
+                    AbiOperation::name(abi.last), abi.last_exit_ms)
+            } else { alloc::string::String::from(" abi=changing") };
             out.push(alloc::format!(
-                "codex-progress-job vm={} gen={} id={} carrier={} stage={} age_ms={} seq={} if={} phase={} wait=0x{:X} name={}",
+                "codex-progress-job vm={} gen={} id={} carrier={} stage={} age_ms={} seq={} if={} phase={} wait=0x{:X} name={}{}",
                 vm_id, record.generation, identity.1, record.carrier.load(Ordering::Relaxed),
                 progress_stage_name(stage), age, sequence, enabled, phase,
                 record.wait_object.load(Ordering::Relaxed),
-                if identity.2.is_empty() { "-" } else { identity.2.as_str() },
+                if identity.2.is_empty() { "-" } else { identity.2.as_str() }, abi_line,
             ));
         }
     }
@@ -245,6 +270,26 @@ mod tests {
         drop(runner);
         drop(sleeper);
         assert!(progress_lines(2, 4).is_empty());
+    }
+
+    #[test]
+    fn passive_roster_observes_scope_before_it_returns_then_outside_abi() {
+        let job = JobDiagnostic::new(4, 31);
+        job.identify("codex-executor-task", 91, 19);
+        job.enable_progress_probe();
+        let guard = unsafe { job.abi_scope(AbiOperation::Mkdir) };
+        job.phase(RUNNING, 0, 0);
+        job.progress(GUEST_ENTER);
+        let during = progress_lines(4, 1).remove(0);
+        assert!(during.contains(" abi=mkdir "));
+        assert!(during.contains("abi_depth=1 abi_entered=1 abi_exited=0"));
+        drop(guard);
+        let after = progress_lines(4, 1).remove(0);
+        assert!(after.contains(" abi=none "));
+        assert!(after.contains("abi_depth=0 abi_entered=1 abi_exited=1"));
+        assert!(after.contains("abi_last=mkdir"));
+        drop(job);
+        assert!(progress_lines(4, 1).is_empty());
     }
 
     #[test]

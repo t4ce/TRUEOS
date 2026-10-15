@@ -122,6 +122,23 @@ pub(crate) fn current_errno() -> Option<&'static AtomicI32> {
     }
 }
 
+/// Static operation breadcrumb for timed Codex native continuations only.
+/// No host record is available for Hull-only code; absence is not an ABI fault.
+/// # Safety
+/// The guard must stay on this continuation stack and be dropped before returning
+/// from it. It must never escape into a caller/registry that outlives this Thread.
+pub(crate) unsafe fn abi_scope(operation: diagnostics::AbiOperation) -> diagnostics::AbiGuard {
+    if !crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { return diagnostics::AbiGuard::inactive(); }
+    let ptr = active();
+    if ptr.is_null() { return diagnostics::AbiGuard::inactive(); }
+    let thread = unsafe { &*ptr };
+    if !thread.timed { return diagnostics::AbiGuard::inactive(); }
+    match &thread._admission._owner {
+        Some(owner) => unsafe { owner.diagnostic.abi_scope(operation) },
+        None => diagnostics::AbiGuard::inactive(),
+    }
+}
+
 pub(crate) fn set_current_name(name: &str) {
     let ptr = active();
     if !ptr.is_null() {
@@ -175,10 +192,12 @@ fn suspend(wait: Option<Pin<Box<dyn Future<Output = ()> + Send>>>, reason: exit_
 }
 
 pub(crate) fn yield_now() -> bool {
+    let _abi = unsafe { abi_scope(diagnostics::AbiOperation::Yield) };
     suspend(None, exit_trace::Reason::Yield)
 }
 
 pub(crate) fn sleep(ms: u64) -> bool {
+    let _abi = unsafe { abi_scope(diagnostics::AbiOperation::Sleep) };
     if active().is_null() {
         return false;
     }
@@ -203,6 +222,7 @@ pub(crate) fn sleep(ms: u64) -> bool {
 }
 
 pub(crate) fn wait(queue: &crate::wait::WaitQueue, observed: u32, timeout_ms: u64) -> Option<bool> {
+    let _abi = unsafe { abi_scope(diagnostics::AbiOperation::Wait) };
     if active().is_null() {
         return None;
     }

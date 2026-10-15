@@ -42,6 +42,7 @@ def main():
     volatile = (ROOT / 'src/r/fs/volatile_files.rs').read_text()
     selectors = '\n'.join(extract(volatile, n) for n in ['contains', 'disk_for_path', 'selected_disk'])
     rust = HARNESS.replace('@CODES@', (ROOT / 'src/r/cabi_codes.rs').read_text()).replace('@PATH@', path).replace('@ENV@', env_funcs).replace('@SELECTORS@', selectors)
+    production = '\n#[path="@ROOT@/src/r/io/async_fs_progress.rs"]mod progress;\nstatic PROGRESS:progress::Tracker=progress::Tracker::new();\nfn progress_now_ms()->u64{100}\nfn trace_slow_progress(_:progress::Snapshot){}\nfn lock_operations()->std::sync::MutexGuard<\'static,BTreeMap<u32,Operation>>{ASYNC_FS_OPERATIONS.lock()}\n'.replace('@ROOT@',str(ROOT)) + production
     rust = rust.replace('@PRODUCTION@', production).replace('@WORKER@', statement).replace('@ARM@', arm).replace('@MOUNT_POLICY@', extract(vmcall, 'vm_mount_selector_allowed'))
     with tempfile.TemporaryDirectory(prefix='async-fs-rename-routing-') as directory:
         test = Path(directory) / 'test.rs'
@@ -86,6 +87,7 @@ pub mod async_fs_cabi{
 use crate::*;
 const ASYNC_FS_MAX_OPERATIONS:usize=64;
 #[derive(Debug)]enum RequestKind{Rename{source:String,destination:String,replace_file:bool}}
+impl RequestKind{fn progress_class(&self)->u32{14}}
 struct Request{id:u32,owner:u32,kind:RequestKind}
 #[derive(Debug)]enum OperationState{Pending,Upload{bytes:Vec<u8>},Read(Vec<u8>),Unit,Failed(i32)}
 struct Operation{owner:u32,state:OperationState}

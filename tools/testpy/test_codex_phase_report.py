@@ -125,6 +125,39 @@ class CodexPhaseReportTests(unittest.TestCase):
         report = parse_log_text(raw)
         self.assertEqual([c['run'] for c in report['captures']], [1, 2])
 
+    def test_post_capture_started_boundaries_survive_without_invented_completion(self):
+        phases = ('turn_record_context turn_display_roots turn_skills_plugins '
+                  'turn_start_hooks turn_hooks_inputs sampling_base_instructions '
+                  'sampling_incremental_tools sampling_build_prompt sampling_metadata '
+                  'sampling_stream').split()
+        raw = event('conversation_starts', spans='[span=1 session_loop]')
+        for sequence, phase in enumerate(phases, 10):
+            line = event('step_context_phase',
+                         f'capture_id={sequence} phase={phase} offset_ms=7 '
+                         'duration_ms=0 status=started path=PATH_SECRET prompt=PROMPT_SECRET',
+                         spans='[span=1 session_loop]')
+            raw += line + line.replace('codex_otel.log_only:', 'codex_otel.trace_safe:')
+        raw += event('step_context_phase',
+                     'capture_id=10 phase=turn_record_context offset_ms=7 '
+                     'duration_ms=53 status=complete')
+        report = parse_log_text(raw)
+        self.assertEqual(len(report['captures']), len(phases))
+        started = [e for e in report['events'] if e.get('status') == 'started']
+        self.assertEqual(len(started), len(phases))
+        self.assertTrue(all('duration_ms' not in e for e in started))
+        for capture in report['captures']:
+            first = capture['phases'][0]
+            self.assertEqual(first['status'], 'started')
+            self.assertIsNone(first['duration_ms'])
+            self.assertIsNone(first['end_ms'])
+        terminal = report['captures'][0]['phases'][1]
+        self.assertEqual(terminal['duration_ms'], 53)
+        self.assertEqual(terminal['end_ms'], 60)
+        self.assertEqual(terminal['status'], 'complete')
+        for output in (json.dumps(report), markdown(report)):
+            for secret in ('PATH_SECRET', 'PROMPT_SECRET', 'ACCOUNT_SECRET', 'EMAIL_SECRET'):
+                self.assertNotIn(secret, output)
+
     def test_mcp_exact_target_whitelist_and_missing_phase_end(self):
         def mcp(sequence, phase, state, offset=0, duration=0, method='tools/list', layer='http'):
             return (f'[apps] [info] codex_rmcp_client::phase: event.name="codex.mcp_phase" sequence={sequence} '

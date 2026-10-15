@@ -5,7 +5,14 @@ include!("../cabi_codes.rs");
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+#[path = "async_fs_progress.rs"]
+mod progress;
+static PROGRESS: progress::Tracker = progress::Tracker::new();
+static REGISTRY_WAITERS: AtomicU32 = AtomicU32::new(0);
+fn progress_now_ms() -> u64 {
+    crate::r::input_timing::now_ms()
+}
 use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
@@ -80,6 +87,82 @@ enum RequestKind {
     },
 }
 
+impl RequestKind {
+    // Stable numeric classes; never export paths or request payloads.
+    fn progress_class(&self) -> u32 {
+        match self {
+            Self::Read { .. } => 1,
+            Self::Write { .. } => 2,
+            Self::CreateDirAll { .. } => 3,
+            Self::Stat { .. } => 4,
+            Self::TypedStat { .. } => 5,
+            Self::Metadata { .. } => 6,
+            Self::MetadataV2 { .. } => 7,
+            Self::RecordKey { .. } => 8,
+            Self::ListDir { .. } => 9,
+            Self::TypedListDir { .. } => 10,
+            Self::SelectFiles { .. } => 11,
+            Self::ListMounts => 12,
+            Self::Remove { .. } => 13,
+            Self::Rename { .. } => 14,
+        }
+    }
+}
+
+fn lock_operations() -> spin::MutexGuard<'static, BTreeMap<u32, Operation>> {
+    REGISTRY_WAITERS.fetch_add(1, Ordering::Relaxed);
+    let guard = ASYNC_FS_OPERATIONS.lock();
+    REGISTRY_WAITERS.fetch_sub(1, Ordering::Relaxed);
+    guard
+}
+
+static SLOW_TRACE_NEXT_MS: AtomicU64 = AtomicU64::new(0);
+static SLOW_TRACE_SKIPPED: AtomicU64 = AtomicU64::new(0);
+fn trace_slow_progress(s: progress::Snapshot) {
+    let queued = s.begun.saturating_sub(s.admitted);
+    let service = s.done.saturating_sub(s.begun);
+    let consumer = if s.phase == 4 {
+        s.observed.saturating_sub(s.done)
+    } else {
+        0
+    };
+    if queued.max(service).max(consumer) < 100 {
+        return;
+    }
+    let now = progress_now_ms();
+    let next = SLOW_TRACE_NEXT_MS.load(Ordering::Relaxed);
+    if now < next
+        || SLOW_TRACE_NEXT_MS
+            .compare_exchange(next, now.saturating_add(250), Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+    {
+        SLOW_TRACE_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    crate::log_info!(target: "blueprint";
+        "blueprint-async-fs-timing owner={} id={} class={} phase={} queued_ms={} service_ms={} consumer_ms={} skipped={}\n",s.owner,s.id,s.class,s.phase,queued,service,consumer,SLOW_TRACE_SKIPPED.swap(0,Ordering::Relaxed));
+}
+
+/// BSP observer: bounded atomic snapshots, never takes FS or registry locks.
+pub(crate) fn progress_lines(maximum: usize) -> Vec<String> {
+    if maximum == 0 {
+        return Vec::new();
+    }
+    let now = progress_now_ms();
+    let waiters = REGISTRY_WAITERS.load(Ordering::Acquire);
+    let mut snapshots: Vec<_> = PROGRESS.snapshots().filter(|s| s.phase != 4).collect();
+    if snapshots.is_empty() && waiters == 0 {
+        return Vec::new();
+    }
+    snapshots.sort_unstable_by_key(|s| (if s.phase==2 {0} else if s.phase==1 {1} else {2}, s.admitted));
+    let mut lines = Vec::new();
+    lines.push(alloc::format!("codex-progress-fs registry_waiters={} pending={} missed={}",waiters,snapshots.len(),PROGRESS.missed.load(Ordering::Relaxed)));
+    for s in snapshots.into_iter().take(maximum.saturating_sub(1)) {
+        lines.push(alloc::format!("codex-progress-fs owner={} id={} class={} phase={} admitted_age_ms={} queued_ms={} service_ms={} unobserved_ms={}",s.owner,s.id,s.class,s.phase,now.saturating_sub(s.admitted),if s.phase==1 {now.saturating_sub(s.admitted)} else {s.begun.saturating_sub(s.admitted)},if s.phase==2 {now.saturating_sub(s.begun)} else if s.phase>=3 {s.done.saturating_sub(s.begun)} else {0},if s.phase==3 {now.saturating_sub(s.done)} else {0}));
+    }
+    lines
+}
+
 #[derive(Debug)]
 struct Request {
     id: u32,
@@ -140,7 +223,7 @@ pub(crate) fn pending_for_owner(owner: u32) -> usize {
     // All multi-lock broker paths use requests -> active -> operations.
     let requests = ASYNC_FS_REQUESTS.lock();
     let active = ASYNC_FS_ACTIVE_REQUEST.lock();
-    let operations = ASYNC_FS_OPERATIONS.lock();
+    let operations = lock_operations();
     pending_in(owner, &requests, *active, &operations)
 }
 
@@ -149,13 +232,13 @@ pub(crate) fn pending_for_owner(owner: u32) -> usize {
 pub(crate) fn release_owner(owner: u32) -> Result<usize, usize> {
     let requests = ASYNC_FS_REQUESTS.lock();
     let active = ASYNC_FS_ACTIVE_REQUEST.lock();
-    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    let mut operations = lock_operations();
     let pending = pending_in(owner, &requests, *active, &operations);
     if pending != 0 {
         return Err(pending);
     }
     let before = operations.len();
-    operations.retain(|_, operation| operation.owner != owner);
+    operations.retain(|id, operation| { if operation.owner == owner {PROGRESS.release(owner,*id);false} else {true} });
     Ok(before - operations.len())
 }
 
@@ -168,18 +251,43 @@ fn take_request() -> Option<Request> {
     Some(request)
 }
 
+fn begin_request(request: &Request) -> bool {
+    let operations = lock_operations();
+    let pending = operations.get(&request.id).is_some_and(|operation| {
+        operation.owner == request.owner
+            && matches!(operation.state, OperationState::Pending | OperationState::Upload { .. })
+    });
+    if pending {
+        PROGRESS.begin(request.owner, request.id, progress_now_ms());
+    }
+    pending
+}
+
 fn finish_request(request: &Request, state: Option<OperationState>) {
     let mut active = ASYNC_FS_ACTIVE_REQUEST.lock();
     assert_eq!(*active, Some((request.owner, request.id)));
+    let mut timing = None;
     if let Some(state) = state {
-        let mut operations = ASYNC_FS_OPERATIONS.lock();
-        if let Some(operation) = operations.get_mut(&request.id)
+        let mut operations = lock_operations();
+        if let Some(operation) = operations
+            .get_mut(&request.id)
             .filter(|operation| operation.owner == request.owner)
         {
             operation.state = state;
+            timing = PROGRESS.done(request.owner, request.id, progress_now_ms());
+        } else {
+            // Discarding a consumer does not cancel admitted disk work.
+            timing = PROGRESS.done(request.owner, request.id, progress_now_ms());
+            PROGRESS.release(request.owner, request.id);
         }
+    } else {
+        PROGRESS.release(request.owner, request.id);
     }
     *active = None;
+    drop(active);
+    if let Some(timing) = timing {
+        trace_slow_progress(timing);
+    }
 }
 
 fn encode_dir_listing(listing: &crate::r::fs::trueosfs::DirListing) -> Option<Vec<u8>> {
@@ -292,7 +400,7 @@ fn start(owner: u32, kind: RequestKind) -> i32 {
 }
 
 fn start_inner(owner: u32, kind: RequestKind) -> i32 {
-    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    let mut operations = lock_operations();
     if operations.len() >= ASYNC_FS_MAX_OPERATIONS {
         return FS_ERR_NO_SPACE;
     }
@@ -306,11 +414,13 @@ fn start_inner(owner: u32, kind: RequestKind) -> i32 {
             state: OperationState::Pending,
         },
     );
+    PROGRESS.admit(owner, id, kind.progress_class(), progress_now_ms());
     drop(operations);
 
     let mut requests = ASYNC_FS_REQUESTS.lock();
     if requests.len() >= ASYNC_FS_MAX_OPERATIONS {
-        ASYNC_FS_OPERATIONS.lock().remove(&id);
+        lock_operations().remove(&id);
+        PROGRESS.release(owner, id);
         return FS_ERR_NO_SPACE;
     }
     requests.push_back(Request { id, owner, kind });
@@ -348,7 +458,7 @@ fn start_completed_read_inner(owner: u32, bytes: Vec<u8>) -> i32 {
     if bytes.len() as u64 > ASYNC_FS_MAX_RESULT_BYTES {
         return FS_ERR_TOO_LARGE;
     }
-    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    let mut operations = lock_operations();
     if operations.len() >= ASYNC_FS_MAX_OPERATIONS {
         return FS_ERR_NO_SPACE;
     }
@@ -423,7 +533,7 @@ fn stage_write(
         return FS_ERR_NO_SPACE;
     }
 
-    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    let mut operations = lock_operations();
     if operations.len() >= ASYNC_FS_MAX_OPERATIONS {
         return FS_ERR_NO_SPACE;
     }
@@ -447,7 +557,7 @@ fn stage_write(
 }
 
 pub(crate) fn write_chunk(owner: u32, id: u32, offset: usize, data: &[u8]) -> i32 {
-    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    let mut operations = lock_operations();
     let Some(operation) = operations
         .get_mut(&id)
         .filter(|operation| operation.owner == owner)
@@ -469,7 +579,7 @@ pub(crate) fn write_chunk(owner: u32, id: u32, offset: usize, data: &[u8]) -> i3
 
 pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
     let request = {
-        let mut operations = ASYNC_FS_OPERATIONS.lock();
+        let mut operations = lock_operations();
         let Some(operation) = operations
             .get_mut(&id)
             .filter(|operation| operation.owner == owner)
@@ -477,7 +587,7 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
             return FS_ERR_NOT_FOUND;
         };
         let state = core::mem::replace(&mut operation.state, OperationState::Pending);
-        match state {
+        let request = match state {
             OperationState::Upload {
                 path,
                 bytes,
@@ -498,13 +608,15 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
                 operation.state = state;
                 return FS_ERR_BAD_PARAM;
             }
-        }
+        };
+        PROGRESS.admit(owner, id, request.kind.progress_class(), progress_now_ms());
+        request
     };
-
     let mut requests = ASYNC_FS_REQUESTS.lock();
     if requests.len() >= ASYNC_FS_MAX_OPERATIONS {
+        PROGRESS.release(owner, id);
         drop(requests);
-        if let Some(operation) = ASYNC_FS_OPERATIONS.lock().get_mut(&id) {
+        if let Some(operation) = lock_operations().get_mut(&id) {
             operation.state = OperationState::Failed(FS_ERR_NO_SPACE);
         }
         return FS_ERR_NO_SPACE;
@@ -605,22 +717,32 @@ pub(crate) fn start_rename_with_policy(
 }
 
 pub(crate) fn status(owner: u32, id: u32) -> i32 {
-    let operations = ASYNC_FS_OPERATIONS.lock();
+    let operations = lock_operations();
     let Some(operation) = operations
         .get(&id)
         .filter(|operation| operation.owner == owner)
     else {
         return FS_ERR_NOT_FOUND;
     };
-    match operation.state {
+    let result = match operation.state {
         OperationState::Pending | OperationState::Upload { .. } => 0,
         OperationState::Read(_) | OperationState::Unit => 1,
         OperationState::Failed(code) => code,
+    };
+    let timing = if result != 0 {
+        PROGRESS.observe(owner, id, progress_now_ms())
+    } else {
+        None
+    };
+    drop(operations);
+    if let Some(timing) = timing {
+        trace_slow_progress(timing);
     }
+    result
 }
 
 pub(crate) fn result_len(owner: u32, id: u32) -> isize {
-    let operations = ASYNC_FS_OPERATIONS.lock();
+    let operations = lock_operations();
     let Some(operation) = operations
         .get(&id)
         .filter(|operation| operation.owner == owner)
@@ -636,7 +758,7 @@ pub(crate) fn result_len(owner: u32, id: u32) -> isize {
 }
 
 pub(crate) fn result_read(owner: u32, id: u32, offset: usize, out: &mut [u8]) -> isize {
-    let operations = ASYNC_FS_OPERATIONS.lock();
+    let operations = lock_operations();
     let Some(operation) = operations
         .get(&id)
         .filter(|operation| operation.owner == owner)
@@ -660,11 +782,18 @@ pub(crate) fn result_read(owner: u32, id: u32, offset: usize, out: &mut [u8]) ->
 }
 
 pub(crate) fn discard(owner: u32, id: u32) -> i32 {
-    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    let mut operations = lock_operations();
     if operations.get(&id).map(|operation| operation.owner) != Some(owner) {
         return FS_ERR_NOT_FOUND;
     }
+    let unfinished = operations
+        .get(&id)
+        .is_some_and(|operation| matches!(operation.state, OperationState::Pending));
     operations.remove(&id);
+    // A detached request remains observable until the service drains it.
+    if !unfinished {
+        PROGRESS.release(owner, id);
+    }
     0
 }
 
@@ -1095,7 +1224,7 @@ pub async fn service_task() {
             continue;
         };
 
-        if status(request.owner, request.id) != 0 {
+        if !begin_request(&request) {
             finish_request(&request, None);
             continue;
         }

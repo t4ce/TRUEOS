@@ -516,3 +516,36 @@ fn kill_of_a_paused_native_job_retires_its_counted_park() {
     crate::hv::set_guest_pause_for_test(57, false);
     crate::hv::set_guest_kill_for_test(57, false);
 }
+
+
+#[test]
+#[cfg(thread_scheduler_harness)]
+fn abi_breadcrumb_follows_nested_parked_stack_and_retires_with_owner() {
+    let _serial = SERIAL.lock().unwrap();
+    let queue = Arc::new(crate::wait::WaitQueue::new());
+    let mut task = make_thread(52, move || {
+        let _outer = unsafe { abi_scope(diagnostics::AbiOperation::Condvar) };
+        let observed = queue.observe();
+        let _ = wait(&queue, observed, 0);
+        panic!("killed breadcrumb stack resumed");
+    });
+    task.0.timed = true;
+    assert!(crate::r::blocking::open_guest_jobs(52, 19));
+    let owner = crate::r::blocking::reserve_guest_job(52).unwrap();
+    owner.diagnostic.identify("codex-executor-task", 52, 0);
+    owner.diagnostic.enable_progress_probe();
+    task.0._admission._owner = Some(owner);
+    assert!(poll_thread(&mut task).is_pending());
+    let line = diagnostics::progress_lines(52, 1).remove(0);
+    assert!(line.contains(" abi=wait "));
+    assert!(line.contains(" abi_depth=2 abi_entered=2 abi_exited=0 "));
+    assert!(current_id().is_none());
+    // A carrier's next task cannot inherit the parked stack's active scope.
+    drop(unsafe { abi_scope(diagnostics::AbiOperation::Alloc) });
+    assert!(diagnostics::progress_lines(52, 1)[0].contains(" abi=wait "));
+    crate::hv::set_guest_kill_for_test(52, true);
+    assert!(poll_thread(&mut task).is_ready());
+    drop(task);
+    assert!(diagnostics::progress_lines(52, 1).is_empty());
+    crate::hv::set_guest_kill_for_test(52, false);
+}

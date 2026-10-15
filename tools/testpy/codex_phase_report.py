@@ -22,7 +22,7 @@ SQLX_SETUP_PHASES = frozenset("setup_total connect_headers service_ready connect
 SQLX_RPC_PHASES = frozenset("serialize write read_header read_body parse complete".split())
 SLICE_REASONS = frozenset({"Yield", "Sleep", "Wait", "Complete"})
 SLICE_STOPS = frozenset({"End", "Bounds", "Unaligned", "NonIncreasing", "NonExecutable", "Limit"})
-STEP_PHASES = frozenset("capture active_turn_snapshot environment_ready instructions capability_roots capability_discovery mcp_ready recommendations selected_contributors build_router conversation_snapshot retain_context".split())
+STEP_PHASES = frozenset("capture active_turn_snapshot environment_ready instructions capability_roots capability_discovery mcp_ready recommendations selected_contributors build_router conversation_snapshot retain_context turn_record_context turn_display_roots turn_skills_plugins turn_start_hooks turn_hooks_inputs sampling_base_instructions sampling_incremental_tools sampling_build_prompt sampling_metadata sampling_stream".split())
 PHASES = frozenset("thread_start_create_thread thread_start_total startup_prewarm_create_turn_context startup_prewarm_build_tools startup_prewarm_build_prompt startup_prewarm_websocket_warmup startup_prewarm_total startup_prewarm_resolve".split())
 STAGES = frozenset("account_status_begin account_status_done app_server_begin app_server_done arg0_cleanup_begin arg0_cleanup_done arg0_dispatch_done cli_begin cli_entering_tui cloud_auth_storage_begin cloud_auth_storage_done cloud_config_begin cloud_config_done crossterm_backend_created dotenv_begin dotenv_done editable_composer_visible first_frame_backend_flushed first_frame_render_begin first_frame_render_done full_config_begin full_config_done main_thread_entered main_thread_spawn_begin main_thread_spawn_done motion_begin motion_done path_aliases_begin path_aliases_done presentation_config_begin presentation_config_done process_main ratatui_terminal_begin ratatui_terminal_created runtime_begin runtime_done screen_reader_begin screen_reader_done session_prompt_ready state_db_begin state_db_done terminal_checks_begin terminal_checks_done terminal_init_begin terminal_init_done terminal_modes_begin terminal_modes_done terminal_queries_begin terminal_queries_done terminal_stderr_guard_done thread_start_begin thread_start_done tui_draft_begin tui_event_loop_created tui_preflight_begin".split())
 SPAN_NAMES = frozenset("app_server.request app_server.thread_start.create_thread endpoint_session.execute_with list_models model_client.stream_responses_websocket model_client.websocket_connection responses_websocket.stream_request session_init session_loop submission_dispatch thread_spawn turn".split())
@@ -227,7 +227,7 @@ def parse_log_text(text: str) -> dict:
                 value = _number(fields.get(key))
                 if value is not None:
                     event[key] = value
-            if fields.get('status') in {'complete', 'cancelled', 'error'}:
+            if fields.get('status') in {'started', 'complete', 'cancelled', 'error'}:
                 event['status'] = fields['status']
         span_prefix = body.split('event.name=', 1)[0]
         event['spans'] = [dict(id=int(sid), name=sname) for sid, sname in re.findall(r'\[span=(\d+) ([\w.]+)', span_prefix) if sname in SPAN_NAMES]
@@ -253,6 +253,10 @@ def parse_log_text(text: str) -> dict:
             value = _number(fields.get(key))
             if value is not None:
                 event[key] = value
+        if name == 'step_context_phase' and event.get('status') == 'started':
+            # A started-only observation has no measured duration. The wire's
+            # zero is only a placeholder, never a completed zero-length phase.
+            event.pop('duration_ms', None)
         if fields.get('startup.phase') in PHASES:
             event['phase'] = fields['startup.phase']
         if fields.get('startup.status') in {'ready', 'error', 'cancelled'}:
@@ -344,6 +348,7 @@ def parse_log_text(text: str) -> dict:
         'Measured spans overlap. Do not add them to infer a critical path.',
         'Prompt-to-request wall intervals are unassigned elapsed time, not a diagnosed cause; request duration measures sending, not full response latency.',
         'Missing ends and absent measurements are null, never zero.',
+        'Step phase started records precede work and do not prove completion; their duration and end remain null until a terminal observation exists.',
         'Startup run boundaries use process_main or a same-PID elapsed reset; captures without process_main are marked partial.',
         'Step-context offsets share one capture monotonic clock; overlapping child phases are unioned only to find unassigned intervals, never added as a critical path.',
         'Capture IDs are numeric and process-local; capture groups include observed startup run and session.',

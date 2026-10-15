@@ -5189,6 +5189,7 @@ pub unsafe extern "C" fn readdir_r(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn stat(path: *const c_char, buf: *mut c_void) -> c_int {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Stat) };
     if path.is_null() || buf.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
@@ -5295,6 +5296,7 @@ pub unsafe extern "C" fn fstatat(
     buf: *mut c_void,
     flags: c_int,
 ) -> c_int {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Stat) };
     // TRUEOSFS has no symbolic-link node kind; stat and lstat coincide. Do not
     // quietly accept AT_EMPTY_PATH or flags with a different contract.
     if flags & !TRUEOS_AT_SYMLINK_NOFOLLOW != 0 {
@@ -5326,6 +5328,7 @@ pub unsafe extern "C" fn fstatat64(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mkdirat(dirfd: c_int, path: *const c_char, _mode: c_int) -> c_int {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Mkdir) };
     let path = match unsafe { posix_at_path(dirfd, path) } {
         Ok(path) => path,
         Err(errno) => { TRUEOS_ERRNO.store(errno, Ordering::Relaxed); return -1; }
@@ -6403,6 +6406,7 @@ pub unsafe extern "C" fn dirfd(_dir: *mut TrueosDir) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mkdir(path: *const c_char, _mode: c_int) -> c_int {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Mkdir) };
     unsafe { mkdirat(TRUEOS_AT_FDCWD, path, _mode) }
 }
 
@@ -7522,6 +7526,7 @@ pub unsafe extern "C" fn pthread_mutex_destroy(mutex: *mut c_void) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_mutex_lock(mutex: *mut c_void) -> c_int {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Mutex) };
     let Some(key) = pthread_key(mutex) else {
         return TRUEOS_EINVAL;
     };
@@ -7530,6 +7535,7 @@ pub unsafe extern "C" fn pthread_mutex_lock(mutex: *mut c_void) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_mutex_trylock(mutex: *mut c_void) -> c_int {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Mutex) };
     let Some(key) = pthread_key(mutex) else {
         return TRUEOS_EINVAL;
     };
@@ -7610,6 +7616,7 @@ pub unsafe extern "C" fn pthread_cond_destroy(cond: *mut c_void) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_cond_wait(cond: *mut c_void, mutex: *mut c_void) -> c_int {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Condvar) };
     let Some(cond_key) = pthread_key(cond) else {
         return TRUEOS_EINVAL;
     };
@@ -7629,6 +7636,7 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
     mutex: *mut c_void,
     abstime: *const c_void,
 ) -> c_int {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Condvar) };
     let Some(cond_key) = pthread_key(cond) else {
         return TRUEOS_EINVAL;
     };

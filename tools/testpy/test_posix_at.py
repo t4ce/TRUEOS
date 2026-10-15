@@ -41,6 +41,9 @@ def harness():
     let k=crate::key(path);crate::DISK.lock().dirs.insert(k,());crate::CREATES.fetch_add(1,std::sync::atomic::Ordering::Relaxed);0
    }
 ''')
+    # Timing instrumentation is inactive outside a scheduled Codex continuation;
+    # the real scheduler/record implementation is covered by its own harness.
+    fixture = fixture.replace('mod r {', 'mod r { pub mod blocking {pub mod diagnostics {pub enum AbiOperation {Stat,Mkdir}}} pub mod threads {pub fn abi_scope(_:super::blocking::diagnostics::AbiOperation) {}}', 1)
     fixture += SUPPORT
     impl_start = source.index('impl OpenFile {')
     impl_end = source.index('\n/// Remove one descriptor', impl_start)

@@ -55,7 +55,8 @@ pub(crate) fn enqueue(
     let required = super::blueprint::prebind_required_readiness(&request.bytes)?;
     let worker = crate::workers::pick_background_spawner().ok_or("apps: no background worker")?;
     let (target, receipt) = super::matrix::reserve(&request.archive, &request.bytes)?;
-    if let Some(frontend) = request.frontend {
+    let frontend = request.frontend;
+    if let Some(frontend) = frontend {
         if let Err(error) = crate::shell3::tui::attach(frontend, &target) {
             super::matrix::discard(&target);
             return Err(error);
@@ -68,6 +69,12 @@ pub(crate) fn enqueue(
             return Err("apps: launch task pool exhausted".into());
         }
     };
+    // All fallible synchronous admission is complete. Do not park the old
+    // native helper on attachment/task-pool failure, and do not let the new
+    // guest run its one-shot terminal claim before this handoff commits.
+    if let Some(frontend) = frontend {
+        crate::shell3::tui::park_native_for_launch(frontend);
+    }
     worker.spawn(task);
     Ok(receipt)
 }

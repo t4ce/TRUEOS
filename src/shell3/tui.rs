@@ -4,7 +4,7 @@ use crate::shell3::{MatrixSlotLease, MatrixTarget};
 use super::matrix_target::{MatrixSlotAttachment, attach_matrix_slot_resource, matrix_slot_is_live, TRANSPORT_NET_TCP_SCOPE, TRANSPORT_LOCAL_SCOPE};
 use super::service::QueuedBlueprint;
 use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 use trueos_terminal::{Terminal, TerminalColor};
 mod remote;
@@ -177,6 +177,31 @@ pub(crate) fn attach(frontend: Frontend, target: &MatrixTarget) -> Result<(), St
     create_route(Some(frontend), target)
 }
 
+/// Commit a prepared Blueprint launch after attachment and task-token admission.
+/// This cannot fail and runs before the admitted task is spawned. Native-to-
+/// native attachment continues to require explicit navigation.
+pub(crate) fn park_native_for_launch(frontend: Frontend) {
+    let mut routes = ROUTES.lock();
+    park_native_for_attachment(&mut routes, Some(frontend.id));
+    routes.changed(Some(frontend.id));
+}
+
+/// Attaching a new foreground-capable launch reserves its input route now,
+/// while accepted-word feedback may defer selecting/presenting the surface.
+/// Retire native helper input ownership before the guest's one-shot lease
+/// claim; keep its screen/paint state available for a later explicit resume.
+/// Blueprint owners retain their separate epoch/release handshake.
+fn park_native_for_attachment(routes: &mut Registry, frontend: Option<u64>) {
+    let Some(frontend) = frontend else { return; };
+    for route in routes.routes.iter_mut().filter(|route| route.frontend == Some(frontend)) {
+        if let Some(native) = route.native.as_mut() {
+            native.active = false;
+            native.input.clear();
+            route.suppressed_text = None;
+        }
+    }
+}
+
 fn create_route(frontend: Option<Frontend>, target: &MatrixTarget) -> Result<(), String> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
     let (cols, rows) = frontend.map_or((super::Default_COLUMNS, super::Default_ROWS), |view| (view.cols, view.rows));
@@ -233,34 +258,57 @@ pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
     }
 }
 
+// Report at most once per VM run; a failed app claim must not flood lifecycle
+// output if it retries. Unknown-run failures have a separate one-shot slot.
+static CLAIM_REJECT_RUN: [AtomicU64; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicU64::new(0) }; crate::allcaps::hv::VM_ID_LIMIT];
+static CLAIM_REJECT_NO_RUN: [AtomicBool; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicBool::new(false) }; crate::allcaps::hv::VM_ID_LIMIT];
+fn log_claim_rejection(vm: u8, run: u64, frontend: Option<u64>, reason: &'static str) {
+    let Some(last) = CLAIM_REJECT_RUN.get(vm as usize) else { return; };
+    if run == 0 {
+        if CLAIM_REJECT_NO_RUN[vm as usize].swap(true, Ordering::Relaxed) { return; }
+    } else if last.swap(run, Ordering::Relaxed) == run { return; }
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-claim-rejected vm={} generation={} frontend={} reason={}\n",
+        vm, run, frontend.unwrap_or(0), reason));
+}
+
 pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
-    let run = crate::hv::vm_run_generation(vm)?;
+    let Some(run) = crate::hv::vm_run_generation(vm) else {
+        log_claim_rejection(vm, 0, None, "missing-run");
+        return None;
+    };
     let live = matrix_slot_is_live(&lease);
     let mut routes = ROUTES.lock();
-    let index = routes
-        .routes
-        .iter()
-        .position(|route| route.lease == lease)?;
+    let Some(index) = routes.routes.iter().position(|route| route.lease == lease) else {
+        drop(routes);
+        log_claim_rejection(vm, run, None, "missing-route");
+        return None;
+    };
     let frontend = routes.routes[index].frontend;
     let owner = Owner { vm, run };
-    if !live
-        // Feedback delays presentation, not the launch-reserved lease. Apps
-        // claim once during startup and legitimately exit if it is rejected.
-        || (!routes.routes[index].selected && !frontend.is_some_and(|frontend| routes.navigation_holds.contains(&frontend)))
-        || routes.routes[index].vm != Some(vm)
-        || routes.routes.iter().any(|route| {
+    let rejection = if !live { Some("dead-slot") }
+        else if !routes.routes[index].selected && !frontend.is_some_and(|frontend| routes.navigation_holds.contains(&frontend)) { Some("not-selected") }
+        else if routes.routes[index].vm != Some(vm) { Some("wrong-vm") }
+        else if routes.routes.iter().any(|route| {
             frontend.is_some() && route.frontend == frontend && route.active() && route.lease != lease
-        })
-        || routes.routes[index]
-            .owner
-            .is_some_and(|current| current != owner)
-    {
+        }) { Some("other-active-route") }
+        else if routes.routes[index].owner.is_some_and(|current| current != owner) { Some("stale-owner") }
+        else { None };
+    if let Some(reason) = rejection {
+        drop(routes);
+        log_claim_rejection(vm, run, frontend, reason);
         return Some(false);
     }
     if routes.routes[index].owner.is_none() {
         if let Some((_, output)) = routes.remote_frontends.iter_mut().find(|entry| Some(entry.0) == frontend) {
-            if !output.begin() { return Some(false); }
+            if !output.begin() {
+                drop(routes);
+                log_claim_rejection(vm, run, frontend, "remote-begin");
+                return Some(false);
+            }
         }
         let route = &mut routes.routes[index];
         route.screen.reset();

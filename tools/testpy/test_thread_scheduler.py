@@ -297,6 +297,7 @@ mod time_driver {
 }
 '''
     diagnostic = (ROOT / 'src/r/blocking/diagnostics.rs').read_text().replace('embassy_time_driver::', 'crate::time_driver::')
+    diagnostic = diagnostic.replace('#[path = "abi_breadcrumb.rs"] mod abi_breadcrumb;', f'#[path="{ROOT / "src/r/blocking/abi_breadcrumb.rs"}"] mod abi_breadcrumb;')
     support = support.replace('__WLS__', f'#[path="{ROOT / "src/wls.rs"}"] mod wls;')
     support = support.replace('__DIAGNOSTICS__', 'pub mod diagnostics {\n' + diagnostic.replace('//!', '//') + '\n}')
     lifetime = (ROOT / 'src/r/blocking/lifetime.rs').read_text().replace('//!', '//')

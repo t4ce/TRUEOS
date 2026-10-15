@@ -20,6 +20,12 @@ def main():
     source += re.search(r'^impl RgbaColor \{.*?^}', shell, re.M | re.S).group()
     source += f'#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;use metafmtstr::MetaFmtStr;\n#[path="{ROOT}/src/shell3/update.rs"] mod update;\n#[path="{ROOT}/src/shell3/transition.rs"] mod transition;\n'
     source += '''
+mod allcaps {pub mod hv {pub const VM_ID_LIMIT:usize=64;}}
+static CLAIM_REJECTIONS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+mod log_os {pub fn blueprint_important_line(line:core::fmt::Arguments) {
+    assert!(crate::tui::registry_unlocked_for_test(),"rejection logging retained ROUTES");
+    crate::CLAIM_REJECTIONS.lock().unwrap().push(line.to_string());
+}}
 const SpecialSeperator:char='│';
 const Default_COLUMNS:usize=100;const Default_ROWS:usize=25;
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
@@ -61,10 +67,11 @@ impl MatrixSlotLease {pub fn name(&self)->&str {&self.name}}
 pub trait MatrixSlotAttachment:Send+Sync {fn on_matrix_slot_freed(&self,lease:&MatrixSlotLease);}
 static LIVE:std::sync::Mutex<Vec<MatrixSlotLease>>=std::sync::Mutex::new(Vec::new());
 static ATTACHMENTS:std::sync::Mutex<Vec<(MatrixSlotLease,Arc<dyn MatrixSlotAttachment>)>>=std::sync::Mutex::new(Vec::new());
+pub static FAIL_ATTACH:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
 pub fn target(name:&str,lifetime:u64)->MatrixTarget {let lease=MatrixSlotLease {name:name.into(),lifetime};LIVE.lock().unwrap().push(lease.clone());MatrixTarget {lease}}
 pub fn matrix_target_slot_lease(target:&MatrixTarget)->MatrixSlotLease {target.lease.clone()}
 pub fn matrix_slot_is_live(lease:&MatrixSlotLease)->bool {LIVE.lock().unwrap().contains(lease)}
-pub fn attach_matrix_slot_resource(lease:&MatrixSlotLease,a:Arc<dyn MatrixSlotAttachment>)->Result<(),()> {if !matrix_slot_is_live(lease) {return Err(());}ATTACHMENTS.lock().unwrap().push((lease.clone(),a));Ok(())}
+pub fn attach_matrix_slot_resource(lease:&MatrixSlotLease,a:Arc<dyn MatrixSlotAttachment>)->Result<(),()> {if FAIL_ATTACH.load(std::sync::atomic::Ordering::Relaxed) || !matrix_slot_is_live(lease) {return Err(());}ATTACHMENTS.lock().unwrap().push((lease.clone(),a));Ok(())}
 pub fn free_name(name:&str) {
     LIVE.lock().unwrap().retain(|lease|lease.name!=name);
     let callbacks={let mut a=ATTACHMENTS.lock().unwrap();let mut callbacks=Vec::new();let mut i=0;while i<a.len() {if a[i].0.name==name {callbacks.push(a.remove(i));}else {i+=1;}}callbacks};
@@ -125,6 +132,74 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     let drain=tui::take_remote_output(f.id,65536).unwrap();
     assert!(drain.active);assert!(drain.bytes.ends_with(b"first ssh frame"));
     assert!(tui::take_remote_output(f.id,65536).unwrap().bytes.is_empty());tui::detach(f.id);
+}
+#[test] fn native_helper_to_blueprint_claim_survives_feedback_and_final_selection() {
+    hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
+    let f=frontend(20,5);
+    let old=shell2::target("native-before-blueprint",1);
+    tui::attach_native(f,&old).unwrap();
+    assert!(tui::active(f.id,Some("native-before-blueprint")));
+    tui::hold_navigation(f.id,true);
+    let next=shell2::target("blueprint-after-native",1);
+    tui::attach(f,&next).unwrap();tui::park_native_for_launch(f);hv::bind(26,&next);
+    assert_eq!(tui::claim(&next,26),Some(true));
+    assert_eq!(tui::write(&next,26,b"first frame"),Some(11));
+    assert!(tui::snapshot(f.id,Some("blueprint-after-native")).is_none());
+    assert!(!tui::input(f.id,Some("blueprint-after-native"),b"not yet"));
+    tui::hold_navigation(f.id,false);
+    assert!(tui::select(f,Some("blueprint-after-native")));
+    // Selection must park only the old visible helper, not release the new
+    // Blueprint's already-claimed, buffered startup surface.
+    assert!(tui::active(f.id,Some("blueprint-after-native")));
+    assert_eq!(tui::write(&next,26,b"next"),Some(4));
+    assert!(tui::input(f.id,Some("blueprint-after-native"),b"key"));
+    assert!(!tui::active(f.id,Some("native-before-blueprint")));
+    assert_eq!(tui::claim(&next,26),Some(true));
+    tui::detach(f.id);
+}
+#[test] fn failed_launch_attachment_keeps_old_native_owner() {
+    let f=frontend(20,5);let old=shell2::target("keep-native-on-attach-failure",1);
+    tui::attach_native(f,&old).unwrap();
+    let expired=shell2::target("failed-blueprint-attachment",1);
+    shell2::FAIL_ATTACH.store(true,std::sync::atomic::Ordering::Relaxed);
+    assert!(tui::attach(f,&expired).is_err());
+    shell2::FAIL_ATTACH.store(false,std::sync::atomic::Ordering::Relaxed);
+    assert!(tui::active(f.id,Some("keep-native-on-attach-failure")));
+    assert!(!tui::supports(&expired));
+    assert!(tui::attach(f,&old).is_err(),"already-attached failure must not park its native owner");
+    assert!(tui::active(f.id,Some("keep-native-on-attach-failure")));
+    tui::detach(f.id);
+}
+#[test] fn launch_preparation_preserves_other_frontend_and_blueprint_exclusivity() {
+    hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
+    let f=frontend(20,5);let old=shell2::target("native-local-prepare",1);
+    tui::attach_native(f,&old).unwrap();
+    let other=frontend(20,5);let other_native=shell2::target("native-other-prepare",1);
+    tui::attach_native(other,&other_native).unwrap();
+    let next=shell2::target("blueprint-local-prepare",1);
+    tui::attach(f,&next).unwrap();tui::park_native_for_launch(f);hv::bind(27,&next);
+    assert!(!tui::active(f.id,Some("native-local-prepare")));
+    assert!(tui::active(other.id,Some("native-other-prepare")));
+    assert_eq!(tui::claim(&next,27),Some(true));
+    let competing=shell2::target("blueprint-competing-prepare",1);
+    tui::attach(f,&competing).unwrap();tui::park_native_for_launch(f);hv::bind(28,&competing);
+    assert_eq!(tui::claim(&competing,28),Some(false),"launch preparation cannot release another Blueprint owner");
+    assert_eq!(tui::claim(&next,27),Some(true));
+    tui::detach(f.id);tui::detach(other.id);
+}
+#[test] fn failed_claim_reason_is_static_unlocked_and_bounded_per_run() {
+    hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
+    let f=frontend(20,5);let old=shell2::target("private-old-helper-name",1);
+    tui::attach_native(f,&old).unwrap();
+    let next=shell2::target("private-target-name",1);tui::attach(f,&next).unwrap();hv::bind(58,&next);
+    assert_eq!(tui::claim(&next,58),Some(false));assert_eq!(tui::claim(&next,58),Some(false));
+    let lines=CLAIM_REJECTIONS.lock().unwrap().iter().filter(|line|line.contains("vm=58 ")).cloned().collect::<Vec<_>>();
+    assert_eq!(lines.len(),1);assert!(lines[0].contains("reason=other-active-route"));
+    assert!(!lines[0].contains("private"));
+    hv::RUN.store(2,std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(tui::claim(&next,58),Some(false));
+    assert_eq!(CLAIM_REJECTIONS.lock().unwrap().iter().filter(|line|line.contains("vm=58 ")).count(),2);
+    hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);tui::detach(f.id);
 }
 #[test] fn accepted_word_hold_keeps_new_and_resumed_native_helpers_parked() {
     let f=frontend(20,5);let t=shell2::target("latched-native",1);
@@ -533,12 +608,12 @@ fn submit_app_prompt(&mut self)->bool {false}
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-tui-') as directory:
         path = Path(directory)
-        (path/'spin.rs').write_text('pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T> {pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<\'_,T>{self.0.lock().unwrap()}}')
+        dependency_args = history_support.dependencies(path)
+        (path/'spin.rs').write_text('pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T> {pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<\'_,T>{self.0.lock().unwrap()}pub fn try_lock(&self)->Option<std::sync::MutexGuard<\'_,T>>{self.0.try_lock().ok()}}')
         for name, file in [('spin', path/'spin.rs'), ('trueos_terminal', ROOT/'crates/trueos-terminal/src/lib.rs'), ('microfont', ROOT/'vendor/microfont/src/lib.rs')]:
             subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
-        dependency_args = history_support.dependencies(path)
         tui_source=(ROOT/'src/shell3/tui.rs').read_text().replace('mod remote;', f'#[path="{ROOT}/src/shell3/tui/remote.rs"] mod remote;')
-        (path/'tui.rs').write_text(tui_source)
+        (path/'tui.rs').write_text(tui_source+'\npub(crate) fn registry_unlocked_for_test()->bool { ROUTES.try_lock().is_some() }\n')
         (path/'test.rs').write_text(source.replace(str(ROOT/'src/shell3/tui.rs'),str(path/'tui.rs')))
         args = ['rustc','--edition=2024','--test',str(path/'test.rs'),'-o',str(path/'tests')]
         args += dependency_args

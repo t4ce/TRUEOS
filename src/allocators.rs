@@ -8,6 +8,8 @@ use spin::Mutex;
 
 use crate::phys::{self, HeapArena};
 
+mod watermark;
+
 const HV_GUEST_HEAP_ALIGN: usize = 2 * 1024 * 1024;
 pub const HV_GUEST_HEAP_MIN_ARENA_SIZE: usize = 16 * 1024 * 1024;
 pub const HV_GUEST_HEAP_MAX_ARENA_SIZE: usize = 4 * 1024 * 1024 * 1024;
@@ -50,6 +52,8 @@ static HOST_HEAP_VIRT_END: AtomicUsize = AtomicUsize::new(0);
 static ALLOC_DOMAIN_MISMATCH_LOGGED: AtomicU32 = AtomicU32::new(0);
 static HV_GUEST_ALLOC_FREE_BUCKET_BY_VM: [AtomicU32; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { AtomicU32::new(HV_GUEST_ALLOC_BUCKET_INIT) }; crate::allcaps::hv::VM_ID_LIMIT];
+static HV_GUEST_ALLOC_SAMPLE_BY_VM: [watermark::SampleGate; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { watermark::SampleGate::new() }; crate::allcaps::hv::VM_ID_LIMIT];
 
 #[derive(Copy, Clone, Debug)]
 pub struct AllocTrace {
@@ -1204,6 +1208,7 @@ pub fn prepare_hv_guest_heap_for_vm(
 
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Alloc) };
         let domain = current_alloc_domain();
         let ptr = allocator_for_domain(domain).lock().alloc(domain, layout);
         if !ptr.is_null() {
@@ -1221,6 +1226,7 @@ unsafe impl GlobalAlloc for Allocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Dealloc) };
         if ptr.is_null() {
             return;
         }
@@ -1235,6 +1241,7 @@ unsafe impl GlobalAlloc for Allocator {
 static GLOBAL_ALLOCATOR: Allocator = Allocator;
 
 pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Alloc) };
     let domain = current_alloc_domain();
     let ptr = {
         let mut guard = allocator_for_domain(domain).lock();
@@ -1255,6 +1262,7 @@ pub unsafe fn alloc_raw(layout: Layout) -> *mut u8 {
 }
 
 pub unsafe fn alloc_raw_hv_guest(vm_id: u8, layout: Layout) -> *mut u8 {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Alloc) };
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT || !ensure_hv_guest_heap_ready(vm_id) {
         return core::ptr::null_mut();
     }
@@ -1277,6 +1285,11 @@ pub unsafe fn alloc_raw_hv_guest(vm_id: u8, layout: Layout) -> *mut u8 {
 }
 
 fn log_hv_guest_alloc_watermark(vm_id: u8, layout: Layout, ptr: *mut u8, path: &str) {
+    // heap_stats walks every free node while holding the heap lock. The old
+    // bucket check happened after that walk, charging every quiet allocation
+    // for a full fragmented-heap scan. Bound the walk itself first.
+    let Some(sample) = HV_GUEST_ALLOC_SAMPLE_BY_VM.get(vm_id as usize) else { return; };
+    if !sample.admit(crate::r::input_timing::now_ms(), layout.size()) { return; }
     with_host_alloc_domain_strong(|| {
         let Some(bucket_slot) = HV_GUEST_ALLOC_FREE_BUCKET_BY_VM.get(vm_id as usize) else {
             return;
@@ -1352,6 +1365,7 @@ fn log_hv_guest_alloc_failure(vm_id: u8, layout: Layout, path: &str) {
 }
 
 pub unsafe fn dealloc_raw(ptr: *mut u8) {
+    let _abi = unsafe { crate::r::threads::abi_scope(crate::r::blocking::diagnostics::AbiOperation::Dealloc) };
     if ptr.is_null() {
         return;
     }

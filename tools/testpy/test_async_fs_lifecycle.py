@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def main() -> None:
     production = "\n".join(item("src/r/io/async_fs_cabi.rs", name) for name in (
         "pending_in", "pending_for_owner", "release_owner", "take_request",
-        "finish_request", "discard",
+        "finish_request", "discard", "begin_request",
     ))
     harness = r'''
 #![allow(dead_code)]
@@ -37,6 +37,7 @@ fn reset() -> std::sync::MutexGuard<'static, ()> {
     ASYNC_FS_REQUESTS.lock().clear();
     *ASYNC_FS_ACTIVE_REQUEST.lock() = None;
     ASYNC_FS_OPERATIONS.lock().clear();
+    for s in PROGRESS.snapshots(){PROGRESS.release(s.owner,s.id);}
     guard
 }
 fn insert(id: u32, owner: u32, state: OperationState) {
@@ -44,6 +45,7 @@ fn insert(id: u32, owner: u32, state: OperationState) {
 }
 fn enqueue(id: u32, owner: u32) {
     insert(id, owner, OperationState::Pending);
+    PROGRESS.admit(owner,id,7,10);
     ASYNC_FS_REQUESTS.lock().push_back(Request { id, owner });
 }
 #[test]
@@ -52,11 +54,14 @@ fn discarded_running_write_blocks_release_until_filesystem_completion() {
     enqueue(1, 10);
     let write = take_request().unwrap();
     assert_eq!(pending_for_owner(10), 1);
+    assert!(begin_request(&write));
     assert_eq!(discard(10, 1), 0);
+    assert_eq!(PROGRESS.snapshots().next().unwrap().phase,2);
     assert!(ASYNC_FS_OPERATIONS.lock().is_empty());
     assert_eq!(pending_for_owner(10), 1, "discard must not hide a live disk transaction");
     assert_eq!(release_owner(10), Err(1));
     finish_request(&write, Some(OperationState::Unit));
+    assert_eq!(PROGRESS.snapshots().count(),0);
     assert_eq!(pending_for_owner(10), 0);
     assert_eq!(release_owner(10), Ok(0));
 }
@@ -111,7 +116,7 @@ fn completion_publishes_result_before_owner_becomes_quiescent() {
     with tempfile.TemporaryDirectory(prefix="trueos-async-fs-lifecycle-") as directory:
         path = Path(directory)
         source = path / "lifecycle.rs"
-        source.write_text(harness + production)
+        source.write_text(harness + '\n#[path="@ROOT@/src/r/io/async_fs_progress.rs"]mod progress;\nstatic PROGRESS:progress::Tracker=progress::Tracker::new();\nfn progress_now_ms()->u64{100}\nfn trace_slow_progress(_:progress::Snapshot){}\nfn lock_operations()->std::sync::MutexGuard<\'static,BTreeMap<u32,Operation>>{ASYNC_FS_OPERATIONS.lock()}\n'.replace("@ROOT@",str(ROOT)) + production)
         binary = path / "lifecycle"
         subprocess.run(
             ["rustc", "--edition=2024", "--test", "--target", "x86_64-unknown-linux-gnu",

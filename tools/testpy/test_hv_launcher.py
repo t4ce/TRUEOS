@@ -9,6 +9,7 @@ source = (root / 'src/hv/launcher.rs').read_text()
 source = source[source.index('use alloc::'):]
 a = source.index('pub(crate) fn enqueue(')
 b = source.index('#[trueos_executor::task', a)
+admission_source = source[:a] + source[a:b]
 source = source[:a] + source[source.index('async fn launch_task', b):]
 harness = r'''
 extern crate alloc;
@@ -113,3 +114,63 @@ with tempfile.TemporaryDirectory(prefix='hv-launcher-') as temp:
     (path / 'test.rs').write_text(harness + source + tests)
     subprocess.run(['rustc', '--edition=2024', '--test', str(path/'test.rs'), '-o', str(path/'test')], check=True)
     subprocess.run([str(path/'test')], check=True)
+
+
+# Separately exercise the actual synchronous enqueue function. The executor
+# token models its drop-bomb rule: admission failure returns no token; a token
+# must reach spawn exactly once and cannot be moved before fallible attachment.
+admission_fixture = r'''
+#![allow(dead_code,unused_imports)]
+extern crate alloc;
+use std::sync::{Mutex,atomic::{AtomicBool,Ordering}};
+static LOCK:Mutex<()>=Mutex::new(());
+static EVENTS:Mutex<Vec<&'static str>>=Mutex::new(Vec::new());
+static ATTACH_FAIL:AtomicBool=AtomicBool::new(false);
+static POOL_FAIL:AtomicBool=AtomicBool::new(false);
+static NATIVE_ACTIVE:AtomicBool=AtomicBool::new(true);
+fn event(s:&'static str){EVENTS.lock().unwrap().push(s);}
+mod spin {pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T>{pub const fn new(v:T)->Self{Self(std::sync::Mutex::new(v))}pub fn lock(&self)->std::sync::MutexGuard<'_,T>{self.0.lock().unwrap()}}}
+mod trueos_time {pub struct Duration;pub struct Timer;}
+mod shell3 {
+ #[derive(Clone)]pub struct MatrixTarget;
+ pub mod tui {
+  #[derive(Clone,Copy)]pub struct Frontend;
+  pub fn attach(_:Frontend,_:&super::MatrixTarget)->Result<(),String>{crate::event("attach");if crate::ATTACH_FAIL.load(crate::Ordering::Relaxed){Err("fixture attachment rejected".into())}else{Ok(())}}
+  pub fn park_native_for_launch(_:Frontend){crate::event("park");crate::NATIVE_ACTIVE.store(false,crate::Ordering::Relaxed);}
+ }
+}
+mod workers {
+ pub struct Spawner;
+ pub fn pick_background_spawner()->Option<Spawner>{Some(Spawner)}
+ pub struct Token(pub bool);
+ impl Drop for Token {fn drop(&mut self){assert!(self.0,"unspawned token dropped");}}
+ impl Spawner {pub fn spawn(&self,mut token:Token){crate::event("spawn");assert!(!crate::NATIVE_ACTIVE.load(crate::Ordering::Relaxed));token.0=true;}}
+}
+mod hv {
+ #[derive(Default)]pub struct BlueprintInstanceRequest;
+ pub enum BlueprintConsoleSurface{Text}
+ pub mod blueprint{pub fn prebind_required_readiness(_:&[u8])->Result<u32,String>{Ok(0)}}
+ pub mod matrix {
+  #[derive(Debug)]pub struct AppReceipt;
+  pub fn reserve(_:&str,_:&[u8])->Result<(crate::shell3::MatrixTarget,AppReceipt),String>{crate::event("reserve");Ok((crate::shell3::MatrixTarget,AppReceipt))}
+  pub fn discard(_:&crate::shell3::MatrixTarget){crate::event("discard");}
+ }
+ pub mod launcher {
+  use crate::{spin,trueos_time};
+  @ADMISSION@
+  fn launch_task(_:LaunchRequest,_:crate::shell3::MatrixTarget,_:u32,_:Option<Box<dyn LaunchObserver>>)->Result<crate::workers::Token,()> {
+   crate::event("token");if crate::POOL_FAIL.load(crate::Ordering::Relaxed){Err(())}else{Ok(crate::workers::Token(false))}
+  }
+ }
+}
+fn reset(){EVENTS.lock().unwrap().clear();ATTACH_FAIL.store(false,Ordering::Relaxed);POOL_FAIL.store(false,Ordering::Relaxed);NATIVE_ACTIVE.store(true,Ordering::Relaxed);}
+fn launch()->Result<hv::matrix::AppReceipt,String>{let mut r=hv::launcher::LaunchRequest::new("fixture.bp".into(),vec![1]);r.frontend=Some(shell3::tui::Frontend);hv::launcher::enqueue(r,None)}
+#[test]fn failed_attachment_never_admits_token_or_parks_native(){let _g=LOCK.lock().unwrap();reset();ATTACH_FAIL.store(true,Ordering::Relaxed);assert!(launch().is_err());assert!(NATIVE_ACTIVE.load(Ordering::Relaxed));assert_eq!(*EVENTS.lock().unwrap(),["reserve","attach","discard"]);}
+#[test]fn pool_exhaustion_keeps_previous_native_owner(){let _g=LOCK.lock().unwrap();reset();POOL_FAIL.store(true,Ordering::Relaxed);assert!(launch().is_err());assert!(NATIVE_ACTIVE.load(Ordering::Relaxed));assert_eq!(*EVENTS.lock().unwrap(),["reserve","attach","token","discard"]);}
+#[test]fn admitted_token_commits_handoff_before_guest_can_spawn(){let _g=LOCK.lock().unwrap();reset();assert!(launch().is_ok());assert_eq!(*EVENTS.lock().unwrap(),["reserve","attach","token","park","spawn"]);}
+'''
+with tempfile.TemporaryDirectory(prefix='hv-launch-admission-') as directory:
+    folder=Path(directory)
+    (folder/'tests.rs').write_text(admission_fixture.replace('@ADMISSION@',admission_source))
+    subprocess.run(['rustc','--edition=2024','--test',str(folder/'tests.rs'),'-o',str(folder/'tests')],check=True)
+    subprocess.run([str(folder/'tests')],check=True)
