@@ -19,7 +19,7 @@ def function(path, name):
     source = Path(path).read_text()
     matches = list(re.finditer(
         rf'^(?P<indent> *)(?:pub(?:\([^)]*\))?\s+)?'
-        rf'(?:unsafe\s+extern\s+"C"\s+)?fn {re.escape(name)}\(',
+        rf'(?:unsafe\s+(?:extern\s+"C"\s+)?)?fn {re.escape(name)}\(',
         source, re.MULTILINE))
     if len(matches) != 1:
         raise ValueError(f"{path}: expected one function {name}, got {len(matches)}")

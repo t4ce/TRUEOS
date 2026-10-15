@@ -377,6 +377,20 @@ pub mod env {
     }
 
     pub fn var(key: &str) -> Option<String> {
+        if key.starts_with("TRUEOS_") {
+            let local = {
+                let stack = context_stack().lock();
+                stack.last().map(|ctx| ctx.vars.get(key).cloned())
+            };
+            return match local {
+                Some(value) => value,
+                None => process_vm_id().and_then(|vm_id| crate::hv::blueprint_process_env_var(vm_id, key)),
+            };
+        }
+        if let Some(vm_id) = process_vm_id() {
+            return crate::std_abi_shim::environment_bytes(Some(vm_id), key.as_bytes())
+                .and_then(|value| String::from_utf8(value).ok());
+        }
         let local = {
             let stack = context_stack().lock();
             stack.last().map(|ctx| ctx.vars.get(key).cloned())
@@ -388,6 +402,15 @@ pub mod env {
             }
         }
         .or_else(|| crate::locale::env_var(key).map(String::from))
+    }
+
+    pub(crate) fn initial_snapshot() -> Vec<(String,String)> {
+        let stack = context_stack().lock();
+        if let Some(context) = stack.last() {
+            return context.vars.iter().map(|(key,value)|(key.clone(),value.clone())).collect();
+        }
+        drop(stack);
+        crate::hv::blueprint::build_host_env().into_iter().collect()
     }
 
     pub(crate) fn current_app_fs_root() -> Option<String> {
@@ -408,21 +431,7 @@ pub mod env {
     }
 
     pub(crate) unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
-        let Some(key) = (unsafe { cstr_to_str(name) }) else {
-            return ptr::null_mut();
-        };
-
-        let Some(value) = var(key) else {
-            return ptr::null_mut();
-        };
-
-        let mut bytes = Vec::with_capacity(value.len().saturating_add(1));
-        bytes.extend_from_slice(value.as_bytes());
-        bytes.push(0);
-
-        let ptr = bytes.as_mut_ptr();
-        core::mem::forget(bytes);
-        ptr.cast::<c_char>()
+        unsafe { crate::std_abi_shim::getenv(name) }
     }
 
     pub(crate) fn console_target() -> Option<MatrixTarget> {

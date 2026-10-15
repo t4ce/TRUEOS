@@ -7,6 +7,8 @@
 
 use core::ffi::{c_char, c_int, c_long, c_void};
 
+pub(crate) mod ctype;
+
 #[repr(C)]
 pub struct TimeSpec {
     tv_sec: i64,
@@ -97,19 +99,14 @@ pub unsafe extern "C" fn clock_gettime(clock: c_int, out: *mut TimeSpec) -> c_in
     if out.is_null() {
         return -1;
     }
-    let ticks = embassy_time_driver::now();
-    let hz = u64::from(embassy_time_driver::TICK_HZ.max(1));
-    let elapsed_secs = ticks / hz;
-    let elapsed_nanos = (ticks % hz).saturating_mul(1_000_000_000) / hz;
-    let seconds = match clock {
-        0 => crate::std_abi_shim::trueos_cabi_boot_timestamp_secs().saturating_add(elapsed_secs),
-        1 => elapsed_secs,
-        _ => return -1,
-    };
+    if !matches!(clock, 0 | 1) {
+        return -1;
+    }
+    let nanos = crate::std_abi_shim::pthread_clock_nanos(clock);
     unsafe {
         out.write(TimeSpec {
-            tv_sec: seconds as i64,
-            tv_nsec: elapsed_nanos as i64,
+            tv_sec: (nanos / 1_000_000_000) as i64,
+            tv_nsec: (nanos % 1_000_000_000) as i64,
         });
     }
     0

@@ -80,18 +80,37 @@ pub enum HttpServerEvent {
 
 pub struct HttpServer {
     listener_handle: Option<api::NetHandle>,
+    listen_pending: bool,
     sessions: BTreeMap<u32, HttpSession>,
+    max_sessions: usize,
     max_request_bytes: usize,
     listen_port: u16,
 }
 
 impl HttpServer {
     pub fn new(listen_port: u16, max_request_bytes: usize) -> Self {
+        Self::with_session_limit(listen_port, max_request_bytes, 16)
+    }
+
+    /// The owner submits the initial OpenTcpListen before delivering events.
+    /// Keep at most this many accepted sessions plus one listening socket.
+    pub fn with_session_limit(listen_port: u16, max_request_bytes: usize, max_sessions: usize) -> Self {
         Self {
             listener_handle: None,
+            listen_pending: true,
             sessions: BTreeMap::new(),
+            max_sessions: max_sessions.max(1),
             max_request_bytes,
             listen_port,
+        }
+    }
+
+    fn rearm_listener(&mut self) -> HttpServerEvent {
+        if self.listener_handle.is_none() && !self.listen_pending && self.sessions.len() < self.max_sessions {
+            self.listen_pending = true;
+            HttpServerEvent::Submit(api::Command::OpenTcpListen { port: self.listen_port })
+        } else {
+            HttpServerEvent::None
         }
     }
 
@@ -99,15 +118,37 @@ impl HttpServer {
         match ev {
             api::Event::Opened { handle, kind } => {
                 if kind == api::SocketKind::Tcp {
+                    if self.listener_handle.is_some_and(|listener| listener != handle) {
+                        return HttpServerEvent::Submit(api::Command::Close { handle });
+                    }
+                    self.listen_pending = false;
                     self.listener_handle = Some(handle);
                 }
                 HttpServerEvent::None
             }
             api::Event::TcpEstablished { handle, .. } => {
+                if self.listener_handle != Some(handle) && !self.sessions.contains_key(&handle.0) {
+                    return HttpServerEvent::Submit(api::Command::Close { handle });
+                }
+                if self.listener_handle == Some(handle) {
+                    // A smoltcp listen socket becomes the connected socket;
+                    // it cannot accept another peer. Replenish it now, while
+                    // the accepted session is still alive, rather than at EOF.
+                    self.listener_handle = None;
+                }
+                if !self.sessions.contains_key(&handle.0) && self.sessions.len() >= self.max_sessions {
+                    return HttpServerEvent::Submit(api::Command::Close { handle });
+                }
                 self.sessions.entry(handle.0).or_default();
-                HttpServerEvent::None
+                self.rearm_listener()
             }
             api::Event::TcpData { handle, data } => {
+                // The network adapter may deliver data before Established in
+                // the same poll. Preserve that ordering without bypassing the
+                // accepted-session admission bound.
+                if !self.sessions.contains_key(&handle.0) && (self.listener_handle != Some(handle) || self.sessions.len() >= self.max_sessions) {
+                    return HttpServerEvent::Submit(api::Command::Close { handle });
+                }
                 let session = self.sessions.entry(handle.0).or_default();
                 session.req.extend_from_slice(data.as_slice());
 
@@ -164,16 +205,18 @@ impl HttpServer {
                 self.sessions.remove(&handle.0);
                 if self.listener_handle == Some(handle) {
                     self.listener_handle = None;
-                    return HttpServerEvent::Submit(api::Command::OpenTcpListen {
-                        port: self.listen_port,
-                    });
                 }
-                HttpServerEvent::None
+                // Closing an older accepted session must never replace or
+                // duplicate a newer listener that is open or still pending.
+                self.rearm_listener()
             }
             api::Event::Error { msg } => {
                 if msg == "bad handle" {
                     HttpServerEvent::None
                 } else {
+                    if matches!(msg, "no sockets available" | "listen failed" | "link down") {
+                        self.listen_pending = false;
+                    }
                     HttpServerEvent::Error(msg)
                 }
             }
@@ -213,7 +256,7 @@ impl HttpServer {
         pending_bytes: usize,
         keep_alive: bool,
     ) {
-        let session = self.sessions.entry(handle.0).or_default();
+        let Some(session) = self.sessions.get_mut(&handle.0) else { return; };
         session.pending_bytes = pending_bytes;
         session.sent_bytes = 0;
         session.pending_close = !keep_alive;
@@ -391,3 +434,7 @@ pub fn queue_send_bytes(out: &mut Vec<api::Command>, handle: api::NetHandle, byt
         });
     }
 }
+
+#[cfg(test)]
+#[path = "vhttp_srv/tests.rs"]
+mod tests;

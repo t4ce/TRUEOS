@@ -306,7 +306,9 @@ fn http_stream_drain_events(
             return true;
         };
         if matches!(ev, api::Event::Closed { handle } if handle == active) {
-            let _ = server.on_event(ev);
+            if let vhttp_srv::HttpServerEvent::Submit(cmd) = server.on_event(ev) {
+                let _ = vnet.submit(cmd);
+            }
             crate::log!("http-trueosfs: stream cancelled handle={}\n", active.0);
             return false;
         }

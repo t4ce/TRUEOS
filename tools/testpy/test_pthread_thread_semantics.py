@@ -39,6 +39,13 @@ def main():
         "pthread_cond_notify_key", "pthread_cond_wait_key",
         "pthread_mutex_tests", "pthread_thread_semantics_tests",
     )]
+    clock_source = str(ROOT / "src/blueprint_shims.rs")
+    definitions += [item(clock_source, "TimeSpec")]
+    c_clock = re.search(r'^pub unsafe extern "C" fn clock_gettime\b.*?^}', Path(clock_source).read_text(), re.MULTILINE | re.DOTALL)
+    if c_clock is None:
+        raise ValueError("missing production C clock_gettime")
+    definitions += [c_clock.group(0)]
+    definitions += ["mod std_abi_shim { pub(crate) use super::pthread_clock_nanos; }"]
     definitions += ["pub(crate) struct ProcessErrno;", errno_impl.group(0)]
     support = f'''#![allow(dead_code)]
 extern crate alloc;
@@ -147,6 +154,46 @@ mod r {{ pub mod threads {{
 }} }}
 #[cfg(test)] mod platform_clock_tests {{
     use super::*;
+    #[test] fn c_clock_abstime_and_condvar_share_epoch_for_both_clocks() {{
+        // A late-started Hull has a local Embassy epoch distinct from host
+        // Chronos. Run both signs of that origin difference. Neither absolute
+        // C deadline may become immediately expired or billions of ms long.
+        for offset in [15_470_000_000, 600_123_000_000] {{
+            r::platform::CLOCK_OFFSET_NS.with(|value| value.set(offset));
+            for clock in [TRUEOS_CLOCK_MONOTONIC, TRUEOS_CLOCK_REALTIME] {{
+                let mut ctime = TimeSpec {{ tv_sec: -1, tv_nsec: -1 }};
+                assert_eq!(unsafe {{ clock_gettime(clock, &mut ctime) }}, 0);
+                let cnow = ctime.tv_sec as u128 * 1_000_000_000 + ctime.tv_nsec as u128;
+                let comparator = pthread_clock_nanos(clock);
+                assert!(comparator >= cnow && comparator - cnow < 20_000_000);
+                let deadline = comparator + 8_000_000;
+                let abstime = PthreadTimespec {{ tv_sec: (deadline / 1_000_000_000) as i64, tv_nsec: (deadline % 1_000_000_000) as i64 }};
+                let remaining = pthread_deadline_millis(abstime, cnow).unwrap();
+                assert!((8..=28).contains(&remaining));
+                // Form a direct C pthread caller timeout from clock_gettime.
+                // Exercise the production unlock/wait/relock. Installed std
+                // Condvar uses its own platform-backed Timespec::now helper.
+                let cdeadline = cnow + 8_000_000;
+                let ctime = PthreadTimespec {{ tv_sec: (cdeadline / 1_000_000_000) as i64, tv_nsec: (cdeadline % 1_000_000_000) as i64 }};
+                let mutex = PthreadMutexStorage {{ owner: AtomicUsize::new(0), depth: AtomicUsize::new(0), kind: AtomicI32::new(TRUEOS_PTHREAD_MUTEX_NORMAL) }};
+                let cond = PthreadCondStorage {{ generation: AtomicU64::new(0), clock: AtomicI32::new(clock) }};
+                let mutex_key = &mutex as *const _ as usize;
+                assert_eq!(pthread_mutex_lock_key(mutex_key), 0);
+                let started = std::time::Instant::now();
+                assert_eq!(pthread_cond_wait_key(&cond as *const _ as usize, mutex_key, Some(ctime)), TRUEOS_ETIMEDOUT);
+                assert!(started.elapsed() < std::time::Duration::from_millis(500));
+                assert_eq!(mutex.owner.load(Ordering::Acquire), pthread_current_id());
+                assert_eq!(pthread_mutex_unlock_key(mutex_key), 0);
+            }}
+        }}
+        r::platform::CLOCK_OFFSET_NS.with(|offset| offset.set(0));
+    }}
+    #[test] fn c_clock_rejects_invalid_inputs_without_writing() {{
+        let mut value = TimeSpec {{ tv_sec: 41, tv_nsec: 42 }};
+        assert_eq!(unsafe {{ clock_gettime(2, &mut value) }}, -1);
+        assert_eq!((value.tv_sec, value.tv_nsec), (41, 42));
+        assert_eq!(unsafe {{ clock_gettime(1, core::ptr::null_mut()) }}, -1);
+    }}
     #[test] fn guest_deadline_uses_the_platform_clock_despite_local_driver_offset() {{
         // The Hull's Rust std forms this absolute deadline using the platform
         // clock. The local driver view need not have the same clock origin.

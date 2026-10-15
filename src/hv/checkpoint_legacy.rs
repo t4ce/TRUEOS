@@ -304,14 +304,16 @@ pub(super) fn prepare_replicatable_resume(vm_id: u8) {
             let mut identity = identity_slot.lock();
             if let Some(identity) = identity.as_mut() {
                 identity.generation = identity.generation.saturating_add(1);
+                let generation_text = alloc::format!("{}", identity.generation);
                 if let Some(context_slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)
                     && let Some(context) = context_slot.lock().as_mut()
                 {
                     context.vars.insert(
                         AllocString::from("TRUEOS_APP_GENERATION"),
-                        alloc::format!("{}", identity.generation),
+                        generation_text.clone(),
                     );
                 }
+                crate::std_abi_shim::refresh_reserved_environment(vm_id,"TRUEOS_APP_GENERATION",&generation_text);
             }
         }
         resume_blueprint_process_context(vm_id);

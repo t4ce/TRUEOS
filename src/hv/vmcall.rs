@@ -4499,17 +4499,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let key_bytes = unsafe { &(&(*p).payload)[..n] };
-            let Ok(key) = core::str::from_utf8(key_bytes) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let Some(value) = crate::hv::blueprint_process_env_var(vm_id, key)
-                .or_else(|| crate::r::io::env::var(key))
+            let Some(value) = crate::std_abi_shim::environment_bytes(Some(vm_id), key_bytes)
             else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let bytes = value.as_bytes();
+            let bytes = value.as_slice();
             let out_n = core::cmp::min(bytes.len(), PAYLOAD_CAP);
             unsafe {
                 (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[..out_n]);

@@ -189,7 +189,7 @@ pub fn poll() {
         }
     }
 
-    for w in to_wake {
+    for w in to_wake.drain(..) {
         w.wake();
     }
 }
@@ -248,6 +248,22 @@ impl Driver for TimeDriver {
             at,
             trueos_executor::raw::timer_slack_ticks_for_waker(waker),
         );
+
+        // A task can poll the same pending timer repeatedly, or have several
+        // timers sharing its waker. Retain its earliest wake rather than using
+        // bounded queue capacity for duplicate registrations. An earlier wake
+        // causes the task to poll and register any remaining timers again.
+        if let Some(mut idx) = queue.iter().position(|entry| entry.waker.will_wake(waker)) {
+            if queue[idx].at <= at {
+                return;
+            }
+            queue[idx].at = at;
+            while idx != 0 && queue[idx - 1].at > at {
+                queue.swap(idx - 1, idx);
+                idx -= 1;
+            }
+            return;
+        }
 
         let mut idx = 0;
         while idx < queue.len() {

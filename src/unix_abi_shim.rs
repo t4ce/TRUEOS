@@ -13,6 +13,13 @@ use crate::std_abi_shim::{
     open_file_poll_events,
 };
 
+/// No namespace-correct POSIX mount-capacity query is exposed by the VFS yet.
+/// Failure must leave the output untouched: callers assume_init only on success.
+pub unsafe extern "C" fn statvfs(_path: *const core::ffi::c_char, _out: *mut c_void) -> c_int {
+    TRUEOS_ERRNO.store(crate::std_abi_shim::TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
+}
+
 const TRUEOS_AF_UNIX: c_int = 1;
 const TRUEOS_SOCK_STREAM: c_int = 1;
 const TRUEOS_SOCK_NONBLOCK: c_int = 0o4000;

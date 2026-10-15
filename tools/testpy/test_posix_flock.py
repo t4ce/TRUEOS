@@ -68,13 +68,14 @@ mod hv {
 }
 mod r {
     pub mod threads { pub fn current_vm_id()->Option<u8> { crate::REALM.with(|r| r.get()) } }
-    pub mod io { pub mod fs_cabi {
+    pub mod io { pub mod kfs { #[derive(Clone)] pub struct FsStat; } pub mod fs_cabi {
         pub fn trueos_cabi_sleep_ms(ms:u64) {
             crate::SLEEPS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
             std::thread::sleep(std::time::Duration::from_millis(ms));
         }
     } }
     pub mod fs {
+        pub mod volatile_files { pub fn selected_disk(_: &str)->Option<super::trueosfs::Disk> { super::trueosfs::primary_root_handle() } }
         pub mod advisory_lock { @REGISTRY@ }
         pub mod trueosfs {
             pub struct Disk;

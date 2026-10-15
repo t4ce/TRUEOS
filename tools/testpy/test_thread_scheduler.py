@@ -192,7 +192,62 @@ mod wait {
     hv_source = (ROOT / "src/hv/mod.rs").read_text()
     control = hv_source[hv_source.index("static VM_CONTROL_WAITS:"):hv_source.index("\nstruct TrueosVmId")]
     support = support.replace("__CONTROL_BOUNDARY__", control)
-    support += registers + wait_items + platform_items + "\n}\n"
+    platform_tests = r"""
+#[cfg(test)] mod hull_platform_wait_contract_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Wake;
+    struct Count(AtomicUsize);
+    impl Wake for Count { fn wake(self: Arc<Self>) { self.0.fetch_add(1, Ordering::Relaxed); } }
+    fn counter() -> (Arc<Count>, Waker) {
+        let count = Arc::new(Count(AtomicUsize::new(0)));
+        (count.clone(), Waker::from(count))
+    }
+    #[test] fn native_notify_reaches_hull_wait_only_in_the_same_vm_scope() {
+        let (a, aw) = counter(); let (b, bw) = counter();
+        let key = 0x9911;
+        let mut first = Box::pin(platform_wait_after_for_vm_async(200, key, platform_wait_observe_for_vm(200, key), u64::MAX));
+        let mut other = Box::pin(platform_wait_after_for_vm_async(201, key, platform_wait_observe_for_vm(201, key), u64::MAX));
+        assert!(first.as_mut().poll(&mut Context::from_waker(&aw)).is_pending());
+        assert!(other.as_mut().poll(&mut Context::from_waker(&bw)).is_pending());
+        assert!(platform_wake_one_for_vm(200, key));
+        assert_eq!(a.0.load(Ordering::Relaxed), 1);
+        assert_eq!(b.0.load(Ordering::Relaxed), 0);
+        assert_eq!(first.as_mut().poll(&mut Context::from_waker(&aw)), Poll::Ready(true));
+        assert!(other.as_mut().poll(&mut Context::from_waker(&bw)).is_pending());
+        drop((first, other)); retire_platform_vm_waits(200); retire_platform_vm_waits(201);
+    }
+    #[test] fn completed_hull_wait_drop_cannot_unregister_a_new_wait_with_the_same_waker() {
+        let (_, waker) = counter(); let key = 0x9922;
+        let mut old = Box::pin(platform_wait_after_for_vm_async(202, key, platform_wait_observe_for_vm(202, key), u64::MAX));
+        assert!(old.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        assert!(platform_wake_one_for_vm(202, key));
+        let mut replacement = Box::pin(platform_wait_after_for_vm_async(202, key, platform_wait_observe_for_vm(202, key), u64::MAX));
+        assert!(replacement.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        assert_eq!(old.as_mut().poll(&mut Context::from_waker(&waker)), Poll::Ready(true));
+        drop(old);
+        assert!(platform_wake_one_for_vm(202, key), "replacement registration was lost");
+        assert_eq!(replacement.as_mut().poll(&mut Context::from_waker(&waker)), Poll::Ready(true));
+        drop(replacement); retire_platform_vm_waits(202);
+    }
+    #[test] fn expired_hull_wait_preserves_generation_and_later_same_key_notifications() {
+        let (_, waker) = counter(); let key = 0x9933;
+        let observed = platform_wait_observe_for_vm(203, key);
+        let mut old = Box::pin(platform_wait_after_for_vm_async(203, key, observed, 1));
+        assert!(old.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        assert_eq!(old.as_mut().poll(&mut Context::from_waker(&waker)), Poll::Ready(false));
+        drop(old);
+        assert_eq!(platform_wait_observe_for_vm(203, key), observed);
+        let mut next = Box::pin(platform_wait_after_for_vm_async(203, key, observed, u64::MAX));
+        assert!(next.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        assert!(platform_wake_one_for_vm(203, key));
+        assert_eq!(next.as_mut().poll(&mut Context::from_waker(&waker)), Poll::Ready(true));
+        drop(next); retire_platform_vm_waits(203);
+    }
+}
+"""
+    support += registers + wait_items + platform_items + platform_tests + "\n}\n"
     timing = (ROOT / 'src/r/input_timing.rs').read_text().replace('embassy_time_driver::', 'crate::time_driver::').replace('//!', '//')
     probe = (ROOT / 'src/r/progress_probe.rs').read_text().replace('//!', '//')
     support += 'mod r { pub mod progress_probe {\n' + probe + '\n}\n'

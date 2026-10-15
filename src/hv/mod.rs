@@ -3211,6 +3211,13 @@ pub fn stage_blueprint_launch(
         }
         process_context.vars.insert(AllocString::from("TRUEOS_MCP_STDIO"), AllocString::from("1"));
     }
+    // Materialize the C environment while host-owned launch map nodes are
+    // readable, before any guest loader or CABI can request getenv/environ.
+    if crate::std_abi_shim::initialize_blueprint_environment(vm_id,
+        process_context.vars.iter().map(|(key,value)|(key.as_bytes(),value.as_bytes()))).is_err() {
+        clear_blueprint_child_template(vm_id);
+        return Err(StartError::GuestMemoryUnavailable);
+    }
     *launch_script_slot.lock() = state.launch_script.clone();
     *slot.lock() = Some(guest_state);
     let _ = exit_reason_mailbox.lock().take();
@@ -3310,29 +3317,35 @@ pub(crate) fn blueprint_console_target(vm_id: u8) -> Option<crate::shell3::Matri
 }
 
 pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocString> {
-    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
-    context.as_ref()?.vars.get(key).cloned()
+    if key.starts_with("TRUEOS_") {
+        // Authorization consumes the kernel-owned launch map, never mutable
+        // getenv/environ buffers. Hull code cannot walk host map nodes.
+        if current_hull_guest_context_vm_id().is_some() { return None; }
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
+        return context.as_ref()?.vars.get(key).cloned();
+    }
+    crate::std_abi_shim::environment_bytes(Some(vm_id), key.as_bytes())
+        .and_then(|value| AllocString::from_utf8(value).ok())
 }
 
 pub(crate) fn blueprint_process_env_text(vm_id: u8) -> Option<AllocString> {
-    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
-    let context = context.as_ref()?;
+    let pairs = crate::std_abi_shim::environment_pairs(vm_id)?;
     let mut out = AllocString::new();
-    for (key, value) in context.vars.iter() {
+    for (key, value) in pairs.iter() {
+        let (Ok(key),Ok(value))=(core::str::from_utf8(key),core::str::from_utf8(value)) else {continue;};
         let _ = writeln!(out, "{}={}", key, value);
     }
     Some(out)
 }
 
 fn blueprint_context_path(vm_id: u8, requested: &str) -> Option<AllocString> {
-    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
-    let context = context.as_ref()?;
-    let root = context.vars.get("TRUEOS_APP_FS_ROOT").cloned();
-    let home = context
-        .vars
-        .get("HOME")
-        .cloned()
-        .unwrap_or_else(|| AllocString::from("/"));
+    let root = {
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
+        context.as_ref()?.vars.get("TRUEOS_APP_FS_ROOT").cloned()
+    };
+    // Release the launch-context lock before lazy environment initialization
+    // takes its initial snapshot from that same context.
+    let home = blueprint_process_env_var(vm_id,"HOME").unwrap_or_else(|| AllocString::from("/"));
 
     let logical = if requested.trim().is_empty() {
         home.as_str()

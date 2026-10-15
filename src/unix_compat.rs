@@ -45,7 +45,9 @@ pub(crate) fn unsupported_unix_import_reason(name: &str) -> Option<&'static str>
 pub(crate) fn is_unix_import(name: &str) -> bool {
     matches!(
         name,
-        "__errno"
+        "iswspace" | "iswalpha" | "iswdigit" | "iswalnum"
+            | "__ctype_b_loc"
+            | "__errno"
             | "__errno_location"
             | "__memcpy_chk"
             | "__memmove_chk"
@@ -87,14 +89,19 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "freeaddrinfo"
             | "fstat"
             | "fstat64"
+            | "fstatat"
+            | "fstatat64"
             | "fsync"
             | "ftruncate"
             | "ftruncate64"
+            | "futimens"
             | "gai_strerror"
             | "getaddrinfo"
             | "getcwd"
             | "geteuid"
             | "getenv"
+            | "setenv"
+            | "unsetenv"
             | "getpeername"
             | "getpid"
             | "getsockname"
@@ -112,6 +119,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "malloc"
             | "memchr"
             | "mkdir"
+            | "mkdirat"
             | "mmap"
             | "mmap64"
             | "mprotect"
@@ -188,6 +196,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "socket"
             | "socketpair"
             | "stat"
+            | "statvfs"
             | "stat64"
             | "strchr"
             | "strcmp"
@@ -217,6 +226,12 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         return None;
     }
     match name {
+        "iswspace" => Some(crate::blueprint_shims::ctype::iswspace as *const () as usize),
+        "iswalpha" => Some(crate::blueprint_shims::ctype::iswalpha as *const () as usize),
+        "iswdigit" => Some(crate::blueprint_shims::ctype::iswdigit as *const () as usize),
+        "iswalnum" => Some(crate::blueprint_shims::ctype::iswalnum as *const () as usize),
+        "__ctype_b_loc" => Some(crate::blueprint_shims::ctype::__ctype_b_loc as *const () as usize),
+        "statvfs" => Some(crate::unix_abi_shim::statvfs as *const () as usize),
         "__errno" => Some(crate::std_abi_shim::__errno as *const () as usize),
         "__errno_location" => Some(crate::std_abi_shim::__errno_location as *const () as usize),
         "__memcpy_chk" => Some(crate::std_abi_shim::__memcpy_chk as *const () as usize),
@@ -244,7 +259,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "dlsym" => Some(crate::std_abi_shim::dlsym as *const () as usize),
         "dup" => Some(crate::std_abi_shim::dup as *const () as usize),
         "dup2" => Some(crate::std_abi_shim::dup2 as *const () as usize),
-        "environ" => Some(core::ptr::addr_of!(crate::std_abi_shim::TRUEOS_ENVIRON) as usize),
+        "environ" => crate::std_abi_shim::environ_import_address(),
         "errno_location" => Some(crate::std_abi_shim::errno_location as *const () as usize),
         "execvp" => Some(crate::std_abi_shim::execvp as *const () as usize),
         "fchmod" => Some(crate::std_abi_shim::fchmod as *const () as usize),
@@ -259,14 +274,19 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "freeaddrinfo" => Some(crate::std_abi_shim::freeaddrinfo as *const () as usize),
         "fstat" => Some(crate::std_abi_shim::fstat as *const () as usize),
         "fstat64" => Some(crate::std_abi_shim::fstat64 as *const () as usize),
+        "fstatat" => Some(crate::std_abi_shim::fstatat as *const () as usize),
+        "fstatat64" => Some(crate::std_abi_shim::fstatat64 as *const () as usize),
         "fsync" => Some(crate::std_abi_shim::fsync as *const () as usize),
         "ftruncate" => Some(crate::std_abi_shim::ftruncate as *const () as usize),
         "ftruncate64" => Some(crate::std_abi_shim::ftruncate64 as *const () as usize),
+        "futimens" => Some(crate::std_abi_shim::futimens as *const () as usize),
         "gai_strerror" => Some(crate::std_abi_shim::gai_strerror as *const () as usize),
         "getaddrinfo" => Some(crate::std_abi_shim::getaddrinfo as *const () as usize),
         "getcwd" => Some(crate::std_abi_shim::getcwd as *const () as usize),
         "geteuid" => Some(crate::std_abi_shim::geteuid as *const () as usize),
-        "getenv" => Some(crate::r::io::env::getenv as *const () as usize),
+        "getenv" => Some(crate::std_abi_shim::getenv as *const () as usize),
+        "setenv" => Some(crate::std_abi_shim::setenv as *const () as usize),
+        "unsetenv" => Some(crate::std_abi_shim::unsetenv as *const () as usize),
         "getpeername" => Some(crate::std_abi_shim::getpeername as *const () as usize),
         "getpid" => Some(crate::std_abi_shim::getpid as *const () as usize),
         "getsockname" => Some(crate::std_abi_shim::getsockname as *const () as usize),
@@ -284,6 +304,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "malloc" => Some(crate::std_abi_shim::malloc as *const () as usize),
         "memchr" => Some(crate::std_abi_shim::memchr as *const () as usize),
         "mkdir" => Some(crate::std_abi_shim::mkdir as *const () as usize),
+        "mkdirat" => Some(crate::std_abi_shim::mkdirat as *const () as usize),
         "mmap" => Some(crate::std_abi_shim::mmap as *const () as usize),
         "mmap64" => Some(crate::std_abi_shim::mmap64 as *const () as usize),
         "mprotect" => Some(crate::std_abi_shim::mprotect as *const () as usize),

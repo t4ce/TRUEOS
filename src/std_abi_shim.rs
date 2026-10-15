@@ -45,11 +45,9 @@ impl ProcessErrno {
         self.current().as_ptr()
     }
 }
-// `environ` is a data import, not a function. Keep an addressable `char **`
-// cell whose value points at a permanently empty, null-terminated vector.
-static mut TRUEOS_EMPTY_ENVIRON: [*mut c_char; 1] = [ptr::null_mut()];
-pub(crate) static mut TRUEOS_ENVIRON: *mut *mut c_char =
-    core::ptr::addr_of_mut!(TRUEOS_EMPTY_ENVIRON) as *mut *mut c_char;
+// Each process owns its `environ` pointer cell and all C-string payloads.
+#[path = "process_environment.rs"]
+mod process_environment;
 static C_ALLOCATIONS: Mutex<AllocationRegistry<AllocationRecord, C_ALLOCATION_CAPACITY>> =
     Mutex::new(AllocationRegistry::new());
 static PTHREAD_KEYS: ProcessPthreadKeys = ProcessPthreadKeys;
@@ -97,13 +95,16 @@ pub(crate) const TRUEOS_EINVAL: c_int = 22;
 const TRUEOS_ENAMETOOLONG: c_int = 36;
 const TRUEOS_ERANGE: c_int = 34;
 const TRUEOS_EOVERFLOW: c_int = 75;
-const TRUEOS_ENOSYS: c_int = 38;
+pub(crate) const TRUEOS_ENOSYS: c_int = 38;
 const TRUEOS_EIO: c_int = 5;
+const TRUEOS_EFAULT: c_int = 14;
 pub(crate) const TRUEOS_EBADF: c_int = 9;
 const TRUEOS_EPERM: c_int = 1;
 const TRUEOS_ESRCH: c_int = 3;
 const TRUEOS_ECHILD: c_int = 10;
 const TRUEOS_ENOTDIR: c_int = 20;
+const TRUEOS_EISDIR: c_int = 21;
+const TRUEOS_EEXIST: c_int = 17;
 pub(crate) const TRUEOS_ENOTTY: c_int = 25;
 const TRUEOS_EAI_SYSTEM: c_int = 11;
 const TRUEOS_EAI_FAMILY: c_int = 5;
@@ -130,6 +131,8 @@ const TRUEOS_O_CREAT: c_int = 0o100;
 const TRUEOS_O_TRUNC: c_int = 0o1000;
 const TRUEOS_O_NONBLOCK: c_int = 0o4000;
 const TRUEOS_AT_FDCWD: c_int = -100;
+const TRUEOS_AT_SYMLINK_NOFOLLOW: c_int = 0x100;
+const TRUEOS_O_DIRECTORY: c_int = 0o200000;
 const TRUEOS_O_APPEND: c_int = 0o2000;
 const TRUEOS_F_GETFD: c_int = 1;
 const TRUEOS_F_SETFD: c_int = 2;
@@ -384,6 +387,13 @@ pub(crate) struct BytePipe {
 
 #[derive(Clone)]
 pub(crate) enum OpenFile {
+    // Paths remain subject to the ordinary per-Blueprint filesystem resolver.
+    // This is a directory anchor, not a POSIX DIR stream or a file byte world.
+    Directory {
+        path: String,
+        metadata: crate::r::io::kfs::FsStat,
+        flags: c_int,
+    },
     Regular {
         path: Option<String>,
         lock: Arc<FileLockHandle>,
@@ -513,6 +523,7 @@ enum SocketFd {
 /// VM's pages can be mapped into its otherwise-private Hull RW image.
 #[repr(C, align(4096))]
 struct ProcessSharedState {
+    environment: Mutex<process_environment::Environment>,
     errno: [AtomicI32; crate::percpu::CPU_SLOT_LIMIT],
     pthread_keys: Mutex<FixedKeyMap<usize, PthreadKeyState, PTHREAD_KEY_CAPACITY>>,
     pthread_tls_values:
@@ -532,6 +543,7 @@ struct ProcessSharedState {
 impl ProcessSharedState {
     const fn new() -> Self {
         Self {
+            environment: Mutex::new(process_environment::Environment::new()),
             errno: [const { AtomicI32::new(0) }; crate::percpu::CPU_SLOT_LIMIT],
             pthread_keys: Mutex::new(FixedKeyMap::new()),
             pthread_tls_values: Mutex::new(FixedKeyMap::new()),
@@ -701,6 +713,111 @@ pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
     }
     state.socket_fds.lock().clear();
     state.next_file_fd.store(0, Ordering::Release);
+    *state.environment.lock() = process_environment::Environment::new();
+}
+
+fn environment_vm_id() -> Option<u8> {
+    crate::r::threads::current_vm_id()
+        .or_else(crate::hv::current_guest_execution_context_vm_id)
+}
+
+pub(crate) fn initialize_blueprint_environment<'a>(vm_id: u8, initial: impl Iterator<Item = (&'a [u8], &'a [u8])>) -> Result<(), c_int> {
+    let state = blueprint_process_state(vm_id).ok_or(TRUEOS_EINVAL)?;
+    let mut env = state.environment.lock();
+    crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+        let mut next = process_environment::Environment::new();
+        next.initialize(initial)?;
+        *env = next;
+        Ok(())
+    }).ok_or(TRUEOS_ENOMEM)?
+}
+
+fn with_environment<R>(vm_id: Option<u8>, f: impl FnOnce(&mut process_environment::Environment) -> R) -> Result<R, c_int> {
+    let state = match vm_id {
+        Some(vm_id) => blueprint_process_state(vm_id).ok_or(TRUEOS_EINVAL)?,
+        None => &HOST_PROCESS_STATE,
+    };
+    let mut env = state.environment.lock();
+    let initial = if env.initialized() { None } else {
+        // Guest CABI runs inside the guest address space. It must never walk
+        // the host-owned launch context, even before allocating its own copy.
+        if vm_id.is_some() { return Err(TRUEOS_EINVAL); }
+        Some(crate::r::io::env::initial_snapshot())
+    };
+    let operate = || {
+        if let Some(initial) = initial {
+            env.initialize(initial.iter().map(|(key,value)|(key.as_bytes(),value.as_bytes())))?;
+        }
+        Ok(f(&mut env))
+    };
+    // The shared-state page only owns pointer cells. Every pointee must also
+    // live in this VM's EPT-readable arena, including host-carrier mutations.
+    match vm_id {
+        Some(vm_id) => crate::allocators::with_hv_guest_alloc_domain(vm_id, operate).ok_or(TRUEOS_ENOMEM)?,
+        None => crate::allocators::with_host_alloc_domain(operate),
+    }
+}
+
+pub(crate) fn environment_bytes(vm_id: Option<u8>, key: &[u8]) -> Option<Vec<u8>> {
+    with_environment(vm_id, |env| env.get(key).map(<[u8]>::to_vec)).ok().flatten()
+}
+
+pub(crate) fn environment_pairs(vm_id: u8) -> Option<Vec<(Vec<u8>,Vec<u8>)>> {
+    with_environment(Some(vm_id), |env| env.pairs().map(|(key,value)|(key.to_vec(),value.to_vec())).collect()).ok()
+}
+
+pub(crate) fn environ_import_address() -> Option<usize> {
+    // The image loader can run before entering the app thread; its explicit
+    // current VM is valid for binding data imports, not for runtime C calls.
+    let vm_id = environment_vm_id().or_else(crate::hv::current_vm_id);
+    with_environment(vm_id, |env| core::ptr::addr_of_mut!(env.environ) as usize).ok()
+}
+
+pub(crate) fn refresh_reserved_environment(vm_id: u8, key: &str, value: &str) {
+    let Some(state) = blueprint_process_state(vm_id) else {return;};
+    let mut env = state.environment.lock();
+    if !env.initialized() {return;}
+    let result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || env.refresh_reserved(key.as_bytes(),value.as_bytes()));
+    if !matches!(result, Some(Ok(()))) {
+        crate::log_important!(target: "hv"; "std-abi environment reserved refresh failed vm={}\n",vm_id);
+    }
+}
+
+unsafe fn environment_cstr(pointer: *const c_char) -> Result<Vec<u8>,c_int> {
+    if pointer.is_null() { return Err(TRUEOS_EINVAL); }
+    let mut bytes = Vec::new();
+    for index in 0..=process_environment::MAX_STRING {
+        let byte = abi_read_bytes(unsafe {pointer.cast::<u8>().add(index)},1).ok_or(TRUEOS_EFAULT)?[0];
+        if byte == 0 { return Ok(bytes); }
+        bytes.try_reserve(1).map_err(|_|TRUEOS_ENOMEM)?;
+        bytes.push(byte);
+    }
+    Err(TRUEOS_ENOMEM)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
+    let Ok(key) = (unsafe {environment_cstr(name)}) else {return ptr::null_mut();};
+    with_environment(environment_vm_id(), |env| env.get_ptr(&key)).unwrap_or(ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setenv(name: *const c_char, value: *const c_char, overwrite: c_int) -> c_int {
+    let result = (|| {
+        let key = unsafe {environment_cstr(name)}?;
+        let value = unsafe {environment_cstr(value)}?;
+        with_environment(environment_vm_id(), |env| env.set(&key,&value,overwrite != 0))?
+    })();
+    match result {Ok(())=>0,Err(errno)=>{TRUEOS_ERRNO.store(errno,Ordering::Relaxed);-1}}
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn unsetenv(name: *const c_char) -> c_int {
+    let result = (|| {
+        let key = unsafe {environment_cstr(name)}?;
+        with_environment(environment_vm_id(), |env| env.unset(&key))?
+    })();
+    match result {Ok(())=>0,Err(errno)=>{TRUEOS_ERRNO.store(errno,Ordering::Relaxed);-1}}
 }
 
 fn initialize_usize_sequence(counter: &AtomicUsize, first: usize) {
@@ -818,6 +935,7 @@ impl SocketFd {
 impl OpenFile {
     fn len(&self) -> usize {
         match self {
+            Self::Directory { .. } => 0,
             Self::Regular { world, .. } => world.lock().bytes.len(),
             Self::PipeRead { pipe, .. } | Self::PipeWrite { pipe, .. } => pipe.lock().bytes.len(),
             Self::UnixSocket { rx, .. } => rx.lock().bytes.len(),
@@ -827,14 +945,14 @@ impl OpenFile {
     fn offset(&self) -> usize {
         match self {
             Self::Regular { offset, .. } => *offset,
-            Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => 0,
+            Self::Directory { .. } | Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => 0,
         }
     }
 
     fn set_offset(&mut self, next: usize) {
         match self {
             Self::Regular { offset, .. } => *offset = next,
-            Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => {
+            Self::Directory { .. } | Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => {
                 let _ = next;
             }
         }
@@ -854,13 +972,14 @@ impl OpenFile {
                 world.revision = world.revision.wrapping_add(1);
                 true
             }
-            Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => false,
+            Self::Directory { .. } | Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => false,
         }
     }
 
     pub(crate) fn flags(&self) -> c_int {
         match self {
-            Self::Regular { flags, .. }
+            Self::Directory { flags, .. }
+            | Self::Regular { flags, .. }
             | Self::PipeRead { flags, .. }
             | Self::PipeWrite { flags, .. }
             | Self::UnixSocket { flags, .. } => *flags,
@@ -869,7 +988,8 @@ impl OpenFile {
 
     pub(crate) fn set_flags(&mut self, next: c_int) {
         match self {
-            Self::Regular { flags, .. }
+            Self::Directory { flags, .. }
+            | Self::Regular { flags, .. }
             | Self::PipeRead { flags, .. }
             | Self::PipeWrite { flags, .. }
             | Self::UnixSocket { flags, .. } => *flags = next,
@@ -880,7 +1000,7 @@ impl OpenFile {
         match self {
             Self::Regular { world, offset, .. } => world.lock().bytes.len().saturating_sub(*offset),
             Self::PipeRead { pipe, .. } => pipe.lock().bytes.len(),
-            Self::PipeWrite { .. } => 0,
+            Self::Directory { .. } | Self::PipeWrite { .. } => 0,
             Self::UnixSocket { rx, .. } => rx.lock().bytes.len(),
         }
     }
@@ -894,7 +1014,7 @@ fn remove_open_file_for_close(fd: c_int) -> Option<(OpenFile, bool, bool)> {
     let mut table = OPEN_FILES.lock();
     let file = table.remove(fd)?;
     let (close_read, close_write) = match &file {
-        OpenFile::Regular { .. } => (false, false),
+        OpenFile::Directory { .. } | OpenFile::Regular { .. } => (false, false),
         OpenFile::PipeRead { pipe, .. } => {
             let aliased = table.values().any(|candidate| {
                 matches!(candidate, OpenFile::PipeRead { pipe: other, .. } if Arc::ptr_eq(pipe, other))
@@ -1479,19 +1599,12 @@ struct PthreadTimespec {
     tv_nsec: i64,
 }
 
-fn pthread_clock_nanos(clock: c_int) -> u128 {
-    if clock == TRUEOS_CLOCK_MONOTONIC {
-        // TRUEOS Rust std forms its absolute condvar deadline with this same
-        // platform clock. In the Hull it crosses VMCALL to the host; reading
-        // the local Embassy driver instead can compare different clock origins
-        // and turn an 8ms wait into a many-second wait. Native carriers use the
-        // same entry point, which resolves directly to the host clock there.
-        return u128::from(crate::r::platform::trueos_platform_monotonic_nanos());
-    }
-    // Match the C clock_gettime ABI's subsecond realtime timestamp.
-    let ticks = embassy_time_driver::now();
-    let hz = u128::from(embassy_time_driver::TICK_HZ.max(1));
-    let elapsed = u128::from(ticks).saturating_mul(1_000_000_000) / hz;
+pub(crate) fn pthread_clock_nanos(clock: c_int) -> u128 {
+    // One clock domain for C clock_gettime and absolute pthread deadlines.
+    // Hull BSS contains a private Embassy/TSC origin; the platform boundary
+    // crosses VMCALL there and reads the host Chronos clock on native carriers.
+    // Sample monotonic once, preserving subsecond precision for realtime too.
+    let elapsed = u128::from(crate::r::platform::trueos_platform_monotonic_nanos());
     if clock == TRUEOS_CLOCK_REALTIME {
         u128::from(trueos_cabi_boot_timestamp_secs()) * 1_000_000_000 + elapsed
     } else {
@@ -2854,13 +2967,10 @@ pub unsafe extern "C" fn sys_getenv(
             usize::MAX,
         );
     }
-    let Ok(key) = core::str::from_utf8(key_bytes) else {
+    let Some(value) = environment_bytes(environment_vm_id(), key_bytes) else {
         return usize::MAX;
     };
-    let Some(value) = crate::r::io::env::var(key) else {
-        return usize::MAX;
-    };
-    copy_bytes_to_words(recv_buf, words, value.as_bytes())
+    copy_bytes_to_words(recv_buf, words, &value)
 }
 
 #[unsafe(no_mangle)]
@@ -3566,6 +3676,10 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
     };
     let mut notify_local = false;
     match file {
+        OpenFile::Directory { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EISDIR, Ordering::Relaxed);
+            return -1;
+        }
         OpenFile::Regular {
             path,
             world,
@@ -3683,6 +3797,10 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
         return -1;
     };
     let copied = match file {
+        OpenFile::Directory { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EISDIR, Ordering::Relaxed);
+            return -1;
+        }
         OpenFile::Regular {
             path,
             world,
@@ -3757,6 +3875,7 @@ pub(crate) fn open_file_poll_events(file: &OpenFile, events: i16) -> i16 {
     const POLLHUP: i16 = 0x0010;
 
     match file {
+        OpenFile::Directory { .. } => POLLERR,
         // Ordinary regular-file I/O cannot block. Reaching EOF therefore
         // remains readable readiness instead of making poll sleep forever.
         OpenFile::Regular {
@@ -5139,6 +5258,106 @@ pub unsafe extern "C" fn lstat64(path: *const c_char, buf: *mut c_void) -> c_int
     unsafe { stat(path, buf) }
 }
 
+// Snapshot an anchor before entering a filesystem bridge: both resolution and
+// metadata requests may park. Never retain the descriptor-table lock there.
+unsafe fn posix_at_path(dirfd: c_int, path: *const c_char) -> Result<String, c_int> {
+    if path.is_null() {
+        return Err(TRUEOS_EFAULT);
+    }
+    let path = abi_cstr_to_string(path, 4096).ok_or(TRUEOS_EFAULT)?;
+    if path.is_empty() {
+        return Err(TRUEOS_ENOENT);
+    }
+    if path.starts_with('/') || dirfd == TRUEOS_AT_FDCWD {
+        return Ok(path);
+    }
+    let anchor = {
+        let table = OPEN_FILES.lock();
+        match table.get(dirfd) {
+            Some(OpenFile::Directory { path, .. }) => Some(path.clone()),
+            Some(_) => return Err(TRUEOS_ENOTDIR),
+            None => None,
+        }
+    };
+    match anchor {
+        Some(anchor) => Ok(alloc::format!("/{}/{}", anchor.trim_matches('/'), path)),
+        None if (0..=2).contains(&dirfd) || SOCKET_FDS.lock().get(dirfd).is_some() => {
+            Err(TRUEOS_ENOTDIR)
+        }
+        None => Err(TRUEOS_EBADF),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fstatat(
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut c_void,
+    flags: c_int,
+) -> c_int {
+    // TRUEOSFS has no symbolic-link node kind; stat and lstat coincide. Do not
+    // quietly accept AT_EMPTY_PATH or flags with a different contract.
+    if flags & !TRUEOS_AT_SYMLINK_NOFOLLOW != 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    if buf.is_null() {
+        TRUEOS_ERRNO.store(TRUEOS_EFAULT, Ordering::Relaxed);
+        return -1;
+    }
+    let path = match unsafe { posix_at_path(dirfd, path) } {
+        Ok(path) => path,
+        Err(errno) => { TRUEOS_ERRNO.store(errno, Ordering::Relaxed); return -1; }
+    };
+    let mut bytes = path.into_bytes();
+    bytes.push(0);
+    unsafe { stat(bytes.as_ptr().cast(), buf) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fstatat64(
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut c_void,
+    flags: c_int,
+) -> c_int {
+    unsafe { fstatat(dirfd, path, buf, flags) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mkdirat(dirfd: c_int, path: *const c_char, _mode: c_int) -> c_int {
+    let path = match unsafe { posix_at_path(dirfd, path) } {
+        Ok(path) => path,
+        Err(errno) => { TRUEOS_ERRNO.store(errno, Ordering::Relaxed); return -1; }
+    };
+    // The current trusted broker offers recursive creation only. Check the
+    // target and immediate parent so this adapter cannot manufacture missing
+    // ancestors or report success for an existing directory. These checks are
+    // not an atomic exclusive create against concurrent namespace writers.
+    let checked = (|| {
+        match regular_file_metadata(&path) {
+            Ok(_) => return Err(TRUEOS_EEXIST),
+            Err(TRUEOS_ENOENT) => {}
+            Err(errno) => return Err(errno),
+        }
+        let resolved = crate::r::io::env::resolve_fs_path(&path, true).ok_or(TRUEOS_EINVAL)?;
+        let normalized = crate::r::path::FsPath::parse(&resolved, true)
+            .map_err(|_| TRUEOS_EINVAL)?.to_relative_string();
+        let parent = normalized.rsplit_once('/').map_or("/", |(parent, _)| parent);
+        let parent = regular_file_metadata(parent)?;
+        if parent.kind != crate::r::io::kfs::FsNodeKind::Directory {
+            return Err(TRUEOS_ENOTDIR);
+        }
+        let rc = crate::r::io::cabi::trueos_cabi_fs_create_dir_all(path.as_ptr(), path.len());
+        if rc != 0 { return Err(fs_rc_to_errno(rc)); }
+        Ok(())
+    })();
+    match checked {
+        Ok(()) => { TRUEOS_ERRNO.store(0, Ordering::Relaxed); 0 }
+        Err(errno) => { TRUEOS_ERRNO.store(errno, Ordering::Relaxed); -1 }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -> c_int {
     if path.is_null() {
@@ -5158,6 +5377,36 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
     let trace_file_world = path == POSIX_FILE_WORLD_PROBE_PATH;
 
     let fd = next_file_fd();
+    if !matches!(access, TRUEOS_O_RDONLY | TRUEOS_O_WRONLY | TRUEOS_O_RDWR) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    let metadata = regular_file_metadata(path.as_str());
+    if let Ok(metadata) = metadata {
+        if metadata.kind == crate::r::io::kfs::FsNodeKind::Directory {
+            if writable || should_truncate || should_create {
+                TRUEOS_ERRNO.store(TRUEOS_EISDIR, Ordering::Relaxed);
+                return -1;
+            }
+            let Some(path) = crate::r::io::env::resolve_fs_path(&path, true) else {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            };
+            if OPEN_FILES.lock().insert(fd, OpenFile::Directory { path, metadata, flags }).is_err() {
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                return -1;
+            }
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            return fd;
+        }
+        if flags & TRUEOS_O_DIRECTORY != 0 {
+            TRUEOS_ERRNO.store(TRUEOS_ENOTDIR, Ordering::Relaxed);
+            return -1;
+        }
+    } else if flags & TRUEOS_O_DIRECTORY != 0 {
+        TRUEOS_ERRNO.store(metadata.unwrap_err(), Ordering::Relaxed);
+        return -1;
+    }
     let file = match access {
         TRUEOS_O_RDONLY | TRUEOS_O_WRONLY | TRUEOS_O_RDWR => {
             let (world, reused) = match open_regular_file_world(
@@ -5238,11 +5487,13 @@ pub unsafe extern "C" fn openat(
     flags: c_int,
     _mode: c_int,
 ) -> c_int {
-    if dirfd != TRUEOS_AT_FDCWD {
-        TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
-        return -1;
-    }
-    unsafe { open(path, flags, 0) }
+    let path = match unsafe { posix_at_path(dirfd, path) } {
+        Ok(path) => path,
+        Err(errno) => { TRUEOS_ERRNO.store(errno, Ordering::Relaxed); return -1; }
+    };
+    let mut bytes = path.into_bytes();
+    bytes.push(0);
+    unsafe { open(bytes.as_ptr().cast(), flags, _mode) }
 }
 
 fn duplicate_native_tcp_fd(fd: c_int, minimum: c_int, cloexec: bool) -> Result<c_int, c_int> {
@@ -5314,6 +5565,7 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
         return -1;
     };
     match file {
+        OpenFile::Directory { .. } => {}
         OpenFile::Regular {
             path,
             world,
@@ -5397,6 +5649,7 @@ pub async fn close_async(fd: c_int) -> c_int {
         return -1;
     };
     match file {
+        OpenFile::Directory { .. } => {}
         OpenFile::Regular {
             path,
             world,
@@ -5842,6 +6095,10 @@ pub unsafe extern "C" fn pread64(fd: c_int, buf: *mut c_void, count: usize, offs
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             n as isize
         }
+        OpenFile::Directory { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EISDIR, Ordering::Relaxed);
+            -1
+        }
         OpenFile::PipeRead { .. } | OpenFile::PipeWrite { .. } | OpenFile::UnixSocket { .. } => {
             TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
             -1
@@ -5909,6 +6166,10 @@ pub unsafe extern "C" fn pwrite64(
             }
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             input.len() as isize
+        }
+        OpenFile::Directory { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EISDIR, Ordering::Relaxed);
+            -1
         }
         OpenFile::PipeRead { .. } | OpenFile::PipeWrite { .. } | OpenFile::UnixSocket { .. } => {
             TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
@@ -6067,8 +6328,10 @@ pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
+    let directory = matches!(file, OpenFile::Directory { .. });
     let len = file.len() as u64;
     let (root_id, file_id, disk_revision) = match file {
+        OpenFile::Directory { metadata, .. } => (metadata.root_id as u64, metadata.file_id, metadata.revision),
         OpenFile::Regular { world, .. } => {
             let world = world.lock();
             (world.root_id as u64, world.file_id, world.disk_revision)
@@ -6079,8 +6342,8 @@ pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut c_void) -> c_int {
     let out = TrueosStat {
         st_dev: root_id,
         st_ino: file_id,
-        st_nlink: 1,
-        st_mode: TRUEOS_FILE_MODE,
+        st_nlink: if directory { 2 } else { 1 },
+        st_mode: if directory { TRUEOS_DIR_MODE } else { TRUEOS_FILE_MODE },
         st_uid: 0,
         st_gid: 0,
         __pad0: 0,
@@ -6140,22 +6403,7 @@ pub unsafe extern "C" fn dirfd(_dir: *mut TrueosDir) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mkdir(path: *const c_char, _mode: c_int) -> c_int {
-    if path.is_null() {
-        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
-        return -1;
-    }
-    let Some(path) = abi_cstr_to_string(path, 4096) else {
-        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
-        return -1;
-    };
-    let rc =
-        unsafe { crate::r::io::cabi::trueos_cabi_fs_create_dir_all(path.as_ptr(), path.len()) };
-    if rc != 0 {
-        TRUEOS_ERRNO.store(fs_rc_to_errno(rc), Ordering::Relaxed);
-        return -1;
-    }
-    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    0
+    unsafe { mkdirat(TRUEOS_AT_FDCWD, path, _mode) }
 }
 
 #[unsafe(no_mangle)]
@@ -6435,9 +6683,20 @@ pub unsafe extern "C" fn fchown(fd: c_int, _owner: u32, _group: u32) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn futimens(fd: c_int, _times: *const c_void) -> c_int {
+    let valid = (0..=2).contains(&fd)
+        || OPEN_FILES.lock().get(fd).is_some()
+        || SOCKET_FDS.lock().get(fd).is_some();
+    TRUEOS_ERRNO.store(if valid { TRUEOS_ENOSYS } else { TRUEOS_EBADF }, Ordering::Relaxed);
+    -1
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn utimes(_path: *const c_char, _times: *const c_void) -> c_int {
-    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    0
+    // TRUEOSFS revisions are logical addresses; they are not writable POSIX
+    // wall-clock access/modification timestamps.
+    TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    -1
 }
 
 #[unsafe(no_mangle)]

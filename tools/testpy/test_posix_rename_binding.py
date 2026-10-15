@@ -37,7 +37,7 @@ struct Mutex<T>(std::sync::Mutex<T>);
 impl<T> Mutex<T> {const fn new(v:T)->Self {Self(std::sync::Mutex::new(v))} fn lock(&self)->std::sync::MutexGuard<'_,T> {self.0.try_lock().expect("mutex held across cooperative wait")}}
 const OPEN_FILE_CAPACITY:usize=8;
 const TRUEOS_EINVAL:i32=22;const TRUEOS_ENOENT:i32=2;const TRUEOS_EIO:i32=5;
-const TRUEOS_EBADF:i32=9;const TRUEOS_ENOTDIR:i32=20;const TRUEOS_EAGAIN:i32=11;
+const TRUEOS_EISDIR:i32=21;const TRUEOS_EBADF:i32=9;const TRUEOS_ENOTDIR:i32=20;const TRUEOS_EAGAIN:i32=11;
 const TRUEOS_AT_FDCWD:i32=-100;const TRUEOS_O_APPEND:i32=1024;
 static TRUEOS_ERRNO:AtomicI32=AtomicI32::new(0);
 static REGULAR_FILE_WORLDS:Mutex<RegularFileWorldRegistry>=Mutex::new(RegularFileWorldRegistry::new());
@@ -45,6 +45,7 @@ static OPEN_FILES:Mutex<FixedKeyMap<i32,OpenFile,8>>=Mutex::new(FixedKeyMap::new
 static SOCKET_FDS:Mutex<FixedKeyMap<i32,(),8>>=Mutex::new(FixedKeyMap::new());
 static FD_FLAGS:Mutex<FixedKeyMap<i32,i32,8>>=Mutex::new(FixedKeyMap::new());
 #[derive(Clone)] enum OpenFile {
+ Directory {path:String,metadata:r::io::kfs::FsStat,flags:i32},
  Regular {path:Option<String>,world:Arc<Mutex<RegularFileWorld>>,offset:usize,writable:bool,flags:i32},
  PipeRead {pipe:Arc<Mutex<BytePipe>>},PipeWrite {pipe:Arc<Mutex<BytePipe>>},
  UnixSocket {rx:Arc<Mutex<BytePipe>>,tx:Arc<Mutex<BytePipe>>},
