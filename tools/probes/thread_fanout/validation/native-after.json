@@ -1,0 +1,28 @@
+{
+  "iso_sha256": "80006c03250f93e1be5d17e07f50f18b665a0c356afd53520a0040f7fba787a7",
+  "source_iso": "/home/t4ce/Repos/TRUEOS/bld/thread-admission-fixed/trueos.iso",
+  "package_sha256": "8c9c149e519607a1d7a7da96fc0dd00d67888d1e6b268a5af95fb58329e42a2f",
+  "runtime_sha256": "411ace4902d495ff65f388266519285d04b238e542923f3e3a266847c377cafd",
+  "full_elf_sha256": "23e0260f4148bd1852559b1efb5b3aa0ab696c70cbfcdea635c8b145af1d865c",
+  "all_pass": true,
+  "background": 8,
+  "scoped": 24,
+  "rounds": 3,
+  "elapsed_ms": [
+    135,
+    79,
+    62
+  ],
+  "total_elapsed_ms": 280,
+  "wls_shared_slot_budget": 2560,
+  "wls_abi_slots": 4096,
+  "global_scheduler_limit": 256,
+  "pthread_registry_limit": 64,
+  "checks": [
+    "32 simultaneous unique/stable WLS identities",
+    "Rust thread-local isolation",
+    "scoped completion and background joins",
+    "lease recycling across96 thread creations"
+  ],
+  "scope": "controlled native fanout, not a repeated full Codex model turn"
+}

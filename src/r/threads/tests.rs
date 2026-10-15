@@ -100,6 +100,58 @@ fn wls_lease_survives_suspension_and_completion_until_task_retirement() {
 
 #[test]
 #[cfg(thread_scheduler_harness)]
+fn scoped_fanout_keeps_sixty_four_live_identities_through_scheduler_retirement() {
+    let _serial = SERIAL.lock().unwrap();
+    const VM: u8 = 54;
+    let baseline = THREAD_COUNT.load(Ordering::Acquire);
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let mut tasks = Vec::new();
+    for sequence in 1..=64usize {
+        let id = crate::wls::BLUEPRINT_THREAD_CARRIER_TAG as usize | sequence;
+        let identity = crate::wls::try_lease_blueprint_thread_identity(VM, id).unwrap();
+        let expected_slot = identity.slot();
+        let observations = observed.clone();
+        let mut task = make_thread(sequence, move || {
+            assert_eq!(current_id(), Some(id));
+            assert_eq!(current_vm_id(), Some(VM));
+            for _ in 0..2 {
+                assert_eq!(crate::wls::trueos_cabi_wls_current_slot(), expected_slot);
+                assert!(yield_now());
+            }
+            assert_eq!(crate::wls::trueos_cabi_wls_current_slot(), expected_slot);
+            observations.lock().unwrap().push(expected_slot);
+        });
+        task.0.id = id;
+        task.0.vm_id = Some(VM);
+        task.0.domain = (77, VM);
+        task.0.wls = (0, id as u32, Some(expected_slot));
+        task.0._wls_lease = Some(identity);
+        tasks.push(task);
+    }
+    assert_eq!(THREAD_COUNT.load(Ordering::Acquire), baseline + 64);
+    for _ in 0..2 {
+        for task in &mut tasks { assert!(poll_thread(task).is_pending()); }
+    }
+    for task in &mut tasks { assert!(poll_thread(task).is_ready()); }
+    let mut slots = observed.lock().unwrap().clone();
+    slots.sort_unstable(); slots.dedup();
+    assert_eq!(slots.len(), 64);
+    // Completion becomes visible to joiners before task/stack retirement.
+    // All identities must remain reserved until that final owner is dropped.
+    for sequence in 1..=64usize {
+        let id = crate::wls::BLUEPRINT_THREAD_CARRIER_TAG as usize | sequence;
+        assert!(crate::wls::try_lease_blueprint_thread_identity(VM, id).is_none());
+    }
+    drop(tasks);
+    assert_eq!(THREAD_COUNT.load(Ordering::Acquire), baseline);
+    for sequence in 1..=64usize {
+        let id = crate::wls::BLUEPRINT_THREAD_CARRIER_TAG as usize | sequence;
+        assert!(crate::wls::try_lease_blueprint_thread_identity(VM, id).is_some());
+    }
+}
+
+#[test]
+#[cfg(thread_scheduler_harness)]
 fn diagnostics_identify_the_parked_worker_and_retire_on_force_kill() {
     let _serial = SERIAL.lock().unwrap();
     let queue = Arc::new(crate::wait::WaitQueue::new());

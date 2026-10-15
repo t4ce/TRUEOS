@@ -710,6 +710,17 @@ boot image was reset or replaced by these controlled runs. Both owned test VMs
 were stopped after evidence capture; unrelated VMs and the physical rig were
 left running.
 
+## Subsequent scoped-thread admission repair
+
+The later native `Scope::spawn` panic exposed the fixed 20-live-thread WLS
+partition as an accidental admission limit. The same probe reproduced errno 11
+on the 21st live thread before the repair, then passed three 32-thread rounds
+after leasing from the existing shared slot budget. The 4,096-slot ABI and
+scheduler capacities were preserved. This supersedes the earlier per-realm WLS
+capacity described in this audit. See
+[the dedicated thread-admission report](codex-thread-admission-2026-10-15.md)
+for exact artifacts, before/after evidence and the remaining full-Codex scope.
+
 
 ## Physical automatic-turn follow-up, 13:26 UTC
 
