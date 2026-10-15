@@ -35,6 +35,7 @@ static MIO_RX_DEVICE_INDEX: AtomicUsize = AtomicUsize::new(2);
 static PAUSED: AtomicU64 = AtomicU64::new(0);
 static DELIVERY_ALLOWED: AtomicBool = AtomicBool::new(true);
 static SENT_CREDIT: AtomicU64 = AtomicU64::new(0);
+static EOF_COUNT: AtomicU64 = AtomicU64::new(0);
 static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod net { pub fn primary_device_index() -> usize { 2 } }
 mod hv {
@@ -48,6 +49,7 @@ mod v { pub mod vnet { pub const MAX_MSG: usize = 4; } }
 enum NetEvent {
     TcpData { handle: NetHandle, data: Vec<u8> },
     TcpSent { handle: NetHandle, len: usize },
+    TcpReadClosed { handle: NetHandle },
 }
 std::thread_local! { static DELIVERED: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) }; }
 fn push_event(_: &'static str, event: NetEvent) -> bool {
@@ -55,6 +57,7 @@ fn push_event(_: &'static str, event: NetEvent) -> bool {
     match event {
         NetEvent::TcpData { data, .. } => DELIVERED.with(|out| out.borrow_mut().extend(data)),
         NetEvent::TcpSent { len, .. } => { SENT_CREDIT.fetch_add(len as u64, AtomicOrdering::Relaxed); }
+        NetEvent::TcpReadClosed { .. } => { EOF_COUNT.fetch_add(1, AtomicOrdering::Relaxed); }
     }
     true
 }
@@ -72,6 +75,7 @@ impl Socket {
 struct Record {
     owner: &'static str, handle: NetHandle,
     tcp_loopback_peer: Option<NetHandle>, tcp_tx: TcpTxQueue,
+    tcp_finish_pending: bool, tcp_write_closed: bool,
 }
 struct Service { device_index: usize, records: Vec<Record> }
 impl Service {
@@ -92,6 +96,7 @@ fn reset() -> std::sync::MutexGuard<'static, ()> {
     PAUSED.store(0, AtomicOrdering::Release);
     DELIVERY_ALLOWED.store(true, AtomicOrdering::Release);
     SENT_CREDIT.store(0, AtomicOrdering::Release);
+    EOF_COUNT.store(0, AtomicOrdering::Release);
     DELIVERED.with(|out| out.borrow_mut().clear());
     serial
 }
@@ -147,8 +152,8 @@ fn loopback_retains_bytes_and_sender_credit_across_pause_and_queue_pressure() {
     tx.push(b" and two".to_vec());
     let expected = tx.len();
     let mut service = Service { device_index: 2, records: vec![
-        Record { owner: "sender", handle: NetHandle(1), tcp_loopback_peer: Some(NetHandle(9)), tcp_tx: tx },
-        Record { owner: "paused", handle: NetHandle(9), tcp_loopback_peer: Some(NetHandle(1)), tcp_tx: TcpTxQueue::new() },
+        Record { owner: "sender", handle: NetHandle(1), tcp_loopback_peer: Some(NetHandle(9)), tcp_tx: tx, tcp_finish_pending: false, tcp_write_closed: false },
+        Record { owner: "paused", handle: NetHandle(9), tcp_loopback_peer: Some(NetHandle(1)), tcp_tx: TcpTxQueue::new(), tcp_finish_pending: false, tcp_write_closed: false },
     ] };
     PAUSED.store(1 << 3, AtomicOrdering::Release);
     service.flush_loopback_tcp_tx(0);
@@ -163,6 +168,54 @@ fn loopback_retains_bytes_and_sender_credit_across_pause_and_queue_pressure() {
     assert!(service.records[0].tcp_tx.is_empty());
     DELIVERED.with(|out| assert_eq!(*out.borrow(), b"TLS bytes one and two"));
     assert_eq!(SENT_CREDIT.load(AtomicOrdering::Acquire) as usize, expected);
+}
+#[test]
+fn finish_waits_for_all_queued_bytes_and_preserves_peer_reply() {
+    let _serial = reset();
+    assert!(publish_rx_owner(9, Some(3)));
+    let mut tx = TcpTxQueue::new();
+    tx.push(vec![b'a'; 300]); // More than the bounded 64 four-byte chunks per flush.
+    let mut service = Service { device_index: 2, records: vec![
+        Record { owner: "sender", handle: NetHandle(1), tcp_loopback_peer: Some(NetHandle(9)),
+            tcp_tx: tx, tcp_finish_pending: true, tcp_write_closed: false },
+        Record { owner: "peer", handle: NetHandle(9), tcp_loopback_peer: Some(NetHandle(1)),
+            tcp_tx: TcpTxQueue::new(), tcp_finish_pending: false, tcp_write_closed: false },
+    ] };
+    PAUSED.store(1 << 3, AtomicOrdering::Release);
+    service.flush_loopback_tcp_tx(0);
+    assert_eq!(EOF_COUNT.load(AtomicOrdering::Acquire), 0);
+    PAUSED.store(0, AtomicOrdering::Release);
+    service.flush_loopback_tcp_tx(0);
+    assert!(!service.records[0].tcp_tx.is_empty());
+    assert_eq!(EOF_COUNT.load(AtomicOrdering::Acquire), 0);
+    service.flush_loopback_tcp_tx(0);
+    assert!(service.records[0].tcp_write_closed);
+    assert!(!service.records[0].tcp_finish_pending);
+    assert_eq!(EOF_COUNT.load(AtomicOrdering::Acquire), 1);
+    DELIVERED.with(|out| { assert_eq!(out.borrow().len(), 300); out.borrow_mut().clear(); });
+    service.flush_loopback_tcp_tx(0);
+    assert_eq!(EOF_COUNT.load(AtomicOrdering::Acquire), 1, "EOF must be idempotent");
+    service.records[1].tcp_tx.push(b"reply".to_vec());
+    service.flush_loopback_tcp_tx(1);
+    DELIVERED.with(|out| assert_eq!(*out.borrow(), b"reply"));
+}
+#[test]
+fn finish_retries_eof_when_event_queue_is_full_even_without_data() {
+    let _serial = reset();
+    let mut service = Service { device_index: 2, records: vec![
+        Record { owner: "sender", handle: NetHandle(1), tcp_loopback_peer: Some(NetHandle(9)),
+            tcp_tx: TcpTxQueue::new(), tcp_finish_pending: true, tcp_write_closed: false },
+        Record { owner: "peer", handle: NetHandle(9), tcp_loopback_peer: Some(NetHandle(1)),
+            tcp_tx: TcpTxQueue::new(), tcp_finish_pending: false, tcp_write_closed: false },
+    ] };
+    DELIVERY_ALLOWED.store(false, AtomicOrdering::Release);
+    service.flush_loopback_tcp_tx(0);
+    assert!(service.records[0].tcp_finish_pending);
+    assert_eq!(EOF_COUNT.load(AtomicOrdering::Acquire), 0);
+    DELIVERY_ALLOWED.store(true, AtomicOrdering::Release);
+    service.flush_loopback_tcp_tx(0);
+    assert!(service.records[0].tcp_write_closed);
+    assert_eq!(EOF_COUNT.load(AtomicOrdering::Acquire), 1);
 }
 '''
     harness = harness.replace("@RECEIVE@", receive).replace("@LOOPBACK@", loopback)

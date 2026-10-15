@@ -61,6 +61,9 @@ struct SocketState {
     connected: bool,
     connect_submitted: bool,
     closed: bool,
+    read_shutdown: bool,
+    write_shutdown: bool,
+    peer_eof: bool,
     last_error: i32,
     recv_buf: VecDeque<u8>,
 }
@@ -90,6 +93,9 @@ impl SocketState {
             connected: false,
             connect_submitted: false,
             closed: false,
+            read_shutdown: false,
+            write_shutdown: false,
+            peer_eof: false,
             last_error: 0,
             recv_buf: VecDeque::new(),
         }
@@ -173,8 +179,13 @@ fn pump_socket(socket: &mut SocketState) {
                 socket.last_error = 0;
             }
             api::Event::TcpData { handle, data } => {
-                if socket.handle == Some(handle) {
+                if socket.handle == Some(handle) && !socket.read_shutdown {
                     socket.recv_buf.extend(data.as_slice().iter().copied());
+                }
+            }
+            api::Event::TcpReadClosed { handle } => {
+                if socket.handle == Some(handle) {
+                    socket.peer_eof = true;
                 }
             }
             api::Event::Closed { handle } => {
@@ -380,6 +391,10 @@ fn connect_inner(socket_id: u32, remote: RemoteAddr, nonblocking: bool) -> Resul
             }
             socket.connect_submitted = true;
             socket.closed = false;
+            socket.read_shutdown = false;
+            socket.write_shutdown = false;
+            socket.peer_eof = false;
+            socket.recv_buf.clear();
             socket.last_error = 0;
         }
 
@@ -416,6 +431,9 @@ fn recv_inner(socket_id: u32, out: &mut [u8], flags: i32) -> Result<Option<usize
     with_socket_mut(socket_id, |socket| {
         pump_socket(socket);
 
+        if socket.read_shutdown {
+            return Ok(Some(0));
+        }
         if !socket.recv_buf.is_empty() {
             let count = out.len().min(socket.recv_buf.len());
             if flags & MSG_PEEK != 0 {
@@ -435,7 +453,7 @@ fn recv_inner(socket_id: u32, out: &mut [u8], flags: i32) -> Result<Option<usize
         if socket.last_error != 0 {
             return Err(-socket.last_error);
         }
-        if socket.closed {
+        if socket.closed || socket.peer_eof {
             return Ok(Some(0));
         }
         if !socket.connected {
@@ -594,6 +612,9 @@ pub(crate) fn socket_tcp_send_host(socket_id: u32, data: &[u8]) -> isize {
         let end = (sent + api::MAX_MSG).min(data.len());
         let result = with_socket_mut(socket_id, |socket| {
             pump_socket(socket);
+            if socket.write_shutdown {
+                return Err(-EPIPE);
+            }
             if socket.last_error != 0 {
                 return Err(-socket.last_error);
             }
@@ -680,12 +701,41 @@ pub(crate) fn socket_tcp_recv_host(
     }
 }
 
-pub(crate) fn socket_tcp_shutdown_host(socket_id: u32, _how: u32) -> i32 {
-    match with_socket_mut(socket_id, |socket| {
-        close_socket_state(socket);
+pub(crate) fn socket_tcp_shutdown_host(socket_id: u32, how: u32) -> i32 {
+    if how > 2 {
+        return -EINVAL;
+    }
+    let result = with_socket_mut(socket_id, |socket| {
+        pump_socket(socket);
+        if !socket.connected {
+            return Err(-ENOTCONN);
+        }
+        let shut_read = how == 0 || how == 2;
+        let shut_write = how == 1 || how == 2;
+        if shut_write && !socket.write_shutdown {
+            let Some(handle) = socket.handle else {
+                return Err(-ENOTCONN);
+            };
+            let Some(vnet) = socket.vnet.as_ref() else {
+                return Err(-ENETUNREACH);
+            };
+            // Finish follows queued writes. Commit both local flags only after
+            // acceptance so a full bridge queue leaves shutdown retryable.
+            vnet.submit(api::Command::FinishTcp { handle })
+                .map_err(|_| -EAGAIN)?;
+            socket.write_shutdown = true;
+        }
+        if shut_read {
+            socket.read_shutdown = true;
+            socket.recv_buf.clear();
+        }
         Ok(())
-    }) {
-        Ok(()) => 0,
+    });
+    match result {
+        Ok(()) => {
+            let _ = crate::wait::platform_wake_all_blueprint_io_waiters();
+            0
+        }
         Err(err) => err,
     }
 }
@@ -1140,15 +1190,15 @@ pub extern "C" fn trueos_cabi_socket_tcp_recv(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, _how: u32) -> i32 {
+pub extern "C" fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, how: u32) -> i32 {
     if vm_guest_vmcall_active() {
         return guest_call_i32(
             trueos_vm::vmcall::OP_BP_SOCKET_TCP_SHUTDOWN,
             socket_id as u64,
-            _how as u64,
+            how as u64,
         );
     }
-    socket_tcp_shutdown_host(socket_id, _how)
+    socket_tcp_shutdown_host(socket_id, how)
 }
 
 #[unsafe(no_mangle)]

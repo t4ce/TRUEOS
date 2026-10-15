@@ -388,6 +388,9 @@ fn to_kernel_cmd(cmd: api::Command) -> Result<NetCommand, ()> {
             handle: NetHandle(handle.0),
             packet: Vec::from(packet.as_slice()),
         },
+        api::Command::FinishTcp { handle } => NetCommand::FinishTcp {
+            handle: NetHandle(handle.0),
+        },
         api::Command::Close { handle } => NetCommand::Close {
             handle: NetHandle(handle.0),
         },
@@ -417,6 +420,9 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
         NetEvent::Opened { handle, kind } => api::Event::Opened {
             handle: api::NetHandle(handle.0),
             kind: from_kernel_kind(kind),
+        },
+        NetEvent::TcpReadClosed { handle } => api::Event::TcpReadClosed {
+            handle: api::NetHandle(handle.0),
         },
         NetEvent::Closed { handle } => api::Event::Closed {
             handle: api::NetHandle(handle.0),

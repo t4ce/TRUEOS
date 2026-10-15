@@ -26,6 +26,7 @@ fn remember_event_handle(session: &mut HostBlueprintNetSession, event: &api::Eve
         | api::Event::TcpEstablished { handle, .. }
         | api::Event::TcpData { handle, .. }
         | api::Event::TcpSent { handle, .. }
+        | api::Event::TcpReadClosed { handle }
         | api::Event::UdpPacket { handle, .. }
         | api::Event::UdpPacketV6 { handle, .. }
         | api::Event::IpPacket { handle, .. } => Some(*handle),

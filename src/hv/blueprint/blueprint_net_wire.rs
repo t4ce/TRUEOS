@@ -13,6 +13,7 @@ const TAG_ICMP_ECHO_V6: u8 = 10;
 const TAG_OPEN_TUN: u8 = 11;
 const TAG_SEND_IP_PACKET: u8 = 12;
 const TAG_OPEN_TCP_LISTEN_AT: u8 = 13;
+const TAG_FINISH_TCP: u8 = 14;
 
 const TAG_OPENED: u8 = 1;
 const TAG_CLOSED: u8 = 2;
@@ -25,6 +26,7 @@ const TAG_TCP_SENT: u8 = 8;
 const TAG_ICMP_REPLY: u8 = 9;
 const TAG_ICMP_REPLY_V6: u8 = 10;
 const TAG_IP_PACKET: u8 = 11;
+const TAG_TCP_READ_CLOSED: u8 = 12;
 
 const KIND_UDP: u8 = 1;
 const KIND_TCP: u8 = 2;
@@ -243,6 +245,10 @@ pub(crate) fn encode_command(command: api::Command, out: &mut [u8]) -> Result<us
             w.u32(handle.0)?;
             w.byte_buf(&packet)?;
         }
+        api::Command::FinishTcp { handle } => {
+            w.byte(TAG_FINISH_TCP)?;
+            w.u32(handle.0)?;
+        }
         api::Command::Close { handle } => {
             w.byte(TAG_CLOSE)?;
             w.u32(handle.0)?;
@@ -332,6 +338,9 @@ pub(crate) fn decode_command(input: &[u8]) -> Result<api::Command, WireError> {
             handle: api::NetHandle(r.u32()?),
             packet: r.byte_buf()?,
         },
+        TAG_FINISH_TCP => api::Command::FinishTcp {
+            handle: api::NetHandle(r.u32()?),
+        },
         TAG_CLOSE => api::Command::Close {
             handle: api::NetHandle(r.u32()?),
         },
@@ -406,6 +415,10 @@ pub(crate) fn encode_event(event: api::Event, out: &mut [u8]) -> Result<usize, W
             w.byte(TAG_TCP_DATA)?;
             w.u32(handle.0)?;
             w.byte_buf(&data)?;
+        }
+        api::Event::TcpReadClosed { handle } => {
+            w.byte(TAG_TCP_READ_CLOSED)?;
+            w.u32(handle.0)?;
         }
         api::Event::TcpSent { handle, len } => {
             w.byte(TAG_TCP_SENT)?;
@@ -500,6 +513,9 @@ pub(crate) fn decode_event(input: &[u8]) -> Result<api::Event, WireError> {
         TAG_TCP_DATA => api::Event::TcpData {
             handle: api::NetHandle(r.u32()?),
             data: r.byte_buf()?,
+        },
+        TAG_TCP_READ_CLOSED => api::Event::TcpReadClosed {
+            handle: api::NetHandle(r.u32()?),
         },
         TAG_TCP_SENT => api::Event::TcpSent {
             handle: api::NetHandle(r.u32()?),

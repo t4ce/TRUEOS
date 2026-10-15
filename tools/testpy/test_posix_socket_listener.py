@@ -31,9 +31,9 @@ def cabi_item(name):
 def main():
     definitions = [constant(SOURCE, name) for name in (
         "TRUEOS_AF_INET", "TRUEOS_AF_INET6", "TRUEOS_EOPNOTSUPP", "TRUEOS_EAGAIN", "TRUEOS_EBADF", "TRUEOS_EINVAL",
-        "TRUEOS_EIO", "TRUEOS_EADDRINUSE", "TRUEOS_EINPROGRESS",
+        "TRUEOS_EIO", "TRUEOS_EPIPE", "TRUEOS_EADDRINUSE", "TRUEOS_EINPROGRESS",
         "TRUEOS_SOCK_NONBLOCK", "TRUEOS_SOCK_CLOEXEC", "TRUEOS_FD_CLOEXEC",
-        "TRUEOS_MSG_DONTWAIT", "TRUEOS_O_NONBLOCK",
+        "TRUEOS_MSG_DONTWAIT", "TRUEOS_MSG_PEEK", "TRUEOS_O_NONBLOCK",
     )]
     definitions += [item(SOURCE, name) for name in (
         "TrueosInAddr", "TrueosSockAddrIn", "TrueosSockAddrIn6", "SocketFd",
@@ -155,6 +155,9 @@ mod mio_compat {{
         let state=STATE.lock();
         if state.read_status != 0 {{ return state.read_status; }}
         let n=len.min(4); unsafe {{ core::ptr::copy_nonoverlapping(b"HTTP".as_ptr(),out,n); }} n as isize
+    }}
+    pub unsafe fn trueos_mio_tcp_stream_peek(backend:u32, out:*mut u8, len:usize)->isize {{
+        unsafe {{ trueos_mio_tcp_stream_read(backend,out,len) }}
     }}
     pub unsafe fn trueos_mio_tcp_stream_write(_backend:u32, data:*const u8, len:usize)->isize {{
         let mut state=STATE.lock();

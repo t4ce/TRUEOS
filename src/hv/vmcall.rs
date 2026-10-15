@@ -390,9 +390,12 @@ pub const OP_BP_MIO_TCP_LISTENER_BIND: u32 = 0x50; // payload addr -> socket id/
 pub const OP_BP_MIO_TCP_STREAM_CONNECT: u32 = 0x51; // payload addr -> socket id/status
 pub const OP_BP_MIO_UDP_SOCKET_BIND: u32 = 0x52; // payload addr -> socket id/status
 pub const OP_BP_MIO_SOCKET_CLOSE: u32 = 0x53; // arg0 socket -> status
+pub const OP_BP_MIO_SOCKET_SHUTDOWN: u32 = 0x5D; // arg0 socket, arg1 how -> status
 pub const OP_BP_MIO_SOCKET_LOCAL_ADDR: u32 = 0x54; // arg0 socket -> addr/status
 pub const OP_BP_MIO_SOCKET_PEER_ADDR: u32 = 0x55; // arg0 socket -> addr/status
 pub const OP_BP_MIO_SOCKET_TAKE_ERROR: u32 = 0x56; // arg0 socket -> status
+/// High bit of the TCP read capacity requests a non-consuming receive.
+pub const MIO_TCP_READ_PEEK: u64 = 1 << 63;
 pub const OP_BP_MIO_TCP_STREAM_READ: u32 = 0x57; // arg0 socket, arg1 cap -> bytes/status
 pub const OP_BP_MIO_TCP_STREAM_WRITE: u32 = 0x58; // arg0 socket, payload bytes -> signed rc
 pub const OP_BP_MIO_UDP_SOCKET_CONNECT: u32 = 0x59; // arg0 socket, payload addr -> status
@@ -6253,6 +6256,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_MIO_SOCKET_SHUTDOWN => {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || {
+                match u32::try_from(arg1) {
+                    Ok(how) => crate::mio_compat::mio_socket_shutdown_host(arg0 as u32, how),
+                    Err(_) => -4,
+                }
+            });
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_MIO_SOCKET_LOCAL_ADDR | OP_BP_MIO_SOCKET_PEER_ADDR => {
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -6287,14 +6300,19 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_MIO_TCP_STREAM_READ => {
-            let want = core::cmp::min(arg1 as usize, PAYLOAD_CAP);
+            let peek = arg1 & MIO_TCP_READ_PEEK != 0;
+            let want = core::cmp::min((arg1 & !MIO_TCP_READ_PEEK) as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..want] };
             let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
-                crate::mio_compat::mio_tcp_stream_read_host(arg0 as u32, out.as_mut_ptr(), want)
+                if peek {
+                    crate::mio_compat::mio_tcp_stream_peek_host(arg0 as u32, out.as_mut_ptr(), want)
+                } else {
+                    crate::mio_compat::mio_tcp_stream_read_host(arg0 as u32, out.as_mut_ptr(), want)
+                }
             });
             let len = if rc > 0 { rc as u32 } else { 0 };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len);

@@ -435,6 +435,7 @@ pub async fn ws_time_task() {
                     api::Event::UdpPacketV6 { .. } => {}
                     api::Event::IcmpReply { .. } => {}
                     api::Event::IcmpReplyV6 { .. } => {}
+                    api::Event::TcpReadClosed { .. } => {}
                 }
             }
 

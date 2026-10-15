@@ -648,6 +648,7 @@ fn tls_socket_tick_once() -> bool {
                     }
                 }
                 vnet::Event::TcpSent { .. } => {}
+                vnet::Event::TcpReadClosed { .. } => {}
                 vnet::Event::IpPacket { .. } => {}
                 vnet::Event::UdpPacket { .. } => {}
                 vnet::Event::UdpPacketV6 { .. } => {}

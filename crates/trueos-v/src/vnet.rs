@@ -177,6 +177,10 @@ pub enum Command {
         seq: u16,
         data: ByteBuf<MAX_MSG>,
     },
+    /// Finish queued TCP writes while preserving the receive side.
+    FinishTcp {
+        handle: NetHandle,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -229,5 +233,9 @@ pub enum Event {
         seq: u16,
         rtt_ms: u32,
         data: ByteBuf<MAX_MSG>,
+    },
+    /// Peer finished writing; previously delivered data remains readable.
+    TcpReadClosed {
+        handle: NetHandle,
     },
 }

@@ -88,6 +88,7 @@ pub async fn lan_discovery_task() {
                     | v::vnet::Event::IpPacket { .. }
                     | v::vnet::Event::IcmpReply { .. }
                     | v::vnet::Event::IcmpReplyV6 { .. }
+                    | v::vnet::Event::TcpReadClosed { .. }
                     | v::vnet::Event::Opened { .. }
                     | v::vnet::Event::Closed { .. } => {}
                 }

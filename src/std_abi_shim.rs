@@ -92,6 +92,7 @@ const TRUEOS_EBUSY: c_int = 16;
 const TRUEOS_EDEADLK: c_int = 35;
 const TRUEOS_ENOENT: c_int = 2;
 const TRUEOS_EPIPE: c_int = 32;
+const TRUEOS_ENOTCONN: c_int = 107;
 pub(crate) const TRUEOS_EINVAL: c_int = 22;
 const TRUEOS_ENAMETOOLONG: c_int = 36;
 const TRUEOS_ERANGE: c_int = 34;
@@ -155,6 +156,7 @@ const TRUEOS_SOCK_DGRAM: c_int = 2;
 const TRUEOS_SOCK_TYPE_MASK: c_int = 0xf;
 const TRUEOS_SOCK_NONBLOCK: c_int = 0o4000;
 const TRUEOS_SOCK_CLOEXEC: c_int = 0o2000000;
+const TRUEOS_MSG_PEEK: c_int = 0x2;
 const TRUEOS_MSG_DONTWAIT: c_int = 0x40;
 const TRUEOS_IPPROTO_UDP: c_int = 17;
 const TRUEOS_S_IFDIR: u32 = 0o040000;
@@ -951,6 +953,7 @@ fn mio_status_to_errno(status: i32) -> c_int {
         -4 => TRUEOS_EINVAL,
         -5 => TRUEOS_EBADF,
         -8 => TRUEOS_EIO,
+        -10 => TRUEOS_EPIPE,
         _ => TRUEOS_EIO,
     }
 }
@@ -4239,28 +4242,29 @@ pub unsafe extern "C" fn shutdown(socket_id: c_int, how: c_int) -> c_int {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
-    let cabi_backend = {
+    let socket = {
         let sockets = SOCKET_FDS.lock();
         match sockets.get(socket_id) {
             Some(SocketFd::Cabi { backend, .. } | SocketFd::PendingListener { backend, .. }) => {
-                Some(*backend)
+                (false, *backend)
             }
-            Some(_) => None,
+            Some(SocketFd::MioStream { backend, .. }) => (true, *backend),
+            Some(_) => {
+                TRUEOS_ERRNO.store(TRUEOS_ENOTCONN, Ordering::Relaxed);
+                return -1;
+            }
             None => {
                 TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
                 return -1;
             }
         }
     };
-    if let Some(backend) = cabi_backend {
-        return posix_rc_i32(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_shutdown(
-            backend, how as u32,
-        ));
+    if socket.0 {
+        return posix_mio_i32(crate::mio_compat::mio_socket_shutdown(socket.1, how as u32));
     }
-    // Mio closes the backend when the owning TcpStream is dropped. Treat the
-    // half-close as successful until the virtual TCP API grows half-close support.
-    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    0
+    posix_rc_i32(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_shutdown(
+        socket.1, how as u32,
+    ))
 }
 
 #[unsafe(no_mangle)]
@@ -4700,12 +4704,16 @@ pub unsafe extern "C" fn recv(
         };
         let mut rx = rx.lock();
         let copied = core::cmp::min(output.len(), rx.bytes.len());
-        if copied == 0 && descriptor_flags & TRUEOS_O_NONBLOCK != 0 && rx.write_open {
+        if len != 0 && copied == 0
+            && (descriptor_flags & TRUEOS_O_NONBLOCK != 0 || flags & TRUEOS_MSG_DONTWAIT != 0)
+            && rx.write_open {
             TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
             return -1;
         }
         output[..copied].copy_from_slice(&rx.bytes[..copied]);
-        rx.bytes.drain(..copied);
+        if flags & TRUEOS_MSG_PEEK == 0 {
+            rx.bytes.drain(..copied);
+        }
         TRUEOS_ERRNO.store(0, Ordering::Relaxed);
         return copied as isize;
     }
@@ -4728,11 +4736,15 @@ pub unsafe extern "C" fn recv(
         };
         loop {
             let raw = unsafe {
-                crate::mio_compat::trueos_mio_tcp_stream_read(
-                    backend,
-                    output.as_mut_ptr(),
-                    output.len(),
-                )
+                if flags & TRUEOS_MSG_PEEK != 0 {
+                    crate::mio_compat::trueos_mio_tcp_stream_peek(
+                        backend, output.as_mut_ptr(), output.len(),
+                    )
+                } else {
+                    crate::mio_compat::trueos_mio_tcp_stream_read(
+                        backend, output.as_mut_ptr(), output.len(),
+                    )
+                }
             };
             if raw != -2 || nonblocking || flags & TRUEOS_MSG_DONTWAIT != 0 || len == 0 {
                 break raw;

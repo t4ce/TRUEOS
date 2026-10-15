@@ -690,8 +690,8 @@ pub enum NetCommand {
     Close {
         handle: NetHandle,
     },
-    /// Send FIN after socket-buffered data. Caller must first wait for TcpSent
-    /// for its submitted writes; Close remains the immediate teardown path.
+    /// Send FIN after all queued writes reach the TCP socket buffer.
+    /// Preserve the receive side; Close remains the immediate teardown path.
     FinishTcp {
         handle: NetHandle,
     },
@@ -727,6 +727,10 @@ pub enum NetEvent {
     TcpData {
         handle: NetHandle,
         data: Vec<u8>,
+    },
+    /// Ordered receive EOF, currently emitted by explicit loopback FinishTcp.
+    TcpReadClosed {
+        handle: NetHandle,
     },
     TcpSent {
         handle: NetHandle,
@@ -897,6 +901,7 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
     let wakes_io = matches!(
         event,
         NetEvent::TcpData { .. }
+            | NetEvent::TcpReadClosed { .. }
             | NetEvent::TcpEstablished { .. }
             | NetEvent::Closed { .. }
             | NetEvent::UdpPacket { .. }
@@ -1744,6 +1749,8 @@ struct SocketRecord {
     kind: SocketKind,
     socket: SocketHandle,
     tcp_tx: TcpTxQueue,
+    tcp_finish_pending: bool,
+    tcp_write_closed: bool,
     tcp_loopback_peer: Option<NetHandle>,
     tcp_connect: bool,
     tcp_local_port: Option<u16>,
@@ -2592,6 +2599,8 @@ impl NetService {
             kind: SocketKind::Udp,
             socket: sh,
             tcp_tx: TcpTxQueue::new(),
+            tcp_finish_pending: false,
+            tcp_write_closed: false,
             tcp_loopback_peer: None,
             tcp_connect: false,
             tcp_local_port: None,
@@ -2641,6 +2650,8 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: TcpTxQueue::new(),
+            tcp_finish_pending: false,
+            tcp_write_closed: false,
             tcp_loopback_peer: None,
             tcp_connect: false,
             tcp_local_port: Some(port),
@@ -2718,6 +2729,8 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: client_socket,
             tcp_tx: TcpTxQueue::new(),
+            tcp_finish_pending: false,
+            tcp_write_closed: false,
             tcp_loopback_peer: Some(server_handle),
             tcp_connect: true,
             tcp_local_port: Some(local_port),
@@ -2816,6 +2829,8 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: TcpTxQueue::new(),
+            tcp_finish_pending: false,
+            tcp_write_closed: false,
             tcp_loopback_peer: None,
             tcp_connect: true,
             tcp_local_port: Some(local_port),
@@ -2889,6 +2904,8 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: TcpTxQueue::new(),
+            tcp_finish_pending: false,
+            tcp_write_closed: false,
             tcp_loopback_peer: None,
             tcp_connect: true,
             tcp_local_port: Some(local_port),
@@ -2948,6 +2965,14 @@ impl NetService {
             }
             self.records[idx].tcp_tx.advance(len);
             let _ = push_event(owner, NetEvent::TcpSent { handle, len });
+        }
+        // EOF shares the data queue and is retried on pressure, so it cannot
+        // overtake accepted bytes or disappear when the receiver is paused.
+        if self.records[idx].tcp_finish_pending && self.records[idx].tcp_tx.is_empty()
+            && push_event(peer_owner, NetEvent::TcpReadClosed { handle: peer })
+        {
+            self.records[idx].tcp_finish_pending = false;
+            self.records[idx].tcp_write_closed = true;
         }
     }
 
@@ -3067,6 +3092,11 @@ impl NetService {
         let handle = self.records[idx].handle;
 
         if self.records[idx].tcp_tx.is_empty() {
+            if self.records[idx].tcp_finish_pending {
+                self.sockets.get_mut::<tcp::Socket>(self.records[idx].socket).close();
+                self.records[idx].tcp_finish_pending = false;
+                self.records[idx].tcp_write_closed = true;
+            }
             return;
         }
 
@@ -3105,6 +3135,12 @@ impl NetService {
             if !(socket.can_send() && socket.may_send()) {
                 break;
             }
+        }
+
+        if self.records[idx].tcp_tx.is_empty() && self.records[idx].tcp_finish_pending {
+            socket.close();
+            self.records[idx].tcp_finish_pending = false;
+            self.records[idx].tcp_write_closed = true;
         }
 
         if total_sent != 0 {
@@ -4344,6 +4380,17 @@ impl NetService {
                 }
             }
             NetCommand::SendTcp { handle, data } => {
+                if let Some(rec) = self.records.iter().find(|rec| rec.handle == handle) {
+                    let msg = if rec.owner != owner {
+                        Some("bad tcp owner")
+                    } else if rec.tcp_finish_pending || rec.tcp_write_closed {
+                        Some("tcp write closed")
+                    } else { None };
+                    if let Some(msg) = msg {
+                        let _ = push_event(owner, NetEvent::Error { msg });
+                        return;
+                    }
+                }
                 let data = match self.route_tcp_send(handle, data) {
                     TcpRoute::Network(data) => data,
                     TcpRoute::Loopback(result) => {
@@ -4456,14 +4503,21 @@ impl NetService {
                 }
             }
             NetCommand::FinishTcp { handle } => {
-                if !self.close_loopback_tcp(handle) {
-                    if let Some(rec) = self.records.iter().find(|rec| rec.handle == handle)
-                        && rec.kind == SocketKind::Tcp
-                    {
-                        self.sockets.get_mut::<tcp::Socket>(rec.socket).close();
-                    } else {
-                        let _ = push_event(owner, NetEvent::Closed { handle });
-                    }
+                let Some(idx) = self.records.iter().position(|rec| rec.handle == handle) else {
+                    let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+                    return;
+                };
+                if self.records[idx].owner != owner {
+                    let _ = push_event(owner, NetEvent::Error { msg: "bad tcp owner" });
+                    return;
+                }
+                if self.records[idx].kind != SocketKind::Tcp {
+                    let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
+                    return;
+                }
+                if !self.records[idx].tcp_write_closed {
+                    self.records[idx].tcp_finish_pending = true;
+                    self.flush_tcp_tx(idx);
                 }
             }
         }

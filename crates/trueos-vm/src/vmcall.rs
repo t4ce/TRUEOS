@@ -407,12 +407,15 @@ pub const OP_BP_MIO_SOCKET_CLOSE: u32 = 0x53;
 pub const OP_BP_MIO_SOCKET_LOCAL_ADDR: u32 = 0x54;
 pub const OP_BP_MIO_SOCKET_PEER_ADDR: u32 = 0x55;
 pub const OP_BP_MIO_SOCKET_TAKE_ERROR: u32 = 0x56;
+/// High bit of the TCP read capacity requests a non-consuming receive.
+pub const MIO_TCP_READ_PEEK: u64 = 1 << 63;
 pub const OP_BP_MIO_TCP_STREAM_READ: u32 = 0x57;
 pub const OP_BP_MIO_TCP_STREAM_WRITE: u32 = 0x58;
 pub const OP_BP_MIO_UDP_SOCKET_CONNECT: u32 = 0x59;
 pub const OP_BP_MIO_UDP_SOCKET_SEND_TO: u32 = 0x5A;
 pub const OP_BP_MIO_UDP_SOCKET_RECV_FROM: u32 = 0x5B;
 pub const OP_BP_MIO_TCP_LISTENER_ACCEPT: u32 = 0x5C;
+pub const OP_BP_MIO_SOCKET_SHUTDOWN: u32 = 0x5D;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;

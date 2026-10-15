@@ -20,6 +20,7 @@ const STATUS_NOT_FOUND: i32 = -5;
 const STATUS_IO: i32 = -6;
 const STATUS_NO_DEVICE: i32 = -8;
 const STATUS_RESOURCE_EXHAUSTED: i32 = -9;
+const STATUS_BROKEN_PIPE: i32 = -10;
 
 pub(crate) const READY_READABLE: u8 = 0b0000_0001;
 pub(crate) const READY_WRITABLE: u8 = 0b0000_0010;
@@ -332,6 +333,9 @@ struct MioSocketState {
     listen_port: Option<u16>,
     connected: bool,
     closed: bool,
+    read_shutdown: bool,
+    write_shutdown: bool,
+    peer_eof: bool,
     error: i32,
     tx_in_flight: usize,
     rx_stream: VecDeque<u8>,
@@ -985,6 +989,9 @@ impl MioCompat {
                         listen_port: None,
                         connected: true,
                         closed: false,
+                        read_shutdown: false,
+                        write_shutdown: false,
+                        peer_eof: false,
                         error: STATUS_OK,
                         tx_in_flight: 0,
                         rx_stream: inherited_rx,
@@ -1052,6 +1059,9 @@ impl MioCompat {
             }
             api::Event::TcpData { handle, data } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    if socket.read_shutdown {
+                        return;
+                    }
                     let queued_before = socket.rx_stream.len();
                     let data_len = data.as_slice().len();
                     let queued_after = queued_before.saturating_add(data_len);
@@ -1100,6 +1110,11 @@ impl MioCompat {
                         socket.connected = true;
                         socket.tx_in_flight = socket.tx_in_flight.saturating_sub(len as usize);
                     }
+                }
+            }
+            api::Event::TcpReadClosed { handle } => {
+                if let Some(socket) = self.socket_by_handle_mut(handle) {
+                    socket.peer_eof = true;
                 }
             }
             api::Event::UdpPacket { handle, from, data } => {
@@ -1187,14 +1202,18 @@ impl MioCompat {
 
         match socket.kind {
             MioSocketKind::TcpStream => {
-                if want_read && (!socket.rx_stream.is_empty() || socket.closed) {
+                if want_read && (!socket.rx_stream.is_empty() || socket.closed || socket.read_shutdown || socket.peer_eof) {
                     ready |= READY_READABLE;
                 }
-                if want_write && socket.connected && socket.tx_in_flight < MIO_TCP_TX_WINDOW_BYTES {
+                if want_write && socket.connected && !socket.closed && !socket.write_shutdown
+                    && socket.tx_in_flight < MIO_TCP_TX_WINDOW_BYTES {
                     ready |= READY_WRITABLE;
                 }
-                if socket.closed {
-                    ready |= READY_READ_CLOSED | READY_WRITE_CLOSED;
+                if socket.closed || socket.read_shutdown || socket.peer_eof {
+                    ready |= READY_READ_CLOSED;
+                }
+                if socket.closed || socket.write_shutdown {
+                    ready |= READY_WRITE_CLOSED;
                 }
             }
             MioSocketKind::TcpListener => {
@@ -1318,6 +1337,9 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
             listen_port: Some(port),
             connected: false,
             closed: false,
+            read_shutdown: false,
+            write_shutdown: false,
+            peer_eof: false,
             error: STATUS_OK,
             tx_in_flight: 0,
             rx_stream: VecDeque::new(),
@@ -1442,6 +1464,9 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
             listen_port: None,
             connected: false,
             closed: false,
+            read_shutdown: false,
+            write_shutdown: false,
+            peer_eof: false,
             error: STATUS_OK,
             tx_in_flight: 0,
             rx_stream: VecDeque::new(),
@@ -1569,6 +1594,9 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
             listen_port: None,
             connected: true,
             closed: false,
+            read_shutdown: false,
+            write_shutdown: false,
+            peer_eof: false,
             error: STATUS_OK,
             tx_in_flight: 0,
             rx_stream: VecDeque::new(),
@@ -1656,6 +1684,64 @@ pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
         compat.sockets.remove(socket_index);
         STATUS_OK
     })
+}
+
+pub(crate) fn mio_socket_shutdown_host(socket_id: u32, how: u32) -> i32 {
+    if how > 2 {
+        return STATUS_INVALID_INPUT;
+    }
+    let owner_vm = current_owner_vm();
+    let status = with_compat(|compat| {
+        compat.pump();
+        let Some(socket) = compat.socket_for_owner(socket_id, owner_vm) else {
+            return STATUS_NOT_FOUND;
+        };
+        if socket.kind != MioSocketKind::TcpStream || !socket.connected || socket.closed {
+            return STATUS_NOT_CONNECTED;
+        }
+        let finish = how != 0 && !socket.write_shutdown;
+        if finish {
+            let Some(handle) = socket.handle else {
+                return STATUS_NOT_CONNECTED;
+            };
+            // The adapter retains all previously submitted bytes and sends FIN
+            // after they have entered the TCP send buffer. Reads stay usable.
+            if let Err(status) = compat.submit(api::Command::FinishTcp { handle }) {
+                return status;
+            }
+        }
+        let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
+            return STATUS_NOT_FOUND;
+        };
+        if how != 1 {
+            socket.read_shutdown = true;
+            socket.rx_stream.clear();
+        }
+        if how != 0 {
+            socket.write_shutdown = true;
+        }
+        STATUS_OK
+    });
+    if status == STATUS_OK {
+        let _ = crate::wait::platform_wake_all_blueprint_io_waiters();
+    }
+    status
+}
+
+pub(crate) fn mio_socket_shutdown(socket_id: u32, how: u32) -> i32 {
+    if vm_guest_vmcall_active() {
+        let (status, data) = crate::hv::vmcall::guest_call(
+            trueos_vm::vmcall::OP_BP_MIO_SOCKET_SHUTDOWN,
+            u64::from(socket_id),
+            u64::from(how),
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_i32(data)
+        } else {
+            STATUS_INVALID_INPUT
+        };
+    }
+    mio_socket_shutdown_host(socket_id, how)
 }
 
 pub(crate) fn close_sockets_for_vm(vm_id: u8) -> usize {
@@ -1839,10 +1925,11 @@ pub unsafe extern "C" fn trueos_mio_socket_take_error(socket_id: u32) -> i32 {
     mio_socket_take_error_host(socket_id)
 }
 
-pub(crate) unsafe fn mio_tcp_stream_read_host(
+pub(crate) unsafe fn mio_tcp_stream_receive_host(
     socket_id: u32,
     out_ptr: *mut u8,
     out_cap: usize,
+    peek: bool,
 ) -> isize {
     if out_ptr.is_null() && out_cap != 0 {
         return STATUS_INVALID_INPUT as isize;
@@ -1856,6 +1943,9 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
         if socket.kind != MioSocketKind::TcpStream {
             return STATUS_INVALID_INPUT as isize;
         }
+        if out_cap == 0 || socket.read_shutdown {
+            return 0;
+        }
         if socket.rx_stream.is_empty() {
             if tcp_flow_logging_enabled(socket) && should_log_tcp_read_would_block() {
                 crate::log!(
@@ -1865,7 +1955,7 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
                     socket.closed as u8
                 );
             }
-            return if socket.closed {
+            return if socket.closed || socket.peer_eof {
                 0
             } else {
                 STATUS_WOULD_BLOCK as isize
@@ -1874,11 +1964,12 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
 
         let len = out_cap.min(socket.rx_stream.len());
         for index in 0..len {
-            unsafe {
-                out_ptr
-                    .add(index)
-                    .write(socket.rx_stream.pop_front().unwrap());
-            }
+            let byte = if peek {
+                socket.rx_stream[index]
+            } else {
+                socket.rx_stream.pop_front().unwrap()
+            };
+            unsafe { out_ptr.add(index).write(byte) };
         }
         if tcp_flow_logging_enabled(socket) {
             crate::log!(
@@ -1892,11 +1983,45 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
     })
 }
 
+pub(crate) unsafe fn mio_tcp_stream_read_host(
+    socket_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    mio_tcp_stream_receive_host(socket_id, out_ptr, out_cap, false)
+}
+
+pub(crate) unsafe fn mio_tcp_stream_peek_host(
+    socket_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    mio_tcp_stream_receive_host(socket_id, out_ptr, out_cap, true)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
     socket_id: u32,
     out_ptr: *mut u8,
     out_cap: usize,
+) -> isize {
+    mio_tcp_stream_receive(socket_id, out_ptr, out_cap, false)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_tcp_stream_peek(
+    socket_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    mio_tcp_stream_receive(socket_id, out_ptr, out_cap, true)
+}
+
+unsafe fn mio_tcp_stream_receive(
+    socket_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+    peek: bool,
 ) -> isize {
     if vm_guest_vmcall_active() {
         let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() else {
@@ -1910,7 +2035,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
         let (status, data) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_MIO_TCP_STREAM_READ,
             socket_id as u64,
-            want as u64,
+            want as u64 | if peek { trueos_vm::vmcall::MIO_TCP_READ_PEEK } else { 0 },
             &[],
             &mut bytes,
         );
@@ -1937,7 +2062,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
         }
         let mut bytes = Vec::new();
         bytes.resize(want, 0);
-        let rc = mio_tcp_stream_read_host(socket_id, bytes.as_mut_ptr(), want);
+        let rc = mio_tcp_stream_receive_host(socket_id, bytes.as_mut_ptr(), want, peek);
         if rc <= 0 {
             return rc;
         }
@@ -1958,7 +2083,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
         let mut bytes = Vec::new();
         bytes.resize(want, 0);
         let rc = crate::hv::with_guest_broker_context(vm_id, || {
-            mio_tcp_stream_read_host(socket_id, bytes.as_mut_ptr(), want)
+            mio_tcp_stream_receive_host(socket_id, bytes.as_mut_ptr(), want, peek)
         });
         if rc <= 0 {
             return rc;
@@ -1969,7 +2094,7 @@ pub unsafe extern "C" fn trueos_mio_tcp_stream_read(
         }
         return got as isize;
     }
-    mio_tcp_stream_read_host(socket_id, out_ptr, out_cap)
+    mio_tcp_stream_receive_host(socket_id, out_ptr, out_cap, peek)
 }
 
 pub(crate) unsafe fn mio_tcp_stream_write_host(
@@ -1988,6 +2113,9 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
         };
         if socket.kind != MioSocketKind::TcpStream {
             return STATUS_INVALID_INPUT as isize;
+        }
+        if socket.write_shutdown {
+            return STATUS_BROKEN_PIPE as isize;
         }
         if !socket.connected {
             return if socket.error != STATUS_OK {

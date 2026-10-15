@@ -462,6 +462,7 @@ pub async fn midi_piano_udp_task() {
                     | api::Event::IpPacket { .. }
                     | api::Event::IcmpReply { .. }
                     | api::Event::IcmpReplyV6 { .. }
+                    | api::Event::TcpReadClosed { .. }
                     | api::Event::Opened { .. }
                     | api::Event::Closed { .. } => {}
                 }

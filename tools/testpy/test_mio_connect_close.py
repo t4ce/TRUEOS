@@ -66,7 +66,7 @@ fn prepare(kind:MioSocketKind, connected:bool, error:i32) {
         c.sockets=vec![MioSocketState {
             id:1, owner_vm:None, kind, handle:Some(api::NetHandle(2)),
             listen_handles:vec![api::NetHandle(2)], local:None, peer:Some(CompatAddr),
-            listen_port:None, connected, closed:false, error, tx_in_flight:0,
+            listen_port:None, connected, closed:false, read_shutdown:false, write_shutdown:false, peer_eof:false, error, tx_in_flight:0,
             rx_stream:VecDeque::new(), rx_dgrams:VecDeque::new(), accept_queue:VecDeque::new(),
         }];
         c.close_event(api::NetHandle(2));

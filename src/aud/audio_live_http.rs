@@ -1101,7 +1101,8 @@ pub async fn tinyaudio_live_http_task() {
                     | api::Event::UdpPacketV6 { .. }
                     | api::Event::IpPacket { .. }
                     | api::Event::IcmpReply { .. }
-                    | api::Event::IcmpReplyV6 { .. } => {}
+                    | api::Event::IcmpReplyV6 { .. }
+                    | api::Event::TcpReadClosed { .. } => {}
                 }
             }
 
