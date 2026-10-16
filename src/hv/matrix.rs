@@ -17,6 +17,9 @@ pub(crate) struct AppReceipt {
 struct Entry {
     lease: MatrixSlotLease,
     receipt: AppReceipt,
+    observed: bool,
+    // Outer None means pending; Some(None) is an exit without an action.
+    completion: Option<Option<String>>,
 }
 static APPS: spin::Mutex<Vec<Entry>> = spin::Mutex::new(Vec::new());
 
@@ -44,6 +47,8 @@ pub(crate) fn reserve(archive: &str, bytes: &[u8]) -> Result<(MatrixTarget, AppR
     APPS.lock().push(Entry {
         lease: lease.clone(),
         receipt: receipt.clone(),
+        observed: false,
+        completion: None,
     });
     if attach_matrix_slot_resource(&lease, Arc::new(Attachment)).is_err() {
         APPS.lock().retain(|entry| entry.lease != lease);
@@ -61,6 +66,20 @@ pub(crate) fn reserve(archive: &str, bytes: &[u8]) -> Result<(MatrixTarget, AppR
 pub(crate) fn discard(target: &MatrixTarget) {
     let lease = matrix_target_slot_lease(target);
     crate::shell3::MatrixSlots::drop_lease(&lease);
+}
+
+/// Keep an observed launch's identity until its owner consumes completion.
+pub(crate) fn observe_completion(target: &MatrixTarget) {
+    let lease = matrix_target_slot_lease(target);
+    if let Some(entry) = APPS.lock().iter_mut().find(|entry| entry.lease == lease) {
+        entry.observed = true;
+    }
+}
+
+/// Snapshot belongs to the Matrix lifetime, never to a reusable numeric VM ID.
+pub(crate) fn take_completion(target: &MatrixTarget) -> Option<Option<String>> {
+    let lease = matrix_target_slot_lease(target);
+    APPS.lock().iter_mut().find(|entry| entry.lease == lease)?.completion.take()
 }
 
 /// Both queued launches and reconstruction enter through this identity check.
@@ -159,7 +178,19 @@ pub(crate) fn working_slots() -> Vec<String> {
 pub(crate) fn retire_vm(vm: u8) {
     let lease = super::vm_slot(vm).and_then(|vm| vm.matrix_owner.lock().take());
     if let Some(lease) = lease {
-        crate::shell3::MatrixSlots::drop_lease(&lease);
+        let reason = super::blueprint_console_exit_reason(vm);
+        let retained = {
+            let mut apps = APPS.lock();
+            if let Some(entry) = apps.iter_mut().find(|entry| entry.lease == lease && entry.observed) {
+                entry.completion = Some(reason);
+                true
+            } else {
+                false
+            }
+        };
+        if !retained {
+            crate::shell3::MatrixSlots::drop_lease(&lease);
+        }
     }
 }
 

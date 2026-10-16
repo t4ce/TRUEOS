@@ -38,9 +38,9 @@ def harness():
     fence_line = next(line for line in source.splitlines() if line.startswith("const FREE_ADDRESS_FENCES:"))
     # Replay the previous tracing policy against the same indexed allocator;
     # this isolates trace cost from first-fit and index maintenance cost.
-    alloc_start = source.index("    unsafe fn alloc(&mut self")
+    alloc_start = source.index("    unsafe fn alloc_select(&mut self")
     alloc_end = source.index("\n    }\n", alloc_start) + len("\n    }\n")
-    prior = textwrap.dedent(source[alloc_start:alloc_end]).replace("unsafe fn alloc(", "unsafe fn old_traced_alloc(", 1)
+    prior = textwrap.dedent(source[alloc_start:alloc_end]).replace("unsafe fn alloc_select(", "unsafe fn old_traced_alloc_select(", 1)
     selected = """            trace_alloc_block(trace_enabled, block, block_start, payload_start, aligned_used);
             trace_alloc_compare(trace_enabled);"""
     # function() dedents production methods by four spaces.
@@ -49,7 +49,12 @@ def harness():
         raise ValueError("selected trace boundary changed")
     prior = prior.replace(selected, "", 1)
     prior = prior.replace("        if aligned_used > block.size {", selected + "\n\n        if aligned_used > block.size {", 1)
-    production += "\nimpl FreeList {\n" + prior + "\n}\n"
+    wrapper_start = source.index("    unsafe fn alloc(&mut self")
+    wrapper_end = source.index("\n    }\n", wrapper_start) + len("\n    }\n")
+    wrapper = textwrap.dedent(source[wrapper_start:wrapper_end])
+    wrapper = wrapper.replace("unsafe fn alloc(", "unsafe fn old_traced_alloc(", 1)
+    wrapper = wrapper.replace("self.alloc_select(", "self.old_traced_alloc_select(", 1)
+    production += "\nimpl FreeList {\n" + prior + "\n" + wrapper + "\n}\n"
     # Count actual metadata reads, including the one predecessor examined
     # before entering the band, without changing branches or list geometry.
     marker = production.index("unsafe fn checked_free_block_end(")

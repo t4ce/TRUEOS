@@ -64,7 +64,7 @@ fn prepare(kind:MioSocketKind, connected:bool, error:i32) {
     with_compat(|c| {
         c.refills=0;
         c.sockets=vec![MioSocketState {
-            id:1, owner_vm:None, kind, handle:Some(api::NetHandle(2)),
+            id:1, owner_vm:None, progress_generation:1, kind, handle:Some(api::NetHandle(2)),
             listen_handles:vec![api::NetHandle(2)], local:None, peer:Some(CompatAddr),
             listen_port:None, connected, closed:false, read_shutdown:false, write_shutdown:false, peer_eof:false, error, tx_in_flight:0,
             rx_stream:VecDeque::new(), rx_dgrams:VecDeque::new(), accept_queue:VecDeque::new(),

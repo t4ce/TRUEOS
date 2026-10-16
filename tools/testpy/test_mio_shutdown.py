@@ -61,7 +61,7 @@ std::thread_local! {
     static WAKES:std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 fn new_socket()->MioSocketState {
-    MioSocketState { id:1, owner_vm:Some(7), kind:MioSocketKind::TcpStream,
+    MioSocketState { id:1, owner_vm:Some(7), progress_generation:1, kind:MioSocketKind::TcpStream,
         handle:Some(api::NetHandle(42)), listen_handles:Vec::new(),local:None,peer:None,
         listen_port:None,connected:true,closed:false,read_shutdown:false,write_shutdown:false,
         peer_eof:false,error:STATUS_OK,tx_in_flight:0,rx_stream:b"witness".iter().copied().collect(),

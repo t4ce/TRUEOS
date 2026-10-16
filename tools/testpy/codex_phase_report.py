@@ -21,6 +21,10 @@ MCP_STATES = frozenset({"started", "complete", "cancelled", "error"})
 SQLX_SETUP_PHASES = frozenset("setup_total connect_headers service_ready connect_headers_retry upgrade open".split())
 SQLX_RPC_PHASES = frozenset("serialize write read_header read_body parse complete".split())
 SQLX_OPERATIONS = frozenset("open execute prepare begin commit rollback ping close".split())
+SQLITE_SERVICE_PHASES = frozenset("dispatch lock run reclaim snapshot_after publish restore reply_serialize reply_write complete".split())
+SQLITE_SERVICE_NUMBERS = tuple("seq connection_id request_id elapsed_us lock_us queue_us before_us before_bytes execute_us reclaim_us after_us after_bytes publish_us publish_bytes restore_us reply_serialize_us reply_write_us reply_bytes".split())
+NETWORK_PROGRESS_NUMBERS = tuple("vm gen current_gen sockets paused rx_bytes read_bytes peek_bytes read_calls peek_calls would_block ready_probes readable_hits queued socket_queue_peak".split())
+ALLOCATOR_WORK_NUMBERS = tuple("vm alloc_calls alloc_nodes alloc_max_nodes alloc_failures".split())
 SLICE_REASONS = frozenset({"Yield", "Sleep", "Wait", "Complete"})
 SLICE_STOPS = frozenset({"End", "Bounds", "Unaligned", "NonIncreasing", "NonExecutable", "Limit"})
 STEP_PHASES = frozenset("capture active_turn_snapshot environment_ready instructions capability_roots capability_discovery mcp_ready recommendations selected_contributors build_router conversation_snapshot retain_context turn_record_context context_world_state context_render context_record_items context_persist_snapshot context_checkpoint turn_display_roots turn_skills_plugins turn_start_hooks turn_hooks_inputs input_inspect_hooks input_record hook_transcript_path hook_transcript_persist input_prepare input_record_history input_emit_items input_persist sampling_base_instructions sampling_incremental_tools sampling_build_prompt sampling_metadata sampling_stream".split())
@@ -113,6 +117,65 @@ def _slice_record(line: str, line_no: int, run: int) -> dict | None:
     record['frames'] = addresses
     return record
 
+
+
+def _sqlite_service_record(line: str, line_no: int, run: int) -> dict | None:
+    match = re.match(r'^(?:\[[^\]\r\n]*\]\s*)*(?:blueprint vm(\d+):\s*)?sqlite-service-timing\s+(.*)', line)
+    if not match:
+        return None
+    fields = _fields(match[2])
+    if fields.get('operation') not in SQLX_OPERATIONS or fields.get('phase') not in SQLITE_SERVICE_PHASES or fields.get('completed') not in {'true', 'false'}:
+        return None
+    record = dict(line=line_no, run=run or None, operation=fields['operation'], phase=fields['phase'], completed=fields['completed'] == 'true')
+    if match[1] is not None:
+        record['vm'] = _number(match[1])
+        if record['vm'] is None:
+            return None
+    for key in SQLITE_SERVICE_NUMBERS:
+        value = _number(fields.get(key))
+        if value is None:
+            return None
+        record[key] = value
+    if 'skipped' in fields:
+        skipped = _number(fields['skipped'])
+        if skipped is None:
+            return None
+        record['skipped'] = skipped
+    return record
+
+
+def _network_progress_record(line: str, line_no: int, run: int) -> dict | None:
+    match = re.match(r'^(?:\[[^\]\r\n]*\]\s*)*codex-progress-net\s+(.*)', line)
+    if not match:
+        return None
+    fields = _fields(match[1])
+    record = dict(line=line_no, run=run or None)
+    if fields.get('registry') == 'busy':
+        return dict(record, registry='busy')
+    for key in NETWORK_PROGRESS_NUMBERS:
+        value = _number(fields.get(key))
+        if value is None:
+            return None
+        record[key] = value
+    if record['vm'] > 255 or record['paused'] not in (0, 1):
+        return None
+    return record
+
+
+def _allocator_work_record(line: str, line_no: int, run: int) -> dict | None:
+    match = re.match(r'^(?:\[[^\]\r\n]*\]\s*)*codex-allocator-work\s+(.*)', line)
+    if not match:
+        return None
+    fields = _fields(match[1])
+    record = dict(line=line_no, run=run or None)
+    for key in ALLOCATOR_WORK_NUMBERS:
+        value = _number(fields.get(key))
+        if value is None:
+            return None
+        record[key] = value
+    if record['vm'] > 255:
+        return None
+    return record
 
 
 def _async_fs_record(line: str, line_no: int, run: int) -> tuple[str, dict] | None:
@@ -217,6 +280,9 @@ def parse_log_text(text: str) -> dict:
     markers, events = [], []
     sqlx_setup, sqlx_rpc, slice_exits = [], [], []
     async_fs, async_fs_pending = [], []
+    sqlite_service = []
+    network_progress = []
+    allocator_work = []
     startup_runs = []
     startup_run = 0
     pid_elapsed: dict[int, float] = {}
@@ -250,6 +316,15 @@ def parse_log_text(text: str) -> dict:
             fs_record = _async_fs_record(line, line_no, startup_run)
             if fs_record:
                 (async_fs if fs_record[0] == 'timing' else async_fs_pending).append(fs_record[1])
+            service_record = _sqlite_service_record(line, line_no, startup_run)
+            if service_record:
+                sqlite_service.append(service_record)
+            network_record = _network_progress_record(line, line_no, startup_run)
+            if network_record:
+                network_progress.append(network_record)
+            work_record = _allocator_work_record(line, line_no, startup_run)
+            if work_record:
+                allocator_work.append(work_record)
             trace = _slice_record(line, line_no, startup_run)
             if trace:
                 slice_exits.append(trace)
@@ -410,7 +485,10 @@ def parse_log_text(text: str) -> dict:
         'SQLx records carry no VM identity; connection summaries must not be treated as authoritative cross-process joins when several emitters share a capture.',
         'MCP body_progress records are cumulative byte observations at elapsed body times, not extra completed body intervals. Repeated same-offset samples remain separate.',
         'Async filesystem records are sampled diagnostics. Owner/class summaries show independent maxima, never an additive critical path or a total operation count; skipped values describe omitted samples.',
-    ], startup_runs=startup_runs, startup_markers=markers, startup_spans=startup_spans, events=events, turns=turns, captures=list(captures.values()), mcp_captures=_mcp_captures(events), sqlx_setup=sqlx_setup, sqlx_rpc=sqlx_rpc, sqlx_connections=_sqlx_connections(sqlx_setup, sqlx_rpc), slice_exits=slice_exits, slice_summaries=_slice_summaries(slice_exits), async_fs=async_fs, async_fs_pending=async_fs_pending, async_fs_summary=_async_fs_summaries(async_fs))
+        'SQLite service timings are sampled numeric observations. Optional VM identity belongs to the service, not its client; connection/request IDs are process-local correlation hints, not authoritative cross-client joins. Zero IDs mean no correlation metadata. Stages overlap with client waits and must not be added to turn duration.',
+        'Network progress is raw TCP byte/call telemetry, including TLS and HTTP framing, not plaintext body counts. Counters are scoped by VM and generation; current_gen and paused describe observation time. queued sums live socket queues, while socket_queue_peak is a single-socket maximum. Socket closure/shutdown can discard bytes, so rx_bytes minus read_bytes is not a queue invariant. Busy or absent snapshots do not mean zero work. No cross-generation deltas or request-level attribution are inferred.',
+        'Allocator work counts first-fit candidate visits, not time or freed bytes. Counters reset on heap installation or restored-index rebuild, including within one VM run; decreases can mean a reset. Missing/busy/uninitialized snapshots are absent, not zero. No cross-snapshot rates or time attribution are inferred.',
+    ], startup_runs=startup_runs, startup_markers=markers, startup_spans=startup_spans, events=events, turns=turns, captures=list(captures.values()), mcp_captures=_mcp_captures(events), sqlx_setup=sqlx_setup, sqlx_rpc=sqlx_rpc, sqlx_connections=_sqlx_connections(sqlx_setup, sqlx_rpc), slice_exits=slice_exits, slice_summaries=_slice_summaries(slice_exits), async_fs=async_fs, async_fs_pending=async_fs_pending, async_fs_summary=_async_fs_summaries(async_fs), sqlite_service=sqlite_service, network_progress=network_progress, allocator_work=allocator_work)
 
 
 def markdown(report: dict) -> str:
@@ -421,7 +499,7 @@ def markdown(report: dict) -> str:
         details = {k: v for k, v in event.items() if k not in {'line', 'event', 'session', 'spans'}}
         lines.append(f"- L{event['line']} {event['session']} {event['event']}: {json.dumps(details, sort_keys=True)}")
     lines += ['', 'Turns:', json.dumps(report['turns'], indent=2), '', 'Step-context capture timelines:', json.dumps(report['captures'], indent=2)]
-    for label, key in [('MCP phase timelines', 'mcp_captures'), ('SQLx connection summaries', 'sqlx_connections'), ('SQLx setup phases', 'sqlx_setup'), ('SQLx RPC phases', 'sqlx_rpc'), ('Async filesystem timing summaries', 'async_fs_summary'), ('Async filesystem timing samples', 'async_fs'), ('Pending async filesystem observations', 'async_fs_pending'), ('Continuation exit-callstack summaries', 'slice_summaries'), ('Continuation exit call stacks', 'slice_exits')]:
+    for label, key in [('MCP phase timelines', 'mcp_captures'), ('SQLx connection summaries', 'sqlx_connections'), ('SQLx setup phases', 'sqlx_setup'), ('SQLx RPC phases', 'sqlx_rpc'), ('SQLite service timing samples', 'sqlite_service'), ('Network progress samples', 'network_progress'), ('Allocator work samples', 'allocator_work'), ('Async filesystem timing summaries', 'async_fs_summary'), ('Async filesystem timing samples', 'async_fs'), ('Pending async filesystem observations', 'async_fs_pending'), ('Continuation exit-callstack summaries', 'slice_summaries'), ('Continuation exit call stacks', 'slice_exits')]:
         lines += ['', label + ':', json.dumps(report.get(key, []), indent=2)]
     lines += ['', *report['notes']]
     return '\n'.join(lines)

@@ -367,6 +367,12 @@ struct FreeList {
     // during batched destruction. Allocation and heap replacement invalidate
     // this hint before they can remove or replace its node.
     free_finger: Option<NonNull<FreeBlock>>,
+    // Cumulative candidate visits, committed once per allocation under the
+    // existing heap lock. These are work counts, not elapsed-time samples.
+    alloc_calls: u64,
+    alloc_nodes: u64,
+    alloc_max_nodes: u64,
+    alloc_failures: u64,
     initialized: bool,
     heap_virt_start: usize,
     heap_len: usize,
@@ -382,6 +388,10 @@ impl FreeList {
             head: None,
             address_fences: [None; FREE_ADDRESS_FENCES],
             free_finger: None,
+            alloc_calls: 0,
+            alloc_nodes: 0,
+            alloc_max_nodes: 0,
+            alloc_failures: 0,
             initialized: false,
             heap_virt_start: 0,
             heap_len: 0,
@@ -416,6 +426,17 @@ impl FreeList {
     }
 
     unsafe fn alloc(&mut self, domain: AllocDomain, layout: Layout) -> *mut u8 {
+        let mut nodes = 0usize;
+        let ptr = unsafe { self.alloc_select(domain, layout, &mut nodes) };
+        let nodes = nodes as u64;
+        self.alloc_calls = self.alloc_calls.saturating_add(1);
+        self.alloc_nodes = self.alloc_nodes.saturating_add(nodes);
+        self.alloc_max_nodes = self.alloc_max_nodes.max(nodes);
+        self.alloc_failures = self.alloc_failures.saturating_add(u64::from(ptr.is_null()));
+        ptr
+    }
+
+    unsafe fn alloc_select(&mut self, domain: AllocDomain, layout: Layout, nodes: &mut usize) -> *mut u8 {
         self.free_finger = None;
         if !self.initialized {
             self.init_once();
@@ -429,6 +450,10 @@ impl FreeList {
         let mut last_rejected = None;
 
         while let Some(mut block_ptr) = current {
+            // Validated nodes are ordered, disjoint and at least one block
+            // wide. At most heap_len/minimum_block_size() valid candidates
+            // plus one invalid candidate can be visited, so this cannot wrap.
+            *nodes += 1;
             if self.checked_free_block_end(block_ptr).is_none() {
                 trace_alloc_invalid_ptr(trace_enabled, block_ptr.as_ptr() as usize);
                 return null_mut();
@@ -868,6 +893,7 @@ impl FreeList {
     /// Used once after loading a validated heap image; the index is derived
     /// allocator state and is deliberately absent from the image format.
     unsafe fn rebuild_address_fences(&mut self) {
+        self.reset_work_counts();
         self.free_finger = None;
         self.address_fences.fill(None);
         let mut current = self.head;
@@ -879,6 +905,7 @@ impl FreeList {
     }
 
     fn install_heap(&mut self, virt_start: usize, phys_start: usize, len: usize) {
+        self.reset_work_counts();
         self.head = None;
         self.free_finger = None;
         self.address_fences.fill(None);
@@ -887,6 +914,13 @@ impl FreeList {
         self.heap_len = len;
         self.heap_phys_start = phys_start;
         self.heap_source = HeapSourceKind::Arena;
+    }
+
+    fn reset_work_counts(&mut self) {
+        self.alloc_calls = 0;
+        self.alloc_nodes = 0;
+        self.alloc_max_nodes = 0;
+        self.alloc_failures = 0;
     }
 
     fn ensure_heap_backing(&mut self) -> (usize, usize) {
@@ -1773,6 +1807,32 @@ pub fn hv_guest_heap_stats_if_configured(vm_id: u8) -> Option<HeapStats> {
         return None;
     }
     Some(heap_stats_from_guard(&mut guard))
+}
+
+/// Allocator work since heap installation or restore-index rebuild. A node
+/// means one attempted first-fit candidate, including a rejected invalid node.
+/// These counters contain no allocation addresses, layouts or payloads.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AllocatorWorkSnapshot {
+    pub alloc_calls: u64,
+    pub alloc_nodes: u64,
+    pub alloc_max_nodes: u64,
+    pub alloc_failures: u64,
+}
+
+/// Passive observer: never wait for the allocator, initialize it or walk its
+/// free list. None means absent/uninitialized/busy, never a zero-work sample.
+pub(crate) fn hv_guest_allocator_work_snapshot(vm_id: u8) -> Option<AllocatorWorkSnapshot> {
+    let guard = hv_guest_allocator_page(vm_id)?.allocator.try_lock()?;
+    if !guard.initialized {
+        return None;
+    }
+    Some(AllocatorWorkSnapshot {
+        alloc_calls: guard.alloc_calls,
+        alloc_nodes: guard.alloc_nodes,
+        alloc_max_nodes: guard.alloc_max_nodes,
+        alloc_failures: guard.alloc_failures,
+    })
 }
 
 const HV_GUEST_HEAP_IMAGE_MAGIC: u32 = u32::from_le_bytes(*b"HGS1");

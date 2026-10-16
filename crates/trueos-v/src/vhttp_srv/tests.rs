@@ -18,6 +18,9 @@ fn assert_listen(event: HttpServerEvent) {
 fn assert_close(event: HttpServerEvent, id: u32) {
     assert!(matches!(event, HttpServerEvent::Submit(api::Command::Close { handle }) if handle == api::NetHandle(id)));
 }
+fn assert_finish(event: HttpServerEvent, id: u32) {
+    assert!(matches!(event, HttpServerEvent::Submit(api::Command::FinishTcp { handle }) if handle == api::NetHandle(id)));
+}
 
 #[test]
 fn accepted_connection_rearms_before_response_or_eof() {
@@ -48,7 +51,7 @@ fn old_session_eof_never_duplicates_pending_or_new_listener() {
 }
 
 #[test]
-fn response_completion_closes_only_accepted_session() {
+fn response_completion_finishes_only_accepted_session() {
     let mut server = HttpServer::new(80, 1024);
     opened(&mut server, 1);
     assert_listen(established(&mut server, 1));
@@ -56,7 +59,7 @@ fn response_completion_closes_only_accepted_session() {
     assert!(matches!(request(&mut server, 1, b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n"), HttpServerEvent::RequestReady { .. }));
     server.mark_response(api::NetHandle(1), 100, false);
     assert!(matches!(server.on_event(api::Event::TcpSent { handle: api::NetHandle(1), len: 40 }), HttpServerEvent::None));
-    assert_close(server.on_event(api::Event::TcpSent { handle: api::NetHandle(1), len: 60 }), 1);
+    assert_finish(server.on_event(api::Event::TcpSent { handle: api::NetHandle(1), len: 60 }), 1);
     assert!(matches!(closed(&mut server, 1), HttpServerEvent::None));
     assert_eq!(server.listener_handle, Some(api::NetHandle(2)));
     assert_listen(established(&mut server, 2));
@@ -116,7 +119,7 @@ fn twenty_immediate_sequential_connections_keep_an_independent_listener() {
         opened(&mut server, id + 1);
         assert!(matches!(request(&mut server, id, b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n"), HttpServerEvent::RequestReady { .. }));
         server.mark_response(api::NetHandle(id), 10, false);
-        assert_close(server.on_event(api::Event::TcpSent { handle: api::NetHandle(id), len: 10 }), id);
+        assert_finish(server.on_event(api::Event::TcpSent { handle: api::NetHandle(id), len: 10 }), id);
         assert!(matches!(closed(&mut server, id), HttpServerEvent::None));
         assert_eq!(server.listener_handle, Some(api::NetHandle(id + 1)));
     }
@@ -132,4 +135,22 @@ fn request_size_and_malformed_header_checks_still_apply_to_admitted_session() {
     opened(&mut server, 2);
     assert_listen(established(&mut server, 2));
     assert!(matches!(request(&mut server, 2, b"BAD\r\n\r\n"), HttpServerEvent::BadRequest { .. }));
+}
+
+#[test]
+fn keep_alive_completion_never_finishes_and_graceful_finish_waits_for_closed_cleanup() {
+    let mut server = HttpServer::with_session_limit(80, 1024, 1);
+    opened(&mut server, 1);
+    assert!(matches!(established(&mut server, 1), HttpServerEvent::None));
+    server.mark_response(api::NetHandle(1), 100, true);
+    assert!(matches!(server.on_event(api::Event::TcpSent { handle: api::NetHandle(1), len: 100 }), HttpServerEvent::None));
+    assert_eq!(server.sessions.len(), 1);
+    // A subsequent response on the same session may request graceful closure.
+    server.mark_response(api::NetHandle(1), 40, false);
+    assert_finish(server.on_event(api::Event::TcpSent { handle: api::NetHandle(1), len: 40 }), 1);
+    assert_eq!(server.sessions.len(), 1, "send admission is not disconnect");
+    assert!(matches!(server.on_event(api::Event::TcpSent { handle: api::NetHandle(1), len: 40 }), HttpServerEvent::None), "finish is emitted once");
+    assert_listen(closed(&mut server, 1));
+    assert!(server.sessions.is_empty());
+    assert!(matches!(closed(&mut server, 1), HttpServerEvent::None));
 }

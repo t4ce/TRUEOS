@@ -231,7 +231,11 @@ impl HttpServer {
                         session.pending_bytes = 0;
                         session.sent_bytes = 0;
                         if should_close {
-                            return HttpServerEvent::Submit(api::Command::Close { handle });
+                            // TcpSent confirms admission to TCP's send buffer,
+                            // not delivery or acknowledgement by the peer.
+                            // Keep that socket alive until its queued bytes and
+                            // FIN drain; Close is the immediate abort path.
+                            return HttpServerEvent::Submit(api::Command::FinishTcp { handle });
                         }
                         if session.req.len() > self.max_request_bytes {
                             session.req.clear();

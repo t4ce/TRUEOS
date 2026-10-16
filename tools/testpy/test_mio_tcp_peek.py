@@ -39,8 +39,12 @@ def main():
     constants = flag + '\n' + '\n'.join(re.search(rf'^(?:pub\(crate\) )?const {n}:.*?;', shim, re.M).group() for n in (
         'TRUEOS_MSG_PEEK', 'TRUEOS_MSG_DONTWAIT', 'TRUEOS_EINVAL',
     ))
+    progress_helper = mio.split('fn compat_progress(', 1)[1].split('\n}\n', 1)[0]
+    progress_helper = 'fn compat_progress(' + progress_helper + '\n}\n'
     harness = r'''
 #![allow(dead_code, unused_variables, non_camel_case_types, unsafe_op_in_unsafe_fn)]
+extern crate alloc;
+#[path = "@PROGRESS@"] mod progress;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI32, Ordering};
 type c_int = i32;
@@ -50,18 +54,19 @@ const STATUS_WOULD_BLOCK: i32 = -2;
 static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 #[macro_export] macro_rules! log { ($($args:tt)*) => {} }
 #[derive(PartialEq)] enum MioSocketKind { TcpStream, UdpSocket }
-struct Socket { id:u32, kind:MioSocketKind, closed:bool, read_shutdown:bool, peer_eof:bool, rx_stream:VecDeque<u8> }
-struct Compat { socket:Socket }
+struct Socket { id:u32, owner_vm:Option<u8>, progress_generation:u64, kind:MioSocketKind, closed:bool, read_shutdown:bool, peer_eof:bool, rx_stream:VecDeque<u8> }
+struct Compat { sockets:Vec<Socket>, progress:[progress::Counters;1] }
 impl Compat {
     fn pump(&mut self) {}
     fn socket_mut_for_owner(&mut self, id:u32, _:Option<u8>) -> Option<&mut Socket> {
-        if id == self.socket.id { Some(&mut self.socket) } else { None }
+        self.sockets.iter_mut().find(|socket|socket.id==id)
     }
 }
 std::thread_local! {
     static STATE:std::cell::RefCell<Compat> = std::cell::RefCell::new(Compat {
-        socket:Socket { id:1, kind:MioSocketKind::TcpStream, closed:false,
-                        read_shutdown:false, peer_eof:false, rx_stream:VecDeque::new() }
+        sockets:vec![Socket { id:1, owner_vm:Some(0), progress_generation:1, kind:MioSocketKind::TcpStream, closed:false,
+                        read_shutdown:false, peer_eof:false, rx_stream:VecDeque::new() }],
+        progress:[progress::Counters::new();1]
     });
 }
 fn with_compat<R>(f:impl FnOnce(&mut Compat)->R)->R { STATE.with(|s| f(&mut s.borrow_mut())) }
@@ -98,6 +103,8 @@ mod hv {
 }
 fn vmcall_isize(data:u64)->isize { data as i64 as isize }
 fn vm_guest_vmcall_active()->bool { MODE.with(|m| m.get()==1) }
+fn owner_matches(socket_owner:Option<u8>, requested:Option<u8>)->bool { requested.is_none()||socket_owner==requested }
+mod allcaps { pub mod hv { pub const CODEX_PROGRESS_PROBES_ENABLED:bool=true; } }
 fn current_owner_vm()->Option<u8> { MODE.with(|m| if m.get()==2 { Some(1) } else { None }) }
 fn socket_owner_vm(_:u32)->Option<u8> { MODE.with(|m| if m.get()==3 { Some(1) } else { None }) }
 fn copy_to_active_guest(_:u8,out:*mut u8,bytes:&[u8])->bool {
@@ -116,8 +123,8 @@ unsafe fn native_recv(buf:*mut u8, len:usize, flags:i32)->isize {
     @DISPATCH@
 }
 fn prepare(bytes:&[u8], closed:bool) {
-    with_compat(|c| { c.socket.rx_stream=bytes.iter().copied().collect();
-        c.socket.closed=closed; c.socket.read_shutdown=false; c.socket.peer_eof=false; });
+    with_compat(|c| { c.sockets[0].owner_vm=current_owner_vm(); c.sockets[0].rx_stream=bytes.iter().copied().collect();
+        c.sockets[0].closed=closed; c.sockets[0].read_shutdown=false; c.sockets[0].peer_eof=false; });
 }
 #[test] fn repeated_native_peeks_preserve_the_witness_for_read() {
     prepare(b"peek-witness",true);
@@ -139,7 +146,7 @@ fn prepare(bytes:&[u8], closed:bool) {
     assert_eq!(&out[..2],b"ab");
     assert_eq!(unsafe { native_recv(out.as_mut_ptr(),3,TRUEOS_MSG_PEEK) },3);
     assert_eq!(&out,b"cde");
-    with_compat(|c| assert_eq!(c.socket.rx_stream.iter().copied().collect::<Vec<_>>(),b"cdefgh"));
+    with_compat(|c| assert_eq!(c.sockets[0].rx_stream.iter().copied().collect::<Vec<_>>(),b"cdefgh"));
 }
 #[test] fn empty_open_is_would_block_and_empty_closed_is_eof() {
     let mut out=[0;1];
@@ -155,7 +162,7 @@ fn prepare(bytes:&[u8], closed:bool) {
         prepare(bytes,false);
         for flags in [0,TRUEOS_MSG_PEEK] {
             assert_eq!(unsafe { native_recv(std::ptr::null_mut(),0,flags) },0);
-            with_compat(|c| assert_eq!(c.socket.rx_stream.len(),bytes.len()));
+            with_compat(|c| assert_eq!(c.sockets[0].rx_stream.len(),bytes.len()));
         }
     }
 }
@@ -169,7 +176,7 @@ fn prepare(bytes:&[u8], closed:bool) {
 }
 #[test] fn peer_half_close_drains_buffer_before_eof_and_keeps_peek_non_consuming() {
     prepare(b"last",false);
-    with_compat(|c|c.socket.peer_eof=true);
+    with_compat(|c|c.sockets[0].peer_eof=true);
     let mut out=[0;4];
     assert_eq!(unsafe { native_recv(out.as_mut_ptr(),4,TRUEOS_MSG_PEEK) },4);
     assert_eq!(&out,b"last");
@@ -180,10 +187,23 @@ fn prepare(bytes:&[u8], closed:bool) {
 }
 #[test] fn read_shutdown_is_eof_for_both_operations() {
     prepare(b"buffered",false);
-    with_compat(|c| c.socket.read_shutdown=true);
+    with_compat(|c| c.sockets[0].read_shutdown=true);
     let mut out=[0;8];
     assert_eq!(unsafe { mio_tcp_stream_peek_host(1,out.as_mut_ptr(),8) },0);
     assert_eq!(unsafe { mio_tcp_stream_read_host(1,out.as_mut_ptr(),8) },0);
+}
+#[test] fn production_receive_records_consumption_peeking_and_would_block() {
+    prepare(b"four",false);
+    with_compat(|c| { c.sockets[0].owner_vm=Some(0); c.progress=[progress::Counters::new();1]; });
+    let mut out=[0;8];
+    assert_eq!(unsafe { mio_tcp_stream_peek_host(1,out.as_mut_ptr(),8) },4);
+    assert_eq!(unsafe { mio_tcp_stream_read_host(1,out.as_mut_ptr(),8) },4);
+    assert_eq!(unsafe { mio_tcp_stream_read_host(1,out.as_mut_ptr(),8) },-2);
+    with_compat(|c| {
+        let p=c.progress[0];
+        assert_eq!((p.generation,p.read_bytes,p.peek_bytes),(1,4,4));
+        assert_eq!((p.read_calls,p.peek_calls,p.would_block),(2,1,1));
+    });
 }
 '''
     harness += r"""
@@ -210,11 +230,12 @@ fn prepare(bytes:&[u8], closed:bool) {
         assert_eq!(&out[..PAYLOAD_CAP],b"abcdefghijklmnop");
         assert!(out[PAYLOAD_CAP..].iter().all(|&b|b==0x55));
         assert_eq!(unsafe { trueos_mio_tcp_stream_peek(1,std::ptr::null_mut(),0) },0);
-        with_compat(|c|assert_eq!(c.socket.rx_stream.len(),26));
+        with_compat(|c|assert_eq!(c.sockets[0].rx_stream.len(),26));
     }
 }
 """
-    harness = harness.replace('@DISPATCH@', dispatch).replace('@DISPATCHER@', dispatcher)
+    harness = harness.replace('@DISPATCH@', dispatch).replace('@DISPATCHER@', dispatcher).replace('@PROGRESS@', str(ROOT / 'src/mio_compat/progress.rs'))
+    production += progress_helper
     with tempfile.TemporaryDirectory(prefix='trueos-mio-peek-') as directory:
         rust = Path(directory) / 'test.rs'
         binary = Path(directory) / 'test'

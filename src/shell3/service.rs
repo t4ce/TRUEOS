@@ -123,9 +123,7 @@ pub(crate) fn launch_bytes_with_script(archive: alloc::string::String, bytes: Ve
     launch_bytes_with_args(archive, bytes, frontend, script, args)
 }
 fn launch_bytes_with_args(archive: alloc::string::String, bytes: Vec<u8>, frontend: super::tui::Frontend, script: Option<alloc::string::String>, args: Vec<alloc::string::String>) -> Result<QueuedBlueprint, alloc::string::String> {
-    let observer = (archive == "os.bp").then(|| alloc::boxed::Box::new(ShellLaunch {
-        run: spin::Mutex::new(None),
-    }) as alloc::boxed::Box<dyn crate::hv::launcher::LaunchObserver>);
+    let observer = (archive == "os.bp").then(|| alloc::boxed::Box::new(ShellLaunch) as alloc::boxed::Box<dyn crate::hv::launcher::LaunchObserver>);
     let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
     request.script = script;
     request.args = args;
@@ -769,17 +767,13 @@ pub(super) fn working_vmx_slots() -> Vec<alloc::string::String> {
 }
 
 // OS update completion is presentation policy, not Matrix/VM ownership.
-struct ShellLaunch { run: spin::Mutex<Option<u64>> }
+struct ShellLaunch;
 impl crate::hv::launcher::LaunchObserver for ShellLaunch {
-    fn started(&self, vm: u8) { *self.run.lock() = crate::hv::vm_run_generation(vm); }
-    fn finished(&self, target: &super::MatrixTarget, vm: Option<u8>, error: Option<&str>) {
-        if error.is_some() { return; }
-        if let Some(vm) = vm.filter(|vm| crate::hv::vm_run_generation(*vm) == *self.run.lock()) {
-            if let Some(reason) = crate::hv::blueprint_console_exit_reason(vm) {
-                if !matches!(reason.as_str(), "os:quit" | "os:cancel") {
-                    super::os::complete(target.clone(), reason);
-                    return;
-                }
+    fn finished(&self, target: &super::MatrixTarget, _vm: Option<u8>, error: Option<&str>, reason: Option<&str>) {
+        if error.is_none() {
+            if let Some(reason) = reason.filter(|reason| !matches!(*reason, "os:quit" | "os:cancel")) {
+                super::os::complete(target.clone(), reason.into());
+                return;
             }
         }
         crate::hv::matrix::discard(target);

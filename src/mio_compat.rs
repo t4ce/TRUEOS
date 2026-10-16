@@ -6,6 +6,8 @@ use v::vnet as api;
 
 use crate::blueprint_net_broker::VNetBridge;
 
+mod progress;
+
 const STATUS_OK: i32 = 0;
 const STATUS_UNSUPPORTED: i32 = -1;
 const STATUS_WOULD_BLOCK: i32 = -2;
@@ -325,6 +327,7 @@ fn mio_socket_kind_label(kind: MioSocketKind) -> &'static str {
 struct MioSocketState {
     id: u32,
     owner_vm: Option<u8>,
+    progress_generation: u64,
     kind: MioSocketKind,
     handle: Option<api::NetHandle>,
     listen_handles: Vec<api::NetHandle>,
@@ -351,6 +354,7 @@ struct PendingOpen {
 struct MioCompat {
     net: Option<VNetBridge>,
     sockets: Vec<MioSocketState>,
+    progress: [progress::Counters; crate::allcaps::hv::VM_ID_LIMIT],
     pending_opens: VecDeque<PendingOpen>,
     next_socket_id: u32,
     udp_next_ephemeral: u16,
@@ -364,6 +368,67 @@ fn with_compat<R>(f: impl FnOnce(&mut MioCompat) -> R) -> R {
         let mut guard = MIO_COMPAT.lock();
         let compat = guard.get_or_insert_with(MioCompat::new);
         f(compat)
+    })
+}
+
+fn compat_progress(
+    slots: &mut [progress::Counters],
+    (owner, generation): (Option<u8>, u64),
+) -> Option<&mut progress::Counters> {
+    if !crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { return None; }
+    slots.get_mut(usize::from(owner?))?.for_generation(generation)
+}
+
+/// Aggregate raw TCP progress for live socket owners without driving network I/O.
+/// Cumulative counters survive socket closure until a newer run is observed.
+/// Current queue bytes cover live sockets of the reported generation only.
+/// The peak is the largest individual socket queue, not a sum of historical peaks.
+/// A busy registry yields one static row, never waits on the suspect lock.
+pub(crate) fn progress_lines(limit: usize) -> Vec<alloc::string::String> {
+    const MAX_ROWS: usize = 4;
+    if limit == 0 { return Vec::new(); }
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let Some(guard) = MIO_COMPAT.try_lock() else {
+            return alloc::vec![alloc::string::String::from("codex-progress-net registry=busy")];
+        };
+        let Some(compat) = guard.as_ref() else { return Vec::new(); };
+        // Snapshot only scalars under the registry lock. Formatting/allocating
+        // rows happens after releasing it, and output is globally bounded.
+        let mut snapshots = [None; MAX_ROWS];
+        let mut count = 0usize;
+        // Live TCP owners get the bounded rows before retained closed-socket
+        // history, so low VM ids cannot hide a higher active owner.
+        for active in [true, false] {
+            for (vm, counters) in compat.progress.iter().enumerate() {
+                if count >= limit.min(MAX_ROWS) { break; }
+                if !counters.observed { continue; }
+                let current_generation = crate::hv::vm_run_generation(vm as u8).unwrap_or(0);
+                let mut sockets = 0usize;
+                let mut queued = 0usize;
+                for socket in &compat.sockets {
+                    if socket.owner_vm == Some(vm as u8)
+                        && socket.progress_generation == counters.generation
+                        && socket.kind == MioSocketKind::TcpStream {
+                        sockets = sockets.saturating_add(1);
+                        queued = queued.saturating_add(socket.rx_stream.len());
+                    }
+                }
+                if (sockets != 0) != active { continue; }
+                if current_generation != counters.generation && sockets == 0 { continue; }
+                snapshots[count] = Some((vm, *counters, current_generation, sockets, queued,
+                    usize::from(crate::hv::guest_pause_requested(vm as u8))));
+                count += 1;
+            }
+        }
+        drop(guard);
+        snapshots.into_iter().flatten().map(|(vm, counters, current_generation, sockets, queued, paused)| {
+            alloc::format!(
+                "codex-progress-net vm={} gen={} current_gen={} sockets={} paused={} rx_bytes={} read_bytes={} peek_bytes={} read_calls={} peek_calls={} would_block={} ready_probes={} readable_hits={} queued={} socket_queue_peak={}",
+                vm, counters.generation, current_generation, sockets, paused,
+                counters.rx_bytes, counters.read_bytes, counters.peek_bytes,
+                counters.read_calls, counters.peek_calls, counters.would_block,
+                counters.ready_probes, counters.readable_hits, queued, counters.socket_queue_peak)
+        }).collect()
     })
 }
 
@@ -595,6 +660,7 @@ impl MioCompat {
         Self {
             net: None,
             sockets: Vec::new(),
+            progress: [progress::Counters::new(); crate::allcaps::hv::VM_ID_LIMIT],
             pending_opens: VecDeque::new(),
             next_socket_id: 1,
             udp_next_ephemeral: 49_152,
@@ -945,7 +1011,7 @@ impl MioCompat {
                 {
                     let child_id = self.alloc_socket_id();
                     let event_peer = CompatAddr::from_vnet(peer, peer6);
-                    let (owner_vm, local, fallback_peer, port, inherited_rx) = {
+                    let (owner_vm, progress_generation, local, fallback_peer, port, inherited_rx) = {
                         let listener = self.socket_mut(listener_id).unwrap();
                         listener.listen_handles.retain(|h| *h != handle);
                         let mut inherited_rx = VecDeque::new();
@@ -961,6 +1027,7 @@ impl MioCompat {
                         }
                         (
                             listener.owner_vm,
+                            listener.progress_generation,
                             listener.local,
                             listener.local.map(CompatAddr::unspecified_same_family),
                             listener.listen_port,
@@ -981,6 +1048,7 @@ impl MioCompat {
                     self.sockets.push(MioSocketState {
                         id: child_id,
                         owner_vm,
+                        progress_generation,
                         kind: MioSocketKind::TcpStream,
                         handle: Some(handle),
                         listen_handles: Vec::new(),
@@ -1095,6 +1163,11 @@ impl MioCompat {
                             handle.0,
                             socket.rx_stream.len()
                         );
+                    }
+                    let identity = (socket.owner_vm, socket.progress_generation);
+                    let queued = socket.rx_stream.len();
+                    if let Some(counters) = compat_progress(&mut self.progress, identity) {
+                        counters.receive(data_len, queued);
                     }
                 } else {
                     crate::log!(
@@ -1258,7 +1331,13 @@ pub(crate) fn mio_socket_poll_ready_for_vm_host(
         if socket.owner_vm != Some(vm_id) {
             return None;
         }
-        Some(compat.ready_mask(socket, interests))
+        let ready = compat.ready_mask(socket, interests);
+        let identity = (socket.owner_vm, socket.progress_generation);
+        let tcp = socket.kind == MioSocketKind::TcpStream;
+        if tcp && let Some(counters) = compat_progress(&mut compat.progress, identity) {
+            counters.readiness(ready & READY_READABLE != 0);
+        }
+        Some(ready)
     })
 }
 
@@ -1271,7 +1350,13 @@ pub(crate) fn mio_socket_poll_ready_host(socket_id: u32, interests: u8) -> Optio
         // re-authorize the backend through ambient CPU context here. Direct
         // Blueprint Mio calls still enforce ownership at their ABI boundary.
         let socket = compat.socket(socket_id)?;
-        Some(compat.ready_mask(socket, interests))
+        let ready = compat.ready_mask(socket, interests);
+        let identity = (socket.owner_vm, socket.progress_generation);
+        let tcp = socket.kind == MioSocketKind::TcpStream;
+        if tcp && let Some(counters) = compat_progress(&mut compat.progress, identity) {
+            counters.readiness(ready & READY_READABLE != 0);
+        }
+        Some(ready)
     })
 }
 
@@ -1329,6 +1414,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
+            progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpListener,
             handle: None,
             listen_handles: Vec::new(),
@@ -1456,6 +1542,7 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
+            progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpStream,
             handle: None,
             listen_handles: Vec::new(),
@@ -1586,6 +1673,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
+            progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::Udp,
             handle: None,
             listen_handles: Vec::new(),
@@ -1937,13 +2025,16 @@ pub(crate) unsafe fn mio_tcp_stream_receive_host(
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
+        let Some(socket) = compat.sockets.iter_mut()
+            .find(|socket| socket.id == socket_id && owner_matches(socket.owner_vm, owner_vm)) else {
             return STATUS_NOT_FOUND as isize;
         };
         if socket.kind != MioSocketKind::TcpStream {
             return STATUS_INVALID_INPUT as isize;
         }
+        let counters = compat_progress(&mut compat.progress, (socket.owner_vm, socket.progress_generation));
         if out_cap == 0 || socket.read_shutdown {
+            if let Some(counters) = counters { counters.read(0, peek, false); }
             return 0;
         }
         if socket.rx_stream.is_empty() {
@@ -1955,11 +2046,9 @@ pub(crate) unsafe fn mio_tcp_stream_receive_host(
                     socket.closed as u8
                 );
             }
-            return if socket.closed || socket.peer_eof {
-                0
-            } else {
-                STATUS_WOULD_BLOCK as isize
-            };
+            let would_block = !(socket.closed || socket.peer_eof);
+            if let Some(counters) = counters { counters.read(0, peek, would_block); }
+            return if would_block { STATUS_WOULD_BLOCK as isize } else { 0 };
         }
 
         let len = out_cap.min(socket.rx_stream.len());
@@ -1979,6 +2068,7 @@ pub(crate) unsafe fn mio_tcp_stream_receive_host(
                 socket.rx_stream.len()
             );
         }
+        if let Some(counters) = counters { counters.read(len, peek, false); }
         len as isize
     })
 }

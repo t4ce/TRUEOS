@@ -90,7 +90,7 @@ fn install(page_stride:bool)->Arena{
   let next=offsets.get(i+1).map(|(next,_)|unsafe{NonNull::new_unchecked(ptr.as_ptr().add(*next).cast::<FreeBlock>())});
   unsafe{ptr.as_ptr().add(offset).cast::<FreeBlock>().write(FreeBlock{size,next})};
  }
- *HEAP.lock().unwrap()=Some(FreeList{head:Some(ptr.cast()),address_fences:[None;FREE_ADDRESS_FENCES],initialized:true,heap_virt_start:start,heap_len:bytes,heap_phys_start:0,heap_source:HeapSourceKind::Arena});
+ *HEAP.lock().unwrap()=Some(FreeList{head:Some(ptr.cast()),address_fences:[None;FREE_ADDRESS_FENCES],free_finger:None,alloc_calls:0,alloc_nodes:0,alloc_max_nodes:0,alloc_failures:0,initialized:true,heap_virt_start:start,heap_len:bytes,heap_phys_start:0,heap_source:HeapSourceKind::Arena});
  let stats=hv_guest_heap_stats(0);assert_eq!((stats.free_blocks,stats.free_bytes,stats.largest_free_block),(NODES,FREE,LARGE));
  Arena{ptr,layout,first_gap:(start+gap.0,start+gap.1)}
 }

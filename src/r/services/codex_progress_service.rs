@@ -33,6 +33,20 @@ pub(crate) async fn codex_progress_task() {
                 counters.ipi_failed.wrapping_sub(previous.ipi_failed),
                 counters.timer_armed.wrapping_sub(previous.timer_armed),
                 counters.timer_received.wrapping_sub(previous.timer_received));
+            for line in crate::mio_compat::progress_lines(4) {
+                crate::log_info!(target: "blueprint"; "{}\n", line);
+            }
+            let mut allocator_rows = 0usize;
+            for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+                if allocator_rows == 4 { break; }
+                let Some(work) = crate::allocators::hv_guest_allocator_work_snapshot(vm_id as u8) else {
+                    continue;
+                };
+                crate::log_info!(target: "blueprint";
+                    "codex-allocator-work vm={} alloc_calls={} alloc_nodes={} alloc_max_nodes={} alloc_failures={}\n",
+                    vm_id, work.alloc_calls, work.alloc_nodes, work.alloc_max_nodes, work.alloc_failures);
+                allocator_rows += 1;
+            }
             for line in crate::r::io::async_fs_cabi::progress_lines(4) {
                 crate::log_info!(target: "blueprint"; "{}\n", line);
             }

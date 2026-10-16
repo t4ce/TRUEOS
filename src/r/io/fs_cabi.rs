@@ -1874,7 +1874,7 @@ pub unsafe extern "C" fn trueos_cabi_shell2_frontend_submit_input_v1(
 pub extern "C" fn trueos_cabi_shell2_frontend_detach_v1() -> i32 { -38 }
 
 pub(crate) fn blueprint_img_open_payload(vm_id: u8, payload: &[u8]) -> i32 {
-    -38 // ENOSYS: removed shell integration.
+    crate::r::services::image_open_service::enqueue(vm_id, payload)
 }
 
 /// Queue one new resident img Blueprint. The payload is a non-empty,
