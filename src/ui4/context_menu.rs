@@ -129,7 +129,13 @@ pub(super) fn validate_request(request: &ContextMenuRequest) -> Result<(), Conte
     if request.entries.is_empty() {
         return Err(ContextMenuError::Empty);
     }
-    if request.entries.len() > MAX_CONTEXT_MENU_ENTRIES {
+    let system_rows = usize::from(
+        request
+            .entries
+            .last()
+            .is_some_and(|entry| entry.action_id == super::collapse::MENU_ACTION),
+    );
+    if request.entries.len() > MAX_CONTEXT_MENU_ENTRIES + system_rows {
         return Err(ContextMenuError::TooManyEntries);
     }
     if request
@@ -238,6 +244,10 @@ pub(super) fn resolve_window_menu(
     else {
         return Err(ContextMenuError::NotFocused);
     };
+    let mut entries = entries;
+    if let Some(entry) = super::collapse::menu_entry(owner, window) {
+        entries.push(entry);
+    }
     menu.entries = entries;
     menu.preparing = false;
     drop(active);
@@ -268,13 +278,30 @@ pub(super) fn registered_request(
     owner: WindowOwner,
     window: WindowId,
 ) -> Option<ContextMenuRequest> {
+    let collapse = super::collapse::menu_entry(owner, window);
+    let collapsed = super::window_broker::collapse_state(owner, window) == Some(true);
     let menus = WINDOW_MENUS.lock();
-    let menu = menus
+    let app = menus
         .iter()
-        .find(|menu| menu.owner == owner && menu.window == window)?;
+        .find(|menu| menu.owner == owner && menu.window == window);
+    if collapsed || app.is_none() {
+        return collapse.map(|entry| ContextMenuRequest {
+            dynamic: false,
+            entries: alloc::vec![entry],
+            context: 0,
+            callback: super::collapse::ignore_menu,
+        });
+    }
+    let menu = app?;
+    let mut entries = menu.entries.clone();
+    if !menu.dynamic
+        && let Some(entry) = collapse
+    {
+        entries.push(entry);
+    }
     Some(ContextMenuRequest {
         dynamic: menu.dynamic,
-        entries: menu.entries.clone(),
+        entries,
         context: menu.context,
         callback: menu.callback,
     })
@@ -527,9 +554,15 @@ pub(super) fn visual() -> Option<ContextMenuVisual> {
 pub(super) fn dispatch_pending_callbacks() {
     loop {
         let pending = PENDING_CALLBACKS.lock().pop_front();
-        let Some(pending) = pending else {
+        let Some(mut pending) = pending else {
             return;
         };
+        if pending.result.selected_action == Some(super::collapse::MENU_ACTION) {
+            let _ =
+                super::window_broker::toggle_collapse(pending.result.owner, pending.result.window);
+            pending.result.selected_action = None;
+            pending.result.reason = ContextMenuCloseReason::Dismissed;
+        }
         (pending.callback)(pending.result);
     }
 }

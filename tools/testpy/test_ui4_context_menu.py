@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-root = Path(__file__).resolve().parents[1]
+root = Path(__file__).resolve().parents[2]
 source = root / "src/ui4/context_menu.rs"
 harness = r'''
 extern crate alloc;
@@ -30,7 +30,21 @@ mod ui4 {
         pub const CONTEXT_MENU_ROW_HEIGHT_PX:u32 = 24;
         pub fn notify_slot4_visual_change() {}
     }
+    mod collapse {
+        pub const MENU_ACTION:u32 = u32::MAX;
+        pub fn menu_entry(owner:super::WindowOwner, window:super::WindowId)->Option<super::context_menu::ContextMenuEntry> {
+            super::window_broker::collapse_state(owner,window).map(|state| super::context_menu::ContextMenuEntry::action(if state { "restore" } else { "collapse" }, MENU_ACTION))
+        }
+        pub fn ignore_menu(_:super::context_menu::ContextMenuResult) {}
+    }
     mod window_broker {
+        static COLLAPSED:std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        pub fn collapse_state(_:super::WindowOwner, window:super::WindowId)->Option<bool> {
+            (window.0 == 99).then(|| COLLAPSED.load(std::sync::atomic::Ordering::Relaxed))
+        }
+        pub fn toggle_collapse(_:super::WindowOwner, _:super::WindowId)->Result<(),()> {
+            COLLAPSED.fetch_xor(true,std::sync::atomic::Ordering::Relaxed); Ok(())
+        }
         pub struct Placement { pub x:i32, pub y:i32 }
         pub struct Snapshot { pub presentation_placement:Placement }
         pub fn window_snapshot(_:super::WindowOwner, _:super::WindowId)->Option<Snapshot> {
@@ -49,6 +63,42 @@ mod ui4 {
             assert_eq!(event.reason, ContextMenuCloseReason::Prepare);
             assert_eq!(event.local, (100,100));
             event.serial
+        }
+        #[test]
+        fn kernel_collapse_works_without_an_app_menu_and_preserves_dynamic_actions() {
+            let owner = WindowOwner::Vm(3);
+            let window = WindowId(99);
+            let cursor = Ui4CursorSource { controller_id:4, slot_id:5, ep_target:6, hid_kind:0 };
+            let color = crate::graphics::primitives::Rgba8;
+            let request = registered_request(owner,window).unwrap();
+            assert!(!request.dynamic);
+            assert_eq!(request.entries[0].label,"collapse");
+            let serial = open(cursor,owner,window,(120,130),color,request).unwrap();
+            let menu = visual().unwrap();
+            let row = entry_rect(menu_rect(menu.anchor,1,1000,1000),0).unwrap();
+            let gesture = pointer_down(cursor,row.x+2,row.y+2,1000,1000).unwrap();
+            pointer_up(cursor,gesture,row.x+2,row.y+2,1000,1000);
+            dispatch_pending_callbacks();
+            assert_eq!(registered_request(owner,window).unwrap().entries[0].label,"restore");
+            window_broker::toggle_collapse(owner,window).unwrap();
+            register_dynamic_window_menu(owner,window,complete).unwrap();
+            open(cursor,owner,window,(120,130),color,registered_request(owner,window).unwrap()).unwrap();
+            let serial = take_prepare();
+            resolve_window_menu(owner,window,serial,vec![ContextMenuEntry::action("app",1)]).unwrap();
+            let menu = visual().unwrap();
+            assert_eq!(menu.entries.iter().map(|entry| entry.label.as_str()).collect::<Vec<_>>(),vec!["app","collapse"]);
+            let row = entry_rect(menu_rect(menu.anchor,2,1000,1000),1).unwrap();
+            let gesture = pointer_down(cursor,row.x+2,row.y+2,1000,1000).unwrap();
+            pointer_up(cursor,gesture,row.x+2,row.y+2,1000,1000);
+            dispatch_pending_callbacks();
+            let result = EVENTS.lock().pop().unwrap();
+            assert_eq!(result.selected_action,None,"system action must never run app handlers");
+            assert_eq!(result.reason,ContextMenuCloseReason::Dismissed);
+            let request = registered_request(owner,window).unwrap();
+            assert!(!request.dynamic,"restore must work even when app stops pumping menus");
+            assert_eq!(request.entries[0].label,"restore");
+            window_broker::toggle_collapse(owner,window).unwrap();
+            release_window_registration(owner,window);
         }
         #[test]
         fn dynamic_invocations_are_owned_frozen_and_cannot_be_resurrected() {
@@ -118,4 +168,4 @@ with tempfile.TemporaryDirectory(prefix="trueos-context-menu-") as directory:
     test = directory / "test.rs"
     test.write_text(harness)
     subprocess.run(["rustc", "--edition=2024", "-A", "warnings", "--test", str(test), "-o", str(directory / "test")], check=True)
-    subprocess.run([str(directory / "test")], check=True)
+    subprocess.run([str(directory / "test"), "--test-threads=1"], check=True)

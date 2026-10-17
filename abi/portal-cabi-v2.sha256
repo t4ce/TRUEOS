@@ -1,3 +1,4 @@
+# Additive kernel-owned UI4 collapse registration v1; existing signatures unchanged.
 # Additive initial-connection Happy Eyeballs fetch opt-in; existing signatures unchanged.
 # Additive filesystem metadata v2 with committed revision; v1 and existing signatures unchanged.
 # Additive filesystem metadata v1 with root-scoped persistent object identity; existing signatures unchanged.
@@ -19,4 +20,4 @@
 # Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
-980552ad4f8af876829501c68542d5d37c7ebc83be91493358fff6baa6544b5c
+afbe289bea73b1b2e9acd2dc50dfb40d8ea58444fbf3cbd8eb3262c835a0648a

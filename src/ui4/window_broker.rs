@@ -488,6 +488,7 @@ pub(crate) enum WindowBrokerError {
 
 #[derive(Copy, Clone)]
 struct WindowRecord {
+    collapse: Option<super::collapse::Collapse>,
     generation: u16,
     owner: WindowOwner,
     session: WindowSessionId,
@@ -1585,6 +1586,7 @@ impl WindowBroker {
 impl WindowRecord {
     fn new(generation: u16, request: WindowCreate, buffering: FrameBuffering) -> Self {
         Self {
+            collapse: None,
             generation,
             owner: request.owner,
             session: request.session,
@@ -1619,7 +1621,7 @@ impl WindowRecord {
     }
 
     fn snapshot(self, slot: usize) -> Option<WindowSnapshot> {
-        Some(WindowSnapshot {
+        let snapshot = WindowSnapshot {
             layer: 0,
             id: WindowId(pack_handle(slot, self.generation).ok()?),
             owner: self.owner,
@@ -1640,7 +1642,8 @@ impl WindowRecord {
             damage: self.damage,
             maximized: self.dock_target == Some(WindowDockTarget::Maximize),
             dock_target: self.dock_target,
-        })
+        };
+        Some(self.collapse.map_or(snapshot, |collapse| collapse.project(snapshot)))
     }
 
     fn presentation_placement(self) -> WindowPlacement {
@@ -1733,6 +1736,7 @@ pub(crate) fn begin_window_session(
 }
 
 fn begin_window_session_admitted(owner: WindowOwner) -> Result<WindowSessionId, WindowBrokerError> {
+    release_collapse(owner, None);
     let (result, retirements) = WINDOW_BROKER.lock().begin_session(owner);
     complete_transition_retirements(retirements);
     super::cursor_frame_inout::owner_closed(owner);
@@ -1749,6 +1753,7 @@ pub(crate) fn finish_window_session(
     owner: WindowOwner,
     session: WindowSessionId,
 ) -> Result<usize, WindowBrokerError> {
+    release_collapse(owner, Some(session));
     let closed = WINDOW_BROKER
         .lock()
         .finish_session(owner, session, false, false, false, false, false, 0)
@@ -1762,6 +1767,7 @@ pub(crate) fn finish_window_session_with_request(
     session: WindowSessionId,
     request: WindowSessionCloseRequest<'_>,
 ) -> Result<usize, WindowBrokerError> {
+    release_collapse(owner, Some(session));
     let started_ms = trueos_time::Instant::now().as_millis();
     let finish = WINDOW_BROKER.lock().finish_session(
         owner,
@@ -2379,6 +2385,23 @@ fn update_window_placement(
     let output_extent = crate::ui4::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
+    if let Some(collapse) = &mut window.collapse
+        && let Some(tile) = &mut collapse.tile
+    {
+        let updated = update(*tile);
+        // Compact extents are always the supplied image's exact extent.
+        tile.x = updated.x;
+        tile.y = updated.y;
+        window.placement.visible = updated.visible;
+        window.placement.opacity = updated.opacity;
+        let placement = *tile;
+        window.revision = next_serial(window.revision);
+        window.damage = Some(DamageRegion::FULL);
+        broker.mark_composition_changed();
+        drop(broker);
+        super::cursor_frame_inout::selection_strip_stack_changed();
+        return Ok(placement);
+    }
     let previous = window.placement;
     let placement = update(previous);
     if !placement.valid() {
@@ -3040,6 +3063,13 @@ pub(crate) fn publish_window_frames(
 }
 
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
+    let icon = {
+        let mut broker = WINDOW_BROKER.lock();
+        broker.checked_window_mut(owner, id)?.collapse.take()
+    };
+    if let Some(icon) = icon {
+        retire_frame_when_released(icon.frame);
+    }
     let mut broker = WINDOW_BROKER.lock();
     let output = {
         let window = broker.checked_window_mut(owner, id)?;
@@ -3651,6 +3681,78 @@ fn unpack_handle(raw: u32) -> Result<(usize, u16), WindowBrokerError> {
         return Err(WindowBrokerError::InvalidHandle);
     }
     Ok((usize::from(low - 1), generation))
+}
+
+pub(super) fn install_collapse(
+    owner: WindowOwner,
+    id: WindowId,
+    mut icon: super::collapse::Collapse,
+) -> Result<(), WindowBrokerError> {
+    let old = {
+        let mut broker = WINDOW_BROKER.lock();
+        let window = broker.checked_window_mut(owner, id)?;
+        if let Some(old) = window.collapse {
+            icon.tile = old.tile.map(|tile| WindowPlacement {
+                width: icon.width,
+                height: icon.height,
+                ..tile
+            });
+        }
+        let old = window.collapse.replace(icon);
+        window.revision = next_serial(window.revision);
+        window.damage = Some(DamageRegion::FULL);
+        broker.mark_composition_changed();
+        old
+    };
+    if let Some(old) = old {
+        retire_frame_when_released(old.frame);
+    }
+    super::cursor_frame_inout::selection_strip_stack_changed();
+    Ok(())
+}
+
+pub(super) fn collapse_state(owner: WindowOwner, id: WindowId) -> Option<bool> {
+    let mut broker = WINDOW_BROKER.lock();
+    broker
+        .checked_window_mut(owner, id)
+        .ok()?
+        .collapse
+        .map(|icon| icon.tile.is_some())
+}
+
+pub(super) fn toggle_collapse(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    let icon = window
+        .collapse
+        .as_mut()
+        .ok_or(WindowBrokerError::InteractionDenied)?;
+    icon.toggle(window.placement);
+    window.revision = next_serial(window.revision);
+    window.damage = Some(DamageRegion::FULL);
+    broker.mark_composition_changed();
+    drop(broker);
+    super::cursor_frame_inout::selection_strip_stack_changed();
+    Ok(())
+}
+
+fn release_collapse(owner: WindowOwner, session: Option<WindowSessionId>) {
+    let frames = {
+        let mut broker = WINDOW_BROKER.lock();
+        let mut frames = Vec::new();
+        for window in &mut broker.windows {
+            if window.owner == owner && session.is_none_or(|session| window.session == session) {
+                if let Some(icon) = window.collapse.take() {
+                    frames.push(icon.frame);
+                }
+            }
+        }
+        if !frames.is_empty() {
+            broker.mark_composition_changed();
+        }
+        frames
+    };
+    retire_transferred_frames(frames);
 }
 
 #[cfg(test)]

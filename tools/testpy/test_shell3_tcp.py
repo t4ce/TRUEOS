@@ -147,6 +147,17 @@ impl Terminal {pub(crate) fn submitted(&self)->Vec<String>{self.shell.parsed.bor
             assert_eq!(&*tty.shell.parsed.borrow(), &["vmx-tab-exit"]);
         }
     }
+    #[test] fn section_sign_is_app_input_at_every_utf8_packet_split() {
+        let input="before § after\\r".as_bytes();
+        for split in 0..=input.len() {
+            let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());tty.shell.vmx=true;
+            tui::claim();tty.reconcile_matrix_selection();tty.output.clear();
+            tty.input(&input[..split]);tty.input(&input[split..]);
+            assert_eq!(tui::received(),input,"split {split}");
+            assert!(tui::remote_active(1));
+            assert!(tty.shell.prompt.is_empty() && tty.submitted().is_empty());
+        }
+    }
     #[test] fn remote_pty_resize_does_not_emit_shell_paint_or_erase_app() {
         let mut tty=Terminal::new_ssh(Shell3::new_terminal().unwrap());
         tui::claim();tty.reconcile_matrix_selection();tty.output.clear();

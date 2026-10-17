@@ -28,8 +28,14 @@ mod r {pub mod keyboard {
 }}
 mod tui {
     use super::*;
-    pub fn park(_:u64)->bool {true}
-    pub fn keyboard(_:u64,name:Option<&str>,_:&r::keyboard::TrueosKeyboardOutputEvent)->bool {name.is_some()}
+    pub fn park(_:u64)->bool {panic!("typing text must not park the terminal")}
+    pub fn keyboard(_:u64,name:Option<&str>,event:&r::keyboard::TrueosKeyboardOutputEvent)->bool {
+        if name.is_some() && event.kind==r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT {
+            TEXT.with(|text|text.borrow_mut().push(char::from_u32(event.codepoint).unwrap()));
+        }
+        name.is_some()
+    }
+    std::thread_local! {pub static TEXT:std::cell::RefCell<String>=Default::default();}
 }
 struct History {cursor:Option<usize>}
 impl History {fn recall(&mut self,_:bool,_:&str)->Option<String>{None} fn end_recall(&mut self){}}
@@ -77,6 +83,18 @@ impl Shell3 {
     let mut native=Shell3::new(false);
     let tab=TrueosKeyboardOutputEvent{flags:1,kind:KEYBOARD_OUTPUT_KIND_KEY,codepoint:0,key_code:KEYBOARD_KEY_TAB};
     assert_eq!(native.handle_keyboard_with_latch(&tab),(true,false));assert!(native.slot.is_some());
+}
+#[test] fn section_sign_reaches_terminal_without_parking_or_editing_shell_prompt() {
+    use r::keyboard::*;
+    for vmx in [true,false] {
+        let mut shell=Shell3::new(vmx);
+        tui::TEXT.with(|text|text.borrow_mut().clear());
+        let text=TrueosKeyboardOutputEvent{flags:1,kind:KEYBOARD_OUTPUT_KIND_TEXT,codepoint:'§' as u32,key_code:0};
+        assert_eq!(shell.handle_keyboard_with_latch(&text),(true,false));
+        assert_eq!(shell.slot.as_deref(),Some("app"));
+        assert_eq!(shell.prompt.text,"draft");
+        tui::TEXT.with(|text|assert_eq!(&*text.borrow(),"§"));
+    }
 }
 '''
     with tempfile.TemporaryDirectory(prefix='sh3-vmx-tab-') as directory:

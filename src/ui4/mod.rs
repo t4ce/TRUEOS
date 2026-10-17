@@ -5,6 +5,8 @@
 
 pub(crate) mod blueprint_text;
 mod color_picker;
+mod collapse;
+pub(crate) use collapse::{enable_window_collapse, CollapseError, MAX_COLLAPSE_IMAGE_SIZE};
 mod compositor_service;
 mod context_menu;
 mod cursor_frame_inout;

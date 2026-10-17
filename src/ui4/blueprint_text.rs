@@ -7,6 +7,8 @@
 //! coherent UI4 frame lifecycle.
 
 pub(crate) mod clipboard_api;
+pub(crate) mod collapse_api;
+pub use collapse_api::trueos_cabi_ui4_scene_enable_collapse_v1;
 pub(crate) mod cursor_image_api;
 pub(crate) mod display_api;
 pub(crate) mod drag_drop_api;

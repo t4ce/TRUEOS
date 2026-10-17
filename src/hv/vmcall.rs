@@ -112,6 +112,7 @@ pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_FINISH: u32 = 0xC2; // arg0 window -> rc
 pub const OP_BP_UI4_SCENE_SKYBOX_RENDER: u32 = 0xC3; // arg0 window,payload render params -> rc
 pub const OP_BP_UI4_SCENE_SKYBOX_REGISTER_KERNEL: u32 = 0xC4; // arg0 window/package_len,arg1 offset,payload -> rc
 pub const OP_BP_UI4_SCENE_WRITE_OPAQUE_RGBA8: u32 = 0xC8; // arg0 window,arg1 byte offset,payload RGBA8 -> rc
+pub const OP_BP_UI4_SCENE_ENABLE_COLLAPSE_V1: u32 = 0x233;
 pub const OP_BP_UI4_SCENE_FRAME_PRIMARY_ACTIVATION: u32 = 0x206;
 pub const OP_BP_UI4_SCENE_FRAME_GET_POSITION: u32 = 0x205;
 pub const OP_BP_UI4_SCENE_FRAME_SET_POSITION: u32 = 0xC5; // arg0 window,arg1 x/y -> rc
@@ -2534,6 +2535,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1 as usize,
                 payload,
             );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_ENABLE_COLLAPSE_V1 => {
+            if req_len != 0 || arg1 != 0 || arg0 > u32::MAX as u64 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let rc = crate::ui4::blueprint_text::collapse_api::finish(
+                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

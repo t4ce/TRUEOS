@@ -1162,11 +1162,9 @@ impl Shell3 {
             && self.active_vmx_app().is_some() {
             return (self.select_matrix_slot_index(0), false);
         }
-        let operator = event.kind == KEYBOARD_OUTPUT_KIND_TEXT && event.codepoint == OPERATOR as u32;
-        if operator && !tui::park(self.tui_frontend) { return (false, false); }
-        if !operator {
-            if tui::keyboard(self.tui_frontend, self.active_matrix_slot_name().as_deref(), event) { return (true, false); }
-        }
+        // A terminal owner receives ordinary text, including the Matrix
+        // operator. Shell operators are parsed only while Shell3 owns input.
+        if tui::keyboard(self.tui_frontend, self.active_matrix_slot_name().as_deref(), event) { return (true, false); }
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
             match event.key_code {
                 KEYBOARD_KEY_ARROW_UP | KEYBOARD_KEY_ARROW_DOWN => {

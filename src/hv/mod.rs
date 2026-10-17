@@ -3613,7 +3613,30 @@ pub(crate) fn blueprint_terminal_lease_current(
 pub(crate) fn blueprint_terminal_surface_snapshot(
     vm_id: u8,
 ) -> Result<BlueprintTerminalSurfaceSnapshot, BlueprintTerminalLeaseError> {
-    blueprint_terminal_lease_current(vm_id, 0)?;
+    match blueprint_terminal_lease_current(vm_id, 0) {
+        Ok(_) => {}
+        Err(BlueprintTerminalLeaseError::NotActive) => {
+            // Crossterm polls this surface from its event loop. Treat that
+            // guest poll as acknowledgement of an explicit Shell3 `tui`
+            // request, using the same ticket/epoch validation as typed apps.
+            // A merely parked app must never reclaim the shell's input.
+            let ticket = {
+                let slot = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?;
+                let guard = slot.lock();
+                let c = guard.as_ref().ok_or(BlueprintTerminalLeaseError::Detached)?;
+                if !c.console_attached { return Err(BlueprintTerminalLeaseError::Detached); }
+                match c.terminal_lease {
+                    BlueprintTerminalLeaseState::ReentryRequested { ticket, .. } => ticket,
+                    _ => return Err(BlueprintTerminalLeaseError::NotActive),
+                }
+            };
+            match blueprint_terminal_lease_poll_reentry(vm_id, ticket)? {
+                BlueprintTerminalReentryPoll::Ready(_) => {}
+                BlueprintTerminalReentryPoll::Pending => return Err(BlueprintTerminalLeaseError::Busy),
+            }
+        }
+        Err(error) => return Err(error),
+    }
     let target = blueprint_console_target(vm_id).ok_or(BlueprintTerminalLeaseError::Detached)?;
     crate::shell3::tui::surface(&target).ok_or(BlueprintTerminalLeaseError::Unsupported)
 }
@@ -3699,8 +3722,17 @@ fn blueprint_console_request_tui(vm_id: u8) -> BlueprintTerminalReentryRequest {
             "terminal-lifecycle: vm={} phase=reentry-request state=pending ticket={} epoch={} owner=shell2\n",
             vm_id, ticket, epoch
         ));
+        notify_blueprint_console_input(vm_id);
     }
     request
+}
+
+pub(crate) fn blueprint_terminal_reentry_requested(vm_id: u8) -> bool {
+    BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)
+        .is_some_and(|slot| slot.lock().as_ref().is_some_and(|context| {
+            context.console_attached
+                && matches!(context.terminal_lease, BlueprintTerminalLeaseState::ReentryRequested { .. })
+        }))
 }
 
 /// Request the same epoch/ticket handshake used by vmx_tui, without CLI routing.

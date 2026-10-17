@@ -2428,6 +2428,8 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_lease_poll_reentry_v1(
 /// Snapshot the active terminal presentation. The generation changes when the
 /// underlying surface identity changes (including a same-size direct TCP
 /// reconnect); columns and rows are returned from the same host snapshot.
+/// A guest event-loop poll also acknowledges an explicit Shell3 reentry
+/// request. Polling a merely parked lease never transfers ownership.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_surface_snapshot_v1(
     out_generation: *mut u64,
@@ -2698,7 +2700,8 @@ pub(crate) fn claim_attached_console_for_terminal_io() {
 ///
 /// Hull callers park in VMX root and are resumed by the producer itself; this
 /// is the event-driven primitive used by the TRUEOS terminal-only `poll(2)`
-/// path. Other kernel callers retain a bounded compatibility wait.
+/// path. Native Blueprints wait on their VM-local I/O generation; ordinary
+/// kernel callers retain a bounded compatibility wait.
 pub(crate) fn wait_attached_console_readable(timeout_ms: u64) -> bool {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let (status, woke) = trueos_vm::vmcall::call(
@@ -2707,6 +2710,24 @@ pub(crate) fn wait_attached_console_readable(timeout_ms: u64) -> bool {
             0,
         );
         return status == trueos_vm::vmcall::STATUS_OK && woke != 0;
+    }
+    if let Some(vm) = crate::hv::current_guest_execution_context_vm_id() {
+        let observed = crate::r::platform::trueos_tokio_platform_wait_observe(
+            crate::wait::BLUEPRINT_IO_WAIT_KEY,
+        );
+        // Observe before probing, and include typed reentry in the predicate.
+        // No stdin byte is produced by `tui`, so byte readiness alone would
+        // sleep through the handoff or lose a request just before observation.
+        if trueos_cabi_shell_attached_readable_len() != 0
+            || crate::hv::blueprint_terminal_reentry_requested(vm)
+        {
+            return true;
+        }
+        return crate::r::platform::trueos_tokio_platform_wait_after(
+            crate::wait::BLUEPRINT_IO_WAIT_KEY,
+            observed,
+            timeout_ms,
+        );
     }
     crate::wait::spin_until_timeout(timeout_ms.max(1), || {
         trueos_cabi_shell_attached_readable_len() != 0

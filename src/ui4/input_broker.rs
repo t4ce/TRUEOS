@@ -310,6 +310,7 @@ struct CursorRoute {
     context_menu_pressed_action: Option<DesktopContextMenuAction>,
     requested_context_menu_gesture: Option<u64>,
     suppress_context_menu_open: bool,
+    collapse_press: Option<(WindowTarget, super::collapse::RestorePress)>,
     selection_anchor: Option<(u32, u32)>,
     absorb_select: bool,
     resize_latch: Option<(WindowTarget, u64)>,
@@ -338,6 +339,7 @@ impl CursorRoute {
             context_menu_pressed_action: None,
             requested_context_menu_gesture: None,
             suppress_context_menu_open: false,
+            collapse_press: None,
             selection_anchor: None,
             absorb_select: false,
             resize_latch: None,
@@ -354,6 +356,7 @@ impl CursorRoute {
         self.secondary_restore_origin = None;
         self.dock_fields_visible = false;
         self.dock_preview = None;
+        self.collapse_press = None;
         self.selection_anchor = None;
     }
 
@@ -758,6 +761,34 @@ impl InputBroker {
             return;
         }
 
+        if pressed & PRIMARY_BUTTON_MASK != 0
+            && let Some(window) = hit.filter(|window| {
+                super::window_broker::collapse_state(window.owner, window.id) == Some(true)
+            })
+        {
+            self.cursors[index].collapse_press =
+                Some((WindowTarget::from(window), super::collapse::RestorePress::new(x, y)));
+        }
+        if let Some((target, mut press)) = self.cursors[index].collapse_press {
+            press.update(x, y, buttons_down & SECONDARY_BUTTON_MASK != 0);
+            self.cursors[index].collapse_press = Some((target, press));
+            self.cursors[index].buttons_down = event.buttons_down;
+            self.cursors[index].x = x;
+            self.cursors[index].y = y;
+            if released & PRIMARY_BUTTON_MASK != 0 {
+                self.cursors[index].collapse_press = None;
+                self.cursors[index].capture = None;
+                if super::window_broker::collapse_state(target.owner, target.window) == Some(true)
+                    && press.clicked(hit.is_some_and(|window| {
+                        window.owner == target.owner && window.id == target.window
+                    }))
+                {
+                    let _ = super::window_broker::toggle_collapse(target.owner, target.window);
+                }
+            }
+            return;
+        }
+
         if pressed & PRIMARY_BUTTON_MASK != 0 {
             self.cursors[index].selection_anchor = Some((x, y));
         }
@@ -1021,7 +1052,9 @@ impl InputBroker {
                     }
                 }
             }
-            if target.interaction.receives_input {
+            if target.interaction.receives_input
+                && super::window_broker::collapse_state(target.owner, target.id) != Some(true)
+            {
                 // While a dock resize is waiting for a producer replacement,
                 // input follows the exact 1:1 pixels currently on screen rather
                 // than the newer logical destination hidden behind them.
@@ -2161,6 +2194,9 @@ static PHYSICAL_OWNER_QUEUES: Mutex<Vec<PhysicalOwnerQueue, MAX_OWNER_QUEUES>> =
     Mutex::new(Vec::new());
 
 fn enqueue_physical_owner_event(owner: WindowOwner, event: Ui4KeyboardEvent) {
+    if super::window_broker::collapse_state(owner, event.window) == Some(true) {
+        return;
+    }
     let mut queues = PHYSICAL_OWNER_QUEUES.lock();
     let index = if let Some(index) = queues.iter().position(|queue| queue.owner == owner) {
         index
@@ -2196,6 +2232,11 @@ pub(super) fn take_physical_owner_events(
 }
 
 fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
+    if let Ui4InputEvent::Keyboard(key) = event
+        && super::window_broker::collapse_state(owner, key.window) == Some(true)
+    {
+        return;
+    }
     if let Ui4InputEvent::Resize(incoming) = event {
         enqueue_owner_resize(owner, incoming);
         return;
