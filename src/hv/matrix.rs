@@ -36,7 +36,7 @@ impl MatrixSlotAttachment for Attachment {
 }
 
 pub(crate) fn reserve(archive: &str, bytes: &[u8]) -> Result<(MatrixTarget, AppReceipt), String> {
-    let (name, lifetime) = crate::shell3::MatrixSlots::fresh_slot(None);
+    let (name, lifetime) = crate::shell3::MatrixSlots::fresh_app_slot(archive);
     let lease = MatrixSlotLease::from_identity(name.clone(), lifetime);
     let receipt = AppReceipt {
         slot: name,

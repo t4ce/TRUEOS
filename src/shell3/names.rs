@@ -65,7 +65,7 @@ pub(super) const HV_GROUPS: [NameGroup; 2] = [
 
 const CMD_AKA_NAMES: [NameEntry; 0] = [];
 
-const CMD_CAPTURE_NAMES: [NameEntry; 5] = [
+const CAPTURE_NAMES: [NameEntry; 5] = [
     NameEntry {
         name: "pic",
         color: RgbaColor::White,
@@ -90,14 +90,10 @@ const CMD_CAPTURE_NAMES: [NameEntry; 5] = [
 
 const CMD_APPDB_NAMES: [NameEntry; 0] = [];
 
-pub(super) const CMD_GROUPS: [NameGroup; 3] = [
+pub(super) const CMD_GROUPS: [NameGroup; 2] = [
     NameGroup {
         name: "Aka",
         names: &CMD_AKA_NAMES,
-    },
-    NameGroup {
-        name: "Capture",
-        names: &CMD_CAPTURE_NAMES,
     },
     NameGroup {
         name: "AppDB",
@@ -152,10 +148,16 @@ pub(super) const ADM_NAMES: &[NameEntry] = &[
     },
 ];
 
-pub(super) const ADM_GROUPS: [NameGroup; 1] = [NameGroup {
-    name: "System",
-    names: ADM_NAMES,
-}];
+pub(super) const ADM_GROUPS: [NameGroup; 2] = [
+    NameGroup {
+        name: "System",
+        names: ADM_NAMES,
+    },
+    NameGroup {
+        name: "Capture",
+        names: &CAPTURE_NAMES,
+    },
+];
 
 /// Slot-specific VM environment controls; not a Tab mode.
 pub(super) const VME_GROUP: NameGroup = NameGroup {

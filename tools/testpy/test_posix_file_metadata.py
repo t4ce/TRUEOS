@@ -19,7 +19,7 @@ source = r'''#![allow(dead_code)]
 use core::ffi::c_int;
 use std::cell::RefCell;
 const TRUEOS_ENOENT:i32=2; const TRUEOS_EINVAL:i32=22;
-const TRUEOS_EIO:i32=5; const TRUEOS_ENAMETOOLONG:i32=36;
+const TRUEOS_EIO:i32=5; const TRUEOS_ENOSPC:i32=28; const TRUEOS_ENAMETOOLONG:i32=36;
 struct Fixture { hull:bool, start:i32, statuses:Vec<i32>, response:Vec<u8>, read_error:Option<isize>, calls:Vec<String> }
 std::thread_local! { static FIXTURE:RefCell<Fixture>=RefCell::new(Fixture {hull:false,start:7,statuses:vec![1],response:vec![],read_error:None,calls:vec![]}); }
 mod hv { pub fn current_hull_guest_context_vm_id()->Option<u8> { super::FIXTURE.with(|f| f.borrow().hull.then_some(0)) } }
@@ -89,6 +89,7 @@ fn reset(hull:bool) {
     FIXTURE.with(|f| assert_eq!(f.borrow().calls,vec!["resolve:/file.txt","kfs:apps/probe/file.txt"]));
 }
 #[test] fn missing_and_failed_requests_preserve_errors_and_release_operations() {
+    assert_eq!(fs_rc_to_errno(r::io::cabi::FS_ERR_NO_SPACE),TRUEOS_ENOSPC);
     for status in [r::io::cabi::FS_ERR_NOT_FOUND,r::io::cabi::FS_ERR_IO] {
         reset(true);FIXTURE.with(|f| f.borrow_mut().statuses=vec![status]);
         assert_eq!(regular_file_metadata("missing").unwrap_err(),fs_rc_to_errno(status));

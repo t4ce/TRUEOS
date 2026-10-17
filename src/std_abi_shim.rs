@@ -97,6 +97,7 @@ const TRUEOS_ERANGE: c_int = 34;
 const TRUEOS_EOVERFLOW: c_int = 75;
 pub(crate) const TRUEOS_ENOSYS: c_int = 38;
 const TRUEOS_EIO: c_int = 5;
+const TRUEOS_ENOSPC: c_int = 28;
 const TRUEOS_EFAULT: c_int = 14;
 pub(crate) const TRUEOS_EBADF: c_int = 9;
 const TRUEOS_EPERM: c_int = 1;
@@ -2403,7 +2404,7 @@ fn fs_rc_to_errno(rc: i32) -> c_int {
         | crate::r::io::cabi::FS_ERR_BAD_PARAM
         | crate::r::io::cabi::FS_ERR_BAD_UTF8 => TRUEOS_EINVAL,
         crate::r::io::cabi::FS_ERR_TOO_LARGE => TRUEOS_ENAMETOOLONG,
-        crate::r::io::cabi::FS_ERR_NO_SPACE => TRUEOS_EIO,
+        crate::r::io::cabi::FS_ERR_NO_SPACE => TRUEOS_ENOSPC,
         _ => TRUEOS_EIO,
     }
 }

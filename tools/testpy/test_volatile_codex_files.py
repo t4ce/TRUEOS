@@ -49,7 +49,7 @@ mod r {
         pub fn test_select(path:&str)->(u32,String){let(d,p)=selected_disk(path).unwrap();(d.0,p.into())}
     }}
     pub mod disc {pub mod ramdisk {
-        pub fn create_private(cap:u64,bs:u32,label:&str)->Result<crate::disc::block::DeviceHandle,crate::disc::block::Error>{assert_eq!(cap,512*1024*1024);assert_eq!(bs,512);assert_eq!(label,"codex-files");crate::STATE.lock().created+=1;Ok(crate::disc::block::DeviceHandle(2))}
+        pub fn create_private(cap:u64,bs:u32,label:&str)->Result<crate::disc::block::DeviceHandle,crate::disc::block::Error>{assert_eq!(cap,2*1024*1024*1024);assert_eq!(bs,512);assert_eq!(label,"codex-files");crate::STATE.lock().created+=1;Ok(crate::disc::block::DeviceHandle(2))}
     }}
     pub mod fs {
         pub mod trueosfs {

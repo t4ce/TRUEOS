@@ -61,7 +61,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use names::{ADM_NAMES, CMD_GROUPS, HV_GROUPS};
+use names::{ADM_GROUPS, CMD_GROUPS, HV_GROUPS};
 use spin::Once;
 use zeroize::Zeroize;
 
@@ -321,14 +321,27 @@ impl MatrixSlots {
 
     /// Allocate under one lock so simultaneous connections cannot share a name.
     pub(crate) fn fresh_slot(peer_port: Option<u16>) -> (String, u64) {
-        let mut slots = matrix_slots().lock();
         let preferred = peer_port.filter(|port| *port != 0).map(|port| port.to_string());
+        Self::allocate_slot(preferred, "sh")
+    }
+
+    /// Blueprint identities use the archive basename without its package suffix.
+    pub(crate) fn fresh_app_slot(archive: &str) -> (String, u64) {
+        let basename = archive.rsplit('/').next().unwrap_or(archive);
+        let stem = basename.strip_suffix(".bp").unwrap_or(basename);
+        let prefix: String = stem.chars().take(4).collect();
+        let prefix = if prefix.is_empty() { "app" } else { &prefix };
+        Self::allocate_slot(Some(prefix.to_string()), prefix)
+    }
+
+    fn allocate_slot(preferred: Option<String>, prefix: &str) -> (String, u64) {
+        let mut slots = matrix_slots().lock();
         let mut number = 1u64;
         let name = loop {
             if let Some(candidate) = preferred.as_ref().filter(|name| !slots.ids.contains(name)) {
                 break candidate.clone();
             }
-            let candidate = format!("sh{number}");
+            let candidate = format!("{prefix}{number}");
             if !slots.ids.contains(&candidate) {
                 break candidate;
             }
@@ -1394,7 +1407,7 @@ impl Shell3 {
             if let Err(error) = service::edit_aka(self.tui_frontend()) {
                 MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error);
             }
-        } else if self.mode == Mode::CMD && capture::recognizes(&text) {
+        } else if self.mode == Mode::ADM && capture::recognizes(&text) {
             match capture::start(&text, self.tui_frontend()) {
                 Ok(()) => { self.select_matrix_slot_name(&text); }
                 Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
@@ -1859,7 +1872,9 @@ impl Shell3 {
                     .any(|group| group.names.iter().any(|entry| matches(entry.name)))
                     || self.appdb_names.iter().any(|entry| matches(entry))
             }
-            Mode::ADM => ADM_NAMES.iter().any(|entry| matches(entry.name)),
+            Mode::ADM => ADM_GROUPS
+                .iter()
+                .any(|group| group.names.iter().any(|entry| matches(entry.name))),
         }
     }
 }

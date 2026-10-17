@@ -10,7 +10,7 @@ shell = (ROOT / 'src/shell3/shell3.rs').read_text()
 state = re.search(r'^struct MatrixSlotsState \{.*?^}', shell, re.M | re.S).group()
 state_impl = re.search(r'^impl MatrixSlotsState \{.*?^}', shell, re.M | re.S).group()
 methods = '\n'.join(re.search(r'^    (?:pub\((?:crate|super)\) )?fn '+name+r'\(.*?^    }', shell, re.M | re.S).group()
-                    for name in ('fresh_slot', 'drop_lease', 'drop_slot', 'drop_slot_inner', 'set_background_active', 'background_active_slots'))
+                    for name in ('fresh_slot', 'fresh_app_slot', 'allocate_slot', 'drop_lease', 'drop_slot', 'drop_slot_inner', 'set_background_active', 'background_active_slots'))
 source = r'''#![allow(dead_code,non_upper_case_globals)]
 extern crate alloc;
 mod r {pub mod input_timing {pub fn now_ms()->u64 {0}}}
@@ -89,6 +89,7 @@ mod hv {
     static BLUEPRINT_PROCESS_CONTEXTS:[spin::Mutex<Option<Context>>;2]=[const {spin::Mutex::new(None)};2];
     pub fn vm_run_generation(vm:u8)->Option<u64> {vm_slot(vm).map(|vm|vm.run_generation.load(Ordering::Acquire))}
     fn notify_blueprint_console_input(_:u8) {}
+    fn blueprint_console_exit_reason(_:u8)->Option<String> {None}
     @STDIN_METHODS@
     @PROMPT_TEST@
 
@@ -130,11 +131,24 @@ mod hv {
         assert_eq!(*KILLED.lock(),vec![0]);
         *trueos_vm_ids[0].matrix_owner.lock()=None;KILLED.lock().clear();
         // The allocator reuses the name, but never its lifetime.
-        let (replacement,receipt)=matrix::reserve("new.bp",b"new").unwrap();
+        let (replacement,receipt)=matrix::reserve("old.bp",b"old").unwrap();
         assert_eq!(receipt.slot,old_receipt.slot);
         assert!(!crate::shell3::MatrixSlots::drop_lease(&crate::shell3::MatrixSlotLease::from_identity(old_receipt.slot,old_receipt.lifetime)));
         assert!(matrix::app(&receipt.slot,Some(receipt.lifetime)).is_some());
         matrix::discard(&replacement);
+    }
+    #[test] fn app_names_use_four_characters_and_number_collisions() {
+        let mut targets=Vec::new();
+        for (archive,expected) in [("/apps/appstore.bp","apps"),("appstore.bp","apps1"),("appsmith.bp","apps2"),("os.bp","os"),("éclair.bp","écla")] {
+            let (target,receipt)=matrix::reserve(archive,b"app").unwrap();
+            assert_eq!(receipt.slot,expected);
+            targets.push(target);
+        }
+        matrix::discard(&targets.remove(0));
+        let (reused,receipt)=matrix::reserve("appstore.bp",b"app").unwrap();
+        assert_eq!(receipt.slot,"apps");
+        matrix::discard(&reused);
+        for target in targets {matrix::discard(&target);}
     }
     #[test] fn slot_deletion_and_admission_cannot_leave_an_unowned_running_app() {
         for _ in 0..32 {

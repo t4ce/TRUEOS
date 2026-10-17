@@ -9,7 +9,8 @@ use super::trueosfs as fs;
 use crate::disc::block;
 use crate::r::io::kfs::{FsError, Result};
 
-const CAPACITY_BYTES: u64 = 512 * 1024 * 1024;
+// Sparse: logical capacity reserves address space without allocating unused blocks.
+const CAPACITY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const COPY_CHUNK_BYTES: usize = 64 * 1024;
 static PREPARE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> = AsyncMutex::new(());
 #[derive(Clone, Copy)]
