@@ -1159,6 +1159,14 @@ unsafe extern "C" {
         total_len: usize,
         content_type: u32,
     ) -> i32;
+    pub fn trueos_cabi_async_fs_checked_write_begin_v1(
+        path_ptr: *const u8,
+        path_len: usize,
+        total_len: usize,
+        content_type: u32,
+        flags: u32,
+        expected_sha256: *const u8,
+    ) -> i32;
     pub fn trueos_cabi_async_fs_write_chunk(
         id: u32,
         offset: usize,

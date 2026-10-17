@@ -148,6 +148,7 @@ pub const OP_BP_ASYNC_FS_RENAME_START: u32 = 0x13A; // payload src-len + resolve
 pub const OP_BP_ASYNC_FS_TYPED_STAT_START: u32 = 0x170; // payload resolved path -> typed metadata operation id/rc
 pub const OP_BP_ASYNC_FS_TYPED_LIST_DIR_START: u32 = 0x171; // payload resolved path -> TDL2 operation id/rc
 pub const OP_BP_ASYNC_FS_TYPED_WRITE_BEGIN: u32 = 0x172; // arg0 total bytes,arg1 content type,payload path
+pub const OP_BP_ASYNC_FS_CHECKED_WRITE_BEGIN_V1: u32 = 0x21E; // arg0 bytes,arg1 type,payload flags+sha256+path
 pub const OP_BP_FS_TYPED_WRITE_BEGIN: u32 = 0x173; // arg0 total bytes,arg1 content type,payload path
 pub const OP_BP_FS_TYPED_STAT: u32 = 0x174; // payload path -> kind,len,content type
 pub const OP_BP_FS_TYPED_LIST_DIR: u32 = 0x175; // arg0 offset,arg1 cap,payload path -> TDL2 bytes

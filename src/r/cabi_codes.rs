@@ -14,6 +14,7 @@ pub const FS_ERR_ALREADY_EXISTS: i32 = -9;
 pub const FS_ERR_TIMEOUT: i32 = -14;
 pub const FS_ERR_TYPE_REQUIRED: i32 = -15;
 pub const FS_ERR_TYPE_MISMATCH: i32 = -16;
+pub const FS_ERR_WRITE_CONFLICT: i32 = -17;
 
 // Contract limit for C ABI FS path parameters used by kernel + QJS.
 #[allow(dead_code)]
@@ -51,6 +52,7 @@ pub fn cabi_rc_name(rc: i32) -> &'static [u8] {
         FS_ERR_TIMEOUT => b"FS_ERR_TIMEOUT",
         FS_ERR_TYPE_REQUIRED => b"FS_ERR_TYPE_REQUIRED",
         FS_ERR_TYPE_MISMATCH => b"FS_ERR_TYPE_MISMATCH",
+        FS_ERR_WRITE_CONFLICT => b"FS_ERR_WRITE_CONFLICT",
         NET_ERR_BAD_URL => b"NET_ERR_BAD_URL",
         NET_ERR_TIMEOUT => b"NET_ERR_TIMEOUT",
         NET_ERR_HTTP => b"NET_ERR_HTTP",

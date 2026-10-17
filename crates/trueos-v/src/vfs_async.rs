@@ -17,6 +17,7 @@ pub const ERR_NOT_FOUND: i32 = -8;
 pub const ERR_ALREADY_EXISTS: i32 = -9;
 pub const ERR_TYPE_REQUIRED: i32 = -15;
 pub const ERR_TYPE_MISMATCH: i32 = -16;
+pub const ERR_WRITE_CONFLICT: i32 = -17;
 
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
@@ -528,6 +529,37 @@ pub async fn write_file_typed(
     content_type: ContentTypeId,
 ) -> Result<(), i32> {
     let mut write = write_file_begin_typed(path, bytes.len(), content_type)?;
+    for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
+        write.write_chunk(chunk)?;
+    }
+    write.commit().await
+}
+
+/// Atomically create or replace a file, retaining the current record's type/key.
+/// `content_type` declares the identity only when the destination is missing.
+/// Create-only and expected-content checks run under the namespace write lease.
+pub async fn write_file_typed_checked(
+    path: &[u8],
+    bytes: &[u8],
+    content_type: ContentTypeId,
+    create_new: bool,
+    expected_sha256: Option<[u8; 32]>,
+) -> Result<(), i32> {
+    if create_new && expected_sha256.is_some() {
+        return Err(ERR_BAD_PARAM);
+    }
+    let flags = u32::from(create_new) | (u32::from(expected_sha256.is_some()) << 1);
+    let operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_checked_write_begin_v1(
+            path.as_ptr(),
+            path.len(),
+            bytes.len(),
+            content_type.raw(),
+            flags,
+            expected_sha256.as_ref().map_or(core::ptr::null(), |hash| hash.as_ptr()),
+        )
+    })?;
+    let mut write = TypedWrite { operation, total_len: bytes.len(), next_offset: 0 };
     for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
         write.write_chunk(chunk)?;
     }
