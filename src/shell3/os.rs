@@ -15,7 +15,13 @@ pub(crate) fn matrix_target_interrupted(target: &MatrixTarget) -> bool {
 }
 
 pub(super) fn complete(target: MatrixTarget, reason: String) {
-    let Some(worker) = crate::workers::pick_background_spawner() else {
+    // ACPI's SMI command port and firmware runtime calls belong on the BSP.
+    let worker = if matches!(reason.as_str(), "os:shutdown" | "os:reboot") {
+        crate::workers::spawner_for_slot(0)
+    } else {
+        crate::workers::pick_background_spawner()
+    };
+    let Some(worker) = worker else {
         print_matrix_target_line(&target, "os: no administration worker available");
         return;
     };
