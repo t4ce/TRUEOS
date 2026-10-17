@@ -1,11 +1,17 @@
 {
-  "contract": "maxpix-tornado-pointlist-v1",
+  "contract": "maxpix-tornado-pointlist-input-v1",
+  "vertex_layout": 11,
   "mesa_version": "26.0.4",
   "device_id": 18048,
   "topology": "POINT_LIST",
   "stride": 24,
   "cpu_vertex_upload": "once",
   "time_field": "camera.jitter_frame.z",
+  "point_width_field": "camera.jitter_frame.w",
+  "point_width_format": "u8.3-integer-0-default-1px",
+  "pointer_slots": 4,
+  "pointer_state_field": "camera.inverse_view_projection",
+  "pointer_buttons_field": "camera.previous_view_projection",
   "vs": {
     "ver": 12,
     "verx10": 120,
@@ -61,7 +67,7 @@
     "length": 0,
     "dynamic_offset_index": 0
   },
-  "vs_sha256": "ae78870b3b4b2d8c7ee75f54f59695dbf0a4db58eaf46848d4084658c941312d",
+  "vs_sha256": "f6e006b00cac64fab3aad66422ac0645157906fa5d9206f92d860c9c478e2c2e",
   "ps_sha256": "847892f905f3cce9a4cafd08361e3ea3f9c9d0c6f50428742c1a85b8664eb2d6",
   "baremetal_verified": false
 }

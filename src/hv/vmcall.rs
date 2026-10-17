@@ -5592,6 +5592,35 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_ASYNC_FS_CHECKED_WRITE_BEGIN_V1 => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = (|| -> i32 {
+                if req_len as usize > PAYLOAD_CAP || arg1 > u32::MAX as u64 {
+                    return crate::r::io::cabi::FS_ERR_BAD_PARAM;
+                }
+                let payload = unsafe { &(&(*p).payload)[..req_len as usize] };
+                let (options, raw_path) = match crate::r::io::async_fs_cabi::decode_checked_write_payload(payload) {
+                    Ok(value) => value,
+                    Err(code) => return code,
+                };
+                let path = match crate::r::path::FsPath::parse(raw_path, false) {
+                    Ok(path) => path.to_relative_string(),
+                    Err(_) => return crate::r::io::cabi::FS_ERR_BAD_PATH,
+                };
+                if !vm_mount_selector_allowed(vm_id, path.as_str()) {
+                    return crate::r::io::cabi::FS_ERR_BAD_PATH;
+                }
+                crate::r::io::async_fs_cabi::start_write_checked(
+                    crate::r::io::async_fs_cabi::owner_for_vm(vm_id), path, arg0 as usize,
+                    crate::r::fs::trueosfs::ContentTypeId::from_raw(arg1 as u32), options,
+                )
+            })();
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_ASYNC_FS_WRITE_CHUNK => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {

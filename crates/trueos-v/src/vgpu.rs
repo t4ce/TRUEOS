@@ -454,7 +454,14 @@ pub const RETAINED_MATERIAL_NORMAL: usize = 4;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
 /// Native POINT_LIST tornado. Two Float3 inputs: phase/height/radius and offset.
 /// Camera jitter_frame[2] supplies elapsed seconds; color is shader constant.
-pub const RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO: u32 = 10;
+/// Maxpix reserves inverse_view_projection columns for four pointer records
+/// [x, y, integrated motion seconds, active], and previous_view_projection
+/// columns for [held buttons, pressed buttons, released buttons, wheel].
+/// jitter_frame[3] carries native SF PointWidth as an integer U8.3 value:
+/// 0 selects 1px; 1..=2047 selects 0.125..=255.875px.
+/// Layout 11 versions pointer/raster inputs: older kernels must reject it
+/// rather than silently running the original time-only layout-10 shader.
+pub const RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO: u32 = 11;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch
 /// to three control points; this is not arbitrary PATCHLIST shader admission.

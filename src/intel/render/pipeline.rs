@@ -590,6 +590,19 @@ const fn resident_point_width_raw(point_width_px: u32) -> u32 {
     }
 }
 
+/// Zero is the legacy Maxpix default (1px). Explicit widths use the complete
+/// nonzero 11-bit U8.3 hardware domain: 0.125px through 255.875px.
+fn maxpix_point_width_raw(value: f32) -> Option<u32> {
+    if !value.is_finite() || value < 0.0 || value > 2047.0 {
+        return None;
+    }
+    let raw = value as u32;
+    if raw as f32 != value {
+        return None;
+    }
+    Some(if raw == 0 { 8 } else { raw })
+}
+
 const fn mesa_sf_dw3(point_raster: bool, point_width_raw: u32) -> u32 {
     if point_raster {
         (MESA_SF_DW3 & !SF_POINT_WIDTH_MASK) | (point_width_raw & SF_POINT_WIDTH_MASK)
@@ -2323,7 +2336,7 @@ fn encode_triangle_probe_batch(
     post3d_value: u32,
     done_value: u32,
     batch_mode: TriangleBatchMode,
-    point_width_px: u32,
+    point_width_raw: u32,
     streamout_experiment: StreamoutProofExperiment,
     front_end_contract: TriangleFrontEndContract,
     viewport_translation_px: [f32; 2],
@@ -2885,7 +2898,11 @@ fn encode_triangle_probe_batch(
     let point_width_raw = if batch_mode.point_raster() {
         backend_probe_mode
             .point_width_raw_override()
-            .unwrap_or_else(|| resident_point_width_raw(point_width_px))
+            .unwrap_or(if point_width_raw == 0 {
+                RESIDENT_POINT_WIDTH_U8_3
+            } else {
+                point_width_raw
+            })
     } else {
         0
     };

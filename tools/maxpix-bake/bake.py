@@ -12,7 +12,7 @@ import struct
 import importlib.util
 
 ROOT = Path(__file__).resolve().parents[2]
-HERE = Path(__file__).resolve().parent
+SHADER = ROOT.parent / 'TRUEOS-Blueprints/apps/maxpix/tornado.wgsl'
 OUT = ROOT / 'picasso/maxpix-tornado'
 WORK = ROOT / 'bld/maxpix-bake'
 MESA = Path(os.environ.get('MAXPIX_MESA_BUILD', ROOT / '.codex_tmp/trueos-adj-instrumented-rpls/mesa-build')).resolve()
@@ -36,7 +36,7 @@ def main():
         spv = WORK / f'{entry}.spv'
         subprocess.run(['cargo', 'run', '--offline', '-q', '--target', 'x86_64-unknown-linux-gnu',
             '--manifest-path', str(ROOT / 'tools/wgsl-spv/Cargo.toml'), '--', entry,
-            str(HERE / 'shaders/tornado.wgsl'), str(spv)], cwd=ROOT.parent, check=True)
+            str(SHADER), str(spv)], cwd=ROOT.parent, check=True)
         stages.append(spv)
     c_path = WORK / 'pipeline_dump.c'
     baker.make_churn_compile_only_dumper(c_path)
@@ -95,9 +95,12 @@ def main():
     for name,code in [('vertex.bin',vs), ('fragment.bin',ps)]: (OUT / name).write_bytes(code)
     for path in capture.iterdir():
         if path.suffix == '.txt' and path.name != 'host_state_reference.txt': shutil.copy2(path, OUT / path.name)
-    shutil.copy2(HERE / 'shaders/tornado.wgsl', OUT / 'tornado.wgsl')
-    metadata = {'contract':'maxpix-tornado-pointlist-v1','mesa_version':'26.0.4','device_id':0x4680,'topology':'POINT_LIST',
+    shutil.copy2(SHADER, OUT / 'tornado.wgsl')
+    metadata = {'contract':'maxpix-tornado-pointlist-input-v1','vertex_layout':11,'mesa_version':'26.0.4','device_id':0x4680,'topology':'POINT_LIST',
         'stride':24,'cpu_vertex_upload':'once','time_field':'camera.jitter_frame.z',
+        'point_width_field':'camera.jitter_frame.w','point_width_format':'u8.3-integer-0-default-1px',
+        'pointer_slots':4,'pointer_state_field':'camera.inverse_view_projection',
+        'pointer_buttons_field':'camera.previous_view_projection',
         'vs':vs_meta,'ps':ps_meta,'vs_sha256':hashlib.sha256(vs).hexdigest(),
         'ps_sha256':hashlib.sha256(ps).hexdigest(),'baremetal_verified':False}
     (OUT / 'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')

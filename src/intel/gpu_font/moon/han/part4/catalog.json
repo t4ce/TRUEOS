@@ -1,18 +1,18 @@
 {
-  "detail": 6,
+  "detail": 12,
   "scale": 8,
   "width": 2560,
   "height": 1152,
   "columns": 16,
   "tile_width": 160,
   "tile_height": 128,
-  "model": "tissue",
+  "model": "envelope",
   "recipe": {
-    "model": "tissue",
-    "reach": 1.76,
-    "sigma": 0.45,
-    "level": 0.75,
-    "balance": 1,
+    "model": "envelope",
+    "reach": 2.84,
+    "sigma": 0.29,
+    "level": 0.85,
+    "balance": 0,
     "stretch": 1.75,
     "bias": 0,
     "smartBias": true,
@@ -21,7 +21,8 @@
     "prune": true,
     "cross": false,
     "contours": false,
-    "route": "field"
+    "route": "field",
+    "detail": 12
   },
   "route": "field",
   "source_sha256": "50b9f22403b6bf9500550e5b36010afeed33ccb7b8d1e14a8f3cf1dc5d45ccad",
@@ -31,7 +32,7 @@
   "part_count": 4,
   "path": "microfonttothemoon-han-8x-4.png",
   "glyph_count": 112,
-  "mesh_sha256": "f324f2059789ec09bf0dd28618ae8ecac4e8e4461473a11aa46c3d26c2009532",
+  "mesh_sha256": "a3389fc17f0a9a25be50fed629c230d52bffb02efca60bf510fba7f3a5f51289",
   "glyphs": [
     {
       "slot": 304,
@@ -49,10 +50,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1542,
-      "triangles": 2354,
-      "gpuTriangles": 2354,
+      "spacing": 0.08333333333333333,
+      "vertices": 4061,
+      "triangles": 6274,
+      "gpuTriangles": 6274,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -72,10 +73,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1485,
-      "triangles": 2264,
-      "gpuTriangles": 2264,
+      "spacing": 0.08333333333333333,
+      "vertices": 4113,
+      "triangles": 6322,
+      "gpuTriangles": 6322,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -95,10 +96,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1284,
-      "triangles": 1942,
-      "gpuTriangles": 1942,
+      "spacing": 0.08333333333333333,
+      "vertices": 3387,
+      "triangles": 5178,
+      "gpuTriangles": 5178,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -118,10 +119,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1040,
-      "triangles": 1552,
-      "gpuTriangles": 1552,
+      "spacing": 0.08333333333333333,
+      "vertices": 3119,
+      "triangles": 4828,
+      "gpuTriangles": 4828,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -141,10 +142,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1217,
-      "triangles": 1812,
-      "gpuTriangles": 1812,
+      "spacing": 0.08333333333333333,
+      "vertices": 3334,
+      "triangles": 5148,
+      "gpuTriangles": 5148,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -164,10 +165,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1209,
-      "triangles": 1826,
-      "gpuTriangles": 1826,
+      "spacing": 0.08333333333333333,
+      "vertices": 3922,
+      "triangles": 6088,
+      "gpuTriangles": 6088,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -187,10 +188,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1146,
-      "triangles": 1780,
-      "gpuTriangles": 1780,
+      "spacing": 0.08333333333333333,
+      "vertices": 3396,
+      "triangles": 5260,
+      "gpuTriangles": 5260,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -210,10 +211,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1247,
-      "triangles": 1896,
-      "gpuTriangles": 1896,
+      "spacing": 0.08333333333333333,
+      "vertices": 3181,
+      "triangles": 4912,
+      "gpuTriangles": 4912,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -233,10 +234,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1575,
-      "triangles": 2416,
-      "gpuTriangles": 2416,
+      "spacing": 0.08333333333333333,
+      "vertices": 3789,
+      "triangles": 5830,
+      "gpuTriangles": 5830,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -256,10 +257,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 966,
-      "triangles": 1466,
-      "gpuTriangles": 1466,
+      "spacing": 0.08333333333333333,
+      "vertices": 2437,
+      "triangles": 3760,
+      "gpuTriangles": 3760,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -279,10 +280,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1105,
-      "triangles": 1668,
-      "gpuTriangles": 1668,
+      "spacing": 0.08333333333333333,
+      "vertices": 2828,
+      "triangles": 4326,
+      "gpuTriangles": 4326,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -302,10 +303,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1155,
-      "triangles": 1728,
-      "gpuTriangles": 1728,
+      "spacing": 0.08333333333333333,
+      "vertices": 3199,
+      "triangles": 4932,
+      "gpuTriangles": 4932,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -325,10 +326,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1466,
-      "triangles": 2200,
-      "gpuTriangles": 2200,
+      "spacing": 0.08333333333333333,
+      "vertices": 4476,
+      "triangles": 6922,
+      "gpuTriangles": 6922,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -348,10 +349,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1528,
-      "triangles": 2280,
-      "gpuTriangles": 2280,
+      "spacing": 0.08333333333333333,
+      "vertices": 4752,
+      "triangles": 7316,
+      "gpuTriangles": 7316,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -371,10 +372,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1214,
-      "triangles": 1806,
-      "gpuTriangles": 1806,
+      "spacing": 0.08333333333333333,
+      "vertices": 4896,
+      "triangles": 7590,
+      "gpuTriangles": 7590,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -394,10 +395,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1365,
-      "triangles": 2056,
-      "gpuTriangles": 2056,
+      "spacing": 0.08333333333333333,
+      "vertices": 4067,
+      "triangles": 6244,
+      "gpuTriangles": 6244,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -417,10 +418,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1502,
-      "triangles": 2268,
-      "gpuTriangles": 2268,
+      "spacing": 0.08333333333333333,
+      "vertices": 4465,
+      "triangles": 6904,
+      "gpuTriangles": 6904,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -440,10 +441,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1290,
-      "triangles": 2000,
-      "gpuTriangles": 2000,
+      "spacing": 0.08333333333333333,
+      "vertices": 4446,
+      "triangles": 6912,
+      "gpuTriangles": 6912,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -463,10 +464,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1152,
-      "triangles": 1742,
-      "gpuTriangles": 1742,
+      "spacing": 0.08333333333333333,
+      "vertices": 3065,
+      "triangles": 4706,
+      "gpuTriangles": 4706,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -486,10 +487,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1804,
-      "triangles": 2772,
-      "gpuTriangles": 2772,
+      "spacing": 0.08333333333333333,
+      "vertices": 4967,
+      "triangles": 7704,
+      "gpuTriangles": 7704,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -509,10 +510,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1560,
-      "triangles": 2408,
-      "gpuTriangles": 2408,
+      "spacing": 0.08333333333333333,
+      "vertices": 3843,
+      "triangles": 5952,
+      "gpuTriangles": 5952,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -532,10 +533,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1375,
-      "triangles": 2130,
-      "gpuTriangles": 2130,
+      "spacing": 0.08333333333333333,
+      "vertices": 4269,
+      "triangles": 6644,
+      "gpuTriangles": 6644,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -555,10 +556,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1610,
-      "triangles": 2480,
-      "gpuTriangles": 2480,
+      "spacing": 0.08333333333333333,
+      "vertices": 4176,
+      "triangles": 6460,
+      "gpuTriangles": 6460,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -578,10 +579,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1273,
-      "triangles": 1932,
-      "gpuTriangles": 1932,
+      "spacing": 0.08333333333333333,
+      "vertices": 4633,
+      "triangles": 7170,
+      "gpuTriangles": 7170,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -601,10 +602,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1490,
-      "triangles": 2272,
-      "gpuTriangles": 2272,
+      "spacing": 0.08333333333333333,
+      "vertices": 3317,
+      "triangles": 5058,
+      "gpuTriangles": 5058,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -624,10 +625,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1577,
-      "triangles": 2392,
-      "gpuTriangles": 2392,
+      "spacing": 0.08333333333333333,
+      "vertices": 3752,
+      "triangles": 5800,
+      "gpuTriangles": 5800,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -647,10 +648,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1301,
-      "triangles": 1986,
-      "gpuTriangles": 1986,
+      "spacing": 0.08333333333333333,
+      "vertices": 3031,
+      "triangles": 4680,
+      "gpuTriangles": 4680,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -670,10 +671,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1300,
-      "triangles": 1986,
-      "gpuTriangles": 1986,
+      "spacing": 0.08333333333333333,
+      "vertices": 4315,
+      "triangles": 6686,
+      "gpuTriangles": 6686,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -693,10 +694,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1240,
-      "triangles": 1874,
-      "gpuTriangles": 1874,
+      "spacing": 0.08333333333333333,
+      "vertices": 4475,
+      "triangles": 6952,
+      "gpuTriangles": 6952,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -716,10 +717,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1220,
-      "triangles": 1870,
-      "gpuTriangles": 1870,
+      "spacing": 0.08333333333333333,
+      "vertices": 3555,
+      "triangles": 5504,
+      "gpuTriangles": 5504,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -739,10 +740,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1854,
-      "triangles": 2812,
-      "gpuTriangles": 2812,
+      "spacing": 0.08333333333333333,
+      "vertices": 4967,
+      "triangles": 7704,
+      "gpuTriangles": 7704,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -762,10 +763,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1145,
-      "triangles": 1738,
-      "gpuTriangles": 1738,
+      "spacing": 0.08333333333333333,
+      "vertices": 3266,
+      "triangles": 5056,
+      "gpuTriangles": 5056,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -785,10 +786,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1298,
-      "triangles": 1982,
-      "gpuTriangles": 1982,
+      "spacing": 0.08333333333333333,
+      "vertices": 3617,
+      "triangles": 5586,
+      "gpuTriangles": 5586,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -808,10 +809,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1224,
-      "triangles": 1876,
-      "gpuTriangles": 1876,
+      "spacing": 0.08333333333333333,
+      "vertices": 4407,
+      "triangles": 6860,
+      "gpuTriangles": 6860,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -831,10 +832,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1604,
-      "triangles": 2458,
-      "gpuTriangles": 2458,
+      "spacing": 0.08333333333333333,
+      "vertices": 4025,
+      "triangles": 6190,
+      "gpuTriangles": 6190,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -854,10 +855,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1457,
-      "triangles": 2236,
-      "gpuTriangles": 2236,
+      "spacing": 0.08333333333333333,
+      "vertices": 4628,
+      "triangles": 7188,
+      "gpuTriangles": 7188,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -877,10 +878,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1130,
-      "triangles": 1700,
-      "gpuTriangles": 1700,
+      "spacing": 0.08333333333333333,
+      "vertices": 3422,
+      "triangles": 5296,
+      "gpuTriangles": 5296,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -900,10 +901,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1393,
-      "triangles": 2130,
-      "gpuTriangles": 2130,
+      "spacing": 0.08333333333333333,
+      "vertices": 4582,
+      "triangles": 7092,
+      "gpuTriangles": 7092,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -923,10 +924,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 945,
-      "triangles": 1454,
-      "gpuTriangles": 1454,
+      "spacing": 0.08333333333333333,
+      "vertices": 3716,
+      "triangles": 5778,
+      "gpuTriangles": 5778,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -946,10 +947,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1178,
-      "triangles": 1784,
-      "gpuTriangles": 1784,
+      "spacing": 0.08333333333333333,
+      "vertices": 3311,
+      "triangles": 5116,
+      "gpuTriangles": 5116,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -969,10 +970,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1418,
-      "triangles": 2204,
-      "gpuTriangles": 2204,
+      "spacing": 0.08333333333333333,
+      "vertices": 4202,
+      "triangles": 6524,
+      "gpuTriangles": 6524,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -992,10 +993,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1475,
-      "triangles": 2272,
-      "gpuTriangles": 2272,
+      "spacing": 0.08333333333333333,
+      "vertices": 4055,
+      "triangles": 6266,
+      "gpuTriangles": 6266,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1015,10 +1016,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1622,
-      "triangles": 2512,
-      "gpuTriangles": 2512,
+      "spacing": 0.08333333333333333,
+      "vertices": 4299,
+      "triangles": 6654,
+      "gpuTriangles": 6654,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1038,10 +1039,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1316,
-      "triangles": 2006,
-      "gpuTriangles": 2006,
+      "spacing": 0.08333333333333333,
+      "vertices": 3697,
+      "triangles": 5688,
+      "gpuTriangles": 5688,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1061,10 +1062,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1324,
-      "triangles": 2056,
-      "gpuTriangles": 2056,
+      "spacing": 0.08333333333333333,
+      "vertices": 4190,
+      "triangles": 6508,
+      "gpuTriangles": 6508,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1084,10 +1085,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1533,
-      "triangles": 2336,
-      "gpuTriangles": 2336,
+      "spacing": 0.08333333333333333,
+      "vertices": 4564,
+      "triangles": 7070,
+      "gpuTriangles": 7070,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1107,10 +1108,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1320,
-      "triangles": 2028,
-      "gpuTriangles": 2028,
+      "spacing": 0.08333333333333333,
+      "vertices": 3364,
+      "triangles": 5188,
+      "gpuTriangles": 5188,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1130,10 +1131,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1318,
-      "triangles": 2018,
-      "gpuTriangles": 2018,
+      "spacing": 0.08333333333333333,
+      "vertices": 4299,
+      "triangles": 6684,
+      "gpuTriangles": 6684,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1153,10 +1154,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1449,
-      "triangles": 2192,
-      "gpuTriangles": 2192,
+      "spacing": 0.08333333333333333,
+      "vertices": 4813,
+      "triangles": 7462,
+      "gpuTriangles": 7462,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1176,10 +1177,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1429,
-      "triangles": 2160,
-      "gpuTriangles": 2160,
+      "spacing": 0.08333333333333333,
+      "vertices": 4517,
+      "triangles": 6974,
+      "gpuTriangles": 6974,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1199,10 +1200,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1774,
-      "triangles": 2722,
-      "gpuTriangles": 2722,
+      "spacing": 0.08333333333333333,
+      "vertices": 4984,
+      "triangles": 7722,
+      "gpuTriangles": 7722,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1222,10 +1223,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1332,
-      "triangles": 2046,
-      "gpuTriangles": 2046,
+      "spacing": 0.08333333333333333,
+      "vertices": 5072,
+      "triangles": 7904,
+      "gpuTriangles": 7904,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1245,10 +1246,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1259,
-      "triangles": 1888,
-      "gpuTriangles": 1888,
+      "spacing": 0.08333333333333333,
+      "vertices": 3893,
+      "triangles": 6018,
+      "gpuTriangles": 6018,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1268,10 +1269,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1154,
-      "triangles": 1738,
-      "gpuTriangles": 1738,
+      "spacing": 0.08333333333333333,
+      "vertices": 3082,
+      "triangles": 4748,
+      "gpuTriangles": 4748,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1291,10 +1292,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1135,
-      "triangles": 1726,
-      "gpuTriangles": 1726,
+      "spacing": 0.08333333333333333,
+      "vertices": 2970,
+      "triangles": 4566,
+      "gpuTriangles": 4566,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1314,10 +1315,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1534,
-      "triangles": 2294,
-      "gpuTriangles": 2294,
+      "spacing": 0.08333333333333333,
+      "vertices": 5455,
+      "triangles": 8480,
+      "gpuTriangles": 8480,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1337,10 +1338,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1395,
-      "triangles": 2082,
-      "gpuTriangles": 2082,
+      "spacing": 0.08333333333333333,
+      "vertices": 4984,
+      "triangles": 7720,
+      "gpuTriangles": 7720,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1360,10 +1361,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1629,
-      "triangles": 2482,
-      "gpuTriangles": 2482,
+      "spacing": 0.08333333333333333,
+      "vertices": 4155,
+      "triangles": 6432,
+      "gpuTriangles": 6432,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1383,10 +1384,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1380,
-      "triangles": 2104,
-      "gpuTriangles": 2104,
+      "spacing": 0.08333333333333333,
+      "vertices": 3565,
+      "triangles": 5468,
+      "gpuTriangles": 5468,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1406,10 +1407,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1326,
-      "triangles": 2038,
-      "gpuTriangles": 2038,
+      "spacing": 0.08333333333333333,
+      "vertices": 3947,
+      "triangles": 6120,
+      "gpuTriangles": 6120,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1429,10 +1430,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1272,
-      "triangles": 1938,
-      "gpuTriangles": 1938,
+      "spacing": 0.08333333333333333,
+      "vertices": 3768,
+      "triangles": 5820,
+      "gpuTriangles": 5820,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1452,10 +1453,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1393,
-      "triangles": 2132,
-      "gpuTriangles": 2132,
+      "spacing": 0.08333333333333333,
+      "vertices": 4510,
+      "triangles": 6996,
+      "gpuTriangles": 6996,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1475,10 +1476,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1461,
-      "triangles": 2182,
-      "gpuTriangles": 2182,
+      "spacing": 0.08333333333333333,
+      "vertices": 3670,
+      "triangles": 5658,
+      "gpuTriangles": 5658,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1498,10 +1499,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1257,
-      "triangles": 1950,
-      "gpuTriangles": 1950,
+      "spacing": 0.08333333333333333,
+      "vertices": 3126,
+      "triangles": 4802,
+      "gpuTriangles": 4802,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1521,10 +1522,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1370,
-      "triangles": 2108,
-      "gpuTriangles": 2108,
+      "spacing": 0.08333333333333333,
+      "vertices": 3750,
+      "triangles": 5796,
+      "gpuTriangles": 5796,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1544,10 +1545,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1247,
-      "triangles": 1882,
-      "gpuTriangles": 1882,
+      "spacing": 0.08333333333333333,
+      "vertices": 3334,
+      "triangles": 5148,
+      "gpuTriangles": 5148,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1567,10 +1568,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1167,
-      "triangles": 1786,
-      "gpuTriangles": 1786,
+      "spacing": 0.08333333333333333,
+      "vertices": 3179,
+      "triangles": 4908,
+      "gpuTriangles": 4908,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1590,10 +1591,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1301,
-      "triangles": 1998,
-      "gpuTriangles": 1998,
+      "spacing": 0.08333333333333333,
+      "vertices": 3867,
+      "triangles": 5984,
+      "gpuTriangles": 5984,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1613,10 +1614,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1335,
-      "triangles": 2044,
-      "gpuTriangles": 2044,
+      "spacing": 0.08333333333333333,
+      "vertices": 3511,
+      "triangles": 5416,
+      "gpuTriangles": 5416,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1636,10 +1637,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1143,
-      "triangles": 1718,
-      "gpuTriangles": 1718,
+      "spacing": 0.08333333333333333,
+      "vertices": 4120,
+      "triangles": 6384,
+      "gpuTriangles": 6384,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1659,10 +1660,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1439,
-      "triangles": 2220,
-      "gpuTriangles": 2220,
+      "spacing": 0.08333333333333333,
+      "vertices": 3697,
+      "triangles": 5694,
+      "gpuTriangles": 5694,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1682,10 +1683,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1394,
-      "triangles": 2140,
-      "gpuTriangles": 2140,
+      "spacing": 0.08333333333333333,
+      "vertices": 3441,
+      "triangles": 5290,
+      "gpuTriangles": 5290,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1705,10 +1706,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1229,
-      "triangles": 1858,
-      "gpuTriangles": 1858,
+      "spacing": 0.08333333333333333,
+      "vertices": 3633,
+      "triangles": 5588,
+      "gpuTriangles": 5588,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1728,10 +1729,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1571,
-      "triangles": 2392,
-      "gpuTriangles": 2392,
+      "spacing": 0.08333333333333333,
+      "vertices": 4726,
+      "triangles": 7312,
+      "gpuTriangles": 7312,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1751,10 +1752,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1466,
-      "triangles": 2268,
-      "gpuTriangles": 2268,
+      "spacing": 0.08333333333333333,
+      "vertices": 4271,
+      "triangles": 6616,
+      "gpuTriangles": 6616,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1774,10 +1775,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1535,
-      "triangles": 2340,
-      "gpuTriangles": 2340,
+      "spacing": 0.08333333333333333,
+      "vertices": 4520,
+      "triangles": 7012,
+      "gpuTriangles": 7012,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1797,10 +1798,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1487,
-      "triangles": 2228,
-      "gpuTriangles": 2228,
+      "spacing": 0.08333333333333333,
+      "vertices": 4056,
+      "triangles": 6212,
+      "gpuTriangles": 6212,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1820,10 +1821,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1111,
-      "triangles": 1688,
-      "gpuTriangles": 1688,
+      "spacing": 0.08333333333333333,
+      "vertices": 2796,
+      "triangles": 4304,
+      "gpuTriangles": 4304,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1843,10 +1844,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1529,
-      "triangles": 2328,
-      "gpuTriangles": 2328,
+      "spacing": 0.08333333333333333,
+      "vertices": 4250,
+      "triangles": 6558,
+      "gpuTriangles": 6558,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1866,10 +1867,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1461,
-      "triangles": 2234,
-      "gpuTriangles": 2234,
+      "spacing": 0.08333333333333333,
+      "vertices": 4804,
+      "triangles": 7436,
+      "gpuTriangles": 7436,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1889,10 +1890,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1432,
-      "triangles": 2190,
-      "gpuTriangles": 2190,
+      "spacing": 0.08333333333333333,
+      "vertices": 3903,
+      "triangles": 6032,
+      "gpuTriangles": 6032,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1912,10 +1913,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1724,
-      "triangles": 2634,
-      "gpuTriangles": 2634,
+      "spacing": 0.08333333333333333,
+      "vertices": 4476,
+      "triangles": 6922,
+      "gpuTriangles": 6922,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1935,10 +1936,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1476,
-      "triangles": 2280,
-      "gpuTriangles": 2280,
+      "spacing": 0.08333333333333333,
+      "vertices": 4891,
+      "triangles": 7582,
+      "gpuTriangles": 7582,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1958,10 +1959,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1302,
-      "triangles": 1940,
-      "gpuTriangles": 1940,
+      "spacing": 0.08333333333333333,
+      "vertices": 4240,
+      "triangles": 6576,
+      "gpuTriangles": 6576,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -1981,10 +1982,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1416,
-      "triangles": 2178,
-      "gpuTriangles": 2178,
+      "spacing": 0.08333333333333333,
+      "vertices": 4372,
+      "triangles": 6742,
+      "gpuTriangles": 6742,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2004,10 +2005,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1723,
-      "triangles": 2644,
-      "gpuTriangles": 2644,
+      "spacing": 0.08333333333333333,
+      "vertices": 4503,
+      "triangles": 6940,
+      "gpuTriangles": 6940,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2027,10 +2028,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1493,
-      "triangles": 2304,
-      "gpuTriangles": 2304,
+      "spacing": 0.08333333333333333,
+      "vertices": 4299,
+      "triangles": 6654,
+      "gpuTriangles": 6654,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2050,10 +2051,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1298,
-      "triangles": 1980,
-      "gpuTriangles": 1980,
+      "spacing": 0.08333333333333333,
+      "vertices": 5066,
+      "triangles": 7896,
+      "gpuTriangles": 7896,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2073,10 +2074,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1334,
-      "triangles": 2080,
-      "gpuTriangles": 2080,
+      "spacing": 0.08333333333333333,
+      "vertices": 4310,
+      "triangles": 6700,
+      "gpuTriangles": 6700,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2096,10 +2097,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1596,
-      "triangles": 2450,
-      "gpuTriangles": 2450,
+      "spacing": 0.08333333333333333,
+      "vertices": 3643,
+      "triangles": 5624,
+      "gpuTriangles": 5624,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2119,10 +2120,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1044,
-      "triangles": 1574,
-      "gpuTriangles": 1574,
+      "spacing": 0.08333333333333333,
+      "vertices": 3484,
+      "triangles": 5408,
+      "gpuTriangles": 5408,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2142,10 +2143,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1246,
-      "triangles": 1904,
-      "gpuTriangles": 1904,
+      "spacing": 0.08333333333333333,
+      "vertices": 3760,
+      "triangles": 5840,
+      "gpuTriangles": 5840,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2165,10 +2166,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1213,
-      "triangles": 1858,
-      "gpuTriangles": 1858,
+      "spacing": 0.08333333333333333,
+      "vertices": 4334,
+      "triangles": 6730,
+      "gpuTriangles": 6730,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2188,10 +2189,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1426,
-      "triangles": 2174,
-      "gpuTriangles": 2174,
+      "spacing": 0.08333333333333333,
+      "vertices": 4073,
+      "triangles": 6288,
+      "gpuTriangles": 6288,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2211,10 +2212,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1469,
-      "triangles": 2262,
-      "gpuTriangles": 2262,
+      "spacing": 0.08333333333333333,
+      "vertices": 4741,
+      "triangles": 7368,
+      "gpuTriangles": 7368,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2234,10 +2235,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1505,
-      "triangles": 2324,
-      "gpuTriangles": 2324,
+      "spacing": 0.08333333333333333,
+      "vertices": 4770,
+      "triangles": 7408,
+      "gpuTriangles": 7408,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2257,10 +2258,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1453,
-      "triangles": 2230,
-      "gpuTriangles": 2230,
+      "spacing": 0.08333333333333333,
+      "vertices": 3859,
+      "triangles": 5940,
+      "gpuTriangles": 5940,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2280,10 +2281,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1587,
-      "triangles": 2440,
-      "gpuTriangles": 2440,
+      "spacing": 0.08333333333333333,
+      "vertices": 4458,
+      "triangles": 6898,
+      "gpuTriangles": 6898,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2303,10 +2304,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1607,
-      "triangles": 2480,
-      "gpuTriangles": 2480,
+      "spacing": 0.08333333333333333,
+      "vertices": 4164,
+      "triangles": 6410,
+      "gpuTriangles": 6410,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2326,10 +2327,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1260,
-      "triangles": 1934,
-      "gpuTriangles": 1934,
+      "spacing": 0.08333333333333333,
+      "vertices": 2943,
+      "triangles": 4530,
+      "gpuTriangles": 4530,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2349,10 +2350,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1357,
-      "triangles": 2050,
-      "gpuTriangles": 2050,
+      "spacing": 0.08333333333333333,
+      "vertices": 3476,
+      "triangles": 5368,
+      "gpuTriangles": 5368,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2372,10 +2373,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1658,
-      "triangles": 2550,
-      "gpuTriangles": 2550,
+      "spacing": 0.08333333333333333,
+      "vertices": 4270,
+      "triangles": 6542,
+      "gpuTriangles": 6542,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2395,10 +2396,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1260,
-      "triangles": 1926,
-      "gpuTriangles": 1926,
+      "spacing": 0.08333333333333333,
+      "vertices": 4078,
+      "triangles": 6328,
+      "gpuTriangles": 6328,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2418,10 +2419,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1463,
-      "triangles": 2208,
-      "gpuTriangles": 2208,
+      "spacing": 0.08333333333333333,
+      "vertices": 4534,
+      "triangles": 7014,
+      "gpuTriangles": 7014,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2441,10 +2442,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 1695,
-      "triangles": 2596,
-      "gpuTriangles": 2596,
+      "spacing": 0.08333333333333333,
+      "vertices": 4127,
+      "triangles": 6360,
+      "gpuTriangles": 6360,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2464,10 +2465,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 382,
-      "triangles": 550,
-      "gpuTriangles": 550,
+      "spacing": 0.08333333333333333,
+      "vertices": 989,
+      "triangles": 1512,
+      "gpuTriangles": 1512,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2487,10 +2488,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 662,
-      "triangles": 990,
-      "gpuTriangles": 990,
+      "spacing": 0.08333333333333333,
+      "vertices": 1133,
+      "triangles": 1704,
+      "gpuTriangles": 1704,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2510,10 +2511,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 671,
-      "triangles": 1008,
-      "gpuTriangles": 1008,
+      "spacing": 0.08333333333333333,
+      "vertices": 1133,
+      "triangles": 1704,
+      "gpuTriangles": 1704,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2533,10 +2534,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 347,
-      "triangles": 516,
-      "gpuTriangles": 516,
+      "spacing": 0.08333333333333333,
+      "vertices": 554,
+      "triangles": 836,
+      "gpuTriangles": 836,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2556,10 +2557,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 424,
-      "triangles": 636,
-      "gpuTriangles": 636,
+      "spacing": 0.08333333333333333,
+      "vertices": 1224,
+      "triangles": 1888,
+      "gpuTriangles": 1888,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2579,10 +2580,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 559,
-      "triangles": 834,
-      "gpuTriangles": 834,
+      "spacing": 0.08333333333333333,
+      "vertices": 1672,
+      "triangles": 2580,
+      "gpuTriangles": 2580,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     },
@@ -2602,10 +2603,10 @@
         1
       ],
       "route": "field",
-      "spacing": 0.16666666666666666,
-      "vertices": 820,
-      "triangles": 1224,
-      "gpuTriangles": 1224,
+      "spacing": 0.08333333333333333,
+      "vertices": 1601,
+      "triangles": 2424,
+      "gpuTriangles": 2424,
       "collapsedFaces": 0,
       "float32FlippedFaces": 0
     }

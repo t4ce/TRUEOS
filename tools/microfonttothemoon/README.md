@@ -28,20 +28,21 @@ PNG encoding run on a blocking service lane; the BSP performs the async
 filesystem write. Only rejected queue/render admission and disk writes
 retry. An accepted, incomplete GPU pass is never replayed or read back.
 
-## Actual Draft tessellation
+## Actual Fine tessellation
 
 Geometry comes from the studio's pure `buildShape` functions. The build
-tool runs those functions with `detail=6` (Draft) and the shared
+tool runs those functions with `detail=12` (Fine) and the shared
 `recipe.json` parameters. All source masks use the general-field route,
-with sample spacing 1/6 source unit. Increasing raster scale to 8× keeps
+with sample spacing 1/12 source unit. Increasing raster scale to 8× keeps
 this tessellation detail; it does not add diagnostic lines or resample a
 previous PNG.
 
-The shared recipe uses Directional tissue, reach 1.76, sigma 0.45,
-threshold 0.75, density balance 1.0, tangent stretch 1.75, neutral connection
-bias, and zero diagonal assist/centerline snap. Shortcut pruning remains
-enabled; cross-character links remain disabled. In Tissue mode, stretch
-is `1 + 1.75 * local_coherence`.
+The shared recipe uses Distance envelope, reach 2.84, sigma 0.29,
+threshold 0.85, neutral connection bias, and protected continuations.
+Shortcut pruning remains enabled; cross-character links remain disabled.
+Density balance and tangent stretch do not affect the envelope model.
+The source/guides overlay in the studio is an inspection aid; boot images
+continue to render the grayscale body mesh.
 
 Tessellation is fixed at build time. The kernel embeds vector geometry,
 uploads each part once, and rasterizes it at boot using the native triangle
@@ -52,24 +53,25 @@ font cache, font warmup, or Shell3 routing is added. The renderer's
 Regenerate and validate from the repository root:
 
 ```sh
-node tools/microfonttothemoon/generate.mjs 6
+node tools/microfonttothemoon/generate.mjs 12
 mkdir -p bld/microfonttothemoon
 rustc --edition=2024 -Awarnings tools/microfonttothemoon/export_han.rs -o bld/microfonttothemoon/export_han
 bld/microfonttothemoon/export_han > bld/microfonttothemoon/han-masks.txt
-node tools/microfonttothemoon/generate.mjs 6 src/intel/gpu_font/moon/han han
+node tools/microfonttothemoon/generate.mjs 12 src/intel/gpu_font/moon/han han
 python3 tools/microfonttothemoon/validate.py
 python3 tools/microfonttothemoon/validate.py src/intel/gpu_font/moon/han
 cargo build --offline
 ```
 
-Compare Fine in a separate output directory:
+Compare High in a separate output directory:
 
 ```sh
-node tools/microfonttothemoon/generate.mjs 12 /tmp/moon-fine
-python3 tools/microfonttothemoon/validate.py src/intel/gpu_font/moon /tmp/moon-fine
+node tools/microfonttothemoon/generate.mjs 24 /tmp/moon-high
+python3 tools/microfonttothemoon/validate.py src/intel/gpu_font/moon /tmp/moon-high
 ```
 
-Supported detail values match the studio: 6, 12, 24, 40. Generated
+The shared recipe sets the default detail to Fine; a CLI argument overrides
+it for the generated artifact. Supported detail values match the studio: 6, 12, 24, 40. Generated
 `config.rs` files supply all eight kernel requests and their diagnostics.
 The validator checks content hashes, bounds, winding, indices, spacing,
 tile containment, and complete glyph coverage across all four parts.

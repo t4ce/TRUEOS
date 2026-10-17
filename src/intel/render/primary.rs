@@ -1798,7 +1798,7 @@ fn stage_resident_scene_secondary(
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
             ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
-        point_width_px,
+        resident_point_width_raw(point_width_px),
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         if draw.fixed_gl.is_some() { TriangleFrontEndContract {
             vs_urb_read_length: 2, sbe_read_length: 2,
@@ -1933,14 +1933,9 @@ fn stage_resident_churn_forward_secondary(
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
             ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
-        // Maxpix has a dedicated POINTLIST pipeline; leave other point paths
-        // on their existing default footprint.
-        if core::ptr::eq(resident.pipeline.vs.code.as_ptr(),
-            crate::intel::shader::maxpix_tornado::pipeline().vs.code.as_ptr()) {
-            1
-        } else {
-            0
-        },
+        // Width is validated and latched with the camera under the retained
+        // submission lease. Zero keeps every other resident's existing default.
+        resident.point_width_raw.load(Ordering::Acquire),
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         front_end_contract,
         [0.0, 0.0],

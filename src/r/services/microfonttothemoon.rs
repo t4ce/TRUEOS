@@ -102,8 +102,8 @@ async fn run_stamp(stamp: Stamp) {
     }
 }
 
-/// The studio's pure tessellator generates this immutable geometry at Draft
-/// detail=6. Only vertices/indices are embedded: no raster or atlas is cached.
+/// The studio's pure tessellator generates this immutable geometry at the
+/// configured detail. Only vertices/indices are embedded; no raster is cached.
 /// The boot worker uploads it once and submits one grayscale triangle scene.
 fn render_stamp(stamp: Stamp) -> Result<Vec<u8>, &'static str> {
     use crate::intel::render::{

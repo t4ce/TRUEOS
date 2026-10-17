@@ -492,6 +492,8 @@ pub(crate) struct ResidentChurnForward {
     /// already-proven indexed draw command path unchanged.
     expanded_indices: ResidentRenderBuffer,
     camera: ResidentRenderBuffer,
+    /// Dedicated Maxpix SF PointWidth in native U8.3 units; other paths use zero.
+    point_width_raw: AtomicU32,
     instances: ResidentRenderBuffer,
     compacted_indices: ResidentRenderBuffer,
     indirect_args: ResidentRenderBuffer,

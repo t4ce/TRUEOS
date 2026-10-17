@@ -40,6 +40,30 @@ pub(crate) fn is_virtual_read(path: &str) -> bool {
 }
 const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CheckedWriteOptions {
+    pub create_new: bool,
+    pub expected_sha256: Option<[u8; 32]>,
+}
+
+/// Fixed, versioned wire header: flags:u32 LE, expected SHA-256:32, then path.
+pub(crate) fn decode_checked_write_payload(
+    bytes: &[u8],
+) -> Result<(CheckedWriteOptions, &str), i32> {
+    if bytes.len() <= 36 || bytes.len() > 36 + BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    let flags = u32::from_le_bytes(bytes[..4].try_into().map_err(|_| FS_ERR_BAD_PARAM)?);
+    if flags > 2 || (flags != 2 && bytes[4..36].iter().any(|b| *b != 0)) {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    let expected_sha256 = if flags == 2 {
+        Some(bytes[4..36].try_into().map_err(|_| FS_ERR_BAD_PARAM)?)
+    } else { None };
+    let path = core::str::from_utf8(&bytes[36..]).map_err(|_| FS_ERR_BAD_UTF8)?;
+    Ok((CheckedWriteOptions { create_new: flags == 1, expected_sha256 }, path))
+}
+
 #[derive(Debug)]
 enum RequestKind {
     Read {
@@ -50,6 +74,7 @@ enum RequestKind {
         bytes: Vec<u8>,
         content_type: crate::r::fs::trueosfs::ContentTypeId,
         legacy_blob: bool,
+        checked: Option<CheckedWriteOptions>,
     },
     CreateDirAll {
         path: String,
@@ -179,6 +204,7 @@ enum OperationState {
         total_len: usize,
         content_type: crate::r::fs::trueosfs::ContentTypeId,
         legacy_blob: bool,
+        checked: Option<CheckedWriteOptions>,
     },
     Read(Vec<u8>),
     Unit,
@@ -476,7 +502,7 @@ fn start_completed_read_inner(owner: u32, bytes: Vec<u8>) -> i32 {
 }
 
 pub(crate) fn start_write(owner: u32, path: String, total_len: usize) -> i32 {
-    start_write_inner(owner, path, total_len, crate::r::fs::trueosfs::ContentTypeId::BLOB, true)
+    start_write_inner(owner, path, total_len, crate::r::fs::trueosfs::ContentTypeId::BLOB, true, None)
 }
 
 pub(crate) fn start_write_typed(
@@ -497,7 +523,25 @@ pub(crate) fn start_write_typed(
         );
         return FS_ERR_BAD_PARAM;
     }
-    start_write_inner(owner, path, total_len, content_type, false)
+    start_write_inner(owner, path, total_len, content_type, false, None)
+}
+
+pub(crate) fn start_write_checked(
+    owner: u32,
+    path: String,
+    total_len: usize,
+    content_type: crate::r::fs::trueosfs::ContentTypeId,
+    options: CheckedWriteOptions,
+) -> i32 {
+    if content_type == crate::r::fs::trueosfs::ContentTypeId::NONE {
+        return FS_ERR_TYPE_REQUIRED;
+    }
+    if !content_type.is_registered() || (options.create_new && options.expected_sha256.is_some())
+        || path.starts_with("vFile:")
+    {
+        return FS_ERR_BAD_PARAM;
+    }
+    start_write_inner(owner, path, total_len, content_type, false, Some(options))
 }
 
 fn start_write_inner(
@@ -506,9 +550,10 @@ fn start_write_inner(
     total_len: usize,
     content_type: crate::r::fs::trueosfs::ContentTypeId,
     legacy_blob: bool,
+    checked: Option<CheckedWriteOptions>,
 ) -> i32 {
     crate::allocators::with_host_alloc_domain_strong(|| {
-        stage_write(owner, path, total_len, content_type, legacy_blob)
+        stage_write(owner, path, total_len, content_type, legacy_blob, checked)
     })
 }
 
@@ -518,6 +563,7 @@ fn stage_write(
     total_len: usize,
     content_type: crate::r::fs::trueosfs::ContentTypeId,
     legacy_blob: bool,
+    checked: Option<CheckedWriteOptions>,
 ) -> i32 {
     let max_bytes = if path.starts_with("vFile:") {
         ASYNC_FS_MAX_RESULT_BYTES
@@ -550,6 +596,7 @@ fn stage_write(
                 total_len,
                 content_type,
                 legacy_blob,
+                checked,
             },
         },
     );
@@ -594,6 +641,7 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
                 total_len,
                 content_type,
                 legacy_blob,
+                checked,
             } if bytes.len() == total_len => Request {
                 id,
                 owner,
@@ -602,6 +650,7 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
                     bytes,
                     content_type,
                     legacy_blob,
+                    checked,
                 },
             },
             state => {
@@ -1000,8 +1049,22 @@ async fn process(request: &Request) -> OperationState {
             bytes,
             content_type,
             legacy_blob,
+            checked,
         } => {
             let _ = path;
+            if let Some(options) = checked {
+                use crate::r::fs::trueosfs::CheckedWriteError;
+                return match crate::r::fs::trueosfs::file_in_typed_checked_async(
+                    disk, selected_path, bytes.as_slice(), *content_type,
+                    options.create_new, options.expected_sha256,
+                ).await {
+                    Ok(true) => OperationState::Unit,
+                    Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
+                    Err(CheckedWriteError::AlreadyExists) => OperationState::Failed(FS_ERR_ALREADY_EXISTS),
+                    Err(CheckedWriteError::Conflict) => OperationState::Failed(FS_ERR_WRITE_CONFLICT),
+                    Err(CheckedWriteError::Device(error)) => OperationState::Failed(map_block_error(error)),
+                };
+            }
             if *legacy_blob {
                 match crate::r::fs::trueosfs::file_info_async(disk, selected_path).await {
                     Ok(Some(info))
@@ -1294,6 +1357,23 @@ fn guest_typed_write_begin(path: &str, total_len: usize, content_type: u32) -> i
     }
 }
 
+fn guest_checked_write_begin(
+    path: &str, total_len: usize, content_type: u32, options: CheckedWriteOptions,
+) -> i32 {
+    let mut payload = Vec::with_capacity(36 + path.len());
+    let flags = u32::from(options.create_new) | (u32::from(options.expected_sha256.is_some()) << 1);
+    payload.extend_from_slice(&flags.to_le_bytes());
+    payload.extend_from_slice(&options.expected_sha256.unwrap_or([0; 32]));
+    payload.extend_from_slice(path.as_bytes());
+    if payload.len() > trueos_vm::vmcall::PAYLOAD_CAP { return FS_ERR_TOO_LARGE; }
+    let (status, value) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_ASYNC_FS_CHECKED_WRITE_BEGIN_V1,
+        total_len as u64, content_type as u64, &payload, &mut [],
+    );
+    if status == trueos_vm::vmcall::STATUS_OK { (value as i64) as i32 }
+    else { FS_ERR_BAD_PARAM }
+}
+
 fn guest_rename_start(source: &str, destination: &str, replace_file: bool) -> i32 {
     let Some(payload_len) = 4usize
         .checked_add(source.len())
@@ -1396,6 +1476,38 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_typed_write_begin(
         guest_typed_write_begin(path.as_str(), total_len, content_type)
     } else {
         start_write_typed(direct_owner(), path, total_len, id)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_checked_write_begin_v1(
+    path_ptr: *const u8,
+    path_len: usize,
+    total_len: usize,
+    content_type: u32,
+    flags: u32,
+    expected_sha256: *const u8,
+) -> i32 {
+    if flags > 2 || (flags == 2 && expected_sha256.is_null()) {
+        return FS_ERR_BAD_PARAM;
+    }
+    let path = match parse_path(path_ptr, path_len, false) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(content_type);
+    if id == crate::r::fs::trueosfs::ContentTypeId::NONE { return FS_ERR_TYPE_REQUIRED; }
+    if !id.is_registered() || path.starts_with("vFile:") { return FS_ERR_BAD_PARAM; }
+    let hash = if flags == 2 {
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(unsafe { core::slice::from_raw_parts(expected_sha256, 32) });
+        Some(hash)
+    } else { None };
+    let options = CheckedWriteOptions { create_new: flags == 1, expected_sha256: hash };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_checked_write_begin(path.as_str(), total_len, content_type, options)
+    } else {
+        start_write_checked(direct_owner(), path, total_len, id, options)
     }
 }
 

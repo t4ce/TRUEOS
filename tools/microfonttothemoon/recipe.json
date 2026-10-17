@@ -1,9 +1,9 @@
 {
-  "model": "tissue",
-  "reach": 1.76,
-  "sigma": 0.45,
-  "level": 0.75,
-  "balance": 1.0,
+  "model": "envelope",
+  "reach": 2.84,
+  "sigma": 0.29,
+  "level": 0.85,
+  "balance": 0,
   "stretch": 1.75,
   "bias": 0,
   "smartBias": true,
@@ -12,5 +12,6 @@
   "prune": true,
   "cross": false,
   "contours": false,
-  "route": "field"
+  "route": "field",
+  "detail": 12
 }

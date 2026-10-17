@@ -1418,6 +1418,116 @@ pub async fn write_file_typed_async(
     file_in_typed_async(disk, name, bytes, content_type).await
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckedWriteError {
+    Device(block::Error),
+    AlreadyExists,
+    Conflict,
+}
+
+impl From<block::Error> for CheckedWriteError {
+    fn from(error: block::Error) -> Self { Self::Device(error) }
+}
+
+/// Conditional complete-file write. Check the current destination and preserve
+/// its identity and access key while holding the same lease as publication.
+pub async fn file_in_typed_checked_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+    new_content_type: ContentTypeId,
+    create_new: bool,
+    expected_sha256: Option<[u8; 32]>,
+) -> Result<bool, CheckedWriteError> {
+    use sha2::{Digest, Sha256};
+    let _activity = crate::disc::access::Activity::begin(disk)?;
+    if disk.parent().is_some() || (create_new && expected_sha256.is_some())
+        || new_content_type == ContentTypeId::NONE || !new_content_type.is_registered()
+    {
+        return Err(block::Error::InvalidParam.into());
+    }
+    // Unlike convenience imports, an executor write never creates missing
+    // parents implicitly. Validate their existence under the publication lease.
+    let Some(placement) = placement_for_io_async(disk).await? else { return Ok(false); };
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    let (_write_lease, indexed) = loop {
+        // Index construction can checkpoint; never rebuild while holding this lease.
+        ensure_index_async(disk, &placement).await?;
+        let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        if !validate_indexed_file_target(disk.id(), name, false)? {
+            drop(lease);
+            continue;
+        }
+        break (lease, indexed_removal_entry(disk.id(), name)?);
+    };
+    if create_new && indexed.is_some() { return Err(CheckedWriteError::AlreadyExists); }
+    let existing = if let Some(entry) = indexed {
+        let record = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
+            .await.map_err(map_engine_err)?.ok_or(block::Error::Corrupted)?;
+        if record.kind != NodeKind::File || record.content_type != entry.content_type {
+            return Err(block::Error::Corrupted.into());
+        }
+        Some(trueos_fs::FileRecordRef {
+            file_id: record.file_id,
+            entry_lba: record.entry_lba,
+            data_lba: record.data_lba,
+            data_len: record.data_len,
+            content_type: record.content_type,
+            record_key: record.record_key,
+        })
+    } else { None };
+    if let Some(expected) = expected_sha256 {
+        let record = existing.as_ref().ok_or(CheckedWriteError::Conflict)?;
+        // Hash the immutable current record in bounded chunks. No full-file clone
+        // and no name lookup (which could rebuild the index under this lease).
+        let mut hash = Sha256::new();
+        let mut buffer = alloc::vec![0u8; core::cmp::min(record.data_len, 64 * 1024) as usize];
+        let mut offset = 0u64;
+        while offset < record.data_len {
+            let len = core::cmp::min(buffer.len() as u64, record.data_len - offset) as usize;
+            let got = trueos_fs::read_file_range_at(&io, &params, record, offset, &mut buffer[..len])
+                .await.map_err(map_engine_err)?.ok_or(block::Error::Corrupted)?;
+            if got == 0 || got > len { return Err(block::Error::Corrupted.into()); }
+            hash.update(&buffer[..got]);
+            offset += got as u64;
+        }
+        let actual: [u8; 32] = hash.finalize().into();
+        if actual != expected { return Err(CheckedWriteError::Conflict); }
+    }
+    let metadata = existing.as_ref().map_or(
+        trueos_fs::FileWriteMetadata {
+            file_id: 0,
+            content_type: new_content_type,
+            record_key: RecordKey::Ffa,
+        },
+        |record| trueos_fs::FileWriteMetadata {
+            file_id: record.file_id,
+            content_type: record.content_type,
+            record_key: record.record_key,
+        },
+    );
+    let Some(mut stream) = trueos_fs::begin_write_file_stream_prevalidated(
+        &io, &params, name, bytes.len() as u64, metadata,
+    ).await.map_err(map_engine_err)? else { return Ok(false); };
+    for chunk in bytes.chunks(64 * 1024) {
+        trueos_fs::write_file_stream_chunk(&io, &mut stream, chunk).await.map_err(map_engine_err)?;
+    }
+    let record = trueos_fs::write_stream_record_ref(&stream);
+    trueos_fs::finish_write_file_stream(&io, &params, stream).await.map_err(map_engine_err)?;
+    record_successful_content_commit(record.content_type, false);
+    bump_root_cache_gen(disk.id());
+    file_record_cache_invalidate_path(disk.id(), name);
+    file_record_cache_insert(disk.id(), name, record);
+    if !update_root_index_put(disk.id(), name, record) { invalidate_root_index(disk.id()); }
+    super::file_watch::changed(disk.id(), name);
+    Ok(true)
+}
+
 async fn file_in_with_metadata_async(
     disk: block::DeviceHandle,
     name: &str,

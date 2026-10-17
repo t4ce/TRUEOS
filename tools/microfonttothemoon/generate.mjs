@@ -5,7 +5,9 @@ import {performance} from 'node:perf_hooks';
 import crypto from 'node:crypto';
 const han=process.argv[4]==='han';
 const html=fs.readFileSync('src/intel/gpu_font/continuum-diagonal-ui.html','utf8');
-const detail=Number(process.argv[2]||6);
+const recipe=JSON.parse(fs.readFileSync('tools/microfonttothemoon/recipe.json','utf8'));
+const detail=Number(process.argv[2]||recipe.detail||6);
+recipe.detail=detail;
 if(![6,12,24,40].includes(detail)) throw new Error('detail must be 6 (Draft), 12, 24, or 40');
 const context=vm.createContext({performance});
 const start=html.indexOf('function buildOrganic(input)');
@@ -22,7 +24,6 @@ if(han) {
  hanSource=fs.readFileSync('vendor/microfont/src/gui_han.rs','utf8')+fs.readFileSync('vendor/microfont/src/gui_han_data.rs','utf8');
 }
 const cell={stroke:.64,doubleGap:.70,edgeGhosts:true,continuations:true,boxSource:'ports',dotSize:1,dotStyle:'round',barLength:1.7,dotGap:.24,brailleLayout:'microfont',joinDots:false,blockCoverage:'ideal',blockInset:0,shadeRows:8};
-const recipe=JSON.parse(fs.readFileSync('tools/microfonttothemoon/recipe.json','utf8'));
 const settings={...recipe,cell,detail};
 const recipeNote=Object.entries(recipe).map(([key,value])=>`${key}=${value}`).join(' ');
 // Preserve the original 32-column layout, doubled from 4x to 8x. Split

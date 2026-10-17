@@ -2464,6 +2464,7 @@ fn create_resident_churn_forward_with_admission(
     );
     Ok(ResidentChurnForward {
         draw_group_count: AtomicU32::new(CHURN_FORWARD_DRAW_COUNT as u32),
+        point_width_raw: AtomicU32::new(0),
         vertex_gpu_addr: geometry.gpu_base(),
         vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
         vertex_format: TriangleVertexFormat::PosNormal,
@@ -2917,6 +2918,12 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
             .unwrap_or("picasso-retained-transform-unavailable"),
     )?;
     let camera_bytes = encode_camera(camera)?;
+    let maxpix = core::ptr::eq(resident.pipeline.vs.code.as_ptr(),
+        crate::intel::shader::maxpix_tornado::pipeline().vs.code.as_ptr());
+    let point_width_raw = if maxpix {
+        maxpix_point_width_raw(camera.jitter_frame[3])
+            .ok_or("maxpix-point-width-range")?
+    } else { 0 };
     let default_draw = [v::vgpu::RetainedDrawRange {
         first_index: 0,
         index_count: resident.index_count,
@@ -2965,6 +2972,14 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     resident
         .draw_group_count
         .store(ranges.len() as u32, Ordering::Release);
+    let previous_width = resident.point_width_raw.swap(point_width_raw, Ordering::AcqRel);
+    if maxpix && previous_width != point_width_raw {
+        crate::log_important!(target: "render";
+            "maxpix-native: input-contract=pointer-v1 slots=4 point-width-u8.3={} point-width-px={}.{:03} pointer0-active={} pointer0-x={} pointer0-y={}\n",
+            point_width_raw, point_width_raw / 8, (point_width_raw % 8) * 125,
+            camera.inverse_view_projection[3], camera.inverse_view_projection[0],
+            camera.inverse_view_projection[1]);
+    }
     transform.row_count.store(row_count, Ordering::Release);
     Ok(())
 }

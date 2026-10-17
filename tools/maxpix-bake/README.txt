@@ -1,18 +1,21 @@
 Maxpix: native ADL-S POINTLIST tornado
 
 The Blueprint uploads one 24-byte seed vertex and one u32 index per particle
-once. Layout 10 chooses this baked VS/PS pair in the retained renderer. Each
+once. Layout 11 chooses this baked VS/PS pair in the retained renderer. Each
 vertex carries phase, height fraction, radial factor, and a Float3 offset.
 The VS applies tornado motion from camera.jitter_frame.z (elapsed seconds),
 then the GPU-authored identity instance and Picasso view-projection. The PS
-writes a constant cyan color. The retained Maxpix path selects one-pixel native
-points. The Blueprint renders a full-resolution streaming frame presented
+writes a constant cyan color. The retained Maxpix path uses camera.jitter_frame.w for native point width
+(0 = default 1px; 1..2047 = U8.3 values 0.125..255.875px). The Blueprint renders a full-resolution streaming frame presented
 at 1:1 without upscaling. HS/DS/GS are disabled.
 
 This is a dedicated baked shader admission, not a general guest shader compiler.
 The captured target is Intel UHD Graphics 770, 8086:4680 (Gen12). Mesa captures,
 ISA, metadata and hashes are under picasso/maxpix-tornado. Compilation and host
 checks do not establish bare-metal raster output; metadata marks that separately.
+
+Shader source: ../TRUEOS-Blueprints/apps/maxpix/tornado.wgsl (relative to TRUEOS).
+The baker reads this app-owned source and copies it into the capture output.
 
 Rebake (needs cargo, Vulkan development headers/loader, cc, iga64):
 1. Unpack https://archive.mesa3d.org/mesa-26.0.4.tar.xz.
