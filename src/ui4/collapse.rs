@@ -4,6 +4,7 @@ use super::*;
 
 pub(super) const MENU_ACTION: u32 = u32::MAX;
 pub(crate) const MAX_COLLAPSE_IMAGE_SIZE: u32 = 256;
+const COLLAPSED_SIZE: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollapseError {
@@ -61,7 +62,8 @@ impl Collapse {
             window.presentation_placement = placement;
             window.maximized = false;
             window.dock_target = None;
-            window.interaction.primary_activation = true;
+            // The first click selects the tile; only a subsequent click restores it.
+            window.interaction.primary_activation = false;
             window.interaction.maximizable = false;
             window.interaction.resize_on_maximize = false;
         }
@@ -92,7 +94,7 @@ impl RestorePress {
 }
 
 /// Copies a pitched straight-alpha source into an owned premultiplied frame.
-/// No decoding, resampling, or padding is imposed on the application image.
+/// All registered images are resampled to the standard 64×64 compact tile.
 pub(crate) fn enable_window_collapse(
     owner: WindowOwner,
     window: WindowId,
@@ -119,8 +121,8 @@ pub(crate) fn enable_window_collapse(
         cadence: FrameCadence::Dirty,
         buffering: FrameBuffering::Double,
         format: ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
+        width: COLLAPSED_SIZE,
+        height: COLLAPSED_SIZE,
         base_color: Some(PremultipliedRgba8::TRANSPARENT),
     })
     .map_err(CollapseError::from)?;
@@ -135,9 +137,10 @@ pub(crate) fn enable_window_collapse(
         };
         let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
         pixels.fill(0);
-        for y in 0..height as usize {
-            for x in 0..width as usize {
-                let src = &rgba[y * pitch + x * 4..][..4];
+        for y in 0..COLLAPSED_SIZE as usize {
+            for x in 0..COLLAPSED_SIZE as usize {
+                let (source_x, source_y) = collapse_source_pixel(x, y, width, height);
+                let src = &rgba[source_y * pitch + source_x * 4..][..4];
                 let dst = &mut pixels[y * view.pitch as usize + x * 4..][..4];
                 premultiply(src, dst);
             }
@@ -152,8 +155,8 @@ pub(crate) fn enable_window_collapse(
             window,
             Collapse {
                 frame,
-                width,
-                height,
+                width: COLLAPSED_SIZE,
+                height: COLLAPSED_SIZE,
                 tile: None,
             },
         )
@@ -179,3 +182,12 @@ pub(super) fn menu_entry(owner: WindowOwner, window: WindowId) -> Option<Context
 }
 
 pub(super) fn ignore_menu(_: ContextMenuResult) {}
+
+// Sample at destination pixel centers; source extents are validated before use.
+fn collapse_source_pixel(x: usize, y: usize, width: u32, height: u32) -> (usize, usize) {
+    let size = COLLAPSED_SIZE as usize;
+    (
+        ((2 * x + 1) * width as usize / (2 * size)).min(width as usize - 1),
+        ((2 * y + 1) * height as usize / (2 * size)).min(height as usize - 1),
+    )
+}

@@ -1,6 +1,9 @@
 //! Collapse registration shares the existing bounded, chunked image transport.
 use super::*;
-const UPLOAD_ID: u32 = u32::MAX;
+// Collapse uses the ordinary upload transport. Keep its transient ID in the
+// allowed low-bit namespace; MAX is the reserved text backbuffer ID, and the
+// entire high-bit namespace belongs to FontKernel products.
+const UPLOAD_ID: u32 = 0x7FFF_FFFF;
 
 /// Copy a straight-alpha RGBA8 icon, enabling kernel-owned collapse/restore.
 /// Zero extents, images larger than 256x256, and incomplete uploads are rejected.

@@ -6872,6 +6872,12 @@ pub(crate) fn font_sprite_status(
     0
 }
 
+fn sprite_rgba8_upload_id_valid(sprite_id: u32) -> bool {
+    sprite_id != 0
+        && sprite_id != TEXT_BACKBUFFER_SPRITE_ID
+        && sprite_id & 0x8000_0000 == 0
+}
+
 pub(crate) fn begin_sprite_rgba8_upload(
     owner: WindowOwner,
     window_id: u32,
@@ -6885,11 +6891,7 @@ pub(crate) fn begin_sprite_rgba8_upload(
     // The high-bit namespace is reserved for opaque FontKernel products. A
     // Blueprint can only receive those IDs from a successful font-ticket poll;
     // normal RGBA uploads cannot replace or shadow them.
-    if sprite_id == 0
-        || sprite_id == TEXT_BACKBUFFER_SPRITE_ID
-        || sprite_id & 0x8000_0000 != 0
-        || packed_len == 0
-    {
+    if !sprite_rgba8_upload_id_valid(sprite_id) || packed_len == 0 {
         return ERROR_INVALID;
     }
     let Some(row_bytes) = (width as usize).checked_mul(core::mem::size_of::<u32>()) else {

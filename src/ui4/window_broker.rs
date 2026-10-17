@@ -2389,7 +2389,7 @@ fn update_window_placement(
         && let Some(tile) = &mut collapse.tile
     {
         let updated = update(*tile);
-        // Compact extents are always the supplied image's exact extent.
+        // Compact extents stay at the registered tile size.
         tile.x = updated.x;
         tile.y = updated.y;
         window.placement.visible = updated.visible;
@@ -2631,6 +2631,28 @@ pub(crate) fn move_window(
     let output_extent = crate::ui4::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
+    // The tile owns its placement independently of the retained producer.
+    if let Some(tile) = window
+        .collapse
+        .as_mut()
+        .and_then(|collapse| collapse.tile.as_mut())
+    {
+        if !window.interaction.movable
+            || placement.width != tile.width
+            || placement.height != tile.height
+        {
+            return Err(WindowBrokerError::InteractionDenied);
+        }
+        if *tile != placement {
+            *tile = placement;
+            window.revision = next_serial(window.revision);
+            window.damage = Some(DamageRegion::FULL);
+            broker.mark_composition_changed();
+            drop(broker);
+            super::cursor_frame_inout::selection_strip_stack_changed();
+        }
+        return Ok(());
+    }
     if !window.interaction.movable
         || placement.width != window.placement.width
         || placement.height != window.placement.height
