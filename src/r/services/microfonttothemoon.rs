@@ -109,6 +109,9 @@ fn render_stamp(stamp: Stamp) -> Result<Vec<u8>, &'static str> {
     use crate::intel::render::{
         ResidentSceneDraw, ResidentSceneFragmentContract, ResidentScenePrimitiveTopology,
     };
+    // Worker time through completed RGBA8 readback: includes mesh preparation
+    // and upload, but excludes queue admission, PNG encoding and disk writes.
+    let generation_started_ns = crate::chronos::monotonic_nanos();
     let data = stamp.mesh;
     fn word(bytes: &[u8], offset: usize) -> Result<u32, &'static str> {
         let data = bytes.get(offset..offset + 4).ok_or("mesh-truncated")?;
@@ -152,6 +155,7 @@ fn render_stamp(stamp: Stamp) -> Result<Vec<u8>, &'static str> {
     let result = crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
         &[draw], &[], Some([0, 0, 0, 255]), stamp.width, stamp.height, false,
     );
+    let rgba8_ready_ns = crate::chronos::monotonic_nanos();
     // The renderer owns incomplete GPU backing until exact retirement. Do not
     // release the source after an uncertain submission; never replay this job.
     match result {
@@ -160,10 +164,14 @@ fn render_stamp(stamp: Stamp) -> Result<Vec<u8>, &'static str> {
             if !released {
                 return Err("mesh-release-unproven");
             }
+            let rgba = frame.rgba.ok_or("readback-missing")?;
             crate::log_important!(target: "microfonttothemoon";
-                "microfonttothemoon: rendered detail={} field_spacing={} vertices={} triangles={} geometry_us={} frame_us={}\n",
-                stamp.detail, 1.0 / stamp.detail as f32, vertex_count, index_count / 3, frame.geometry_us, frame.frame_us);
-            frame.rgba.ok_or("readback-missing")
+                "microfonttothemoon: rendered path={} part={}/4 detail={} field_spacing={} vertices={} triangles={} rgba8_bytes={} generation_us={} geometry_us={} frame_us={}\n",
+                stamp.path, stamp.part, stamp.detail, 1.0 / stamp.detail as f32,
+                vertex_count, index_count / 3, rgba.len(),
+                rgba8_ready_ns.saturating_sub(generation_started_ns) / 1_000,
+                frame.geometry_us, frame.frame_us);
+            Ok(rgba)
         }
         Err("render-storage-busy" | "render-busy") => {
             if !crate::intel::render::release_resident_triangle_mesh(&mesh) {

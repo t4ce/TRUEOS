@@ -9,6 +9,7 @@ import collections
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import struct
@@ -48,6 +49,23 @@ def main():
         text = path.read_text()
         for match in DEF.finditer(text):
             definitions[match[1]].append(f'{path.relative_to(kernel)}:{text.count(chr(10), 0, match.start()) + 1}')
+    references = collections.defaultdict(list)
+    # Keep SDK wrapper references distinct from emitted binary imports. A wrapper
+    # can survive for years without any application calling it.
+    for root in ['api', 'crates', 'apps', 'buildins', 'probes']:
+        for directory, dirs, files in os.walk(bp / root):
+            dirs[:] = sorted(d for d in dirs if d not in {'target', 'vendor', '.git', 'node_modules', 'dist'})
+            for filename in sorted(files):
+                path = Path(directory) / filename
+                if path.suffix not in {'.rs', '.c', '.h', '.cpp', '.js', '.ts', '.mjs'}:
+                    continue
+                for number, line in enumerate(path.read_text(errors='replace').splitlines(), 1):
+                    if line.lstrip().startswith(('//', '*')):
+                        continue
+                    for name in set(re.findall(NAME, line)):
+                        if re.search(r'\bfn\s+' + re.escape(name) + r'\b', line):
+                            continue
+                        references[name].append(f'{path.relative_to(bp)}:{number}')
     # Literal resolver candidates; includes gated arms and rejected Unix names.
     # These are coverage hints, never a claim of successful runtime resolution.
     literal_candidates = set()
@@ -58,9 +76,12 @@ def main():
     users = collections.defaultdict(list)
     artifacts = []
     errors = []
+    packages = sorted((bp / 'dist').glob('*.bp'))
+    if not packages:
+        parser.error(f'no dist/*.bp packages found under {bp}')
     with tempfile.TemporaryDirectory(prefix='trueos-api-audit-') as tmp:
         elf_path = Path(tmp) / 'module.elf'
-        for path in sorted((bp / 'dist').glob('*.bp')):
+        for path in packages:
             try:
                 blob = path.read_bytes()
                 if len(blob) < 24 or blob[:4] != b'TRBP':
@@ -96,6 +117,8 @@ def main():
     for name in sorted(names):
         rows.append({'name': name, 'kernel_declared': name in kernel_decl, 'sdk_declared': name in sdk_decl,
                      'definitions': definitions[name], 'generated_resolver_candidate': name in native,
+                     'sync_fs_prebind_rejected': name.startswith(('trueos_cabi_fs_', 'trueos_cabi_trueosfs_')),
+                     'blueprint_source_references': references[name],
                      'artifact_users': users[name], 'signature_drift': name in kernel_decl and name in sdk_decl and kernel_decl[name] != sdk_decl[name]})
     report = {'scope': 'Static source inventory plus undefined ELF symbols in dist/*.bp. No runtime health or deletion safety claim. cfg/macros, dynamic lookup, inline ABI types and external consumers need separate review.',
               'kernel': str(kernel), 'blueprints': str(bp), 'summary': {

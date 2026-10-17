@@ -21,6 +21,12 @@
         "src/std_abi_shim.rs:2099"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:1007",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:14",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:294"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -89,6 +95,10 @@
         "src/r/archive_cabi.rs:422"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:78"
+      ],
       "artifact_users": [
         "termdir",
         "velory",
@@ -105,6 +115,10 @@
         "src/r/archive_cabi.rs:107"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:201"
+      ],
       "artifact_users": [
         "velory",
         "voxy"
@@ -119,6 +133,10 @@
         "src/r/archive_cabi.rs:313"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:141"
+      ],
       "artifact_users": [
         "termdir"
       ],
@@ -132,6 +150,10 @@
         "src/r/archive_cabi.rs:288"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:97"
+      ],
       "artifact_users": [
         "termdir",
         "websys"
@@ -146,6 +168,11 @@
         "src/r/archive_cabi.rs:379"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:44",
+        "crates/trueos-v/src/varchive.rs:63"
+      ],
       "artifact_users": [
         "termdir",
         "velory",
@@ -162,6 +189,10 @@
         "src/r/archive_cabi.rs:125"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:205"
+      ],
       "artifact_users": [
         "velory",
         "voxy"
@@ -176,6 +207,10 @@
         "src/r/archive_cabi.rs:134"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:218"
+      ],
       "artifact_users": [
         "velory",
         "voxy"
@@ -190,6 +225,10 @@
         "src/r/archive_cabi.rs:365"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:59"
+      ],
       "artifact_users": [
         "termdir",
         "velory",
@@ -206,6 +245,10 @@
         "src/r/archive_cabi.rs:339"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/varchive.rs:167"
+      ],
       "artifact_users": [
         "termdir",
         "websys"
@@ -220,6 +263,10 @@
         "src/r/io/async_fs_cabi.rs:1483"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:601"
+      ],
       "artifact_users": [
         "codex"
       ],
@@ -233,6 +280,10 @@
         "src/r/io/async_fs_cabi.rs:1573"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:641"
+      ],
       "artifact_users": [
         "appstore",
         "codex",
@@ -259,6 +310,11 @@
         "src/r/io/async_fs_cabi.rs:1840"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:181",
+        "probes/panick/main.rs:33"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -301,6 +357,10 @@
         "src/r/io/async_fs_cabi.rs:1661"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:253"
+      ],
       "artifact_users": [
         "codex",
         "gboi",
@@ -323,6 +383,10 @@
         "src/r/io/async_fs_cabi.rs:1697"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:436"
+      ],
       "artifact_users": [
         "termdir"
       ],
@@ -336,6 +400,8 @@
         "src/r/io/async_fs_cabi.rs:1633"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -347,6 +413,8 @@
         "src/r/io/async_fs_cabi.rs:1623"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "codex",
         "prismq",
@@ -364,6 +432,11 @@
         "src/r/io/async_fs_cabi.rs:1406"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:211",
+        "probes/panick/main.rs:39"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -402,6 +475,10 @@
         "src/r/io/async_fs_cabi.rs:1645"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:719"
+      ],
       "artifact_users": [
         "websys"
       ],
@@ -415,6 +492,10 @@
         "src/r/io/async_fs_cabi.rs:1715"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:762"
+      ],
       "artifact_users": [
         "codex",
         "qjs",
@@ -435,6 +516,10 @@
         "src/r/io/async_fs_cabi.rs:1731"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:775"
+      ],
       "artifact_users": [
         "codex",
         "share",
@@ -451,6 +536,18 @@
         "src/r/io/async_fs_cabi.rs:1792"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:215",
+        "crates/trueos-v/src/vfs_async.rs:257",
+        "crates/trueos-v/src/vfs_async.rs:292",
+        "crates/trueos-v/src/vfs_async.rs:438",
+        "crates/trueos-v/src/vfs_async.rs:655",
+        "crates/trueos-v/src/vfs_async.rs:687",
+        "crates/trueos-v/src/vfs_async.rs:723",
+        "crates/trueos-v/src/vfs_async.rs:812",
+        "probes/panick/main.rs:57"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -490,6 +587,19 @@
         "src/r/io/async_fs_cabi.rs:1806"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:227",
+        "crates/trueos-v/src/vfs_async.rs:267",
+        "crates/trueos-v/src/vfs_async.rs:302",
+        "crates/trueos-v/src/vfs_async.rs:444",
+        "crates/trueos-v/src/vfs_async.rs:664",
+        "crates/trueos-v/src/vfs_async.rs:696",
+        "crates/trueos-v/src/vfs_async.rs:732",
+        "crates/trueos-v/src/vfs_async.rs:824",
+        "probes/panick/main.rs:79",
+        "probes/panick/main.rs:83"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -529,6 +639,10 @@
         "src/r/io/async_fs_cabi.rs:1855"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:804"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -542,6 +656,10 @@
         "src/r/io/async_fs_cabi.rs:1589"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:651"
+      ],
       "artifact_users": [
         "cubesrv",
         "gboi",
@@ -563,6 +681,11 @@
         "src/r/io/async_fs_cabi.rs:1778"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:166",
+        "probes/panick/main.rs:47"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -605,6 +728,10 @@
         "src/r/io/async_fs_cabi.rs:1677"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:289"
+      ],
       "artifact_users": [
         "img",
         "termdir"
@@ -619,6 +746,10 @@
         "src/r/io/async_fs_cabi.rs:1605"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:684"
+      ],
       "artifact_users": [
         "codex",
         "termdir"
@@ -633,6 +764,10 @@
         "src/r/io/async_fs_cabi.rs:1452"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:624"
+      ],
       "artifact_users": [
         "cubesrv",
         "img",
@@ -650,6 +785,10 @@
         "src/r/io/async_fs_cabi.rs:1435"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:546"
+      ],
       "artifact_users": [
         "appstore",
         "codex",
@@ -678,6 +817,11 @@
         "src/r/io/async_fs_cabi.rs:1515"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:126",
+        "crates/trueos-v/src/vfs_async.rs:552"
+      ],
       "artifact_users": [
         "appstore",
         "codex",
@@ -710,6 +854,11 @@
         "src/r/io/async_fs_cabi.rs:1558"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vfs_async.rs:145",
+        "crates/trueos-v/src/vfs_async.rs:564"
+      ],
       "artifact_users": [
         "appstore",
         "codex",
@@ -742,6 +891,10 @@
         "src/aud/cabi.rs:607"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:505"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -753,6 +906,10 @@
         "src/aud/cabi.rs:347"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:541"
+      ],
       "artifact_users": [
         "Player",
         "games",
@@ -768,6 +925,10 @@
         "src/aud/cabi.rs:508"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:509"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -779,6 +940,10 @@
         "src/aud/cabi.rs:386"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:537"
+      ],
       "artifact_users": [
         "Player",
         "games"
@@ -793,6 +958,10 @@
         "src/aud/cabi.rs:639"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:713"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -804,6 +973,10 @@
         "src/aud/cabi.rs:680"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:747"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -815,6 +988,10 @@
         "src/aud/cabi.rs:675"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:732"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -826,6 +1003,10 @@
         "src/aud/cabi.rs:876"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:585"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -837,6 +1018,10 @@
         "src/aud/cabi.rs:915"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:613"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -848,6 +1033,10 @@
         "src/aud/cabi.rs:952"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:641"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -859,6 +1048,10 @@
         "src/aud/cabi.rs:988"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:673"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -870,6 +1063,10 @@
         "src/aud/cabi.rs:1020"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:690"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -881,6 +1078,10 @@
         "src/aud/cabi.rs:261"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:468"
+      ],
       "artifact_users": [
         "Player",
         "games",
@@ -896,6 +1097,10 @@
         "src/aud/cabi.rs:435"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:525"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -907,6 +1112,10 @@
         "src/aud/cabi.rs:593"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:501"
+      ],
       "artifact_users": [
         "Player",
         "games",
@@ -922,6 +1131,10 @@
         "src/aud/cabi.rs:407"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:521"
+      ],
       "artifact_users": [
         "Player"
       ],
@@ -935,6 +1148,10 @@
         "src/aud/cabi.rs:450"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:529"
+      ],
       "artifact_users": [
         "Player"
       ],
@@ -948,6 +1165,10 @@
         "src/aud/cabi.rs:363"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:486"
+      ],
       "artifact_users": [
         "Player",
         "games",
@@ -963,6 +1184,10 @@
         "src/aud/cabi.rs:618"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:545"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -974,6 +1199,10 @@
         "src/aud/cabi.rs:488"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:533"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -985,6 +1214,10 @@
         "src/aud/cabi.rs:522"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:491"
+      ],
       "artifact_users": [
         "Player",
         "games",
@@ -1000,6 +1233,10 @@
         "src/aud/cabi.rs:561"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vaudio.rs:703"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1011,6 +1248,10 @@
         "src/r/io/fs_cabi.rs:1981"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/child_hull.rs:91"
+      ],
       "artifact_users": [
         "codex"
       ],
@@ -1024,6 +1265,11 @@
         "src/r/io/fs_cabi.rs:2022"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/child_hull.rs:48",
+        "crates/trueos-v/src/child_hull.rs:61"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -1037,6 +1283,10 @@
         "src/r/io/fs_cabi.rs:1991"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/child_hull.rs:36"
+      ],
       "artifact_users": [
         "codex",
         "qjs"
@@ -1051,6 +1301,10 @@
         "src/r/io/fs_cabi.rs:1966"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/child_hull.rs:85"
+      ],
       "artifact_users": [
         "codex"
       ],
@@ -1064,6 +1318,10 @@
         "src/r/io/fs_cabi.rs:1933"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/child_hull.rs:25"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -1077,6 +1335,10 @@
         "src/r/io/fs_cabi.rs:2054"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/child_hull.rs:73"
+      ],
       "artifact_users": [
         "codex",
         "qjs"
@@ -1091,6 +1353,10 @@
         "src/r/io/fs_cabi.rs:2068"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/child_hull.rs:77"
+      ],
       "artifact_users": [
         "codex",
         "qjs"
@@ -1105,6 +1371,10 @@
         "src/r/io/fs_cabi.rs:2082"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:458"
+      ],
       "artifact_users": [
         "backup",
         "commander",
@@ -1123,6 +1393,10 @@
         "src/r/io/fs_cabi.rs:2824"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:662"
+      ],
       "artifact_users": [
         "appstore",
         "codex",
@@ -1138,6 +1412,10 @@
         "src/r/io/fs_cabi.rs:2308"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:450"
+      ],
       "artifact_users": [
         "calculator",
         "hyper",
@@ -1153,6 +1431,11 @@
         "src/r/io/fs_cabi.rs:2279"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/shutdown.rs:49",
+        "crates/trueos-v/src/vshell.rs:464"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -1224,6 +1507,10 @@
         "src/r/io/fs_cabi.rs:2110"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/shutdown.rs:57"
+      ],
       "artifact_users": [
         "velosrv",
         "voxy"
@@ -1238,6 +1525,11 @@
         "src/r/io/fs_cabi.rs:2381"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:340",
+        "crates/trueos-v/src/vshell.rs:380"
+      ],
       "artifact_users": [
         "Player",
         "appstore",
@@ -1267,6 +1559,10 @@
         "src/r/io/fs_cabi.rs:2414"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:417"
+      ],
       "artifact_users": [
         "Player",
         "badc",
@@ -1286,6 +1582,10 @@
         "src/r/io/fs_cabi.rs:2397"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:398"
+      ],
       "artifact_users": [
         "Player",
         "appstore",
@@ -1314,6 +1614,11 @@
         "src/r/io/fs_cabi.rs:2434"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:353",
+        "buildins/edit/crates/edit/src/sys/unix.rs:174"
+      ],
       "artifact_users": [
         "Player",
         "appstore",
@@ -1343,6 +1648,11 @@
         "src/std_abi_shim.rs:3107"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:15",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:192"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -1356,6 +1666,10 @@
         "src/r/io/calculator_cabi.rs:8"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/calculator_base.rs:31"
+      ],
       "artifact_users": [
         "calculator"
       ],
@@ -1369,6 +1683,12 @@
         "src/std_abi_shim.rs:2104"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:1025",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:15",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:299"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -1432,6 +1752,10 @@
         "src/ui4/blueprint_text/clipboard_api.rs:13"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/clipboard.rs:30"
+      ],
       "artifact_users": [
         "voxy"
       ],
@@ -1445,6 +1769,8 @@
         "src/std_abi_shim.rs:6954"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "Frog",
         "appstore",
@@ -1466,6 +1792,10 @@
         "src/spirit/dobby_ui.rs:725"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:132"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -1479,6 +1809,10 @@
         "src/spirit/dobby_ui.rs:835"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:199"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -1492,6 +1826,11 @@
         "src/spirit/dobby_ui.rs:749"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:142",
+        "api/src/spirit.rs:152"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -1505,6 +1844,10 @@
         "src/spirit/dobby_ui.rs:737"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:138"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -1518,6 +1861,10 @@
         "src/spirit/dobby_ui.rs:773"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:167"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -1531,6 +1878,10 @@
         "src/spirit/dobby_ui.rs:798"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:189"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -1544,6 +1895,10 @@
         "src/spirit/dobby_ui.rs:814"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:194"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -1557,6 +1912,11 @@
         "src/spirit/dobby_ui.rs:704"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:114",
+        "api/src/spirit.rs:121"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -1570,6 +1930,11 @@
         "src/r/io/fs_cabi.rs:1715"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/env.rs:32",
+        "crates/trueos-v/src/env.rs:37"
+      ],
       "artifact_users": [
         "backup",
         "dobby",
@@ -1595,6 +1960,10 @@
         "src/r/io/fs_cabi.rs:1678"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/env.rs:29"
+      ],
       "artifact_users": [
         "backup",
         "dobby",
@@ -1620,6 +1989,11 @@
         "src/r/io/fs_cabi.rs:1738"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/env.rs:55",
+        "crates/trueos-v/src/env.rs:62"
+      ],
       "artifact_users": [
         "codex",
         "dobby",
@@ -1642,6 +2016,13 @@
         "src/std_abi_shim.rs:2109"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:1014",
+        "api/src/lib.rs:1045",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:15",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:304"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -1710,6 +2091,8 @@
         "src/r/io/fs_cabi.rs:1394"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1721,6 +2104,8 @@
         "src/r/io/fs_cabi.rs:1463"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1732,6 +2117,8 @@
         "src/r/io/fs_cabi.rs:1544"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1743,6 +2130,8 @@
         "src/r/io/fs_cabi.rs:1271"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1754,6 +2143,8 @@
         "src/r/io/fs_cabi.rs:1598"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1765,6 +2156,8 @@
         "src/r/io/fs_cabi.rs:1485"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1776,6 +2169,8 @@
         "src/r/io/fs_cabi.rs:1571"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1787,6 +2182,8 @@
         "src/r/io/fs_cabi.rs:1512"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1798,6 +2195,8 @@
         "src/r/io/fs_cabi.rs:1346"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1809,6 +2208,8 @@
         "src/r/io/fs_cabi.rs:1449"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1820,6 +2221,8 @@
         "src/r/io/fs_cabi.rs:1312"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1831,6 +2234,8 @@
         "src/r/io/fs_cabi.rs:1415"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1842,6 +2247,8 @@
         "src/r/io/fs_cabi.rs:1435"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1853,6 +2260,10 @@
         "src/r/io/input_cabi.rs:998"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:415"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1864,6 +2275,10 @@
         "src/r/io/input_cabi.rs:963"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:442"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1875,6 +2290,10 @@
         "src/r/io/input_cabi.rs:935"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:369"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1886,6 +2305,10 @@
         "src/r/io/input_cabi.rs:1005"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:428"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1897,6 +2320,10 @@
         "src/r/io/input_cabi.rs:970"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:393"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1908,6 +2335,10 @@
         "src/r/io/input_cabi.rs:983"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:402"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1919,6 +2350,10 @@
         "src/r/services/gridpaper_service.rs:1782"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:786"
+      ],
       "artifact_users": [
         "gridpaper"
       ],
@@ -1932,6 +2367,10 @@
         "src/r/services/gridpaper_service.rs:1787"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:790"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1943,6 +2382,10 @@
         "src/r/services/gridpaper_service.rs:1806"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:795"
+      ],
       "artifact_users": [
         "gridpaper"
       ],
@@ -1956,6 +2399,10 @@
         "src/r/services/gridpaper_service.rs:1811"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:803"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1967,6 +2414,10 @@
         "src/r/services/gridpaper_service.rs:1614"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:571"
+      ],
       "artifact_users": [
         "gridpaper"
       ],
@@ -1980,6 +2431,10 @@
         "src/r/services/gridpaper_service.rs:1624"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:580"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -1991,6 +2446,11 @@
         "src/r/services/gridpaper_service.rs:1556"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:537",
+        "apps/gridpaper/src/rustc_oneshot.rs:39"
+      ],
       "artifact_users": [
         "gridpaper"
       ],
@@ -2004,6 +2464,10 @@
         "src/r/services/gridpaper_service.rs:1576"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:553"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2015,6 +2479,10 @@
         "src/r/services/gridpaper_service.rs:1676"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:616"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2026,6 +2494,10 @@
         "src/r/services/gridpaper_service.rs:1654"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:597"
+      ],
       "artifact_users": [
         "gridpaper"
       ],
@@ -2039,6 +2511,11 @@
         "src/r/services/gridpaper_service.rs:1738"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:637",
+        "api/src/gridpaper.rs:699"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2050,6 +2527,11 @@
         "src/r/services/gridpaper_service.rs:1749"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/gridpaper.rs:648",
+        "api/src/gridpaper.rs:710"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2061,6 +2543,10 @@
         "src/std_abi_shim.rs:2130"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "apps/prismq/crates/prism-q/src/backend/memory.rs:277"
+      ],
       "artifact_users": [
         "prismq"
       ],
@@ -2074,6 +2560,11 @@
         "src/usb3/hid/mod.rs:833"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:794",
+        "crates/trueos-v/src/vinput.rs:797"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2085,6 +2576,11 @@
         "src/usb3/hid/mod.rs:803"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:772",
+        "crates/trueos-v/src/vinput.rs:775"
+      ],
       "artifact_users": [
         "skybox",
         "xpapp"
@@ -2099,6 +2595,11 @@
         "src/usb3/hid/mod.rs:818"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:783",
+        "crates/trueos-v/src/vinput.rs:786"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2110,6 +2611,11 @@
         "src/usb3/hid/mod.rs:755"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:711",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:16"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2121,6 +2627,10 @@
         "src/usb3/hid/mod.rs:731"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:734"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2132,6 +2642,10 @@
         "src/usb3/hid/mod.rs:779"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:757"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2143,6 +2657,10 @@
         "src/ui4/blueprint_text.rs:6556"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/image_source.rs:35"
+      ],
       "artifact_users": [
         "img",
         "solara"
@@ -2157,6 +2675,10 @@
         "src/ui4/blueprint_text.rs:6580"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/image_source.rs:56"
+      ],
       "artifact_users": [
         "img",
         "solara"
@@ -2171,6 +2693,10 @@
         "src/r/io/fs_cabi.rs:1883"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:542"
+      ],
       "artifact_users": [
         "solara",
         "termdir"
@@ -2185,6 +2711,10 @@
         "src/r/io/input_cabi.rs:1119"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:563"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2196,6 +2726,10 @@
         "src/r/io/input_cabi.rs:1091"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:541"
+      ],
       "artifact_users": [
         "commander"
       ],
@@ -2209,6 +2743,10 @@
         "src/r/io/input_cabi.rs:1077"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:530"
+      ],
       "artifact_users": [
         "commander"
       ],
@@ -2222,6 +2760,10 @@
         "src/r/io/input_cabi.rs:1105"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:552"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2233,6 +2775,11 @@
         "src/r/io/input_cabi.rs:1142"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:597",
+        "crates/trueos-v/src/vinput.rs:600"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2244,6 +2791,10 @@
         "src/r/io/input_cabi.rs:1133"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:587"
+      ],
       "artifact_users": [
         "commander"
       ],
@@ -2257,6 +2808,10 @@
         "src/r/io/input_cabi.rs:1035"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:484"
+      ],
       "artifact_users": [
         "commander"
       ],
@@ -2270,6 +2825,10 @@
         "src/r/io/input_cabi.rs:1068"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:520"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2281,6 +2840,11 @@
         "src/r/io/input_cabi.rs:643"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:651",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:16"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2292,6 +2856,11 @@
         "src/r/io/input_cabi.rs:552"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:641",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:16"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2303,6 +2872,10 @@
         "src/r/io/input_cabi.rs:610"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:625"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2314,6 +2887,8 @@
         "src/r/io/input_cabi.rs:654"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2325,6 +2900,10 @@
         "src/r/io/input_cabi.rs:580"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:138"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2336,6 +2915,12 @@
         "src/r/io/input_cabi.rs:661"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:693",
+        "crates/trueos-v/src/vinput.rs:667",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:17"
+      ],
       "artifact_users": [
         "hull",
         "skybox",
@@ -2351,6 +2936,10 @@
         "src/r/io/input_cabi.rs:590"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:118"
+      ],
       "artifact_users": [
         "hull",
         "voxy"
@@ -2365,6 +2954,11 @@
         "src/r/io/input_cabi.rs:681"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:694",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:17"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -2378,6 +2972,10 @@
         "src/r/io/input_cabi.rs:925"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:324"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2389,6 +2987,10 @@
         "src/r/io/input_cabi.rs:841"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:341"
+      ],
       "artifact_users": [
         "commander"
       ],
@@ -2402,6 +3004,10 @@
         "src/r/io/input_cabi.rs:804"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:262"
+      ],
       "artifact_users": [
         "commander"
       ],
@@ -2415,6 +3021,10 @@
         "src/r/io/input_cabi.rs:856"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:286"
+      ],
       "artifact_users": [
         "commander"
       ],
@@ -2428,6 +3038,10 @@
         "src/r/io/input_cabi.rs:902"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:311"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2439,6 +3053,10 @@
         "src/r/io/input_cabi.rs:877"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:295"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2450,6 +3068,10 @@
         "src/r/io/fs_cabi.rs:2513"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:611"
+      ],
       "artifact_users": [
         "hyper",
         "ssh"
@@ -2464,6 +3086,10 @@
         "src/r/io/fs_cabi.rs:2621"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:631"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2475,6 +3101,10 @@
         "src/r/io/fs_cabi.rs:2601"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:626"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2486,6 +3116,10 @@
         "src/r/io/fs_cabi.rs:2489"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:601"
+      ],
       "artifact_users": [
         "hyper",
         "ssh"
@@ -2500,6 +3134,10 @@
         "src/r/io/fs_cabi.rs:2557"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:621"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2511,6 +3149,10 @@
         "src/r/io/fs_cabi.rs:2215"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/replication.rs:136"
+      ],
       "artifact_users": [
         "gridpaper"
       ],
@@ -2524,6 +3166,10 @@
         "src/r/io/fs_cabi.rs:2244"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/replication.rs:148"
+      ],
       "artifact_users": [
         "gridpaper",
         "hello_world_replicatable",
@@ -2540,6 +3186,10 @@
         "src/r/io/fs_cabi.rs:2128"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/replication.rs:82"
+      ],
       "artifact_users": [
         "gridpaper",
         "hello_world_replicatable",
@@ -2556,6 +3206,10 @@
         "src/r/io/fs_cabi.rs:2165"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/replication.rs:100"
+      ],
       "artifact_users": [
         "hello_world_replicatable",
         "img",
@@ -2571,6 +3225,10 @@
         "src/r/io/fs_cabi.rs:2184"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/replication.rs:117"
+      ],
       "artifact_users": [
         "gridpaper"
       ],
@@ -2584,6 +3242,11 @@
         "src/r/io/fs_cabi.rs:223"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vsys.rs:73",
+        "buildins/edit/crates/edit/src/bin/edit/main.rs:60"
+      ],
       "artifact_users": [
         "Frog",
         "appstore",
@@ -2613,6 +3276,10 @@
         "src/ai/lumen_service.rs:1116"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:113"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2626,6 +3293,10 @@
         "src/ai/lumen_service.rs:1100"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:101"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2639,6 +3310,10 @@
         "src/ai/lumen_service.rs:1209"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:145"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2652,6 +3327,10 @@
         "src/ai/lumen_service.rs:879"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:31"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2665,6 +3344,10 @@
         "src/ai/lumen_service.rs:932"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:53"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2676,6 +3359,10 @@
         "src/ai/lumen_service.rs:1075"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:92"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2689,6 +3376,10 @@
         "src/ai/lumen_service.rs:1145"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:128"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2702,6 +3393,10 @@
         "src/ai/lumen_service.rs:1193"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:141"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2715,6 +3410,10 @@
         "src/ai/lumen_service.rs:1164"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:133"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2728,6 +3427,10 @@
         "src/ai/lumen_service.rs:1043"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:82"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2741,6 +3444,10 @@
         "src/ai/lumen_service.rs:847"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:25"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2754,6 +3461,10 @@
         "src/ai/lumen_service.rs:993"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:70"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -2767,6 +3478,11 @@
         "src/std_abi_shim.rs:2119"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:18",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:314"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2778,6 +3494,10 @@
         "src/r/io/input_cabi.rs:789"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:217"
+      ],
       "artifact_users": [
         "hello_world"
       ],
@@ -2791,6 +3511,10 @@
         "src/r/io/input_cabi.rs:730"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:234"
+      ],
       "artifact_users": [
         "commander",
         "hello_world"
@@ -2805,6 +3529,10 @@
         "src/r/io/input_cabi.rs:693"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:165"
+      ],
       "artifact_users": [
         "commander",
         "hello_world"
@@ -2819,6 +3547,10 @@
         "src/r/io/input_cabi.rs:745"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:189"
+      ],
       "artifact_users": [
         "commander",
         "hello_world"
@@ -2833,6 +3565,10 @@
         "src/r/io/input_cabi.rs:766"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:198"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2844,6 +3580,11 @@
         "src/usb3/hid/input.rs:287"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:609",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:18"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2855,6 +3596,13 @@
         "src/r/net/https.rs:2270"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:159",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:18",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:534",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:18"
+      ],
       "artifact_users": [
         "dobby",
         "hull",
@@ -2872,6 +3620,13 @@
         "src/r/net/https.rs:2253"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:149",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:18",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:498",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:19"
+      ],
       "artifact_users": [
         "dobby",
         "hull",
@@ -2889,6 +3644,13 @@
         "src/r/net/https.rs:2244"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:137",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:19",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:462",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:19"
+      ],
       "artifact_users": [
         "dobby",
         "hull",
@@ -2906,6 +3668,13 @@
         "src/r/net/https.rs:2104"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:26",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:19",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:188",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:20"
+      ],
       "artifact_users": [
         "hull",
         "image-viewer",
@@ -2922,6 +3691,10 @@
         "src/r/net/https.rs:2604"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:37"
+      ],
       "artifact_users": [
         "hull"
       ],
@@ -2935,6 +3708,13 @@
         "src/r/net/https.rs:2279"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:132",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:20",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:478",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:20"
+      ],
       "artifact_users": [
         "image-viewer",
         "qjs"
@@ -2949,6 +3729,14 @@
         "src/r/net/https.rs:2239"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:127",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:20",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:489",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:529",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:21"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -2962,6 +3750,12 @@
         "src/r/net/https.rs:2188"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:21",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:237",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:21"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -2975,6 +3769,10 @@
         "src/r/net/https.rs:2204"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:99"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -2988,6 +3786,12 @@
         "src/r/net/https.rs:2131"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:21",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:208",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:22"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -2999,6 +3803,10 @@
         "src/r/net/https.rs:2150"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:64"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3010,6 +3818,14 @@
         "src/r/net/https.rs:2234"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:117",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:22",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:452",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:485",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:22"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -3023,6 +3839,13 @@
         "src/r/net/https.rs:2088"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:16",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:22",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:180",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:23"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -3036,6 +3859,13 @@
         "src/r/net/https.rs:2317"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:122",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:22",
+        "apps/qjs/crates/trueos-qjs/src/async_fs.rs:475",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:23"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -3049,6 +3879,12 @@
         "src/r/net/https.rs:2119"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vnetfs.rs:10",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:23",
+        "apps/qjs/crates/trueos-qjs/src/node/mod.rs:678"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -3062,6 +3898,10 @@
         "src/std_abi_shim.rs:3117"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vclock.rs:309"
+      ],
       "artifact_users": [
         "monaco",
         "qjs",
@@ -3080,6 +3920,11 @@
         "src/std_abi_shim.rs:3124"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vclock.rs:323",
+        "crates/trueos-v/src/vclock.rs:329"
+      ],
       "artifact_users": [
         "qjs"
       ],
@@ -3093,6 +3938,17 @@
         "src/r/io/fs_cabi.rs:328"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vsys.rs:34",
+        "apps/gridpaper/src/rustc_oneshot.rs:49",
+        "apps/qjs/crates/trueos-qjs/src/child_worker.rs:64",
+        "apps/qjs/crates/trueos-qjs/src/child_worker.rs:75",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:24",
+        "apps/qjs/crates/trueos-qjs/src/vm.rs:89",
+        "apps/qjs/crates/trueos-qjs/src/vm.rs:130",
+        "apps/qjs/crates/trueos-qjs/src/vm.rs:132"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -3158,6 +4014,11 @@
         "src/usb3/hid/input.rs:409"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vinput.rs:616",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:24"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3169,6 +4030,12 @@
         "src/std_abi_shim.rs:2114"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:1050",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:24",
+        "apps/qjs/crates/trueos-qjs/src/trueos_shims.rs:309"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -3237,6 +4104,8 @@
         "src/r/io/fs_cabi.rs:1860"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3248,6 +4117,8 @@
         "src/r/io/fs_cabi.rs:1874"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3259,6 +4130,8 @@
         "src/r/io/fs_cabi.rs:1863"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3270,6 +4143,8 @@
         "src/r/io/fs_cabi.rs:1869"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3281,6 +4156,8 @@
         "src/r/io/fs_cabi.rs:1857"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3292,6 +4169,10 @@
         "src/r/io/shell3_sessions_cabi.rs:53"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/command_session.rs:170"
+      ],
       "artifact_users": [
         "codex"
       ],
@@ -3305,6 +4186,10 @@
         "src/r/io/shell3_sessions_cabi.rs:3"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/command_session.rs:147"
+      ],
       "artifact_users": [
         "codex"
       ],
@@ -3318,6 +4203,10 @@
         "src/r/io/shell3_sessions_cabi.rs:22"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/command_session.rs:192"
+      ],
       "artifact_users": [
         "codex"
       ],
@@ -3331,6 +4220,10 @@
         "src/r/io/shell3_sessions_cabi.rs:38"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/command_session.rs:222"
+      ],
       "artifact_users": [
         "codex"
       ],
@@ -3344,6 +4237,11 @@
         "src/r/io/fs_cabi.rs:2854"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:671",
+        "crates/trueos-v/src/vshell.rs:674"
+      ],
       "artifact_users": [
         "hello_world"
       ],
@@ -3357,6 +4255,10 @@
         "src/r/io/fs_cabi.rs:2650"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:469"
+      ],
       "artifact_users": [
         "dobby",
         "gboi",
@@ -3382,6 +4284,8 @@
         "src/r/io/fs_cabi.rs:2669"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3393,6 +4297,10 @@
         "src/r/io/fs_cabi.rs:2738"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:515"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3404,6 +4312,12 @@
         "src/r/io/fs_cabi.rs:1821"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:195",
+        "crates/trueos-v/src/vshell.rs:199",
+        "crates/trueos-v/src/vshell.rs:264"
+      ],
       "artifact_users": [
         "dobby",
         "gboi",
@@ -3427,6 +4341,11 @@
         "src/r/io/fs_cabi.rs:344"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vsys.rs:39",
+        "apps/gridpaper/src/rustc_oneshot.rs:50"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -3472,6 +4391,10 @@
         "src/r/net/smtp_cabi.rs:141"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmail.rs:62"
+      ],
       "artifact_users": [
         "webmail"
       ],
@@ -3485,6 +4408,10 @@
         "src/r/net/smtp_cabi.rs:214"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmail.rs:47"
+      ],
       "artifact_users": [
         "webmail"
       ],
@@ -3498,6 +4425,10 @@
         "src/r/net/smtp_cabi.rs:162"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmail.rs:77"
+      ],
       "artifact_users": [
         "webmail"
       ],
@@ -3511,6 +4442,10 @@
         "src/r/net/smtp_cabi.rs:206"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmail.rs:31"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3522,6 +4457,10 @@
         "src/r/net/smtp_cabi.rs:171"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmail.rs:87"
+      ],
       "artifact_users": [
         "webmail"
       ],
@@ -3535,6 +4474,10 @@
         "src/r/net/smtp_cabi.rs:220"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmail.rs:39"
+      ],
       "artifact_users": [
         "webmail"
       ],
@@ -3548,6 +4491,8 @@
         "src/r/net/socket_cabi.rs:998"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3559,6 +4504,8 @@
         "src/r/net/socket_cabi.rs:1014"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3570,6 +4517,8 @@
         "src/r/net/socket_cabi.rs:978"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3581,6 +4530,8 @@
         "src/r/net/socket_cabi.rs:1039"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3592,6 +4543,8 @@
         "src/r/net/socket_cabi.rs:1056"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3603,6 +4556,8 @@
         "src/r/net/socket_cabi.rs:966"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3614,6 +4569,8 @@
         "src/r/net/socket_cabi.rs:1213"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3625,6 +4582,8 @@
         "src/r/net/socket_cabi.rs:1262"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3636,6 +4595,8 @@
         "src/r/net/socket_cabi.rs:1082"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3647,6 +4608,8 @@
         "src/r/net/socket_cabi.rs:1142"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3658,6 +4621,8 @@
         "src/r/net/socket_cabi.rs:1094"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3669,6 +4634,8 @@
         "src/r/net/socket_cabi.rs:986"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3680,6 +4647,8 @@
         "src/r/net/socket_cabi.rs:1193"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3691,6 +4660,8 @@
         "src/r/net/socket_cabi.rs:1205"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3702,6 +4673,11 @@
         "src/ai/lumen_service.rs:1222"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:149",
+        "api/src/spirit.rs:27"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -3715,6 +4691,11 @@
         "src/ai/lumen_service.rs:1322"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:167",
+        "api/src/spirit.rs:46"
+      ],
       "artifact_users": [
         "dobby",
         "lumen"
@@ -3729,6 +4710,10 @@
         "src/ai/lumen_service.rs:1280"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lumen.rs:154"
+      ],
       "artifact_users": [
         "lumen"
       ],
@@ -3742,6 +4727,10 @@
         "src/ai/lumen_service.rs:1253"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/spirit.rs:33"
+      ],
       "artifact_users": [
         "dobby"
       ],
@@ -3755,6 +4744,8 @@
         "src/std_abi_shim.rs:7869"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "Frog",
         "codex",
@@ -3778,6 +4769,10 @@
         "src/std_abi_shim.rs:3112"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vsys.rs:44"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -3835,6 +4830,8 @@
         "src/std_abi_shim.rs:7864"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "Frog",
         "PlotTwist",
@@ -3879,6 +4876,8 @@
         "src/std_abi_shim.rs:7859"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "Frog",
         "appstore",
@@ -3920,6 +4919,8 @@
         "src/std_abi_shim.rs:7874"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "Frog",
         "codex",
@@ -3947,6 +4948,8 @@
         "src/std_abi_shim.rs:7755"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "Frog",
         "codex",
@@ -3974,6 +4977,8 @@
         "src/r/io/fs_cabi.rs:1656"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3985,6 +4990,8 @@
         "src/r/io/fs_cabi.rs:1620"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -3996,6 +5003,8 @@
         "src/r/io/fs_cabi.rs:1638"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": true,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4007,6 +5016,10 @@
         "src/r/net/socket_cabi.rs:934"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:592"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4018,6 +5031,10 @@
         "src/r/net/socket_cabi.rs:916"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:554"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4029,6 +5046,10 @@
         "src/r/net/socket_cabi.rs:952"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:571"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4040,6 +5061,10 @@
         "src/r/net/socket_cabi.rs:939"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:581"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4049,6 +5074,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:187"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4058,6 +5087,11 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:827",
+        "api/src/lib.rs:833"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4067,6 +5101,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:660"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4076,6 +5114,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:728"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4085,6 +5127,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:852"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4094,6 +5140,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:864"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4103,6 +5153,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:839"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4112,6 +5166,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:877"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4121,6 +5179,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:655"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4130,6 +5192,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:671"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4139,6 +5205,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:845"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4148,6 +5218,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/lib.rs:676"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4159,6 +5233,11 @@
         "src/ui4/blueprint_text.rs:2408"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:769",
+        "api/src/ui4_solara_text.rs:790"
+      ],
       "artifact_users": [
         "games",
         "osm",
@@ -4174,6 +5253,10 @@
         "src/ui4/blueprint_text.rs:2556"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:846"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4185,6 +5268,10 @@
         "src/ui4/blueprint_text.rs:2420"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:807"
+      ],
       "artifact_users": [
         "games",
         "osm",
@@ -4200,6 +5287,11 @@
         "src/ui4/blueprint_text.rs:2459"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:755",
+        "api/src/ui4_solara_text.rs:829"
+      ],
       "artifact_users": [
         "games",
         "solara"
@@ -4214,6 +5306,8 @@
         "src/ui4/blueprint_text/display_api.rs:56"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "hull",
         "voxy"
@@ -4228,6 +5322,8 @@
         "src/ui4/blueprint_text/display_api.rs:21"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "hull",
         "voxy"
@@ -4242,6 +5338,8 @@
         "src/ui4/blueprint_text/display_api.rs:36"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4253,6 +5351,8 @@
         "src/ui4/blueprint_text/display_api.rs:76"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "hull",
         "voxy"
@@ -4267,6 +5367,10 @@
         "src/ui4/blueprint_text/drag_drop_api.rs:27"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vdrag.rs:23"
+      ],
       "artifact_users": [
         "termdir"
       ],
@@ -4280,6 +5384,11 @@
         "src/ui4/blueprint_text/drag_drop_api.rs:77"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vdrag.rs:45",
+        "crates/trueos-v/src/vdrag.rs:58"
+      ],
       "artifact_users": [
         "termdir"
       ],
@@ -4293,6 +5402,10 @@
         "src/ui4/blueprint_text/drag_drop_api.rs:92"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vdrag.rs:76"
+      ],
       "artifact_users": [
         "termdir"
       ],
@@ -4306,6 +5419,10 @@
         "src/ui4/blueprint_text.rs:5100"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1775"
+      ],
       "artifact_users": [
         "games"
       ],
@@ -4319,6 +5436,10 @@
         "src/ui4/blueprint_text.rs:6516"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:2006"
+      ],
       "artifact_users": [
         "cubes",
         "rbgb",
@@ -4334,6 +5455,10 @@
         "src/ui4/blueprint_text.rs:3404"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_scene.rs:32"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4345,6 +5470,10 @@
         "src/ui4/blueprint_text/collapse_api.rs:10"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_scene.rs:53"
+      ],
       "artifact_users": [
         "osm",
         "solara",
@@ -4360,6 +5489,10 @@
         "src/ui4/blueprint_text.rs:2820"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:978"
+      ],
       "artifact_users": [
         "boat",
         "trueos-picasso-example"
@@ -4374,6 +5507,8 @@
         "src/ui4/blueprint_text/font_api.rs:39"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4385,6 +5520,10 @@
         "src/ui4/blueprint_text.rs:4218"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1380"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4396,6 +5535,10 @@
         "src/ui4/blueprint_text.rs:4260"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1407"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4407,6 +5550,10 @@
         "src/ui4/blueprint_text.rs:3286"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1076"
+      ],
       "artifact_users": [
         "hull",
         "solara",
@@ -4422,6 +5569,11 @@
         "src/ui4/blueprint_text.rs:1415"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:671",
+        "api/src/ui4_winit.rs:82"
+      ],
       "artifact_users": [
         "cubes",
         "games",
@@ -4438,6 +5590,10 @@
         "src/ui4/blueprint_text.rs:1206"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:596"
+      ],
       "artifact_users": [
         "image-viewer",
         "img",
@@ -4454,6 +5610,10 @@
         "src/ui4/blueprint_text.rs:1257"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:650"
+      ],
       "artifact_users": [
         "cubes",
         "games",
@@ -4469,6 +5629,10 @@
         "src/ui4/blueprint_text.rs:1231"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:611"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -4493,6 +5657,10 @@
         "src/ui4/blueprint_text.rs:1453"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:697"
+      ],
       "artifact_users": [
         "shadertoy"
       ],
@@ -4506,6 +5674,10 @@
         "src/ui4/blueprint_text.rs:3593"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1065"
+      ],
       "artifact_users": [
         "termdir"
       ],
@@ -4519,6 +5691,10 @@
         "src/ui4/blueprint_text.rs:6223"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:2041"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4530,6 +5706,10 @@
         "src/ui4/blueprint_text.rs:3910"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1314"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -4563,6 +5743,10 @@
         "src/ui4/blueprint_text.rs:3657"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1097"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4574,6 +5758,10 @@
         "src/ui4/blueprint_text.rs:3690"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1131"
+      ],
       "artifact_users": [
         "hull",
         "termdir",
@@ -4589,6 +5777,10 @@
         "src/ui4/blueprint_text.rs:3625"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1124"
+      ],
       "artifact_users": [
         "img"
       ],
@@ -4602,6 +5794,10 @@
         "src/ui4/blueprint_text.rs:3555"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1088"
+      ],
       "artifact_users": [
         "cubes",
         "potato-stamps"
@@ -4616,6 +5812,10 @@
         "src/ui4/blueprint_text.rs:3334"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1082"
+      ],
       "artifact_users": [
         "hull",
         "image-viewer",
@@ -4633,6 +5833,10 @@
         "src/ui4/blueprint_text.rs:2848"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:995"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4644,6 +5848,10 @@
         "src/ui4/blueprint_text.rs:4112"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1329"
+      ],
       "artifact_users": [
         "gboi",
         "img",
@@ -4662,6 +5870,11 @@
         "src/ui4/blueprint_text.rs:3007"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1034",
+        "api/src/ui4_solara_text.rs:1048"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -4682,6 +5895,10 @@
         "src/ui4/blueprint_text.rs:2593"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:908"
+      ],
       "artifact_users": [
         "QuadTexture",
         "games",
@@ -4702,6 +5919,8 @@
         "src/ui4/blueprint_text.rs:2748"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "hull",
         "voxy"
@@ -4716,6 +5935,10 @@
         "src/ui4/blueprint_text.rs:2959"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1009"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -4735,6 +5958,10 @@
         "src/ui4/blueprint_text.rs:2882"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:249"
+      ],
       "artifact_users": [
         "boat",
         "commander",
@@ -4761,6 +5988,10 @@
         "src/ui4/blueprint_text.rs:2782"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:923"
+      ],
       "artifact_users": [
         "hull",
         "image-viewer",
@@ -4779,6 +6010,10 @@
         "src/ui4/blueprint_text.rs:4623"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1644"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4790,6 +6025,10 @@
         "src/ui4/blueprint_text.rs:2299"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:869"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -4817,6 +6056,10 @@
         "src/ui4/blueprint_text/cursor_image_api.rs:13"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1176"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4828,6 +6071,10 @@
         "src/ui4/blueprint_text.rs:2913"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:959"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -4858,6 +6105,10 @@
         "src/ui4/blueprint_text/cursor_image_api.rs:82"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1190"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4869,6 +6120,10 @@
         "src/ui4/blueprint_text.rs:3878"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1242"
+      ],
       "artifact_users": [
         "cubes"
       ],
@@ -4882,6 +6137,11 @@
         "src/ui4/blueprint_text.rs:3756"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1253",
+        "api/src/ui4_solara_text.rs:1274"
+      ],
       "artifact_users": [
         "boat",
         "trueos-picasso-example"
@@ -4896,6 +6156,10 @@
         "src/ui4/blueprint_text.rs:3818"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1228"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4907,6 +6171,10 @@
         "src/ui4/blueprint_text.rs:3726"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1212"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -4918,6 +6186,10 @@
         "src/ui4/blueprint_text.rs:3369"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1109"
+      ],
       "artifact_users": [
         "cubes",
         "voxy"
@@ -4932,6 +6204,10 @@
         "src/ui4/blueprint_text.rs:3472"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:2163"
+      ],
       "artifact_users": [
         "voxy",
         "xpapp"
@@ -4946,6 +6222,10 @@
         "src/ui4/blueprint_text.rs:4835"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1706"
+      ],
       "artifact_users": [
         "cubes",
         "shadertoy"
@@ -4960,6 +6240,10 @@
         "src/ui4/blueprint_text.rs:4737"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1657"
+      ],
       "artifact_users": [
         "cubes",
         "shadertoy"
@@ -4974,6 +6258,10 @@
         "src/ui4/blueprint_text.rs:4357"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1580"
+      ],
       "artifact_users": [
         "skybox"
       ],
@@ -4987,6 +6275,10 @@
         "src/ui4/blueprint_text.rs:4493"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1613"
+      ],
       "artifact_users": [
         "skybox"
       ],
@@ -5000,6 +6292,10 @@
         "src/ui4/blueprint_text.rs:4430"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1562"
+      ],
       "artifact_users": [
         "skybox"
       ],
@@ -5013,6 +6309,11 @@
         "src/ui4/blueprint_text.rs:1833"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1433",
+        "api/src/ui4_solara_text.rs:1443"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5041,6 +6342,10 @@
         "src/ui4/blueprint_text.rs:1852"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1456"
+      ],
       "artifact_users": [
         "voxy"
       ],
@@ -5054,6 +6359,11 @@
         "src/ui4/blueprint_text.rs:4288"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1502",
+        "api/src/ui4_solara_text.rs:1540"
+      ],
       "artifact_users": [
         "games",
         "image-viewer",
@@ -5071,6 +6381,10 @@
         "src/ui4/blueprint_text.rs:4149"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1356"
+      ],
       "artifact_users": [
         "games",
         "image-viewer",
@@ -5088,6 +6402,10 @@
         "src/ui4/blueprint_text.rs:2099"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1470"
+      ],
       "artifact_users": [
         "shadertoy"
       ],
@@ -5101,6 +6419,8 @@
         "src/ui4/blueprint_text.rs:2626"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "hull",
         "voxy"
@@ -5115,6 +6435,8 @@
         "src/ui4/blueprint_text.rs:2654"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "hull",
         "voxy"
@@ -5129,6 +6451,8 @@
         "src/ui4/blueprint_text.rs:2685"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [
         "hull",
         "voxy"
@@ -5143,6 +6467,10 @@
         "src/ui4/blueprint_text.rs:2718"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:713"
+      ],
       "artifact_users": [
         "hull",
         "termdir",
@@ -5158,6 +6486,11 @@
         "src/ui4/blueprint_text.rs:1151"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:2199",
+        "api/src/ui4_solara_text.rs:2209"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5169,6 +6502,11 @@
         "src/ui4/blueprint_text.rs:1116"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:2169",
+        "api/src/ui4_solara_text.rs:2179"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5180,6 +6518,10 @@
         "src/ui4/blueprint_text.rs:1815"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:739"
+      ],
       "artifact_users": [
         "gboi",
         "hull",
@@ -5200,6 +6542,10 @@
         "src/ui4/blueprint_text.rs:6552"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:2151"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5234,6 +6580,10 @@
         "src/ui4/blueprint_text.rs:6603"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:2061"
+      ],
       "artifact_users": [
         "image-viewer",
         "termdir"
@@ -5248,6 +6598,10 @@
         "src/ui4/blueprint_text.rs:1177"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:577"
+      ],
       "artifact_users": [
         "gboi",
         "termdir",
@@ -5263,6 +6617,10 @@
         "src/ui4/blueprint_text.rs:6211"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:2024"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5295,6 +6653,8 @@
         "src/ui4/blueprint_text.rs:4953"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5306,6 +6666,12 @@
         "src/ui4/blueprint_text.rs:4967"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:1738",
+        "api/src/ui4_solara_text.rs:1885",
+        "api/src/ui4_solara_text.rs:1989"
+      ],
       "artifact_users": [
         "termdir",
         "xpapp"
@@ -5320,6 +6686,10 @@
         "src/ui4/blueprint_text.rs:1323"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:631"
+      ],
       "artifact_users": [
         "voxy"
       ],
@@ -5333,6 +6703,8 @@
         "src/ui4/blueprint_text.rs:1316"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5344,6 +6716,11 @@
         "src/r/io/vgpu_cabi.rs:1063"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:821",
+        "apps/xpapp/src/test_host_gpu.rs:48"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5370,6 +6747,12 @@
         "src/r/io/vgpu_cabi.rs:1575"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:964",
+        "crates/trueos-v/src/vgpu.rs:1549",
+        "apps/xpapp/src/test_host_gpu.rs:7"
+      ],
       "artifact_users": [
         "cubes",
         "hull",
@@ -5389,6 +6772,10 @@
         "src/r/io/vgpu_cabi.rs:1681"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:935"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5400,6 +6787,10 @@
         "src/r/io/vgpu_cabi.rs:1628"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:953"
+      ],
       "artifact_users": [
         "potatomin"
       ],
@@ -5413,6 +6804,11 @@
         "src/r/io/vgpu_cabi.rs:1584"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:941",
+        "apps/xpapp/src/test_host_gpu.rs:38"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5439,6 +6835,11 @@
         "src/r/io/vgpu_cabi.rs:1010"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1411",
+        "apps/xpapp/src/test_host_gpu.rs:115"
+      ],
       "artifact_users": [
         "cubes",
         "hull",
@@ -5455,6 +6856,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1061"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5464,6 +6869,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1027"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5473,6 +6882,10 @@
       "sdk_declared": true,
       "definitions": [],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1035"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5484,6 +6897,10 @@
         "src/r/io/vgpu_cabi.rs:1041"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:814"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5495,6 +6912,11 @@
         "src/r/io/vgpu_cabi.rs:1019"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:808",
+        "apps/xpapp/src/test_host_gpu.rs:128"
+      ],
       "artifact_users": [
         "potato-stamps",
         "xpapp"
@@ -5509,6 +6931,10 @@
         "src/r/io/vgpu_cabi.rs:1304"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:985"
+      ],
       "artifact_users": [
         "potatomin"
       ],
@@ -5522,6 +6948,11 @@
         "src/r/io/vgpu_cabi.rs:991"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:794",
+        "apps/xpapp/src/test_host_gpu.rs:105"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5548,6 +6979,11 @@
         "src/r/io/vgpu_cabi.rs:1783"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:864",
+        "apps/xpapp/src/test_host_gpu.rs:27"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5574,6 +7010,10 @@
         "src/r/io/vgpu_cabi.rs:1806"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1407"
+      ],
       "artifact_users": [
         "cubes",
         "solara",
@@ -5589,6 +7029,11 @@
         "src/r/io/vgpu_cabi.rs:1199"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:916",
+        "apps/xpapp/src/test_host_gpu.rs:88"
+      ],
       "artifact_users": [
         "QuadTexture",
         "cubes",
@@ -5611,6 +7056,10 @@
         "src/r/io/vgpu_cabi.rs:1233"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:930"
+      ],
       "artifact_users": [
         "cubes",
         "hull",
@@ -5627,6 +7076,10 @@
         "src/r/io/vgpu_cabi.rs:1451"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1262"
+      ],
       "artifact_users": [
         "maxpix",
         "trueos-picasso-example"
@@ -5641,6 +7094,10 @@
         "src/r/io/vgpu_cabi.rs:1482"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1287"
+      ],
       "artifact_users": [
         "cubes",
         "trueos-picasso-example"
@@ -5655,6 +7112,10 @@
         "src/r/io/vgpu_cabi.rs:1513"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1344"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5671,6 +7132,10 @@
         "src/r/io/vgpu_cabi.rs:1544"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1376"
+      ],
       "artifact_users": [
         "cubes"
       ],
@@ -5684,6 +7149,10 @@
         "src/r/io/vgpu_cabi.rs:1412"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1234"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5703,6 +7172,10 @@
         "src/r/io/vgpu_cabi.rs:1442"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1240"
+      ],
       "artifact_users": [
         "cubes",
         "solara",
@@ -5718,6 +7191,10 @@
         "src/r/io/vgpu_cabi.rs:1899"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1314"
+      ],
       "artifact_users": [
         "solara",
         "trueos-picasso-example"
@@ -5732,6 +7209,11 @@
         "src/r/io/vgpu_cabi.rs:1162"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:899",
+        "apps/xpapp/src/test_host_gpu.rs:77"
+      ],
       "artifact_users": [
         "QuadTexture",
         "cubes",
@@ -5754,6 +7236,11 @@
         "src/r/io/vgpu_cabi.rs:1190"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:905",
+        "apps/xpapp/src/test_host_gpu.rs:12"
+      ],
       "artifact_users": [
         "cubes",
         "hull",
@@ -5771,6 +7258,10 @@
         "src/r/io/vgpu_cabi.rs:1815"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:998"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5782,6 +7273,10 @@
         "src/r/io/vgpu_cabi.rs:1838"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1392"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5793,6 +7288,10 @@
         "src/r/io/vgpu_cabi.rs:1273"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1145"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5804,6 +7303,11 @@
         "src/r/io/vgpu_cabi.rs:1340"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1179",
+        "apps/xpapp/src/test_host_gpu.rs:99"
+      ],
       "artifact_users": [
         "cubes",
         "hull",
@@ -5822,6 +7326,11 @@
         "src/r/io/vgpu_cabi.rs:1242"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1116",
+        "apps/xpapp/src/test_host_gpu.rs:22"
+      ],
       "artifact_users": [
         "QuadTexture",
         "solara",
@@ -5838,6 +7347,10 @@
         "src/r/io/vgpu_cabi.rs:1376"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1213"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5849,6 +7362,11 @@
         "src/r/io/vgpu_cabi.rs:1092"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:878",
+        "apps/xpapp/src/test_host_gpu.rs:68"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5874,6 +7392,11 @@
         "src/r/io/vgpu_cabi.rs:1129"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1082",
+        "apps/xpapp/src/test_host_gpu.rs:59"
+      ],
       "artifact_users": [
         "voxy"
       ],
@@ -5887,6 +7410,12 @@
         "src/r/io/vgpu_cabi.rs:1120"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1440",
+        "crates/trueos-v/src/vgpu.rs:1453",
+        "apps/xpapp/src/test_host_gpu.rs:120"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5912,6 +7441,10 @@
         "src/r/io/vgpu_cabi.rs:1704"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:839"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5923,6 +7456,10 @@
         "src/r/io/vgpu_cabi.rs:1757"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1536"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5934,6 +7471,10 @@
         "src/r/io/vgpu_cabi.rs:1767"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1542"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5945,6 +7486,11 @@
         "src/r/io/vgpu_cabi.rs:1861"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vgpu.rs:1400",
+        "apps/xpapp/src/test_host_gpu.rs:110"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -5971,6 +7517,10 @@
         "src/r/io/fs_cabi.rs:1926"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:551"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -5982,6 +7532,11 @@
         "src/r/io/fs_cabi.rs:1921"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vshell.rs:570",
+        "crates/trueos-v/src/vshell.rs:585"
+      ],
       "artifact_users": [
         "termdir"
       ],
@@ -5995,6 +7550,10 @@
         "src/r/media_cabi.rs:17"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:162"
+      ],
       "artifact_users": [
         "cubes",
         "img",
@@ -6012,6 +7571,10 @@
         "src/r/media_cabi.rs:89"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:181"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -6032,6 +7595,10 @@
         "src/r/media_cabi.rs:250"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:289"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -6052,6 +7619,10 @@
         "src/r/media_cabi.rs:115"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:194"
+      ],
       "artifact_users": [
         "cubes",
         "img",
@@ -6069,6 +7640,10 @@
         "src/r/media_cabi.rs:203"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:210"
+      ],
       "artifact_users": [
         "cubes",
         "img",
@@ -6086,6 +7661,10 @@
         "src/r/media_cabi.rs:102"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:274"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -6106,6 +7685,10 @@
         "src/r/media_cabi.rs:51"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:170"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -6126,6 +7709,10 @@
         "src/r/media_cabi.rs:30"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:157"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -6142,6 +7729,10 @@
         "src/r/media_cabi.rs:156"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:236"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -6158,6 +7749,10 @@
         "src/r/media_cabi.rs:263"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia.rs:127"
+      ],
       "artifact_users": [
         "QuadTexture",
         "boat",
@@ -6174,6 +7769,10 @@
         "src/r/video_cabi.rs:4"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vmedia_video.rs:7"
+      ],
       "artifact_users": [
         "solara",
         "trueos-picasso-example"
@@ -6188,6 +7787,11 @@
         "src/wls.rs:372"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "api/src/ui4_solara_text.rs:244",
+        "api/src/worker.rs:122"
+      ],
       "artifact_users": [
         "solara"
       ],
@@ -6201,6 +7805,11 @@
         "src/r/io/fs_cabi.rs:203"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vsys.rs:52",
+        "apps/gridpaper/src/rustc_oneshot.rs:132"
+      ],
       "artifact_users": [
         "Frog",
         "Player",
@@ -6272,6 +7881,8 @@
         "src/r/io/fs_cabi.rs:314"
       ],
       "generated_resolver_candidate": true,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -6283,6 +7894,10 @@
         "src/hv/wc3/x86_cabi.rs:17"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:35"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6296,6 +7911,10 @@
         "src/hv/wc3/x86_cabi.rs:23"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:45"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6309,6 +7928,10 @@
         "src/hv/wc3/x86_cabi.rs:26"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:56"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6322,6 +7945,10 @@
         "src/hv/wc3/x86_cabi.rs:41"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:68"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6335,6 +7962,10 @@
         "src/hv/wc3/x86_cabi.rs:34"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:62"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6348,6 +7979,10 @@
         "src/hv/wc3/x86_cabi.rs:52"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:76"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6361,6 +7996,10 @@
         "src/hv/wc3/x86_cabi.rs:151"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:153"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6374,6 +8013,10 @@
         "src/hv/wc3/x86_cabi.rs:63"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:85"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6387,6 +8030,10 @@
         "src/hv/wc3/x86_cabi.rs:94"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:114"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6400,6 +8047,10 @@
         "src/hv/wc3/x86_cabi.rs:103"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:121"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6413,6 +8064,10 @@
         "src/hv/wc3/x86_cabi.rs:73"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:95"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6426,6 +8081,10 @@
         "src/hv/wc3/x86_cabi.rs:112"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:127"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6439,6 +8098,10 @@
         "src/hv/wc3/x86_cabi.rs:121"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:133"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6452,6 +8115,10 @@
         "src/hv/wc3/x86_cabi.rs:148"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:148"
+      ],
       "artifact_users": [],
       "signature_drift": false
     },
@@ -6463,6 +8130,10 @@
         "src/hv/wc3/x86_cabi.rs:76"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:101"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6476,6 +8147,10 @@
         "src/hv/wc3/x86_cabi.rs:85"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:107"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6489,6 +8164,10 @@
         "src/hv/wc3/x86_cabi.rs:139"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:160"
+      ],
       "artifact_users": [
         "xpapp"
       ],
@@ -6502,6 +8181,10 @@
         "src/hv/wc3/x86_cabi.rs:130"
       ],
       "generated_resolver_candidate": false,
+      "sync_fs_prebind_rejected": false,
+      "blueprint_source_references": [
+        "crates/trueos-v/src/vx86.rs:162"
+      ],
       "artifact_users": [
         "xpapp"
       ],
