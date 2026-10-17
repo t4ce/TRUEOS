@@ -25,7 +25,8 @@ def main():
     definitions += re.search(r'^impl BlueprintTerminalLeaseState \{.*?^}', source, re.M | re.S).group()
     for name in ('blueprint_terminal_lease_current', 'blueprint_terminal_lease_release',
                  'blueprint_console_request_tui', 'blueprint_terminal_lease_poll_reentry',
-                 'blueprint_terminal_surface_snapshot', 'blueprint_terminal_reentry_requested'):
+                 'blueprint_terminal_surface_snapshot', 'blueprint_terminal_reentry_requested',
+                 'blueprint_console_return_to_cli'):
         definitions += '\n' + function(path, name)
     harness = r'''
 #![allow(dead_code)]
@@ -97,6 +98,15 @@ fn setup() {
     assert!(!OWNED.load(Ordering::Relaxed));
     assert_eq!(blueprint_console_request_tui(0),BlueprintTerminalReentryRequest::AlreadyRequested);
     CAN_CLAIM.store(true,Ordering::Relaxed);assert!(blueprint_terminal_surface_snapshot(0).is_ok());
+}
+#[test] fn leaving_a_pending_reentry_cancels_it_and_rejects_late_acknowledgement() {
+    setup();blueprint_terminal_surface_snapshot(0).unwrap();blueprint_terminal_lease_release(0,1).unwrap();
+    blueprint_console_request_tui(0);assert!(blueprint_terminal_reentry_requested(0));
+    assert!(blueprint_console_return_to_cli(0));assert!(!blueprint_terminal_reentry_requested(0));
+    assert_eq!(blueprint_terminal_surface_snapshot(0),Err(BlueprintTerminalLeaseError::NotActive));
+    assert_eq!(blueprint_terminal_lease_poll_reentry(0,1),Err(BlueprintTerminalLeaseError::Stale));
+    assert_eq!(blueprint_console_request_tui(0),BlueprintTerminalReentryRequest::Requested{ticket:2,epoch:3});
+    assert!(blueprint_terminal_surface_snapshot(0).is_ok());
 }
 #[test] fn detached_surface_cannot_acknowledge_a_request() {
     setup();blueprint_terminal_surface_snapshot(0).unwrap();blueprint_terminal_lease_release(0,1).unwrap();

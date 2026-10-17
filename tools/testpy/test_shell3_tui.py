@@ -90,6 +90,7 @@ static TARGETS:std::sync::Mutex<Vec<(u8,shell2::MatrixTarget)>>=std::sync::Mutex
 pub fn bind(vm:u8,target:&shell2::MatrixTarget) {TARGETS.lock().unwrap().retain(|e|e.0!=vm);TARGETS.lock().unwrap().push((vm,target.clone()));crate::tui::bind_vm(target,vm);}
 pub fn vm_run_generation(_:u8)->Option<u64> {Some(RUN.load(Ordering::Relaxed))}
 pub fn blueprint_terminal_request_reentry(_:u8)->Result<(),&'static str> {REQUESTS.fetch_add(1,Ordering::Relaxed);Ok(())}
+pub fn blueprint_terminal_reentry_requested(_:u8)->bool {false}
 pub fn blueprint_console_return_to_cli(vm:u8)->bool {let target=TARGETS.lock().unwrap().iter().find(|e|e.0==vm).map(|e|e.1.clone()).unwrap();crate::tui::release(&target,vm)==Some(true)}
 pub fn blueprint_console_submit_stdin_for_target(vm:u8,t:&shell2::MatrixTarget,run:u64,bytes:&[u8])->usize {blueprint_console_submit_stdin_for_lease(vm,&t.lease,run,bytes)}
 pub fn blueprint_console_submit_stdin_for_lease(_:u8,lease:&shell2::MatrixSlotLease,run:u64,bytes:&[u8])->usize {
@@ -207,6 +208,7 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     assert!(!tui::active(f.id,Some("latched-native")));
     tui::request(f,"latched-native").unwrap();assert!(!tui::active(f.id,Some("latched-native")));
     tui::hold_navigation(f.id,false);assert!(tui::select_for_navigation(f,"latched-native"));
+    assert!(!tui::active(f.id,Some("latched-native")));tui::request(f,"latched-native").unwrap();
     assert!(tui::active(f.id,Some("latched-native")));tui::detach(f.id);
 }
 #[test] fn vm_id_reuse_disconnects_the_previous_slot_input_and_terminal_owner() {
@@ -275,17 +277,21 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     assert!(shell2::matrix_slot_is_live(&t.lease));
     let next=frontend(40,9);assert!(tui::select_for_navigation(next,"size"));
 }
-#[test] fn explicit_slot_navigation_requests_blueprint_reentry_without_claiming_text_output() {
+#[test] fn slot_navigation_keeps_shell_control_until_explicit_tui_and_preserves_other_owner() {
     let (f,t)=session("navigation-reentry",24,20,8);
     let before=hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed);
     assert!(tui::select_for_navigation(f,"navigation-reentry"));
-    assert_eq!(hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed),before+1);
+    assert_eq!(hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed),before);
     assert!(tui::snapshot(f.id,Some("navigation-reentry")).is_none());
+    assert_eq!(tui::claim(&t,24),Some(false));
+    tui::request(f,"navigation-reentry").unwrap();
     assert_eq!(tui::claim(&t,24),Some(true));
     assert!(tui::park(f.id));
     let other=frontend(30,12);
     assert!(tui::select_for_navigation(other,"navigation-reentry"));
-    assert_eq!(hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed),before+2);
+    assert_eq!(hv::REQUESTS.load(std::sync::atomic::Ordering::Relaxed),before+1);
+    assert!(!tui::active(other.id,Some("navigation-reentry")));
+    tui::request(other,"navigation-reentry").unwrap();
     assert_eq!(tui::claim(&t,24),Some(true));
     assert!(tui::active(other.id,Some("navigation-reentry")));
     assert!(tui::select_for_navigation(f,"navigation-reentry"));
@@ -505,7 +511,8 @@ fn submit_app_prompt(&mut self)->bool {false}
     let patches=update::diff_rendered_lines(Some(&shell),&rows);assert!(!patches.iter().any(|patch|patch.row==SpecialRows::MatrixRow(1)),"unchanged body background must not be repainted");
     assert_eq!(tui::native_read(&t).unwrap().0,b"\r");
     tui::native_return(&t);assert!(!tui::native_pending_frame(f.id,Some("native-palette")));
-    assert!(tui::select_for_navigation(f,"native-palette"));assert_eq!(tui::snapshot(f.id,Some("native-palette")).unwrap(),rows);
+    assert!(tui::select_for_navigation(f,"native-palette"));assert!(tui::snapshot(f.id,Some("native-palette")).is_none());
+    tui::request(f,"native-palette").unwrap();assert_eq!(tui::snapshot(f.id,Some("native-palette")).unwrap(),rows);
     let (vm_frontend,vm_target)=session("vm-palette",15,12,5);tui::claim(&vm_target,15);
     tui::write(&vm_target,15,b"\x1b[?25lVM");let rows=tui::snapshot(vm_frontend.id,Some("vm-palette")).unwrap();assert_eq!(rows[0][0].1.unwrap().background(),Some([0,0,0,255]));
 }
@@ -531,7 +538,8 @@ fn submit_app_prompt(&mut self)->bool {false}
 #[test] fn native_helpers_can_return_before_the_first_paint() {
     let f=frontend(12,5);let t=shell2::target("native-unpainted",1);tui::attach_native(f,&t).unwrap();
     tui::native_return(&t);assert!(!tui::native_pending_frame(f.id,Some("native-unpainted")));assert!(tui::supports(&t));
-    assert!(tui::select_for_navigation(f,"native-unpainted"));assert!(tui::native_pending_frame(f.id,Some("native-unpainted")));
+    assert!(tui::select_for_navigation(f,"native-unpainted"));assert!(!tui::native_pending_frame(f.id,Some("native-unpainted")));
+    tui::request(f,"native-unpainted").unwrap();assert!(tui::native_pending_frame(f.id,Some("native-unpainted")));
     tui::native_write(&t,b"\x1b[?25lCRY");assert!(tui::snapshot(f.id,Some("native-unpainted")).is_some());
 }
 #[test] fn native_admin_on_ssh_keeps_cell_frames_input_scope_and_reentry() {
@@ -554,6 +562,7 @@ fn submit_app_prompt(&mut self)->bool {false}
     tui::native_return(&t);tty.output.clear();tty.reconcile_matrix_selection();
     assert!(String::from_utf8_lossy(&tty.output).contains("TrueOS"));assert!(tui::supports(&t));
     tui::select(f,None);assert!(tui::select_for_navigation(f,"native-admin-ssh"));
+    assert!(!tui::native_visible(&t));tui::request(f,"native-admin-ssh").unwrap();
     assert!(tui::native_visible(&t));assert_eq!(tui::native_transport_scope(&t),Some(1));
     tty.input("§".as_bytes());assert!(!tui::native_visible(&t));
 }
@@ -584,7 +593,8 @@ fn submit_app_prompt(&mut self)->bool {false}
     tui::select(f,None);assert!(tui::select(f,Some("native")));assert!(tui::active(f.id,Some("native")));
     assert_eq!(tui::snapshot(f.id,Some("native")).unwrap()[0][0].0,'P');
     tui::park(f.id);assert!(!tui::active(f.id,Some("native")));tui::select(f,Some("native"));assert!(!tui::active(f.id,Some("native")));
-    assert!(tui::select_for_navigation(f,"native"));assert!(tui::active(f.id,Some("native")));assert!(tui::native_visible(&t));tui::park(f.id);
+    assert!(tui::select_for_navigation(f,"native"));assert!(!tui::active(f.id,Some("native")));assert!(!tui::native_visible(&t));
+    tui::request(f,"native").unwrap();assert!(tui::active(f.id,Some("native")));tui::park(f.id);
     assert!(tui::select(other,Some("native")));
     assert!(!tui::active(f.id,Some("native")));assert!(tui::active(other.id,Some("native")));
     assert_eq!(tui::surface(&t).unwrap().cols,30);tui::bind_remote_frontend(other.id);assert_eq!(tui::native_transport_scope(&t),Some(1));

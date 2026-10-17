@@ -593,6 +593,7 @@ impl PromptState {
 enum LatchedNavigation {
     Default,
     Slot { name: String, lifetime: Option<u64> },
+    Native { name: String, lifetime: Option<u64> },
     App { app: service::QueuedBlueprint, lifetime: u64 },
     Resume { name: String, lifetime: Option<u64> },
 }
@@ -982,7 +983,7 @@ impl Shell3 {
                 self.latched_navigation = Some(LatchedNavigation::Default);
                 return true;
             }
-            if !tui::select(self.tui_frontend(), None) {return false;}
+            if !tui::park(self.tui_frontend) || !tui::select(self.tui_frontend(), None) {return false;}
             self.active_matrix_slot = None;
             self.active_matrix_lifetime = None;
             self.matrix_selection_dirty = true;
@@ -1281,6 +1282,10 @@ impl Shell3 {
                 let live = matrix_slots().lock().lifetimes.iter().any(|(id, generation)| id == &name && Some(*generation) == lifetime);
                 if live { self.select_matrix_slot_name(&name); }
             }
+            Some(LatchedNavigation::Native { name, lifetime }) => {
+                let live = matrix_slots().lock().lifetimes.iter().any(|(id, generation)| id == &name && Some(*generation) == lifetime);
+                if live { self.enter_native_terminal(&name); }
+            }
             Some(LatchedNavigation::App { app, lifetime }) => {
                 let live = matrix_slots().lock().lifetimes.iter().any(|(name, generation)| name == &app.slot && *generation == lifetime);
                 if live { self.select_queued_app(app); }
@@ -1296,6 +1301,20 @@ impl Shell3 {
         }
         self.matrix_selection_dirty = true;
         service::notify_work();
+    }
+
+    // Starting a helper is an explicit entry action; selecting its retained
+    // slot later uses the command pane until the user requests `tui`.
+    fn enter_native_terminal(&mut self, name: &str) {
+        let lifetime = matrix_slots().lock().lifetimes.iter()
+            .find(|(id, _)| id == name).map(|(_, lifetime)| *lifetime);
+        if self.command_feedback.is_some() {
+            self.latched_navigation = Some(LatchedNavigation::Native { name: name.into(), lifetime });
+        } else if self.select_matrix_slot_name(name) {
+            if let Err(error) = tui::request(self.tui_frontend(), name) {
+                MatrixSlots::echo(Some(name), lifetime, error.into());
+            }
+        }
     }
 
     fn select_queued_app(&mut self, app: service::QueuedBlueprint) {
@@ -1353,7 +1372,7 @@ impl Shell3 {
         let is_alias = self.aka_names.iter().any(|name| name == &text);
         if self.mode == Mode::ADM && text == "log" {
             match system_log::start(self.tui_frontend()) {
-                Ok(()) => { self.select_matrix_slot_name(&text); }
+                Ok(()) => { self.enter_native_terminal(&text); }
                 Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
             }
         } else if text == "env" && (self.mode == Mode::ADM || self.active_vmx_app().is_some()) {
@@ -1377,7 +1396,7 @@ impl Shell3 {
                 },
             };
             match result {
-                Ok(()) => { self.select_matrix_slot_name(&text); }
+                Ok(()) => { self.enter_native_terminal(&text); }
                 Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
             }
         } else if self.mode == Mode::ADM && text == "sh3" {
@@ -1400,7 +1419,7 @@ impl Shell3 {
             }
         } else if self.mode == Mode::HV && self.active_vmx_app().is_none() && lifecycle::recognizes(&text) {
             match lifecycle::start(&text, self.tui_frontend()) {
-                Ok(()) => { self.select_matrix_slot_name(&text); }
+                Ok(()) => { self.enter_native_terminal(&text); }
                 Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
             }
         } else if text == "Aka" {
@@ -1409,7 +1428,7 @@ impl Shell3 {
             }
         } else if self.mode == Mode::ADM && capture::recognizes(&text) {
             match capture::start(&text, self.tui_frontend()) {
-                Ok(()) => { self.select_matrix_slot_name(&text); }
+                Ok(()) => { self.enter_native_terminal(&text); }
                 Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
             }
         } else if is_alias {
@@ -1422,7 +1441,8 @@ impl Shell3 {
                 let message = lifecycle::control(&text, &lease);
                 MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), message);
             }
-        } else if text == "tui" && self.active_vmx_app().is_some() {
+        } else if text == "tui" && (self.active_vmx_app().is_some()
+            || self.active_matrix_slot_name().is_some_and(|name| tui::native_slot(&name))) {
             self.latched_navigation = Some(LatchedNavigation::Resume {
                 name: self.active_matrix_slot.clone().unwrap_or_default(),
                 lifetime: self.active_matrix_lifetime,
@@ -1859,6 +1879,9 @@ impl Shell3 {
     fn any_name_matching(&self, matches: impl Fn(&str) -> bool) -> bool {
         // Aka remains visible and available independently of Tab/VM context.
         if matches("Aka") || self.aka_names.iter().any(|alias| matches(alias)) { return true; }
+        if matches("tui") && self.active_matrix_slot_name().is_some_and(|name| tui::native_slot(&name)) {
+            return true;
+        }
         if self.active_vmx_app().is_some() {
             return names::VME_GROUP.names.iter().any(|entry| matches(entry.name));
         }

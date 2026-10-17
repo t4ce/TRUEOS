@@ -590,13 +590,20 @@ pub(super) fn park(frontend: u64) -> bool {
         }
         if changed {routes.changed(frontend);}
     }
-    let vm = ROUTES
+    let candidates: Vec<_> = ROUTES
         .lock()
         .routes
         .iter()
-        .find(|route| route.frontend == Some(frontend) && route.owner.is_some())
-        .and_then(|route| route.owner.map(|owner| owner.vm));
-    vm.is_none_or(crate::hv::blueprint_console_return_to_cli)
+        .filter(|route| route.frontend == Some(frontend))
+        .filter_map(|route| route.vm.map(|vm| (vm, route.owner.is_some())))
+        .collect();
+    let mut parked = true;
+    for (vm, active) in candidates {
+        if active || crate::hv::blueprint_terminal_reentry_requested(vm) {
+            parked &= crate::hv::blueprint_console_return_to_cli(vm);
+        }
+    }
+    parked
 }
 pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
     // A helper has one input owner. A parked helper may move to another shell.
@@ -650,38 +657,13 @@ pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
     }
     true
 }
-/// Explicit navigation reenters a wired terminal, including its current slot.
-/// Resize/repaint selection above never silently undoes an operator park.
-pub(super) fn select_for_navigation(frontend: Frontend, name: &str) -> bool {
-    // A busy Blueprint's command slot remains accessible for explicit `tui`.
-    let busy_blueprint = ROUTES.lock().routes.iter().any(|route| {
-        route.lease.name() == name && route.native.is_none() && route.vm.is_some()
-            && route.frontend != Some(frontend.id) && route.owner.is_some()
-    });
-    if busy_blueprint { return park(frontend.id); }
-    if !select(frontend, Some(name)) {return false;}
-    let blueprint = ROUTES.lock().routes.iter().any(|route| {
-        route.lease.name() == name && route.native.is_none() && route.vm.is_some()
-    });
-    if blueprint {
-        // Reserved text programs remain text programs. Parked terminal apps
-        // receive the same reentry request as an explicit `tui` command.
-        let vm = ROUTES.lock().routes.iter().find(|route| route.lease.name() == name).and_then(|route| route.vm);
-        if vm.is_some_and(|vm| !crate::hv::blueprint_console_is_terminal(vm)) { return true; }
-        return request(frontend, name).is_ok();
-    }
-    let mut routes = ROUTES.lock();
-    if let Some(route) = routes.routes.iter_mut().find(|r| r.frontend == Some(frontend.id) && r.lease.name() == name) {
-        if let Some(native) = route.native.as_mut() {
-            if !native.active {
-                native.active = true;
-                native.return_to_default = false;
-                route.suppressed_text = None;
-                routes.changed(frontend.id);
-            }
-        }
-    }
-    true
+/// Selecting a Matrix slot leaves its command pane in Shell3's control.
+/// Only an explicit `tui` attaches its terminal, including native helpers.
+pub(super) fn select_for_navigation(frontend: Frontend, _name: &str) -> bool {
+    if !park(frontend.id) { return false; }
+    // Shell3 tracks the selected Matrix slot separately. Do not mark its TUI
+    // selected here: a delayed initial claim must not make navigation enter it.
+    select(frontend, None)
 }
 /// Explicit `tui` releases the previous attachment before requesting reentry.
 /// Ordinary slot navigation continues to respect a live terminal owner.

@@ -35,10 +35,13 @@ pub fn notify_work() {}
 mod tui {
 use super::*;
 pub fn hold_navigation(_:u64,_:bool) {}
+pub static PARKS:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
+pub fn park(_:u64)->bool {PARKS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);true}
 pub fn select(_:Frontend,_:Option<&str>)->bool {true}
 pub fn select_for_navigation(_:Frontend,_:&str)->bool {true}
 pub fn queue_launch(_:u64,_:service::QueuedBlueprint) {panic!("unexpected queue")}
-pub fn request(_:Frontend,_:&str)->Result<(),String> {Ok(())}
+pub static ENTRIES:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+pub fn request(_:Frontend,name:&str)->Result<(),String> {ENTRIES.lock().unwrap().push(name.into());Ok(())}
 pub fn request_takeover(_:Frontend,_:&str)->Result<(),String> {Ok(())}
 }
 #[derive(Default)] struct Slots {ids:Vec<String>,lifetimes:Vec<(String,u64)>,generation:u64}
@@ -72,11 +75,26 @@ fn refresh_prompt_strip(&mut self) {}
 
 fn new()->Self {Self {input:String::new(),accepted:vec![],command_feedback:Some(command_latch::Feedback::new("termdir",0,false)),latched_navigation:None,tui_frontend:1,active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false,matrix_scroll:0,matrix_column:0,matrix_drag:None}}
 '''
-    for name in ('latch_prompt_prefix', 'select_matrix_slot_index', 'select_matrix_slot_name', 'active_matrix_slot_name', 'finish_command_latch', 'select_queued_app'):
+    for name in ('latch_prompt_prefix', 'select_matrix_slot_index', 'select_matrix_slot_name', 'active_matrix_slot_name', 'finish_command_latch', 'enter_native_terminal', 'select_queued_app'):
         source += re.search(rf'^    (?:pub(?:\([^)]*\))? )?fn {name}\(.*?^    }}', shell, re.M | re.S).group()
     source += "}\nconst OPERATOR:char='§';"
     source += r'''
 fn text(feedback:&command_latch::Feedback,now:u64)->String {feedback.runs(20,now).iter().map(|run|run.text.as_str()).collect()}
+#[test] fn navigation_to_the_default_slot_parks_pending_terminal_entry() {
+    let mut shell=Shell3::new();shell.command_feedback=None;
+    let before=tui::PARKS.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(shell.select_matrix_slot_index(0));
+    assert!(tui::PARKS.load(std::sync::atomic::Ordering::Relaxed)>before);
+}
+#[test] fn starting_a_native_helper_enters_after_feedback_but_navigation_does_not() {
+    let name="native-entry";MatrixSlots::ensure_named(name);let mut shell=Shell3::new();
+    shell.enter_native_terminal(name);assert!(shell.active_matrix_slot.is_none());
+    assert!(!tui::ENTRIES.lock().unwrap().iter().any(|n|n==name));
+    shell.finish_command_latch(true);assert_eq!(shell.active_matrix_slot.as_deref(),Some(name));
+    assert_eq!(tui::ENTRIES.lock().unwrap().iter().filter(|n|*n==name).count(),1);
+    assert!(shell.select_matrix_slot_name(name));
+    assert_eq!(tui::ENTRIES.lock().unwrap().iter().filter(|n|*n==name).count(),1);
+}
 #[test] fn mode_switch_latches_first_prefix_and_drops_tail() {
     for (input,expected) in [("apple tail","app"),("äβdiscard","äβ")] {
         let mut shell=Shell3::new();shell.input=input.into();

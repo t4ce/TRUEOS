@@ -96,11 +96,11 @@ TOPICS: dict[str, dict[str, Any]] = {
         "sources": ["src/shell2/mod.rs::handle_matrix_operator", "src/shell2/mod.rs::parse_double_section_operator", "src/shell2/matrix.rs::switch_active_slot", "src/shell2/matrix.rs::free_slot"],
     },
     "tui": {
-        "summary": "Blueprint terminal UIs lease Shell2 input/output; after release, the same VM remains addressable through its Matrix slot.",
-        "sequence": ["Connect to Shell2", "launch an installed Blueprint by id/name in Default or press TAB once for online", "the Blueprint may acquire the terminal lease", "after it parks/releases, enter vmx_tui to request re-entry", "enter vmx_leave or § to return to the default slot"],
-        "vm_controls": ["vmx_tui [demo]", "vmx_env", "vmx_smp", "vmx_help", "vmx_leave", "vmx_stop", "vmx_pause", "vmx_snapshot", "vmx_preserve"],
-        "notes": ["While a VM is active, TAB is delivered/ignored as VM context requires; it does not switch Shell2 mode.", "Blueprint commands without vmx_ are passed to text-app input when that Blueprint enables command passthrough."],
-        "sources": ["src/shell2/mod.rs::is_vmx_control_command", "src/shell2/mod.rs::is_vmx_tui_command", "src/hv/mod.rs::blueprint_control_shell_vmx_command", "crates/trueos-v/src/vshell.rs"],
+        "summary": "Shell3 Matrix-slot navigation selects the command pane. Explicit tui enters or resumes that slot's terminal UI without restarting its app.",
+        "sequence": ["Connect to Shell3 over SSH port 22 with a PTY", "launch an app through AppDB or its alias", "TAB leaves a VM terminal UI and keeps its VM and document state alive", "select the retained slot with §<slot> followed by Enter; navigation stays in the command pane", "type tui at the selected slot's prompt to request terminal entry", "the app acknowledges re-entry, restores terminal modes and redraws its retained frame"],
+        "vm_controls": ["tui", "env", "smp", "esc", "stop", "pause", "resume", "kill"],
+        "notes": ["Selecting an existing slot never automatically enters its TUI, for either Blueprint apps or native helpers.", "The tui command can explicitly take over the selected app's terminal attachment from another Shell3.", "TAB leaves a VMX terminal before ordinary app input routing; the § character inside an active app remains ordinary app input.", "Navigating away cancels an unacknowledged re-entry request so a late app poll cannot take Shell3 input."],
+        "sources": ["src/shell3/tui.rs::select_for_navigation", "src/shell3/tui.rs::request_takeover", "src/shell3/shell3.rs::echo_recognized_prompt", "src/hv/mod.rs::blueprint_terminal_surface_snapshot"],
     },
     "runscripts": {
         "summary": "A launch script is a one-shot, per-VM UTF-8 control stream, separate from argv.",

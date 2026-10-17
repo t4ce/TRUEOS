@@ -3664,14 +3664,19 @@ pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
         Err(BlueprintTerminalLeaseError::NotActive) => BLUEPRINT_PROCESS_CONTEXTS
             .get(vm_id as usize)
             .and_then(|slot| {
-                let guard = slot.lock();
-                let context = guard.as_ref()?;
-                Some(matches!(
-                    context.terminal_lease,
-                    BlueprintTerminalLeaseState::Reserved
-                        | BlueprintTerminalLeaseState::Parked { .. }
-                        | BlueprintTerminalLeaseState::ReentryRequested { .. }
-                ))
+                let _transition = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize)?.lock();
+                let mut guard = slot.lock();
+                let context = guard.as_mut()?;
+                match context.terminal_lease {
+                    BlueprintTerminalLeaseState::ReentryRequested { epoch, .. } => {
+                        // Navigation cancels an unacknowledged `tui`; a late
+                        // guest poll must not reacquire the shell's input.
+                        context.terminal_lease = BlueprintTerminalLeaseState::Parked { ticket: epoch };
+                        Some(true)
+                    }
+                    BlueprintTerminalLeaseState::Reserved | BlueprintTerminalLeaseState::Parked { .. } => Some(true),
+                    _ => Some(false),
+                }
             })
             .unwrap_or(false),
         Err(_) => false,
