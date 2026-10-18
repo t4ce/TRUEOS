@@ -25,6 +25,13 @@ if(han) {
 }
 const cell={stroke:.64,doubleGap:.70,edgeGhosts:true,continuations:true,boxSource:'ports',dotSize:1,dotStyle:'round',barLength:1.7,dotGap:.24,brailleLayout:'microfont',joinDots:false,blockCoverage:'ideal',blockInset:0,shadeRows:8};
 const settings={...recipe,cell,detail};
+if(!Array.isArray(recipe.long_reach||[]))throw new Error('long_reach must be a character list');
+const longReach=new Set(recipe.long_reach||[]);
+if([...longReach].some(ch=>typeof ch!=='string'||[...ch].length!==1))
+ throw new Error('long_reach entries must be single Unicode characters');
+if(!Number.isFinite(recipe.reach)||recipe.reach<=0||
+   (longReach.size&&(!Number.isFinite(recipe.long_reach_value)||recipe.long_reach_value<=recipe.reach)))
+ throw new Error('connection reach must be positive and long_reach_value must exceed reach');
 const recipeNote=Object.entries(recipe).map(([key,value])=>`${key}=${value}`).join(' ');
 // Preserve the original 32-column layout, doubled from 4x to 8x. Split
 // on tile boundaries into a 2x2 set, padding to 18 rows so no glyph is cut.
@@ -45,7 +52,11 @@ for(let slot=0;slot<glyphs.length;slot++) {
  const family=cp>=0x2500&&cp<=0x257f?'box':cp>=0x2580&&cp<=0x259f?'block':cp>=0x2800&&cp<=0x28ff?'braille':g.char===' '||g.char==='\u00a0'?'space':'field';
  const points=sites(g),tile={char:g.char,family,x:0,y:0,width:g.width,height:11,points,mask:family==='braille'?cp-0x2800:0};
  if(family==='block')tile.blockPoints=sites(catalog.find(g=>g.id==='block-'+(cp-0x2580)));
- const input={id:slot,width:g.width,height:11,points,tiles:[tile],settings:{...settings,route:recipe.route==='field'?'field':(family==='field'?'field':'cells')}};
+ // Resolve the single per-glyph profile flag while building vector geometry.
+ // Both profiles share the same image draw; no character test reaches the GPU.
+ const useLongReach=longReach.has(g.char);
+ const reach=useLongReach?recipe.long_reach_value:recipe.reach;
+ const input={id:slot,width:g.width,height:11,points,tiles:[tile],settings:{...settings,reach,route:recipe.route==='field'?'field':(family==='field'?'field':'cells')}};
  context.input=input;
  const mesh=vm.runInContext('buildShape(input)',context);
  if(mesh.stats.openLoops||mesh.stats.nonmanifold)throw new Error(`invalid mesh slot ${slot}`);
@@ -74,7 +85,7 @@ for(let slot=0;slot<glyphs.length;slot++) {
   if(area<0){[ids[1],ids[2]]=[ids[2],ids[1]];float32FlippedFaces++;}
   indices.push(...ids);gpuTriangles++;
  }
- stats.push({slot,char:g.char,kind:g.kind,width:g.width,byte:g.byte,part:part+1,origin:[ox,oy],tile:placement,route:mesh.route,spacing:mesh.stats.spacing,vertices:mesh.stats.vertices,triangles:mesh.stats.triangles,gpuTriangles,collapsedFaces,float32FlippedFaces});
+ stats.push({slot,char:g.char,kind:g.kind,width:g.width,byte:g.byte,long_reach:useLongReach,reach:mesh.settings.reach,part:part+1,origin:[ox,oy],tile:placement,route:mesh.route,spacing:mesh.stats.spacing,vertices:mesh.stats.vertices,triangles:mesh.stats.triangles,gpuTriangles,collapsedFaces,float32FlippedFaces});
 }
 const root=(process.argv[3]||'src/intel/gpu_font/moon').replace(/\/$/,'')+'/';
 fs.mkdirSync(root,{recursive:true});

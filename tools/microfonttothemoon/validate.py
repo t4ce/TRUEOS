@@ -57,6 +57,13 @@ def validate(root):
         assert area > 0, (i, area)
     assert all(abs(g['spacing'] - 1/meta['detail']) < 1e-9
                for g in meta['glyphs'] if g['route'] == 'field')
+    long_reach = set(meta['recipe'].get('long_reach', []))
+    for glyph in meta['glyphs']:
+        if 'long_reach' in glyph:
+            assert glyph['long_reach'] == (glyph['char'] in long_reach)
+            expected_reach = (meta['recipe']['long_reach_value'] if glyph['long_reach']
+                              else meta['recipe']['reach'])
+            assert glyph['reach'] == expected_reach
     assert sum(g['vertices'] for g in meta['glyphs']) == nv
     assert sum(g['gpuTriangles'] for g in meta['glyphs']) == ni // 3
     if 'part' in meta:

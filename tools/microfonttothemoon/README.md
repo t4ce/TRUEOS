@@ -1,84 +1,91 @@
 # Microfont to the moon
 
-The boot service `src/r/services/microfonttothemoon.rs` renders four studio
-images and four Han images through the same native triangle pipeline, then
-writes them to a writable TRUEOSFS root:
+At boot, `src/r/services/microfonttothemoon.rs` constructs glyph meshes on
+the CPU from the existing Microfont crate, rasterizes them with the iGPU,
+and writes one file to a writable TRUEOSFS root:
+
+`microfonttothemoon-8x.tar.lz4`
+
+The archive contains eight PNGs:
 
 - `microfonttothemoon-8x-1.png` through `microfonttothemoon-8x-4.png`
 - `microfonttothemoon-han-8x-1.png` through `microfonttothemoon-han-8x-4.png`
 
-Each image is 2560×1152. Every source unit is 8 pixels, so a normal 6×11
-cell occupies 48×88 pixels. The map and keyboard keep their 18×11 and
-12×11 source dimensions. The original 32-column sheet order is retained,
-with 160×128 inspection tiles. The sheet is split into four quadrants at
-tile boundaries, padded to 18 rows so no glyph is cut between images.
-Parts 1 and 2 are top left/right; parts 3 and 4 are bottom left/right.
-Each part fits the existing Render0 target and uses one geometry pass.
+Each PNG is 2560×1152. A source unit is 8 pixels; a normal 6×11 cell
+occupies 48×88 pixels. The original 32-column layout is split at whole-tile
+boundaries into four parts. Parts 1/2 are top left/right and 3/4 bottom
+left/right. The map and keyboard retain their 18×11 and 12×11 source sizes.
+No individual PNGs are written to disk by this service.
 
-The studio sheet contains 224 packed Microfont slots (byte 0x20 through
-0xFF), 256 Braille patterns, 32 blocks and the two studio icons, in that
-order. The Han sheet contains all 512 entries of the vendored GUI Han
-subset, including punctuation, in ascending Unicode order. The generator
-obtains Han masks by compiling and running the vendored Rust decoder,
-preserving all 66 source bits. Each root catalog lists its four parts;
-part catalogs record glyph positions and mesh statistics.
-
-The service waits for GuC, Render0 and filesystem readiness. GPU work and
-PNG encoding run on a blocking service lane; the BSP performs the async
-filesystem write. Only rejected queue/render admission and disk writes
-retry. An accepted, incomplete GPU pass is never replayed or read back.
-
-## Actual Fine tessellation
-
-Geometry comes from the studio's pure `buildShape` functions. The build
-tool runs those functions with `detail=12` (Fine) and the shared
-`recipe.json` parameters. All source masks use the general-field route,
-with sample spacing 1/12 source unit. Increasing raster scale to 8× keeps
-this tessellation detail; it does not add diagnostic lines or resample a
-previous PNG.
-
-The shared recipe uses Distance envelope, reach 2.84, sigma 0.29,
-threshold 0.85, neutral connection bias, and protected continuations.
-Shortcut pruning remains enabled; cross-character links remain disabled.
-Density balance and tangent stretch do not affect the envelope model.
-The source/guides overlay in the studio is an inspection aid; boot images
-continue to render the grayscale body mesh.
-
-Tessellation is fixed at build time. The kernel embeds vector geometry,
-uploads each part once, and rasterizes it at boot using the native triangle
-VS/constant-RGBA PS, white draw color and black clear. No RGBA atlas,
-font cache, font warmup, or Shell3 routing is added. The renderer's
-4-sample antialiasing is separate from the sheets' 8× scale.
-
-Regenerate and validate from the repository root:
+Extract with a standard LZ4 and tar implementation:
 
 ```sh
-node tools/microfonttothemoon/generate.mjs 12
+lz4 -dc microfonttothemoon-8x.tar.lz4 | tar -xf -
+```
+
+## Runtime CPU meshing
+
+The studio set contains all 224 packed CP850 atlas slots, 256 Braille
+patterns, 32 blocks and two icons, in that order. The Han set contains the
+512 GUI Han entries, including punctuation, in ascending Unicode order.
+Masks and codepoints come directly from the crate's packed tables and
+public accessors. No second mask table is embedded by this service.
+
+The CPU mesher ports the studio's neutral-bias Convolved membrane:
+finite-range Gabriel links, eased reach cutoff, midpoint quadrature,
+endpoint caps, density normalization, Float32 field samples, conservative
+quadtree merging, shared-edge conformity, threshold clipping and welded
+indexed triangles. It builds each image part from source masks on the
+blocking service lane, then uploads its geometry to the existing renderer.
+The supported model is the currently selected neutral membrane/general
+field configuration; unsupported models or directional bias are rejected.
+
+The shared `recipe.json` supplies the kernel's small embedded default
+configuration. Current settings are reach 1.70, influence width 0.20,
+threshold 0.66, density balance 66%, neutral bias and High detail 24.
+`long_reach: ["/"]` selects reach 2.54 for the slash. Selection happens
+before meshing and both profiles share the usual image draw. Changing the
+recipe requires a kernel rebuild, but no host mesh-generation step.
+
+There are no `.mesh`, catalog, or generated `config.rs` inputs in the
+kernel service. The optional host generator and its old meshes remain a
+debug oracle. They are not compiled into the runtime service. The renderer
+still uses native triangle shaders and 4-sample antialiasing, independently
+of the 8× raster scale.
+
+`cpu_mesh_us` measures CPU construction from crate masks. `generation_us`
+measures construction, upload, rendering and completed RGBA8 readback.
+Both exclude PNG encoding, tar/LZ4 packaging and filesystem storage.
+The service packs and compresses the PNGs on a blocking lane using the
+existing POSIX/PAX tar and standard LZ4-frame encoders. The BSP performs
+only the final archive write; disk-write retries do not regenerate images.
+Queue or render admission rejection may retry; an accepted, incomplete
+GPU pass is never replayed or read back. A failed image aborts the export
+instead of saving a partial archive.
+
+## Checks and optional debug generation
+
+The runtime CPU mesh test compares all eight image meshes, including all
+1026 glyphs and both reach profiles, against the JS debug generator. It
+checks vertex positions, index streams, glyph identities and layout.
+Regenerate the oracle only when the recipe or source font changes:
+
+```sh
+node tools/microfonttothemoon/generate.mjs
 mkdir -p bld/microfonttothemoon
 rustc --edition=2024 -Awarnings tools/microfonttothemoon/export_han.rs -o bld/microfonttothemoon/export_han
 bld/microfonttothemoon/export_han > bld/microfonttothemoon/han-masks.txt
-node tools/microfonttothemoon/generate.mjs 12 src/intel/gpu_font/moon/han han
-python3 tools/microfonttothemoon/validate.py
-python3 tools/microfonttothemoon/validate.py src/intel/gpu_font/moon/han
+node tools/microfonttothemoon/generate.mjs 24 src/intel/gpu_font/moon/han han
+python3 tools/testpy/test_microfont_runtime_mesh.py
+python3 tools/testpy/test_lz4_archive.py
 cargo build --offline
 ```
 
-Compare High in a separate output directory:
+The debug generator accepts detail overrides 6, 12, 24 or 40. Its catalog
+validator remains available for offline mesh diagnostics. Kernel builds
+need neither Node nor generated geometry.
 
-```sh
-node tools/microfonttothemoon/generate.mjs 24 /tmp/moon-high
-python3 tools/microfonttothemoon/validate.py src/intel/gpu_font/moon /tmp/moon-high
-```
-
-The shared recipe sets the default detail to Fine; a CLI argument overrides
-it for the generated artifact. Supported detail values match the studio: 6, 12, 24, 40. Generated
-`config.rs` files supply all eight kernel requests and their diagnostics.
-The validator checks content hashes, bounds, winding, indices, spacing,
-tile containment, and complete glyph coverage across all four parts.
-Float32 quantization can collapse microscopic threshold slivers; catalogs
-record removed faces and any winding normalization. The build tool does
-not rasterize geometry.
-
-On a booted machine, look for `microfonttothemoon: saved` logs containing
-the actual disk ID and each image path. A host build does not prove the
-GPU ran or that files exist on the rig.
+Look for `microfonttothemoon: rendered` timing records and one
+`microfonttothemoon: saved` archive record, including the actual disk ID.
+A host build/test does not prove the GPU ran or that the disk artifact
+exists on the rig.
