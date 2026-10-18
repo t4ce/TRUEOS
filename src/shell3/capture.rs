@@ -559,7 +559,7 @@ impl Menu {
         {
             return;
         }
-        match crate::ui4::request_wd_postblend_capture(target.clone()) {
+        match crate::ui4::request_wd_postblend_capture(Some(target.clone()), None) {
             Ok(()) => {
                 self.pending_pictures += 1;
                 self.message = "Picture armed; waiting for capture and save…".into();

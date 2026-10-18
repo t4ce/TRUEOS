@@ -1,4 +1,4 @@
-//! Selected-character inspector: 4× source stamp above four CPU triangle fonts.
+//! Selected-character inspector: 4× source stamp above Dista Meso and Lean in one column.
 use super::microfont_raster_preview::{PaintResult, append_quad, paint_triangles};
 use crate::ui4::{self, FrameHandle, Ui4InputEvent, WindowOwner};
 use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
@@ -10,7 +10,7 @@ const GLYPH_WIDTH: u32 = 96;
 const GLYPH_HEIGHT: u32 = GLYPH_WIDTH * microfont::FHEIGHT as u32 / microfont::FWIDTH as u32;
 const STAMP_SCALE: u32 = 4;
 const HEADER_HEIGHT: u32 = microfont::FHEIGHT as u32 * STAMP_SCALE;
-const WIDTH: u32 = 2 * GLYPH_WIDTH;
+const WIDTH: u32 = GLYPH_WIDTH;
 const HEIGHT: u32 = HEADER_HEIGHT + 2 * GLYPH_HEIGHT;
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, PaintResult>;
 
@@ -72,7 +72,7 @@ async fn inspect() -> Result<(), &'static str> {
         }
     };
     let reply = Arc::new(Reply::new());
-    // Exercise the source stamp and all four CPU triangle variants on boot.
+    // Exercise the source stamp and both Dista shapes on boot.
     // Selected-window text input replaces this initial glyph.
     let mut character = Some('A');
     let mut dirty = true;
@@ -162,47 +162,43 @@ fn paint_character(frame: FrameHandle, character: Option<char>) -> PaintResult {
     use microfont::{
         FontDetail,
         FontShape::{Lean, Meso},
-        raster_tri::{convo_triangles, dista_triangles},
+        raster_tri::dista_triangles,
     };
     let started = Instant::now().as_micros();
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    let mut counts = [0usize; 4];
+    let mut counts = [0usize; 2];
     if let Some(ch) = character {
         append_stamp(ch, &mut vertices, &mut indices);
-        // Columns: Dista, Convo. Rows: Meso, Lean. Controls get only the stamp.
+        // Meso above Lean, for Basic Latin and Braille. Other glyphs get the stamp.
         for (row, shape) in [Meso, Lean].into_iter().enumerate() {
-            for (column, build) in [dista_triangles, convo_triangles].into_iter().enumerate() {
-                let Some(mesh) = build(ch, shape, FontDetail::Fine) else {
-                    continue;
-                };
-                let slot = row * 2 + column;
-                counts[slot] = mesh.indices.len() / 3;
-                let x = (slot % 2) as f32 * GLYPH_WIDTH as f32;
-                let y = HEADER_HEIGHT as f32 + (slot / 2) as f32 * GLYPH_HEIGHT as f32;
-                let scale = GLYPH_WIDTH as f32 / microfont::FWIDTH as f32;
-                let base = vertices.len() as u32;
-                for [px, py] in mesh.vertices {
-                    vertices.push([
-                        2.0 * (x + px * scale) / WIDTH as f32 - 1.0,
-                        1.0 - 2.0 * (y + py * scale) / HEIGHT as f32,
-                        0.5,
-                    ]);
-                }
-                for triangle in mesh.indices.chunks_exact(3) {
-                    indices.extend_from_slice(&[
-                        base + triangle[0],
-                        base + triangle[2],
-                        base + triangle[1],
-                    ]);
-                }
+            let Some(mesh) = dista_triangles(ch, shape, FontDetail::Fine) else {
+                continue;
+            };
+            counts[row] = mesh.indices.len() / 3;
+            let y = HEADER_HEIGHT as f32 + row as f32 * GLYPH_HEIGHT as f32;
+            let scale = GLYPH_WIDTH as f32 / microfont::FWIDTH as f32;
+            let base = vertices.len() as u32;
+            for [px, py] in mesh.vertices {
+                vertices.push([
+                    2.0 * (px * scale) / WIDTH as f32 - 1.0,
+                    1.0 - 2.0 * (y + py * scale) / HEIGHT as f32,
+                    0.5,
+                ]);
+            }
+            for triangle in mesh.indices.chunks_exact(3) {
+                indices.extend_from_slice(&[
+                    base + triangle[0],
+                    base + triangle[2],
+                    base + triangle[1],
+                ]);
             }
         }
     }
     let cpu_us = Instant::now().as_micros().saturating_sub(started);
     let result = paint_triangles(frame, &vertices, &indices)?;
     crate::log_important!(target: "microfont-triangle-preview";
-        "microfont-triangle-preview: rendered frame={} codepoint={:?} size={}x{} glyph={}x{} detail=0 subdivisions=12 triangles={:?} cpu_us={} rgba8_us={} layout=dista-meso,convo-meso/dista-lean,convo-lean stamp=4x storage=none escape=close\n",
+        "microfont-triangle-preview: rendered frame={} codepoint={:?} size={}x{} glyph={}x{} detail=0 subdivisions=12 triangles={:?} cpu_us={} rgba8_us={} layout=dista-meso/dista-lean stamp=4x storage=none escape=close\n",
         frame.raw(), character.map(|ch| ch as u32), WIDTH, HEIGHT, GLYPH_WIDTH, GLYPH_HEIGHT, counts,
         cpu_us, Instant::now().as_micros().saturating_sub(started));
     Ok(result)

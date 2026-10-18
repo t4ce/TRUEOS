@@ -314,6 +314,7 @@ struct CursorRoute {
     selection_anchor: Option<(u32, u32)>,
     absorb_select: bool,
     resize_latch: Option<(WindowTarget, u64)>,
+    screenshot_latch: bool,
 }
 
 impl CursorRoute {
@@ -343,11 +344,13 @@ impl CursorRoute {
             selection_anchor: None,
             absorb_select: false,
             resize_latch: None,
+            screenshot_latch: false,
         }
     }
 
     fn clear_frame_interaction(&mut self) {
         self.resize_latch = None;
+        self.screenshot_latch = false;
         self.capture = None;
         self.keyboard_source = None;
         self.secondary_anchor = None;
@@ -610,6 +613,33 @@ impl InputBroker {
                 (recipient, frame, signed_local(x, window.presentation_placement.x), signed_local(y, window.presentation_placement.y))
             });
             super::drag_drop::pointer_released(source, destination);
+        }
+
+        if self.cursors[index].screenshot_latch {
+            let route = &mut self.cursors[index];
+            route.x = x;
+            route.y = y;
+            route.buttons_down = buttons_down;
+            route.visible_after_motion = true;
+            if pressed & !PRIMARY_BUTTON_MASK != 0 || event.wheel != 0 {
+                route.screenshot_latch = false;
+                route.selection_anchor = None;
+                route.absorb_select = buttons_down & PRIMARY_BUTTON_MASK != 0;
+            } else {
+                if pressed & PRIMARY_BUTTON_MASK != 0 {
+                    route.selection_anchor = Some((x, y));
+                }
+                if released & PRIMARY_BUTTON_MASK != 0 {
+                    let area = route.selection_anchor.take().map(|anchor| selection_rect_between(anchor, (x, y)));
+                    route.screenshot_latch = false;
+                    if let Some(area) = area {
+                        if let Err(error) = super::screenshot::request_wd_postblend_capture(None, Some(area)) {
+                            crate::log_warn!(target: "ui4/screenshot"; "ui4/screenshot: selection failed error={}\n", error);
+                        }
+                    }
+                }
+            }
+            return;
         }
 
         // Own the complete rectangle gesture before menus, selection or app input.
@@ -1223,6 +1253,37 @@ impl InputBroker {
             return;
         }
         let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            && event.key_code == crate::r::keyboard::KEYBOARD_KEY_PRINT_SCREEN
+        {
+            let _ = self.consumed_keys.push(event);
+            if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
+                if let Some(index) = self.keyboard_route_index(&event, combo_id, false) {
+                    let route = &mut self.cursors[index];
+                    // Convert the existing resize rectangle into a capture,
+                    // including a primary drag already in progress.
+                    if route.resize_latch.take().is_none() && !route.screenshot_latch {
+                        route.selection_anchor = None;
+                    }
+                    route.screenshot_latch = true;
+                }
+            }
+            return;
+        }
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            && event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE
+        {
+            if let Some(index) = self.keyboard_route_index(&event, combo_id, false) {
+                let route = &mut self.cursors[index];
+                if route.screenshot_latch {
+                    route.screenshot_latch = false;
+                    route.selection_anchor = None;
+                    route.absorb_select = route.buttons_down & PRIMARY_BUTTON_MASK != 0;
+                    let _ = self.consumed_keys.push(event);
+                    return;
+                }
+            }
+        }
         if INTERACTIVE_SCREENSHOT_ENABLED
             && event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
             && event.key_code == crate::r::keyboard::KEYBOARD_KEY_F1

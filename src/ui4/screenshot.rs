@@ -50,7 +50,7 @@ static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CAPTURE_REQUESTS: Mutex<VecDeque<CaptureRequest>> = Mutex::new(VecDeque::new());
 static CAPTURE_QUEUE: Mutex<VecDeque<CapturedComposition>> = Mutex::new(VecDeque::new());
-static SHOT_TARGETS: Mutex<VecDeque<crate::shell3::MatrixTarget>> = Mutex::new(VecDeque::new());
+static SHOT_TARGETS: Mutex<VecDeque<(Option<crate::shell3::MatrixTarget>, Option<super::input_broker::Ui4VisualRect>)>> = Mutex::new(VecDeque::new());
 
 pub(super) enum CaptureError {
     NoScanout,
@@ -210,12 +210,15 @@ struct CapturedWindowRgba {
     rgba_premultiplied: Vec<u8>,
 }
 
-/// Arm one on-demand full-display WD snapshot for the explicit shell command.
+/// Arm one on-demand WD snapshot, optionally cropped to a screen rectangle.
 ///
 /// The screenshot worker consumes the next completed writeback frame, performs
 /// the diagnostic XYUV8888 -> RGBA conversion, and persists one PNG.
+/// Areas are intersected with the display bounds; empty intersections fail.
+/// Only the selected pixels are converted, queued for encoding, and saved.
 pub(crate) fn request_wd_postblend_capture(
-    target: crate::shell3::MatrixTarget,
+    target: Option<crate::shell3::MatrixTarget>,
+    area: Option<super::input_broker::Ui4VisualRect>,
 ) -> Result<(), &'static str> {
     let mut targets = SHOT_TARGETS.lock();
     crate::intel::media::wd_xyuv8888::request_screenshot().map_err(|error| match error {
@@ -226,7 +229,7 @@ pub(crate) fn request_wd_postblend_capture(
             "WD screenshot copy is quarantined until reboot"
         }
     })?;
-    targets.push_back(target);
+    targets.push_back((target, area));
     Ok(())
 }
 
@@ -542,7 +545,7 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
 fn take_wd_postblend_capture() -> Option<CapturedComposition> {
     crate::intel::media::wd_xyuv8888::with_screenshot(|wd_sequence, xyuv| {
         // A pending async BCS copy must not consume the request's reply target.
-        let shot_target = SHOT_TARGETS.lock().pop_front();
+        let (shot_target, area) = SHOT_TARGETS.lock().pop_front().unwrap_or((None, None));
         let conversion_started = crate::chronos::monotonic_nanos();
         let expected = crate::intel::media::wd_xyuv8888::WD_XYUV8888_BYTES;
         if xyuv.len() != expected {
@@ -555,8 +558,25 @@ fn take_wd_postblend_capture() -> Option<CapturedComposition> {
             report_shot_result(shot_target.as_ref(), Err("Invalid screenshot layout."));
             return None;
         }
-        let mut rgba = alloc::vec![0u8; expected];
-        for (source, destination) in xyuv.chunks_exact(4).zip(rgba.chunks_exact_mut(4)) {
+        let screen_width = crate::intel::media::wd_xyuv8888::WD_WIDTH as u32;
+        let screen_height = crate::intel::media::wd_xyuv8888::WD_HEIGHT as u32;
+        let rect = area.unwrap_or(super::input_broker::Ui4VisualRect {
+            x: 0, y: 0, width: screen_width, height: screen_height,
+        });
+        let right = rect.x.saturating_add(rect.width).min(screen_width);
+        let bottom = rect.y.saturating_add(rect.height).min(screen_height);
+        let width = right.saturating_sub(rect.x);
+        let height = bottom.saturating_sub(rect.y);
+        if width == 0 || height == 0 {
+            report_shot_result(shot_target.as_ref(), Err("Screenshot area is outside the screen."));
+            return None;
+        }
+        let mut rgba = alloc::vec![0u8; width as usize * height as usize * 4];
+        for (index, destination) in rgba.chunks_exact_mut(4).enumerate() {
+            let x = rect.x as usize + index % width as usize;
+            let y = rect.y as usize + index / width as usize;
+            let offset = (y * screen_width as usize + x) * 4;
+            let source = &xyuv[offset..offset + 4];
             // DRM XYUV8888 is [31:0] X:Y:Cb:Cr, hence little-endian memory is
             // Cr, Cb, Y, X. Convert limited-range BT.709 for visual diagnosis.
             let cr = i32::from(source[0]) - 128;
@@ -574,8 +594,8 @@ fn take_wd_postblend_capture() -> Option<CapturedComposition> {
             sequence: CAPTURE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1,
             unix_seconds: crate::chronos::best_effort_unix_time_seconds(),
             monotonic_ms: crate::chronos::monotonic_nanos() / 1_000_000,
-            width: crate::intel::media::wd_xyuv8888::WD_WIDTH as u32,
-            height: crate::intel::media::wd_xyuv8888::WD_HEIGHT as u32,
+            width,
+            height,
             rgba,
             scope: CaptureScope::WdPostBlend { wd_sequence },
             path_override: None,
@@ -1088,13 +1108,13 @@ pub(crate) fn writable_capture_root_handle() -> Option<crate::disc::block::Devic
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_screenshot_service_task() {
     crate::log_info!(target: "ui4/screenshot";
-        "ui4/screenshot: service online full-display-trigger=shell2-shot-only full-display-source=pipe-c-wd-postblend live-route=borrow-next-rdp-frame idle-route=temporary-wd-one-frame encode=none format=png-rgba destination=trueosfs:/screenshots worker=background\n"
+        "ui4/screenshot: service online full-display-trigger=shell2-shot-or-print-selection full-display-source=pipe-c-wd-postblend live-route=borrow-next-rdp-frame idle-route=temporary-wd-one-frame encode=none format=png-rgba destination=trueosfs:/screenshots worker=background\n"
     );
     let mut root_wait_logged = false;
     loop {
         drive_manual_wd_capture_if_needed().await;
         if crate::intel::media::wd_xyuv8888::take_failed_screenshot() {
-            let target = SHOT_TARGETS.lock().pop_front();
+            let target = SHOT_TARGETS.lock().pop_front().and_then(|(target, _)| target);
             report_shot_result(target.as_ref(), Err("Screenshot copy failed."));
         }
         if let Some(capture) = take_wd_postblend_capture() {
