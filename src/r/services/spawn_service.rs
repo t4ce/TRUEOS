@@ -45,6 +45,7 @@ define_started_flags!(
     FONT_PLAN_SERVICE_STARTED,
     FONT_KERNEL_SERVICE_STARTED,
     MICROFONT_RASTER_PREVIEW_STARTED,
+    BOXDRAW_RASTER_PREVIEW_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
     TTSTT_CAPTURE_WRITER_STARTED,
     LUMEN_BOOT_WARM_STARTED,
@@ -334,6 +335,10 @@ pub(crate) fn retry_font_plan_pool_autostart() {
 
 fn spawn_microfont_raster_preview(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_| super::microfont_raster_preview::microfont_raster_preview_task())
+}
+
+fn spawn_boxdraw_raster_preview(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| super::boxdraw_raster_preview::boxdraw_raster_preview_task())
 }
 
 fn microfont_raster_preview_gate() -> bool {
@@ -1397,7 +1402,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 76
+const TASK_COUNT: usize = 77
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
@@ -1470,6 +1475,14 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         microfont_raster_preview_gate,
         &MICROFONT_RASTER_PREVIEW_STARTED,
         spawn_microfont_raster_preview,
+    ),
+    TaskSpec::enabled_gated(
+        "boxdraw-raster-preview",
+        crate::r::readiness::UI4_COMPOSITOR_READY
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        microfont_raster_preview_gate,
+        &BOXDRAW_RASTER_PREVIEW_STARTED,
+        spawn_boxdraw_raster_preview,
     ),
     TaskSpec::enabled_gated(
         "font-kernel-service",

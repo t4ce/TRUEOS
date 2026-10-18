@@ -28,8 +28,8 @@ async fn show_once() -> Result<(), &'static str> {
     let session = ui4::begin_window_session(OWNER).map_err(|_| "session-create")?;
     let frame = match ui4::create_frame(ui4::FrameSpec {
         output,
-        content: ui4::FrameContent::Image,
-        cadence: ui4::FrameCadence::Dirty,
+        content: ui4::FrameContent::FontScene2d,
+        cadence: ui4::FrameCadence::Immutable,
         buffering: ui4::FrameBuffering::Single,
         format: ui4::ScanoutFormat::Rgba8888Premultiplied,
         width: WIDTH,
@@ -98,7 +98,7 @@ async fn show_once() -> Result<(), &'static str> {
         return Err("window-publish");
     }
     crate::log_important!(target: "microfont-raster-preview";
-        "microfont-raster-preview: presented window={} frame={} size={}x{} scale={} glyphs=29 quads={} rows=2 shade-slots=empty renders=1 storage=none escape=close\n",
+        "microfont-raster-preview: presented window={} frame={} size={}x{} scale={} glyphs=32 quads={} rows=2 shades=included renders=1 storage=none escape=close\n",
         window.raw(), frame.raw(), WIDTH, HEIGHT, SCALE, quads);
     while !ui4::window_is_closed(OWNER, window) {
         Timer::after(Duration::from_millis(50)).await;
@@ -120,7 +120,7 @@ fn paint_once(frame: FrameHandle) -> PaintResult {
     };
     // UI4 initialized the white background before granting this lease. Keep
     // the batch non-overlapping so its rectangle walkers can run in parallel.
-    let mut rects = Vec::with_capacity(64);
+    let mut rects = Vec::with_capacity(128);
     for (index, &(ch, _)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
         let Some(quads) = microfont::raster::block_quad_slice(ch) else {
             continue;
@@ -157,7 +157,9 @@ fn paint_once(frame: FrameHandle) -> PaintResult {
         }
         return Err(("scanout-release", finalizer.submitted));
     };
-    if ui4::publish_gpgpu_frame_buffer(lease, release).is_err() {
+    if let Err(error) = ui4::publish_gpu_font_frame_buffer(lease, release) {
+        crate::log_important!(target: "microfont-raster-preview";
+            "microfont-raster-preview: frame publication rejected error={:?}\n", error);
         let _ = ui4::cancel_frame_buffer(lease);
         return Err(("frame-publish", false));
     }

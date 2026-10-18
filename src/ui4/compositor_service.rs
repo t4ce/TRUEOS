@@ -1364,6 +1364,9 @@ const fn resident_release_direct_contract(
     cadence: super::FrameCadence,
     buffering: super::FrameBuffering,
 ) -> bool {
+    // A resident renderer can also finish a one-shot image. Its exact-surface
+    // release and the display read lease provide the same ownership proof;
+    // producer buffering only determines when that allocation can be reused.
     matches!(
         (content, cadence, buffering),
         (
@@ -1371,6 +1374,11 @@ const fn resident_release_direct_contract(
             super::FrameCadence::Streaming,
             super::FrameBuffering::Triple,
         )
+            | (
+                FrameContent::BlueprintScene,
+                super::FrameCadence::Immutable,
+                super::FrameBuffering::Single,
+            )
     )
 }
 

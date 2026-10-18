@@ -73,7 +73,7 @@ aside{min-height:0;min-width:0;display:flex;flex-direction:column;border-left:1p
 <div class="biascard"><div class="controlhead"><label for="bias">Connection bias</label><output id="biasOut">Neutral</output></div><input type="range" id="bias" min="-1" max="1" step="0.01" value="0" aria-label="Horizontal versus vertical connection bias"><div class="biasends"><span>— Horizontal</span><button id="zeroBias">Neutral</button><span>Vertical │</span></div><label class="check"><input type="checkbox" id="smartBias" checked>Protect established continuations</label><p class="hintp">Attenuate the competing direction before the body forms. Other links must support a stroke; it cannot vote for itself.</p><p id="biasSummary" class="hintp"></p></div>
 
 <div class="knobgrid">
-<div class="control" id="reachControl"><div class="controlhead"><label for="reach">Connection reach</label><output for="reach" id="reachOut"></output></div><input type="range" id="reach" min="0.8" max="3.6" step="0.02" value="1.85"><p class="hint">Link nearby sites; ease new links in near the cutoff.</p></div>
+<div class="control" id="reachControl"><div class="controlhead"><label for="reach">Connection reach</label><output for="reach" id="reachOut"></output></div><label class="check"><input type="checkbox" id="reach">Long reach</label><p class="hint">Short: 1.76 u · Long: 2.76 u. Link nearby sites; ease new links in near the cutoff.</p></div>
 <div class="control"><div class="controlhead"><label for="sigma">Influence width</label><output for="sigma" id="sigmaOut"></output></div><input type="range" id="sigma" min="0.20" max="1.2" step="0.01" value="0.44"><p class="hint">Spread the field in source-cell units, not screen pixels.</p></div>
 <div class="control"><div class="controlhead"><label for="level">Body threshold</label><output for="level" id="levelOut"></output></div><input type="range" id="level" min="0.10" max="0.85" step="0.01" value="0.48"><p class="hint">Lower grows and joins; higher carves and separates.</p></div>
 <div class="control" id="balanceControl"><div class="controlhead"><label for="balance">Density balance</label><output for="balance" id="balanceOut"></output></div><input type="range" id="balance" min="0" max="1" step="0.02" value="0.82"><p class="hint">Reduce bulges from crowded sites and busy junctions.</p></div>
@@ -708,13 +708,14 @@ let camera={zoom:1,px:0,py:0},pointer=null,drag=null,editing=null;
 let framePending=false,scheduled=0,generation=0,busy=false,pending=null;
 let routeMode='auto';
 const CELL_DEFAULTS={stroke:.64,doubleGap:.70,edgeGhosts:true,continuations:true,boxSource:'ports',dotSize:1,dotStyle:'round',barLength:1.7,dotGap:.24,brailleLayout:'microfont',joinDots:false,blockCoverage:'ideal',blockInset:0,shadeRows:8};
-const settings={bias:0,smartBias:true,cell:{...CELL_DEFAULTS},model:'membrane',reach:1.85,sigma:.44,level:.48,balance:.82,stretch:1.4,diagAssist:.95,diagSnap:.72,detail:12,prune:true,cross:false,contours:false};
+const CONNECTION_REACH={short:1.76,long:2.76};
+const settings={bias:0,smartBias:true,cell:{...CELL_DEFAULTS},model:'membrane',reach:CONNECTION_REACH.short,sigma:.44,level:.48,balance:.82,stretch:1.4,diagAssist:.95,diagSnap:.72,detail:12,prune:true,cross:false,contours:false};
 const recipes={
-membrane:{description:'Treat links as continuous sources. Their influence blends into one body; density balance evens out crowded junctions.',reach:1.85,sigma:.44,level:.48,balance:.82,stretch:1.4,diagAssist:.15,diagSnap:.20},
-charge:{description:'No explicit links. Radial potentials overlap, grow necks, and fuse into shared regions at the chosen threshold.',reach:1.85,sigma:.63,level:.45,balance:.92,stretch:1.4,diagAssist:0,diagSnap:0},
-tissue:{description:'Infer direction from neighbors. Stretched, locally aligned fields cooperate to produce a flowing body.',reach:1.85,sigma:.37,level:.46,balance:.88,stretch:1.45,diagAssist:.25,diagSnap:.25},
-diagonal:{description:'Detect 45° / 135° staircase runs, fit cleaner slanted centerlines through them, and blend those ribbons into the body before meshing.',reach:1.90,sigma:.36,level:.46,balance:.72,stretch:1.75,diagAssist:.95,diagSnap:.72},
-envelope:{description:'A geometric baseline: a rounded union around the nearest sites and links. No additive cooperation between influences.',reach:1.85,sigma:.40,level:.50,balance:0,stretch:1.4,diagAssist:0,diagSnap:0}
+membrane:{description:'Treat links as continuous sources. Their influence blends into one body; density balance evens out crowded junctions.',sigma:.44,level:.48,balance:.82,stretch:1.4,diagAssist:.15,diagSnap:.20},
+charge:{description:'No explicit links. Radial potentials overlap, grow necks, and fuse into shared regions at the chosen threshold.',sigma:.63,level:.45,balance:.92,stretch:1.4,diagAssist:0,diagSnap:0},
+tissue:{description:'Infer direction from neighbors. Stretched, locally aligned fields cooperate to produce a flowing body.',sigma:.37,level:.46,balance:.88,stretch:1.45,diagAssist:.25,diagSnap:.25},
+diagonal:{description:'Detect 45° / 135° staircase runs, fit cleaner slanted centerlines through them, and blend those ribbons into the body before meshing.',sigma:.36,level:.46,balance:.72,stretch:1.75,diagAssist:.95,diagSnap:.72},
+envelope:{description:'A geometric baseline: a rounded union around the nearest sites and links. No additive cooperation between influences.',sigma:.40,level:.50,balance:0,stretch:1.4,diagAssist:0,diagSnap:0}
 };
 function displayChar(ch){if(ch===' ')return 'SPACE';if(ch==='\u00a0')return 'NBSP';if(ch==='\u007f')return 'DEL';if(ch==='\u00ad')return 'SHY';if(ch==='\u2800')return 'BRAILLE BLANK';return ch;}
 const unicode=g=>'U+'+g.char.codePointAt(0).toString(16).toUpperCase().padStart(4,'0');
@@ -768,7 +769,7 @@ function setupCatalog(){
   $('glyph').value=glyphId;
 }
 function syncControls(){
-  for(const key of ['reach','sigma','level','balance','stretch','diagAssist','diagSnap']){
+  for(const key of ['sigma','level','balance','stretch','diagAssist','diagSnap']){
     const inp=$(key); if(!inp) continue; inp.value=settings[key];
     inp.style.setProperty('--pct',100*(Number(inp.value)-Number(inp.min))/(Number(inp.max)-Number(inp.min))+'%');
     $(key+'Out').textContent=
@@ -776,8 +777,10 @@ function syncControls(){
       key==='stretch'?'+'+settings[key].toFixed(2)+'×':
       key==='diagAssist'?Math.round(settings[key]*100)+'%':
       key==='diagSnap'?Math.round(settings[key]*100)+'%':
-      settings[key].toFixed(2)+(key==='reach'||key==='sigma'?' u':'');
+      settings[key].toFixed(2)+(key==='sigma'?' u':'');
   }
+  $('reach').checked=settings.reach===CONNECTION_REACH.long;
+  $('reachOut').textContent=($('reach').checked?'Long':'Short')+' · '+settings.reach.toFixed(2)+' u';
   $('recipe').value=settings.model;
   $('recipeDescription').textContent=recipes[settings.model].description;
   $('reachControl').hidden=settings.model==='charge';
@@ -1002,7 +1005,8 @@ function renderAtlas(){
 $('glyph').addEventListener('change',e=>selectGlyph(e.target.value));
 document.querySelectorAll('[data-char]').forEach(b=>b.onclick=()=>selectGlyph(byChar.get(b.dataset.char).id));
 $('recipe').addEventListener('change',e=>setRecipe(e.target.value));
-for(const k of ['reach','sigma','level','balance','stretch','diagAssist','diagSnap'])$(k).addEventListener('input',e=>{settings[k]=Number(e.target.value);syncControls();scheduleBuild();});
+$('reach').addEventListener('change',e=>{settings.reach=e.target.checked?CONNECTION_REACH.long:CONNECTION_REACH.short;syncControls();scheduleBuild();});
+for(const k of ['sigma','level','balance','stretch','diagAssist','diagSnap'])$(k).addEventListener('input',e=>{settings[k]=Number(e.target.value);syncControls();scheduleBuild();});
 $('detail').onchange=e=>{settings.detail=Number(e.target.value);$('cellDetail').value=e.target.value;scheduleBuild();};
 for(const k of ['prune','cross'])$(k).onchange=e=>{settings[k]=e.target.checked;scheduleBuild();};
 $('overlay').onchange=requestDraw;
