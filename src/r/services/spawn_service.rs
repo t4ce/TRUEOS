@@ -45,7 +45,7 @@ define_started_flags!(
     FONT_PLAN_SERVICE_STARTED,
     FONT_KERNEL_SERVICE_STARTED,
     MICROFONT_RASTER_PREVIEW_STARTED,
-    BOXDRAW_RASTER_PREVIEW_STARTED,
+    MICROFONT_TRIANGLE_PREVIEW_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
     TTSTT_CAPTURE_WRITER_STARTED,
     LUMEN_BOOT_WARM_STARTED,
@@ -337,8 +337,8 @@ fn spawn_microfont_raster_preview(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_| super::microfont_raster_preview::microfont_raster_preview_task())
 }
 
-fn spawn_boxdraw_raster_preview(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_| super::boxdraw_raster_preview::boxdraw_raster_preview_task())
+fn spawn_microfont_triangle_preview(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| super::microfont_triangle_preview::microfont_triangle_preview_task())
 }
 
 fn microfont_raster_preview_gate() -> bool {
@@ -1477,12 +1477,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_microfont_raster_preview,
     ),
     TaskSpec::enabled_gated(
-        "boxdraw-raster-preview",
+        "microfont-triangle-preview",
         crate::r::readiness::UI4_COMPOSITOR_READY
             | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         microfont_raster_preview_gate,
-        &BOXDRAW_RASTER_PREVIEW_STARTED,
-        spawn_boxdraw_raster_preview,
+        &MICROFONT_TRIANGLE_PREVIEW_STARTED,
+        spawn_microfont_triangle_preview,
     ),
     TaskSpec::enabled_gated(
         "font-kernel-service",

@@ -14,7 +14,7 @@ pub mod keyboard_control_service;
 pub mod media_service;
 pub(crate) mod microfont_log_service;
 pub(crate) mod microfont_raster_preview;
-pub(crate) mod boxdraw_raster_preview;
+pub(crate) mod microfont_triangle_preview;
 pub mod mouse_motion_service;
 pub(crate) mod pxeproc_service;
 pub(crate) mod oceancache;
