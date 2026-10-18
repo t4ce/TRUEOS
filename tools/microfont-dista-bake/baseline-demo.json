@@ -1,0 +1,28 @@
+{
+  "scope": "Single visible Fine specimen on the physical rig; not an atlas benchmark",
+  "capture_started_local": "2026-10-18T21:08:51+02:00",
+  "capture_run_id": "90e02377e58f33311b60872997f6f85d",
+  "source_log": "bld/baremetal-logs/trueos-baremetal.0.log",
+  "source_lines": [314, 315],
+  "runtime_elf_sha256": "fe9481d7c6e86b2298f1a56649f5aaca98c6e44a7ad45a3ed76578754f7de607",
+  "shader_sha256": "a0b873492831bdc20c2b48ca257ff60b9fdd80fbec1a2beb8a0631d877ab95a7",
+  "compiled_device": "0x4680",
+  "text": "ABC123/Yy%",
+  "shapes": ["Meso", "Lean"],
+  "size": [960, 352],
+  "quality": "Fine",
+  "submitted_triangles": [3612, 3036],
+  "active_union_triangles": [2578, 2002],
+  "gpu_draw": {
+    "ticks": 13715,
+    "hz": 19200000,
+    "ns": 714323,
+    "includes": "Procedural vertex work and triangle rasterization in the same draw",
+    "excludes": "Clear, final target writeback, host scheduling and display presentation"
+  },
+  "render_wall_us": 8000,
+  "gpu_wait_us": 8000,
+  "complete_stamp_wall_us": 12000,
+  "host_clock_resolution_us": 1000,
+  "notes": "Host capture date is authoritative; guest boot RTC was stale. No independent shader/backend duration can be derived from this fused draw."
+}

@@ -83,6 +83,38 @@ const _: () = assert!(patch_cube::CONTRACT_VERSION == 11);
 
 #[path = "../../crates/trueos-shader/generated_font_patch.rs"]
 pub(crate) mod font_patch;
+
+#[path = "../../crates/trueos-shader/generated_microfont_dista.rs"]
+mod microfont_dista;
+
+pub(crate) fn microfont_dista_pipeline() -> &'static TrianglePipeline {
+    microfont_dista::microfont_dista_pipeline()
+}
+
+pub(crate) fn microfont_dista_artifact() -> (u16, &'static str) {
+    (microfont_dista::COMPILED_DEVICE_ID, microfont_dista::SOURCE_SHA256)
+}
+
+/// Bake-time graph audit for diagnostics; geometry still comes from GLSL.
+pub(crate) fn microfont_dista_active_links(character: char) -> usize {
+    microfont_dista::ACTIVE_LINK_COUNTS[character as usize] as usize
+}
+
+/// Seed edits require rebaking the procedural shader, with an explicit CPU
+/// fallback until then. Never silently render the previous glyph design.
+pub(crate) fn microfont_dista_seeds_current() -> bool {
+    microfont::FontShape::INFLUENCE_WIDTH == 0.20
+        && microfont::FontShape::Meso.body_threshold() == 0.22
+        && microfont::FontShape::Lean.body_threshold() == 0.63
+        && microfont::raster::SHORT_CONNECTION_REACH == 1.76
+        && microfont::raster::LONG_CONNECTION_REACH == 2.76
+        && microfont_dista::SEEDS.iter().enumerate().all(
+            |(codepoint, &(pixels, long_reach))| {
+                microfont::raster::basic_seed(codepoint as u8 as char)
+                    .is_some_and(|seed| seed.pixels == pixels && seed.long_reach == long_reach)
+            },
+        )
+}
 const _: () = assert!(font_patch::CONTRACT_VERSION == 1);
 const _: () = {
     if font_patch::AVAILABLE {

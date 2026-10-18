@@ -1313,39 +1313,15 @@ fn write_triangle_probe_state_with_flush(
     } else {
         backend_probe_mode.surface_halign_raw(warm.device_id)
     };
-    surface[0] = (SURFTYPE_2D << 29)
-        | (draw.rt_surface_format << 18)
-        | (surface_halign << 14)
-        | (SURFACE_VALIGN_4 << 16)
-        | if resident_msaa4 {
-            (1 << 12) | (1 << 28)
-        } else {
-            0
-        };
-    surface[1] = (RENDER_MOCS << 24)
-        // TGL/ADL PRM: EnableUnormPathInColorPipe must never be zero on
-        // gfx11 through gfx12.0 render surfaces.
-        | if device_is_gfx12(warm.device_id) && !device_is_gfx125(warm.device_id) {
-            1 << 31
-        } else {
-            0
-        }
-        | if resident_msaa4 {
-            let aligned_height = crate::intel::align_up(draw.target_h as usize, 64)
-                .ok_or("probe-msaa4-shape")?;
-            u32::try_from(aligned_height / 4).map_err(|_| "probe-msaa4-shape")?
-        } else {
-            0
-        };
-    surface[2] = draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16);
-    surface[3] = draw.rt_pitch.saturating_sub(1);
-    surface[4] = if resident_msaa4 { 2 << 3 } else { 0 };
-    surface[7] = (SHADER_CHANNEL_ALPHA << 16)
-        | (SHADER_CHANNEL_BLUE << 19)
-        | (SHADER_CHANNEL_GREEN << 22)
-        | (SHADER_CHANNEL_RED << 25);
-    surface[8] = draw.rt_gpu_addr as u32;
-    surface[9] = (draw.rt_gpu_addr >> 32) as u32;
+    surface.copy_from_slice(&triangle_render_target_surface_state(
+        TriangleRenderTargetSurface {
+            format: draw.rt_surface_format, pitch: draw.rt_pitch,
+            width: draw.target_w, height: draw.target_h, gpu: draw.rt_gpu_addr,
+            msaa4: resident_msaa4,
+        },
+        warm.device_id,
+        surface_halign,
+    )?);
     intel_render_verbose_log!(
         "probe-surface-rt backend={} surf0=0x{:08X} format={} halign_raw={} valign_raw={} size={}x{} pitch=0x{:X} rt_gpu=0x{:X} samples={} tiling={} note=render-target-descriptor\n",
         backend_probe_mode.label(),
@@ -1637,6 +1613,46 @@ const fn fixed_gl_ps_surface_indices() -> [usize; 4] {
 
 const fn fixed_gl_state_gpu_addr(vertex_gpu_addr: u64, vertex_buffer_bytes: u32) -> u64 {
     vertex_gpu_addr + vertex_buffer_bytes as u64
+}
+
+#[derive(Copy, Clone)]
+struct TriangleRenderTargetSurface {
+    format: u32,
+    pitch: u32,
+    width: u32,
+    height: u32,
+    gpu: u64,
+    msaa4: bool,
+}
+
+/// Encode the native color-target descriptor identically for R8 and RGBA;
+/// pitch is already expressed in bytes by the target's owner.
+fn triangle_render_target_surface_state(
+    target: TriangleRenderTargetSurface,
+    device_id: u16,
+    surface_halign: u32,
+) -> Result<[u32; 16], &'static str> {
+    if target.msaa4 && !device_is_gfx125(device_id) { return Err("probe-msaa4-device"); }
+    let mut surface = [0; 16];
+    surface[0] = (SURFTYPE_2D << 29) | (target.format << 18)
+        | (surface_halign << 14) | (SURFACE_VALIGN_4 << 16)
+        | if target.msaa4 { (1 << 12) | (1 << 28) } else { 0 };
+    // Gen11..12.0 require EnableUnormPathInColorPipe for normalized targets.
+    surface[1] = (RENDER_MOCS << 24)
+        | if device_is_gfx12(device_id) && !device_is_gfx125(device_id) { 1 << 31 } else { 0 }
+        | if target.msaa4 {
+            let aligned_height = crate::intel::align_up(target.height as usize, 64)
+                .ok_or("probe-msaa4-shape")?;
+            u32::try_from(aligned_height / 4).map_err(|_| "probe-msaa4-shape")?
+        } else { 0 };
+    surface[2] = target.width.saturating_sub(1) | (target.height.saturating_sub(1) << 16);
+    surface[3] = target.pitch.saturating_sub(1);
+    surface[4] = if target.msaa4 { 2 << 3 } else { 0 };
+    surface[7] = (SHADER_CHANNEL_ALPHA << 16) | (SHADER_CHANNEL_BLUE << 19)
+        | (SHADER_CHANNEL_GREEN << 22) | (SHADER_CHANNEL_RED << 25);
+    surface[8] = target.gpu as u32;
+    surface[9] = (target.gpu >> 32) as u32;
+    Ok(surface)
 }
 
 /// Encode the Gen12 RAW buffer surface used by Churn's read-only storage

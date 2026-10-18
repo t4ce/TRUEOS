@@ -157,20 +157,26 @@ def harness_source(secondary_finisher: str | None = None) -> str:
         "PIPE_CONTROL_L3_READ_ONLY_CACHE_INVALIDATE_HEADER", "PIPE_CONTROL_VF_CACHE_INVALIDATE",
         "PIPE_CONTROL_TLB_INVALIDATE", "PIPE_CONTROL_FLUSH_BITS", "PIPE_CONTROL_INVALIDATE_BITS",
         "PIPELINE_SELECT_3D", "RESULT_SLOT_BATCH_ENTRY_DWORD", "RCS_EXEC_RESULT_DRAW_BATCH_ENTRY",
-        "RESIDENT_SCENE_MAX_DRAWS", "RESULT_OA_BEGIN_DWORD",
+        "RESIDENT_SCENE_MAX_DRAWS", "RESULT_OA_BEGIN_DWORD", "RESULT_OA_END_DWORD",
+        "RESULT_OA_REPORT_DWORDS", "WARM_RESULT_BYTES",
     ]
     declarations = [constant(constants, name) for name in names]
     declarations += [constant(primary, name) for name in (
         "RESULT_SLOT_SECONDARY_RETURN_DWORD", "RCS_EXEC_RESULT_SECONDARY_RETURN_BASE",
         "PICASSO_PIPELINE_STATS_BEGIN_DWORD", "PICASSO_PIPELINE_STATS_END_DWORD",
         "PICASSO_PIPELINE_STATS_LIMIT_DWORD", "PICASSO_PIPELINE_STAT_REGISTERS",
+        "DISTA_GPU_TIMESTAMP_BEGIN_DWORD", "DISTA_GPU_TIMESTAMP_END_DWORD",
+        "DISTA_GPU_TARGET_BEGIN_DWORD", "DISTA_GPU_TARGET_READY_DWORD",
+        "DISTA_GPU_TIMESTAMP_LIMIT_DWORD", "DISTA_GPU_TIMESTAMP_BITS",
         "RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS", "RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS",
         "RESIDENT_SECONDARY_POST_OPENING_MARKER_DWORD", "RESULT_SLOT_POST_OPENING_DWORD",
         "RCS_EXEC_RESULT_DRAW_POST_OPENING",
     )]
     declarations.append(constant("src/intel/render/pipeline.rs", "RESULT_SLOT_DEPTH_STATE_WA_DWORD"))
+    declarations.append(constant("src/intel/render/pipeline.rs", "PICASSO_VUE_RESULT_LIMIT_DWORD"))
     declarations += [item(primary, name) for name in (
         "emit_picasso_pipeline_stat_snapshot", "picasso_pipeline_stats_delta",
+        "ResidentSceneGpuTimestamp", "emit_dista_gpu_timestamp", "dista_gpu_timestamp_interval",
         "encode_resident_scene_primary_commands", "picasso_pipeline_stats_tests",
         "resident_secondary_marker",
     )]

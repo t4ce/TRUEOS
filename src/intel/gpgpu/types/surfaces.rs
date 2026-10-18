@@ -425,12 +425,27 @@ impl GpgpuOwnedMask8Surface {
         self.surface
     }
 
-    fn quarantine_backing(&self) {
+    pub(crate) fn quarantine_backing(&self) {
         self.quarantined.store(true, Ordering::Release);
     }
 
-    fn backing_is_quarantined(&self) -> bool {
+    pub(crate) fn backing_is_quarantined(&self) -> bool {
         self.quarantined.load(Ordering::Acquire)
+    }
+
+    /// Release backing only after every external engine alias has retired.
+    /// On refusal, retain both the pages and their producer virtual range.
+    pub(crate) fn try_release_backing(&mut self) -> bool {
+        if self.virt.is_null() { return true; }
+        if self.backing_is_quarantined() { return false; }
+        if !retire_font_rcs_ppgtt_range(self.surface.gpu, self.surface.phys, self.surface.bytes) {
+            self.quarantine_backing();
+            return false;
+        }
+        crate::dma::dealloc(self.virt, self.surface.bytes);
+        recycle_font_coverage_gpu_va(self.surface.gpu, self.surface.bytes);
+        self.virt = core::ptr::null_mut();
+        true
     }
 
     /// Zero one bounded region before it is handed to a new GPU producer.
@@ -556,6 +571,7 @@ impl GpgpuOwnedMask8Surface {
 
 impl Drop for GpgpuOwnedMask8Surface {
     fn drop(&mut self) {
+        if self.virt.is_null() { return; }
         if self.backing_is_quarantined() {
             crate::log_error!(
                 target: "gpgpu";
@@ -566,8 +582,7 @@ impl Drop for GpgpuOwnedMask8Surface {
             );
             return;
         }
-        if !retire_font_rcs_ppgtt_range(self.surface.gpu, self.surface.phys, self.surface.bytes) {
-            self.quarantine_backing();
+        if !self.try_release_backing() {
             crate::log_error!(
                 target: "gpgpu";
                 "intel/gpgpu: persistent R8 backing retirement refused phys=0x{:X} gpu=0x{:X} bytes={} action=no-unmap-no-free\n",
@@ -577,8 +592,6 @@ impl Drop for GpgpuOwnedMask8Surface {
             );
             return;
         }
-        crate::dma::dealloc(self.virt, self.surface.bytes);
-        recycle_font_coverage_gpu_va(self.surface.gpu, self.surface.bytes);
     }
 }
 

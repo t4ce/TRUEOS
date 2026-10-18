@@ -170,6 +170,18 @@ pub(super) fn paint_triangles(
     vertices: &[[f32; 3]],
     indices: &[u32],
 ) -> PaintResult {
+    paint_triangles_with_contract(
+        frame, vertices, indices,
+        crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
+    )
+}
+
+pub(super) fn paint_triangles_with_contract(
+    frame: FrameHandle,
+    vertices: &[[f32; 3]],
+    indices: &[u32],
+    fragment_contract: crate::intel::render::ResidentSceneFragmentContract,
+) -> PaintResult {
     use crate::intel::render::{
         self, ResidentSceneDraw, ResidentSceneFragmentContract, ResidentScenePrimitiveTopology,
     };
@@ -217,7 +229,7 @@ pub(super) fn paint_triangles(
         depth_flags: None,
         rgba: if blank { [255; 4] } else { [48, 100, 216, 255] },
         sampled_texture: None,
-        fragment_contract: ResidentSceneFragmentContract::ConstantRgba,
+        fragment_contract: if blank { ResidentSceneFragmentContract::ConstantRgba } else { fragment_contract },
         viewport_translation_px: [0.0, 0.0],
         topology: ResidentScenePrimitiveTopology::TriangleList,
         point_width_px: 0,
@@ -230,7 +242,7 @@ pub(super) fn paint_triangles(
     );
     let result = match result {
         Ok(result) => result,
-        Err(reason @ ("render-busy" | "in-flight")) => {
+        Err(reason @ ("render-busy" | "in-flight" | "microfont-dista-device")) => {
             let _ = render::release_resident_triangle_mesh(&mesh);
             let _ = ui4::cancel_frame_buffer(lease);
             return Err((reason, false));
@@ -249,6 +261,12 @@ pub(super) fn paint_triangles(
         core::mem::forget(mesh);
         return Err(("scanout-release", true));
     };
+    if matches!(fragment_contract, ResidentSceneFragmentContract::MicrofontDista) {
+        crate::log_important!(target: "microfont-triangle-preview";
+            "microfont-triangle-preview: render frame={} frame_us={} scene_prepare_us={} gpu_wait_us={} gpu_timestamp={:?} gpu_target_ready_timestamp={:?} timing_scope=draw-and-clear-through-RT-writeback readback=timing-only\n",
+            frame.raw(), result.frame_us, result.geometry_prepare_us, result.gpu_poll_us,
+            result.gpu_timestamp, result.gpu_target_ready_timestamp);
+    }
     let _ = render::release_resident_triangle_mesh(&mesh);
     if let Err(error) = ui4::publish_resident_scene_frame_buffer(lease, release) {
         crate::log_important!(target: "microfont-raster-preview";

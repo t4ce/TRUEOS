@@ -12,11 +12,24 @@ fn usage(io: &Output) {
     Output::line(io, "gpu pipeline pbr|uv|uv8 (Picasso diagnostic)");
     Output::line(io, "gpu capture vue (one Picasso draw)");
     Output::line(io, "gpu frush [start|stop|status] (Font Rush2)");
+    #[cfg(feature = "microfont_dista_bench")]
+    Output::line(io, "gpu dista-bench [1..15 warm samples] (background Basic atlas)");
 }
 
 pub(super) fn execute(io: &Output, rest: &str) {
     let mut args = rest.split_whitespace();
     match (args.next(), args.next(), args.next()) {
+        #[cfg(feature = "microfont_dista_bench")]
+        (Some(cmd), samples, None) if cmd.eq_ignore_ascii_case("dista-bench") => {
+            let samples = match samples.map(str::parse::<u8>).transpose() {
+                Ok(samples) => samples.unwrap_or(7),
+                Err(_) => { usage(io); return; }
+            };
+            match crate::r::services::microfont_dista_bench::request(samples) {
+                Ok(()) => Output::line(io, "gpu: Dista atlas benchmark queued; results in microfont-dista-bench log"),
+                Err(reason) => Output::line(io, &format!("gpu: Dista atlas benchmark: {reason}")),
+            }
+        }
         (Some(cmd), action, None) if cmd.eq_ignore_ascii_case("frush") => {
             let action = action.unwrap_or("start");
             return frush(io, action);
@@ -562,8 +575,10 @@ use super::{
 use alloc::{string::String, vec::Vec};
 use trueos_time::{Duration, Timer};
 const REFRESH_NS: u64 = 250_000_000;
-const ACTIONS: [&str; 23] = [
+const ACTIONS: &[&str] = &[
     "status",
+    #[cfg(feature = "microfont_dista_bench")]
+    "dista-bench 7",
     "test broker",
     "test abi",
     "test guc",
@@ -683,8 +698,8 @@ async fn menu_task(target: MatrixTarget) {
             let lines = if menu {
                 picker.frame(
                     "GPU  diagnostics and controls",
-                    "Choose a diagnostic or Picasso/Font Rush action.",
-                    &ACTIONS,
+                    "Choose a diagnostic, Dista benchmark or Picasso/Font Rush action.",
+                    ACTIONS,
                     rows,
                 )
             } else {

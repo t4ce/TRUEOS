@@ -396,6 +396,8 @@ const SURFTYPE_NULL: u32 = 7;
 const SURFACE_FORMAT_RAW: u32 = 0x1FF;
 const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 192;
 const SURFACE_FORMAT_R8G8B8A8_UNORM: u32 = 199;
+// Intel ISL / Gen12 surface format: one normalized coverage byte per pixel.
+const SURFACE_FORMAT_R8_UNORM: u32 = 320;
 // Mesa ISL / gfx12 SURFACE_FORMAT: decode RGB before sampler filtering.
 const SURFACE_FORMAT_R8G8B8A8_UNORM_SRGB: u32 = 200;
 const SURFACE_FORMAT_R32G32B32A32_FLOAT: u32 = 0;

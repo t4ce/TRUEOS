@@ -361,6 +361,8 @@ impl ResidentScenePrimitiveTopology {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
+    /// Float3 procedural Dista tasks, expanded to positions by the vertex shader.
+    MicrofontDista,
     ClipPosition3UvTexture,
     VoxyHeadless,
     VoxyHeadlessTexture,
@@ -379,6 +381,11 @@ fn resident_scene_shader_pipeline(
     match (fragment_contract, has_texture) {
         (ResidentSceneFragmentContract::ConstantRgba, false) => {
             Ok(crate::intel::shader::triangle_pipeline_simd16())
+        }
+        (ResidentSceneFragmentContract::MicrofontDista, false)
+            if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 =>
+        {
+            Ok(crate::intel::shader::microfont_dista_pipeline())
         }
         (ResidentSceneFragmentContract::ClipPosition3UvTexture, true)
             if vertex_format == TriangleVertexFormat::PosUv && vertex_stride == 20 =>
@@ -789,6 +796,16 @@ impl ResidentSceneIncompleteStage {
     }
 }
 
+/// Hardware command-stream duration around a retired procedural Dista draw.
+/// The owning result field defines whether clear and target writeback are included.
+/// Always excludes CPU preparation, submission, and host completion wait.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentSceneGpuTimestamp {
+    pub(crate) ticks: u64,
+    pub(crate) hz: u64,
+    pub(crate) ns: u64,
+}
+
 #[derive(Debug)]
 pub(crate) struct ResidentSceneFrameResult {
     pub(crate) completed_draws: usize,
@@ -810,6 +827,18 @@ pub(crate) struct ResidentSceneFrameResult {
     /// submission. This excludes CPU batch preparation and LRC setup.
     pub(crate) gpu_poll_us: u64,
     pub(crate) gpu_poll_iters: u64,
+    /// Procedural vertex expansion and rasterization together, excluding clear
+    /// and final target cache writeback. These GPU stages overlap in flight.
+    pub(crate) gpu_timestamp: Option<ResidentSceneGpuTimestamp>,
+    /// Dista clear + draw + ordered color-target writeback. This proves the
+    /// RGBA8 backbuffer or R8 mask is ready for single-sample scenes without later
+    /// coverage/copy passes; it excludes any separately submitted resolve.
+    pub(crate) gpu_target_ready_timestamp: Option<ResidentSceneGpuTimestamp>,
+    /// Commands from target-begin through the fullscreen clear and setup
+    /// preceding the Dista draw, measured by the existing ordered markers.
+    pub(crate) gpu_clear_setup_timestamp: Option<ResidentSceneGpuTimestamp>,
+    /// Ordered color-target/tile writeback from draw-end to target-ready.
+    pub(crate) gpu_writeback_timestamp: Option<ResidentSceneGpuTimestamp>,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) resolve_us: u64,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1709,6 +1738,11 @@ fn stage_resident_scene_secondary(
         draw.vertex_format,
         draw.vertex_stride,
     )?;
+    if matches!(fragment_contract, ResidentSceneFragmentContract::MicrofontDista)
+        && !matches!(state_warm.device_id, 0x4680 | 0xa780)
+    {
+        return Err("microfont-dista-device");
+    }
     draw.sampled_texture = sampled_texture.map(|texture| TriangleSampledTextureBinding {
         gpu_addr: texture.storage.gpu_base(),
         width: texture.width,
@@ -2495,6 +2529,14 @@ mod picasso_vue_capture_tests {
 const PICASSO_PIPELINE_STATS_BEGIN_DWORD: usize = 34;
 const PICASSO_PIPELINE_STATS_END_DWORD: usize = 46;
 const PICASSO_PIPELINE_STATS_LIMIT_DWORD: usize = 58;
+// Four QWords after the OA reports and Picasso VUE diagnostics. Keep this
+// independently reserved: the pre-OA gap cannot hold all four boundaries.
+const DISTA_GPU_TARGET_BEGIN_DWORD: usize = PICASSO_VUE_RESULT_LIMIT_DWORD;
+const DISTA_GPU_TIMESTAMP_BEGIN_DWORD: usize = DISTA_GPU_TARGET_BEGIN_DWORD + 2;
+const DISTA_GPU_TIMESTAMP_END_DWORD: usize = DISTA_GPU_TIMESTAMP_BEGIN_DWORD + 2;
+const DISTA_GPU_TARGET_READY_DWORD: usize = DISTA_GPU_TIMESTAMP_END_DWORD + 2;
+const DISTA_GPU_TIMESTAMP_LIMIT_DWORD: usize = DISTA_GPU_TARGET_READY_DWORD + 2;
+const DISTA_GPU_TIMESTAMP_BITS: u32 = 36;
 const PICASSO_PIPELINE_STAT_REGISTERS: [crate::intel::stats::RenderStat; 6] = [
     crate::intel::stats::RenderStat::IaVerticesCount,
     crate::intel::stats::RenderStat::IaPrimitivesCount,
@@ -2509,7 +2551,86 @@ const _: () = {
     assert!(PICASSO_PIPELINE_STATS_END_DWORD == PICASSO_PIPELINE_STATS_BEGIN_DWORD + 12);
     assert!(PICASSO_PIPELINE_STATS_LIMIT_DWORD == PICASSO_PIPELINE_STATS_END_DWORD + 12);
     assert!(PICASSO_PIPELINE_STATS_LIMIT_DWORD <= RESULT_OA_BEGIN_DWORD);
+    assert!(DISTA_GPU_TARGET_BEGIN_DWORD >= PICASSO_VUE_RESULT_LIMIT_DWORD);
+    assert!(DISTA_GPU_TARGET_BEGIN_DWORD >= RESULT_OA_END_DWORD + RESULT_OA_REPORT_DWORDS);
+    assert!(DISTA_GPU_TARGET_BEGIN_DWORD.is_multiple_of(2));
+    assert!(DISTA_GPU_TIMESTAMP_BEGIN_DWORD.is_multiple_of(2));
+    assert!(DISTA_GPU_TIMESTAMP_BEGIN_DWORD == DISTA_GPU_TARGET_BEGIN_DWORD + 2);
+    assert!(DISTA_GPU_TIMESTAMP_END_DWORD == DISTA_GPU_TIMESTAMP_BEGIN_DWORD + 2);
+    assert!(DISTA_GPU_TARGET_READY_DWORD == DISTA_GPU_TIMESTAMP_END_DWORD + 2);
+    assert!(DISTA_GPU_TIMESTAMP_LIMIT_DWORD == DISTA_GPU_TARGET_READY_DWORD + 2);
+    assert!(DISTA_GPU_TIMESTAMP_LIMIT_DWORD * 4 <= WARM_RESULT_BYTES);
 };
+
+fn emit_dista_gpu_timestamp(
+    push: &mut impl FnMut(u32) -> Result<(), &'static str>,
+    result_ppgtt_gpu: u64,
+    dword: usize,
+) -> Result<(), &'static str> {
+    let destination = result_ppgtt_gpu + (dword * 4) as u64;
+    // Match the existing RCS timestamp path: CS stall orders completion of
+    // preceding 3D work. Post-sync writes one QWord through the PPGTT mapping.
+    for word in [
+        PIPE_CONTROL_CMD,
+        PIPE_CONTROL_FLUSH_ENABLE | PIPE_CONTROL_CS_STALL | (3 << 14),
+        destination as u32,
+        (destination >> 32) as u32,
+        0,
+        0,
+    ] {
+        push(word)?;
+    }
+    Ok(())
+}
+
+fn dista_gpu_timestamp_interval(
+    start: u64,
+    end: u64,
+    hz: u64,
+) -> Option<ResidentSceneGpuTimestamp> {
+    if start == 0 || end == 0 || hz == 0 {
+        return None;
+    }
+    let ticks = end.wrapping_sub(start) & ((1u64 << DISTA_GPU_TIMESTAMP_BITS) - 1);
+    // A draw must finish within half a timestamp epoch. Reject unwritten,
+    // reversed, or stale samples rather than treating them as a duration.
+    if ticks == 0 || ticks >= (1u64 << (DISTA_GPU_TIMESTAMP_BITS - 1)) {
+        return None;
+    }
+    let ns = ((u128::from(ticks) * 1_000_000_000 + u128::from(hz / 2)) / u128::from(hz))
+        .min(u128::from(u64::MAX)) as u64;
+    Some(ResidentSceneGpuTimestamp { ticks, hz, ns })
+}
+
+fn read_dista_gpu_timestamp_after_retire(
+    warm: RenderWarmState,
+    hz: u64,
+) -> (
+    Option<ResidentSceneGpuTimestamp>,
+    Option<ResidentSceneGpuTimestamp>,
+    Option<ResidentSceneGpuTimestamp>,
+    Option<ResidentSceneGpuTimestamp>,
+) {
+    if warm.result_virt.is_null() || warm.result_len < DISTA_GPU_TIMESTAMP_LIMIT_DWORD * 4 {
+        return (None, None, None, None);
+    }
+    let pointer = unsafe { warm.result_virt.add(DISTA_GPU_TARGET_BEGIN_DWORD * 4) };
+    let mut words = [0u32; 8];
+    crate::intel::dma_flush(pointer, core::mem::size_of_val(&words));
+    for (index, word) in words.iter_mut().enumerate() {
+        *word = unsafe { core::ptr::read_volatile(pointer.cast::<u32>().add(index)) };
+    }
+    let target_begin = u64::from(words[0]) | (u64::from(words[1]) << 32);
+    let draw_begin = u64::from(words[2]) | (u64::from(words[3]) << 32);
+    let draw_end = u64::from(words[4]) | (u64::from(words[5]) << 32);
+    let target_ready = u64::from(words[6]) | (u64::from(words[7]) << 32);
+    (
+        dista_gpu_timestamp_interval(draw_begin, draw_end, hz),
+        dista_gpu_timestamp_interval(target_begin, target_ready, hz),
+        dista_gpu_timestamp_interval(target_begin, draw_begin, hz),
+        dista_gpu_timestamp_interval(draw_end, target_ready, hz),
+    )
+}
 
 fn emit_picasso_pipeline_stat_snapshot(
     push: &mut impl FnMut(u32) -> Result<(), &'static str>,
@@ -2582,6 +2703,7 @@ fn encode_resident_scene_primary_batch(
     result_ppgtt_gpu: u64,
     secondary_ppgtt: bool,
     stats_first_secondary: Option<usize>,
+    timestamp_first_secondary: Option<usize>,
 ) -> Result<usize, &'static str> {
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
@@ -2596,6 +2718,7 @@ fn encode_resident_scene_primary_batch(
         result_ppgtt_gpu,
         secondary_ppgtt,
         stats_first_secondary,
+        timestamp_first_secondary,
         warm.result_len,
     )
 }
@@ -2607,8 +2730,20 @@ fn encode_resident_scene_primary_commands(
     result_ppgtt_gpu: u64,
     secondary_ppgtt: bool,
     stats_first_secondary: Option<usize>,
+    timestamp_first_secondary: Option<usize>,
     result_bytes: usize,
 ) -> Result<usize, &'static str> {
+    if let Some(first) = timestamp_first_secondary {
+        if first >= secondary_count {
+            return Err("dista-timestamp-scope");
+        }
+        if result_bytes < DISTA_GPU_TIMESTAMP_LIMIT_DWORD * 4
+            || result_ppgtt_gpu & 7 != 0
+            || result_ppgtt_gpu.checked_add((DISTA_GPU_TIMESTAMP_LIMIT_DWORD * 4) as u64).is_none()
+        {
+            return Err("dista-timestamp-result-range");
+        }
+    }
     if let Some(first) = stats_first_secondary {
         if first > secondary_count || !secondary_ppgtt {
             return Err("picasso-stat-scope");
@@ -2633,7 +2768,13 @@ fn encode_resident_scene_primary_commands(
     };
     let secondary_return_gpu =
         result_ggtt_gpu + (RESULT_SLOT_SECONDARY_RETURN_DWORD * core::mem::size_of::<u32>()) as u64;
+    if timestamp_first_secondary.is_some() {
+        emit_dista_gpu_timestamp(&mut push, result_ppgtt_gpu, DISTA_GPU_TARGET_BEGIN_DWORD)?;
+    }
     for secondary_index in 0..=secondary_count {
+        if timestamp_first_secondary == Some(secondary_index) {
+            emit_dista_gpu_timestamp(&mut push, result_ppgtt_gpu, DISTA_GPU_TIMESTAMP_BEGIN_DWORD)?;
+        }
         if stats_first_secondary == Some(secondary_index) {
             emit_picasso_pipeline_stat_snapshot(
                 &mut push,
@@ -2673,6 +2814,9 @@ fn encode_resident_scene_primary_commands(
                 .ok_or("scene-frame-secondary-count")?,
         )?;
     }
+    if timestamp_first_secondary.is_some() {
+        emit_dista_gpu_timestamp(&mut push, result_ppgtt_gpu, DISTA_GPU_TIMESTAMP_END_DWORD)?;
+    }
     if stats_first_secondary.is_some() {
         emit_picasso_pipeline_stat_snapshot(
             &mut push,
@@ -2698,6 +2842,13 @@ fn encode_resident_scene_primary_commands(
     push(0)?;
     push(0)?;
     push(0)?;
+
+    // The preceding ordered end-of-pipe flush makes the target's pixel bytes
+    // available before this timestamp. Keep the release cookie after it, so
+    // retirement also proves the timestamp was written for this submission.
+    if timestamp_first_secondary.is_some() {
+        emit_dista_gpu_timestamp(&mut push, result_ppgtt_gpu, DISTA_GPU_TARGET_READY_DWORD)?;
+    }
 
     // Retire the release with a second, ordered PIPE_CONTROL. The QWord
     // cookie is cleared before each submission; together with the saved HEAD
@@ -2726,7 +2877,7 @@ mod picasso_pipeline_stats_tests {
         let ppgtt = 0x2_0084_0000u64;
         let ggtt = 0x3_0094_0000u64;
         let bytes =
-            encode_resident_scene_primary_commands(&mut batch, 4, ggtt, ppgtt, true, Some(2), 4096)
+            encode_resident_scene_primary_commands(&mut batch, 4, ggtt, ppgtt, true, Some(2), None, 4096)
                 .unwrap();
         let expected_registers = [0x2310, 0x2318, 0x2320, 0x2338, 0x2340, 0x2348];
         let mut cursor = 0;
@@ -2822,7 +2973,7 @@ mod picasso_pipeline_stats_tests {
             let mut batch = [0xA5A5_A5A5; 512];
             assert!(
                 encode_resident_scene_primary_commands(
-                    &mut batch, 4, 0x940000, ppgtt, use_ppgtt, first, bytes
+                    &mut batch, 4, 0x940000, ppgtt, use_ppgtt, first, None, bytes
                 )
                 .is_err()
             );
@@ -2837,12 +2988,13 @@ mod picasso_pipeline_stats_tests {
                 0x840000,
                 true,
                 Some(2),
+                None,
                 232
             ),
             Ok(600)
         );
         let bytes = encode_resident_scene_primary_commands(
-            &mut batch, 4, 0x940000, 0x840000, true, None, 0,
+            &mut batch, 4, 0x940000, 0x840000, true, None, None, 0,
         )
         .unwrap();
         assert_eq!(bytes, 168);
@@ -2855,6 +3007,7 @@ mod picasso_pipeline_stats_tests {
                 0x840000,
                 true,
                 Some(2),
+                None,
                 232
             )
             .is_err()
@@ -2883,6 +3036,103 @@ mod picasso_pipeline_stats_tests {
         assert_eq!(picasso_pipeline_stats_delta(&words), Some(expected));
         assert_eq!(picasso_pipeline_stats_delta(&words[..23]), None);
     }
+
+    #[test]
+    fn dista_timestamps_bracket_clear_draw_and_target_writeback_in_ppgtt() {
+        for use_ppgtt in [false, true] {
+            for first_draw in [0, 1] {
+                let mut batch = [0u32; 256];
+                let result = 0x2_0084_0000u64;
+                let bytes = encode_resident_scene_primary_commands(
+                    &mut batch, 3, 0x3_0094_0000, result, use_ppgtt, None, Some(first_draw), 848,
+                ).unwrap();
+                let mut cursor = 0;
+                let mut secondaries = 0;
+                let mut timestamps = 0;
+                let mut color_released = false;
+                let mut completion_written = false;
+                let timestamp_dwords = [
+                    DISTA_GPU_TARGET_BEGIN_DWORD,
+                    DISTA_GPU_TIMESTAMP_BEGIN_DWORD,
+                    DISTA_GPU_TIMESTAMP_END_DWORD,
+                    DISTA_GPU_TARGET_READY_DWORD,
+                ];
+                while cursor < bytes / 4 {
+                    let packet = &batch[cursor..];
+                    if packet[0] & 0xFF80_0000 == MI_BATCH_BUFFER_START_GEN8 & 0xFF80_0000 {
+                        secondaries += 1;
+                        cursor += 3;
+                    } else if packet[0] == MI_STORE_DATA_IMM_GGTT_DW1 {
+                        cursor += 4;
+                    } else if packet[0] & 0xFFFF_0000 == 0x7A00_0000 {
+                        if packet[1] & (3 << 14) == 3 << 14 {
+                            assert_eq!(secondaries, [0, first_draw, 3, 3][timestamps]);
+                            assert_eq!(color_released, timestamps == 3);
+                            assert!(!completion_written);
+                            assert_eq!(packet[1], PIPE_CONTROL_FLUSH_ENABLE | PIPE_CONTROL_CS_STALL | (3 << 14));
+                            assert_eq!(packet[1] & (1 << 24), 0); // Destination uses PPGTT.
+                            let address = u64::from(packet[2]) | (u64::from(packet[3]) << 32);
+                            assert_eq!(address, result + timestamp_dwords[timestamps] as u64 * 4);
+                            assert_eq!(packet[4..6], [0, 0]);
+                            timestamps += 1;
+                        } else if packet[1] == PIPE_CONTROL_SCENE_COLOR_RELEASE_BITS {
+                            assert_eq!(timestamps, 3);
+                            assert!(!color_released);
+                            color_released = true;
+                        } else if packet[1] == PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS {
+                            assert_eq!(timestamps, 4);
+                            assert!(color_released);
+                            assert_eq!(packet[4..6], [RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+                                RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI]);
+                            completion_written = true;
+                        } else {
+                            panic!("unexpected Dista PIPE_CONTROL");
+                        }
+                        cursor += 6;
+                    } else {
+                        assert!(matches!(packet[0], MI_BATCH_BUFFER_END | MI_NOOP));
+                        cursor += 1;
+                    }
+                }
+                assert!(completion_written);
+                assert_eq!((timestamps, bytes), (4, 236));
+            }
+        }
+        assert!(DISTA_GPU_TARGET_BEGIN_DWORD >= PICASSO_VUE_RESULT_LIMIT_DWORD);
+        assert!(DISTA_GPU_TARGET_BEGIN_DWORD >= RESULT_OA_END_DWORD + RESULT_OA_REPORT_DWORDS);
+        assert_eq!(DISTA_GPU_TIMESTAMP_LIMIT_DWORD, 212);
+        assert!(DISTA_GPU_TIMESTAMP_LIMIT_DWORD * 4 <= WARM_RESULT_BYTES);
+    }
+
+    #[test]
+    fn dista_timestamp_validation_does_not_write_packets_on_error() {
+        for (first, result, bytes) in [
+            (3, 0x840000, 848),
+            (4, 0x840000, 848),
+            (1, 0x840000, 847),
+            (1, 0x840000, 248),
+            (1, 0x840004, 848),
+            (1, u64::MAX - 7, 848),
+        ] {
+            let mut batch = [0xA5A5_A5A5; 256];
+            assert!(encode_resident_scene_primary_commands(
+                &mut batch, 3, 0x940000, result, true, None, Some(first), bytes,
+            ).is_err());
+            assert!(batch.iter().all(|word| *word == 0xA5A5_A5A5));
+        }
+    }
+
+    #[test]
+    fn dista_timestamp_duration_uses_hardware_frequency_and_36_bit_wrap() {
+        assert_eq!(dista_gpu_timestamp_interval(7, 1927, 19_200_000),
+            Some(ResidentSceneGpuTimestamp { ticks: 1920, hz: 19_200_000, ns: 100_000 }));
+        let epoch = 1u64 << DISTA_GPU_TIMESTAMP_BITS;
+        assert_eq!(dista_gpu_timestamp_interval(epoch - 7, 5, 24_000_000),
+            Some(ResidentSceneGpuTimestamp { ticks: 12, hz: 24_000_000, ns: 500 }));
+        for (start, end, hz) in [(0, 1, 1), (1, 0, 1), (1, 2, 0), (2, 2, 1), (9, 8, 1), (1, epoch / 2 + 1, 1)] {
+            assert_eq!(dista_gpu_timestamp_interval(start, end, hz), None);
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -2891,6 +3141,10 @@ struct ResidentSceneGeometryResult {
     prepare_us: u64,
     gpu_poll_us: u64,
     gpu_poll_iters: u64,
+    gpu_timestamp: Option<ResidentSceneGpuTimestamp>,
+    gpu_target_ready_timestamp: Option<ResidentSceneGpuTimestamp>,
+    gpu_clear_setup_timestamp: Option<ResidentSceneGpuTimestamp>,
+    gpu_writeback_timestamp: Option<ResidentSceneGpuTimestamp>,
     pipeline_stats: Option<[u64; 6]>,
     vue_capture: bool,
 }
@@ -2923,9 +3177,18 @@ fn submit_resident_scene_geometry_batched(
     }
     if !matches!(
         render_target_surface_format,
-        SURFACE_FORMAT_R8G8B8A8_UNORM | SURFACE_FORMAT_B8G8R8A8_UNORM
+        SURFACE_FORMAT_R8G8B8A8_UNORM | SURFACE_FORMAT_B8G8R8A8_UNORM | SURFACE_FORMAT_R8_UNORM
     ) {
         return Err("scene-frame-target-format");
+    }
+    // R8 is admitted only for the dedicated opaque Dista mask producer.
+    // Other scene paths retain their RGBA/BGRA target contract.
+    if render_target_surface_format == SURFACE_FORMAT_R8_UNORM
+        && (draws.is_empty() || clear != Some([0; 4]) || opaque_depth_enabled
+            || depth_config.is_some() || carrier.is_some() || drawable_depth.is_some()
+            || draws.iter().any(|draw| !resident_dista_mask_draw_is_valid(draw)))
+    {
+        return Err("scene-frame-mask-contract");
     }
     // Legacy scene HiZ needs its initialization pass in the same submission.
     // Drawable-owned persistent depth uses plain D32 without shared HiZ data.
@@ -2996,6 +3259,10 @@ fn submit_resident_scene_geometry_batched(
         )?;
         secondary_count = 1;
     }
+    let dista_first_secondary = (!draws.is_empty()
+        && draws.iter().all(|draw| matches!(draw.fragment_contract,
+            ResidentSceneFragmentContract::MicrofontDista)))
+        .then_some(secondary_count);
     for scene_draw in draws {
         if opaque_depth_enabled && scene_draw.rgba[3] == 0 {
             continue;
@@ -3093,6 +3360,7 @@ fn submit_resident_scene_geometry_batched(
         GPU_VA_RESULT_BASE,
         carrier.is_some(),
         None,
+        dista_first_secondary.filter(|first| *first < secondary_count),
     )?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
@@ -3136,11 +3404,26 @@ fn submit_resident_scene_geometry_batched(
     if !completed && carrier.is_none() {
         record_render_engine_after_nonretired_submit(dev, submit_name);
     }
+    let (
+        gpu_timestamp,
+        gpu_target_ready_timestamp,
+        gpu_clear_setup_timestamp,
+        gpu_writeback_timestamp,
+    ) = if completed && dista_first_secondary.is_some() {
+        read_dista_gpu_timestamp_after_retire(
+            warm,
+            u64::from(crate::intel::gpgpu::direct_rcs_timestamp_frequency_hz(dev)),
+        )
+    } else { (None, None, None, None) };
     Ok(ResidentSceneGeometryResult {
         completed,
         prepare_us,
         gpu_poll_us,
         gpu_poll_iters,
+        gpu_timestamp,
+        gpu_target_ready_timestamp,
+        gpu_clear_setup_timestamp,
+        gpu_writeback_timestamp,
         pipeline_stats: None,
         vue_capture: false,
     })
@@ -3432,6 +3715,7 @@ fn submit_resident_churn_forward_geometry_batched(
         GPU_VA_RESULT_BASE,
         carrier.is_some(),
         capture_pipeline_stats.then_some(1 + transform_secondary_count),
+        None,
     )?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if transform_handoff.is_some_and(RetainedGraphicsHandoff::uses_native_matrices) {
@@ -3556,6 +3840,10 @@ fn submit_resident_churn_forward_geometry_batched(
         prepare_us,
         gpu_poll_us,
         gpu_poll_iters,
+        gpu_timestamp: None,
+        gpu_target_ready_timestamp: None,
+        gpu_clear_setup_timestamp: None,
+        gpu_writeback_timestamp: None,
         pipeline_stats,
         vue_capture: vue_capture_bytes.is_some(),
     })
@@ -4193,6 +4481,10 @@ fn submit_resident_scene_capture_inner_for_carrier(
             geometry_prepare_us: geometry.prepare_us,
             gpu_poll_us: geometry.gpu_poll_us,
             gpu_poll_iters: geometry.gpu_poll_iters,
+            gpu_timestamp: geometry.gpu_timestamp,
+            gpu_target_ready_timestamp: geometry.gpu_target_ready_timestamp,
+            gpu_clear_setup_timestamp: geometry.gpu_clear_setup_timestamp,
+            gpu_writeback_timestamp: geometry.gpu_writeback_timestamp,
             resolve_us: resolve_finished_ns.saturating_sub(geometry_finished_ns) / 1_000,
             coverage_us: coverage_finished_ns.saturating_sub(resolve_finished_ns) / 1_000,
             present_copy_us: present_copy_finished_ns.saturating_sub(present_copy_started_ns)

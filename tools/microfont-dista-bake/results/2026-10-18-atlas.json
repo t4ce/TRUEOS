@@ -1,0 +1,393 @@
+{
+  "schema": "microfont-dista-measured-atlas/v1",
+  "date": "2026-10-18",
+  "timezone": "Europe/Berlin",
+  "units": "nanoseconds unless a field names another unit",
+  "device": "8086:4680",
+  "shader_source_sha256": "5c3b3840f1404878992c912d66ba4b337b48ce5fbd53e0a314629b45a5ed9264",
+  "scope": {
+    "slots": 95,
+    "nonblank_glyphs": 94,
+    "codepoints": "U+0020..U+007E",
+    "glyph_size_px": [
+      96,
+      176
+    ],
+    "atlas_size_px": [
+      1536,
+      1056
+    ],
+    "destination_bytes_per_shape": 6488064,
+    "shapes": [
+      "Meso",
+      "Lean"
+    ],
+    "warm_samples_per_case_per_matrix": 7,
+    "window": false,
+    "pixel_readback": false,
+    "scanout": false,
+    "end": "retired RGBA8 back buffer"
+  },
+  "builds": [
+    {
+      "name": "initial",
+      "capture_id": "69fcb7945096244e3c98a3d30c06a1e3",
+      "runtime_elf_sha256": "d8c1bed4c6e8c76b5bcad3b503db1091ee1e4a497d9f1092ca3b23ca5bdd9e31",
+      "iso_sha256": "3301ac5adf07e80ba073c043dfe5b58505844346c33f24528c73dd30f3b26820",
+      "matrices": 2,
+      "raw_logs": [
+        "atlas-run1.log",
+        "atlas-run2.log"
+      ],
+      "boot_log": "initial-boot.log"
+    },
+    {
+      "name": "phases",
+      "capture_id": "f18ea301beb73f96d345a48736514187",
+      "runtime_elf_sha256": "ed51f14ce2c065b6c891ce7f7c21d2f1fd0b1c83d15e7127d0538e4fde5878f6",
+      "iso_sha256": "bf05f867cd92e98d6c6844bcf96f12d139cf7938c6bec54ae7d2a0e80d4e4c87",
+      "matrices": 1,
+      "raw_logs": [
+        "atlas-phases-run1.log"
+      ],
+      "boot_log": "phases-boot.log",
+      "reset_receipt": "phases-reset-receipt.json"
+    }
+  ],
+  "validation": {
+    "matrices": 3,
+    "render_samples": 288,
+    "first_samples": 36,
+    "warm_samples": 252,
+    "setup_cleanup_records": 36,
+    "missing_or_duplicate_samples": 0,
+    "geometry_count_mismatches": 0,
+    "incomplete_cleanup_records": 0,
+    "missing_gpu_timestamps": 0,
+    "errors": 0,
+    "phase_partition_max_rounding_difference_ns": 1
+  },
+  "aggregation": "Each phase case reports the median of seven warm samples. Combined sheets sum the separately measured Meso and Lean medians; they are not a measured single draw. Initial variant comparisons pool 14 warm samples per variant/case from the first build only.",
+  "fine_direct_first_both_atlases_ns": [
+    57830477,
+    61460240
+  ],
+  "phase_case_medians": [
+    {
+      "variant": "direct",
+      "quality": "Draft",
+      "shape": "Meso",
+      "warm_samples": 7,
+      "submitted_triangles": 26196,
+      "active_union_triangles": 18110,
+      "gpu_clear_setup_ns": 8172865,
+      "gpu_draw_ns": 2909531,
+      "gpu_writeback_ns": 9323,
+      "gpu_rgba_ready_ns": 11091719,
+      "wall_ns": 13179909
+    },
+    {
+      "variant": "direct",
+      "quality": "Draft",
+      "shape": "Lean",
+      "warm_samples": 7,
+      "submitted_triangles": 20988,
+      "active_union_triangles": 12902,
+      "gpu_clear_setup_ns": 8172865,
+      "gpu_draw_ns": 1571094,
+      "gpu_writeback_ns": 9167,
+      "gpu_rgba_ready_ns": 9753021,
+      "wall_ns": 11645164
+    },
+    {
+      "variant": "loop",
+      "quality": "Draft",
+      "shape": "Meso",
+      "warm_samples": 7,
+      "submitted_triangles": 26196,
+      "active_union_triangles": 18110,
+      "gpu_clear_setup_ns": 8172813,
+      "gpu_draw_ns": 2946563,
+      "gpu_writeback_ns": 9323,
+      "gpu_rgba_ready_ns": 11128750,
+      "wall_ns": 18354394
+    },
+    {
+      "variant": "loop",
+      "quality": "Draft",
+      "shape": "Lean",
+      "warm_samples": 7,
+      "submitted_triangles": 20988,
+      "active_union_triangles": 12902,
+      "gpu_clear_setup_ns": 8172813,
+      "gpu_draw_ns": 1615260,
+      "gpu_writeback_ns": 9167,
+      "gpu_rgba_ready_ns": 9797083,
+      "wall_ns": 17047750
+    },
+    {
+      "variant": "direct",
+      "quality": "Fine",
+      "shape": "Meso",
+      "warm_samples": 7,
+      "submitted_triangles": 31404,
+      "active_union_triangles": 23318,
+      "gpu_clear_setup_ns": 8172813,
+      "gpu_draw_ns": 3013750,
+      "gpu_writeback_ns": 9271,
+      "gpu_rgba_ready_ns": 11195833,
+      "wall_ns": 18415976
+    },
+    {
+      "variant": "direct",
+      "quality": "Fine",
+      "shape": "Lean",
+      "warm_samples": 7,
+      "submitted_triangles": 26196,
+      "active_union_triangles": 18110,
+      "gpu_clear_setup_ns": 8172813,
+      "gpu_draw_ns": 1882240,
+      "gpu_writeback_ns": 9167,
+      "gpu_rgba_ready_ns": 10064531,
+      "wall_ns": 12150168
+    },
+    {
+      "variant": "loop",
+      "quality": "Fine",
+      "shape": "Meso",
+      "warm_samples": 7,
+      "submitted_triangles": 31404,
+      "active_union_triangles": 23318,
+      "gpu_clear_setup_ns": 8172865,
+      "gpu_draw_ns": 3038646,
+      "gpu_writeback_ns": 9219,
+      "gpu_rgba_ready_ns": 11220677,
+      "wall_ns": 13514971
+    },
+    {
+      "variant": "loop",
+      "quality": "Fine",
+      "shape": "Lean",
+      "warm_samples": 7,
+      "submitted_triangles": 26196,
+      "active_union_triangles": 18110,
+      "gpu_clear_setup_ns": 8172865,
+      "gpu_draw_ns": 1924635,
+      "gpu_writeback_ns": 9219,
+      "gpu_rgba_ready_ns": 10106771,
+      "wall_ns": 17424491
+    },
+    {
+      "variant": "direct",
+      "quality": "High",
+      "shape": "Meso",
+      "warm_samples": 7,
+      "submitted_triangles": 41820,
+      "active_union_triangles": 33734,
+      "gpu_clear_setup_ns": 8172865,
+      "gpu_draw_ns": 3428750,
+      "gpu_writeback_ns": 9271,
+      "gpu_rgba_ready_ns": 11610938,
+      "wall_ns": 18913946
+    },
+    {
+      "variant": "direct",
+      "quality": "High",
+      "shape": "Lean",
+      "warm_samples": 7,
+      "submitted_triangles": 31404,
+      "active_union_triangles": 23318,
+      "gpu_clear_setup_ns": 8172865,
+      "gpu_draw_ns": 1882760,
+      "gpu_writeback_ns": 9323,
+      "gpu_rgba_ready_ns": 10065000,
+      "wall_ns": 17358173
+    },
+    {
+      "variant": "loop",
+      "quality": "High",
+      "shape": "Meso",
+      "warm_samples": 7,
+      "submitted_triangles": 41820,
+      "active_union_triangles": 33734,
+      "gpu_clear_setup_ns": 8172813,
+      "gpu_draw_ns": 3449115,
+      "gpu_writeback_ns": 9219,
+      "gpu_rgba_ready_ns": 11631094,
+      "wall_ns": 13715769
+    },
+    {
+      "variant": "loop",
+      "quality": "High",
+      "shape": "Lean",
+      "warm_samples": 7,
+      "submitted_triangles": 31404,
+      "active_union_triangles": 23318,
+      "gpu_clear_setup_ns": 8173125,
+      "gpu_draw_ns": 1915938,
+      "gpu_writeback_ns": 9271,
+      "gpu_rgba_ready_ns": 10098333,
+      "wall_ns": 11950999
+    }
+  ],
+  "phase_both_weights_sum_of_medians": [
+    {
+      "variant": "direct",
+      "quality": "Draft",
+      "submitted_triangles": 47184,
+      "active_union_triangles": 31012,
+      "gpu_clear_setup_ns": 16345730,
+      "gpu_draw_ns": 4480625,
+      "gpu_writeback_ns": 18490,
+      "gpu_rgba_ready_ns": 20844740,
+      "wall_ns": 24825073
+    },
+    {
+      "variant": "loop",
+      "quality": "Draft",
+      "submitted_triangles": 47184,
+      "active_union_triangles": 31012,
+      "gpu_clear_setup_ns": 16345626,
+      "gpu_draw_ns": 4561823,
+      "gpu_writeback_ns": 18490,
+      "gpu_rgba_ready_ns": 20925833,
+      "wall_ns": 35402144
+    },
+    {
+      "variant": "direct",
+      "quality": "Fine",
+      "submitted_triangles": 57600,
+      "active_union_triangles": 41428,
+      "gpu_clear_setup_ns": 16345626,
+      "gpu_draw_ns": 4895990,
+      "gpu_writeback_ns": 18438,
+      "gpu_rgba_ready_ns": 21260364,
+      "wall_ns": 30566144
+    },
+    {
+      "variant": "loop",
+      "quality": "Fine",
+      "submitted_triangles": 57600,
+      "active_union_triangles": 41428,
+      "gpu_clear_setup_ns": 16345730,
+      "gpu_draw_ns": 4963281,
+      "gpu_writeback_ns": 18438,
+      "gpu_rgba_ready_ns": 21327448,
+      "wall_ns": 30939462
+    },
+    {
+      "variant": "direct",
+      "quality": "High",
+      "submitted_triangles": 73224,
+      "active_union_triangles": 57052,
+      "gpu_clear_setup_ns": 16345730,
+      "gpu_draw_ns": 5311510,
+      "gpu_writeback_ns": 18594,
+      "gpu_rgba_ready_ns": 21675938,
+      "wall_ns": 36272119
+    },
+    {
+      "variant": "loop",
+      "quality": "High",
+      "submitted_triangles": 73224,
+      "active_union_triangles": 57052,
+      "gpu_clear_setup_ns": 16345938,
+      "gpu_draw_ns": 5365053,
+      "gpu_writeback_ns": 18490,
+      "gpu_rgba_ready_ns": 21729427,
+      "wall_ns": 25666768
+    }
+  ],
+  "initial_direct_vs_loop": [
+    {
+      "quality": "Draft",
+      "shape": "Meso",
+      "warm_samples_per_variant": 14,
+      "loop_draw_ns": 2947552.0,
+      "direct_draw_ns": 2909427.0,
+      "saved_draw_ns": 38125.0,
+      "saved_draw_percent": 1.2934462224924277,
+      "loop_rgba_ready_ns": 11129817.5,
+      "direct_rgba_ready_ns": 11091718.5,
+      "saved_rgba_ready_ns": 38099.0,
+      "saved_rgba_ready_percent": 0.3423146875499082
+    },
+    {
+      "quality": "Draft",
+      "shape": "Lean",
+      "warm_samples_per_variant": 14,
+      "loop_draw_ns": 1615807.5,
+      "direct_draw_ns": 1571354.5,
+      "saved_draw_ns": 44453.0,
+      "saved_draw_percent": 2.751132173851155,
+      "loop_rgba_ready_ns": 9797864.5,
+      "direct_rgba_ready_ns": 9753464.0,
+      "saved_rgba_ready_ns": 44400.5,
+      "saved_rgba_ready_percent": 0.4531650748997396
+    },
+    {
+      "quality": "Fine",
+      "shape": "Meso",
+      "warm_samples_per_variant": 14,
+      "loop_draw_ns": 3039922.0,
+      "direct_draw_ns": 3013750.0,
+      "saved_draw_ns": 26172.0,
+      "saved_draw_percent": 0.8609431426201067,
+      "loop_rgba_ready_ns": 11222005.0,
+      "direct_rgba_ready_ns": 11195833.0,
+      "saved_rgba_ready_ns": 26172.0,
+      "saved_rgba_ready_percent": 0.23322035589896814
+    },
+    {
+      "quality": "Fine",
+      "shape": "Lean",
+      "warm_samples_per_variant": 14,
+      "loop_draw_ns": 1924115.0,
+      "direct_draw_ns": 1883281.0,
+      "saved_draw_ns": 40834.0,
+      "saved_draw_percent": 2.1222224243353436,
+      "loop_rgba_ready_ns": 10106224.0,
+      "direct_rgba_ready_ns": 10065260.0,
+      "saved_rgba_ready_ns": 40964.0,
+      "saved_rgba_ready_percent": 0.4053343761230703
+    },
+    {
+      "quality": "High",
+      "shape": "Meso",
+      "warm_samples_per_variant": 14,
+      "loop_draw_ns": 3448750.0,
+      "direct_draw_ns": 3428489.5,
+      "saved_draw_ns": 20260.5,
+      "saved_draw_percent": 0.5874737223631751,
+      "loop_rgba_ready_ns": 11631016.0,
+      "direct_rgba_ready_ns": 11610651.0,
+      "saved_rgba_ready_ns": 20365.0,
+      "saved_rgba_ready_percent": 0.1750921845520632
+    },
+    {
+      "quality": "High",
+      "shape": "Lean",
+      "warm_samples_per_variant": 14,
+      "loop_draw_ns": 1916276.0,
+      "direct_draw_ns": 1879453.5,
+      "saved_draw_ns": 36822.5,
+      "saved_draw_percent": 1.9215655782361205,
+      "loop_rgba_ready_ns": 10098385.0,
+      "direct_rgba_ready_ns": 10061588.5,
+      "saved_rgba_ready_ns": 36796.5,
+      "saved_rgba_ready_percent": 0.3643800469084908
+    }
+  ],
+  "phase_overhead_warm": {
+    "gpu_clear_setup_ns": {
+      "median_ns": 8172865.0,
+      "min_ns": 8172708,
+      "max_ns": 8173281
+    },
+    "gpu_writeback_ns": {
+      "median_ns": 9271.0,
+      "min_ns": 9063,
+      "max_ns": 12396
+    }
+  }
+}

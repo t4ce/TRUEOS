@@ -4,7 +4,7 @@
 The freestanding kernel has ``test = false``. Compile its real shader module
 and the pure render helpers with their existing Rust tests, without linking
 hardware code or maintaining a second implementation of the state encoding.
-Run from any directory with ``python3 tools/test_clip_position3_uv_texture.py``.
+Run from any directory with ``python3 tools/testpy/test_clip_position3_uv_texture.py``.
 """
 
 from pathlib import Path
@@ -139,27 +139,31 @@ def harness_source() -> str:
     )
 
 
-def main() -> None:
-    verify_voxy_texture_composition_metadata()
+def run_contracts() -> None:
+    """Compile the real shader module with its Microfont and spin dependencies."""
     source = harness_source()
     with tempfile.TemporaryDirectory(prefix="trueos-clip-uv-tests-") as temporary:
         directory = Path(temporary)
-        rust_source = directory / "host_tests.rs"
-        executable = directory / "host_tests"
-        rust_source.write_text(source)
+        (directory / "src").mkdir()
+        (directory / "src/lib.rs").write_text(source)
+        manifest = directory / "Cargo.toml"
+        manifest.write_text(
+            '[package]\nname="trueos-clip-uv-tests"\nversion="0.0.0"\nedition="2024"\n'
+            '[dependencies]\n'
+            f'microfont={{path={json.dumps(str(ROOT / "vendor/microfont"))},default-features=false,features=["raster"]}}\n'
+            'spin={version="=0.10.1",default-features=false,features=["lazy"]}\n'
+        )
         subprocess.run(
-            [
-                "rustc",
-                "--edition=2024",
-                "--test",
-                str(rust_source),
-                "-o",
-                str(executable),
-            ],
-            cwd=ROOT,
+            ["cargo", "test", "--offline", "--manifest-path", str(manifest),
+             "--target", "x86_64-unknown-linux-gnu", "--quiet"],
+            cwd=directory,
             check=True,
         )
-        subprocess.run([str(executable)], cwd=ROOT, check=True)
+
+
+def main() -> None:
+    verify_voxy_texture_composition_metadata()
+    run_contracts()
 
 
 if __name__ == "__main__":

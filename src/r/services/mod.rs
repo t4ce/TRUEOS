@@ -15,6 +15,11 @@ pub mod media_service;
 pub(crate) mod microfont_log_service;
 pub(crate) mod microfont_raster_preview;
 pub(crate) mod microfont_triangle_preview;
+pub(crate) mod microfont_dista_tasks;
+#[cfg(feature = "microfont_dista_bench")]
+pub(crate) mod microfont_dista_bench;
+#[cfg(feature = "microfont_dista_bench")]
+mod microfont_dista_validate;
 pub mod mouse_motion_service;
 pub(crate) mod pxeproc_service;
 pub(crate) mod oceancache;

@@ -1318,7 +1318,7 @@ fn direct_rcs_timestamp_interval_us(start: u64, end: u64, frequency_hz: u64) -> 
     Some((ticks, direct_rcs_timestamp_ticks_to_us(ticks, frequency_hz)))
 }
 
-fn direct_rcs_timestamp_frequency_hz(dev: super::Dev) -> u32 {
+pub(crate) fn direct_rcs_timestamp_frequency_hz(dev: super::Dev) -> u32 {
     const CTC_MODE_MMIO: usize = 0x0A26C;
     const CTC_SOURCE_DIVIDE_LOGIC: u32 = 1;
     const RPM_CONFIG0_MMIO: usize = 0x00D00;
