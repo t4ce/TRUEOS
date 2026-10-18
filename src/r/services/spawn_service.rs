@@ -44,7 +44,7 @@ define_started_flags!(
     FONT_WARM_POOL_STARTED,
     FONT_PLAN_SERVICE_STARTED,
     FONT_KERNEL_SERVICE_STARTED,
-    MICROFONT_MOON_STARTED,
+    MICROFONT_RASTER_PREVIEW_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
     TTSTT_CAPTURE_WRITER_STARTED,
     LUMEN_BOOT_WARM_STARTED,
@@ -332,11 +332,11 @@ pub(crate) fn retry_font_plan_pool_autostart() {
     FONT_PLAN_SERVICE_STARTED.store(false, Ordering::Release);
 }
 
-fn spawn_microfont_moon(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_| super::microfonttothemoon::microfonttothemoon_task())
+fn spawn_microfont_raster_preview(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| super::microfont_raster_preview::microfont_raster_preview_task())
 }
 
-fn microfont_moon_gate() -> bool {
+fn microfont_raster_preview_gate() -> bool {
     crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some()
 }
 
@@ -1464,12 +1464,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_font_plan_pool,
     ),
     TaskSpec::enabled_gated(
-        "microfonttothemoon",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+        "microfont-raster-preview",
+        crate::r::readiness::UI4_COMPOSITOR_READY
             | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        microfont_moon_gate,
-        &MICROFONT_MOON_STARTED,
-        spawn_microfont_moon,
+        microfont_raster_preview_gate,
+        &MICROFONT_RASTER_PREVIEW_STARTED,
+        spawn_microfont_raster_preview,
     ),
     TaskSpec::enabled_gated(
         "font-kernel-service",

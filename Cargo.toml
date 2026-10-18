@@ -142,7 +142,7 @@ half = { workspace = true }
 skrifa = { version = "0.44.0", default-features = false, features = ["libm"] }
 hashbrown = { version = "0.17.0", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
-microfont = { path = "vendor/microfont" }
+microfont = { path = "vendor/microfont", features = ["raster"] }
 object = { version = "0.39.1", default-features = false, features = ["read_core", "elf"] }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-width = { version = "0.2.2", default-features = false }

@@ -13,7 +13,7 @@ pub(crate) mod image_open_service;
 pub mod keyboard_control_service;
 pub mod media_service;
 pub(crate) mod microfont_log_service;
-pub(crate) mod microfonttothemoon;
+pub(crate) mod microfont_raster_preview;
 pub mod mouse_motion_service;
 pub(crate) mod pxeproc_service;
 pub(crate) mod oceancache;
