@@ -132,10 +132,6 @@ CARGO_BUILD_FLAGS ?=
 CARGO_GFX_FLAGS =
 TRUEOS_TTSTT_HOST_TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
 TRUEOS_TTSTT_TARGET_DIR ?= tools/trueos-ttstt/target
-MICROFONT_DISTA_PYTHON ?= python3
-# Empty selects bake.py's local Mesa discovery. Override for another compatible
-# compiler build; current content-verified artifacts require no Mesa toolchain.
-MICROFONT_DISTA_MESA_BUILD ?=
 
 INTEL_GPU_BAKERY_DIR := tools/intel-gpu-bakery
 INTEL_GPU_CPP_ARTIFACT_DIR := crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
@@ -195,13 +191,7 @@ trueos-ttstt-host:
 trueos-ttstt-ubuntu:
 	$(MAKE) --no-print-directory trueos-ttstt-host TRUEOS_TTSTT_HOST_TARGET=x86_64-unknown-linux-gnu
 
-# The seed table is embedded in native shader code. Always check its content
-# before Cargo reads generated Rust; unchanged inputs take the no-toolchain path.
-.PHONY: microfont-dista-shader
-microfont-dista-shader:
-	$(MICROFONT_DISTA_PYTHON) tools/microfont-dista-bake/bake.py --ensure-current $(if $(strip $(MICROFONT_DISTA_MESA_BUILD)),--mesa-build "$(MICROFONT_DISTA_MESA_BUILD)")
-
-kernel: microfont-dista-shader $(if $(filter 1,$(ENABLE_BUILDINS)),buildins) empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
+kernel: $(if $(filter 1,$(ENABLE_BUILDINS)),buildins) empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
 	TRUEOS_BLUEPRINTS_DIR="$(abspath $(BLUEPRINTS_DIR))" TRUEOS_ENABLE_BUILDINS=$(ENABLE_BUILDINS) TRUEOS_REQUIRE_BUILDINS=$(ENABLE_BUILDINS) cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 	$(MAKE) --no-print-directory INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
 

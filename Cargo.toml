@@ -78,15 +78,12 @@ test = false
 bench = false
 
 [features]
-default = ["trueos_lumen", "trueos_h264_encode_stream", "trueos_task_profile", "wc3", "microfont_dista_bench"]
+default = ["trueos_lumen", "trueos_h264_encode_stream", "trueos_task_profile", "wc3"]
 trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
 wc3 = []
-# Included by plain `make iso`; runs only on an explicit Shell3 request.
-# No startup task or visible window.
-microfont_dista_bench = []
 # Compatibility experiments are excluded from the normal VMX lifecycle.
 # RAM pause/resume does not require checkpoint storage or replication.
 legacy_vm_checkpoint = []

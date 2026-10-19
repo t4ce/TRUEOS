@@ -361,8 +361,6 @@ impl ResidentScenePrimitiveTopology {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
-    /// Float3 procedural Dista tasks, expanded to positions by the vertex shader.
-    MicrofontDista,
     ClipPosition3UvTexture,
     VoxyHeadless,
     VoxyHeadlessTexture,
@@ -381,11 +379,6 @@ fn resident_scene_shader_pipeline(
     match (fragment_contract, has_texture) {
         (ResidentSceneFragmentContract::ConstantRgba, false) => {
             Ok(crate::intel::shader::triangle_pipeline_simd16())
-        }
-        (ResidentSceneFragmentContract::MicrofontDista, false)
-            if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 =>
-        {
-            Ok(crate::intel::shader::microfont_dista_pipeline())
         }
         (ResidentSceneFragmentContract::ClipPosition3UvTexture, true)
             if vertex_format == TriangleVertexFormat::PosUv && vertex_stride == 20 =>
@@ -1738,11 +1731,6 @@ fn stage_resident_scene_secondary(
         draw.vertex_format,
         draw.vertex_stride,
     )?;
-    if matches!(fragment_contract, ResidentSceneFragmentContract::MicrofontDista)
-        && !matches!(state_warm.device_id, 0x4680 | 0xa780)
-    {
-        return Err("microfont-dista-device");
-    }
     draw.sampled_texture = sampled_texture.map(|texture| TriangleSampledTextureBinding {
         gpu_addr: texture.storage.gpu_base(),
         width: texture.width,
@@ -3181,14 +3169,8 @@ fn submit_resident_scene_geometry_batched(
     ) {
         return Err("scene-frame-target-format");
     }
-    // R8 is admitted only for the dedicated opaque Dista mask producer.
-    // Other scene paths retain their RGBA/BGRA target contract.
-    if render_target_surface_format == SURFACE_FORMAT_R8_UNORM
-        && (draws.is_empty() || clear != Some([0; 4]) || opaque_depth_enabled
-            || depth_config.is_some() || carrier.is_some() || drawable_depth.is_some()
-            || draws.iter().any(|draw| !resident_dista_mask_draw_is_valid(draw)))
-    {
-        return Err("scene-frame-mask-contract");
+    if render_target_surface_format == SURFACE_FORMAT_R8_UNORM {
+        return Err("scene-frame-target-format");
     }
     // Legacy scene HiZ needs its initialization pass in the same submission.
     // Drawable-owned persistent depth uses plain D32 without shared HiZ data.
@@ -3259,10 +3241,7 @@ fn submit_resident_scene_geometry_batched(
         )?;
         secondary_count = 1;
     }
-    let dista_first_secondary = (!draws.is_empty()
-        && draws.iter().all(|draw| matches!(draw.fragment_contract,
-            ResidentSceneFragmentContract::MicrofontDista)))
-        .then_some(secondary_count);
+    let dista_first_secondary: Option<usize> = None;
     for scene_draw in draws {
         if opaque_depth_enabled && scene_draw.rgba[3] == 0 {
             continue;

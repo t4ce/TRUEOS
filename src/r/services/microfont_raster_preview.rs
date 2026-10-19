@@ -115,10 +115,10 @@ async fn show_once() -> Result<(), &'static str> {
 }
 
 fn paint_once(frame: FrameHandle) -> PaintResult {
-    let mut vertices = Vec::with_capacity(microfont::raster::BOX_DRAW_QUAD_COUNT * 4);
-    let mut indices = Vec::with_capacity(microfont::raster::BOX_DRAW_QUAD_COUNT * 6);
+    let mut vertices = Vec::with_capacity(microfont::raster_quad::BOX_DRAW_QUAD_COUNT * 4);
+    let mut indices = Vec::with_capacity(microfont::raster_quad::BOX_DRAW_QUAD_COUNT * 6);
     for (index, &(ch, _)) in microfont::BOX_DRAW_SYMBOLS.iter().enumerate() {
-        let Some(quads) = microfont::raster::boxdraw_quad_slice(ch) else {
+        let Some(quads) = microfont::raster_quad::boxdraw_quad_slice(ch) else {
             continue;
         };
         let x = (index % 16) as f32 * 2.0 * microfont::FWIDTH as f32 * SCALE as f32;
@@ -136,7 +136,7 @@ fn paint_once(frame: FrameHandle) -> PaintResult {
         }
     }
     for (index, &(ch, _)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
-        let Some(quads) = microfont::raster::block_quad_slice(ch) else {
+        let Some(quads) = microfont::raster_quad::block_quad_slice(ch) else {
             continue;
         };
         let x = (index % 16) as f32 * 2.0 * microfont::FWIDTH as f32 * SCALE as f32;
@@ -163,29 +163,27 @@ fn paint_once(frame: FrameHandle) -> PaintResult {
     Ok(quads)
 }
 
-/// Shared direct resident-triangle publication, used by both preview windows.
+/// Direct resident quad publication; lines share the primitive submission below.
 /// On uncertain retirement the mesh and destination lease remain quarantined.
 pub(super) fn paint_triangles(
     frame: FrameHandle,
     vertices: &[[f32; 3]],
     indices: &[u32],
 ) -> PaintResult {
-    paint_triangles_with_contract(
-        frame, vertices, indices,
-        crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
-    )
+    paint_primitives(frame, vertices, indices,
+        crate::intel::render::ResidentScenePrimitiveTopology::TriangleList)
 }
 
-pub(super) fn paint_triangles_with_contract(
+pub(super) fn paint_primitives(
     frame: FrameHandle,
     vertices: &[[f32; 3]],
     indices: &[u32],
-    fragment_contract: crate::intel::render::ResidentSceneFragmentContract,
+    topology: crate::intel::render::ResidentScenePrimitiveTopology,
 ) -> PaintResult {
     use crate::intel::render::{
         self, ResidentSceneDraw, ResidentSceneFragmentContract, ResidentScenePrimitiveTopology,
     };
-    let triangles = indices.len() / 3;
+    let primitives = indices.len() / if topology == ResidentScenePrimitiveTopology::LineList { 2 } else { 3 };
     let blank = indices.is_empty();
     // An empty glyph still needs a real GPU writer and release fence. Draw a
     // white background when there is no blue geometry to submit.
@@ -195,12 +193,12 @@ pub(super) fn paint_triangles_with_contract(
         [1.0, 1.0, 0.5],
         [-1.0, 1.0, 0.5],
     ];
-    let (vertices, indices) = if blank {
-        (&BACKGROUND[..], &[0, 1, 2, 0, 2, 3][..])
+    let (vertices, indices, topology) = if blank {
+        (&BACKGROUND[..], &[0, 1, 2, 0, 2, 3][..], ResidentScenePrimitiveTopology::TriangleList)
     } else {
-        (vertices, indices)
+        (vertices, indices, topology)
     };
-    let mesh = render::create_resident_triangle_mesh(vertices, indices)
+    let mesh = render::create_resident_indexed_mesh(vertices, indices, topology)
         .map_err(|reason| (reason, false))?;
     let lease = match ui4::acquire_frame_buffer(frame) {
         Ok(lease) => lease,
@@ -229,9 +227,9 @@ pub(super) fn paint_triangles_with_contract(
         depth_flags: None,
         rgba: if blank { [255; 4] } else { [48, 100, 216, 255] },
         sampled_texture: None,
-        fragment_contract: if blank { ResidentSceneFragmentContract::ConstantRgba } else { fragment_contract },
+        fragment_contract: ResidentSceneFragmentContract::ConstantRgba,
         viewport_translation_px: [0.0, 0.0],
-        topology: ResidentScenePrimitiveTopology::TriangleList,
+        topology,
         point_width_px: 0,
     }];
     let result = render::render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
@@ -242,7 +240,7 @@ pub(super) fn paint_triangles_with_contract(
     );
     let result = match result {
         Ok(result) => result,
-        Err(reason @ ("render-busy" | "in-flight" | "microfont-dista-device")) => {
+        Err(reason @ ("render-busy" | "in-flight")) => {
             let _ = render::release_resident_triangle_mesh(&mesh);
             let _ = ui4::cancel_frame_buffer(lease);
             return Err((reason, false));
@@ -261,12 +259,6 @@ pub(super) fn paint_triangles_with_contract(
         core::mem::forget(mesh);
         return Err(("scanout-release", true));
     };
-    if matches!(fragment_contract, ResidentSceneFragmentContract::MicrofontDista) {
-        crate::log_important!(target: "microfont-triangle-preview";
-            "microfont-triangle-preview: render frame={} frame_us={} scene_prepare_us={} gpu_wait_us={} gpu_timestamp={:?} gpu_target_ready_timestamp={:?} timing_scope=draw-and-clear-through-RT-writeback readback=timing-only\n",
-            frame.raw(), result.frame_us, result.geometry_prepare_us, result.gpu_poll_us,
-            result.gpu_timestamp, result.gpu_target_ready_timestamp);
-    }
     let _ = render::release_resident_triangle_mesh(&mesh);
     if let Err(error) = ui4::publish_resident_scene_frame_buffer(lease, release) {
         crate::log_important!(target: "microfont-raster-preview";
@@ -274,7 +266,7 @@ pub(super) fn paint_triangles_with_contract(
         let _ = ui4::cancel_frame_buffer(lease);
         return Err(("frame-publish", false));
     }
-    Ok(triangles)
+    Ok(primitives)
 }
 
 /// Append one perimeter-ordered pixel-space quad with positive clip-space winding.
