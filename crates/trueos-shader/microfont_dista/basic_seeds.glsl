@@ -72,7 +72,7 @@ case 101u: return uvec3(3196174336u,456u,0u);
 case 102u: return uvec3(136347648u,1644700098u,0u);
 case 103u: return uvec3(2726944924u,488u,0u);
 case 104u: return uvec3(2726961152u,136348616u,2u);
-case 105u: return uvec3(136347648u,34078850u,0u);
+case 105u: return uvec3(136429568u,34079106u,0u);
 case 106u: return uvec3(136350224u,34078850u,0u);
 case 107u: return uvec3(407969792u,68174117u,1u);
 case 108u: return uvec3(272678912u,68174084u,1u);
