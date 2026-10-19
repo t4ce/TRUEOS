@@ -16,6 +16,8 @@ pub(crate) mod microfont_log_service;
 pub(crate) mod microfont_raster_preview;
 pub(crate) mod microfont_triangle_preview;
 pub(crate) mod microfont_dista_tasks;
+mod microfont_dista_copy;
+mod microfont_dista_view;
 #[cfg(feature = "microfont_dista_bench")]
 pub(crate) mod microfont_dista_bench;
 #[cfg(feature = "microfont_dista_bench")]

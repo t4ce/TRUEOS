@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -17,7 +18,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "vendor/microfont/shaders/dista_stamp.vert"
-DEFAULT_MESA = ROOT / ".codex_tmp/trueos-adj-instrumented-rpls/mesa-build"
+DEFAULT_MESA = ROOT / "bld/toolchains/microfont-dista-mesa"
 OUT = ROOT / "crates/trueos-shader/microfont_dista"
 GENERATED = ROOT / "crates/trueos-shader/generated_microfont_dista.rs"
 
@@ -27,22 +28,50 @@ def basic_seeds() -> list[tuple[int, bool]]:
     source = (ROOT / "vendor/microfont/src/basic.rs").read_text()
     table = source.split("pub const BASIC_SYMBOLS:", 1)[1].split("];", 1)[0]
     result = []
-    pattern = r"^\s*\('(?:\\.|[^'])+',\s*(0x[0-9a-fA-F]+|0|z\(0x[0-9a-fA-F]+,\s*\d+\))\),"
-    for expression in re.findall(pattern, table, re.MULTILINE):
+    char = r"'((?:\\.|[^'\\])*)'"
+    number = r"(?:0x[0-9a-fA-F_]+|0)"
+    pattern = rf"^\s*\(\s*{char}\s*,\s*({number}|z\(\s*{number}\s*,\s*[\d_]+\s*\))\s*\),"
+    for literal, expression in re.findall(pattern, table, re.MULTILINE):
+        code = ord(rust_char(literal))
+        if code != len(result):
+            raise ValueError(f"Basic table entry {len(result)} has codepoint {code}; expected ordered U+0000..U+007F")
         if expression.startswith("z("):
-            value, shift = re.fullmatch(r"z\((0x[0-9a-fA-F]+),\s*(\d+)\)", expression).groups()
-            pixels = int(value, 16) << int(shift)
+            value, shift = re.fullmatch(rf"z\(\s*({number})\s*,\s*([\d_]+)\s*\)", expression).groups()
+            shift = int(shift.replace("_", ""))
+            if not 0 <= shift < 128:
+                raise ValueError("Basic z() shift exceeds u128")
+            pixels = int(value.replace("_", ""), 0) << shift
         else:
-            pixels = int(expression, 0)
+            pixels = int(expression.replace("_", ""), 0)
         result.append((pixels, False))
     if len(result) != 128:
-        raise SystemExit(f"Basic seed parser expected 128 entries, found {len(result)}")
+        raise ValueError(f"Basic seed parser expected 128 entries, found {len(result)}")
     overrides = source.split("pub const BASIC_RASTER_OVERRIDES:", 1)[1].split("];", 1)[0]
-    for character, pixels, long_reach in re.findall(
-        r"\('([^'])',\s*crate::raster::GlyphSeed\s*\{\s*pixels:\s*(0x[0-9a-fA-F]+),\s*long_reach:\s*(true|false)", overrides
-    ):
-        result[ord(character)] = (int(pixels, 16), long_reach == "true")
+    seen = set()
+    entries = re.findall(
+        rf"\(\s*{char}\s*,\s*crate::raster::GlyphSeed\s*\{{\s*pixels:\s*({number})\s*,\s*long_reach:\s*(true|false)\s*,?\s*\}}\s*\)", overrides)
+    declared = re.search(r";\s*(\d+)\]\s*=\s*\[", overrides)
+    if not declared or len(entries) != int(declared[1]):
+        raise ValueError("Basic override parser count differs from its declared Rust array length")
+    for literal, pixels, long_reach in entries:
+        code = ord(rust_char(literal))
+        if code >= 128 or code in seen:
+            raise ValueError("Basic override has an unknown or duplicate codepoint")
+        seen.add(code)
+        result[code] = (int(pixels.replace("_", ""), 0), long_reach == "true")
+    if any(pixels < 0 or pixels >> 66 for pixels, _ in result):
+        raise ValueError("Basic seed exceeds its 6 by 11 cell")
     return result
+
+
+def rust_char(literal: str) -> str:
+    if literal.startswith(r"\u{") and literal.endswith("}"):
+        value = chr(int(literal[3:-1].replace("_", ""), 16))
+    else:
+        value = ast.literal_eval("'" + literal + "'")
+    if not isinstance(value, str) or len(value) != 1:
+        raise ValueError("expected one Rust character")
+    return value
 
 
 def seed_include(seeds: list[tuple[int, bool]]) -> str:
@@ -119,6 +148,98 @@ def verify_blocker_recipe(shader: str) -> None:
             raise SystemExit(f"GLSL exact blocker set {index} drifted: {actual} != {expected}")
 
 
+def current_inputs():
+    verify_recipe()
+    seeds = basic_seeds()
+    include = seed_include(seeds)
+    return seeds, include, hashlib.sha256(SOURCE.read_bytes() + include.encode()).hexdigest()
+
+
+def generator_fingerprint() -> str:
+    digest = hashlib.sha256()
+    for relative in ("tools/microfont-dista-bake/bake.py", "tools/helio-intel-bake/bake.py",
+                     "crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c",
+                     "crates/trueos-shader/xe_lp_shader_bake/simple_triangle.frag"):
+        digest.update(relative.encode() + b"\0")
+        digest.update((ROOT / relative).read_bytes())
+    return digest.hexdigest()
+
+
+def artifact_freshness() -> tuple[bool, str]:
+    """Check contents, including the exact Rust bytes Cargo will embed.
+
+    This path never loads the native compiler or runs external programs. A
+    normal unchanged make therefore needs only the checked-in artifact.
+    """
+    try:
+        seeds, include, source_sha = current_inputs()
+        manifest = json.loads((OUT / "manifest.json").read_text())
+        if manifest.get("source_sha256") != source_sha:
+            return False, "source-or-seeds-changed"
+        if manifest.get("generator_sha256") != generator_fingerprint():
+            return False, "generator-changed"
+        if manifest.get("device", {}).get("device_id") != 0x4680:
+            return False, "native-device-mismatch"
+        if manifest.get("scratch_bytes") != 0 or manifest.get("memory_sends") != []:
+            return False, "native-contract-mismatch"
+        native = (OUT / "dista_stamp.vs.simd8.bin").read_bytes()
+        if len(native) != manifest.get("vs_bytes") or hashlib.sha256(native).hexdigest() != manifest.get("vs_sha256"):
+            return False, "native-binary-mismatch"
+        rust_bytes = GENERATED.read_bytes()
+        if hashlib.sha256(rust_bytes).hexdigest() != manifest.get("generated_rust_sha256"):
+            return False, "generated-rust-mismatch"
+        rust = rust_bytes.decode()
+        if re.search(r'SOURCE_SHA256: &str = "([a-f0-9]+)"', rust)[1] != source_sha:
+            return False, "generated-source-mismatch"
+        table = rust.split("pub(crate) const SEEDS:", 1)[1].split("];", 1)[0]
+        baked_seeds = [(int(bits.replace("_", ""), 16), flag == "true") for bits, flag in
+                       re.findall(r"\(0x([a-fA-F0-9_]+),\s*(true|false)\)", table)]
+        if baked_seeds != seeds:
+            return False, "generated-seeds-mismatch"
+        counts = rust.split("pub(crate) const ACTIVE_LINK_COUNTS:", 1)[1].split("= [", 1)[1].split("];", 1)[0]
+        if [int(value) for value in re.findall(r"\d+", counts)] != [active_link_count(seed) for seed in seeds]:
+            return False, "generated-links-mismatch"
+        words = rust.split("static DISTA_VS_CODE:", 1)[1].split("= [", 1)[1].split("];", 1)[0]
+        embedded = b"".join(struct.pack("<I", int(word, 16)) for word in re.findall(r"0x([a-fA-F0-9]+)", words))
+        if embedded != native:
+            return False, "embedded-native-mismatch"
+        if (OUT / "basic_seeds.glsl").read_text() != include:
+            return False, "generated-include-mismatch"
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError, struct.error) as error:
+        return False, f"invalid-artifact: {error}"
+    except SystemExit as error:
+        return False, f"recipe-mismatch: {error}"
+    return True, "current"
+
+
+def resolve_mesa_build(override: Path | None = None) -> Path:
+    configured = override or os.environ.get("MICROFONT_DISTA_MESA_BUILD")
+    candidates = [Path(configured)] if configured else [
+        DEFAULT_MESA, ROOT / ".codex_tmp/trueos-adj-instrumented-rpls/mesa-build"]
+    for candidate in candidates:
+        if all((candidate / path).is_file() for path in
+               ("src/intel/tools/libintel_noop_drm_shim.so", "src/intel/vulkan/libvulkan_intel.so")):
+            return candidate.resolve()
+    raise SystemExit("Dista shader needs a refresh, but its native compiler is unavailable. "
+                     "Set MICROFONT_DISTA_MESA_BUILD to the compatible instrumented Mesa build; "
+                     "the ISO build has stopped before compiling a stale atlas.")
+
+
+def ensure_current(mesa_build: Path | None = None, work_dir: Path | None = None):
+    # Invalid source data or a changed reconstruction recipe needs an explicit
+    # source fix; invoking the native compiler cannot make it valid.
+    current_inputs()
+    current, reason = artifact_freshness()
+    if current:
+        print(json.dumps({"artifact": "microfont-dista", "status": "current", "native_baked": False}))
+        return
+    print(f"microfont-dista: refreshing shader ({reason})", file=sys.stderr)
+    bake_native(mesa_build, work_dir)
+    current, reason = artifact_freshness()
+    if not current:
+        raise SystemExit(f"Dista artifact still stale after bake ({reason}); ISO build stopped")
+
+
 def load_baker():
     sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location("trueos_helio_baker", ROOT / "tools/helio-intel-bake/bake.py")
@@ -132,7 +253,7 @@ def decode(binary: Path) -> str:
                             text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if result.returncode or "illegal" in result.stdout.lower():
         raise SystemExit(f"invalid ADL-S EU ISA:\n{result.stdout}")
-    return result.stdout
+    return "\n".join(line.rstrip() for line in result.stdout.splitlines()) + "\n"
 
 
 def emit_rust(vs: bytes, state: dict[str, int], seeds: list[tuple[int, bool]], source_sha: str):
@@ -179,29 +300,24 @@ pub(crate) fn microfont_dista_pipeline() -> &'static TrianglePipeline {{ &PIPELI
     GENERATED.write_text(text)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mesa-build", type=Path, default=DEFAULT_MESA)
-    parser.add_argument("--work-dir", type=Path, default=ROOT / "bld/microfont-dista-bake")
-    parser.add_argument("--source-only", action="store_true", help="compile and validate SPIR-V without native bake")
-    args = parser.parse_args()
-    work = args.work_dir.resolve()
+def bake_native(mesa_build: Path | None = None, work_dir: Path | None = None, source_only: bool = False):
+    seeds, include, source_sha = current_inputs()
+    generator_sha = generator_fingerprint()
+    # Resolve the compiler before doing work, except for explicit source-only
+    # validation. Nothing is loaded on ensure-current's unchanged fast path.
+    mesa = None if source_only else resolve_mesa_build(mesa_build)
+    work = (work_dir or ROOT / "bld/microfont-dista-bake").resolve()
     work.mkdir(parents=True, exist_ok=True)
-    verify_recipe()
-    seeds = basic_seeds()
-    include = seed_include(seeds)
     (work / "basic_seeds.glsl").write_text(include)
-    source_sha = hashlib.sha256(SOURCE.read_bytes()+include.encode()).hexdigest()
     spirv = work / "dista_stamp.vert.spv"
     subprocess.run(["glslc", "--target-env=vulkan1.1", "-O", "-I", str(work), str(SOURCE), "-o", str(spirv)], check=True)
     if shutil.which("spirv-val"):
         subprocess.run(["spirv-val", "--target-env", "vulkan1.1", str(spirv)], check=True)
-    if args.source_only:
+    if source_only:
         print(json.dumps({"source_sha256": source_sha, "seeds": len(seeds), "spirv_bytes": spirv.stat().st_size,
                           "native_baked": False, "gpu_submitted": False}))
         return
 
-    mesa = args.mesa_build.resolve()
     shim = mesa / "src/intel/tools/libintel_noop_drm_shim.so"
     driver = mesa / "src/intel/vulkan/libvulkan_intel.so"
     if not shim.is_file() or not driver.is_file():
@@ -260,15 +376,35 @@ def main() -> None:
     (OUT / "basic_seeds.glsl").write_text(include)
     manifest = {"schema": 1, "contract": "microfont-dista-float3-procedural", "device": device,
                 "backend": "mesa-anv-noop-drm-shim-compile-only", "gpu_submitted": False,
-                "baremetal_verified": False, "source_sha256": source_sha,
+                "baremetal_verified": False, "source_sha256": source_sha, "generator_sha256": generator_sha,
                 "vs_sha256": hashlib.sha256(vs).hexdigest(), "vs_bytes": len(vs),
                 "vertex_compiler_state": state, "memory_sends": [], "scratch_bytes": 0,
                 "scratch_evidence": "complete independently decoded VS contains only URB sends",
                 "executables": list(executables.values()), "ps_reused": "triangle_pipeline_simd16"}
-    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
     emit_rust(vs, state, seeds, source_sha)
+    manifest["generated_rust_sha256"] = hashlib.sha256(GENERATED.read_bytes()).hexdigest()
+    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
     print(json.dumps({"vs_bytes": len(vs), "source_sha256": source_sha, "native_baked": True,
                       "gpu_submitted": False, "generated": str(GENERATED)}))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mesa-build", type=Path)
+    parser.add_argument("--work-dir", type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--source-only", action="store_true", help="validate SPIR-V without native bake")
+    mode.add_argument("--ensure-current", action="store_true", help="rebake changed inputs before the kernel build")
+    mode.add_argument("--check-current", action="store_true", help="check contents without loading compiler tools")
+    args = parser.parse_args()
+    if args.check_current:
+        current, reason = artifact_freshness()
+        print(json.dumps({"artifact": "microfont-dista", "current": current, "reason": reason}))
+        raise SystemExit(0 if current else 1)
+    if args.ensure_current:
+        ensure_current(args.mesa_build, args.work_dir)
+    else:
+        bake_native(args.mesa_build, args.work_dir, args.source_only)
 
 
 if __name__ == "__main__":

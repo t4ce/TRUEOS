@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn descriptors_cover_the_requested_two_rows_without_uploading_positions() {
         assert_eq!((TEXT, tasks::WIDTH, tasks::HEIGHT), ("ABC123/Yy%", 960, 352));
-        let expected_counts = [(Draft, [3036, 2460]), (Fine, [3612, 3036]), (High, [4764, 3612])];
+        let expected_counts = [(Draft, [3056, 2476]), (Fine, [3636, 3056]), (High, [4796, 3636])];
         for (quality, expected) in expected_counts {
             let result = build(quality);
             assert_eq!(result.row_candidates, expected);
@@ -227,6 +227,18 @@ mod tests {
         }
         SEED_MUTATION.with(|value| value.set(0));
         assert!(intel::shader::microfont_dista_seeds_current());
+    }
+
+    #[test]
+    fn current_authored_one_a_and_y_use_the_rebaked_seed_snapshot() {
+        for (character, pixels) in [('1', 0x6282082082082000u128),
+            ('A', 0x85228be8a28a2000), ('Y', 0x228a2894208208000)] {
+            let seed = microfont_real::raster::basic_seed(character).unwrap();
+            assert_eq!(seed.pixels, pixels);
+            assert!(!seed.long_reach);
+        }
+        assert!(intel::shader::microfont_dista_seeds_current());
+        assert_eq!(ATLAS_AUDIT_SITES.into_iter().sum::<usize>(), 1303);
     }
 
     #[test]

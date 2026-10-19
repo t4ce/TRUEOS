@@ -1,11 +1,33 @@
 # Dista GPU body stamp
 
-The UI4 triangle preview stamps `ABC123/Yy%` twice: Meso above Lean, each glyph
-96 × 176 px. The vertex shader in
+The UI4 triangle preview shows the complete printable Basic Latin atlas in
+Meso: 95 slots from U+0020 through U+007E, including blank space. The default
+view has 96 × 176 px glyphs, 16 circle segments, and antialiasing off. The vertex shader in
 [`vendor/microfont/shaders/dista_stamp.vert`](../../vendor/microfont/shaders/dista_stamp.vert)
 constructs the body from seed descriptors. Rust prepares indexed task slots;
 GLSL reconstructs the links and generates the positions. The ordinary triangle
-pipeline rasterizes them. The CPU reconstruction remains available as fallback.
+pipeline rasterizes them directly into an R8 coverage mask. After GPU retirement,
+the CPU reads that mask directly and writes the visible RGBA frame once. There
+is no intermediate CPU coverage vector or staged RGBA readback.
+
+Select this frame to use its comparison controls:
+
+| Key | View change |
+| --- | --- |
+| `Q` | Cycle 4, 8, 12, 16 and 24 circle segments. |
+| `A` | Toggle 2× supersampling in both axes, averaged to the logical display size. |
+| `1` … `5` | Select 1, 2, 4, 8 or 16 pixels per source unit. |
+| `+` / `-` | Step between those sizes, stopping at either endpoint. |
+| Escape | Close the selected frame through UI4's normal window action. |
+
+Other text does not select or edit glyphs. Each source configuration is keyed by
+circle segments and raster source scale. For example, 4× with AA shares the same
+GPU source as 8× without AA. The preview retains up to six retired GPU masks in
+a least-recently-used cache, renders on a cache miss, and copies to a new
+immutable single-buffer frame only when the selected view changes. UI4 replaces
+the ready frame atomically. Idle service ticks do not redraw or regenerate it.
+This visible experiment requires a supported GPU and a current native seed bake;
+it does not silently choose CPU reconstruction as a fallback.
 
 ## Why the sampled field can become simple geometry
 
@@ -33,37 +55,48 @@ row above and below, outside the endpoints' bounding rectangle.
 ## Quality and triangle counts
 
 A regular inscribed disk fan with `N` segments has maximum radial error
-`r_px (1 - cos(π/N))`. Select `N` by solving this bound and round upward to a
-multiple of four, with at least eight segments. This controls the curved
-boundary; straight rectangle sides need no subdivisions. At the demo's scale
-of 16 px per source unit:
+`r_px (1 - cos(π/N))`. This controls the curved boundary; straight rectangle
+sides need no subdivisions. The visible preview exposes coarse detail as well
+as the measured presets. At 16 px per source unit, its Meso atlas has:
 
-| Maximum boundary error | Meso segments | Lean segments | Surviving triangles, both rows | Submitted triangles, both rows |
-| --- | ---: | ---: | ---: | ---: |
-| 0.25 px | 12 | 8 | 3,428 | 5,496 |
-| 0.125 px | 16 | 12 | 4,580 | 6,648 |
-| 0.0625 px | 24 | 16 | 6,308 | 8,376 |
+| Circle segments | Maximum chord error | Surviving triangles | Submitted triangles |
+| ---: | ---: | ---: | ---: |
+| 4 | 1.631006 px | 7,700 | 15,792 |
+| 8 | 0.423885 px | 12,912 | 21,004 |
+| 12 | 0.189746 px | 18,124 | 26,216 |
+| 16 | 0.106999 px | 23,336 | 31,428 |
+| 24 | 0.047640 px | 33,760 | 41,852 |
 
-The demo contains 144 sites and 137 admitted links per row. Surviving geometry
+These counts use the current seed bake, with 1,303 occupied sites and 1,244
+admitted links across the printable set. Earlier measurement reports preserve
+their original seed identities and counts. Surviving geometry
 costs `sites × N + 2 × links` triangles. Submission reserves four forward link
 candidates per ordinary site and ten per long-reach site. GLSL collapses absent
 or pruned links to degenerate triangles. Submitted count includes that work;
 surviving count excludes it. Neither count describes visible pixel area or
 vertex shader invocation count. Indexed fan and rectangle vertices are shared.
 
-The one-shot demo selects its preset with `QUALITY` in
-[`microfont_triangle_preview.rs`](../../src/r/services/microfont_triangle_preview.rs).
-It currently uses Fine. The text is fixed; keyboard text no longer selects a glyph.
-The log reports the preset, segment counts, submitted and surviving triangles,
-CPU task preparation time, host GPU wait time, and an optional hardware timestamp
-duration (`ticks`, `hz`, `ns`). Seed/shape edits made after the last shader bake
-select the CPU fallback until a matching shader is baked.
+The visible view controls are defined in
+[`microfont_dista_view.rs`](../../src/r/services/microfont_dista_view.rs).
+Its reported chord-error bound uses logical display pixels; enabling AA changes
+sampling coverage, not the underlying polygon approximation. At smaller sizes,
+the same segment count has proportionally smaller geometric error. The maximum
+2× source is 3072 × 2112 R8 pixels for the 1536 × 1056 logical atlas.
+The background benchmark keeps its existing Draft/Fine/High presets unchanged.
+The normal `make iso` build checks the native shader before compiling the
+kernel. Editing the Basic hex data, reconstruction overrides or shader refreshes
+its embedded seed table automatically. The content check also covers the shape
+recipe and generated artifacts, so unchanged timestamps cannot hide an edit.
+Current artifacts need no Mesa compiler. A required bake uses a compatible local
+Mesa build discovered by `bake.py`; `MICROFONT_DISTA_MESA_BUILD=/path/to/mesa-build`
+selects another build. A missing compiler or failed bake stops the build before
+Cargo or ISO packaging. The runtime guard remains a check against stale data.
 
 The triangles overlap at joins. Their opaque union gives the body and its
 outline without extracting or welding a contour. Applying opacity separately
-to every overlapping primitive would accumulate coverage. A future union mask
-or stencil resolve can apply color and transparency once; that is outside this
-stamp's scope. The generated mesh is not a manifold outline mesh for export.
+to every overlapping primitive would accumulate coverage. The R8 target stores
+their opaque union first, so a later consumer can apply color and opacity once.
+The generated mesh is not a manifold outline mesh for export.
 
 ## Reproduce the checks
 
@@ -72,11 +105,12 @@ python3 tools/microfont-dista-bake/bake.py --source-only --work-dir /tmp/dista-b
 python3 tools/microfont-dista-bake/audit.py --text 'ABC123/Yy%' --error-px 0.125
 python3 tools/microfont-dista-bake/audit.py --all-basic --raster-step 0.25 > /tmp/dista-audit.json
 python3 tools/microfont-dista-bake/test_audit.py
+python3 tools/microfont-dista-bake/test_make_integration.py
 python3 tools/microfont-dista-bake/host_validate.py --atlas --work-dir /tmp/dista-atlas-host
 ```
 
 `audit.py` independently reads the Rust Basic table, `z(bits, shift)` values,
-and reconstruction overrides, including `A`, `/`, `%`, and `y`. Its slow graph
+and reconstruction overrides, including `1`, `/`, `%`, and `y`. Its slow graph
 oracle checks every pair against every third site. It compares that graph with
 a reconstruction of the GLSL candidate offsets and integer pruning search.
 Optional raster sampling compares the original compact Gaussian field against
@@ -101,18 +135,18 @@ are written beneath the selected work directory. This is software Vulkan
 correctness evidence, not a measurement of Intel iGPU execution.
 
 Each weight's tightly packed RGBA8 atlas contains 6,488,064 bytes (6.1875 MiB).
-The printable set has 1,302 occupied sites and 1,243 accepted links per weight:
+The current printable set has 1,303 occupied sites and 1,244 accepted links per weight:
 
 | Quality | Meso submitted / active triangles | Lean submitted / active triangles |
 | --- | ---: | ---: |
-| Draft | 26,196 / 18,110 | 20,988 / 12,902 |
-| Fine | 31,404 / 23,318 | 26,196 / 18,110 |
-| High | 41,820 / 33,734 | 31,404 / 23,318 |
+| Draft | 26,216 / 18,124 | 21,004 / 12,912 |
+| Fine | 31,428 / 23,336 | 26,216 / 18,124 |
+| High | 41,852 / 33,760 | 31,428 / 23,336 |
 
 The atlas descriptor uses the existing Float3 stream. Packed stamp bits 0..6
 hold the codepoint, 7..10 the column, 11 the weight, 12..14 the atlas grid row,
-15 selects atlas coordinates, and 16 selects direct blocker tests. Ordinary
-demo descriptors leave the new bits clear. No CPU-generated positions or
+15 selects atlas coordinates, and 16 selects direct blocker tests. The earlier
+two-row specimen descriptors leave the new bits clear. No CPU-generated positions or
 precomputed triangle outlines are uploaded.
 
 ## Timing
@@ -241,6 +275,9 @@ R8 against the matched white-on-zero RGBA cases from the same new build.
 The physical rig results from three complete matrices (288 renders) are in
 [`results/2026-10-18-atlas.md`](results/2026-10-18-atlas.md), including the
 clear/setup versus final writeback breakdown and verified boot identities.
+The matched direct-R8 versus RGBA8 experiment (384 additional renders) is in
+[`results/2026-10-18-r8.md`](results/2026-10-18-r8.md): 75% less target storage,
+identical pixel coverage, and essentially unchanged GPU generation time.
 
 Further useful matched experiments are indexed vertex reuse, removal of empty
 candidate slots, smaller glyph scale, and one larger atlas draw versus grouped

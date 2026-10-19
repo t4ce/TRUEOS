@@ -58,22 +58,26 @@ pub(super) fn build(quality: Quality) -> Tasks {
     tasks
 }
 
-#[cfg(feature = "microfont_dista_bench")]
 pub(super) const ATLAS_WIDTH: u32 = 16 * GLYPH_WIDTH;
-#[cfg(feature = "microfont_dista_bench")]
 pub(super) const ATLAS_HEIGHT: u32 = 6 * GLYPH_HEIGHT;
 
 /// One complete printable Basic Latin sheet, including a blank space slot.
 /// Shapes use separate buffers so each stays inside the render target limits.
-#[cfg(feature = "microfont_dista_bench")]
 pub(super) fn build_atlas(quality: Quality, shape: FontShape, direct_checks: bool) -> Tasks {
+    build_atlas_segments(quality.segments(shape), shape, direct_checks)
+}
+
+/// Preview-only polygon choices include deliberately coarse fans for visual
+/// comparison. The named benchmark presets retain their existing definition.
+pub(super) fn build_atlas_segments(segments: usize, shape: FontShape, direct_checks: bool) -> Tasks {
+    assert!(matches!(segments, 4 | 8 | 12 | 16 | 24));
     let mut tasks = Tasks { descriptors: Vec::new(), indices: Vec::new(), row_candidates: [0; 2] };
     let row = usize::from(shape == FontShape::Lean);
     for code in 0x20u32..=0x7e {
         let slot = code - 0x20;
         let stamp = code | (slot % 16) << 7 | (row as u32) << 11
             | (slot / 16) << 12 | 1 << 15 | u32::from(direct_checks) << 16;
-        append_glyph(&mut tasks, char::from_u32(code).unwrap(), stamp, quality.segments(shape), row);
+        append_glyph(&mut tasks, char::from_u32(code).unwrap(), stamp, segments, row);
     }
     tasks
 }

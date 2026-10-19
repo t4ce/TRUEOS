@@ -12,8 +12,10 @@ def main():
     declarations = [constant(constants, name) for name in (
         "SURFACE_FORMAT_R8_UNORM", "SURFACE_FORMAT_R8G8B8A8_UNORM", "SURFTYPE_2D",
         "RENDER_MOCS", "SURFACE_VALIGN_4", "SHADER_CHANNEL_ALPHA", "SHADER_CHANNEL_BLUE",
-        "SHADER_CHANNEL_GREEN", "SHADER_CHANNEL_RED", "RESIDENT_SCENE_TARGET_WIDTH",
-        "RESIDENT_SCENE_TARGET_HEIGHT",
+        "SHADER_CHANNEL_GREEN", "SHADER_CHANNEL_RED",
+    )]
+    declarations += [constant("src/intel/render/dista_mask.rs", name) for name in (
+        "RESIDENT_DISTA_MASK_MAX_WIDTH", "RESIDENT_DISTA_MASK_MAX_HEIGHT",
     )]
     declarations += [item("src/intel/render/submit.rs", name)
                      for name in ("device_is_gfx12", "device_is_gfx125")]

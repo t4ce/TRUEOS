@@ -1,0 +1,4011 @@
+{
+  "schema": "microfont-dista-r8-physical-results/v1",
+  "date": "2026-10-18",
+  "scope": "Atlas generation and full pixel format validation only; no consumer, color composition, copy or sink integration.",
+  "warm_scope": "Rebuild all glyphs with retained mesh/destination; not reuse/copy of an already-built atlas.",
+  "provenance": {
+    "device": "8086:4680",
+    "build_command": "make iso PUBLISH_RELEASE_SMB=0",
+    "capture_id": "4c51a860477f588dbb35d4e5efd30e87",
+    "boot_capture_started": "2026-10-18T23:02:55+02:00",
+    "runtime_elf_sha256": "f0137cf5a5205c16208e0837f2e47ca672875cc19d2e36f287de9ec036b3abca",
+    "iso_sha256": "1e32d44d8ed6943cb2d943d61da198dd0e6e0190b999903ef214f7b6e41c83cf",
+    "shader_source_sha256": "5c3b3840f1404878992c912d66ba4b337b48ce5fbd53e0a314629b45a5ed9264",
+    "render_target_cache_policy": "PAT3-UC",
+    "gpu_timestamp_hz": 19200000,
+    "cpu_tsc_hz": 1689723880,
+    "ink_rgba": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "clear_rgba": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "target_width": 1536,
+    "target_height": 1056,
+    "glyph_width": 96,
+    "glyph_height": 176,
+    "codepoints": "U+0020..U+007E",
+    "evidence_directory": "bld/microfont-dista-experiments/2026-10-18-r8"
+  },
+  "record_counts": {
+    "begin": 2,
+    "setup": 48,
+    "sample": 384,
+    "validation": 24,
+    "done": 2
+  },
+  "renders": 384,
+  "first_renders": 48,
+  "warm_renders": 336,
+  "validated_pairs": 24,
+  "compared_pixels": 38928384,
+  "all_validation_passed": true,
+  "validation": [
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 64738635,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 253877,
+      "passed": true,
+      "quality": "Draft",
+      "r8_hash": 3051414752780438874,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 3051414752780438874,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 64738635,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 253877,
+      "passed": true,
+      "quality": "Draft",
+      "r8_hash": 3051414752780438874,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 3051414752780438874,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 33948660,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 133132,
+      "passed": true,
+      "quality": "Draft",
+      "r8_hash": 9166189622331373317,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 9166189622331373317,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 33948660,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 133132,
+      "passed": true,
+      "quality": "Draft",
+      "r8_hash": 9166189622331373317,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 9166189622331373317,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 64738635,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 253877,
+      "passed": true,
+      "quality": "Fine",
+      "r8_hash": 3051414752780438874,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 3051414752780438874,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 64738635,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 253877,
+      "passed": true,
+      "quality": "Fine",
+      "r8_hash": 3051414752780438874,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 3051414752780438874,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 34296735,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 134497,
+      "passed": true,
+      "quality": "Fine",
+      "r8_hash": 5803875668731760926,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 5803875668731760926,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 34296735,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 134497,
+      "passed": true,
+      "quality": "Fine",
+      "r8_hash": 5803875668731760926,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 5803875668731760926,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 65086710,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 255242,
+      "passed": true,
+      "quality": "High",
+      "r8_hash": 17673300551135851157,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 17673300551135851157,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 65086710,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 255242,
+      "passed": true,
+      "quality": "High",
+      "r8_hash": 17673300551135851157,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 17673300551135851157,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 34296735,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 134497,
+      "passed": true,
+      "quality": "High",
+      "r8_hash": 5803875668731760926,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 5803875668731760926,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 34296735,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 134497,
+      "passed": true,
+      "quality": "High",
+      "r8_hash": 5803875668731760926,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 5803875668731760926,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 1,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 64738635,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 253877,
+      "passed": true,
+      "quality": "Draft",
+      "r8_hash": 3051414752780438874,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 3051414752780438874,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 64738635,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 253877,
+      "passed": true,
+      "quality": "Draft",
+      "r8_hash": 3051414752780438874,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 3051414752780438874,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 33948660,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 133132,
+      "passed": true,
+      "quality": "Draft",
+      "r8_hash": 9166189622331373317,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 9166189622331373317,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 33948660,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 133132,
+      "passed": true,
+      "quality": "Draft",
+      "r8_hash": 9166189622331373317,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 9166189622331373317,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 64738635,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 253877,
+      "passed": true,
+      "quality": "Fine",
+      "r8_hash": 3051414752780438874,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 3051414752780438874,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 64738635,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 253877,
+      "passed": true,
+      "quality": "Fine",
+      "r8_hash": 3051414752780438874,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 3051414752780438874,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 34296735,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 134497,
+      "passed": true,
+      "quality": "Fine",
+      "r8_hash": 5803875668731760926,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 5803875668731760926,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 34296735,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 134497,
+      "passed": true,
+      "quality": "Fine",
+      "r8_hash": 5803875668731760926,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 5803875668731760926,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 65086710,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 255242,
+      "passed": true,
+      "quality": "High",
+      "r8_hash": 17673300551135851157,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 17673300551135851157,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 65086710,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 255242,
+      "passed": true,
+      "quality": "High",
+      "r8_hash": 17673300551135851157,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 17673300551135851157,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Meso",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 34296735,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 134497,
+      "passed": true,
+      "quality": "High",
+      "r8_hash": 5803875668731760926,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 5803875668731760926,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "loop"
+    },
+    {
+      "after_timed_bursts": true,
+      "checked_pixels": 1622016,
+      "coverage_sum": 34296735,
+      "format_mismatches": 0,
+      "kind": "validation",
+      "mismatched_pixels": 0,
+      "nonbinary_pixels": 0,
+      "nonblank_glyphs": 94,
+      "nonzero_pixels": 134497,
+      "passed": true,
+      "quality": "High",
+      "r8_hash": 5803875668731760926,
+      "rgba_channel_mismatches": 0,
+      "rgba_hash": 5803875668731760926,
+      "rgba_nonbinary_pixels": 0,
+      "rgba_nonblank_glyphs": 94,
+      "rgba_space_pixels": 0,
+      "rgba_unused_pixels": 0,
+      "run": 2,
+      "shape": "Lean",
+      "space_pixels": 0,
+      "stage": "atlas-rebuild",
+      "unused_pixels": 0,
+      "variant": "direct"
+    }
+  ],
+  "memory": {
+    "rgba8": {
+      "bytes_per_atlas": 6488064,
+      "pitch_bytes": 6144,
+      "bytes_both_weights": 12976128
+    },
+    "r8": {
+      "bytes_per_atlas": 1622016,
+      "pitch_bytes": 1536,
+      "bytes_both_weights": 3244032
+    },
+    "saved_bytes_per_atlas": 4866048,
+    "saved_bytes_both_weights": 9732096,
+    "reduction_percent": 75
+  },
+  "triangles": [
+    {
+      "quality": "Draft",
+      "shape": "Meso",
+      "submitted": 26196,
+      "active_union": 18110
+    },
+    {
+      "quality": "Draft",
+      "shape": "Lean",
+      "submitted": 20988,
+      "active_union": 12902
+    },
+    {
+      "quality": "Fine",
+      "shape": "Meso",
+      "submitted": 31404,
+      "active_union": 23318
+    },
+    {
+      "quality": "Fine",
+      "shape": "Lean",
+      "submitted": 26196,
+      "active_union": 18110
+    },
+    {
+      "quality": "High",
+      "shape": "Meso",
+      "submitted": 41820,
+      "active_union": 33734
+    },
+    {
+      "quality": "High",
+      "shape": "Lean",
+      "submitted": 31404,
+      "active_union": 23318
+    }
+  ],
+  "direct_pair_aggregates": [
+    {
+      "quality": "Draft",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "aggregation": "sum of separately measured per-weight medians; not one combined submission",
+      "warm": {
+        "gpu_clear_setup_ns": 16345730.0,
+        "gpu_draw_ns": 4480417.0,
+        "gpu_writeback_ns": 18490.0,
+        "gpu_target_ready_ns": 20844635.0,
+        "wall_ns": 27251205.5
+      },
+      "first_gpu": {
+        "gpu_clear_setup_ns": 16347057.5,
+        "gpu_draw_ns": 4483177.0,
+        "gpu_writeback_ns": 18594.0,
+        "gpu_target_ready_ns": 20848828.0,
+        "wall_ns": 28525474.5
+      },
+      "first_target_ready_ns": 59167722.0
+    },
+    {
+      "quality": "Draft",
+      "output_format": "r8",
+      "variant": "direct",
+      "aggregation": "sum of separately measured per-weight medians; not one combined submission",
+      "warm": {
+        "gpu_clear_setup_ns": 16345704.0,
+        "gpu_draw_ns": 4481719.0,
+        "gpu_writeback_ns": 18230.0,
+        "gpu_target_ready_ns": 20845859.0,
+        "wall_ns": 35332269.0
+      },
+      "first_gpu": {
+        "gpu_clear_setup_ns": 16347317.5,
+        "gpu_draw_ns": 4483672.0,
+        "gpu_writeback_ns": 18230.0,
+        "gpu_target_ready_ns": 20849218.5,
+        "wall_ns": 30958558.5
+      },
+      "first_target_ready_ns": 45401162.0
+    },
+    {
+      "quality": "Fine",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "aggregation": "sum of separately measured per-weight medians; not one combined submission",
+      "warm": {
+        "gpu_clear_setup_ns": 16345808.0,
+        "gpu_draw_ns": 4896536.5,
+        "gpu_writeback_ns": 18516.0,
+        "gpu_target_ready_ns": 21261146.5,
+        "wall_ns": 30416679.0
+      },
+      "first_gpu": {
+        "gpu_clear_setup_ns": 16347214.0,
+        "gpu_draw_ns": 4898515.5,
+        "gpu_writeback_ns": 18594.0,
+        "gpu_target_ready_ns": 21264323.0,
+        "wall_ns": 30117450.0
+      },
+      "first_target_ready_ns": 61683885.5
+    },
+    {
+      "quality": "Fine",
+      "output_format": "r8",
+      "variant": "direct",
+      "aggregation": "sum of separately measured per-weight medians; not one combined submission",
+      "warm": {
+        "gpu_clear_setup_ns": 16345756.0,
+        "gpu_draw_ns": 4897083.5,
+        "gpu_writeback_ns": 18178.0,
+        "gpu_target_ready_ns": 21261094.0,
+        "wall_ns": 24995741.5
+      },
+      "first_gpu": {
+        "gpu_clear_setup_ns": 16347214.0,
+        "gpu_draw_ns": 4900755.5,
+        "gpu_writeback_ns": 18412.0,
+        "gpu_target_ready_ns": 21266380.0,
+        "wall_ns": 31973153.0
+      },
+      "first_target_ready_ns": 47705657.5
+    },
+    {
+      "quality": "High",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "aggregation": "sum of separately measured per-weight medians; not one combined submission",
+      "warm": {
+        "gpu_clear_setup_ns": 16345651.5,
+        "gpu_draw_ns": 5307552.0,
+        "gpu_writeback_ns": 18542.0,
+        "gpu_target_ready_ns": 21671979.0,
+        "wall_ns": 30916111.0
+      },
+      "first_gpu": {
+        "gpu_clear_setup_ns": 16347344.0,
+        "gpu_draw_ns": 5308880.0,
+        "gpu_writeback_ns": 18386.0,
+        "gpu_target_ready_ns": 21674609.5,
+        "wall_ns": 29317526.5
+      },
+      "first_target_ready_ns": 63065382.5
+    },
+    {
+      "quality": "High",
+      "output_format": "r8",
+      "variant": "direct",
+      "aggregation": "sum of separately measured per-weight medians; not one combined submission",
+      "warm": {
+        "gpu_clear_setup_ns": 16345730.0,
+        "gpu_draw_ns": 5307656.5,
+        "gpu_writeback_ns": 18230.0,
+        "gpu_target_ready_ns": 21671979.0,
+        "wall_ns": 36121999.5
+      },
+      "first_gpu": {
+        "gpu_clear_setup_ns": 16347213.5,
+        "gpu_draw_ns": 5314297.0,
+        "gpu_writeback_ns": 18229.5,
+        "gpu_target_ready_ns": 21679739.5,
+        "wall_ns": 32130094.0
+      },
+      "first_target_ready_ns": 49741644.0
+    }
+  ],
+  "fine_direct_first_pairs_by_run": [
+    {
+      "run": 1,
+      "output_format": "rgba8",
+      "first_target_ready_ns": 61737889
+    },
+    {
+      "run": 1,
+      "output_format": "r8",
+      "first_target_ready_ns": 48082977
+    },
+    {
+      "run": 2,
+      "output_format": "rgba8",
+      "first_target_ready_ns": 61629882
+    },
+    {
+      "run": 2,
+      "output_format": "r8",
+      "first_target_ready_ns": 47328338
+    }
+  ],
+  "fine_direct_setup": [
+    {
+      "quality": "Fine",
+      "variant": "direct",
+      "output_format": "rgba8",
+      "samples": 4,
+      "aggregation": "median per-atlas setup across both weights and both runs",
+      "task_prepare_ns": 1867590.5,
+      "mesh_upload_ns": 2229133.5,
+      "allocation_ns": 11711875.5
+    },
+    {
+      "quality": "Fine",
+      "variant": "direct",
+      "output_format": "r8",
+      "samples": 4,
+      "aggregation": "median per-atlas setup across both weights and both runs",
+      "task_prepare_ns": 1863217.5,
+      "mesh_upload_ns": 2241735.5,
+      "allocation_ns": 3750478.0
+    }
+  ],
+  "groups": [
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "direct",
+      "quality": "Draft",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 14697332.5,
+          "p95_ns": 14729913,
+          "min_ns": 14664752,
+          "max_ns": 14729913
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 17010685.0,
+          "p95_ns": 17103755,
+          "min_ns": 16848008,
+          "max_ns": 17103755
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1573437.5,
+          "p95_ns": 1574167,
+          "min_ns": 1572708,
+          "max_ns": 1574167
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1571667.0,
+          "p95_ns": 1572760,
+          "min_ns": 1570521,
+          "max_ns": 1572760
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9756380.0,
+          "p95_ns": 9757135,
+          "min_ns": 9755625,
+          "max_ns": 9757135
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9753724.0,
+          "p95_ns": 9754792,
+          "min_ns": 9752604,
+          "max_ns": 9754792
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 21587384.0,
+          "p95_ns": 21605274,
+          "min_ns": 21569494,
+          "max_ns": 21605274
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173828.0,
+          "p95_ns": 8173854,
+          "min_ns": 8173802,
+          "max_ns": 8173854
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172891.0,
+          "p95_ns": 8173073,
+          "min_ns": 8172760,
+          "max_ns": 8173073
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9115.0,
+          "p95_ns": 9115,
+          "min_ns": 9115,
+          "max_ns": 9115
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9115.0,
+          "p95_ns": 9271,
+          "min_ns": 9063,
+          "max_ns": 9271
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "direct",
+      "quality": "Draft",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 16261226.0,
+          "p95_ns": 16314946,
+          "min_ns": 16207506,
+          "max_ns": 16314946
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 18321584.0,
+          "p95_ns": 18489217,
+          "min_ns": 12957406,
+          "max_ns": 18489217
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 2910234.5,
+          "p95_ns": 2911042,
+          "min_ns": 2909427,
+          "max_ns": 2911042
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 2910052.0,
+          "p95_ns": 2914271,
+          "min_ns": 2909010,
+          "max_ns": 2914271
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11092838.5,
+          "p95_ns": 11093542,
+          "min_ns": 11092135,
+          "max_ns": 11093542
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11092135.0,
+          "p95_ns": 11096146,
+          "min_ns": 11091094,
+          "max_ns": 11096146
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 23813778.0,
+          "p95_ns": 23874524,
+          "min_ns": 23753032,
+          "max_ns": 23874524
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173489.5,
+          "p95_ns": 8173646,
+          "min_ns": 8173333,
+          "max_ns": 8173646
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172813.0,
+          "p95_ns": 8173802,
+          "min_ns": 8172708,
+          "max_ns": 8173802
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9115.0,
+          "p95_ns": 9167,
+          "min_ns": 9063,
+          "max_ns": 9167
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9115.0,
+          "p95_ns": 9219,
+          "min_ns": 9010,
+          "max_ns": 9219
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "direct",
+      "quality": "Fine",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 15207188.5,
+          "p95_ns": 15443585,
+          "min_ns": 14970792,
+          "max_ns": 15443585
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11908047.5,
+          "p95_ns": 17063950,
+          "min_ns": 10816898,
+          "max_ns": 17063950
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1884010.5,
+          "p95_ns": 1884115,
+          "min_ns": 1883906,
+          "max_ns": 1884115
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1883021.0,
+          "p95_ns": 1885469,
+          "min_ns": 1881719,
+          "max_ns": 1885469
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10066979.0,
+          "p95_ns": 10067135,
+          "min_ns": 10066823,
+          "max_ns": 10067135
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10064922.0,
+          "p95_ns": 10067656,
+          "min_ns": 10063594,
+          "max_ns": 10067656
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 22755764.0,
+          "p95_ns": 23001700,
+          "min_ns": 22509828,
+          "max_ns": 23001700
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173646.0,
+          "p95_ns": 8173750,
+          "min_ns": 8173542,
+          "max_ns": 8173750
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172865.0,
+          "p95_ns": 8172917,
+          "min_ns": 8172813,
+          "max_ns": 8172917
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9323.0,
+          "p95_ns": 9479,
+          "min_ns": 9167,
+          "max_ns": 9479
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9063.0,
+          "p95_ns": 9271,
+          "min_ns": 8958,
+          "max_ns": 9271
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "direct",
+      "quality": "Fine",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 16765964.5,
+          "p95_ns": 16867518,
+          "min_ns": 16664411,
+          "max_ns": 16867518
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 13087694.0,
+          "p95_ns": 18335742,
+          "min_ns": 11964986,
+          "max_ns": 18335742
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 3016745.0,
+          "p95_ns": 3021302,
+          "min_ns": 3012188,
+          "max_ns": 3021302
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 3014062.5,
+          "p95_ns": 3020208,
+          "min_ns": 3013073,
+          "max_ns": 3020208
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11199401.0,
+          "p95_ns": 11203906,
+          "min_ns": 11194896,
+          "max_ns": 11203906
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11196172.0,
+          "p95_ns": 11202083,
+          "min_ns": 11194844,
+          "max_ns": 11202083
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 24949893.5,
+          "p95_ns": 25081277,
+          "min_ns": 24818510,
+          "max_ns": 25081277
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173568.0,
+          "p95_ns": 8173646,
+          "min_ns": 8173490,
+          "max_ns": 8173646
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172891.0,
+          "p95_ns": 8173438,
+          "min_ns": 8172656,
+          "max_ns": 8173438
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9089.0,
+          "p95_ns": 9115,
+          "min_ns": 9063,
+          "max_ns": 9115
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9115.0,
+          "p95_ns": 9219,
+          "min_ns": 9063,
+          "max_ns": 9219
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "direct",
+      "quality": "High",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 14546000.5,
+          "p95_ns": 14783497,
+          "min_ns": 14308504,
+          "max_ns": 14783497
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 17308289.5,
+          "p95_ns": 17398352,
+          "min_ns": 17026224,
+          "max_ns": 17398352
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1879713.5,
+          "p95_ns": 1879896,
+          "min_ns": 1879531,
+          "max_ns": 1879896
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1879297.0,
+          "p95_ns": 1885208,
+          "min_ns": 1878438,
+          "max_ns": 1885208
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10062500.0,
+          "p95_ns": 10062604,
+          "min_ns": 10062396,
+          "max_ns": 10062604
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10061484.0,
+          "p95_ns": 10067188,
+          "min_ns": 10060625,
+          "max_ns": 10067188
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 22766564.0,
+          "p95_ns": 22975971,
+          "min_ns": 22557157,
+          "max_ns": 22975971
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173645.5,
+          "p95_ns": 8173906,
+          "min_ns": 8173385,
+          "max_ns": 8173906
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172813.0,
+          "p95_ns": 8173490,
+          "min_ns": 8172760,
+          "max_ns": 8173490
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9141.0,
+          "p95_ns": 9167,
+          "min_ns": 9115,
+          "max_ns": 9167
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9115.0,
+          "p95_ns": 9375,
+          "min_ns": 9010,
+          "max_ns": 9375
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "direct",
+      "quality": "High",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 17584093.5,
+          "p95_ns": 17924715,
+          "min_ns": 17243472,
+          "max_ns": 17924715
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 18813710.0,
+          "p95_ns": 18965917,
+          "min_ns": 18710010,
+          "max_ns": 18965917
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 3434583.5,
+          "p95_ns": 3434896,
+          "min_ns": 3434271,
+          "max_ns": 3434896
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 3428359.5,
+          "p95_ns": 3433698,
+          "min_ns": 3427031,
+          "max_ns": 3433698
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11617239.5,
+          "p95_ns": 11617552,
+          "min_ns": 11616927,
+          "max_ns": 11617552
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11610495.0,
+          "p95_ns": 11615729,
+          "min_ns": 11609010,
+          "max_ns": 11615729
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 26975080.0,
+          "p95_ns": 27357649,
+          "min_ns": 26592511,
+          "max_ns": 27357649
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173568.0,
+          "p95_ns": 8173646,
+          "min_ns": 8173490,
+          "max_ns": 8173646
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172917.0,
+          "p95_ns": 8173177,
+          "min_ns": 8172813,
+          "max_ns": 8173177
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9088.5,
+          "p95_ns": 9167,
+          "min_ns": 9010,
+          "max_ns": 9167
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9115.0,
+          "p95_ns": 9271,
+          "min_ns": 9010,
+          "max_ns": 9271
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "loop",
+      "quality": "Draft",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 13073071.0,
+          "p95_ns": 15573511,
+          "min_ns": 10572631,
+          "max_ns": 15573511
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11842859.5,
+          "p95_ns": 17052431,
+          "min_ns": 10545990,
+          "max_ns": 17052431
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1616458.5,
+          "p95_ns": 1617240,
+          "min_ns": 1615677,
+          "max_ns": 1617240
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1616614.5,
+          "p95_ns": 1623438,
+          "min_ns": 1613802,
+          "max_ns": 1623438
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9799218.5,
+          "p95_ns": 9800104,
+          "min_ns": 9798333,
+          "max_ns": 9800104
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9798593.5,
+          "p95_ns": 9805885,
+          "min_ns": 9795573,
+          "max_ns": 9805885
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 19921367.5,
+          "p95_ns": 22434999,
+          "min_ns": 17407736,
+          "max_ns": 22434999
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173568.0,
+          "p95_ns": 8173646,
+          "min_ns": 8173490,
+          "max_ns": 8173646
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172786.5,
+          "p95_ns": 8173438,
+          "min_ns": 8172708,
+          "max_ns": 8173438
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9193.0,
+          "p95_ns": 9219,
+          "min_ns": 9167,
+          "max_ns": 9219
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9167.0,
+          "p95_ns": 9688,
+          "min_ns": 9010,
+          "max_ns": 9688
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "loop",
+      "quality": "Draft",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 16598532.0,
+          "p95_ns": 16747217,
+          "min_ns": 16449847,
+          "max_ns": 16747217
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 18280576.5,
+          "p95_ns": 18481758,
+          "min_ns": 11888411,
+          "max_ns": 18481758
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 2947005.5,
+          "p95_ns": 2947813,
+          "min_ns": 2946198,
+          "max_ns": 2947813
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 2950000.0,
+          "p95_ns": 2954271,
+          "min_ns": 2944167,
+          "max_ns": 2954271
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11129713.5,
+          "p95_ns": 11130417,
+          "min_ns": 11129010,
+          "max_ns": 11130417
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11132187.5,
+          "p95_ns": 11136458,
+          "min_ns": 11125990,
+          "max_ns": 11136458
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 24192134.0,
+          "p95_ns": 24349454,
+          "min_ns": 24034814,
+          "max_ns": 24349454
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173541.5,
+          "p95_ns": 8173698,
+          "min_ns": 8173385,
+          "max_ns": 8173698
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172760.0,
+          "p95_ns": 8172969,
+          "min_ns": 8172656,
+          "max_ns": 8172969
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9167.0,
+          "p95_ns": 9219,
+          "min_ns": 9115,
+          "max_ns": 9219
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9167.0,
+          "p95_ns": 9531,
+          "min_ns": 9063,
+          "max_ns": 9531
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "loop",
+      "quality": "Fine",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 15256677.5,
+          "p95_ns": 15449479,
+          "min_ns": 15063876,
+          "max_ns": 15449479
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 17374798.5,
+          "p95_ns": 17430214,
+          "min_ns": 17293050,
+          "max_ns": 17430214
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1927031.5,
+          "p95_ns": 1927396,
+          "min_ns": 1926667,
+          "max_ns": 1927396
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1924818.0,
+          "p95_ns": 1930208,
+          "min_ns": 1921198,
+          "max_ns": 1930208
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10109791.5,
+          "p95_ns": 10110052,
+          "min_ns": 10109531,
+          "max_ns": 10110052
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10107161.5,
+          "p95_ns": 10112083,
+          "min_ns": 10103073,
+          "max_ns": 10112083
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 22822704.0,
+          "p95_ns": 22987522,
+          "min_ns": 22657886,
+          "max_ns": 22987522
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173672.0,
+          "p95_ns": 8173750,
+          "min_ns": 8173594,
+          "max_ns": 8173750
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172839.0,
+          "p95_ns": 8173333,
+          "min_ns": 8172708,
+          "max_ns": 8173333
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9089.0,
+          "p95_ns": 9115,
+          "min_ns": 9063,
+          "max_ns": 9115
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9063.0,
+          "p95_ns": 9167,
+          "min_ns": 9010,
+          "max_ns": 9167
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "loop",
+      "quality": "Fine",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 16331098.5,
+          "p95_ns": 16913748,
+          "min_ns": 15748449,
+          "max_ns": 16913748
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 18478837.0,
+          "p95_ns": 18552067,
+          "min_ns": 18340758,
+          "max_ns": 18552067
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 3040026.5,
+          "p95_ns": 3041563,
+          "min_ns": 3038490,
+          "max_ns": 3041563
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 3040130.0,
+          "p95_ns": 3048021,
+          "min_ns": 3037552,
+          "max_ns": 3048021
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11222734.5,
+          "p95_ns": 11224271,
+          "min_ns": 11221198,
+          "max_ns": 11224271
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11222344.0,
+          "p95_ns": 11230365,
+          "min_ns": 11219531,
+          "max_ns": 11230365
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 24511968.5,
+          "p95_ns": 25096010,
+          "min_ns": 23927927,
+          "max_ns": 25096010
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173568.0,
+          "p95_ns": 8173594,
+          "min_ns": 8173542,
+          "max_ns": 8173594
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172943.0,
+          "p95_ns": 8173229,
+          "min_ns": 8172813,
+          "max_ns": 8173229
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9141.0,
+          "p95_ns": 9167,
+          "min_ns": 9115,
+          "max_ns": 9167
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9063.0,
+          "p95_ns": 9323,
+          "min_ns": 9063,
+          "max_ns": 9323
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "loop",
+      "quality": "High",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 15265627.0,
+          "p95_ns": 15712053,
+          "min_ns": 14819201,
+          "max_ns": 15712053
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11950628.0,
+          "p95_ns": 17134762,
+          "min_ns": 10859739,
+          "max_ns": 17134762
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1915494.5,
+          "p95_ns": 1916406,
+          "min_ns": 1914583,
+          "max_ns": 1916406
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1916536.5,
+          "p95_ns": 1919115,
+          "min_ns": 1913073,
+          "max_ns": 1919115
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10098099.0,
+          "p95_ns": 10099010,
+          "min_ns": 10097188,
+          "max_ns": 10099010
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10098568.0,
+          "p95_ns": 10100938,
+          "min_ns": 10095000,
+          "max_ns": 10100938
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 23432034.5,
+          "p95_ns": 23913919,
+          "min_ns": 22950150,
+          "max_ns": 23913919
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173464.0,
+          "p95_ns": 8173490,
+          "min_ns": 8173438,
+          "max_ns": 8173490
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172813.0,
+          "p95_ns": 8173073,
+          "min_ns": 8172708,
+          "max_ns": 8173073
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9141.0,
+          "p95_ns": 9167,
+          "min_ns": 9115,
+          "max_ns": 9167
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9115.0,
+          "p95_ns": 9323,
+          "min_ns": 9063,
+          "max_ns": 9323
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "r8",
+      "variant": "loop",
+      "quality": "High",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        1622016
+      ],
+      "destination_pitch_bytes": [
+        1536
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 14758960.0,
+          "p95_ns": 17119868,
+          "min_ns": 12398052,
+          "max_ns": 17119868
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 13585560.5,
+          "p95_ns": 18961350,
+          "min_ns": 12393577,
+          "max_ns": 18961350
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 3449140.5,
+          "p95_ns": 3449531,
+          "min_ns": 3448750,
+          "max_ns": 3449531
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 3448646.0,
+          "p95_ns": 3455104,
+          "min_ns": 3446823,
+          "max_ns": 3455104
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11631953.0,
+          "p95_ns": 11632031,
+          "min_ns": 11631875,
+          "max_ns": 11632031
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11630807.0,
+          "p95_ns": 11637865,
+          "min_ns": 11628698,
+          "max_ns": 11637865
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 24131546.0,
+          "p95_ns": 26514091,
+          "min_ns": 21749001,
+          "max_ns": 26514091
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173646.0,
+          "p95_ns": 8173802,
+          "min_ns": 8173490,
+          "max_ns": 8173802
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172813.0,
+          "p95_ns": 8173698,
+          "min_ns": 8172760,
+          "max_ns": 8173698
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9166.5,
+          "p95_ns": 9323,
+          "min_ns": 9010,
+          "max_ns": 9323
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9167.0,
+          "p95_ns": 9479,
+          "min_ns": 9010,
+          "max_ns": 9479
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "quality": "Draft",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 13836793.5,
+          "p95_ns": 16687796,
+          "min_ns": 10985791,
+          "max_ns": 16687796
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 14369173.0,
+          "p95_ns": 16987967,
+          "min_ns": 10510751,
+          "max_ns": 16987967
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1572187.5,
+          "p95_ns": 1573333,
+          "min_ns": 1571042,
+          "max_ns": 1573333
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1571250.0,
+          "p95_ns": 1574531,
+          "min_ns": 1569896,
+          "max_ns": 1574531
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9755026.0,
+          "p95_ns": 9756146,
+          "min_ns": 9753906,
+          "max_ns": 9756146
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9753255.0,
+          "p95_ns": 9756615,
+          "min_ns": 9751875,
+          "max_ns": 9756615
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 28764071.5,
+          "p95_ns": 31491352,
+          "min_ns": 26036791,
+          "max_ns": 31491352
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173620.0,
+          "p95_ns": 8173698,
+          "min_ns": 8173542,
+          "max_ns": 8173698
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172865.0,
+          "p95_ns": 8173177,
+          "min_ns": 8172708,
+          "max_ns": 8173177
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9219.0,
+          "p95_ns": 9271,
+          "min_ns": 9167,
+          "max_ns": 9271
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9167.0,
+          "p95_ns": 9323,
+          "min_ns": 9063,
+          "max_ns": 9323
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9755026.0,
+          "p95_ns": 9756146,
+          "min_ns": 9753906,
+          "max_ns": 9756146
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9753255.0,
+          "p95_ns": 9756615,
+          "min_ns": 9751875,
+          "max_ns": 9756615
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 28764071.5,
+          "p95_ns": 31491352,
+          "min_ns": 26036791,
+          "max_ns": 31491352
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "quality": "Draft",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 14688681.0,
+          "p95_ns": 17076896,
+          "min_ns": 12300466,
+          "max_ns": 17076896
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 12882032.5,
+          "p95_ns": 16495983,
+          "min_ns": 11863868,
+          "max_ns": 16495983
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 2910989.5,
+          "p95_ns": 2912031,
+          "min_ns": 2909948,
+          "max_ns": 2912031
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 2909167.0,
+          "p95_ns": 2913490,
+          "min_ns": 2907865,
+          "max_ns": 2913490
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11093802.0,
+          "p95_ns": 11095052,
+          "min_ns": 11092552,
+          "max_ns": 11095052
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11091380.0,
+          "p95_ns": 11095677,
+          "min_ns": 11090052,
+          "max_ns": 11095677
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 30403650.5,
+          "p95_ns": 32982246,
+          "min_ns": 27825055,
+          "max_ns": 32982246
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173437.5,
+          "p95_ns": 8173490,
+          "min_ns": 8173385,
+          "max_ns": 8173490
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172865.0,
+          "p95_ns": 8173229,
+          "min_ns": 8172760,
+          "max_ns": 8173229
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9375.0,
+          "p95_ns": 9531,
+          "min_ns": 9219,
+          "max_ns": 9531
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9323.0,
+          "p95_ns": 9531,
+          "min_ns": 9115,
+          "max_ns": 9531
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11093802.0,
+          "p95_ns": 11095052,
+          "min_ns": 11092552,
+          "max_ns": 11095052
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11091380.0,
+          "p95_ns": 11095677,
+          "min_ns": 11090052,
+          "max_ns": 11095677
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 30403650.5,
+          "p95_ns": 32982246,
+          "min_ns": 27825055,
+          "max_ns": 32982246
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "quality": "Fine",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 14839598.0,
+          "p95_ns": 16858812,
+          "min_ns": 12820384,
+          "max_ns": 16858812
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 14627004.5,
+          "p95_ns": 17398248,
+          "min_ns": 11754261,
+          "max_ns": 17398248
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1884218.5,
+          "p95_ns": 1885260,
+          "min_ns": 1883177,
+          "max_ns": 1885260
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1882552.0,
+          "p95_ns": 1885260,
+          "min_ns": 1881771,
+          "max_ns": 1885260
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10067057.5,
+          "p95_ns": 10068177,
+          "min_ns": 10065938,
+          "max_ns": 10068177
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10064766.0,
+          "p95_ns": 10067344,
+          "min_ns": 10063854,
+          "max_ns": 10067344
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 30174460.0,
+          "p95_ns": 32364471,
+          "min_ns": 27984449,
+          "max_ns": 32364471
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173568.0,
+          "p95_ns": 8173646,
+          "min_ns": 8173490,
+          "max_ns": 8173646
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172839.0,
+          "p95_ns": 8173177,
+          "min_ns": 8172708,
+          "max_ns": 8173177
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9271.0,
+          "p95_ns": 9271,
+          "min_ns": 9271,
+          "max_ns": 9271
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9245.0,
+          "p95_ns": 9427,
+          "min_ns": 9115,
+          "max_ns": 9427
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10067057.5,
+          "p95_ns": 10068177,
+          "min_ns": 10065938,
+          "max_ns": 10068177
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10064766.0,
+          "p95_ns": 10067344,
+          "min_ns": 10063854,
+          "max_ns": 10067344
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 30174460.0,
+          "p95_ns": 32364471,
+          "min_ns": 27984449,
+          "max_ns": 32364471
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "quality": "Fine",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 15277852.0,
+          "p95_ns": 17417624,
+          "min_ns": 13138080,
+          "max_ns": 17417624
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 15789674.5,
+          "p95_ns": 18523144,
+          "min_ns": 12990451,
+          "max_ns": 18523144
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 3014297.0,
+          "p95_ns": 3015104,
+          "min_ns": 3013490,
+          "max_ns": 3015104
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 3013984.5,
+          "p95_ns": 3017240,
+          "min_ns": 3012813,
+          "max_ns": 3017240
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11197265.5,
+          "p95_ns": 11198125,
+          "min_ns": 11196406,
+          "max_ns": 11198125
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11196380.5,
+          "p95_ns": 11199479,
+          "min_ns": 11194948,
+          "max_ns": 11199479
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 31509425.5,
+          "p95_ns": 33753440,
+          "min_ns": 29265411,
+          "max_ns": 33753440
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173646.0,
+          "p95_ns": 8173698,
+          "min_ns": 8173594,
+          "max_ns": 8173698
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172969.0,
+          "p95_ns": 8173490,
+          "min_ns": 8172760,
+          "max_ns": 8173490
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9323.0,
+          "p95_ns": 9323,
+          "min_ns": 9323,
+          "max_ns": 9323
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9271.0,
+          "p95_ns": 9531,
+          "min_ns": 9115,
+          "max_ns": 9531
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11197265.5,
+          "p95_ns": 11198125,
+          "min_ns": 11196406,
+          "max_ns": 11198125
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11196380.5,
+          "p95_ns": 11199479,
+          "min_ns": 11194948,
+          "max_ns": 11199479
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 31509425.5,
+          "p95_ns": 33753440,
+          "min_ns": 29265411,
+          "max_ns": 33753440
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "quality": "High",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 13730452.0,
+          "p95_ns": 16144983,
+          "min_ns": 11315921,
+          "max_ns": 16144983
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 14716469.5,
+          "p95_ns": 17442648,
+          "min_ns": 11738005,
+          "max_ns": 17442648
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1880026.0,
+          "p95_ns": 1881458,
+          "min_ns": 1878594,
+          "max_ns": 1881458
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1879219.0,
+          "p95_ns": 1886510,
+          "min_ns": 1877188,
+          "max_ns": 1886510
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10062890.5,
+          "p95_ns": 10064531,
+          "min_ns": 10061250,
+          "max_ns": 10064531
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10061354.0,
+          "p95_ns": 10068542,
+          "min_ns": 10059375,
+          "max_ns": 10068542
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 30037565.0,
+          "p95_ns": 32315961,
+          "min_ns": 27759169,
+          "max_ns": 32315961
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173672.0,
+          "p95_ns": 8173854,
+          "min_ns": 8173490,
+          "max_ns": 8173854
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172786.5,
+          "p95_ns": 8173073,
+          "min_ns": 8172708,
+          "max_ns": 8173073
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9193.0,
+          "p95_ns": 9219,
+          "min_ns": 9167,
+          "max_ns": 9219
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9323.0,
+          "p95_ns": 9688,
+          "min_ns": 9219,
+          "max_ns": 9688
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10062890.5,
+          "p95_ns": 10064531,
+          "min_ns": 10061250,
+          "max_ns": 10064531
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10061354.0,
+          "p95_ns": 10068542,
+          "min_ns": 10059375,
+          "max_ns": 10068542
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 30037565.0,
+          "p95_ns": 32315961,
+          "min_ns": 27759169,
+          "max_ns": 32315961
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "direct",
+      "quality": "High",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 15587074.5,
+          "p95_ns": 17605378,
+          "min_ns": 13568771,
+          "max_ns": 17605378
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 16199641.5,
+          "p95_ns": 18893659,
+          "min_ns": 13566663,
+          "max_ns": 18893659
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 3428854.0,
+          "p95_ns": 3429010,
+          "min_ns": 3428698,
+          "max_ns": 3429010
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 3428333.0,
+          "p95_ns": 3433385,
+          "min_ns": 3427448,
+          "max_ns": 3433385
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11611719.0,
+          "p95_ns": 11611771,
+          "min_ns": 11611667,
+          "max_ns": 11611771
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11610625.0,
+          "p95_ns": 11615521,
+          "min_ns": 11609531,
+          "max_ns": 11615521
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 33027817.5,
+          "p95_ns": 35230928,
+          "min_ns": 30824707,
+          "max_ns": 35230928
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173672.0,
+          "p95_ns": 8173750,
+          "min_ns": 8173594,
+          "max_ns": 8173750
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172865.0,
+          "p95_ns": 8173125,
+          "min_ns": 8172760,
+          "max_ns": 8173125
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9193.0,
+          "p95_ns": 9219,
+          "min_ns": 9167,
+          "max_ns": 9219
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9219.0,
+          "p95_ns": 9375,
+          "min_ns": 9167,
+          "max_ns": 9375
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11611719.0,
+          "p95_ns": 11611771,
+          "min_ns": 11611667,
+          "max_ns": 11611771
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11610625.0,
+          "p95_ns": 11615521,
+          "min_ns": 11609531,
+          "max_ns": 11615521
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 33027817.5,
+          "p95_ns": 35230928,
+          "min_ns": 30824707,
+          "max_ns": 35230928
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "loop",
+      "quality": "Draft",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 14045531.0,
+          "p95_ns": 16239497,
+          "min_ns": 11851565,
+          "max_ns": 16239497
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 17010094.5,
+          "p95_ns": 17092384,
+          "min_ns": 11669075,
+          "max_ns": 17092384
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1617161.5,
+          "p95_ns": 1617865,
+          "min_ns": 1616458,
+          "max_ns": 1617865
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1615260.5,
+          "p95_ns": 1620417,
+          "min_ns": 1613281,
+          "max_ns": 1620417
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9800078.5,
+          "p95_ns": 9800938,
+          "min_ns": 9799219,
+          "max_ns": 9800938
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9797239.5,
+          "p95_ns": 9802552,
+          "min_ns": 9795156,
+          "max_ns": 9802552
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 29007610.0,
+          "p95_ns": 31157966,
+          "min_ns": 26857254,
+          "max_ns": 31157966
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173698.0,
+          "p95_ns": 8173906,
+          "min_ns": 8173490,
+          "max_ns": 8173906
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172734.0,
+          "p95_ns": 8173229,
+          "min_ns": 8172552,
+          "max_ns": 8173229
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9219.0,
+          "p95_ns": 9271,
+          "min_ns": 9167,
+          "max_ns": 9271
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9167.0,
+          "p95_ns": 9323,
+          "min_ns": 9063,
+          "max_ns": 9323
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9800078.5,
+          "p95_ns": 9800938,
+          "min_ns": 9799219,
+          "max_ns": 9800938
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9797239.5,
+          "p95_ns": 9802552,
+          "min_ns": 9795156,
+          "max_ns": 9802552
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 29007610.0,
+          "p95_ns": 31157966,
+          "min_ns": 26857254,
+          "max_ns": 31157966
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "loop",
+      "quality": "Draft",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 12423753.0,
+          "p95_ns": 12507378,
+          "min_ns": 12340128,
+          "max_ns": 12507378
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 13149023.5,
+          "p95_ns": 13192402,
+          "min_ns": 12697529,
+          "max_ns": 13192402
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 2949974.0,
+          "p95_ns": 2952865,
+          "min_ns": 2947083,
+          "max_ns": 2952865
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 2946953.0,
+          "p95_ns": 2951302,
+          "min_ns": 2944219,
+          "max_ns": 2951302
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11132890.5,
+          "p95_ns": 11135677,
+          "min_ns": 11130104,
+          "max_ns": 11135677
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11128984.5,
+          "p95_ns": 11133281,
+          "min_ns": 11126250,
+          "max_ns": 11133281
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 27600941.0,
+          "p95_ns": 28197017,
+          "min_ns": 27004865,
+          "max_ns": 28197017
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173646.0,
+          "p95_ns": 8173750,
+          "min_ns": 8173542,
+          "max_ns": 8173750
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172760.0,
+          "p95_ns": 8173021,
+          "min_ns": 8172604,
+          "max_ns": 8173021
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9271.0,
+          "p95_ns": 9271,
+          "min_ns": 9271,
+          "max_ns": 9271
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9271.0,
+          "p95_ns": 9375,
+          "min_ns": 9167,
+          "max_ns": 9375
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11132890.5,
+          "p95_ns": 11135677,
+          "min_ns": 11130104,
+          "max_ns": 11135677
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11128984.5,
+          "p95_ns": 11133281,
+          "min_ns": 11126250,
+          "max_ns": 11133281
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 27600941.0,
+          "p95_ns": 28197017,
+          "min_ns": 27004865,
+          "max_ns": 28197017
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "loop",
+      "quality": "Fine",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 13512431.5,
+          "p95_ns": 15693084,
+          "min_ns": 11331779,
+          "max_ns": 15693084
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 14696162.5,
+          "p95_ns": 17448792,
+          "min_ns": 10854683,
+          "max_ns": 17448792
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1925364.5,
+          "p95_ns": 1926458,
+          "min_ns": 1924271,
+          "max_ns": 1926458
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1923594.0,
+          "p95_ns": 1927969,
+          "min_ns": 1919792,
+          "max_ns": 1927969
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10108437.5,
+          "p95_ns": 10109740,
+          "min_ns": 10107135,
+          "max_ns": 10109740
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10106015.5,
+          "p95_ns": 10110156,
+          "min_ns": 10102188,
+          "max_ns": 10110156
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 29278284.0,
+          "p95_ns": 31408029,
+          "min_ns": 27148539,
+          "max_ns": 31408029
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173776.0,
+          "p95_ns": 8174010,
+          "min_ns": 8173542,
+          "max_ns": 8174010
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172917.0,
+          "p95_ns": 8173438,
+          "min_ns": 8172813,
+          "max_ns": 8173438
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9297.0,
+          "p95_ns": 9323,
+          "min_ns": 9271,
+          "max_ns": 9323
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9219.0,
+          "p95_ns": 9792,
+          "min_ns": 9115,
+          "max_ns": 9792
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10108437.5,
+          "p95_ns": 10109740,
+          "min_ns": 10107135,
+          "max_ns": 10109740
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10106015.5,
+          "p95_ns": 10110156,
+          "min_ns": 10102188,
+          "max_ns": 10110156
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 29278284.0,
+          "p95_ns": 31408029,
+          "min_ns": 27148539,
+          "max_ns": 31408029
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "loop",
+      "quality": "Fine",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 14721695.0,
+          "p95_ns": 17010477,
+          "min_ns": 12432913,
+          "max_ns": 17010477
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 15654993.5,
+          "p95_ns": 18581174,
+          "min_ns": 11973561,
+          "max_ns": 18581174
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 3040911.5,
+          "p95_ns": 3041094,
+          "min_ns": 3040729,
+          "max_ns": 3041094
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 3040755.0,
+          "p95_ns": 3050729,
+          "min_ns": 3037969,
+          "max_ns": 3050729
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11224010.5,
+          "p95_ns": 11224115,
+          "min_ns": 11223906,
+          "max_ns": 11224115
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11222916.5,
+          "p95_ns": 11232917,
+          "min_ns": 11220052,
+          "max_ns": 11232917
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 30975527.0,
+          "p95_ns": 33362421,
+          "min_ns": 28588633,
+          "max_ns": 33362421
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173828.0,
+          "p95_ns": 8174010,
+          "min_ns": 8173646,
+          "max_ns": 8174010
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172917.0,
+          "p95_ns": 8173646,
+          "min_ns": 8172760,
+          "max_ns": 8173646
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9271.0,
+          "p95_ns": 9375,
+          "min_ns": 9167,
+          "max_ns": 9375
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9271.0,
+          "p95_ns": 9323,
+          "min_ns": 9219,
+          "max_ns": 9323
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11224010.5,
+          "p95_ns": 11224115,
+          "min_ns": 11223906,
+          "max_ns": 11224115
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11222916.5,
+          "p95_ns": 11232917,
+          "min_ns": 11220052,
+          "max_ns": 11232917
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 30975527.0,
+          "p95_ns": 33362421,
+          "min_ns": 28588633,
+          "max_ns": 33362421
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "loop",
+      "quality": "High",
+      "shape": "Lean",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 14762232.5,
+          "p95_ns": 16576053,
+          "min_ns": 12948412,
+          "max_ns": 16576053
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 16550573.0,
+          "p95_ns": 17370513,
+          "min_ns": 11851863,
+          "max_ns": 17370513
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 1917943.0,
+          "p95_ns": 1918698,
+          "min_ns": 1917188,
+          "max_ns": 1918698
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 1915234.5,
+          "p95_ns": 1918490,
+          "min_ns": 1913594,
+          "max_ns": 1918490
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10101354.5,
+          "p95_ns": 10102292,
+          "min_ns": 10100417,
+          "max_ns": 10102292
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10097708.5,
+          "p95_ns": 10100729,
+          "min_ns": 10095938,
+          "max_ns": 10100729
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 31011280.0,
+          "p95_ns": 32745151,
+          "min_ns": 29277409,
+          "max_ns": 32745151
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173958.5,
+          "p95_ns": 8174063,
+          "min_ns": 8173854,
+          "max_ns": 8174063
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172969.0,
+          "p95_ns": 8173594,
+          "min_ns": 8172760,
+          "max_ns": 8173594
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9453.0,
+          "p95_ns": 9531,
+          "min_ns": 9375,
+          "max_ns": 9531
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9271.0,
+          "p95_ns": 9635,
+          "min_ns": 9219,
+          "max_ns": 9635
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 10101354.5,
+          "p95_ns": 10102292,
+          "min_ns": 10100417,
+          "max_ns": 10102292
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 10097708.5,
+          "p95_ns": 10100729,
+          "min_ns": 10095938,
+          "max_ns": 10100729
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 31011280.0,
+          "p95_ns": 32745151,
+          "min_ns": 29277409,
+          "max_ns": 32745151
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    },
+    {
+      "stage": "atlas-rebuild",
+      "output_format": "rgba8",
+      "variant": "loop",
+      "quality": "High",
+      "shape": "Meso",
+      "raw_count": 16,
+      "destination_bytes": [
+        6488064
+      ],
+      "destination_pitch_bytes": [
+        6144
+      ],
+      "first_count": 2,
+      "warm_count": 14,
+      "wall_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 16055029.5,
+          "p95_ns": 18049982,
+          "min_ns": 14060077,
+          "max_ns": 18049982
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 18823085.0,
+          "p95_ns": 18908617,
+          "min_ns": 13493891,
+          "max_ns": 18908617
+        }
+      },
+      "gpu_draw_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 3451510.5,
+          "p95_ns": 3453594,
+          "min_ns": 3449427,
+          "max_ns": 3453594
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 3449010.5,
+          "p95_ns": 3455990,
+          "min_ns": 3447917,
+          "max_ns": 3455990
+        }
+      },
+      "gpu_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11634375.5,
+          "p95_ns": 11636563,
+          "min_ns": 11632188,
+          "max_ns": 11636563
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11631276.0,
+          "p95_ns": 11638177,
+          "min_ns": 11630000,
+          "max_ns": 11638177
+        }
+      },
+      "first_target_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 33512931.5,
+          "p95_ns": 35703512,
+          "min_ns": 31322351,
+          "max_ns": 35703512
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      },
+      "gpu_clear_setup_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 8173646.0,
+          "p95_ns": 8173698,
+          "min_ns": 8173594,
+          "max_ns": 8173698
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 8172995.0,
+          "p95_ns": 8173542,
+          "min_ns": 8172760,
+          "max_ns": 8173542
+        }
+      },
+      "gpu_writeback_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 9219.0,
+          "p95_ns": 9271,
+          "min_ns": 9167,
+          "max_ns": 9271
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 9271.0,
+          "p95_ns": 9375,
+          "min_ns": 9219,
+          "max_ns": 9375
+        }
+      },
+      "gpu_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 11634375.5,
+          "p95_ns": 11636563,
+          "min_ns": 11632188,
+          "max_ns": 11636563
+        },
+        "warm": {
+          "count": 14,
+          "median_ns": 11631276.0,
+          "p95_ns": 11638177,
+          "min_ns": 11630000,
+          "max_ns": 11638177
+        }
+      },
+      "first_rgba_ready_ns": {
+        "first": {
+          "count": 2,
+          "median_ns": 33512931.5,
+          "p95_ns": 35703512,
+          "min_ns": 31322351,
+          "max_ns": 35703512
+        },
+        "warm": {
+          "count": 0,
+          "median_ns": null,
+          "p95_ns": null,
+          "min_ns": null,
+          "max_ns": null
+        }
+      }
+    }
+  ],
+  "independent_capture_check": {
+    "passed": true,
+    "runs": [
+      {
+        "run": 1,
+        "records": {
+          "begin": 1,
+          "setup": 24,
+          "sample": 192,
+          "validation": 12,
+          "done": 1
+        },
+        "renders": 192,
+        "validated_pairs": 12
+      },
+      {
+        "run": 2,
+        "records": {
+          "begin": 1,
+          "setup": 24,
+          "sample": 192,
+          "validation": 12,
+          "done": 1
+        },
+        "renders": 192,
+        "validated_pairs": 12
+      }
+    ]
+  },
+  "limitations": [
+    "Same shader and geometry; separate target allocation and render entry points.",
+    "First-use wall time includes different allocation/ownership paths; it is not a format-only GPU measurement.",
+    "Live shared GPU; no isolated GPU reset or cold-cache experiment.",
+    "Post-burst snapshots and validation excluded from measured intervals.",
+    "Binary coverage in this producer; fractional coverage and consumer composition unmeasured.",
+    "Warm rebuild is not persistent atlas reuse/copy performance."
+  ]
+}

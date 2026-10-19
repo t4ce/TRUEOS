@@ -9,9 +9,10 @@
   "backend": "mesa-anv-noop-drm-shim-compile-only",
   "gpu_submitted": false,
   "baremetal_verified": false,
-  "source_sha256": "5c3b3840f1404878992c912d66ba4b337b48ce5fbd53e0a314629b45a5ed9264",
-  "vs_sha256": "48b2f5643540e00e524e97252070826a8aefdc4e9ca947d7b1969345e72fa41c",
-  "vs_bytes": 18384,
+  "source_sha256": "a69b16f4b8aac1c214fe0f61f161e4b1decc92ba6efc8fa2d3fb177afac3fdf8",
+  "generator_sha256": "e386ec9fe92f5480b661abb399f8550ff5f49d510a1dced1630c40caa1ee350a",
+  "vs_sha256": "efc9eaeb2373ae0fd73a26b172ce814f8faef47005f31ef405875b943a0a0a7c",
+  "vs_bytes": 18440,
   "vertex_compiler_state": {
     "ver": 12,
     "verx10": 120,
@@ -44,10 +45,10 @@
       "description": "SIMD8 vertex shader",
       "simd_width": 8,
       "statistics": {
-        "Instruction Count": 1373,
+        "Instruction Count": 1376,
         "SEND Count": 1,
         "Loop Count": 3,
-        "Cycle Count": 635186,
+        "Cycle Count": 635146,
         "Spill Count": 0,
         "Fill Count": 0,
         "Scratch Memory Size": 0,
@@ -56,7 +57,7 @@
         "Max live registers": 50,
         "Workgroup Memory Size": 0,
         "Non SSA regs after NIR": 95,
-        "Source hash": 2780372100
+        "Source hash": 2309620815
       }
     },
     {
@@ -102,5 +103,6 @@
       }
     }
   ],
-  "ps_reused": "triangle_pipeline_simd16"
+  "ps_reused": "triangle_pipeline_simd16",
+  "generated_rust_sha256": "aed280607e096d016ebcba280bb6a00f4a54d04953a1ea00fd844f599905db72"
 }

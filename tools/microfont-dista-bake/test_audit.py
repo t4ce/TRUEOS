@@ -14,14 +14,20 @@ class DistaAuditTests(unittest.TestCase):
         cls.parameters = audit.load_parameters()
         cls.offsets = audit.load_shader_offsets()
 
-    def test_current_sparse_overrides_and_regular_A(self):
+    def test_current_sparse_overrides_and_authored_basic_shapes(self):
         self.assertEqual(len(self.seeds), 128)
         self.assertEqual(self.seeds["/"].sites(), [(4, 0), (3, 2), (2, 4), (1, 6), (0, 8)])
         self.assertEqual(self.seeds["y"].sites(), [(0, 4), (4, 4), (0, 6), (4, 6), (1, 7), (3, 7), (2, 8), (1, 10)])
         self.assertTrue(self.seeds["y"].long_reach)
         self.assertFalse(self.seeds["A"].long_reach)
-        self.assertEqual(self.seeds["A"].sites()[0], (2, 1))
-        self.assertEqual(len(self.seeds["A"].sites()), 18)
+        self.assertEqual(self.seeds["A"].sites()[0], (2, 0))
+        self.assertEqual(len(self.seeds["A"].sites()), 20)
+        for char, pixels, sites in [("1", 0x6282082082082000, 11),
+                                    ("A", 0x85228BE8A28A2000, 20),
+                                    ("Y", 0x228A2894208208000, 14)]:
+            self.assertEqual(self.seeds[char].pixels, pixels)
+            self.assertEqual(len(self.seeds[char].sites()), sites)
+            self.assertFalse(self.seeds[char].long_reach)
 
     def test_all_printable_seed_graphs_match_full_closed_disc_oracle(self):
         for code in range(33, 127):
@@ -70,11 +76,17 @@ class DistaAuditTests(unittest.TestCase):
 
     def test_demo_counts_distinguish_surviving_and_submitted_triangles(self):
         result = audit.audit(audit.DEMO)
-        self.assertEqual((result["sites"], result["links"]), (144, 137))
-        self.assertEqual(result["active_triangles"], 4580)
-        self.assertEqual(result["submitted_triangles"], 6648)
-        self.assertEqual(result["shapes"]["Meso"]["active_triangles"], 2578)
-        self.assertEqual(result["shapes"]["Lean"]["active_triangles"], 2002)
+        self.assertEqual((result["sites"], result["links"]), (145, 138))
+        self.assertEqual(result["active_triangles"], 4612)
+        self.assertEqual(result["submitted_triangles"], 6692)
+        self.assertEqual(result["shapes"]["Meso"]["active_triangles"], 2596)
+        self.assertEqual(result["shapes"]["Lean"]["active_triangles"], 2016)
+
+    def test_current_full_basic_counts_match_independent_graph_oracle(self):
+        result = audit.audit("".join(chr(code) for code in range(0x20, 0x7f)))
+        self.assertEqual((result["sites"], result["links"]), (1303, 1244))
+        self.assertEqual(result["shapes"]["Meso"]["active_triangles"], 23336)
+        self.assertEqual(result["shapes"]["Lean"]["active_triangles"], 18124)
 
     def test_analytic_union_matches_original_gaussian_field(self):
         for char in audit.DEMO:

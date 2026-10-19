@@ -1,6 +1,12 @@
 // A color-independent offscreen target for the Dista experiment. This does
 // not participate in UI4 frame ownership or extend display scanout formats.
 
+// A 2x printable Basic sheet enables a one-time CPU box resolve for the
+// visible quality preview. The direct mask path owns its target and never
+// uses the scene scratch/depth allocations whose limits remain 2560x1440.
+const RESIDENT_DISTA_MASK_MAX_WIDTH: u32 = 3072;
+const RESIDENT_DISTA_MASK_MAX_HEIGHT: u32 = 2112;
+
 pub(crate) struct ResidentDistaMask {
     backing: crate::intel::gpgpu::GpgpuOwnedMask8Surface,
     render_gpu: u64,
@@ -69,8 +75,8 @@ pub(crate) fn release_resident_dista_mask(mut mask: ResidentDistaMask) -> bool {
 
 fn resident_dista_mask_shape_is_valid(width: u32, height: u32) -> bool {
     width != 0 && height != 0
-        && width as usize <= RESIDENT_SCENE_TARGET_WIDTH
-        && height as usize <= RESIDENT_SCENE_TARGET_HEIGHT
+        && width <= RESIDENT_DISTA_MASK_MAX_WIDTH
+        && height <= RESIDENT_DISTA_MASK_MAX_HEIGHT
 }
 
 fn resident_dista_mask_draw_is_valid(draw: &ResidentSceneDraw<'_>) -> bool {
@@ -156,10 +162,13 @@ mod resident_dista_mask_tests {
     use super::*;
 
     #[test]
-    fn mask_extent_stays_inside_existing_native_target_limits() {
+    fn mask_extent_supports_bounded_two_by_two_supersampling() {
         assert!(resident_dista_mask_shape_is_valid(1536, 1056));
-        for (width, height) in [(0, 1), (1, 0), (RESIDENT_SCENE_TARGET_WIDTH as u32 + 1, 1),
-            (1, RESIDENT_SCENE_TARGET_HEIGHT as u32 + 1)] {
+        assert!(resident_dista_mask_shape_is_valid(3072, 2112));
+        assert_eq!(RESIDENT_DISTA_MASK_MAX_WIDTH as usize * RESIDENT_DISTA_MASK_MAX_HEIGHT as usize,
+            6_488_064);
+        for (width, height) in [(0, 1), (1, 0), (RESIDENT_DISTA_MASK_MAX_WIDTH + 1, 1),
+            (1, RESIDENT_DISTA_MASK_MAX_HEIGHT + 1)] {
             assert!(!resident_dista_mask_shape_is_valid(width, height));
         }
     }
@@ -214,6 +223,19 @@ mod dista_render_target_packet_tests {
             assert_eq!(rgba[3], 6143);
             for word in (1..16).filter(|&word| word != 3) { assert_eq!(rgba[word], mask[word]); }
         }
+    }
+
+    #[test]
+    fn supersampled_mask_descriptor_has_full_extent_without_msaa_storage() {
+        let target = TriangleRenderTargetSurface {
+            format: SURFACE_FORMAT_R8_UNORM, pitch: 3072,
+            width: 3072, height: 2112, gpu: 0x1234_5678_9000, msaa4: false,
+        };
+        let state = triangle_render_target_surface_state(target, 0x4680, 1).unwrap();
+        assert_eq!(state[2], 3071 | (2111 << 16));
+        assert_eq!(state[3], 3071);
+        assert_eq!(state[4], 0);
+        assert_eq!(state[0] & ((1 << 12) | (1 << 28)), 0);
     }
 
     #[test]
