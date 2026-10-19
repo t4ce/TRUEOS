@@ -5,7 +5,7 @@ case 34u: return uvec3(0u,1158938624u,1u);
 case 35u: return uvec3(1045512192u,1161711941u,1u);
 case 36u: return uvec3(2859499520u,2267718082u,0u);
 case 37u: return uvec3(606617600u,168956036u,1u);
-case 38u: return uvec3(2726940672u,2232688984u,0u);
+case 38u: return uvec3(587812864u,1075970368u,1u);
 case 39u: return uvec3(0u,2181562368u,0u);
 case 40u: return uvec3(135274496u,554180738u,0u);
 case 41u: return uvec3(69271552u,33820737u,1u);
@@ -95,4 +95,4 @@ case 124u: return uvec3(136347648u,2181570690u,0u);
 case 125u: return uvec3(272760832u,68173956u,2u);
 case 126u: return uvec3(0u,17057u,0u);
 default: return uvec3(0u); } }
-bool basic_seed_long_reach(uint code) { return code == 47u || code == 55u || code == 92u || code == 118u || code == 121u; }
+bool basic_seed_long_reach(uint code) { return code == 38u || code == 47u || code == 55u || code == 92u || code == 118u || code == 121u; }
