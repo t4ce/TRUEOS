@@ -15,6 +15,19 @@ def trims(p, u):
             and (across-(half-radius))**2+(radius-along)**2 > radius**2+1e-9)
 
 class NativeEndGeometry(unittest.TestCase):
+    def test_aa_cap_is_local_and_fractional(self):
+        def coverage(along,across,radius=4.0):
+            if along < -0.5 or along >= radius or abs(across)>radius:
+                return 1.0
+            return max(0.0,min(1.0,radius-math.hypot(across,radius-along)))
+        self.assertEqual(coverage(-50,0),1.0)
+        self.assertEqual(coverage(0,80),1.0)
+        self.assertEqual(coverage(80,0),1.0)
+        self.assertEqual(coverage(0,0),0.0)
+        self.assertEqual(coverage(4,0),1.0)
+        self.assertGreater(coverage(0.5,0.5),0.0)
+        self.assertLess(coverage(0.5,0.5),1.0)
+
     def test_axis_aligned_coverage_matches_original_rounding(self):
         for u in [(1,0),(-1,0),(0,1),(0,-1)]:
             for x in range(-20,21):

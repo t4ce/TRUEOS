@@ -14,19 +14,28 @@ def module(name,path):
 def fingerprint():
     return hashlib.sha256(b''.join(p.read_bytes() for p in [Path(__file__),FRAG,VERT,DUMPER,ROOT/'tools/helio-intel-bake/bake.py',ROOT/'tools/wc3-fixed-bake/bake.py'])).hexdigest()
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--ensure-current',action='store_true');parser.add_argument('--mesa-build',type=Path,default=ROOT/'bld/toolchains/microfont-dista-mesa');args=parser.parse_args()
+    global FRAG, VERT, OUT, GENERATED
+    parser=argparse.ArgumentParser();parser.add_argument('--ensure-current',action='store_true');parser.add_argument('--mesa-build',type=Path,default=ROOT/'bld/toolchains/microfont-dista-mesa');parser.add_argument('--mask',action='store_true');args=parser.parse_args()
+    stem='mask' if args.mask else 'line_ends'
+    if args.mask:
+        FRAG=ROOT/'vendor/microfont/shaders/mask.frag'
+        VERT=ROOT/'vendor/microfont/shaders/mask.vert'
+        OUT=ROOT/'crates/trueos-shader/microfont_mask'
+        GENERATED=ROOT/'crates/trueos-shader/generated_microfont_mask.rs'
     sha=fingerprint();manifest=OUT/'manifest.json'
     if args.ensure_current and manifest.exists() and GENERATED.exists():
         old=json.loads(manifest.read_text())
         if old.get('source_sha256')==sha and old.get('rust_sha256')==hashlib.sha256(GENERATED.read_bytes()).hexdigest():
             print('microfont-line-ends: native shader current');return
-    work=ROOT/'bld/microfont-line-end-bake';work.mkdir(parents=True,exist_ok=True);OUT.mkdir(parents=True,exist_ok=True)
+    work=ROOT/('bld/microfont-mask-bake' if args.mask else 'bld/microfont-line-end-bake');work.mkdir(parents=True,exist_ok=True);OUT.mkdir(parents=True,exist_ok=True)
     baker=module('helio_baker',ROOT/'tools/helio-intel-bake/bake.py')
     emitter=module('fixed_baker',ROOT/'tools/wc3-fixed-bake/bake.py')
     stages=[]
     for stage,path in [('vert',VERT),('frag',FRAG)]:
-        target=work/f'line_ends.{stage}.spv';subprocess.run(['glslc','--target-env=vulkan1.1',str(path),'-o',str(target)],check=True);stages.append(target)
+        target=work/f'{stem}.{stage}.spv';subprocess.run(['glslc','--target-env=vulkan1.1',str(path),'-o',str(target)],check=True);stages.append(target)
     src=DUMPER.read_text().replace('.size = sizeof(push_color),','.size = 64,').replace('.pushConstantRangeCount = push_color_enabled ? 1u : 0u,','.pushConstantRangeCount = 1,').replace('.pPushConstantRanges = push_color_enabled ? &push_constant_range : NULL,','.pPushConstantRanges = &push_constant_range,')
+    if args.mask:
+        src=src.replace('.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,','.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,')
     marker='    dump_pipeline_executables(device, pipeline);'
     assert src.count(marker)==1
     src=src.replace(marker,marker+'\n    printf("line_end_dump: compiled_only=1\\n");\n    return 0;')
@@ -51,15 +60,24 @@ def main():
     v=state('vertex');p=state('fragment')
     if not (v['binding_table_entries']==0 and p['dispatch16']==1 and p['push_bytes']==64 and p['scratch_bytes']==0 and p['num_varying_inputs']==0 and p['sampler_count']==0 and p['binding_table_entries']==1 and p['computed_depth_mode']==0 and p['uses_src_depth']==1 and p['uses_src_w']==1):raise SystemExit(f'Unadmitted shader ABI: {v}, {p}')
     for stage,data in [('vs',vs),('ps',ps)]:
-        path=OUT/f'line_ends.{stage}.bin';path.write_bytes(data)
+        path=OUT/f'{stem}.{stage}.bin';path.write_bytes(data)
         result=subprocess.run(['iga64','-d','-p=12p1','-Xprint-pc',str(path)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=True)
         if 'illegal' in result.stdout.lower():raise SystemExit('Invalid native shader')
-        (OUT/f'line_ends.{stage}.iga.txt').write_text('\n'.join(l.rstrip() for l in result.stdout.splitlines())+'\n')
+        (OUT/f'{stem}.{stage}.iga.txt').write_text('\n'.join(l.rstrip() for l in result.stdout.splitlines())+'\n')
     emitter.GENERATED=GENERATED;emitter.emit_rust(vs,ps,v,p)
     generated=GENERATED.read_text().replace('tools/wc3-fixed-bake/bake.py','tools/microfont-line-end-bake/bake.py').replace('WC3_FIXED','MICROFONT_LINE_END').replace('wc3_fixed_pipeline','microfont_line_end_pipeline')
     # The emitter's reusable VS/PS declarations default to zero pushed bytes.
     at=generated.index('    ps: TrianglePixelShader')
     generated=generated[:at]+generated[at:].replace('push_constant_bytes: 0,','push_constant_bytes: 64,',1)
+    if args.mask:
+        generated=generated.replace('MICROFONT_LINE_END','MICROFONT_MASK').replace('microfont_line_end_pipeline','microfont_mask_pipeline')
+        vs_at=generated.index('    ps: TrianglePixelShader')
+        generated=generated[:vs_at].replace('push_constant_bytes: 0,','push_constant_bytes: 64,')+generated[vs_at:]
+        ranges=re.findall(r'TRUEOS_PUSH_RANGE stage=vertex slot=(\d+) set=\d+ index=\d+ start=(\d+) length=(\d+)',(executable/'vertex_TRUEOS_VS_state_v1.txt').read_text())
+        active=[(int(slot),int(start),int(length)) for slot,start,length in ranges if int(length)]
+        if len(active)!=1 or active[0][1:]!=(0,2): raise SystemExit(f'Unexpected VS pushes: {active}')
+        _,start,length=active[0]
+        generated+=f'\npub(crate) const MICROFONT_MASK_VS_PUSH_START_BYTES:u32={start*32};\npub(crate) const MICROFONT_MASK_VS_PUSH_GRFS:u32={length};\n'
     GENERATED.write_text(generated)
     for stage in ['vertex','fragment']:
         path=executable/f'{stage}_TRUEOS_{"VS" if stage=="vertex" else "PS"}_state_v1.txt';(OUT/path.name).write_bytes(path.read_bytes())

@@ -194,6 +194,7 @@ trueos-ttstt-ubuntu:
 .PHONY: microfont-line-end-shader
 microfont-line-end-shader:
 	python3 tools/microfont-line-end-bake/bake.py --ensure-current
+	python3 tools/microfont-line-end-bake/bake.py --mask --ensure-current
 
 .PHONY: microfont-line-glyphs
 microfont-line-glyphs:

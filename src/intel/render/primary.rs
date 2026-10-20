@@ -369,6 +369,10 @@ pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
     /// Rounded End corners: two endpoint frames, style, and color; all float bits.
     RoundedLineEnds([u32; 16]),
+    /// Native line AA, or analytic patch coverage; same private 64-byte ABI.
+    MicrofontAa([u32; 16]),
+    /// Immutable source-cell geometry, GPU width/scale expansion, R8 coverage.
+    MicrofontMask([u32; 16]),
     ClipPosition3UvTexture,
     VoxyHeadless,
     VoxyHeadlessTexture,
@@ -385,7 +389,11 @@ fn resident_scene_shader_pipeline(
     vertex_stride: u32,
 ) -> Result<&'static crate::intel::shader::TrianglePipeline, &'static str> {
     match (fragment_contract, has_texture) {
-        (ResidentSceneFragmentContract::RoundedLineEnds(_), false)
+        (ResidentSceneFragmentContract::MicrofontMask(_), false)
+            if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 => {
+            Ok(crate::intel::shader::microfont_mask_pipeline())
+        }
+        (ResidentSceneFragmentContract::RoundedLineEnds(_) | ResidentSceneFragmentContract::MicrofontAa(_), false)
             if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 => {
             Ok(crate::intel::shader::microfont_line_end_pipeline())
         }
@@ -1745,6 +1753,8 @@ fn stage_resident_scene_secondary(
         return Err("voxy-headless-target");
     }
     if let ResidentSceneFragmentContract::FixedGl(state) = fragment_contract { draw.fixed_gl = Some(state); }
+    draw.microfont_aa = matches!(fragment_contract, ResidentSceneFragmentContract::MicrofontAa(_) | ResidentSceneFragmentContract::MicrofontMask(_));
+    if draw.microfont_aa && depth_config.is_some() { return Err("microfont-aa-depth"); }
     if draw.native.is_some() {
         return Err("scene-fragment-contract-native-mismatch");
     }
@@ -1765,7 +1775,7 @@ fn stage_resident_scene_secondary(
         state_warm,
         pipeline,
         (sampled_texture.is_none() && !draw.voxy_headless && !draw.voxy_figure
-            && !matches!(fragment_contract, ResidentSceneFragmentContract::RoundedLineEnds(_))).then_some(rgba),
+            && !matches!(fragment_contract, ResidentSceneFragmentContract::RoundedLineEnds(_) | ResidentSceneFragmentContract::MicrofontAa(_) | ResidentSceneFragmentContract::MicrofontMask(_))).then_some(rgba),
         state_gpu,
         false,
     ).inspect_err(|reason| {
@@ -1787,9 +1797,10 @@ fn stage_resident_scene_secondary(
             secondary_index, sampled_texture.is_some(), reason,
         );
     })?;
-    if let ResidentSceneFragmentContract::RoundedLineEnds(params) = fragment_contract {
-        if !matches!(topology, ResidentScenePrimitiveTopology::LineListAdj | ResidentScenePrimitiveTopology::LineStripAdj)
-            || !clip_adjacency || !matches!(state_warm.device_id, 0x4680 | 0xa780)
+    if let ResidentSceneFragmentContract::RoundedLineEnds(params) | ResidentSceneFragmentContract::MicrofontAa(params) | ResidentSceneFragmentContract::MicrofontMask(params) = fragment_contract {
+        let line = matches!(topology, ResidentScenePrimitiveTopology::LineListAdj | ResidentScenePrimitiveTopology::LineStripAdj) && clip_adjacency;
+        let patch = draw.microfont_aa && topology == ResidentScenePrimitiveTopology::TriangleList && !clip_adjacency;
+        if !(line || patch) || !matches!(state_warm.device_id, 0x4680 | 0xa780)
         { return Err("rounded-line-contract"); }
         let offset = (probe_state.used_bytes as usize + 63) & !63;
         if offset + 64 > state_warm.draw_state_len { return Err("rounded-line-constants-capacity"); }
@@ -3208,9 +3219,11 @@ fn submit_resident_scene_geometry_batched(
     ) {
         return Err("scene-frame-target-format");
     }
-    if render_target_surface_format == SURFACE_FORMAT_R8_UNORM {
-        return Err("scene-frame-target-format");
-    }
+    if render_target_surface_format == SURFACE_FORMAT_R8_UNORM
+        && (draws.is_empty() || clear != Some([0; 4]) || opaque_depth_enabled
+            || depth_config.is_some() || carrier.is_some() || drawable_depth.is_some()
+            || draws.iter().any(|draw| !resident_coverage_draw_is_valid(draw)))
+    { return Err("scene-frame-mask-contract"); }
     // Legacy scene HiZ needs its initialization pass in the same submission.
     // Drawable-owned persistent depth uses plain D32 without shared HiZ data.
     if clear.is_none() && depth_config.is_some_and(|depth| depth.hiz.is_some()) {
@@ -3282,7 +3295,8 @@ fn submit_resident_scene_geometry_batched(
         )?;
         secondary_count = 1;
     }
-    let dista_first_secondary: Option<usize> = None;
+    let dista_first_secondary = (render_target_surface_format == SURFACE_FORMAT_R8_UNORM)
+        .then_some(secondary_count);
     for scene_draw in draws {
         if opaque_depth_enabled && scene_draw.rgba[3] == 0 {
             continue;
@@ -3330,6 +3344,7 @@ fn submit_resident_scene_geometry_batched(
                 == (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR));
         let blend_mode = match scene_draw.fragment_contract {
             ResidentSceneFragmentContract::VoxyFigure => TriangleBlendProbeMode::MesaZeroedState,
+            ResidentSceneFragmentContract::MicrofontAa(_) | ResidentSceneFragmentContract::MicrofontMask(_) => TriangleBlendProbeMode::StraightAlpha,
             ResidentSceneFragmentContract::FixedGl(_) if preserve_depth_clear_color =>
                 TriangleBlendProbeMode::StraightAlpha,
             ResidentSceneFragmentContract::FixedGl(state) if state[5] != 0 => {

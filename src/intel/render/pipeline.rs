@@ -605,6 +605,18 @@ fn resident_line_width_raw(width_px: f32) -> Option<u32> {
     if raw == 0 { None } else { Some(raw) }
 }
 
+/// TGL PRM vol 2d: AA only applies to legacy single-sample line rasterization.
+/// Clear API/MSAA overrides, retaining unrelated cull/clip/scissor state.
+const fn microfont_line_aa_raster(base: u32, enabled: bool) -> u32 {
+    if enabled { (base & !((3 << 22) | (1 << 14) | (1 << 12) | (3 << 10))) | (1 << 2) }
+    else { base }
+}
+const fn microfont_line_aa_wm(base: u32, enabled: bool) -> u32 {
+    // WM line AA region=2 px => a 1 px inward side-coverage ramp.
+    // End cap=0.5 px must agree with SF.DW2[17:16]=0.
+    if enabled { (base & !((3 << 6) | (3 << 8))) | (2 << 6) } else { base }
+}
+
 const fn resident_line_width_sf_dw1(base: u32, line_raster: bool, raw: u32) -> u32 {
     const WIDTH_MASK: u32 = 0x3ffff << 12;
     if line_raster {
@@ -2180,6 +2192,7 @@ mod retained_native_matrix_draw_contract_tests {
         fixed_gl: None,
         voxy_headless: false,
         voxy_figure: false,
+        microfont_aa: false,
             vertex_count: 108,
             vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
             vertex_buffer_bytes: 108 * trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
@@ -2417,7 +2430,10 @@ fn encode_triangle_probe_batch(
     if clip_adjacency && !matches!(batch_mode,
         TriangleBatchMode::LineAdjDraw | TriangleBatchMode::LineStripAdjDraw)
     { return Err("clip-adjacency-topology"); }
-    let rounded_line_ends = core::ptr::eq(pipeline, crate::intel::shader::microfont_line_end_pipeline());
+    let native_line_aa = draw.microfont_aa && batch_mode.line_raster();
+    if native_line_aa && resident_msaa4 { return Err("microfont-aa-msaa"); }
+    let microfont_mask = core::ptr::eq(pipeline, crate::intel::shader::microfont_mask_pipeline());
+    let rounded_line_ends = microfont_mask || core::ptr::eq(pipeline, crate::intel::shader::microfont_line_end_pipeline());
     let adjacency_gs = if clip_adjacency { None } else { batch_mode.adjacency_geometry_shader() };
     if adjacency_gs.is_some()
         && !device_supports_adjacency_geometry_shader(warm.device_id, warm.revision_id)
@@ -3065,6 +3081,7 @@ fn encode_triangle_probe_batch(
                 0
             }
     };
+    let raster_dw1 = microfont_line_aa_raster(raster_dw1, native_line_aa);
     let raster_dw2 = 0;
     let raster_dw3 = 0;
     let raster_dw4 = 0;
@@ -3108,6 +3125,7 @@ fn encode_triangle_probe_batch(
             0
         }
         | wm_barycentric_mode;
+    let wm_dw1 = microfont_line_aa_wm(wm_dw1, native_line_aa);
     let wm_depth_stencil_dw1 = depth_config.map_or_else(
         || {
             if mesa_host_fixed_function {
@@ -3157,6 +3175,15 @@ fn encode_triangle_probe_batch(
     } else {
         1 << 30
     };
+    static MICROFONT_AA_LINE_LOGGED: AtomicBool = AtomicBool::new(false);
+    static MICROFONT_AA_PATCH_LOGGED: AtomicBool = AtomicBool::new(false);
+    let aa_logged = if native_line_aa { &MICROFONT_AA_LINE_LOGGED } else { &MICROFONT_AA_PATCH_LOGGED };
+    if draw.microfont_aa && !aa_logged.swap(true, Ordering::AcqRel) {
+        crate::log_important!(target: "render";
+            "microfont-aa: line={} raster_dw1=0x{:08X} wm_dw1=0x{:08X} sf_dw2=0x{:08X} ps_blend=0x{:08X} samples=1 rt_write=simd16-bypass-aa depth_test=off\n",
+            native_line_aa, raster_dw1, wm_dw1, sf_dw2, ps_blend_dw1);
+    }
+
     let streamout_dw1 = (1 << 25) | (1 << 30) | (1 << 31);
     let streamout_dw2 = streamout_experiment.vertex_read_length();
     let streamout_dw3 = streamout_experiment.vertex_bytes() as u32;
@@ -5084,7 +5111,7 @@ fn encode_triangle_probe_batch(
         // This late verified-host packet supersedes the earlier WM state.
         // Preserve the shader-derived barycentric mode instead of silently
         // reverting VF-fed sampled shaders to a no-varying payload.
-        push(batch_dwords, &mut cursor, 0x8000_0040 | wm_barycentric_mode)?;
+        push(batch_dwords, &mut cursor, microfont_line_aa_wm(0x8000_0040 | wm_barycentric_mode, native_line_aa))?;
         log_batch_offset(cursor, "3DSTATE_PS_BLEND verified-host-tail");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
         // The last PS_BLEND packet is authoritative. Preserve the draw's
@@ -5145,6 +5172,13 @@ fn encode_triangle_probe_batch(
         let address = draw.state_gpu_addr.checked_add(u64::from(probe_state.push_constant_offset_bytes))
             .ok_or("rounded-line-constants-address")?;
         for word in rounded_line_constant_ps_packet(address)? { push(batch_dwords, &mut cursor, word)?; }
+        if microfont_mask {
+            let mut packet = rounded_line_constant_ps_packet(address
+                + u64::from(crate::intel::shader::MICROFONT_MASK_VS_PUSH_START_BYTES))?;
+            packet[0] = 0x7815_0009 | (RENDER_MOCS << 8);
+            packet[2] = crate::intel::shader::MICROFONT_MASK_VS_PUSH_GRFS << 16;
+            for word in packet { push(batch_dwords, &mut cursor, word)?; }
+        }
     }
     if draw.vue_capture {
         let (words, count) = picasso_vue_counter_packets(GPU_VA_RESULT_BASE, warm.result_len, false)?;

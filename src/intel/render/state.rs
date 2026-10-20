@@ -168,6 +168,7 @@ struct TriangleDrawPrep {
     fixed_gl: Option<[u32; 10]>,
     voxy_headless: bool,
     voxy_figure: bool,
+    microfont_aa: bool,
     vertex_count: u32,
     vertex_stride: u32,
     vertex_buffer_bytes: u32,
