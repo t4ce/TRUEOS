@@ -180,30 +180,68 @@ pub(super) fn paint_primitives(
     indices: &[u32],
     topology: crate::intel::render::ResidentScenePrimitiveTopology,
 ) -> PaintResult {
-    use crate::intel::render::{
-        self, ResidentSceneDraw, ResidentSceneFragmentContract, ResidentScenePrimitiveTopology,
-    };
-    let primitives = indices.len() / if topology == ResidentScenePrimitiveTopology::LineList { 2 } else { 3 };
-    let blank = indices.is_empty();
-    // An empty glyph still needs a real GPU writer and release fence. Draw a
-    // white background when there is no blue geometry to submit.
+    use crate::intel::render::ResidentScenePrimitiveTopology as Topology;
     const BACKGROUND: [[f32; 3]; 4] = [
-        [-1.0, -1.0, 0.5],
-        [1.0, -1.0, 0.5],
-        [1.0, 1.0, 0.5],
-        [-1.0, 1.0, 0.5],
+        [-1.0, -1.0, 0.5], [1.0, -1.0, 0.5],
+        [1.0, 1.0, 0.5], [-1.0, 1.0, 0.5],
     ];
-    let (vertices, indices, topology) = if blank {
-        (&BACKGROUND[..], &[0, 1, 2, 0, 2, 3][..], ResidentScenePrimitiveTopology::TriangleList)
-    } else {
-        (vertices, indices, topology)
-    };
-    let mesh = render::create_resident_indexed_mesh(vertices, indices, topology)
-        .map_err(|reason| (reason, false))?;
+    let blank = indices.is_empty();
+    let batch = if blank {
+        PrimitiveBatch { vertices: &BACKGROUND, indices: &[0, 1, 2, 0, 2, 3],
+            topology: Topology::TriangleList, line_width_px: 0.0, clip_adjacency: false, rgba: None, rounded_ends: None }
+    } else { PrimitiveBatch { vertices, indices, topology, line_width_px: 0.0, clip_adjacency: false, rgba: None, rounded_ends: None } };
+    paint_primitive_batches(frame, &[batch], if blank { [255; 4] } else { [48, 100, 216, 255] })
+}
+
+pub(super) struct PrimitiveBatch<'a> {
+    pub vertices: &'a [[f32; 3]],
+    pub indices: &'a [u32],
+    pub topology: crate::intel::render::ResidentScenePrimitiveTopology,
+    /// Screen pixels; 0 retains the engine's native 3px default.
+    pub line_width_px: f32,
+    pub clip_adjacency: bool,
+    /// Optional per-batch diagnostic color.
+    pub rgba: Option<[u8; 4]>,
+    pub rounded_ends: Option<[u32; 16]>,
+}
+
+/// Independent draws share one clear, destination lease, submission and release.
+/// No primitive restart or connector edge is inserted between strokes.
+pub(super) fn paint_primitive_batches(
+    frame: FrameHandle, batches: &[PrimitiveBatch<'_>], rgba: [u8; 4],
+) -> PaintResult {
+    use crate::intel::render::{self, ResidentSceneDraw, ResidentSceneFragmentContract,
+        ResidentScenePrimitiveTopology as Topology};
+    if batches.is_empty() { return Err(("empty-primitive-batches", false)); }
+    let mut meshes = Vec::with_capacity(batches.len());
+    let mut primitives = 0;
+    for batch in batches {
+        let mesh = match render::create_resident_indexed_mesh(
+            batch.vertices, batch.indices, batch.topology,
+        ) {
+            Ok(mesh) => mesh,
+            Err(reason) => {
+                for mesh in &meshes { let _ = render::release_resident_triangle_mesh(mesh); }
+                return Err((reason, false));
+            }
+        };
+        primitives += match batch.topology {
+            Topology::LineStripAdj => batch.indices.len().saturating_sub(3),
+            Topology::LineStrip => batch.indices.len().saturating_sub(1),
+            Topology::LineList => batch.indices.len() / 2,
+            Topology::TriangleList => batch.indices.len() / 3,
+            _ => {
+                let _ = render::release_resident_triangle_mesh(&mesh);
+                for mesh in &meshes { let _ = render::release_resident_triangle_mesh(mesh); }
+                return Err(("preview-topology", false));
+            }
+        };
+        meshes.push(mesh);
+    }
     let lease = match ui4::acquire_frame_buffer(frame) {
         Ok(lease) => lease,
         Err(error) => {
-            let _ = render::release_resident_triangle_mesh(&mesh);
+            for mesh in &meshes { let _ = render::release_resident_triangle_mesh(mesh); }
             return Err((
                 if error == ui4::FramePoolError::Busy {
                     "frame-busy"
@@ -217,21 +255,22 @@ pub(super) fn paint_primitives(
     let destination = match ui4::gpgpu_rgba_surface(lease) {
         Ok(surface) => surface,
         Err(_) => {
-            let _ = render::release_resident_triangle_mesh(&mesh);
+            for mesh in &meshes { let _ = render::release_resident_triangle_mesh(mesh); }
             let _ = ui4::cancel_frame_buffer(lease);
             return Err(("frame-surface", false));
         }
     };
-    let draws = [ResidentSceneDraw {
-        mesh: &mesh,
-        depth_flags: None,
-        rgba: if blank { [255; 4] } else { [48, 100, 216, 255] },
-        sampled_texture: None,
-        fragment_contract: ResidentSceneFragmentContract::ConstantRgba,
-        viewport_translation_px: [0.0, 0.0],
-        topology,
-        point_width_px: 0,
-    }];
+    let draws: Vec<_> = meshes.iter().zip(batches).map(|(mesh, batch)| ResidentSceneDraw {
+        mesh, depth_flags: None, rgba: batch.rgba.unwrap_or(rgba), sampled_texture: None,
+        fragment_contract: if let Some(mut params) = batch.rounded_ends {
+            // Match the existing constant PS's coarse compact-immediate color.
+            // This test changes coverage only, rather than also changing color.
+            let color = batch.rgba.unwrap_or(rgba);
+            for k in 0..4 { params[12 + k] = (color[k] as f32 / 255.0).to_bits() & 0xfff0_0000; }
+            ResidentSceneFragmentContract::RoundedLineEnds(params)
+        } else { ResidentSceneFragmentContract::ConstantRgba },
+        viewport_translation_px: [0.0, 0.0], topology: batch.topology, point_width_px: 0, line_width_px: batch.line_width_px, clip_adjacency: batch.clip_adjacency,
+    }).collect();
     let result = render::render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
         &draws,
         Some([255, 255, 255, 255]),
@@ -241,25 +280,25 @@ pub(super) fn paint_primitives(
     let result = match result {
         Ok(result) => result,
         Err(reason @ ("render-busy" | "in-flight")) => {
-            let _ = render::release_resident_triangle_mesh(&mesh);
+            for mesh in &meshes { let _ = render::release_resident_triangle_mesh(mesh); }
             let _ = ui4::cancel_frame_buffer(lease);
             return Err((reason, false));
         }
         Err(reason) => {
             // No proof of retirement: keep both the mesh and write lease alive.
-            core::mem::forget(mesh);
+            for mesh in meshes { core::mem::forget(mesh); }
             return Err((reason, true));
         }
     };
     if let Some(reason) = result.completion_error() {
-        core::mem::forget(mesh);
+        for mesh in meshes { core::mem::forget(mesh); }
         return Err((reason, true));
     }
     let Some(release) = result.release_fence else {
-        core::mem::forget(mesh);
+        for mesh in meshes { core::mem::forget(mesh); }
         return Err(("scanout-release", true));
     };
-    let _ = render::release_resident_triangle_mesh(&mesh);
+    for mesh in &meshes { let _ = render::release_resident_triangle_mesh(mesh); }
     if let Err(error) = ui4::publish_resident_scene_frame_buffer(lease, release) {
         crate::log_important!(target: "microfont-raster-preview";
             "microfont-raster-preview: frame publication rejected error={:?}\n", error);

@@ -590,6 +590,28 @@ const fn resident_point_width_raw(point_width_px: u32) -> u32 {
     }
 }
 
+const fn native_adjacency_clip_enabled(clip_dw2: u32) -> bool {
+    clip_dw2 & (1 << 31) != 0
+}
+
+/// Native SF.DW1[29:12], U11.7 pixels. Zero selects the renderer's 3px default.
+/// Reject invalid/out-of-range widths rather than silently truncating the field.
+fn resident_line_width_raw(width_px: f32) -> Option<u32> {
+    if !width_px.is_finite() || width_px < 0.0 || width_px > 262143.0 / 128.0 {
+        return None;
+    }
+    if width_px == 0.0 { return Some(3 << 7); }
+    let raw = (width_px * 128.0 + 0.5) as u32;
+    if raw == 0 { None } else { Some(raw) }
+}
+
+const fn resident_line_width_sf_dw1(base: u32, line_raster: bool, raw: u32) -> u32 {
+    const WIDTH_MASK: u32 = 0x3ffff << 12;
+    if line_raster {
+        (base & !WIDTH_MASK) | ((if raw == 0 { 3 << 7 } else { raw }) << 12)
+    } else { base }
+}
+
 /// Zero is the legacy Maxpix default (1px). Explicit widths use the complete
 /// nonzero 11-bit U8.3 hardware domain: 0.125px through 255.875px.
 fn maxpix_point_width_raw(value: f32) -> Option<u32> {
@@ -2353,6 +2375,8 @@ fn encode_triangle_probe_batch(
     done_value: u32,
     batch_mode: TriangleBatchMode,
     point_width_raw: u32,
+    line_width_raw: u32,
+    clip_adjacency: bool,
     streamout_experiment: StreamoutProofExperiment,
     front_end_contract: TriangleFrontEndContract,
     viewport_translation_px: [f32; 2],
@@ -2390,7 +2414,11 @@ fn encode_triangle_probe_batch(
     if resident_msaa4 && !device_is_gfx125(warm.device_id) {
         return Err("probe-msaa4-device");
     }
-    let adjacency_gs = batch_mode.adjacency_geometry_shader();
+    if clip_adjacency && !matches!(batch_mode,
+        TriangleBatchMode::LineAdjDraw | TriangleBatchMode::LineStripAdjDraw)
+    { return Err("clip-adjacency-topology"); }
+    let rounded_line_ends = core::ptr::eq(pipeline, crate::intel::shader::microfont_line_end_pipeline());
+    let adjacency_gs = if clip_adjacency { None } else { batch_mode.adjacency_geometry_shader() };
     if adjacency_gs.is_some()
         && !device_supports_adjacency_geometry_shader(warm.device_id, warm.revision_id)
     {
@@ -2911,6 +2939,16 @@ fn encode_triangle_probe_batch(
             1 << 31
         }
     };
+    // PRM Vol 9 pp190–192: ADJ without GS requires CLIP to remain enabled.
+    // This also rejects viewport-translation and diagnostic clip bypasses.
+    if clip_adjacency && !native_adjacency_clip_enabled(clip_dw2) {
+        return Err("clip-adjacency-requires-clip");
+    }
+    if clip_adjacency {
+        crate::log_important!(target: "render";
+            "native-adjacency: topology=0x{:X} geometry_shader=off clip_enabled=1 clip_dw2=0x{:08X} line_width_raw={}\n",
+            batch_mode.topology(), clip_dw2, line_width_raw);
+    }
     let point_width_raw = if batch_mode.point_raster() {
         backend_probe_mode
             .point_width_raw_override()
@@ -2943,20 +2981,12 @@ fn encode_triangle_probe_batch(
     // default 32-handle block mode (zero).
     let sf_viewport_transform_enable =
         !(batch_mode.screen_space_raster() || backend_probe_mode.disable_sf_viewport_transform());
-    // `Line Width` is a U11.7 field at DW1[29:12]. Give every native line
-    // assembly mode the same clear three-pixel stroke.
-    const LINE_WIDTH_SHIFT: u32 = 12;
-    const THREE_PIXEL_LINE_WIDTH_U11_7: u32 = 3 << 7;
-    let sf_line_width = if batch_mode.line_raster() {
-        THREE_PIXEL_LINE_WIDTH_U11_7 << LINE_WIDTH_SHIFT
+    let sf_base_dw1 = if mesa_host_fixed_function {
+        0x0008_0402
     } else {
-        0
+        (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10)
     };
-    let sf_dw1 = if mesa_host_fixed_function {
-        0x0008_0402 | sf_line_width
-    } else {
-        (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10) | sf_line_width
-    };
+    let sf_dw1 = resident_line_width_sf_dw1(sf_base_dw1, batch_mode.line_raster(), line_width_raw);
     let sf_dw2 = if let Some(gs) = adjacency_gs {
         (gs.meta.sf_deref_block_size as u32) << 29
     } else if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
@@ -3350,7 +3380,7 @@ fn encode_triangle_probe_batch(
             * PS_EXTRA_ENABLE_PS_DEPENDENCY_ON_CPSIZE_CHANGE)
         | ps_source_depth_w_bits(
             backend_probe_mode.force_ps_source_depth_w(),
-            draw.fixed_gl.is_some() && pipeline.ps.meta.computed_depth_mode != 0,
+            (draw.fixed_gl.is_some() && pipeline.ps.meta.computed_depth_mode != 0) || rounded_line_ends,
         )
         | (u32::from(backend_probe_mode.force_ps_bary_planes())
             * (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE
@@ -3358,7 +3388,7 @@ fn encode_triangle_probe_batch(
         | ((pipeline.ps.meta.computed_depth_mode as u32) << 26)
         // The fixed GL fragment program contains conditional alpha discard.
         // Advertise kills even on draws where the alpha-test branch is off.
-        | (u32::from(draw.fixed_gl.is_some()) << 28)
+        | (u32::from(draw.fixed_gl.is_some() || rounded_line_ends) << 28)
         | PS_EXTRA_PIXEL_SHADER_VALID;
     let ps_extra_dw1 = if backend_probe_mode.disable_ps_contract() {
         ps_extra_dw1 & !PS_EXTRA_PIXEL_SHADER_VALID
@@ -5108,6 +5138,14 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, ps_binding_table_pointer_offset)?;
     }
 
+    if rounded_line_ends {
+        if pipeline.ps.meta.kernel.push_constant_bytes != 64 || probe_state.push_constant_offset_bytes == 0 {
+            return Err("rounded-line-constants-contract");
+        }
+        let address = draw.state_gpu_addr.checked_add(u64::from(probe_state.push_constant_offset_bytes))
+            .ok_or("rounded-line-constants-address")?;
+        for word in rounded_line_constant_ps_packet(address)? { push(batch_dwords, &mut cursor, word)?; }
+    }
     if draw.vue_capture {
         let (words, count) = picasso_vue_counter_packets(GPU_VA_RESULT_BASE, warm.result_len, false)?;
         for word in &words[..count] {
@@ -6736,6 +6774,16 @@ fn encode_3d_no_draw_probe_batch(
     push(batch_dwords, &mut cursor, MI_BATCH_BUFFER_END)?;
     push(batch_dwords, &mut cursor, MI_NOOP)?;
     Ok(cursor * core::mem::size_of::<u32>())
+}
+
+/// Compiler push map: 64 bytes at PS slot 3, after source depth/W payload.
+fn rounded_line_constant_ps_packet(address: u64) -> Result<[u32; 11], &'static str> {
+    if address == 0 || address & 31 != 0 { return Err("rounded-line-constants-alignment"); }
+    let mut words = [0; 11];
+    words[0] = 0x7817_0009 | (RENDER_MOCS << 8);
+    words[2] = 2 << 16;
+    words[9] = address as u32; words[10] = (address >> 32) as u32;
+    Ok(words)
 }
 
 /// Gen12 ANV places its single 96B UBO push range in the final constant slot.

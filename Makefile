@@ -191,7 +191,15 @@ trueos-ttstt-host:
 trueos-ttstt-ubuntu:
 	$(MAKE) --no-print-directory trueos-ttstt-host TRUEOS_TTSTT_HOST_TARGET=x86_64-unknown-linux-gnu
 
-kernel: $(if $(filter 1,$(ENABLE_BUILDINS)),buildins) empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
+.PHONY: microfont-line-end-shader
+microfont-line-end-shader:
+	python3 tools/microfont-line-end-bake/bake.py --ensure-current
+
+.PHONY: microfont-line-glyphs
+microfont-line-glyphs:
+	python3 vendor/microfont/tools/generate_line_glyphs.py
+
+kernel: microfont-line-glyphs microfont-line-end-shader $(if $(filter 1,$(ENABLE_BUILDINS)),buildins) empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
 	TRUEOS_BLUEPRINTS_DIR="$(abspath $(BLUEPRINTS_DIR))" TRUEOS_ENABLE_BUILDINS=$(ENABLE_BUILDINS) TRUEOS_REQUIRE_BUILDINS=$(ENABLE_BUILDINS) cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 	$(MAKE) --no-print-directory INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
 

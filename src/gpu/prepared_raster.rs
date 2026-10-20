@@ -232,7 +232,7 @@ pub(crate) fn submit_ui4_prepared_raster_batch_v1(
             ]),
             viewport_translation_px: [0.0, 0.0],
             topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
-            point_width_px: 0,
+            point_width_px: 0, line_width_px: 0.0, clip_adjacency: false,
         }
     }).collect::<Vec<_>>();
     let timing_mesh = crate::chronos::monotonic_nanos();

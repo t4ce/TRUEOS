@@ -81,6 +81,12 @@ pub(crate) struct TrianglePipeline {
 pub(crate) mod patch_cube;
 const _: () = assert!(patch_cube::CONTRACT_VERSION == 11);
 
+#[path = "../../crates/trueos-shader/generated_microfont_line_ends.rs"]
+mod generated_microfont_line_ends;
+pub(crate) fn microfont_line_end_pipeline() -> &'static TrianglePipeline {
+    generated_microfont_line_ends::microfont_line_end_pipeline()
+}
+
 #[path = "../../crates/trueos-shader/generated_font_patch.rs"]
 pub(crate) mod font_patch;
 

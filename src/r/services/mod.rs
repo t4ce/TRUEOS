@@ -15,6 +15,7 @@ pub mod media_service;
 pub(crate) mod microfont_log_service;
 pub(crate) mod microfont_raster_preview;
 pub(crate) mod microfont_line_preview;
+mod microfont_line_overlap;
 pub mod mouse_motion_service;
 pub(crate) mod pxeproc_service;
 pub(crate) mod oceancache;

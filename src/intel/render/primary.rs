@@ -294,6 +294,12 @@ pub(crate) struct ResidentSceneDraw<'a> {
     /// Integer POINT_LIST raster width. Zero retains the renderer default and
     /// is required for every non-point topology.
     pub(crate) point_width_px: u32,
+    /// Native line raster width in screen pixels; 0 keeps the 3px default.
+    /// Positive widths use U11.7 precision (1/128px); non-line draws require 0.
+    pub(crate) line_width_px: f32,
+    /// For native line adjacency, let enabled CLIP discard adjacency vertices.
+    /// False retains the existing pass-through GS used by other diagnostics.
+    pub(crate) clip_adjacency: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -361,6 +367,8 @@ impl ResidentScenePrimitiveTopology {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
+    /// Rounded End corners: two endpoint frames, style, and color; all float bits.
+    RoundedLineEnds([u32; 16]),
     ClipPosition3UvTexture,
     VoxyHeadless,
     VoxyHeadlessTexture,
@@ -377,6 +385,10 @@ fn resident_scene_shader_pipeline(
     vertex_stride: u32,
 ) -> Result<&'static crate::intel::shader::TrianglePipeline, &'static str> {
     match (fragment_contract, has_texture) {
+        (ResidentSceneFragmentContract::RoundedLineEnds(_), false)
+            if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 => {
+            Ok(crate::intel::shader::microfont_line_end_pipeline())
+        }
         (ResidentSceneFragmentContract::ConstantRgba, false) => {
             Ok(crate::intel::shader::triangle_pipeline_simd16())
         }
@@ -1704,6 +1716,8 @@ fn stage_resident_scene_secondary(
     viewport_translation_px: [f32; 2],
     topology: ResidentScenePrimitiveTopology,
     point_width_px: u32,
+    line_width_px: f32,
+    clip_adjacency: bool,
     secondary_index: usize,
     result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
@@ -1712,6 +1726,15 @@ fn stage_resident_scene_secondary(
     {
         return Err("scene-point-width");
     }
+    let line_width_raw = resident_line_width_raw(line_width_px).ok_or("scene-line-width")?;
+    if line_width_px != 0.0 && !matches!(topology,
+        ResidentScenePrimitiveTopology::LineList | ResidentScenePrimitiveTopology::LineListAdj
+        | ResidentScenePrimitiveTopology::LineLoop | ResidentScenePrimitiveTopology::LineStrip
+        | ResidentScenePrimitiveTopology::LineStripAdj)
+    { return Err("scene-line-width-topology"); }
+    if clip_adjacency && !matches!(topology,
+        ResidentScenePrimitiveTopology::LineListAdj | ResidentScenePrimitiveTopology::LineStripAdj)
+    { return Err("scene-clip-adjacency-topology"); }
     draw.state_gpu_addr = state_gpu;
     draw.voxy_figure = matches!(fragment_contract, ResidentSceneFragmentContract::VoxyFigure);
     draw.voxy_headless = matches!(fragment_contract,
@@ -1741,7 +1764,8 @@ fn stage_resident_scene_secondary(
     let shader_layout = upload_triangle_shader_pipeline_at(
         state_warm,
         pipeline,
-        (sampled_texture.is_none() && !draw.voxy_headless && !draw.voxy_figure).then_some(rgba),
+        (sampled_texture.is_none() && !draw.voxy_headless && !draw.voxy_figure
+            && !matches!(fragment_contract, ResidentSceneFragmentContract::RoundedLineEnds(_))).then_some(rgba),
         state_gpu,
         false,
     ).inspect_err(|reason| {
@@ -1750,7 +1774,7 @@ fn stage_resident_scene_secondary(
             secondary_index, sampled_texture.is_some(), reason,
         );
     })?;
-    let probe_state = write_triangle_probe_state_unflushed(
+    let mut probe_state = write_triangle_probe_state_unflushed(
         state_warm,
         draw,
         shader_layout,
@@ -1763,6 +1787,17 @@ fn stage_resident_scene_secondary(
             secondary_index, sampled_texture.is_some(), reason,
         );
     })?;
+    if let ResidentSceneFragmentContract::RoundedLineEnds(params) = fragment_contract {
+        if !matches!(topology, ResidentScenePrimitiveTopology::LineListAdj | ResidentScenePrimitiveTopology::LineStripAdj)
+            || !clip_adjacency || !matches!(state_warm.device_id, 0x4680 | 0xa780)
+        { return Err("rounded-line-contract"); }
+        let offset = (probe_state.used_bytes as usize + 63) & !63;
+        if offset + 64 > state_warm.draw_state_len { return Err("rounded-line-constants-capacity"); }
+        unsafe { core::ptr::copy_nonoverlapping(params.as_ptr() as *const u8,
+            state_warm.draw_state_virt.add(offset), 64); }
+        probe_state.push_constant_offset_bytes = offset as u32;
+        probe_state.used_bytes = (offset + 64) as u32;
+    }
     // Shader bytes and all fixed-function structures occupy one compact
     // prefix. Publish it once, after every CPU write, instead of three
     // independent CLFLUSH+MFENCE passes over partly overlapping state.
@@ -1821,6 +1856,8 @@ fn stage_resident_scene_secondary(
             ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
         resident_point_width_raw(point_width_px),
+        line_width_raw,
+        clip_adjacency,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         if draw.fixed_gl.is_some() { TriangleFrontEndContract {
             vs_urb_read_length: 2, sbe_read_length: 2,
@@ -1958,6 +1995,8 @@ fn stage_resident_churn_forward_secondary(
         // Width is validated and latched with the camera under the retained
         // submission lease. Zero keeps every other resident's existing default.
         resident.point_width_raw.load(Ordering::Acquire),
+        0,
+        false,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         front_end_contract,
         [0.0, 0.0],
@@ -3236,6 +3275,8 @@ fn submit_resident_scene_geometry_batched(
             [0.0, 0.0],
             ResidentScenePrimitiveTopology::TriangleList,
             0,
+            0.0,
+            false,
             0,
             result_ggtt_gpu,
         )?;
@@ -3326,6 +3367,8 @@ fn submit_resident_scene_geometry_batched(
             scene_draw.viewport_translation_px,
             scene_draw.topology,
             scene_draw.point_width_px,
+            scene_draw.line_width_px,
+            scene_draw.clip_adjacency,
             secondary_count,
             result_ggtt_gpu,
         )?;
@@ -3561,6 +3604,8 @@ fn submit_resident_churn_forward_geometry_batched(
         [0.0, 0.0],
         ResidentScenePrimitiveTopology::TriangleList,
         0,
+        0.0,
+        false,
         clear_secondary_index,
         result_ggtt_gpu,
     )?;
@@ -3629,6 +3674,8 @@ fn submit_resident_churn_forward_geometry_batched(
                     [0.0, 0.0],
                     resident.topology(),
                     0,
+                    0.0,
+                    false,
                     secondary_index,
                     result_ggtt_gpu,
                 )?;
@@ -3662,6 +3709,8 @@ fn submit_resident_churn_forward_geometry_batched(
             scene.viewport_translation_px,
             scene.topology,
             scene.point_width_px,
+            scene.line_width_px,
+            scene.clip_adjacency,
             secondary_index,
             result_ggtt_gpu,
         )?;
@@ -6578,6 +6627,8 @@ fn submit_triangle_vf_draw_to_surface_ext(
         RCS_EXEC_RESULT_DONE,
         batch_mode,
         0,
+        0, // Default native line width.
+        false,
         vf_experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         [0.0, 0.0],
@@ -7155,6 +7206,8 @@ fn submit_triangle_streamout_proof(
         RCS_EXEC_RESULT_DONE,
         TriangleBatchMode::StreamoutProof,
         0,
+        0, // Default native line width.
+        false,
         experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         [0.0, 0.0],
@@ -7764,6 +7817,8 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         RCS_EXEC_RESULT_DONE,
         batch_mode,
         0,
+        0, // Default native line width.
+        false,
         StreamoutProofExperiment::PositionSlot1,
         front_end_contract,
         [0.0, 0.0],
@@ -8212,6 +8267,8 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         RCS_EXEC_RESULT_DONE,
         batch_mode,
         0,
+        0, // Default native line width.
+        false,
         streamout_experiment,
         front_end_contract,
         viewport_translation_px,

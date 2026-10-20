@@ -3786,7 +3786,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         },
         viewport_translation_px: [0.0, 0.0],
         topology: draw.topology,
-        point_width_px: 0,
+        point_width_px: 0, line_width_px: 0.0, clip_adjacency: false,
     };
     // Keep Voxygen's first draw and sparse retirement receipts visible under
     // the current bring-up profile, which suppresses Render/Info.
@@ -4336,7 +4336,7 @@ pub(crate) fn submit_ui4_indexed_batch(
                     crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
                 viewport_translation_px: [0.0, 0.0],
                 topology: *topology,
-                point_width_px: *point_width_px,
+                point_width_px: *point_width_px, line_width_px: 0.0, clip_adjacency: false,
             }
         })
         .collect();
@@ -5350,7 +5350,7 @@ pub(crate) fn submit_ui4_retained_frame(
             fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
             viewport_translation_px: [0.0, 0.0],
             topology: crate::intel::render::ResidentScenePrimitiveTopology::LineList,
-            point_width_px: 0,
+            point_width_px: 0, line_width_px: 0.0, clip_adjacency: false,
         })
         .collect::<Vec<_>>();
     let render_material = retained_material.base_color().map(|base_color| {
