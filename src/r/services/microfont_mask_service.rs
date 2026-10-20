@@ -213,6 +213,27 @@ fn append_join(out: &mut Vec<[f32; 3]>, slot: usize, triple: &[microfont::raster
         triangle[2][0] - triangle[0][0],
         triangle[2][1] - triangle[0][1],
     ];
+    // Reflex exterior >270 degrees means the two outward normals are
+    // more than 90 degrees apart. Only these sharp tips get a circular join.
+    if a[0] * b[0] + a[1] * b[1] < -1e-6 {
+        let length = libm::sqrtf((a[0]+b[0])*(a[0]+b[0]) + (a[1]+b[1])*(a[1]+b[1]));
+        let middle = [(a[0]+b[0])*0.5/length, (a[1]+b[1])*0.5/length];
+        let round_code = (code as u32 | 0x8000) as f32;
+        // Two bounded tangent envelopes cover the circular sector. Four
+        // triangles share one centre; the PS supplies the exact circular edge.
+        for (left, right) in [(a, middle), (middle, b)] {
+            let divisor = 1.0 + 4.0*(left[0]*right[0]+left[1]*right[1]);
+            let tangent = [(left[0]+right[0])/divisor, (left[1]+right[1])/divisor];
+            for (one, two) in [(left, tangent), (tangent, right)] {
+                out.extend_from_slice(&[
+                    [round_code, 0.0, 0.0],
+                    [round_code, one[0], one[1]],
+                    [round_code, two[0], two[1]],
+                ]);
+            }
+        }
+        return;
+    }
     let edge = [b[0] - a[0], b[1] - a[1]];
     let height =
         (a[0] * b[1] - a[1] * b[0]).abs() / libm::sqrtf(edge[0] * edge[0] + edge[1] * edge[1]);
@@ -222,6 +243,21 @@ fn append_join(out: &mut Vec<[f32; 3]>, slot: usize, triple: &[microfont::raster
         [code, b[0], b[1]],
     ]);
 }
+pub(super) fn append_strip_joins(out: &mut Vec<[f32; 3]>, slot: usize, strip: &microfont::raster_line::Strip) {
+    use microfont::raster_line::Boundary::Junction;
+    let points: Vec<_> = strip.iter_points().collect();
+    for triple in points.windows(3) {
+        append_join(out, slot, triple);
+    }
+    // The repeated point already supplies the closing line segment. Only the
+    // join spanning the end/start boundary is absent from windows(3).
+    if points.len() >= 4 && points.first() == points.last()
+        && strip.start == Junction && strip.end == Junction
+    {
+        append_join(out, slot, &[points[points.len()-2], points[0], points[1]]);
+    }
+}
+
 fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
     let mut resident = ResidentGlyphs {
         batches: Vec::new(),
@@ -277,10 +313,7 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
         vertices.clear();
         indices.clear();
         for strip in strips {
-            let points: Vec<_> = strip.iter_points().collect();
-            for triple in points.windows(3) {
-                append_join(&mut vertices, slot, triple);
-            }
+            append_strip_joins(&mut vertices, slot, strip);
         }
         indices.extend(0..vertices.len() as u32);
         let mut params = [0; 16];
@@ -480,6 +513,23 @@ pub(crate) fn stamp_preview(
     ink: [u8; 4],
     background: [u8; 4],
 ) -> Result<usize, &'static str> {
+    stamp_preview_colored(frame, config, glyphs, columns, display_scale, &[ink], background)
+}
+
+/// One ink broadcasts to every cell; otherwise provide one straight RGBA ink
+/// per glyph cell. Coverage and opacity are premultiplied exactly once below.
+pub(crate) fn stamp_preview_colored(
+    frame: ui4::FrameHandle,
+    config: AtlasConfig,
+    glyphs: &[char],
+    columns: usize,
+    display_scale: u32,
+    inks: &[[u8; 4]],
+    background: [u8; 4],
+) -> Result<usize, &'static str> {
+    if inks.len() != 1 && inks.len() != glyphs.len() {
+        return Err("microfont-stamp-colors");
+    }
     with_warmed_atlas(config, |atlas| {
         let lease = ui4::acquire_frame_buffer(frame).map_err(|_| "frame-busy")?;
         let result = (|| {
@@ -536,6 +586,8 @@ pub(crate) fn stamp_preview(
                         });
                     partial += usize::from(coverage != 0 && coverage != 255);
                     nonzero += usize::from(coverage != 0);
+                    let ink = if inks.len() == 1 { inks[0] }
+                        else { inks.get(cell).copied().unwrap_or([0; 4]) };
                     let pixel = tint_coverage(coverage, ink, background);
                     unsafe {
                         core::ptr::write_unaligned(
@@ -556,8 +608,8 @@ pub(crate) fn stamp_preview(
             }
             ui4::publish_frame_buffer(lease).map_err(|_| "frame-publish")?;
             crate::log_important!(target:"microfont-mask";
-                "microfont-mask: stamp generation={} glyphs={} copies=1 nonzero={} partial={} rgba={:?} background={:?} geometry_uploads=1\n",
-                atlas.generation,glyphs.len(),nonzero,partial,ink,background);
+                "microfont-mask: stamp generation={} glyphs={} copies=1 nonzero={} partial={} inks={} background={:?} geometry_uploads=1\n",
+                atlas.generation,glyphs.len(),nonzero,partial,inks.len(),background);
             Ok(nonzero)
         })();
         if result.is_err() {

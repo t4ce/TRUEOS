@@ -89,15 +89,9 @@ async fn show_once() -> Result<(), &'static str> {
     let join_triangles: usize = strips
         .iter()
         .map(|s| {
-            s.iter_points()
-                .collect::<Vec<_>>()
-                .windows(3)
-                .filter(|triple| {
-                    let p = triple_pixels(triple);
-                    super::microfont_mask_service::corner_triangle(p[0], p[1], p[2], LINE_WIDTH_PX)
-                        .is_some()
-                })
-                .count()
+            let mut recipes = Vec::new();
+            super::microfont_mask_service::append_strip_joins(&mut recipes, 0, s);
+            recipes.len() / 3
         })
         .sum();
     let real_vertices: usize = strips.iter().map(|s| s.points.len()).sum();
@@ -107,7 +101,7 @@ async fn show_once() -> Result<(), &'static str> {
         .filter(|&tag| tag == microfont::raster_line::Boundary::End)
         .count();
     crate::log_important!(target: "microfont-line-preview";
-        "microfont-line-preview: presented window={} frame={} size={}x{} scale={} cells=65 slots=78 present={} source=line-binary-v1 layout=A-M/N-Z/0-9/a-m/n-z/@%$ rows=6 columns=13 ink_pixels={} glyph_size=96x176 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 lean_px={} meso_px={} storage=none escape=close\n",
+        "microfont-line-preview: presented window={} frame={} size={}x{} scale={} cells=65 slots=78 present={} source=line-binary-v1 layout=A-M/N-Z/0-9/a-m/n-z/@%$ rows=6 columns=13 ink_pixels={} glyph_size=96x176 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 lean_px={} meso_px={} storage=none escape=close\n",
         window.raw(), frame.raw(), WIDTH, HEIGHT, SCALE, present, lines, strips.len(), real_vertices, 2 * strips.len(), ends, 2 * strips.len() - ends, LINE_WIDTH_PX, join_triangles, END_CORNER_FRACTION, LINE_WIDTH_PX * END_CORNER_FRACTION, microfont::FontShape::Lean.line_width_px(), microfont::FontShape::Meso.line_width_px());
     while !ui4::window_is_closed(OWNER, window) {
         let mut wheel = 0i32;
@@ -200,15 +194,6 @@ async fn render_frame(frame: FrameHandle, width_px: f32) -> PaintResult {
     }
 }
 
-fn triple_pixels(triple: &[microfont::raster_line::Point]) -> [[f32; 2]; 3] {
-    core::array::from_fn(|k| {
-        [
-            (triple[k].x() as f32 + 0.5) * SCALE as f32,
-            (triple[k].y() as f32 + 0.5) * SCALE as f32,
-        ]
-    })
-}
-
 /// Positive wheel steps thicken the stroke; clamp to the named weight presets.
 fn width_after_scroll(width_px: f32, wheel: i32) -> f32 {
     (width_px + wheel as f32 * WIDTH_STEP_PX).clamp(
@@ -220,7 +205,8 @@ fn width_after_scroll(width_px: f32, wheel: i32) -> f32 {
 fn paint_once(frame: FrameHandle, width_px: f32) -> PaintResult {
     use super::microfont_mask_service::{self as masks, AtlasConfig};
     let glyphs: Vec<_> = GLYPHS.iter().map(|&ch| ch as char).collect();
-    masks::stamp_preview(
+    let inks = preview_inks();
+    masks::stamp_preview_colored(
         frame,
         AtlasConfig {
             glyph_scale: SCALE,
@@ -229,7 +215,43 @@ fn paint_once(frame: FrameHandle, width_px: f32) -> PaintResult {
         &glyphs,
         COLUMNS,
         SCALE,
-        [48, 100, 216, 255],
-        [255; 4],
+        &inks,
+        [0; 4],
     )
+}
+
+/// Rainbow varies across all named glyphs; each row independently fades alpha.
+fn preview_inks() -> Vec<[u8; 4]> {
+    let count = GLYPHS.iter().filter(|&&ch| ch != b' ').count();
+    let mut ordinal = 0;
+    let mut inks = Vec::with_capacity(GLYPHS.len());
+    for row in GLYPHS.chunks(COLUMNS) {
+        let letters = row.iter().filter(|&&ch| ch != b' ').count();
+        let mut column = 0;
+        for &ch in row {
+            if ch == b' ' { inks.push([0; 4]); continue; }
+            let [r, g, b] = rainbow_rgb(ordinal, count);
+            let alpha = if letters <= 1 { 255 } else {
+                let intervals = letters - 1;
+                ((255 * (intervals - column) + 128 * column + intervals / 2) / intervals) as u8
+            };
+            inks.push([r, g, b, alpha]);
+            column += 1;
+            ordinal += 1;
+        }
+    }
+    inks
+}
+
+fn rainbow_rgb(ordinal: usize, count: usize) -> [u8; 3] {
+    let phase = ordinal * 1536 / count.max(1);
+    let t = (phase % 256) as u8;
+    match phase / 256 {
+        0 => [255, t, 0],
+        1 => [255 - t, 255, 0],
+        2 => [0, 255, t],
+        3 => [0, 255 - t, 255],
+        4 => [t, 0, 255],
+        _ => [255, 0, 255 - t],
+    }
 }

@@ -186,6 +186,15 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
     for width in [8.0,8.001] {with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|_|Ok(())).unwrap();}
     assert_eq!(STATE.lock().unwrap().renders,1);
 }
+#[test] fn colored_transparent_stamp_premultiplies_each_ink_once() {
+    reset(0);let cfg=AtlasConfig::default();
+    stamp_preview_colored(ui4::FrameHandle,cfg,&['A','A'],2,16,&[[255,0,0,255],[0,0,255,128]],[0;4]).unwrap();
+    let s=STATE.lock().unwrap();
+    assert_eq!(&s.dest[..4],&[128,0,0,128]);
+    assert_eq!(&s.dest[96*4..96*4+4],&[0,0,64,64]);
+    assert_eq!((s.renders,s.published),(1,1));
+    assert!(s.dest.chunks_exact(4).all(|p|p[0]<=p[3]&&p[1]<=p[3]&&p[2]<=p[3]));
+}
 #[test] fn real_stamp_applies_color_opacity_and_blank_cells_without_redrawing() {
     reset(0);let cfg=AtlasConfig::default();
     stamp_preview(ui4::FrameHandle,cfg,&['A',' '],2,16,[200,100,50,128],[0;4]).unwrap();
@@ -194,9 +203,51 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
     stamp_preview(ui4::FrameHandle,cfg,&['A',' '],2,16,[0,255,0,255],[0;4]).unwrap();
     let s=STATE.lock().unwrap();assert_eq!(&s.dest[..4],&[0,128,0,128]);assert_eq!((s.renders,s.published,s.uploads),(1,2,uploads));
 }
+#[test] fn connected_loops_get_one_closing_join_only() {
+    use microfont::raster_line::{Point,Strip,Boundary::{End,Junction}};
+    const POINTS:&[Point]=&[Point::new(0,2),Point::new(0,1),Point::new(1,1),Point::new(1,2),Point::new(0,2)];
+    for (start,end,expected) in [(Junction,Junction,12),(End,End,9),(End,Junction,9),(Junction,End,9)] {
+        let strip=Strip::new(POINTS,start,end);
+        let mut vertices=Vec::new();
+        services::microfont_mask_service::append_strip_joins(&mut vertices,0,&strip);
+        assert_eq!(vertices.len(),expected);
+        if expected==12 {assert_eq!(vertices[9][0] as u32,0|(2<<7));}
+    }
+}
+#[test] fn percent_has_two_connected_circles_with_four_joins_each() {
+    use microfont::raster_line::Boundary::Junction;
+    let strips=microfont::raster_line::glyph_strips('%').unwrap();
+    assert_eq!(strips.len(),3);
+    for strip in &strips[1..] {
+        assert_eq!((strip.start,strip.end),(Junction,Junction));
+        let mut vertices=Vec::new();
+        services::microfont_mask_service::append_strip_joins(&mut vertices,0,strip);
+        assert_eq!(vertices.len(),12);
+    }
+}
+#[test] fn sharp_joins_use_bounded_round_sectors_only_above_270_degrees() {
+    use microfont::raster_line::Point;
+    for (triple,expected) in [
+        ([Point::new(0,8),Point::new(2,0),Point::new(4,8)],12),
+        ([Point::new(4,8),Point::new(2,0),Point::new(0,8)],12),
+        ([Point::new(0,8),Point::new(0,0),Point::new(4,0)],3),
+        ([Point::new(0,8),Point::new(0,2),Point::new(2,0)],3),
+    ] {
+        let mut vertices=Vec::new();services::microfont_mask_service::append_join(&mut vertices,0,&triple);
+        assert_eq!(vertices.len(),expected);
+        for triangle in vertices.chunks_exact(3) {
+            if expected==12 {
+                assert!(triangle.iter().all(|v|v[0] as u32 & 0x8000 !=0));
+                assert!(triangle.iter().all(|v|v[1].abs()<=0.7072&&v[2].abs()<=0.7072));
+                let a=triangle[1];let b=triangle[2];
+                assert!(a[0]==b[0]);assert!(a[1]*b[2]-a[2]*b[1]<0.0);
+            }
+        }
+    }
+}
 #[test] fn join_recipes_expand_to_the_same_corners_for_all_widths() {
     use microfont::raster_line::Point;
-    let triple=[Point::new(0,8),Point::new(2,0),Point::new(4,8)];
+    let triple=[Point::new(0,8),Point::new(0,0),Point::new(4,0)];
     let mut vertices=Vec::new();services::microfont_mask_service::append_join(&mut vertices,0,&triple);
     assert_eq!(vertices.len(),3);assert!(vertices[0][1]<-0.5);
     for width in [7.0,8.0,9.0] {
@@ -214,7 +265,7 @@ def main():
     subprocess.run(['python3',str(ROOT/'vendor/microfont/tools/generate_line_glyphs.py')],check=True)
     service=(ROOT/'src/r/services/microfont_mask_service.rs').read_text()
     # Tests access the private owner only to reset between simulated boots.
-    service=service.replace('static ATLAS:', 'pub(crate) static ATLAS:').replace('fn append_join(', 'pub(crate) fn append_join(')
+    service=service.replace('static ATLAS:', 'pub(crate) static ATLAS:').replace('fn append_join(', 'pub(crate) fn append_join(').replace('pub(super) fn append_strip_joins(', 'pub(crate) fn append_strip_joins(')
     service=service.replace('pub(super) fn corner_triangle(', 'pub(crate) fn corner_triangle(')
     source=MOCKS+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n}}\n'+TESTS
     with tempfile.TemporaryDirectory(prefix='microfont-mask-test-') as tmp:

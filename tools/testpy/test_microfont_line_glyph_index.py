@@ -24,7 +24,7 @@ class GlyphIndex(unittest.TestCase):
                 # then remove it. The production decoder and generated lookup run.
                 for contents,expected in [(None,0),(bytes.fromhex('C0 00 40'),1),
                                           (bytes.fromhex('C0 00 40 80 20 44'),2),(None,0)]:
-                    z=data/(character+'.bin')
+                    z=data/f'u{ord(character):04X}.bin'
                     if contents is None:
                         z.unlink(missing_ok=True)
                     else:
@@ -40,10 +40,10 @@ class GlyphIndex(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='line-alias-') as tmp:
             root=Path(tmp);data=root/'data';data.mkdir();src=root/'src';src.mkdir()
             (src/'raster_line.rs').write_text((ROOT/'vendor/microfont/src/raster_line.rs').read_text())
-            (data/'6.bin').write_bytes(bytes.fromhex('C0 00 44'))
-            (data/'b.bin').write_bytes(bytes.fromhex('40 11 34 80 00 44'))
-            (data/'p.bin').write_bytes(bytes.fromhex('C1 21 51 3C'))
-            (data/'n.bin').write_bytes(bytes.fromhex('C0 40 20 83 28 21 23 2C 44'))
+            (data/'u0036.bin').write_bytes(bytes.fromhex('C0 00 44'))
+            (data/'u0062.bin').write_bytes(bytes.fromhex('40 11 34 80 00 44'))
+            (data/'u0070.bin').write_bytes(bytes.fromhex('C1 21 51 3C'))
+            (data/'u006E.bin').write_bytes(bytes.fromhex('C0 40 20 83 28 21 23 2C 44'))
             self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),8)
             check=root/'check.rs'
             check.write_text(r'''#[path="src/raster_line.rs"] mod raster_line;
@@ -84,12 +84,21 @@ fn main() {
             subprocess.run(['rustc','--edition=2024','-A','dead_code',str(check),'-o',str(root/'check')],check=True)
             subprocess.run([str(root/'check')],check=True)
 
+    def test_only_canonical_codepoint_filenames_are_accepted(self):
+        with tempfile.TemporaryDirectory(prefix='line-names-') as tmp:
+            folder=Path(tmp)
+            for name in ['A.bin','u006e.bin','U0041.bin','u00041.bin','uD800.bin','u110000.bin']:
+                path=folder/name;path.write_bytes(bytes.fromhex('C0 00 40'))
+                with self.assertRaises(ValueError):
+                    index.generate(folder,folder/'index.rs')
+                path.unlink()
+
     def test_invalid_bins_report_the_offending_file(self):
         with tempfile.TemporaryDirectory(prefix='line-index-bad-') as tmp:
-            folder=Path(tmp);z=folder/'Z.bin'
+            folder=Path(tmp);z=folder/'u005A.bin'
             for contents in [b'',bytes.fromhex('C1 00 40'),bytes.fromhex('C0 06 40'),bytes.fromhex('C0 80 40')]:
                 z.write_bytes(contents)
-                with self.assertRaisesRegex(ValueError,'Z.bin:'):
+                with self.assertRaisesRegex(ValueError,'u005A.bin:'):
                     index.generate(folder,folder/'index.rs')
 
 if __name__=='__main__':
