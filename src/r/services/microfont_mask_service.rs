@@ -21,6 +21,8 @@ pub(crate) const SLOT_COUNT: usize = BLOCK_START + 32;
 pub(crate) struct AtlasConfig {
     /// Uniform source-cell scale: 16 gives a 96x176 glyph.
     pub(crate) glyph_scale: u32,
+    /// Optional native-pixel height of the eleven-row em cell (demo only).
+    pub(crate) glyph_height_px: Option<u32>,
     /// Native line width in pixels, rounded once to the engine's U11.7 step.
     pub(crate) line_width_px: f32,
 }
@@ -28,6 +30,7 @@ impl Default for AtlasConfig {
     fn default() -> Self {
         Self {
             glyph_scale: 16,
+            glyph_height_px: None,
             line_width_px: 8.0,
         }
     }
@@ -37,7 +40,10 @@ impl AtlasConfig {
         if !(1..=23).contains(&self.glyph_scale)
             || !self.line_width_px.is_finite()
             || self.line_width_px < 1.0
-            || self.line_width_px > self.glyph_scale as f32
+            || self.line_width_px > 32.0
+            || (self.glyph_height_px.is_none() && self.line_width_px > self.glyph_scale as f32)
+            || self.glyph_height_px.is_some_and(|h| !(11..=253).contains(&h))
+            || self.extent().0 > 4096 || self.extent().1 > 4096
         {
             return Err("microfont-atlas-config");
         }
@@ -46,8 +52,21 @@ impl AtlasConfig {
             ..self
         })
     }
+    fn scale(self) -> f32 {
+        self.glyph_height_px.map_or(self.glyph_scale as f32, |h| h as f32 / 11.0)
+    }
+    fn gutter(self) -> u32 {
+        if self.glyph_height_px.is_some() { (libm::ceilf(self.line_width_px * 0.5) as u32 + 1).max(6) }
+        else { 0 }
+    }
+    pub(crate) fn cell_extent(self) -> (u32, u32) {
+        let height = self.glyph_height_px.unwrap_or(11 * self.glyph_scale);
+        let gutter = 2 * self.gutter();
+        (((height * 6 + 10) / 11).max(1) + gutter, height + gutter)
+    }
     pub(crate) fn extent(self) -> (u32, u32) {
-        (ATLAS_COLUMNS * 6 * self.glyph_scale, ATLAS_ROWS * 11 * self.glyph_scale)
+        let (width, height) = self.cell_extent();
+        (ATLAS_COLUMNS * width, ATLAS_ROWS * height)
     }
 }
 
@@ -368,12 +387,11 @@ impl CoverageAtlas {
     /// Atlas rectangle in pixels; absent source glyphs retain an empty slot.
     pub(crate) fn glyph_rect(&self, ch: char) -> Option<[u32; 4]> {
         let slot = glyph_slot(ch)?;
-        let scale = self.config().glyph_scale;
+        let (width, height) = self.config().cell_extent();
         Some([
-            (slot % ATLAS_COLUMNS as usize) as u32 * 6 * scale,
-            (slot / ATLAS_COLUMNS as usize) as u32 * 11 * scale,
-            6 * scale,
-            11 * scale,
+            (slot % ATLAS_COLUMNS as usize) as u32 * width,
+            (slot / ATLAS_COLUMNS as usize) as u32 * height,
+            width, height,
         ])
     }
     pub(crate) fn config(&self) -> AtlasConfig {
@@ -407,13 +425,19 @@ impl CoverageAtlas {
         // Only dynamic values are written. Endpoint frames, boundary tags and
         // join kind remain in their original GPU allocation for service life.
         let transform = [
-            config.glyph_scale as f32,
+            config.scale(),
             config.line_width_px,
             1.0 / width as f32,
             1.0 / height as f32,
         ]
         .map(f32::to_bits);
         for (i, batch) in self.geometry.batches.iter().enumerate() {
+            // Physical-size mode packs independent cells with a stroke-sized
+            // gutter. It prevents wide strokes leaking into adjacent masks.
+            if !constants.write(i * 64 + 36,
+                &(config.glyph_height_px.unwrap_or(0) as f32).to_bits().to_le_bytes()) {
+                return Err("microfont-constants-size");
+            }
             if batch.topology == Topology::LineStripAdj
                 && !constants
                     .write(i * 64 + 32, &(config.line_width_px * 0.5).to_bits().to_le_bytes())
@@ -432,6 +456,9 @@ impl CoverageAtlas {
             .batches
             .iter()
             .enumerate()
+            // The physical-size experiment is exclusively the ASCII line demo.
+            // Box/block consumers retain their unchanged regular atlas layout.
+            .filter(|(_, batch)| config.glyph_height_px.is_none() || batch.params[8] != 0)
             .map(|(i, batch)| render::ResidentSceneDraw {
                 mesh: &batch.mesh,
                 depth_flags: None,
@@ -474,7 +501,7 @@ impl CoverageAtlas {
         self.generation += 1;
         crate::log_important!(target:"microfont-mask";
             "microfont-mask: warm generation={} format=r8 size={}x{} bytes={} scale={} width_px={} geometry_uploads=1 geometry_reuploads=0 gpu_body={:?} gpu_target_ready={:?} samples=1\n",
-            self.generation,width,height,self.surface().bytes,config.glyph_scale,config.line_width_px,
+            self.generation,width,height,self.surface().bytes,config.scale(),config.line_width_px,
             result.gpu_timestamp,result.gpu_target_ready_timestamp);
         Ok(())
     }
@@ -536,11 +563,14 @@ pub(crate) fn stamp_preview_colored(
             let view = ui4::writable_rgba_view(lease).map_err(|_| "frame-view")?;
             let mask = atlas.surface();
             let scale = atlas.config().glyph_scale;
+            let (cell_width, cell_height) = if atlas.config().glyph_height_px.is_some() {
+                atlas.config().cell_extent()
+            } else { (6 * display_scale, 11 * display_scale) };
             if columns == 0
                 || display_scale == 0
-                || scale % display_scale != 0
-                || view.width != columns as u32 * 6 * display_scale
-                || view.height != (glyphs.len().div_ceil(columns)) as u32 * 11 * display_scale
+                || (atlas.config().glyph_height_px.is_none() && scale % display_scale != 0)
+                || view.width != columns as u32 * cell_width
+                || view.height != (glyphs.len().div_ceil(columns)) as u32 * cell_height
             {
                 return Err("microfont-stamp-shape");
             }
@@ -566,18 +596,16 @@ pub(crate) fn stamp_preview_colored(
             let mut nonzero = 0usize;
             for y in 0..view.height {
                 for x in 0..view.width {
-                    let cell = (y / (11 * display_scale)) as usize * columns
-                        + (x / (6 * display_scale)) as usize;
+                    let cell = (y / cell_height) as usize * columns
+                        + (x / cell_width) as usize;
                     let coverage = glyphs
                         .get(cell)
                         .and_then(|&ch| atlas.glyph_rect(ch))
                         .map_or(0, |rect| {
                             let sx = rect[0]
-                                + (x % (6 * display_scale)) * scale / display_scale
-                                + (scale / display_scale) / 2;
+                                + ((2 * (x % cell_width) + 1) * rect[2] / (2 * cell_width)).min(rect[2] - 1);
                             let sy = rect[1]
-                                + (y % (11 * display_scale)) * scale / display_scale
-                                + (scale / display_scale) / 2;
+                                + ((2 * (y % cell_height) + 1) * rect[3] / (2 * cell_height)).min(rect[3] - 1);
                             unsafe {
                                 core::ptr::read_volatile(
                                     source.add((sy * mask.pitch_bytes + sx) as usize),

@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[2]
 MOCKS=r'''
 extern crate alloc;
 use std::sync::Mutex;
-mod libm { pub fn sqrtf(v:f32)->f32 {v.sqrt()} pub fn roundf(v:f32)->f32 {v.round()} }
+mod libm { pub fn ceilf(v:f32)->f32 {v.ceil()} pub fn sqrtf(v:f32)->f32 {v.sqrt()} pub fn roundf(v:f32)->f32 {v.round()} }
 mod spin {
     pub struct Mutex<T>(std::sync::Mutex<T>);
     impl<T> Mutex<T> { pub const fn new(v:T)->Self {Self(std::sync::Mutex::new(v))}
@@ -150,7 +150,7 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
     let (written,before)={let s=STATE.lock().unwrap();(s.constant_writes.len(),s.params.clone())};
     with_warmed_atlas(AtlasConfig {line_width_px:9.0,..AtlasConfig::default()},|_|Ok(())).unwrap();
     let s=STATE.lock().unwrap();assert_eq!(s.constant_allocations,1);
-    assert!(s.constant_writes[written..].iter().all(|&(offset,len)|len==4 && matches!(offset%64,32|48|52|56|60)));
+    assert!(s.constant_writes[written..].iter().all(|&(offset,len)|len==4 && matches!(offset%64,32|36|48|52|56|60)));
     for (old,new) in before.iter().zip(&s.params) {
         assert_eq!(&old[..8],&new[..8]);assert_eq!(&old[10..12],&new[10..12]);
     }
@@ -158,8 +158,41 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
 #[test] fn size_replaces_mask_but_keeps_every_geometry_buffer() {
     reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
     let uploads=STATE.lock().unwrap().uploads;
-    with_warmed_atlas(AtlasConfig {glyph_scale:8,line_width_px:4.0},|a| {assert_eq!((a.surface().width,a.surface().height),(768,1408));Ok(())}).unwrap();
+    with_warmed_atlas(AtlasConfig {glyph_scale:8,line_width_px:4.0,..AtlasConfig::default()},|a| {assert_eq!((a.surface().width,a.surface().height),(768,1408));Ok(())}).unwrap();
     let s=STATE.lock().unwrap();assert_eq!(s.uploads,uploads);assert_eq!((s.renders,s.allocations,s.mask_releases),(2,2,1));
+}
+#[test] fn physical_cell_pitch_rounds_up_to_match_shader_packing() {
+    for height in 11..=240 {
+        let config=AtlasConfig {glyph_height_px:Some(height),..AtlasConfig::default()};
+        let (width,cell_height)=config.cell_extent();
+        let inner=width-12;
+        assert!(inner*11>=height*6);
+        assert!((inner-1)*11<height*6);
+        assert_eq!(cell_height,height+12);
+    }
+}
+#[test] fn physical_sizes_reuse_source_geometry_and_keep_native_width() {
+    reset(0);
+    let mut uploads = 0;
+    for height in [19,38,57,76,94,113,132,151,19] {
+        let config = AtlasConfig { glyph_height_px:Some(height), ..AtlasConfig::default() };
+        with_warmed_atlas(config,|atlas| {
+            assert_eq!(atlas.config().line_width_px,8.0);
+            let (w,h) = atlas.config().cell_extent();
+            assert_eq!(h,height+12); // six native pixels of overhang room per side
+            assert_eq!(w,(height*6+10)/11+12);
+            assert_eq!(atlas.glyph_rect('A').unwrap()[2..],[w,h]);
+
+            assert_eq!((atlas.surface().width,atlas.surface().height),(16*w,16*h));
+            Ok(())
+        }).unwrap();
+        let state=STATE.lock().unwrap();
+        if uploads==0 {uploads=state.uploads;}
+        assert_eq!(state.uploads,uploads);
+        assert!(state.params.iter().all(|p| f32::from_bits(p[9])==height as f32));
+        assert!(state.params.iter().all(|p| (f32::from_bits(p[12])*11.0-height as f32).abs()<0.0001));
+        assert!(state.params.iter().all(|p| p[8]!=0)); // box/block path unchanged, excluded here
+    }
 }
 #[test] fn busy_retry_keeps_uploaded_geometry() {
     reset(2);assert_eq!(with_warmed_atlas(AtlasConfig::default(),|_|Ok(())),Err("render-busy"));
@@ -180,7 +213,7 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
 }
 #[test] fn configuration_validation_precedes_upload_and_quantizes_width_once() {
     reset(0);for (scale,width) in [(0,8.0),(24,8.0),(16,f32::NAN),(4,8.0)] {
-        assert!(with_warmed_atlas(AtlasConfig {glyph_scale:scale,line_width_px:width},|_|Ok(())).is_err());
+        assert!(with_warmed_atlas(AtlasConfig {glyph_scale:scale,line_width_px:width,..AtlasConfig::default()},|_|Ok(())).is_err());
     }
     assert_eq!(STATE.lock().unwrap().uploads,0);
     for width in [8.0,8.001] {with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|_|Ok(())).unwrap();}
@@ -267,7 +300,28 @@ def main():
     # Tests access the private owner only to reset between simulated boots.
     service=service.replace('static ATLAS:', 'pub(crate) static ATLAS:').replace('fn append_join(', 'pub(crate) fn append_join(').replace('pub(super) fn append_strip_joins(', 'pub(crate) fn append_strip_joins(')
     service=service.replace('pub(super) fn corner_triangle(', 'pub(crate) fn corner_triangle(')
-    source=MOCKS+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n}}\n'+TESTS
+    preview=(ROOT/'src/r/services/microfont_line_preview.rs').read_text()
+    helpers=preview[preview.index('fn glyph_height_pixels('):preview.index('type PaintResult')]
+    helper_tests=r'''
+const COLUMNS:usize=13;
+#[test] fn tab_cycles_all_eight_sizes_and_wraps() {
+    let mut step=1;
+    for expected in [2,3,4,5,6,7,8,1] {step=size_after_tabs(step,1);assert_eq!(step,expected);}
+    assert_eq!(size_after_tabs(3,16),3);
+    assert_eq!(size_after_tabs(1,9),2);
+}
+#[test] fn physical_em_uses_gridpaper_conversion_and_keeps_wheel_layout_stable() {
+    for step in 1..=8 {
+        let expected=(1440*u32::from(step)*5+170)/340;
+        assert_eq!(glyph_height_pixels(step),Ok(expected));
+        let base=frame_extent(expected,8.0);
+        assert_eq!(base,(13*((expected*6+10)/11+12),6*(expected+12)));
+        for width in [7.0,7.25,8.0,8.25,9.0] {assert_eq!(frame_extent(expected,width),base);}
+    }
+}
+'''
+    mocks=MOCKS.replace('mod intel {','mod intel { pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {Some(((2560*w+300)/600,(1440*h+170)/340))}')
+    source=mocks+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n} mod preview_size {\n'+helpers+helper_tests+'\n}}\n'+TESTS
     with tempfile.TemporaryDirectory(prefix='microfont-mask-test-') as tmp:
         tmp=Path(tmp);lib=tmp/'libmicrofont.rlib'
         subprocess.run(['rustc','--edition=2024','--crate-name','microfont','--crate-type','rlib','--cfg','feature="raster"',str(ROOT/'vendor/microfont/src/lib.rs'),'-o',str(lib)],check=True)
