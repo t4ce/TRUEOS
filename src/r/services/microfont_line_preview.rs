@@ -1,4 +1,4 @@
-//! Six-row letter, digit and @/%/$ preview; missing glyphs leave empty cells.
+//! Basic Latin in codepoint order; controls and missing glyphs leave empty cells.
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use embassy_sync::signal::Signal;
 use trueos_time::{Duration, Timer};
@@ -12,8 +12,18 @@ const LINE_WIDTH_PX: f32 =
 const MIN_LINE_WIDTH_PX: f32 = 1.0;
 const WIDTH_STEP_PX: f32 = 0.25;
 const END_CORNER_FRACTION: f32 = 0.5;
-const GLYPHS: &[u8; 78] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789   abcdefghijklmnopqrstuvwxyz@%$          ";
-const COLUMNS: usize = 13;
+// One slot per Basic Latin codepoint, including the blank control positions.
+const GLYPHS: [u8; 128] = {
+    let mut glyphs = [0; 128];
+    let mut code = 0;
+    while code < glyphs.len() {
+        glyphs[code] = code as u8;
+        code += 1;
+    }
+    glyphs
+};
+const COLUMNS: usize = 16;
+const ROWS: usize = GLYPHS.len() / COLUMNS;
 // Font size means the complete eleven-row em cell, including descender space.
 // Use the same EDID-to-active-scanout conversion as gridpaper; no guessed DPI.
 fn glyph_height_pixels(step: u8) -> Result<u32, &'static str> {
@@ -22,14 +32,14 @@ fn glyph_height_pixels(step: u8) -> Result<u32, &'static str> {
         .ok_or("physical-display-size-unavailable")
 }
 fn size_after_tabs(step: u8, tabs: u32) -> u8 {
-    ((u32::from(step) - 2 + tabs % 15) % 15 + 2) as u8
+    ((u32::from(step) - 2 + tabs % 7) % 7 + 2) as u8
 }
 fn frame_extent(height: u32, line_width_px: f32) -> (u32, u32) {
     let (width, height) = super::microfont_mask_service::AtlasConfig {
         glyph_height_px: Some(height), line_width_px,
         ..super::microfont_mask_service::AtlasConfig::default()
     }.cell_extent();
-    (COLUMNS as u32 * width, 6 * height + super::microfont_mask_service::PREVIEW_HEADER_HEIGHT)
+    (COLUMNS as u32 * width, ROWS as u32 * height + super::microfont_mask_service::PREVIEW_HEADER_HEIGHT)
 }
 type PaintResult = Result<usize, &'static str>;
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, PaintResult>;
@@ -119,7 +129,7 @@ async fn show_once() -> Result<(), &'static str> {
         .filter(|&tag| tag == microfont::raster_line::Boundary::End)
         .count();
     crate::log_important!(target: "microfont-line-preview";
-        "microfont-line-preview: presented window={} frame={} size={}x{} em_height_px={} cells=65 slots=78 present={} source=line-binary-v1 layout=A-M/N-Z/0-9/a-m/n-z/@%$ rows=6 columns=13 ink_pixels={} size_mm=5 sizing=eleven-row-em tab=5..40mm-step2.5 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 scroll_min_px={} lean_px={} meso_px={} storage=none escape=close\n",
+        "microfont-line-preview: presented window={} frame={} size={}x{} em_height_px={} cells=128 slots=128 present={} source=line-binary-v1 layout=U+0000..U+007F rows=8 columns=16 ink_pixels={} size_mm=5 sizing=eleven-row-em tab=5..20mm-step2.5 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 scroll_min_px={} lean_px={} meso_px={} storage=none escape=close\n",
         window.raw(), frame.raw(), width, height, glyph_height, present, lines, strips.len(), real_vertices, 2 * strips.len(), ends, 2 * strips.len() - ends, LINE_WIDTH_PX, join_triangles, END_CORNER_FRACTION, LINE_WIDTH_PX * END_CORNER_FRACTION, MIN_LINE_WIDTH_PX, microfont::FontShape::Lean.line_width_px(), microfont::FontShape::Meso.line_width_px());
     while !ui4::window_is_closed(OWNER, window) {
         let mut wheel = 0i32;
@@ -259,14 +269,14 @@ fn paint_once(frame: FrameHandle, width_px: f32, glyph_height: u32, size_step: u
 
 /// Rainbow varies across all named glyphs; each row independently fades alpha.
 fn preview_inks() -> Vec<[u8; 4]> {
-    let count = GLYPHS.iter().filter(|&&ch| ch != b' ').count();
+    let count = GLYPHS.iter().filter(|&&ch| ch.is_ascii_graphic()).count();
     let mut ordinal = 0;
     let mut inks = Vec::with_capacity(GLYPHS.len());
     for row in GLYPHS.chunks(COLUMNS) {
-        let letters = row.iter().filter(|&&ch| ch != b' ').count();
+        let letters = row.iter().filter(|&&ch| ch.is_ascii_graphic()).count();
         let mut column = 0;
         for &ch in row {
-            if ch == b' ' { inks.push([0; 4]); continue; }
+            if !ch.is_ascii_graphic() { inks.push([0; 4]); continue; }
             let [r, g, b] = rainbow_rgb(ordinal, count);
             let alpha = if letters <= 1 { 255 } else {
                 let intervals = letters - 1;

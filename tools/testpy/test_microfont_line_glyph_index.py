@@ -45,7 +45,13 @@ class GlyphIndex(unittest.TestCase):
             (data/'u0070.bin').write_bytes(bytes.fromhex('C1 21 51 3C'))
             (data/'u006E.bin').write_bytes(bytes.fromhex('C0 40 20 83 28 21 23 2C 44'))
             (data/'u0074.bin').write_bytes(bytes.fromhex('C0 21 23 C2 02 3A 43 44'))
-            self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),10)
+            for name, payload in {
+                '0028':'C2 04 0B 3B 44', '003C':'C1 04 20 44',
+                '005B':'C2 04 00 40 44', '007B':'C1 04 22 44',
+                '002F':'C1 04 22 40', '003F':'C1 00 24 42',
+            }.items():
+                (data/f'u{name}.bin').write_bytes(bytes.fromhex(payload))
+            self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),22)
             check=root/'check.rs'
             check.write_text(r'''#[path="src/raster_line.rs"] mod raster_line;
 use raster_line::{glyph_strips,Boundary::{End,Junction}};
@@ -88,6 +94,21 @@ fn main() {
     assert_eq!(actual,[(1,4),(3,4)]);
     let actual:Vec<_>=f[1].iter_points().map(|p|(p.x(),p.y())).collect();
     assert_eq!(actual,[(2,8),(2,1),(3,0),(4,0)]);
+    for (canonical,alias,rotate) in [('(',')',false),('<','>',false),('[',']',false),
+                                    ('{','}',false),('/','\\',false),('?','¿',true)] {
+        let source=glyph_strips(canonical).unwrap();let flipped=glyph_strips(alias).unwrap();
+        let all:Vec<_>=source.iter().flat_map(|s|s.iter_points()).collect();
+        let sx=all.iter().map(|p|p.x()).min().unwrap()+all.iter().map(|p|p.x()).max().unwrap();
+        let sy=all.iter().map(|p|p.y()).min().unwrap()+all.iter().map(|p|p.y()).max().unwrap();
+        for (a,b) in source.iter().zip(flipped) {
+            assert_eq!(a.points.as_ptr(),b.points.as_ptr());
+            assert_eq!((a.start,a.end),(b.start,b.end));
+            for (p,q) in a.iter_points().zip(b.iter_points()) {
+                assert_eq!((q.x(),q.y()),(sx-p.x(),if rotate {sy-p.y()} else {p.y()}));
+            }
+        }
+    }
+    assert_eq!(glyph_strips('/').unwrap()[0].points.len(),3); // bin overrides old slash
     assert_eq!(core::mem::size_of::<raster_line::Strip>(),24);
 }
 ''')

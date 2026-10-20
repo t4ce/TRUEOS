@@ -323,19 +323,20 @@ def main():
     preview=(ROOT/'src/r/services/microfont_line_preview.rs').read_text()
     helpers=preview[preview.index('fn glyph_height_pixels('):preview.index('type PaintResult')]
     helper_tests=r'''
-const COLUMNS:usize=13;
-#[test] fn tab_cycles_all_fifteen_sizes_and_wraps() {
+const COLUMNS:usize=16;
+const ROWS:usize=8;
+#[test] fn tab_cycles_all_seven_sizes_and_wraps() {
     let mut step=2;
-    for expected in [3,4,5,6,7,8,9,10,11,12,13,14,15,16,2] {step=size_after_tabs(step,1);assert_eq!(step,expected);}
-    assert_eq!(size_after_tabs(3,30),3);
-    assert_eq!(size_after_tabs(2,16),3);
+    for expected in [3,4,5,6,7,8,2] {step=size_after_tabs(step,1);assert_eq!(step,expected);}
+    assert_eq!(size_after_tabs(3,14),3);
+    assert_eq!(size_after_tabs(2,8),3);
 }
 #[test] fn physical_em_uses_gridpaper_conversion_and_keeps_wheel_layout_stable() {
-    for step in 2..=16 {
+    for step in 2..=8 {
         let expected=(1440*u32::from(step)*5+340)/680;
         assert_eq!(glyph_height_pixels(step),Ok(expected));
         let base=frame_extent(expected,8.0);
-        assert_eq!(base,(13*((expected*6+10)/11+12),6*(expected+12)+super::microfont_mask_service::PREVIEW_HEADER_HEIGHT));
+        assert_eq!(base,(16*((expected*6+10)/11+12),8*(expected+12)+super::microfont_mask_service::PREVIEW_HEADER_HEIGHT));
         for width in [7.0,7.25,8.0,8.25,9.0] {assert_eq!(frame_extent(expected,width),base);}
     }
 }
