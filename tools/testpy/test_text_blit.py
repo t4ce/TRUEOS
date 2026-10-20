@@ -10,7 +10,7 @@ SOURCE = r'''
 extern crate alloc;
 macro_rules! log_info {($($t:tt)*)=>{}}
 pub(crate) use log_info;
-mod allcaps {pub mod text_blit {pub const CPU_MONO_MAX_PIXELS:usize=1024;pub const CPU_COPY_MAX_PIXELS:usize=1024;pub const DIAGNOSTICS:bool=false;}}
+mod allcaps {pub mod text_blit {pub const CPU_MONO_MAX_PIXELS:usize=1024;pub const CPU_COPY_MAX_PIXELS:usize=2048;pub const DIAGNOSTICS:bool=false;}}
 mod time {pub fn tsc_hz()->u64 {1_000_000_000}}
 mod phys {pub fn phys_to_virt(v:usize)->usize {v}}
 mod percpu {pub fn current_slot()->u32 {0}}
@@ -18,7 +18,7 @@ mod intel {
 #[derive(Clone,Copy)]pub struct GucBcs0RgbaSurface {pub phys:u64,pub gpu:u64,pub bytes:usize,pub width:u32,pub height:u32,pub pitch_bytes:u32}
 #[derive(Clone,Copy)]pub struct GucBcs0MonoGlyph {pub x:u32,pub y:u32,pub width:u32,pub height:u32,pub mask:[u8;64],pub foreground:u32,pub background:u32}
 #[derive(Clone,Copy)]pub struct GucBcs0RgbaFill {pub x:u32,pub y:u32,pub width:u32,pub height:u32,pub color:u32}
-pub struct GucBcs0RgbaCopy {pub source:GucBcs0RgbaSurface,pub source_x:u32,pub source_y:u32,pub destination_x:u32,pub destination_y:u32,pub width:u32,pub height:u32}
+#[derive(Clone,Copy)]pub struct GucBcs0RgbaCopy {pub source:GucBcs0RgbaSurface,pub source_x:u32,pub source_y:u32,pub destination_x:u32,pub destination_y:u32,pub width:u32,pub height:u32}
 pub struct DmaFlushRows;
 impl DmaFlushRows {pub fn new(_: *mut u8,_:usize,_:usize,_:usize)->Self {Self}}
 pub fn dma_flush_strided_row_spans(_: &[DmaFlushRows])->bool {true}
@@ -68,6 +68,20 @@ fn glyph(width:u32,height:u32)->GucBcs0MonoGlyph {let mut mask=[0u8;64];for (i,b
     let mut source=vec![0;768*44];let src=surface(&mut source,192,44,768);
     let c=GucBcs0RgbaCopy {source:src,source_x:0,source_y:0,destination_x:0,destination_y:0,width:192,height:11};
     assert!(!unsafe{try_copy(wide,&[c],11)});
+}
+#[test]fn rgba_glyphs_keep_mono_budget_while_viewport_copies_keep_copy_budget() {
+ let mut pixels=vec![0;1024*44];let dst=surface(&mut pixels,256,44,1024);
+ let mut source=vec![0x80;1024*44];let src=surface(&mut source,256,44,1024);
+ let copies:Vec<_>=(0..16).map(|i|GucBcs0RgbaCopy {source:src,source_x:0,source_y:0,destination_x:i*6,destination_y:0,width:6,height:11}).collect();
+ // 1056 pixels fit the independent 2048px copy allowance, but exceed the
+ // 1024px glyph allowance. This remains true when their caps are tuned apart.
+ assert!(unsafe{try_copy(dst,&copies,11)});let before=pixels.clone();assert!(!unsafe{try_glyph_copy(dst,&copies)});assert_eq!(before,pixels);
+ assert!(unsafe{try_glyph_copy(dst,&copies[..15])});
+ let narrow=GucBcs0RgbaSurface {width:24,..dst};assert!(!unsafe{try_glyph_copy(narrow,&copies[..3])});
+ // Use the first clipped glyph height, as mono_on_cpu does; a declared full
+ // row height must not grant extra CPU work for a clipped bottom row.
+ let clipped:Vec<_>=(0..13).map(|_|GucBcs0RgbaCopy {source:src,source_x:0,source_y:0,destination_x:0,destination_y:0,width:6,height:1}).collect();
+ assert!(!unsafe{try_glyph_copy(GucBcs0RgbaSurface {width:24,..dst},&clipped)});
 }
 #[test]fn fills_and_uniform_mono_rows_match_reference_with_unaligned_storage() {
     for width in [1,3,6,12,16] {

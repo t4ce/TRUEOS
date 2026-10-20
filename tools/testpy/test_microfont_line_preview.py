@@ -108,11 +108,15 @@ mod intel {
             }
             if s.fault==2 {return Err("render-busy");}
             let scale=mask.width/96;
+            let height=f32::from_bits(s.params[0][9]) as u32;
+            let (cell_width,cell_height)=if height==0 {(6*scale,11*scale)}
+                else {((height*6+10)/11+12,height+12)};
             // Synthetic coverage tests the actual copy/tint sink independently
             // of hardware rasterization, which is exercised on the rig.
             let slot=('A' as usize)-32;
-            for y in 0..11*scale { for x in 0..6*scale {
-                let px=(slot%16) as u32*6*scale+x;let py=(slot/16) as u32*11*scale+y;
+            mask.data.fill(0);
+            for y in 0..cell_height { for x in 0..cell_width {
+                let px=(slot%16) as u32*cell_width+x;let py=(slot/16) as u32*cell_height+y;
                 mask.data[(py*mask.width+px) as usize]=128;
             }}
             Ok(ResultFrame {release_fence:(s.fault!=4).then_some(1),gpu_timestamp:None,gpu_target_ready_timestamp:None})
@@ -126,11 +130,21 @@ fn reset(fault:u8) {
     let old=services::microfont_mask_service::ATLAS.try_lock().unwrap().take();drop(old);
     *STATE.lock().unwrap()=State {fault,..State::default()};
 }
-fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line::glyph_strips(c as char)).map(|s|s.len()).sum()}
+fn expected_lines()->usize {
+    (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
+        .filter(|ch| !(' '..='~').contains(ch) && !('\u{2500}'..='\u{259f}').contains(ch)))
+        .filter_map(microfont::raster_line::glyph_strips).map(|s|s.len()).sum()
+}
 #[test] fn maps_all_three_ranges_without_collisions() {
-    assert_eq!(SLOT_COUNT,255);assert_eq!(glyph_slot(' '),Some(0));assert_eq!(glyph_slot('~'),Some(94));
+    assert!(SLOT_COUNT>255);assert_eq!(glyph_slot(' '),Some(0));assert_eq!(glyph_slot('~'),Some(94));
     assert_eq!(glyph_slot('─'),Some(95));assert_eq!(glyph_slot('\u{257f}'),Some(222));
     assert_eq!(glyph_slot('▀'),Some(223));assert_eq!(glyph_slot('\u{259f}'),Some(254));assert_eq!(glyph_slot('漢'),None);
+    let extras:Vec<_>=microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
+        .filter(|ch| !(' '..='~').contains(ch) && !('\u{2500}'..='\u{259f}').contains(ch))
+        .map(|ch|glyph_slot(ch).unwrap()).collect();
+    assert_eq!(extras,(255..SLOT_COUNT).collect::<Vec<_>>());
+    assert!(glyph_slot('§').unwrap()>=255);
+    assert_eq!(ATLAS_ROWS,SLOT_COUNT.div_ceil(16) as u32);
 }
 #[test] fn endpoint_recipes_identify_indices_without_changing_seed_positions() {
     reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
@@ -173,7 +187,7 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
 #[test] fn size_replaces_mask_but_keeps_every_geometry_buffer() {
     reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
     let uploads=STATE.lock().unwrap().uploads;
-    with_warmed_atlas(AtlasConfig {glyph_scale:8,line_width_px:4.0,..AtlasConfig::default()},|a| {assert_eq!((a.surface().width,a.surface().height),(768,1408));Ok(())}).unwrap();
+    with_warmed_atlas(AtlasConfig {glyph_scale:8,line_width_px:4.0,..AtlasConfig::default()},|a| {assert_eq!((a.surface().width,a.surface().height),(768,ATLAS_ROWS*88));Ok(())}).unwrap();
     let s=STATE.lock().unwrap();assert_eq!(s.uploads,uploads);assert_eq!((s.renders,s.allocations,s.mask_releases),(2,2,1));
 }
 #[test] fn physical_cell_pitch_rounds_up_to_match_shader_packing() {
@@ -198,7 +212,7 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
             assert_eq!(w,(height*6+10)/11+12);
             assert_eq!(atlas.glyph_rect('A').unwrap()[2..],[w,h]);
 
-            assert_eq!((atlas.surface().width,atlas.surface().height),(16*w,16*h));
+            assert_eq!((atlas.surface().width,atlas.surface().height),(16*w,ATLAS_ROWS*h));
             Ok(())
         }).unwrap();
         let state=STATE.lock().unwrap();
@@ -206,7 +220,48 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
         assert_eq!(state.uploads,uploads);
         assert!(state.params.iter().all(|p| f32::from_bits(p[9])==height as f32));
         assert!(state.params.iter().all(|p| (f32::from_bits(p[12])*11.0-height as f32).abs()<0.0001));
-        assert!(state.params.iter().all(|p| p[8]!=0)); // box/block path unchanged, excluded here
+        assert_eq!(state.params.iter().filter(|p| p[8]==0).count(),1); // shared quad batch
+    }
+}
+#[test] fn shell3_snapshot_keeps_one_fixed_native_mask_independent_of_demo() {
+    reset(0);
+    let fixed=build_shell3_alpha_atlas(19).unwrap();
+    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,3.5);
+    assert_eq!((fixed.glyph_width,fixed.glyph_height,fixed.gutter_px),(23,31,6));
+    let a=fixed.glyph('A').unwrap().to_vec();
+    assert!(a.iter().all(|&coverage|coverage==128));
+    assert_eq!(fixed.glyph('§').unwrap().len(),23*31);
+    assert_eq!(fixed.glyph('█').unwrap().len(),23*31);
+    assert!(fixed.glyph('漢').is_none());
+    assert!(fixed.glyph(' ').unwrap().iter().all(|&coverage|coverage==0));
+    let uploads=STATE.lock().unwrap().uploads;
+    {
+        let state=STATE.lock().unwrap();
+        assert_eq!(state.renders,1);
+        assert_eq!(state.params[0][8],0); // box/block body shares this submission
+        assert!(state.params.iter().all(|p|f32::from_bits(p[13])==3.5));
+    }
+    with_warmed_atlas(AtlasConfig {glyph_height_px:Some(38),line_width_px:8.0,
+        ..AtlasConfig::default()},|_|Ok(())).unwrap();
+    assert_eq!(fixed.glyph('A').unwrap(),a);
+    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,3.5);
+    let state=STATE.lock().unwrap();assert_eq!(state.uploads,uploads);assert_eq!(state.renders,2);
+    assert!(fixed.glyphs().any(|(ch,_)|ch=='§'));
+}
+#[test] fn quad_vertices_keep_explicit_owning_cell_at_exact_boundaries() {
+    reset(0);with_warmed_atlas(AtlasConfig {glyph_height_px:Some(19),
+        line_width_px:3.5,..AtlasConfig::default()},|_|Ok(())).unwrap();
+    let state=STATE.lock().unwrap();
+    for quad in state.vertices[0].chunks_exact(4) {
+        let slot=(-quad[0][2]-1.0) as usize;
+        assert!((BOX_START..SLOT_COUNT).contains(&slot));
+        for point in quad {
+            assert_eq!(point[2],quad[0][2]);
+            let x=point[0]-(slot%16) as f32*6.0;
+            let y=point[1]-(slot/16) as f32*11.0;
+            assert!((0.0..=6.0).contains(&x));
+            assert!((0.0..=11.0).contains(&y));
+        }
     }
 }
 #[test] fn busy_retry_keeps_uploaded_geometry() {
@@ -320,6 +375,10 @@ def main():
     # Tests access the private owner only to reset between simulated boots.
     service=service.replace('static ATLAS:', 'pub(crate) static ATLAS:').replace('fn append_join(', 'pub(crate) fn append_join(').replace('pub(super) fn append_strip_joins(', 'pub(crate) fn append_strip_joins(')
     service=service.replace('pub(super) fn corner_triangle(', 'pub(crate) fn corner_triangle(')
+    # The fixture discards production logging, so its partial-coverage counter
+    # has no reader. Keep the counter in production, where the log consumes it.
+    service=service.replace('            let mut partial = 0usize;\n', '')
+    service=service.replace('                    partial += usize::from(coverage != 0 && coverage != 255);\n', '')
     preview=(ROOT/'src/r/services/microfont_line_preview.rs').read_text()
     helpers=preview[preview.index('fn glyph_height_pixels('):preview.index('type PaintResult')]
     helper_tests=r'''

@@ -1,6 +1,6 @@
-//! Software MicroFont renderer for Shell3's UI4 image frame.
+//! CPU copy sink for Shell3's shared antialiased MicroFont glyph cells.
 
-use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::ui4::{
     FrameRgbaView, acquire_frame_buffer, cancel_frame_buffer, publish_frame_buffer,
@@ -83,63 +83,36 @@ fn paint_segment(
         super::super::SpecialRows::PromtRow => 2,
         super::super::SpecialRows::MatrixRow(index) => index + 3,
     };
-    let scale = scale as usize;
-    let glyph_width = microfont::FWIDTH * scale;
-    let glyph_height = microfont::FHEIGHT * scale;
-    let x = segment.offset.checked_mul(glyph_width).ok_or(())?;
-    let y = row.checked_mul(glyph_height).ok_or(())?;
-    let columns = segment.remove.max(segment.text.chars().count());
-    let requested_width = columns.checked_mul(glyph_width).ok_or(())?;
-    if requested_width == 0 || x >= view.width as usize || y >= view.height as usize {
+    let cell_width = (microfont::FWIDTH as u32).checked_mul(scale).ok_or(())?;
+    let cell_height = (microfont::FHEIGHT as u32).checked_mul(scale).ok_or(())?;
+    let y = u32::try_from(row).ok().and_then(|row| row.checked_mul(cell_height)).ok_or(())?;
+    if y >= view.height {
         return Ok(());
     }
-    let width = requested_width.min(view.width as usize - x);
-    let height = glyph_height.min(view.height as usize - y);
-
-    let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
-    for py in y..y + height {
-        let row_offset = py.checked_mul(view.pitch as usize).ok_or(())?;
-        for px in x..x + width {
-            let offset = row_offset
-                .checked_add(px.checked_mul(4).ok_or(())?)
-                .ok_or(())?;
-            pixels
-                .get_mut(offset..offset + 4)
-                .ok_or(())?
-                .copy_from_slice(&segment.colors.get((px-x) / glyph_width).copied().flatten()
-                    .and_then(super::super::RgbaColor::background).unwrap_or(super::BACKGROUND));
+    let mut characters = segment.text.chars();
+    let count = segment.remove.max(segment.text.chars().count());
+    let mut copies = Vec::new();
+    for column in 0..count {
+        let x = segment.offset.checked_add(column)
+            .and_then(|x| u32::try_from(x).ok())
+            .and_then(|x| x.checked_mul(cell_width)).ok_or(())?;
+        if x >= view.width {
+            break;
         }
+        let character = characters.next().unwrap_or(' ');
+        copies.push(super::copy::glyph_for_cell(
+            x, y, cell_width.min(view.width - x), cell_height.min(view.height - y),
+            (character, segment.colors.get(column).copied().flatten()), scale,
+        ).map_err(|_| ())?);
     }
-
-    let mask_width = width.div_ceil(scale);
-    let mask_height = height.div_ceil(scale);
-    let mut glyphs = vec![0u8; mask_width.checked_mul(mask_height).ok_or(())?];
-    microfont::stamp_text(&mut glyphs, mask_width, mask_height, 0, 0, &segment.text, 1u8)
-        .map_err(|_| ())?;
-    for py in 0..height {
-        for px in 0..width {
-            let underline = segment.colors.get(px / glyph_width).copied().flatten()
-                .is_some_and(super::super::RgbaColor::underline) && py / scale == microfont::FHEIGHT - 1;
-            if glyphs[(py / scale) * mask_width + px / scale] == 0 && !underline {
-                continue;
-            }
-            let offset = (y + py) * view.pitch as usize + (x + px) * 4;
-            let foreground = segment
-                .colors
-                .get(px / glyph_width)
-                .copied()
-                .flatten()
-                .unwrap_or(super::FOREGROUND)
-                .rgba();
-            pixels
-                .get_mut(offset..offset + 4)
-                .ok_or(())?
-                .copy_from_slice(&foreground);
-        }
+    if copies.is_empty() {
+        return Ok(());
     }
-    crate::intel::dma_cache_flush_range(
-        view.virt.wrapping_add(y * view.pitch as usize),
-        height.saturating_mul(view.pitch as usize),
-    );
-    Ok(())
+    // This path is the complete synchronous CPU fallback, independent of the
+    // small-request threshold used by the normal BCS0 renderer.
+    if unsafe { crate::ui4::text_blit::copy(super::copy::bcs_surface(view), &copies) } {
+        Ok(())
+    } else {
+        Err(())
+    }
 }

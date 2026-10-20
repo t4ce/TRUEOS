@@ -151,15 +151,17 @@ pub(crate) unsafe fn mono(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) ->
     crate::intel::dma_flush_strided_row_spans(&spans)
 }
 
+pub(crate) fn valid_copies(destination: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy]) -> bool {
+    copies.iter().all(|c| {
+        valid(destination, c.destination_x, c.destination_y, c.width, c.height)
+            && valid(c.source, c.source_x, c.source_y, c.width, c.height)
+            && !(c.source.phys < destination.phys.saturating_add(destination.bytes as u64)
+                && destination.phys < c.source.phys.saturating_add(c.source.bytes as u64))
+    })
+}
+
 pub(crate) unsafe fn copy(destination: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy]) -> bool {
-    if copies.is_empty()
-        || copies.iter().any(|c| {
-            !valid(destination, c.destination_x, c.destination_y, c.width, c.height)
-                || !valid(c.source, c.source_x, c.source_y, c.width, c.height)
-                || (c.source.phys < destination.phys.saturating_add(destination.bytes as u64)
-                    && destination.phys < c.source.phys.saturating_add(c.source.bytes as u64))
-        })
-    {
+    if copies.is_empty() || !valid_copies(destination, copies) {
         return false;
     }
     let source_spans: Vec<_> = copies
@@ -217,6 +219,21 @@ pub(crate) fn fill_on_cpu(s: GucBcs0RgbaSurface, fills: &[GucBcs0RgbaFill]) -> b
 pub(crate) unsafe fn try_fill(s: GucBcs0RgbaSurface, fills: &[GucBcs0RgbaFill]) -> bool {
     fill_on_cpu(s, fills) && unsafe { fill(s, fills) }
 }
+/// Glyph painting keeps the established glyph-work allowance even when the
+/// source is now a warmed RGBA cell rather than a monochrome mask. Viewport
+/// transfers below retain their independently tuned copy allowance.
+pub(crate) fn glyph_copy_on_cpu(s: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy]) -> bool {
+    let pixels = copy_pixels(copies);
+    let half_row = copies.first().map_or(0, |c| s.width as usize * c.height as usize / 2);
+    pixels != 0 && pixels <= crate::allcaps::text_blit::CPU_MONO_MAX_PIXELS.min(half_row)
+}
+pub(crate) unsafe fn try_glyph_copy(
+    s: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+) -> bool {
+    glyph_copy_on_cpu(s, copies) && unsafe { copy(s, copies) }
+}
+
 pub(crate) unsafe fn try_copy(
     s: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],

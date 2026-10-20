@@ -29,7 +29,7 @@ impl StripCache {
             cache.revision = cache.revision.wrapping_add(1);
             cache.cells = input.cells.clone();
         }
-        cache.raster.render(view, cache.revision, |x, _| input.cells[x as usize],
+        cache.raster.render_rgba(view, cache.revision, |x, _| input.cells[x as usize],
             |write, layout| super::copy::glyph_for_cell(write.x * layout.cell_width,
                 0, layout.cell_width, layout.cell_height, write.cell, scale), poisoned).await?;
         Ok(true)

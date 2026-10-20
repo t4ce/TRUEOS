@@ -84,7 +84,7 @@ impl PanBuffer {
         }
         let work = cache
             .raster
-            .render(
+            .render_rgba(
                 view,
                 cache.cache_revision,
                 |x, y| input.cell(x, y),
@@ -103,9 +103,9 @@ impl PanBuffer {
             .await?;
         cache.view = view;
         crate::log_info!(target: "apps";
-            "shell3/pan: view={}x{}@{},{} tile={}x{} bytes={} budget_used={} produced={} reused={} painted={} mono_batches={} resize_copies_retired={} cpu_glyphs={}\n",
+            "shell3/pan: view={}x{}@{},{} tile={}x{} bytes={} budget_used={} produced={} reused={} painted={} copy_batches={} resize_copies_retired={} cpu_glyphs={}\n",
             view.columns, view.rows, view.x, view.y, layout.columns, layout.rows,
-            layout.bytes, budget.used(), work.produced, work.reused, work.painted, work.mono_batches, resize_copies, work.cpu_glyphs,
+            layout.bytes, budget.used(), work.produced, work.reused, work.painted, work.copy_batches, resize_copies, work.cpu_glyphs,
         );
         Ok(true)
     }

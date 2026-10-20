@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Test production MetaFmt layout/diffs, CPU pixels and legacy mono masks."""
+"""Production Shell3 layout and CPU/cached-RGBA sink equivalence.
+
+Only the shared font provider is synthetic: its retained cells contain fractional
+coverage, so both production sinks must preserve antialiasing and cell styles.
+"""
 from pathlib import Path
 import re
 import subprocess
@@ -30,13 +34,50 @@ mod intel {{
     pub fn dma_cache_flush_range(_: *const u8, _: usize) {{}}
     pub fn active_scanout_dimensions() -> Option<(u32,u32)> {{ Some((2560,1440)) }}
 '''
-    for name in ('GucBcs0RgbaSurface', 'GucBcs0MonoGlyph'):
+    for name in ('GucBcs0RgbaSurface', 'GucBcs0MonoGlyph', 'GucBcs0RgbaCopy', 'GucBcs0RgbaFill'):
         source += extract.item('src/intel/copy/blt.rs', name)
     source += '''
+    pub struct DmaFlushRows;
+    impl DmaFlushRows {pub fn new(_: *mut u8,_:usize,_:usize,_:usize)->Self {Self}}
+    pub fn dma_flush_strided_row_spans(_: &[DmaFlushRows])->bool {true}
 }
 #[derive(Clone, Copy)]
 struct FrameRgbaView { virt: *const u8, byte_len: usize, width: u32, height: u32, pitch: u32, phys: u64, gpu: u64 }
-mod ui4 { pub fn set_window_placement(_:u32,_:u32,_:crate::show::Placement)->Result<(),()> { Ok(()) } }
+macro_rules! log_info {($($t:tt)*)=>{}}
+pub(crate) use log_info;
+mod allcaps {pub mod text_blit {pub const CPU_MONO_MAX_PIXELS:usize=1024;pub const CPU_COPY_MAX_PIXELS:usize=1024;pub const DIAGNOSTICS:bool=false;}}
+mod time {pub fn tsc_hz()->u64 {1_000_000_000}}
+mod phys {pub fn phys_to_virt(v:usize)->usize {v}}
+mod percpu {pub fn current_slot()->u32 {0}}
+mod ui4 {
+    pub fn set_window_placement(_:u32,_:u32,_:crate::show::Placement)->Result<(),()> { Ok(()) }
+    #[path="__ROOT__/src/ui4/text_blit.rs"]pub mod text_blit;
+    mod text_blit_bench {pub async fn run_once()->Result<(),&'static str>{Ok(())}}
+}
+mod r {pub mod services {pub mod shell3_font_service {
+    use crate::intel::{GucBcs0RgbaCopy,GucBcs0RgbaSurface};
+    type Key=(char,u32,u32,[u8;4],[u8;4],bool);
+    static CACHE:std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<Key,Vec<u8>>>>=
+        std::sync::LazyLock::new(||std::sync::Mutex::new(std::collections::HashMap::new()));
+    pub fn glyph(ch:char,width:u32,height:u32,fg:[u8;4],bg:[u8;4],underline:bool)
+        ->Result<GucBcs0RgbaCopy,&'static str> {
+        if width==0 || height==0 {return Err("invalid-cell");}
+        let mut cache=CACHE.lock().unwrap();
+        let pixels=cache.entry((ch,width,height,fg,bg,underline)).or_insert_with(|| {
+            let mut out=vec![0;width as usize*height as usize*4];
+            for y in 0..height {for x in 0..width {
+                let coverage=if underline&&y>=height-height/11 {255u32}
+                    else if ch==' ' {0} else {[0,128,255][(x+y*3+ch as u32)as usize%3]};
+                let at=((y*width+x)*4)as usize;
+                for c in 0..4 {out[at+c]=((u32::from(fg[c])*coverage+u32::from(bg[c])*(255-coverage)+127)/255)as u8;}
+            }}
+            out
+        });
+        let surface=GucBcs0RgbaSurface {phys:pixels.as_ptr() as u64,gpu:pixels.as_ptr() as u64,
+            bytes:pixels.len(),width,height,pitch_bytes:width*4};
+        Ok(GucBcs0RgbaCopy {source:surface,source_x:0,source_y:0,destination_x:0,destination_y:0,width,height})
+    }
+}}}
 mod show {
     const BACKGROUND: [u8;4] = crate::update::MATRIX_BACKGROUND;
     const FOREGROUND: crate::RgbaColor = crate::RgbaColor::White;
@@ -71,18 +112,19 @@ mod show {
         let mut show = Show {surface:None,font_scale:1};
         assert_eq!(show.set_font_scale(2,80,5).unwrap(),(480,110));
     }
-    mod cpu { use crate::FrameRgbaView;
+    mod cpu { use crate::FrameRgbaView; use alloc::vec::Vec;
 """
     source += extract.item('src/shell3/show/cpu.rs', 'paint_segment').replace('fn paint_segment', 'pub(super) fn paint_segment')
     source += '''
     }
-    mod copy { use crate::FrameRgbaView;
+    mod copy { use crate::FrameRgbaView; use alloc::vec::Vec;
 '''
     source += extract.item('src/shell3/show/copy.rs', 'glyphs_for_update')
     source += extract.item('src/shell3/show/copy.rs', 'glyph_for_cell')
+    source += extract.item('src/shell3/show/copy.rs', 'bcs_surface')
     source += '''
         #[test]
-        fn mono_expansion_matches_cpu_pixels_colors_clipping_and_erasure() {
+        fn cached_rgba_copies_match_cpu_pixels_colors_clipping_and_erasure() {
             for scale in [1, 2] {
             for height in [55, 66] {
             for width in [20, 96] {
@@ -90,22 +132,22 @@ mod show {
                     let mut pixels = vec![0x5Au8; 512 * 66];
                     let mut expanded = pixels.clone();
                     let view = FrameRgbaView { virt: pixels.as_mut_ptr(), byte_len: pixels.len(),
-                        width, height, pitch: 512, phys: 4096, gpu: 4096 };
+                        width, height, pitch: 512, phys: pixels.as_ptr() as u64, gpu: pixels.as_ptr() as u64 };
                     let colors = (0..text.chars().count()).map(|i| Some(match i%4 {0=>crate::RgbaColor::Pink,1=>crate::RgbaColor::Green,2=>crate::RgbaColor::Underlined {foreground:crate::RgbaColor::Pink.rgba()},_=>crate::RgbaColor::Terminal {foreground:[255,160,90,255],background:[20,45,60,255],underline:true}})).collect();
                     let update = crate::SegmentUpdate { row, side: crate::StripSide::Left,
                         offset: 1, remove: 8, text: text.into(), colors };
                     super::cpu::paint_segment(view, &update, scale).unwrap();
                     let mut glyphs = Vec::new();
-                    glyphs_for_update(view, &update, scale, &mut glyphs, &[], &[false; 2]);
+                    glyphs_for_update(view, &update, scale, &mut glyphs, &[], &[false; 2]).unwrap();
                     let expected_y = match row {crate::SpecialRows::MatrixRow(index)=>(index as u32 + 3)*11*scale,_=>22*scale};
                     assert_eq!(glyphs.is_empty(),expected_y>=height);
                     for glyph in &glyphs {
-                        assert_eq!(glyph.y, expected_y);
+                        assert_eq!(glyph.destination_y, expected_y);
                         for y in 0..glyph.height { for x in 0..glyph.width {
-                            let bit = glyph.mask[(y*2+x/8) as usize] & (0x80 >> (x%8)) != 0;
-                            let rgba = if bit { glyph.foreground } else { glyph.background };
-                            let offset = ((glyph.y+y)*512+(glyph.x+x)*4) as usize;
-                            expanded[offset..offset+4].copy_from_slice(&rgba.to_le_bytes());
+                            let source=(glyph.source.phys as usize+(glyph.source_y+y)as usize*glyph.source.pitch_bytes as usize+(glyph.source_x+x)as usize*4)as *const u8;
+                            let rgba=unsafe {core::slice::from_raw_parts(source,4)};
+                            let offset = ((glyph.destination_y+y)*512+(glyph.destination_x+x)*4) as usize;
+                            expanded[offset..offset+4].copy_from_slice(rgba);
                         }}
                     }
                     assert_eq!(expanded, pixels, "text={text} width={width} height={height} scale={scale}");
@@ -115,22 +157,49 @@ mod show {
             }
         }
         #[test]
-        fn doubled_section_sign_replicates_each_source_pixel_into_four_pixels() {
+        fn section_sign_keeps_cell_metrics_and_fractional_antialias_coverage() {
             let view = FrameRgbaView { virt: core::ptr::null(), byte_len: 240*110*4,
                 width: 240, height: 110, pitch: 960, phys: 4096, gpu: 4096 };
             let update = crate::SegmentUpdate { row: crate::SpecialRows::TitleRow,
                 side: crate::StripSide::Left, offset: 0, remove: 1, text: "§".into(), colors: vec![] };
             let mut glyphs = Vec::new();
-            glyphs_for_update(view, &update, 2, &mut glyphs, &[], &[false; 2]);
+            glyphs_for_update(view, &update, 2, &mut glyphs, &[], &[false; 2]).unwrap();
             let glyph = &glyphs[0];
             assert_eq!((glyph.width, glyph.height), (12,22));
-            let bits = microfont::font_pixels(microfont::glyph_byte('§'));
+            assert_eq!((glyph.source.width,glyph.source.height),(12,22));
+            let foreground=super::FOREGROUND.rgba();
+            let mut fractional=false;
             for y in 0..22 { for x in 0..12 {
-                let bit = (y/2)*6+x/2;
-                let expected = bit < 64 && bits & (1u64 << (63-bit)) != 0;
-                let actual = glyph.mask[y*2+x/8] & (0x80 >> (x%8)) != 0;
-                assert_eq!(actual, expected, "pixel={x},{y}");
+                let source=(glyph.source.phys as usize+y*glyph.source.pitch_bytes as usize+x*4)as *const u8;
+                let actual=unsafe {core::slice::from_raw_parts(source,4)};
+                fractional|=actual!=foreground&&actual!=super::BACKGROUND;
             }}
+            assert!(fractional,"RGBA copies must retain coverage between foreground and background");
+        }
+        #[test]
+        fn glyph_cache_is_shared_between_destinations_and_styles_are_distinct() {
+            let first=glyph_for_cell(0,0,12,22,('A',None),2).unwrap();
+            let moved=glyph_for_cell(120,44,7,13,('A',None),2).unwrap();
+            assert_eq!(first.source,moved.source);
+            assert_eq!((moved.destination_x,moved.destination_y,moved.width,moved.height),(120,44,7,13));
+            assert_eq!((moved.source.width,moved.source.height),(12,22));
+            let styled=glyph_for_cell(0,0,12,22,('A',Some(crate::RgbaColor::Pink)),2).unwrap();
+            assert_ne!(first.source.phys,styled.source.phys);
+            let underlined=glyph_for_cell(0,0,12,22,(' ',Some(crate::RgbaColor::Underlined {foreground:[5,6,7,255]})),2).unwrap();
+            let source=unsafe {core::slice::from_raw_parts(underlined.source.phys as *const u8,underlined.source.bytes)};
+            for y in 20..22 {for x in 0..12 {assert_eq!(&source[(y*12+x)*4..(y*12+x+1)*4],&[5,6,7,255]);}}
+        }
+        #[test]
+        fn reveal_cells_are_skipped_only_after_their_cache_is_ready() {
+            let view=FrameRgbaView {virt:core::ptr::null(),byte_len:240*110*4,width:240,height:110,pitch:960,phys:4096,gpu:4096};
+            let update=crate::SegmentUpdate {row:crate::SpecialRows::TitleRow,side:crate::StripSide::Left,offset:2,remove:4,text:"ABCD".into(),colors:vec![]};
+            let reveal=crate::update::StripReveal {row:0,start:3,spans:vec![0..2],cells:vec![]};
+            let mut copies=Vec::new();
+            glyphs_for_update(view,&update,2,&mut copies,core::slice::from_ref(&reveal),&[false;2]).unwrap();
+            assert_eq!(copies.len(),4);
+            copies.clear();
+            glyphs_for_update(view,&update,2,&mut copies,&[reveal],&[true,false]).unwrap();
+            assert_eq!(copies.iter().map(|copy|copy.destination_x).collect::<Vec<_>>(),[24,60]);
         }
     }
 }
@@ -312,7 +381,7 @@ fn shared_palette_covers_padding_pan_cells_and_preserves_explicit_styles() {
         path = Path(temporary)
         subprocess.run(['rustc', '--edition=2024', '--crate-name', 'microfont', '--crate-type', 'rlib',
                         str(ROOT / 'vendor/microfont/src/lib.rs'), '-o', str(path / 'libmicrofont.rlib')], check=True)
-        (path / 'tests.rs').write_text(source)
+        (path / 'tests.rs').write_text(source.replace('__ROOT__', str(ROOT)))
         subprocess.run(['rustc', '--edition=2024', '--test', str(path / 'tests.rs'),
                         '--extern', f'microfont={path / "libmicrofont.rlib"}', '-o', str(path / 'tests')], check=True)
         subprocess.run([str(path / 'tests')], check=True)

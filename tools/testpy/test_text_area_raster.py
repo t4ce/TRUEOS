@@ -36,7 +36,10 @@ pub unsafe fn try_mono(d:crate::intel::GucBcs0RgbaSurface,g:&[crate::intel::GucB
         true
     })
 }
-pub unsafe fn try_copy(_:crate::intel::GucBcs0RgbaSurface,_:&[crate::intel::GucBcs0RgbaCopy],_:u32)->bool {false}
+pub unsafe fn try_glyph_copy(d:crate::intel::GucBcs0RgbaSurface,c:&[crate::intel::GucBcs0RgbaCopy])->bool { unsafe { try_copy(d,c,1) } }
+pub unsafe fn try_copy(d:crate::intel::GucBcs0RgbaSurface,c:&[crate::intel::GucBcs0RgbaCopy],_:u32)->bool {
+ crate::intel::state(|s| {if !s.cpu_enabled {return false;}s.events.push("cpu-copy".into());for c in c {let src=s.memory[&c.source.phys].clone();let dst=s.memory.get_mut(&d.phys).unwrap();for y in 0..c.height {for x in 0..c.width {dst[((c.destination_y+y)*d.width+c.destination_x+x) as usize]=src[((c.source_y+y)*c.source.width+c.source_x+x) as usize];}}}true})
+}
 pub fn report(_: &str,_:usize,_:bool,_:usize,_:u64) {}
 }
 #[path="__TRUEOS_ROOT__/src/ui4/text_area.rs"] pub mod text_area;
@@ -59,6 +62,8 @@ pub fn reset() {*S.lock().unwrap()=Some(State::default());}
 pub fn state<R>(f:impl FnOnce(&mut State)->R)->R {f(S.lock().unwrap().as_mut().unwrap())}
 fn queue(op:Op)->Result<GucBcs0CopySubmission,GucBcs0CopySubmitError> {state(|s| {let mode=s.modes.pop_front().unwrap_or(Mode::Complete);s.events.push(format!("queue {mode:?}"));if matches!(mode,Mode::Busy) {return Err(GucBcs0CopySubmitError::Busy);}if matches!(mode,Mode::SubmitFailed) {return Err(GucBcs0CopySubmitError::SubmitFailed);}let id=s.events.len();s.pending.insert(id,(op,mode,false));Ok(GucBcs0CopySubmission(id))})}
 pub fn queue_guc_bcs0_mono_glyphs(d:GucBcs0RgbaSurface,g:&[GucBcs0MonoGlyph])->Result<GucBcs0CopySubmission,GucBcs0CopySubmitError> {queue(Op::Mono(d,g.to_vec()))}
+pub fn queue_guc_bcs0_legacy_rgba_copies(d:GucBcs0RgbaSurface,c:&[GucBcs0RgbaCopy])->Result<GucBcs0CopySubmission,GucBcs0CopySubmitError> {state(|s|s.events.push("legacy-copy".into()));queue_guc_bcs0_rgba_copies(d,c)}
+pub fn glyph_copy(x:u32,y:u32,width:u32,height:u32,value:u32)->GucBcs0RgbaCopy {state(|s| {let phys=0x1_0000_0000+value as u64;let source=GucBcs0RgbaSurface {phys,gpu:phys,bytes:width as usize*height as usize*4,width,height,pitch_bytes:width*4};s.memory.insert(phys,vec![value;(width*height) as usize]);GucBcs0RgbaCopy {source,source_x:0,source_y:0,destination_x:x,destination_y:y,width,height}})}
 pub fn queue_guc_bcs0_rgba_copies(d:GucBcs0RgbaSurface,c:&[GucBcs0RgbaCopy])->Result<GucBcs0CopySubmission,GucBcs0CopySubmitError> {for c in c {assert_ne!(d.phys,c.source.phys);assert!(c.source_x+c.width<=c.source.width&&c.source_y+c.height<=c.source.height);assert!(c.destination_x+c.width<=d.width&&c.destination_y+c.height<=d.height);}queue(Op::Copy(d,c.to_vec()))}
 pub fn poll_guc_bcs0_rgba_copies(id:GucBcs0CopySubmission)->GucBcs0CopyCompletion {state(|s| {let (op,mode,polled)=s.pending.get_mut(&id.0).unwrap();if !*polled {*polled=true;s.events.push("pending".into());return GucBcs0CopyCompletion::Pending;}let op=op.clone();let mode=*mode;if matches!(mode,Mode::Complete) {match op {Op::Mono(d,g)=>{let dst=s.memory.get_mut(&d.phys).unwrap();for g in g {for y in g.y..g.y+g.height {for x in g.x..g.x+g.width {dst[(y*d.width+x) as usize]=g.value;}}}},Op::Copy(d,copies)=>{for c in copies {let src=s.memory[&c.source.phys].clone();let dst=s.memory.get_mut(&d.phys).unwrap();for y in 0..c.height {for x in 0..c.width {dst[((c.destination_y+y)*d.width+c.destination_x+x) as usize]=src[((c.source_y+y)*c.source.width+c.source_x+x) as usize];}}}}}s.events.push("retired".into());GucBcs0CopyCompletion::Complete} else {s.events.push("uncertain".into());if matches!(mode,Mode::Failed) {GucBcs0CopyCompletion::Failed} else {GucBcs0CopyCompletion::InvalidSubmission}}})}
 pub mod gpgpu {
@@ -143,6 +148,40 @@ fn dest(w:u32,h:u32)->intel::gpgpu::GpgpuOwnedRgba8Surface {intel::gpgpu::alloca
     assert!(!intel::state(|s|s.events.iter().any(|e|e=="cpu-mono")));
     drop(a);assert!(b.used()>0);
 }
+fn rgba(w:CellWrite<u32>,l:RasterLayout)->Result<intel::GucBcs0RgbaCopy,&'static str> {
+ Ok(intel::glyph_copy(w.x*l.cell_width,w.y*l.cell_height,l.cell_width,l.cell_height,w.cell))
+}
+#[test]fn rgba_cells_use_legacy_copies_and_preserve_every_coverage_bit() {
+ intel::reset();let v=rect(-3,-2,13,7);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(layout(v),&b).unwrap();let mut p=false;
+ let value=|x:i64,y:i64| 0xff80_0000 | (x.wrapping_mul(31).wrapping_add(y) as u32 & 0xffff);
+ let work=run(a.render_rgba(v,1,value,rgba,&mut p)).unwrap();assert_eq!(work.mono_batches,0);assert!(work.copy_batches>0);assert_eq!(work.cpu_glyphs,0);
+ let events=intel::state(|s|s.events.clone());assert!(events.iter().any(|e|e=="legacy-copy"));
+ let same=run(a.render_rgba(v,1,|_,_|panic!("producer reused"),rgba,&mut p)).unwrap();assert_eq!(same.painted,0);assert_eq!(intel::state(|s|s.events.clone()),events);
+ let d=dest(13,7);run(a.copy_view(v,d.surface(),(0,0),&mut p)).unwrap();intel::state(|s|{for y in 0..7 {for x in 0..13 {assert_eq!(s.memory[&d.surface().phys][y*13+x],value(v.x+x as i64,v.y+y as i64));}}});
+}
+#[test]fn rgba_provider_error_retries_all_cells_before_copy_admission() {
+ intel::reset();let v=rect(0,0,13,7);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(layout(v),&b).unwrap();let mut p=false;let mut calls=0;
+ let result=run(a.render_rgba(v,1,value,|w,l|{calls+=1;if calls==3 {Err("font-busy")}else{rgba(w,l)}},&mut p));assert_eq!(result.err(),Some("font-busy"));assert!(!p);assert!(!intel::state(|s|s.events.iter().any(|e|e.starts_with("queue"))));
+ let work=run(a.render_rgba(v,1,value,rgba,&mut p)).unwrap();assert_eq!(work.produced,21*15);assert_eq!(work.painted,21*15);
+}
+#[test]fn rgba_partial_admission_repaints_every_cell_on_retry() {
+ intel::reset();let v=rect(0,0,13,7);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(layout(v),&b).unwrap();let mut p=false;
+ intel::state(|s|s.modes.extend([intel::Mode::Complete,intel::Mode::Busy]));assert_eq!(run(a.render_rgba(v,1,value,rgba,&mut p)).err(),Some("text-area-admission"));assert!(!p);
+ assert_eq!(run(a.render_rgba(v,1,value,rgba,&mut p)).unwrap().painted,315);
+}
+#[test]fn rgba_uncertainty_and_cancellation_pin_destination_and_charge_budget() {
+ for mode in [intel::Mode::SubmitFailed,intel::Mode::Failed,intel::Mode::Invalid] {
+  intel::reset();let v=rect(0,0,13,7);let l=layout(v);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(l,&b).unwrap();let mut p=false;intel::state(|s|s.modes.push_back(mode));assert!(run(a.render_rgba(v,1,value,rgba,&mut p)).is_err());assert!(p);drop(a);assert_eq!(b.used(),l.bytes);assert!(!intel::state(|s|s.events.iter().any(|e|e.starts_with("free"))));
+ }
+ intel::reset();let v=rect(0,0,13,7);let l=layout(v);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(l,&b).unwrap();let mut p=false;
+ {let mut f=Box::pin(a.render_rgba(v,1,value,rgba,&mut p));assert!(matches!(f.as_mut().poll(&mut context()),Poll::Pending));drop(f);}assert!(p);p=false;intel::state(|s|s.cpu_enabled=true);assert_eq!(run(a.render_rgba(v,1,value,rgba,&mut p)).err(),Some("text-area-backing-pinned"));drop(a);assert_eq!(b.used(),l.bytes);
+}
+#[test]fn rgba_small_requests_copy_synchronously_and_can_be_reused_by_gpu() {
+ intel::reset();intel::state(|s|s.cpu_enabled=true);let v=rect(0,0,13,7);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(layout(v),&b).unwrap();let mut p=false;
+ let work=run(a.render_rgba(v,1,value,rgba,&mut p)).unwrap();assert_eq!(work.copy_batches,0);assert_eq!(work.cpu_glyphs,work.painted);assert!(!p);assert!(!intel::state(|s|s.events.iter().any(|e|e.starts_with("queue"))));
+ intel::state(|s|s.cpu_enabled=false);let d=dest(13,7);run(a.copy_view(v,d.surface(),(0,0),&mut p)).unwrap();intel::state(|s|{for y in 0..7 {for x in 0..13 {assert_eq!(s.memory[&d.surface().phys][y*13+x],value(x as i64,y as i64));}}});
+}
+
 '''
 
 
@@ -167,8 +206,8 @@ mod shell3 {
         }}
     }
     mod show {
-        mod copy {pub fn glyph_for_cell(x:u32,y:u32,width:u32,height:u32,cell:(char,Option<super::super::RgbaColor>),_:u32)->crate::intel::GucBcs0MonoGlyph {
-            crate::intel::GucBcs0MonoGlyph{x,y,width,height,value:cell.0 as u32}
+        mod copy {pub fn glyph_for_cell(x:u32,y:u32,width:u32,height:u32,cell:(char,Option<super::super::RgbaColor>),_:u32)->Result<crate::intel::GucBcs0RgbaCopy,&'static str> {
+            Ok(crate::intel::glyph_copy(x,y,width,height,cell.0 as u32))
         }}
         #[path="__TRUEOS_ROOT__/src/shell3/show/pan.rs"]mod pan;
         use super::update::MatrixAreaSnapshot;

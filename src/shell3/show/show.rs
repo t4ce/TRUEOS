@@ -178,6 +178,7 @@ impl Show {
         if self.poisoned {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
+        crate::r::services::shell3_font_service::prepare().await?;
         let current = self.surface.as_ref().ok_or("shell3-show-surface-missing")?;
         let (placement, epoch) =
             window_resize_state(OWNER, current.window).map_err(|_| "shell3-show-resize-state")?;
@@ -281,6 +282,7 @@ impl Show {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
 
+        crate::r::services::shell3_font_service::prepare().await?;
         let requested_extent = show_extent(columns, rows, self.font_scale)?;
         let extent = self
             .surface

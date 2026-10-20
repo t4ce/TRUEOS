@@ -32,6 +32,7 @@ pub(crate) struct RasterWork {
     pub reused: usize,
     pub painted: usize,
     pub mono_batches: usize,
+    pub copy_batches: usize,
     pub cpu_glyphs: usize,
 }
 
@@ -167,6 +168,7 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             produced: update.produced,
             reused: update.reused,
             painted: glyphs.len(),
+            copy_batches: 0,
             cpu_glyphs: if cpu_paint {glyphs.len()} else {0},
             mono_batches: if cpu_paint {0} else {glyphs
                 .len()
@@ -183,6 +185,58 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             }
         }
         super::text_blit::report("cache-mono", super::text_blit::mono_pixels(&glyphs),cpu_paint,work.mono_batches,paint_started);
+        Ok(work)
+    }
+
+    /// Paint retained RGBA glyph cells without rebuilding one-bit masks.
+    /// The glyph provider owns stable source backing through service lifetime;
+    /// this raster retains the same cancellation and retirement ownership rules.
+    pub async fn render_rgba(
+        &mut self,
+        view: CellRect,
+        revision: u64,
+        produce: impl FnMut(i64, i64) -> C,
+        mut glyph: impl FnMut(CellWrite<C>, RasterLayout) -> Result<GucBcs0RgbaCopy, &'static str>,
+        poisoned: &mut bool,
+    ) -> Result<RasterWork, &'static str> {
+        if self.unretired || *poisoned {
+            return Err("text-area-backing-pinned");
+        }
+        let update = self.cells.update(view, revision, produce).ok_or("text-area-view")?;
+        let layout = self.layout();
+        let copies = match update.writes.into_iter().map(|write| glyph(write, layout))
+            .collect::<Result<Vec<_>, _>>() {
+            Ok(copies) => copies,
+            Err(error) => {
+                // Cell identities were updated above. Recreate every pending
+                // glyph after any provider rejection, including allocation.
+                self.invalidate();
+                return Err(error);
+            }
+        };
+        let started = super::text_blit::stamp();
+        let cpu_paint = unsafe {
+            super::text_blit::try_glyph_copy(self.surface(), &copies)
+        };
+        let batches = if cpu_paint { 0 } else { copies.len().div_ceil(128) };
+        let work = RasterWork {
+            produced: update.produced,
+            reused: update.reused,
+            painted: copies.len(),
+            cpu_glyphs: if cpu_paint { copies.len() } else { 0 },
+            mono_batches: 0,
+            copy_batches: batches,
+        };
+        for chunk in copies.chunks(128).filter(|_| !cpu_paint) {
+            let queued = crate::intel::queue_guc_bcs0_legacy_rgba_copies(self.surface(), chunk);
+            if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
+                self.invalidate();
+                if *poisoned { self.quarantine(); }
+                return Err(error);
+            }
+        }
+        super::text_blit::report("cache-glyph-copy", super::text_blit::copy_pixels(&copies),
+            cpu_paint, batches, started);
         Ok(work)
     }
 

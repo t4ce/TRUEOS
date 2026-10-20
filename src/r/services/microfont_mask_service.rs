@@ -12,17 +12,33 @@ use alloc::vec::Vec;
 
 pub(crate) const PREVIEW_HEADER_HEIGHT: u32 = 30;
 pub(crate) const ATLAS_COLUMNS: u32 = 16;
-pub(crate) const ATLAS_ROWS: u32 = 16;
 pub(crate) const LATIN_SLOTS: usize = 95;
 pub(crate) const BOX_START: usize = LATIN_SLOTS;
 pub(crate) const BLOCK_START: usize = BOX_START + 128;
-pub(crate) const SLOT_COUNT: usize = BLOCK_START + 32;
+const EXTRA_START: usize = BLOCK_START + 32;
+const fn is_extra_line(ch: char) -> bool {
+    !(' ' <= ch && ch <= '~') && !('\u{2500}' <= ch && ch <= '\u{259f}')
+}
+const fn extra_count() -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while i < microfont::raster_line::GLYPH_CHARACTERS.len() {
+        if is_extra_line(microfont::raster_line::GLYPH_CHARACTERS[i]) { count += 1; }
+        i += 1;
+    }
+    count
+}
+pub(crate) const SLOT_COUNT: usize = EXTRA_START + extra_count();
+pub(crate) const ATLAS_ROWS: u32 = SLOT_COUNT.div_ceil(ATLAS_COLUMNS as usize) as u32;
+// Join recipes use seven bits of X and eight bits of Y. Reject overflow
+// explicitly rather than silently changing the shape of a future glyph.
+const _: () = assert!(ATLAS_COLUMNS * 6 <= 128 && ATLAS_ROWS * 11 <= 256);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AtlasConfig {
     /// Uniform source-cell scale: 16 gives a 96x176 glyph.
     pub(crate) glyph_scale: u32,
-    /// Optional native-pixel height of the eleven-row em cell (demo only).
+    /// Optional native-pixel height of the eleven-row em cell.
     pub(crate) glyph_height_px: Option<u32>,
     /// Native line width in pixels, rounded once to the engine's U11.7 step.
     pub(crate) line_width_px: f32,
@@ -76,7 +92,9 @@ pub(crate) fn glyph_slot(ch: char) -> Option<usize> {
         ' '..='~' => Some(ch as usize - 0x20),
         '\u{2500}'..='\u{257f}' => Some(BOX_START + ch as usize - 0x2500),
         '\u{2580}'..='\u{259f}' => Some(BLOCK_START + ch as usize - 0x2580),
-        _ => None,
+        _ => microfont::raster_line::GLYPH_CHARACTERS.iter()
+            .copied().filter(|&candidate| is_extra_line(candidate))
+            .position(|candidate| candidate == ch).map(|index| EXTRA_START + index),
     }
 }
 
@@ -133,7 +151,9 @@ fn append_quad(
 ) {
     let at = cell_origin(slot);
     let base = vertices.len() as u32;
-    vertices.extend(corners.map(|p| [at[0] + p[0], at[1] + p[1], 0.5]));
+    // Quad edges may lie exactly at x=6/y=11. Carry the owning cell explicitly
+    // so physical gutters do not turn that boundary into the next cell.
+    vertices.extend(corners.map(|p| [at[0] + p[0], at[1] + p[1], -(slot as f32 + 1.0)]));
     indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
 }
 fn endpoint_params(strip: &microfont::raster_line::Strip, slot: usize) -> [u32; 16] {
@@ -308,11 +328,12 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
         }
     }
     upload(&mut resident, &vertices, &indices, Topology::TriangleList, [0; 16])?;
-    for code in 0x20u8..=0x7e {
-        let Some(strips) = microfont::raster_line::glyph_strips(code as char) else {
+    for ch in (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter()
+        .copied().filter(|&ch| is_extra_line(ch))) {
+        let Some(strips) = microfont::raster_line::glyph_strips(ch) else {
             continue;
         };
-        let slot = code as usize - 0x20;
+        let slot = glyph_slot(ch).ok_or("microfont-glyph-slot")?;
         let at = cell_origin(slot);
         for strip in strips {
             vertices.clear();
@@ -460,9 +481,6 @@ impl CoverageAtlas {
             .batches
             .iter()
             .enumerate()
-            // The physical-size experiment is exclusively the ASCII line demo.
-            // Box/block consumers retain their unchanged regular atlas layout.
-            .filter(|(_, batch)| config.glyph_height_px.is_none() || batch.params[8] != 0)
             .map(|(i, batch)| render::ResidentSceneDraw {
                 mesh: &batch.mesh,
                 depth_flags: None,
@@ -531,6 +549,81 @@ pub(crate) fn with_warmed_atlas<T>(
     let atlas = guard.as_mut().unwrap();
     atlas.warm(config)?;
     consumer(atlas)
+}
+
+/// Immutable service-owned R8 snapshot. Keeping this data alive does not hold
+/// the preview atlas lock; later Tab/width changes cannot replace its pixels.
+/// Glyph rows are tightly packed, including the safe cap overhang gutter.
+pub(crate) struct OwnedAlphaAtlas {
+    pub(crate) em_height_px: u32,
+    pub(crate) line_width_px: f32,
+    pub(crate) glyph_width: u32,
+    pub(crate) glyph_height: u32,
+    pub(crate) gutter_px: u32,
+    pixels: Vec<u8>,
+}
+impl OwnedAlphaAtlas {
+    pub(crate) fn glyph(&self, ch: char) -> Option<&[u8]> {
+        // Unminted line slots stay blank for the demo, but are absent to font
+        // consumers so they can retain their existing bitmap fallback.
+        if ch != ' ' && microfont::raster_line::glyph_strips(ch).is_none()
+            && !('\u{2500}'..='\u{259f}').contains(&ch) {
+            return None;
+        }
+        let slot = glyph_slot(ch)?;
+        let bytes = self.glyph_width as usize * self.glyph_height as usize;
+        self.pixels.get(slot * bytes..(slot + 1) * bytes)
+    }
+    pub(crate) fn glyphs(&self) -> impl Iterator<Item = (char, &[u8])> + '_ {
+        (' '..='~').chain('\u{2500}'..='\u{259f}')
+            .chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
+                .filter(|&ch| is_extra_line(ch)))
+            .filter_map(|ch| self.glyph(ch).map(|pixels| (ch, pixels)))
+    }
+}
+
+/// One native-line/quad render submission and one R8 readback for Shell3's
+/// service lifetime. Resident source geometry is shared with the demo; each
+/// consumer retains its own immutable result after this function returns.
+pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<OwnedAlphaAtlas, &'static str> {
+    let config = AtlasConfig {
+        glyph_height_px: Some(em_height_px),
+        line_width_px: 3.5,
+        ..AtlasConfig::default()
+    };
+    with_warmed_atlas(config, |atlas| {
+        let surface = atlas.surface();
+        let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;
+        if !crate::intel::dma_flush_strided_row_spans(&[
+            crate::intel::DmaFlushRows::new(source, surface.width as usize,
+                surface.pitch_bytes as usize, surface.height as usize),
+        ]) {
+            return Err("microfont-shell3-alpha-cache");
+        }
+        let (glyph_width, glyph_height) = config.cell_extent();
+        let glyph_bytes = glyph_width as usize * glyph_height as usize;
+        let mut pixels = alloc::vec![0; SLOT_COUNT * glyph_bytes];
+        for slot in 0..SLOT_COUNT {
+            let left = (slot % ATLAS_COLUMNS as usize) * glyph_width as usize;
+            let top = (slot / ATLAS_COLUMNS as usize) * glyph_height as usize;
+            for y in 0..glyph_height as usize {
+                for x in 0..glyph_width as usize {
+                    pixels[slot * glyph_bytes + y * glyph_width as usize + x] = unsafe {
+                        core::ptr::read_volatile(source.add(
+                            (top + y) * surface.pitch_bytes as usize + left + x))
+                    };
+                }
+            }
+        }
+        Ok(OwnedAlphaAtlas {
+            em_height_px,
+            line_width_px: config.line_width_px,
+            glyph_width,
+            glyph_height,
+            gutter_px: config.gutter(),
+            pixels,
+        })
+    })
 }
 
 /// Preview sink only. The cached baseline remains color-free; apply tint and

@@ -1,4 +1,4 @@
-//! Classical BCS0 monochrome expansion of Shell3's colored MicroFont cells.
+//! CPU or legacy BCS0 copies from Shell3's warmed antialiased glyph cells.
 
 use super::{Ui4Surface, rendered_lines};
 use crate::ui4::{
@@ -22,7 +22,7 @@ pub(super) async fn present(
     crate::ui4::text_blit::benchmark_once().await?;
     let present_started = crate::ui4::text_blit::stamp();
     let lease =
-        acquire_frame_buffer(surface.frame).map_err(|_| "shell3-show-mono-destination-busy")?;
+        acquire_frame_buffer(surface.frame).map_err(|_| "shell3-show-copy-destination-busy")?;
     let index = lease.buffer_index as usize;
     let previous = surface.frame_contents[index].clone();
     let current = rendered_lines(lines);
@@ -31,7 +31,7 @@ pub(super) async fn present(
         Ok(view) => view,
         Err(_) => {
             let _ = cancel_frame_buffer(lease);
-            return Err("shell3-show-mono-destination-view");
+            return Err("shell3-show-copy-destination-view");
         }
     };
     let using_pan =
@@ -59,7 +59,10 @@ pub(super) async fn present(
         if using_pan && matches!(update.row, super::super::SpecialRows::MatrixRow(_)) {
             continue;
         }
-        glyphs_for_update(view, update, surface.scale, &mut glyphs, reveals, &cached);
+        if let Err(error) = glyphs_for_update(view, update, surface.scale, &mut glyphs, reveals, &cached) {
+            let _ = cancel_frame_buffer(lease);
+            return Err(error);
+        }
     }
     // A later chunk can fail admission after earlier chunks changed pixels.
     // Any retry must then repaint this entire buffer, including erased cells.
@@ -104,9 +107,8 @@ pub(super) async fn present(
     let terminal_paint = area.is_none() && reveals.is_empty();
     let cpu_paint;
     if terminal_paint {
-        // ANSI cells have no Matrix/strip raster. Plan only this full-screen
-        // path; normal Shell3 keeps its existing pan and reveal caches.
-        let plan = crate::ui4::text_paint::PaintPlan::new(core::mem::take(&mut glyphs));
+        let plan = crate::ui4::text_paint::RgbaPaintPlan::new(core::mem::take(&mut glyphs),
+            crate::r::services::shell3_font_service::solid_color);
         let stats = match plan.paint(bcs_surface(view), poisoned).await {
             Ok(stats) => stats,
             Err(error) => {
@@ -116,27 +118,29 @@ pub(super) async fn present(
         };
         cpu_paint = stats.gpu_pixels == 0;
         if crate::allcaps::text_blit::DIAGNOSTICS {
-            crate::log_info!(target:"apps";"text-paint: cells={} cpu_pixels={} gpu_pixels={} mono_batches={} fill_batches={} wall_ns={}\n",
-                glyph_count, stats.cpu_pixels, stats.gpu_pixels, stats.mono_batches, stats.fill_batches,
+            crate::log_info!(target:"apps";"text-paint: cells={} cpu_pixels={} gpu_pixels={} copy_batches={} fill_batches={} wall_ns={}\n",
+                glyph_count, stats.cpu_pixels, stats.gpu_pixels, stats.copy_batches, stats.fill_batches,
                 crate::ui4::text_blit::nanos(crate::ui4::text_blit::stamp().wrapping_sub(paint_started)));
         }
     } else {
+        // Both sinks copy exactly the same warmed RGBA cells. Small writes retain
+        // the existing measured CPU allowance; larger writes use legacy BLT.
         cpu_paint = !*poisoned && unsafe {
-            crate::ui4::text_blit::try_mono(bcs_surface(view), &glyphs)
+            crate::ui4::text_blit::try_glyph_copy(bcs_surface(view), &glyphs)
         };
         if !cpu_paint && !glyphs.is_empty() {
             crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
         }
-        for chunk in glyphs.chunks(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS).filter(|_| !cpu_paint) {
-            let submission = match crate::intel::queue_guc_bcs0_mono_glyphs(bcs_surface(view), chunk) {
+        for chunk in glyphs.chunks(128).filter(|_| !cpu_paint) {
+            let submission = match crate::intel::queue_guc_bcs0_legacy_rgba_copies(bcs_surface(view), chunk) {
                 Ok(submission) => submission,
                 Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
                     *poisoned = true;
-                    return Err("shell3-show-mono-submit-uncertain");
+                    return Err("shell3-show-copy-submit-uncertain");
                 }
                 Err(_) => {
                     let _ = cancel_frame_buffer(lease);
-                    return Err("shell3-show-mono-unavailable");
+                    return Err("shell3-show-copy-unavailable");
                 }
             };
             *poisoned = true;
@@ -148,14 +152,14 @@ pub(super) async fn present(
                     crate::intel::GucBcs0CopyCompletion::Complete => break,
                     crate::intel::GucBcs0CopyCompletion::Failed
                     | crate::intel::GucBcs0CopyCompletion::InvalidSubmission => {
-                        return Err("shell3-show-mono-retirement-uncertain");
+                        return Err("shell3-show-copy-retirement-uncertain");
                     }
                 }
             }
             *poisoned = false;
         }
-        crate::ui4::text_blit::report("frame-mono", crate::ui4::text_blit::mono_pixels(&glyphs),
-            cpu_paint, if cpu_paint {0} else {glyphs.len().div_ceil(crate::intel::GUC_BCS0_MONO_MAX_GLYPHS)}, paint_started);
+        crate::ui4::text_blit::report("frame-glyph-copy", crate::ui4::text_blit::copy_pixels(&glyphs),
+            cpu_paint, if cpu_paint {0} else {glyphs.len().div_ceil(128)}, paint_started);
     }
     for input in reveals.iter().filter(|input| cached[input.row]) {
         if let Err(error) = strips[input.row].as_mut().ok_or("shell3-strip-cache-missing")?
@@ -194,7 +198,7 @@ pub(super) async fn present(
     surface.clear_buffers[index] = false;
     if !terminal_paint && !glyphs.is_empty() && !cpu_paint {
         crate::log_once!(target: "apps";
-            "shell3/show: bcs0-retired backend=legacy command=xy-mono-src-copy-blt rop=cc colors=metafmt bold=off cpu-rgba-paint=0 staging-frame=0\n"
+            "shell3/show: bcs0-retired backend=legacy command=xy-src-copy-blt rop=cc colors=metafmt bold=off cpu-rgba-paint=0 staging-frame=0\n"
         );
     }
     if crate::allcaps::text_blit::DIAGNOSTICS {
@@ -222,10 +226,10 @@ fn glyphs_for_update(
     view: FrameRgbaView,
     update: &super::super::SegmentUpdate,
     scale: u32,
-    output: &mut Vec<crate::intel::GucBcs0MonoGlyph>,
+    output: &mut Vec<crate::intel::GucBcs0RgbaCopy>,
     reveals: &[super::super::update::StripReveal],
     cached: &[bool; 2],
-) {
+) -> Result<(), &'static str> {
     let row = match update.row {
         super::super::SpecialRows::TitleRow => 0,
         super::super::SpecialRows::StatusRow => 1,
@@ -234,7 +238,7 @@ fn glyphs_for_update(
     };
     let y = row * microfont::FHEIGHT as u32 * scale;
     if y >= view.height {
-        return;
+        return Ok(());
     }
     let mut characters = update.text.chars();
     let count = update.remove.max(update.text.chars().count());
@@ -265,8 +269,9 @@ fn glyphs_for_update(
             height,
             (character, update.colors.get(column).copied().flatten()),
             scale,
-        ));
+        )?);
     }
+    Ok(())
 }
 
 pub(super) fn glyph_for_cell(
@@ -276,43 +281,23 @@ pub(super) fn glyph_for_cell(
     height: u32,
     cell: (char, Option<super::super::RgbaColor>),
     scale: u32,
-) -> crate::intel::GucBcs0MonoGlyph {
-    let bits = microfont::glyph_cell_pixels(cell.0);
-    let bias = usize::from(microfont::glyph_byte(cell.0) == b'q');
-    let mut mask = [0u8; 64];
-    // Most erasure/padding cells need no per-pixel mask expansion.
-    if cell.0 != ' ' || cell.1.is_some_and(super::super::RgbaColor::underline) {
-        for py in 0..height as usize {
-            for px in 0..width as usize {
-                let sx = px / scale as usize;
-                let sy = py / scale as usize;
-                let bit = sy * microfont::FWIDTH + sx.saturating_sub(bias);
-                let count = microfont::FWIDTH * microfont::FHEIGHT;
-                let ink = sx >= bias && bit < count && bits & (1 << (count - 1 - bit)) != 0;
-                let underline = cell.1.is_some_and(super::super::RgbaColor::underline)
-                    && sy == microfont::FHEIGHT - 1;
-                if ink || underline {
-                    mask[py * 2 + px / 8] |= 0x80 >> (px % 8);
-                }
-            }
-        }
-    }
-    crate::intel::GucBcs0MonoGlyph {
-        x,
-        y,
-        width,
-        height,
-        mask,
-        foreground: u32::from_le_bytes(cell.1.unwrap_or(super::FOREGROUND).rgba()),
-        background: u32::from_le_bytes(
-            cell.1
-                .and_then(super::super::RgbaColor::background)
-                .unwrap_or(super::BACKGROUND),
-        ),
-    }
+) -> Result<crate::intel::GucBcs0RgbaCopy, &'static str> {
+    let mut copy = crate::r::services::shell3_font_service::glyph(
+        cell.0,
+        microfont::FWIDTH as u32 * scale,
+        microfont::FHEIGHT as u32 * scale,
+        cell.1.unwrap_or(super::FOREGROUND).rgba(),
+        cell.1.and_then(super::super::RgbaColor::background).unwrap_or(super::BACKGROUND),
+        cell.1.is_some_and(super::super::RgbaColor::underline),
+    )?;
+    copy.destination_x = x;
+    copy.destination_y = y;
+    copy.width = copy.width.min(width);
+    copy.height = copy.height.min(height);
+    Ok(copy)
 }
 
-fn bcs_surface(view: FrameRgbaView) -> crate::intel::GucBcs0RgbaSurface {
+pub(super) fn bcs_surface(view: FrameRgbaView) -> crate::intel::GucBcs0RgbaSurface {
     crate::intel::GucBcs0RgbaSurface {
         phys: view.phys,
         gpu: view.gpu,
