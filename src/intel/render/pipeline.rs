@@ -1633,6 +1633,7 @@ fn write_triangle_probe_state_with_flush(
         sf_clip_viewport_offset_bytes: sf_clip_viewport_offset as u32,
         scissor_rect_offset_bytes: scissor_rect_offset as u32,
         push_constant_offset_bytes: 0,
+        push_constant_gpu_addr: 0,
         cps_state_offset_bytes: cps_state_offset as u32,
         slice_hash_table_offset_bytes: slice_hash_table_offset as u32,
         used_bytes: end_offset as u32,
@@ -5166,18 +5167,23 @@ fn encode_triangle_probe_batch(
     }
 
     if rounded_line_ends {
-        if pipeline.ps.meta.kernel.push_constant_bytes != 64 || probe_state.push_constant_offset_bytes == 0 {
+        if pipeline.ps.meta.kernel.push_constant_bytes != 64 {
             return Err("rounded-line-constants-contract");
         }
-        let address = draw.state_gpu_addr.checked_add(u64::from(probe_state.push_constant_offset_bytes))
-            .ok_or("rounded-line-constants-address")?;
-        for word in rounded_line_constant_ps_packet(address)? { push(batch_dwords, &mut cursor, word)?; }
+        let address = if microfont_mask {
+            if probe_state.push_constant_gpu_addr==0 { return Err("microfont-mask-constants-contract"); }
+            probe_state.push_constant_gpu_addr
+        } else {
+            if probe_state.push_constant_offset_bytes==0 { return Err("rounded-line-constants-contract"); }
+            draw.state_gpu_addr.checked_add(u64::from(probe_state.push_constant_offset_bytes))
+                .ok_or("rounded-line-constants-address")?
+        };
         if microfont_mask {
-            let mut packet = rounded_line_constant_ps_packet(address
-                + u64::from(crate::intel::shader::MICROFONT_MASK_VS_PUSH_START_BYTES))?;
-            packet[0] = 0x7815_0009 | (RENDER_MOCS << 8);
-            packet[2] = crate::intel::shader::MICROFONT_MASK_VS_PUSH_GRFS << 16;
-            for word in packet { push(batch_dwords, &mut cursor, word)?; }
+            for packet in microfont_mask_constant_packets(address)? {
+                for word in packet { push(batch_dwords, &mut cursor, word)?; }
+            }
+        } else {
+            for word in rounded_line_constant_ps_packet(address)? { push(batch_dwords, &mut cursor, word)?; }
         }
     }
     if draw.vue_capture {
@@ -6831,6 +6837,18 @@ fn voxy_headless_constant_vs_packet(vertex_gpu: u64, vertex_bytes: u32) -> Resul
     words[9] = camera as u32;
     words[10] = (camera >> 32) as u32;
     Ok(words)
+}
+
+/// Both stages read the same immutable per-dispatch 64-byte parameter block.
+/// Emit at the final draw frontier, after CONSTANT_ALL has reset earlier state.
+fn microfont_mask_constant_packets(address:u64) -> Result<[[u32;11];2],&'static str> {
+    let ps=rounded_line_constant_ps_packet(address)?;
+    let vs_address=address.checked_add(u64::from(crate::intel::shader::MICROFONT_MASK_VS_PUSH_START_BYTES))
+        .ok_or("microfont-mask-constant-address")?;
+    let mut vs=rounded_line_constant_ps_packet(vs_address)?;
+    vs[0]=0x7815_0009 | (RENDER_MOCS<<8);
+    vs[2]=crate::intel::shader::MICROFONT_MASK_VS_PUSH_GRFS<<16;
+    Ok([ps,vs])
 }
 
 /// Final host-style VS state, including the reset that supersedes early state.

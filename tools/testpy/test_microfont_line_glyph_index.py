@@ -14,7 +14,7 @@ spec.loader.exec_module(index)
 
 class GlyphIndex(unittest.TestCase):
     def test_new_changed_and_removed_bins_are_reflected_in_compiled_lookup(self):
-        for character in ['Z','0','a']:
+        for character in ['Z','0','a','@','%','$']:
             with tempfile.TemporaryDirectory(prefix='line-index-') as tmp:
                 root=Path(tmp);data=root/'data';data.mkdir();src=root/'src';src.mkdir()
                 output=src/'generated_line_glyphs.rs'
@@ -43,7 +43,8 @@ class GlyphIndex(unittest.TestCase):
             (data/'6.bin').write_bytes(bytes.fromhex('C0 00 44'))
             (data/'b.bin').write_bytes(bytes.fromhex('40 11 34 80 00 44'))
             (data/'p.bin').write_bytes(bytes.fromhex('C1 21 51 3C'))
-            self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),6)
+            (data/'n.bin').write_bytes(bytes.fromhex('C0 40 20 83 28 21 23 2C 44'))
+            self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),8)
             check=root/'check.rs'
             check.write_text(r'''#[path="src/raster_line.rs"] mod raster_line;
 use raster_line::{glyph_strips,Boundary::{End,Junction}};
@@ -68,6 +69,15 @@ fn main() {
     assert_eq!(actual,[(4,4),(4,10),(1,7)]);
     assert_eq!((q[0].start,q[0].end),(p[0].start,p[0].end));
     assert_eq!(q[0].adjacency_vertex(0),Some([4.0,4.0,1.0]));
+    let n=glyph_strips('n').unwrap();let u=glyph_strips('u').unwrap();
+    for i in 0..2 {
+        assert_eq!(n[i].points.as_ptr(),u[i].points.as_ptr());
+        assert_eq!((n[i].start,n[i].end),(u[i].start,u[i].end));
+    }
+    let actual:Vec<_>=u[0].iter_points().map(|p|(p.x(),p.y())).collect();
+    assert_eq!(actual,[(4,4),(4,8)]);
+    let actual:Vec<_>=u[1].iter_points().map(|p|(p.x(),p.y())).collect();
+    assert_eq!(actual,[(4,7),(3,8),(1,8),(0,7),(0,4)]);
     assert_eq!(core::mem::size_of::<raster_line::Strip>(),24);
 }
 ''')

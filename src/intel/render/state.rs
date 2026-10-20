@@ -752,6 +752,8 @@ struct TriangleProbeStateLayout {
     scissor_rect_offset_bytes: u32,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     push_constant_offset_bytes: u32,
+    /// Retained Microfont parameter block; fixed metadata is never restaged.
+    push_constant_gpu_addr: u64,
     cps_state_offset_bytes: u32,
     slice_hash_table_offset_bytes: u32,
     /// Exclusive CPU-written end of this state slot. Scene staging uses this

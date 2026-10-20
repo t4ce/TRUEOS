@@ -68,9 +68,13 @@ struct ResidentPrimitive {
 struct ResidentGlyphs {
     batches: Vec<ResidentPrimitive>,
     bytes: usize,
+    constants: Option<render::ResidentRenderBuffer>,
 }
 impl Drop for ResidentGlyphs {
     fn drop(&mut self) {
+        if let Some(constants) = self.constants.take() {
+            let _ = render::release_resident_render_buffer(&constants);
+        }
         for batch in &self.batches {
             let _ = render::release_resident_triangle_mesh(&batch.mesh);
         }
@@ -222,6 +226,7 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
     let mut resident = ResidentGlyphs {
         batches: Vec::new(),
         bytes: 0,
+        constants: None,
     };
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -282,9 +287,20 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
         params[8] = (-1.0f32).to_bits();
         upload(&mut resident, &vertices, &indices, Topology::TriangleList, params)?;
     }
+    resident.constants =
+        Some(render::allocate_resident_render_buffer(resident.batches.len() * 64)?);
+    let constants = resident.constants.as_ref().unwrap();
+    for (i, batch) in resident.batches.iter().enumerate() {
+        for (k, word) in batch.params.iter().enumerate() {
+            if !constants.write(i * 64 + k * 4, &word.to_le_bytes()) {
+                return Err("microfont-constants-upload");
+            }
+        }
+    }
+    constants.flush();
     crate::log_important!(target:"microfont-mask";
-        "microfont-mask: geometry-ready uploads=1 draws={} geometry_bytes={} slots={} cpu_geometry_rebuilds=0 storage=none\n",
-        resident.batches.len(),resident.bytes,SLOT_COUNT);
+        "microfont-mask: geometry-ready uploads=1 draws={} geometry_bytes={} metadata_bytes={} slots={} cpu_geometry_rebuilds=0 storage=none\n",
+        resident.batches.len(),resident.bytes,resident.batches.len()*64,SLOT_COUNT);
     Ok(resident)
 }
 
@@ -301,6 +317,9 @@ impl Drop for CoverageAtlas {
             // A future service teardown must not free vertices while an
             // accepted GPU submission has no proof of retirement.
             core::mem::forget(core::mem::take(&mut self.geometry.batches));
+            if let Some(constants) = self.geometry.constants.take() {
+                core::mem::forget(constants);
+            }
             if let Some(mask) = self.mask.take() {
                 core::mem::forget(mask);
             }
@@ -351,40 +370,52 @@ impl CoverageAtlas {
         if self.mask.is_none() {
             self.mask = Some(render::create_resident_coverage_mask(width, height)?);
         }
+        let constants = self.geometry.constants.as_ref().unwrap();
+        // Only dynamic values are written. Endpoint frames, boundary tags and
+        // join kind remain in their original GPU allocation for service life.
+        let transform = [
+            config.glyph_scale as f32,
+            config.line_width_px,
+            1.0 / width as f32,
+            1.0 / height as f32,
+        ]
+        .map(f32::to_bits);
+        for (i, batch) in self.geometry.batches.iter().enumerate() {
+            if batch.topology == Topology::LineStripAdj
+                && !constants
+                    .write(i * 64 + 32, &(config.line_width_px * 0.5).to_bits().to_le_bytes())
+            {
+                return Err("microfont-constants-width");
+            }
+            for (k, word) in transform.iter().enumerate() {
+                if !constants.write(i * 64 + 48 + k * 4, &word.to_le_bytes()) {
+                    return Err("microfont-constants-transform");
+                }
+            }
+        }
+        constants.flush();
         let draws: Vec<_> = self
             .geometry
             .batches
             .iter()
-            .map(|batch| {
-                let mut params = batch.params;
-                if batch.topology == Topology::LineStripAdj {
-                    params[8] = (config.line_width_px * 0.5).to_bits();
-                }
-                params[12..16].copy_from_slice(
-                    &[
-                        config.glyph_scale as f32,
-                        config.line_width_px,
-                        1.0 / width as f32,
-                        1.0 / height as f32,
-                    ]
-                    .map(f32::to_bits),
-                );
-                render::ResidentSceneDraw {
-                    mesh: &batch.mesh,
-                    depth_flags: None,
-                    rgba: [255; 4],
-                    sampled_texture: None,
-                    fragment_contract: render::ResidentSceneFragmentContract::MicrofontMask(params),
-                    viewport_translation_px: [0.0; 2],
-                    topology: batch.topology,
-                    point_width_px: 0,
-                    line_width_px: if batch.topology == Topology::LineStripAdj {
-                        config.line_width_px
-                    } else {
-                        0.0
-                    },
-                    clip_adjacency: batch.topology == Topology::LineStripAdj,
-                }
+            .enumerate()
+            .map(|(i, batch)| render::ResidentSceneDraw {
+                mesh: &batch.mesh,
+                depth_flags: None,
+                rgba: [255; 4],
+                sampled_texture: None,
+                fragment_contract: render::ResidentSceneFragmentContract::MicrofontMask(
+                    constants.gpu_base() + i as u64 * 64,
+                ),
+                viewport_translation_px: [0.0; 2],
+                topology: batch.topology,
+                point_width_px: 0,
+                line_width_px: if batch.topology == Topology::LineStripAdj {
+                    config.line_width_px
+                } else {
+                    0.0
+                },
+                clip_adjacency: batch.topology == Topology::LineStripAdj,
             })
             .collect();
         let result =

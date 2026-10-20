@@ -96,6 +96,15 @@ fn resident_coverage_draw_is_valid(draw: &ResidentSceneDraw<'_>) -> bool {
             ResidentScenePrimitiveTopology::TriangleList
                 | ResidentScenePrimitiveTopology::LineStripAdj
         )
+        && match draw.topology {
+            ResidentScenePrimitiveTopology::LineStripAdj => {
+                draw.clip_adjacency && draw.line_width_px > 0.0
+            }
+            ResidentScenePrimitiveTopology::TriangleList => {
+                !draw.clip_adjacency && draw.line_width_px == 0.0
+            }
+            _ => false,
+        }
         && draw.point_width_px == 0
         && draw.mesh.carrier.is_none()
         && draw.mesh.vertex_format == TriangleVertexFormat::Float3

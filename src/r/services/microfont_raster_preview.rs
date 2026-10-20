@@ -10,8 +10,7 @@ const SCALE: u32 = 4;
 const WIDTH: u32 = (16 * 2 - 1) * microfont::FWIDTH as u32 * SCALE;
 const BOX_HEIGHT: u32 = 8 * microfont::FHEIGHT as u32 * SCALE;
 const HEIGHT: u32 = BOX_HEIGHT + 2 * microfont::FHEIGHT as u32 * SCALE;
-// The bool retains the destination on uncertain GPU completion.
-pub(super) type PaintResult = Result<usize, (&'static str, bool)>;
+type PaintResult = Result<usize, &'static str>;
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, PaintResult>;
 
 #[trueos_executor::task(pool_size = 1)]
@@ -86,14 +85,12 @@ async fn show_once() -> Result<(), &'static str> {
         }
         match reply.wait().await {
             Ok(quads) => break quads,
-            Err(("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy", false)) => {
+            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy") => {
                 Timer::after(Duration::from_millis(20)).await;
             }
-            Err((reason, pinned)) => {
+            Err(reason) => {
                 let _ = ui4::finish_window_session(OWNER, session);
-                if !pinned {
-                    ui4::retire_frame_when_released(frame);
-                }
+                ui4::retire_frame_when_released(frame);
                 return Err(reason);
             }
         }
@@ -118,14 +115,21 @@ fn paint_once(frame: FrameHandle) -> PaintResult {
     use super::microfont_mask_service::{self as masks, AtlasConfig};
     // Preserve the existing spaced quad specimen; pixels come from the same
     // warmed atlas as the line specimen, sampled at its original 4x size.
-    let columns=31;
-    let mut glyphs=alloc::vec!['\0';columns*10];
-    for (index,&(ch,_)) in microfont::BOX_DRAW_SYMBOLS.iter().enumerate() {
-        glyphs[(index/16)*columns+(index%16)*2]=ch;
+    let columns = 31;
+    let mut glyphs = alloc::vec!['\0';columns*10];
+    for (index, &(ch, _)) in microfont::BOX_DRAW_SYMBOLS.iter().enumerate() {
+        glyphs[(index / 16) * columns + (index % 16) * 2] = ch;
     }
-    for (index,&(ch,_)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
-        glyphs[(8+index/16)*columns+(index%16)*2]=ch;
+    for (index, &(ch, _)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
+        glyphs[(8 + index / 16) * columns + (index % 16) * 2] = ch;
     }
-    masks::stamp_preview(frame,AtlasConfig::default(),&glyphs,columns,SCALE,
-        [48,100,216,255],[255;4]).map_err(|reason|(reason,false))
+    masks::stamp_preview(
+        frame,
+        AtlasConfig::default(),
+        &glyphs,
+        columns,
+        SCALE,
+        [48, 100, 216, 255],
+        [255; 4],
+    )
 }

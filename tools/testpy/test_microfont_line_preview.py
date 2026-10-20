@@ -17,10 +17,10 @@ mod spin {
 #[macro_export] macro_rules! log_error { ($($t:tt)*) => {}; }
 #[derive(Default)] struct State {
     uploads:usize,releases:usize,renders:usize,allocations:usize,mask_releases:usize,fault:u8,
-    vertices:Vec<Vec<[f32;3]>>,params:Vec<[u32;16]>,dest:Vec<u8>,published:usize,
+    vertices:Vec<Vec<[f32;3]>>,params:Vec<[u32;16]>,dest:Vec<u8>,published:usize,constant_allocations:usize,constant_writes:Vec<(usize,usize)>,
 }
 static STATE:Mutex<State>=Mutex::new(State {uploads:0,releases:0,renders:0,allocations:0,
-    mask_releases:0,fault:0,vertices:Vec::new(),params:Vec::new(),dest:Vec::new(),published:0});
+    mask_releases:0,fault:0,vertices:Vec::new(),params:Vec::new(),dest:Vec::new(),published:0,constant_allocations:0,constant_writes:Vec::new()});
 fn fault()->u8 {STATE.lock().unwrap().fault}
 mod phys { pub fn phys_to_virt(p:usize)->usize {p} }
 mod ui4 {
@@ -48,8 +48,25 @@ mod intel {
     pub mod render {
         use super::gpgpu::GpgpuMask8Surface;
         #[derive(Clone,Copy,PartialEq,Debug)] pub enum ResidentScenePrimitiveTopology {TriangleList,LineStripAdj}
+        pub struct ResidentRenderBuffer {data:std::cell::RefCell<Vec<u32>>}
+        impl ResidentRenderBuffer {
+            pub fn gpu_base(&self)->u64 {self.data.borrow().as_ptr() as u64}
+            pub fn write(&self,offset:usize,bytes:&[u8])->bool {
+                crate::STATE.lock().unwrap().constant_writes.push((offset,bytes.len()));
+                let mut data=self.data.borrow_mut();
+                if offset+bytes.len()>data.len()*4 {return false;}
+                unsafe {std::ptr::copy_nonoverlapping(bytes.as_ptr(),(data.as_mut_ptr() as *mut u8).add(offset),bytes.len());}
+                true
+            }
+            pub fn flush(&self) {}
+        }
+        pub fn allocate_resident_render_buffer(bytes:usize)->Result<ResidentRenderBuffer,&'static str> {
+            crate::STATE.lock().unwrap().constant_allocations+=1;
+            Ok(ResidentRenderBuffer {data:std::cell::RefCell::new(vec![0;bytes.div_ceil(4)])})
+        }
+        pub fn release_resident_render_buffer(_:&ResidentRenderBuffer)->bool {true}
         pub struct ResidentTriangleMesh;
-        pub enum ResidentSceneFragmentContract {MicrofontMask([u32;16])}
+        pub enum ResidentSceneFragmentContract {MicrofontMask(u64)}
         pub struct ResidentSceneDraw<'a> {
             pub mesh:&'a ResidentTriangleMesh,pub depth_flags:Option<u32>,pub rgba:[u8;4],
             pub sampled_texture:Option<()>,pub fragment_contract:ResidentSceneFragmentContract,
@@ -79,7 +96,9 @@ mod intel {
         pub fn render_resident_coverage_mask(draws:&[ResidentSceneDraw<'_>],mask:&mut ResidentCoverageMask)->Result<ResultFrame,&'static str> {
             let mut s=crate::STATE.lock().unwrap();s.renders+=1;s.params.clear();
             for d in draws {
-                let ResidentSceneFragmentContract::MicrofontMask(p)=d.fragment_contract;
+                let ResidentSceneFragmentContract::MicrofontMask(address)=d.fragment_contract;
+                let mut p=[0u32;16];
+                unsafe {std::ptr::copy_nonoverlapping(address as *const u32,p.as_mut_ptr(),16);}
                 let f=p.map(f32::from_bits);
                 assert_eq!(d.rgba,[255;4]);assert!(d.depth_flags.is_none());assert!(d.sampled_texture.is_none());
                 assert_eq!(f[14],1.0/mask.width as f32);assert_eq!(f[15],1.0/mask.height as f32);
@@ -125,6 +144,16 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
     for width in [7.0,9.0,8.0] {with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|_|Ok(())).unwrap();}
     let s=STATE.lock().unwrap();assert_eq!(s.uploads,uploads);assert_eq!(s.vertices,vertices);
     assert_eq!((s.renders,s.allocations,s.releases),(4,1,0));
+}
+#[test] fn fixed_endpoint_metadata_is_never_uploaded_again() {
+    reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
+    let (written,before)={let s=STATE.lock().unwrap();(s.constant_writes.len(),s.params.clone())};
+    with_warmed_atlas(AtlasConfig {line_width_px:9.0,..AtlasConfig::default()},|_|Ok(())).unwrap();
+    let s=STATE.lock().unwrap();assert_eq!(s.constant_allocations,1);
+    assert!(s.constant_writes[written..].iter().all(|&(offset,len)|len==4 && matches!(offset%64,32|48|52|56|60)));
+    for (old,new) in before.iter().zip(&s.params) {
+        assert_eq!(&old[..8],&new[..8]);assert_eq!(&old[10..12],&new[10..12]);
+    }
 }
 #[test] fn size_replaces_mask_but_keeps_every_geometry_buffer() {
     reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();

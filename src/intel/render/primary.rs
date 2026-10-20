@@ -372,7 +372,7 @@ pub(crate) enum ResidentSceneFragmentContract {
     /// Native line AA, or analytic patch coverage; same private 64-byte ABI.
     MicrofontAa([u32; 16]),
     /// Immutable source-cell geometry, GPU width/scale expansion, R8 coverage.
-    MicrofontMask([u32; 16]),
+    MicrofontMask(u64),
     ClipPosition3UvTexture,
     VoxyHeadless,
     VoxyHeadlessTexture,
@@ -1797,7 +1797,7 @@ fn stage_resident_scene_secondary(
             secondary_index, sampled_texture.is_some(), reason,
         );
     })?;
-    if let ResidentSceneFragmentContract::RoundedLineEnds(params) | ResidentSceneFragmentContract::MicrofontAa(params) | ResidentSceneFragmentContract::MicrofontMask(params) = fragment_contract {
+    if let ResidentSceneFragmentContract::RoundedLineEnds(params) | ResidentSceneFragmentContract::MicrofontAa(params) = fragment_contract {
         let line = matches!(topology, ResidentScenePrimitiveTopology::LineListAdj | ResidentScenePrimitiveTopology::LineStripAdj) && clip_adjacency;
         let patch = draw.microfont_aa && topology == ResidentScenePrimitiveTopology::TriangleList && !clip_adjacency;
         if !(line || patch) || !matches!(state_warm.device_id, 0x4680 | 0xa780)
@@ -1808,6 +1808,13 @@ fn stage_resident_scene_secondary(
             state_warm.draw_state_virt.add(offset), 64); }
         probe_state.push_constant_offset_bytes = offset as u32;
         probe_state.used_bytes = (offset + 64) as u32;
+    }
+    if let ResidentSceneFragmentContract::MicrofontMask(address)=fragment_contract {
+        if address==0 || address&63!=0 || !matches!(state_warm.device_id,0x4680|0xa780)
+            || !(topology==ResidentScenePrimitiveTopology::TriangleList && !clip_adjacency
+                || topology==ResidentScenePrimitiveTopology::LineStripAdj && clip_adjacency)
+        { return Err("microfont-mask-constants-contract"); }
+        probe_state.push_constant_gpu_addr=address;
     }
     // Shader bytes and all fixed-function structures occupy one compact
     // prefix. Publish it once, after every CPU write, instead of three
