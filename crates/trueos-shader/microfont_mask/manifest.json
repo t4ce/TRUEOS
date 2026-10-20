@@ -1,9 +1,9 @@
 {
-  "source_sha256": "2b53377f854c66f77180e658284496d033b31766159fc2b7e582c05183c1f6e8",
-  "rust_sha256": "c62f0288cc1f3c269f43f252d0e749106b9b3f5869e6764b97237f3ef60d635f",
+  "source_sha256": "ea8bb5df87057ec41e2f9ba77badb295e86cc645f687de32c6c13b6cf24cddff",
+  "rust_sha256": "d7cb964e76629b0f7001bdc8cd39bf25255e7d2d5a25b3ab1ad635f1fe4ded56",
   "device_id": "0x4680",
-  "vs_bytes": 1312,
-  "ps_bytes": 2360,
+  "vs_bytes": 1600,
+  "ps_bytes": 2392,
   "vs_state": {
     "ver": 12,
     "verx10": 120,
@@ -35,7 +35,7 @@
     "grf_start8": 4,
     "grf_start16": 6,
     "grf_start32": 11,
-    "offset16": 2368,
+    "offset16": 2432,
     "num_varying_inputs": 0,
     "barycentric_interp_modes": 0,
     "uses_vmask": 1,

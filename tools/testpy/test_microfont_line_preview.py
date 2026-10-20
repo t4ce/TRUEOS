@@ -132,6 +132,21 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
     assert_eq!(glyph_slot('─'),Some(95));assert_eq!(glyph_slot('\u{257f}'),Some(222));
     assert_eq!(glyph_slot('▀'),Some(223));assert_eq!(glyph_slot('\u{259f}'),Some(254));assert_eq!(glyph_slot('漢'),None);
 }
+#[test] fn endpoint_recipes_identify_indices_without_changing_seed_positions() {
+    reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
+    let state=STATE.lock().unwrap();
+    for (vertices,params) in state.vertices.iter().zip(&state.params) {
+        if f32::from_bits(params[8])<=0.0 {continue;}
+        let last=vertices.len()-2;
+        assert_eq!(vertices[1][2],0.25);
+        assert_eq!(vertices[last][2],0.75);
+        for point in &vertices[2..last] {assert_eq!(point[2],0.5);}
+        for (index,offset) in [(1,0),(last,4)] {
+            assert_eq!(vertices[index][0],f32::from_bits(params[offset]));
+            assert_eq!(vertices[index][1],f32::from_bits(params[offset+1]));
+        }
+    }
+}
 #[test] fn geometry_is_uploaded_once_and_same_config_never_redraws() {
     reset(0);for _ in 0..3 {with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();}
     let s=STATE.lock().unwrap();assert_eq!((s.renders,s.allocations,s.releases),(1,1,0));

@@ -318,6 +318,9 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
             indices.clear();
             for i in 0..strip.points.len() + 2 {
                 let [x, y, z] = strip.adjacency_vertex(i).ok_or("microfont-adjacency")?;
+                // Z is a resident VS recipe marker, not a seed-data change.
+                // Identify real endpoints by index, including coincident points.
+                let z = if i == 1 { 0.25 } else if i == strip.points.len() { 0.75 } else { z };
                 vertices.push([at[0] + x + 0.5, at[1] + y + 0.5, z]);
             }
             indices.extend(0..vertices.len() as u32);
