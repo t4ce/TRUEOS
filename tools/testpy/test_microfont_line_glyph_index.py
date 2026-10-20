@@ -44,7 +44,8 @@ class GlyphIndex(unittest.TestCase):
             (data/'u0062.bin').write_bytes(bytes.fromhex('40 11 34 80 00 44'))
             (data/'u0070.bin').write_bytes(bytes.fromhex('C1 21 51 3C'))
             (data/'u006E.bin').write_bytes(bytes.fromhex('C0 40 20 83 28 21 23 2C 44'))
-            self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),8)
+            (data/'u0074.bin').write_bytes(bytes.fromhex('C0 21 23 C2 02 3A 43 44'))
+            self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),10)
             check=root/'check.rs'
             check.write_text(r'''#[path="src/raster_line.rs"] mod raster_line;
 use raster_line::{glyph_strips,Boundary::{End,Junction}};
@@ -78,6 +79,15 @@ fn main() {
     assert_eq!(actual,[(4,4),(4,8)]);
     let actual:Vec<_>=u[1].iter_points().map(|p|(p.x(),p.y())).collect();
     assert_eq!(actual,[(4,7),(3,8),(1,8),(0,7),(0,4)]);
+    let t=glyph_strips('t').unwrap();let f=glyph_strips('f').unwrap();
+    for i in 0..2 {
+        assert_eq!(t[i].points.as_ptr(),f[i].points.as_ptr());
+        assert_eq!((t[i].start,t[i].end),(f[i].start,f[i].end));
+    }
+    let actual:Vec<_>=f[0].iter_points().map(|p|(p.x(),p.y())).collect();
+    assert_eq!(actual,[(1,4),(3,4)]);
+    let actual:Vec<_>=f[1].iter_points().map(|p|(p.x(),p.y())).collect();
+    assert_eq!(actual,[(2,8),(2,1),(3,0),(4,0)]);
     assert_eq!(core::mem::size_of::<raster_line::Strip>(),24);
 }
 ''')

@@ -10,6 +10,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 
+pub(crate) const PREVIEW_HEADER_HEIGHT: u32 = 30;
 pub(crate) const ATLAS_COLUMNS: u32 = 16;
 pub(crate) const ATLAS_ROWS: u32 = 16;
 pub(crate) const LATIN_SLOTS: usize = 95;
@@ -39,7 +40,7 @@ impl AtlasConfig {
     fn normalized(self) -> Result<Self, &'static str> {
         if !(1..=23).contains(&self.glyph_scale)
             || !self.line_width_px.is_finite()
-            || self.line_width_px < 1.0
+            || self.line_width_px < 0.25
             || self.line_width_px > 32.0
             || (self.glyph_height_px.is_none() && self.line_width_px > self.glyph_scale as f32)
             || self.glyph_height_px.is_some_and(|h| !(11..=253).contains(&h))
@@ -557,6 +558,21 @@ pub(crate) fn stamp_preview_colored(
     inks: &[[u8; 4]],
     background: [u8; 4],
 ) -> Result<usize, &'static str> {
+    stamp_preview_colored_with_header(frame, config, glyphs, columns, display_scale, inks, background, None)
+}
+
+/// Optional fixed-size status row, separate from the native-line glyphs.
+pub(crate) fn stamp_preview_colored_with_header(
+    frame: ui4::FrameHandle,
+    config: AtlasConfig,
+    glyphs: &[char],
+    columns: usize,
+    display_scale: u32,
+    inks: &[[u8; 4]],
+    background: [u8; 4],
+    header: Option<&str>,
+) -> Result<usize, &'static str> {
+    let header_height = if header.is_some() { PREVIEW_HEADER_HEIGHT } else { 0 };
     if inks.len() != 1 && inks.len() != glyphs.len() {
         return Err("microfont-stamp-colors");
     }
@@ -573,10 +589,17 @@ pub(crate) fn stamp_preview_colored(
                 || display_scale == 0
                 || (atlas.config().glyph_height_px.is_none() && scale % display_scale != 0)
                 || view.width != columns as u32 * cell_width
-                || view.height != (glyphs.len().div_ceil(columns)) as u32 * cell_height
+                || view.height != (glyphs.len().div_ceil(columns)) as u32 * cell_height + header_height
             {
                 return Err("microfont-stamp-shape");
             }
+            let header_width = view.width.saturating_sub(8) as usize / 2;
+            let header_mask = header.map(|text| {
+                let mut pixels = alloc::vec![0u8; header_width * microfont::FHEIGHT];
+                microfont::stamp_text(&mut pixels, header_width, microfont::FHEIGHT,
+                    0, 0, text, 255u8).map_err(|_| "microfont-header-text")?;
+                Ok::<_, &'static str>(pixels)
+            }).transpose()?;
             let source = crate::phys::phys_to_virt(mask.phys as usize) as *mut u8;
             let spans = [
                 crate::intel::DmaFlushRows::new(
@@ -599,16 +622,18 @@ pub(crate) fn stamp_preview_colored(
             let mut nonzero = 0usize;
             for y in 0..view.height {
                 for x in 0..view.width {
-                    let cell = (y / cell_height) as usize * columns
+                    let in_header = y < header_height;
+                    let body_y = y.saturating_sub(header_height);
+                    let cell = (body_y / cell_height) as usize * columns
                         + (x / cell_width) as usize;
                     let coverage = glyphs
-                        .get(cell)
+                        .get(cell).filter(|_| !in_header)
                         .and_then(|&ch| atlas.glyph_rect(ch))
                         .map_or(0, |rect| {
                             let sx = rect[0]
                                 + ((2 * (x % cell_width) + 1) * rect[2] / (2 * cell_width)).min(rect[2] - 1);
                             let sy = rect[1]
-                                + ((2 * (y % cell_height) + 1) * rect[3] / (2 * cell_height)).min(rect[3] - 1);
+                                + ((2 * (body_y % cell_height) + 1) * rect[3] / (2 * cell_height)).min(rect[3] - 1);
                             unsafe {
                                 core::ptr::read_volatile(
                                     source.add((sy * mask.pitch_bytes + sx) as usize),
@@ -619,7 +644,14 @@ pub(crate) fn stamp_preview_colored(
                     nonzero += usize::from(coverage != 0);
                     let ink = if inks.len() == 1 { inks[0] }
                         else { inks.get(cell).copied().unwrap_or([0; 4]) };
-                    let pixel = tint_coverage(coverage, ink, background);
+                    let pixel = if in_header {
+                        let hx = x.saturating_sub(4) as usize / 2;
+                        let hy = y.saturating_sub(4) as usize / 2;
+                        let a = if x >= 4 && y >= 4 && hx < header_width && hy < microfont::FHEIGHT {
+                            header_mask.as_ref().unwrap()[hy * header_width + hx]
+                        } else { 0 };
+                        tint_coverage(a, [48, 64, 96, 255], background)
+                    } else { tint_coverage(coverage, ink, background) };
                     unsafe {
                         core::ptr::write_unaligned(
                             view.virt

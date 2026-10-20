@@ -277,7 +277,16 @@ pub(super) fn physical_extent_pixels(
     width_mm: u32,
     height_mm: u32,
 ) -> Option<(u32, u32)> {
-    if width_mm == 0 || height_mm == 0 {
+    physical_extent_pixels_fraction(active_target, width_mm, height_mm, 1)
+}
+
+pub(super) fn physical_extent_pixels_fraction(
+    active_target: DisplayPipelineTarget,
+    width_mm: u32,
+    height_mm: u32,
+    denominator: u32,
+) -> Option<(u32, u32)> {
+    if width_mm == 0 || height_mm == 0 || denominator == 0 {
         return None;
     }
     let framebuffer = crate::limine::framebuffer_response()?
@@ -288,11 +297,11 @@ pub(super) fn physical_extent_pixels(
     let physical = info.physical?;
     let width = rounded_ratio(
         u64::from(active_target.width).checked_mul(u64::from(width_mm))?,
-        u64::from(physical.width_mm),
+        u64::from(physical.width_mm).checked_mul(u64::from(denominator))?,
     );
     let height = rounded_ratio(
         u64::from(active_target.height).checked_mul(u64::from(height_mm))?,
-        u64::from(physical.height_mm),
+        u64::from(physical.height_mm).checked_mul(u64::from(denominator))?,
     );
     (width != 0 && height != 0).then_some((width, height))
 }

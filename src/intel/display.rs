@@ -1541,6 +1541,11 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
     display_metrics::physical_extent_pixels(target, width_mm, height_mm)
 }
 
+pub(crate) fn physical_extent_pixels_fraction(width: u32, height: u32, denominator: u32) -> Option<(u32, u32)> {
+    let target = primary_display_output_target()?.pipeline_target;
+    display_metrics::physical_extent_pixels_fraction(target, width, height, denominator)
+}
+
 /// Compatibility wrapper for hardware-oriented callers. New compositor and
 /// scene owners should retain the logical output returned by
 /// `primary_display_output_target` through their whole frame transaction.

@@ -772,6 +772,11 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
     self::display::physical_extent_pixels(width_mm, height_mm)
 }
 
+/// Physical millimetres expressed as a fraction; round only the final pixels.
+pub(crate) fn physical_extent_pixels_fraction(width: u32, height: u32, denominator: u32) -> Option<(u32, u32)> {
+    self::display::physical_extent_pixels_fraction(width, height, denominator)
+}
+
 pub(crate) fn display_diagnostic_snapshot_text() -> alloc::string::String {
     self::display::diagnostic_snapshot_text()
 }

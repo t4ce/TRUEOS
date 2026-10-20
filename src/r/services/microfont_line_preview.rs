@@ -6,9 +6,10 @@ use trueos_time::{Duration, Timer};
 use crate::ui4::{self, FrameHandle, WindowOwner};
 
 const OWNER: WindowOwner = WindowOwner::MICROFONT_LINE_PREVIEW;
-// Named presets are the only source of the scroll range. Native screen pixels.
+// Native screen pixels; allow thinner strokes below Lean for small glyphs.
 const LINE_WIDTH_PX: f32 =
     (microfont::FontShape::Meso.line_width_px() + microfont::FontShape::Lean.line_width_px()) * 0.5;
+const MIN_LINE_WIDTH_PX: f32 = 1.0;
 const WIDTH_STEP_PX: f32 = 0.25;
 const END_CORNER_FRACTION: f32 = 0.5;
 const GLYPHS: &[u8; 78] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789   abcdefghijklmnopqrstuvwxyz@%$          ";
@@ -16,19 +17,19 @@ const COLUMNS: usize = 13;
 // Font size means the complete eleven-row em cell, including descender space.
 // Use the same EDID-to-active-scanout conversion as gridpaper; no guessed DPI.
 fn glyph_height_pixels(step: u8) -> Result<u32, &'static str> {
-    crate::intel::physical_extent_pixels(5, u32::from(step) * 5)
+    crate::intel::physical_extent_pixels_fraction(10, u32::from(step) * 5, 2)
         .map(|(_, height)| height)
         .ok_or("physical-display-size-unavailable")
 }
 fn size_after_tabs(step: u8, tabs: u32) -> u8 {
-    ((u32::from(step) - 1 + tabs % 8) % 8 + 1) as u8
+    ((u32::from(step) - 2 + tabs % 15) % 15 + 2) as u8
 }
 fn frame_extent(height: u32, line_width_px: f32) -> (u32, u32) {
     let (width, height) = super::microfont_mask_service::AtlasConfig {
         glyph_height_px: Some(height), line_width_px,
         ..super::microfont_mask_service::AtlasConfig::default()
     }.cell_extent();
-    (COLUMNS as u32 * width, 6 * height)
+    (COLUMNS as u32 * width, 6 * height + super::microfont_mask_service::PREVIEW_HEADER_HEIGHT)
 }
 type PaintResult = Result<usize, &'static str>;
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, PaintResult>;
@@ -45,7 +46,7 @@ async fn show_once() -> Result<(), &'static str> {
     let output = ui4::OutputId::from_slot(0).ok_or("output-unavailable")?;
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or("scanout-unavailable")?;
-    let mut size_step = 1;
+    let mut size_step = 2;
     let mut glyph_height = glyph_height_pixels(size_step)?;
     let (width, height) = frame_extent(glyph_height, LINE_WIDTH_PX);
     let session = ui4::begin_window_session(OWNER).map_err(|_| "session-create")?;
@@ -81,7 +82,7 @@ async fn show_once() -> Result<(), &'static str> {
         }
     };
     let mut width_px = LINE_WIDTH_PX;
-    let lines = match render_frame(frame, width_px, glyph_height).await {
+    let lines = match render_frame(frame, width_px, glyph_height, size_step).await {
         Ok(lines) => lines,
         Err(reason) => {
             let _ = ui4::finish_window_session(OWNER, session);
@@ -118,8 +119,8 @@ async fn show_once() -> Result<(), &'static str> {
         .filter(|&tag| tag == microfont::raster_line::Boundary::End)
         .count();
     crate::log_important!(target: "microfont-line-preview";
-        "microfont-line-preview: presented window={} frame={} size={}x{} em_height_px={} cells=65 slots=78 present={} source=line-binary-v1 layout=A-M/N-Z/0-9/a-m/n-z/@%$ rows=6 columns=13 ink_pixels={} size_mm=5 sizing=eleven-row-em tab=5..40mm-step5 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 lean_px={} meso_px={} storage=none escape=close\n",
-        window.raw(), frame.raw(), width, height, glyph_height, present, lines, strips.len(), real_vertices, 2 * strips.len(), ends, 2 * strips.len() - ends, LINE_WIDTH_PX, join_triangles, END_CORNER_FRACTION, LINE_WIDTH_PX * END_CORNER_FRACTION, microfont::FontShape::Lean.line_width_px(), microfont::FontShape::Meso.line_width_px());
+        "microfont-line-preview: presented window={} frame={} size={}x{} em_height_px={} cells=65 slots=78 present={} source=line-binary-v1 layout=A-M/N-Z/0-9/a-m/n-z/@%$ rows=6 columns=13 ink_pixels={} size_mm=5 sizing=eleven-row-em tab=5..40mm-step2.5 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 scroll_min_px={} lean_px={} meso_px={} storage=none escape=close\n",
+        window.raw(), frame.raw(), width, height, glyph_height, present, lines, strips.len(), real_vertices, 2 * strips.len(), ends, 2 * strips.len() - ends, LINE_WIDTH_PX, join_triangles, END_CORNER_FRACTION, LINE_WIDTH_PX * END_CORNER_FRACTION, MIN_LINE_WIDTH_PX, microfont::FontShape::Lean.line_width_px(), microfont::FontShape::Meso.line_width_px());
     while !ui4::window_is_closed(OWNER, window) {
         let mut wheel = 0i32;
         let mut tabs = 0u32;
@@ -145,7 +146,7 @@ async fn show_once() -> Result<(), &'static str> {
         if next_width != width_px || next_step != size_step {
             // Replace the immutable front only when the new native-size render is ready.
             if let Ok(next_frame) = create_preview_frame(output, next_height, next_width) {
-                match render_frame(next_frame, next_width, next_height).await {
+                match render_frame(next_frame, next_width, next_height, next_step).await {
                     Ok(_) => {
                         let committed = if next_step != size_step || frame_extent(next_height, next_width) != frame_extent(glyph_height, width_px) {
                             ui4::window_resize_state(OWNER, window).and_then(|(mut placement, epoch)| {
@@ -164,8 +165,8 @@ async fn show_once() -> Result<(), &'static str> {
                             glyph_height = next_height;
                             let (width, height) = frame_extent(glyph_height, width_px);
                             crate::log_important!(target: "microfont-line-preview";
-                                "microfont-line-preview: adjusted size_mm={} em_height_px={} frame={}x{} width_px={} wheel={} tabs={} geometry_reuploads=0 storage=none\n",
-                                size_step * 5, glyph_height, width, height, width_px, wheel, tabs);
+                                "microfont-line-preview: adjusted size_mm={}.{} em_height_px={} frame={}x{} width_px={} wheel={} tabs={} geometry_reuploads=0 storage=none\n",
+                                size_step * 5 / 2, (size_step % 2) * 5, glyph_height, width, height, width_px, wheel, tabs);
                         } else {
                             ui4::retire_frame_when_released(next_frame);
                         }
@@ -201,12 +202,12 @@ fn create_preview_frame(output: ui4::OutputId, glyph_height: u32, width_px: f32)
     .map_err(|_| "frame-create")
 }
 
-async fn render_frame(frame: FrameHandle, width_px: f32, glyph_height: u32) -> PaintResult {
+async fn render_frame(frame: FrameHandle, width_px: f32, glyph_height: u32, size_step: u8) -> PaintResult {
     let reply = Arc::new(Reply::new());
     loop {
         loop {
             let response = Arc::clone(&reply);
-            let job = Box::new(move || response.signal(paint_once(frame, width_px, glyph_height)));
+            let job = Box::new(move || response.signal(paint_once(frame, width_px, glyph_height, size_step)));
             match crate::r::blocking::try_spawn_blocking_job_with_purpose(
                 job,
                 "microfont-line-preview",
@@ -227,19 +228,20 @@ async fn render_frame(frame: FrameHandle, width_px: f32, glyph_height: u32) -> P
     }
 }
 
-/// Positive wheel steps thicken the stroke; clamp to the named weight presets.
+/// Positive wheel steps thicken the stroke; permit 1px through Meso.
 fn width_after_scroll(width_px: f32, wheel: i32) -> f32 {
     (width_px + wheel as f32 * WIDTH_STEP_PX).clamp(
-        microfont::FontShape::Lean.line_width_px(),
+        MIN_LINE_WIDTH_PX,
         microfont::FontShape::Meso.line_width_px(),
     )
 }
 
-fn paint_once(frame: FrameHandle, width_px: f32, glyph_height: u32) -> PaintResult {
+fn paint_once(frame: FrameHandle, width_px: f32, glyph_height: u32, size_step: u8) -> PaintResult {
     use super::microfont_mask_service::{self as masks, AtlasConfig};
     let glyphs: Vec<_> = GLYPHS.iter().map(|&ch| ch as char).collect();
     let inks = preview_inks();
-    masks::stamp_preview_colored(
+    let label = alloc::format!("{:.2} px   {},{:02} cm (Tab)", width_px, size_step / 4, (size_step % 4) * 25);
+    masks::stamp_preview_colored_with_header(
         frame,
         AtlasConfig {
             glyph_height_px: Some(glyph_height),
@@ -251,6 +253,7 @@ fn paint_once(frame: FrameHandle, width_px: f32, glyph_height: u32) -> PaintResu
         1, // native-pixel copy; physical config supplies the cell extent
         &inks,
         [0; 4],
+        Some(&label),
     )
 }
 

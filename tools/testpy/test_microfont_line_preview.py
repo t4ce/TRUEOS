@@ -227,12 +227,17 @@ fn expected_lines()->usize {(0x20u8..=0x7e).filter_map(|c|microfont::raster_line
     }
 }
 #[test] fn configuration_validation_precedes_upload_and_quantizes_width_once() {
-    reset(0);for (scale,width) in [(0,8.0),(24,8.0),(16,f32::NAN),(4,8.0)] {
+    reset(0);for (scale,width) in [(0,8.0),(24,8.0),(16,f32::NAN),(16,0.125),(4,8.0)] {
         assert!(with_warmed_atlas(AtlasConfig {glyph_scale:scale,line_width_px:width,..AtlasConfig::default()},|_|Ok(())).is_err());
     }
     assert_eq!(STATE.lock().unwrap().uploads,0);
     for width in [8.0,8.001] {with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|_|Ok(())).unwrap();}
     assert_eq!(STATE.lock().unwrap().renders,1);
+    for width in [0.25,0.5,0.75] {
+        with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|a| {
+            assert_eq!(a.config().line_width_px,width); Ok(())
+        }).unwrap();
+    }
 }
 #[test] fn colored_transparent_stamp_premultiplies_each_ink_once() {
     reset(0);let cfg=AtlasConfig::default();
@@ -319,27 +324,27 @@ def main():
     helpers=preview[preview.index('fn glyph_height_pixels('):preview.index('type PaintResult')]
     helper_tests=r'''
 const COLUMNS:usize=13;
-#[test] fn tab_cycles_all_eight_sizes_and_wraps() {
-    let mut step=1;
-    for expected in [2,3,4,5,6,7,8,1] {step=size_after_tabs(step,1);assert_eq!(step,expected);}
-    assert_eq!(size_after_tabs(3,16),3);
-    assert_eq!(size_after_tabs(1,9),2);
+#[test] fn tab_cycles_all_fifteen_sizes_and_wraps() {
+    let mut step=2;
+    for expected in [3,4,5,6,7,8,9,10,11,12,13,14,15,16,2] {step=size_after_tabs(step,1);assert_eq!(step,expected);}
+    assert_eq!(size_after_tabs(3,30),3);
+    assert_eq!(size_after_tabs(2,16),3);
 }
 #[test] fn physical_em_uses_gridpaper_conversion_and_keeps_wheel_layout_stable() {
-    for step in 1..=8 {
-        let expected=(1440*u32::from(step)*5+170)/340;
+    for step in 2..=16 {
+        let expected=(1440*u32::from(step)*5+340)/680;
         assert_eq!(glyph_height_pixels(step),Ok(expected));
         let base=frame_extent(expected,8.0);
-        assert_eq!(base,(13*((expected*6+10)/11+12),6*(expected+12)));
+        assert_eq!(base,(13*((expected*6+10)/11+12),6*(expected+12)+super::microfont_mask_service::PREVIEW_HEADER_HEIGHT));
         for width in [7.0,7.25,8.0,8.25,9.0] {assert_eq!(frame_extent(expected,width),base);}
     }
 }
 '''
-    mocks=MOCKS.replace('mod intel {','mod intel { pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {Some(((2560*w+300)/600,(1440*h+170)/340))}')
+    mocks=MOCKS.replace('mod intel {','mod intel { pub fn physical_extent_pixels_fraction(w:u32,h:u32,d:u32)->Option<(u32,u32)> {Some(((2560*w+300*d)/(600*d),(1440*h+170*d)/(340*d)))}')
     source=mocks+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n} mod preview_size {\n'+helpers+helper_tests+'\n}}\n'+TESTS
     with tempfile.TemporaryDirectory(prefix='microfont-mask-test-') as tmp:
         tmp=Path(tmp);lib=tmp/'libmicrofont.rlib'
-        subprocess.run(['rustc','--edition=2024','--crate-name','microfont','--crate-type','rlib','--cfg','feature="raster"',str(ROOT/'vendor/microfont/src/lib.rs'),'-o',str(lib)],check=True)
+        subprocess.run(['rustc','--edition=2024','--crate-name','microfont','--crate-type','rlib','--cfg','feature="raster"','--cfg','feature="stamp"',str(ROOT/'vendor/microfont/src/lib.rs'),'-o',str(lib)],check=True)
         (tmp/'test.rs').write_text(source.replace('//!','//').replace('<-0.5','< -0.5'))
         subprocess.run(['rustc','--edition=2024','--test','-A','dead_code','-A','unused_imports','--extern',f'microfont={lib}',str(tmp/'test.rs'),'-o',str(tmp/'tests')],check=True)
         subprocess.run([str(tmp/'tests'),'--test-threads=1'],check=True)
