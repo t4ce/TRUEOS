@@ -14,14 +14,17 @@ extract.ROOT = ROOT
 def main():
     sdk = (BLUEPRINTS / "crates/trueos-v/src/vshell.rs").read_text()
     sdk = sdk[sdk.index("/// Launch an app with a one-shot UTF-8 start script"):]
+    sdk = sdk[:sdk.index("/// Spawn a normal Shell3 at a pixel origin")]
     pullbot = (BLUEPRINTS / "buildins/appstore/src/pullbot.rs").read_text()
     pullbot = pullbot[:pullbot.index("pub fn report")]
     startup = (ROOT / "src/shell3/startup.rs").read_text()
     startup = startup[:startup.index("/// Preserve ordinary kernel progress")]
     service = (ROOT / "src/shell3/service.rs").read_text()
-    admission = extract.item("src/shell3/service.rs", "ShellOwnership")
+    admission = extract.item("src/shell3/service.rs", "WindowGeometry")
+    admission += extract.item("src/shell3/service.rs", "WindowSpawn")
+    admission += extract.item("src/shell3/service.rs", "ShellOwnership")
     admission += re.search(r"^impl ShellOwnership \{.*?^}", service, re.M | re.S).group()
-    for name in ("advance_round_robin", "request_shell3_with_startup"):
+    for name in ("advance_round_robin", "request_shell3_with_startup", "request_shell3_configured"):
         admission += extract.item("src/shell3/service.rs", name)
     source = r'''#![allow(dead_code)]
 extern crate alloc;
@@ -83,7 +86,8 @@ ADMISSION_SOURCE
             let mut pool=SHELL_OWNERSHIP.lock();
             assert_eq!(pool.live_shells,255);assert_eq!(pool.pending_by_slot.iter().sum::<usize>(),1);
             assert_eq!(pool.startup_requests.len(),1);
-            let (slot,startup)=pool.startup_requests.pop_front().unwrap();assert_eq!(slot,2);
+            let (slot,startup,window)=pool.startup_requests.pop_front().unwrap();assert_eq!(slot,2);
+            assert!(window.is_none());
             match startup.unwrap() {
                 super::startup::Startup::Blueprint {archive,bytes,script} => {
                     assert_eq!(archive,"Frog.bp");assert_eq!(bytes,vec![9]);assert_eq!(script.as_deref(),Some("weather 13 51\n"));
