@@ -6,6 +6,17 @@ ROOT=Path(__file__).resolve().parents[2]
 MOCKS=r'''
 extern crate alloc;
 use std::sync::Mutex;
+mod wait {
+    pub struct WaitQueue(std::sync::atomic::AtomicU64);
+    impl WaitQueue {
+        pub const fn new()->Self {Self(std::sync::atomic::AtomicU64::new(0))}
+        pub fn observe(&self)->u64 {self.0.load(std::sync::atomic::Ordering::Acquire)}
+        pub fn notify_all(&self) {self.0.fetch_add(1,std::sync::atomic::Ordering::Release);}
+        pub async fn wait_after(&self,old:u64) {
+            std::future::poll_fn(|_|if self.observe()!=old {std::task::Poll::Ready(())}else{std::task::Poll::Pending}).await
+        }
+    }
+}
 mod libm { pub fn ceilf(v:f32)->f32 {v.ceil()} pub fn sqrtf(v:f32)->f32 {v.sqrt()} pub fn roundf(v:f32)->f32 {v.round()} }
 mod spin {
     pub struct Once<T>(std::sync::OnceLock<T>);
@@ -116,8 +127,9 @@ mod intel {
             if s.fault==5 {return Err("scene-frame-draw-limit");}
             let scale=mask.width/96;
             let height=f32::from_bits(s.params[0][9]) as u32;
+            let gutter=((f32::from_bits(s.params[0][13])*0.5).ceil() as u32+1).max(6);
             let (cell_width,cell_height)=if height==0 {(6*scale,11*scale)}
-                else {((height*6+10)/11+12,height+12)};
+                else {((height*6+10)/11+2*gutter,height+2*gutter)};
             // Synthetic coverage tests the actual copy/tint sink independently
             // of hardware rasterization, which is exercised on the rig.
             let slot=if mask.width==cell_width {0}else{('A' as usize)-32};
@@ -147,8 +159,8 @@ fn expected_lines()->usize {
 #[test] fn start_section_sign_is_retained_once_as_a_single_physical_size_glyph() {
     reset(0);
     let cached=START_GLYPH.get().unwrap();
-    assert_eq!((cached.em_height_px,cached.width,cached.height),(213,129,225));
-    assert_eq!(cached.pixels.len(),129*225);
+    assert_eq!((cached.em_height_px,cached.width,cached.height),(213,135,231));
+    assert_eq!(cached.pixels.len(),135*231);
     assert!(cached.pixels.iter().any(|&p|p!=0));
     let pointer=cached.pixels.as_ptr();
     warm_start_glyph().unwrap();warm_start_glyph().unwrap();
@@ -161,12 +173,13 @@ fn expected_lines()->usize {
 #[test] fn standalone_large_glyph_uses_only_its_strips_and_one_small_target() {
     reset(0);
     let glyph=build_single_glyph_mask('§',320).unwrap();
-    assert_eq!((glyph.width,glyph.height),(187,332));
+    assert_eq!((glyph.width,glyph.height),(193,338));
     let state=STATE.lock().unwrap();
     let strips=microfont::raster_line::glyph_strips('§').unwrap();
     assert_eq!(state.uploads,strips.len()+1);
     assert_eq!((state.renders,state.allocations,state.mask_releases),(1,1,1));
     assert!(state.params.iter().all(|p|f32::from_bits(p[9])==320.0));
+    assert!(state.params.iter().all(|p|f32::from_bits(p[13])==16.0));
 }
 #[test] fn maps_all_three_ranges_without_collisions() {
     assert!(SLOT_COUNT>255);assert_eq!(glyph_slot(' '),Some(0));assert_eq!(glyph_slot('~'),Some(94));

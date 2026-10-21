@@ -619,7 +619,7 @@ pub(crate) fn build_single_glyph_mask(ch: char, em_height_px: u32) -> Result<Own
     }
     // A single glyph can be much larger than a full-atlas cell. Its 6x11
     // geometry and the existing native-line/cap/join shaders remain identical.
-    let config = AtlasConfig { glyph_height_px: Some(em_height_px), ..AtlasConfig::default() };
+    let config = AtlasConfig { glyph_height_px: Some(em_height_px), line_width_px: 16.0, ..AtlasConfig::default() };
     if !(11..=4000).contains(&em_height_px) { return Err("microfont-single-glyph-size"); }
     let (width, height) = config.cell_extent();
     let mut geometry = ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None };
