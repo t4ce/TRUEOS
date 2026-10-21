@@ -10,8 +10,10 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use spin::Mutex;
+#[cfg(feature = "trueos_lumen")]
 use trueos_time::{Duration, Timer};
 
+#[cfg(feature = "trueos_lumen")]
 use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_cpu_vnni, restore_cpu_vnni};
 
 const MAX_SYSTEM_BYTES: usize = 8 * 1024;
@@ -19,13 +21,16 @@ const MAX_PROMPT_BYTES: usize = 4 * 1024;
 const MAX_TOOL_NAME_BYTES: usize = 32;
 const MAX_TOOL_RESULT_BYTES: usize = 256;
 const MAX_SPIRIT_RESPONSE_BYTES: usize = 4 * 1024;
+#[cfg(feature = "trueos_lumen")]
 const MAX_REPLY_TOKENS: usize = 48;
 // A mature 16K-token session is roughly 192 MiB (KV dominates), while the
 // prefilled tool/personality template is only a small fraction of that. Keep
 // the transport ceiling large enough for the model's full context instead of
 // making the prototype silently stop being migratable after ~2.6K tokens.
 const MAX_SESSION_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+#[cfg(feature = "trueos_lumen")]
 const WORKER_POLL_MS: u64 = 5;
+#[cfg(feature = "trueos_lumen")]
 const TASK_POOL_SIZE: usize = 4;
 
 const ERROR_BAD_OWNER: i32 = -1;
@@ -33,9 +38,11 @@ const ERROR_BAD_STATE: i32 = -2;
 const ERROR_BAD_INPUT: i32 = -3;
 const ERROR_BUSY: i32 = -4;
 const ERROR_UNAVAILABLE: i32 = -5;
+#[cfg(feature = "trueos_lumen")]
 const ERROR_INFERENCE: i32 = -6;
 const ERROR_TRANSPORT: i32 = -7;
 
+#[cfg(feature = "trueos_lumen")]
 type LfmModule =
     crate::lumen::decode::Lfm25Decode<crate::ai::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>;
 
@@ -138,6 +145,7 @@ fn slot(owner: u8) -> Option<&'static Mutex<LumenSlot>> {
     LUMEN_SLOTS.get(owner as usize)
 }
 
+#[cfg(feature = "trueos_lumen")]
 fn spawn_worker(owner: u8) -> bool {
     let Some((_worker_slot, _core_kind, spawner)) =
         crate::workers::pick_perf_background_spawner_with_slot()
@@ -151,6 +159,12 @@ fn spawn_worker(owner: u8) -> bool {
         }
         Err(_) => false,
     }
+}
+
+// Keep the Blueprint ABI and Spirit presentation available without local inference.
+#[cfg(not(feature = "trueos_lumen"))]
+fn spawn_worker(_owner: u8) -> bool {
+    false
 }
 
 pub(crate) fn template_open(owner: u8, system: &[u8]) -> i32 {
@@ -491,6 +505,7 @@ pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
     0
 }
 
+#[cfg(feature = "trueos_lumen")]
 #[trueos_executor::task(pool_size = TASK_POOL_SIZE)]
 async fn lumen_blueprint_worker(owner: u8) {
     let initial = slot(owner).and_then(|slot| slot.lock().request.take());
@@ -681,12 +696,14 @@ async fn lumen_blueprint_worker(owner: u8) {
     }
 }
 
+#[cfg(feature = "trueos_lumen")]
 struct PromptReply {
     text: Vec<u8>,
     tail: [u32; 2],
     tail_len: usize,
 }
 
+#[cfg(feature = "trueos_lumen")]
 async fn run_prompt(
     tokenizer: &trueos_lfm25_cpu::Lfm25Tokenizer,
     module: &LfmModule,
@@ -712,6 +729,7 @@ async fn run_prompt(
     run_generation(tokenizer, module, turn, prompt_tokens, no_argument_tool).await
 }
 
+#[cfg(feature = "trueos_lumen")]
 async fn run_tool_result(
     tokenizer: &trueos_lfm25_cpu::Lfm25Tokenizer,
     module: &LfmModule,
@@ -725,6 +743,7 @@ async fn run_tool_result(
     run_generation(tokenizer, module, turn, append_tail(tail, suffix)?, None).await
 }
 
+#[cfg(any(feature = "trueos_lumen", test))]
 fn append_tail(tail: &[u32], suffix: Vec<u32>) -> Result<Vec<u32>, ()> {
     if tail.is_empty() || tail.len() > 2 {
         return Err(());
@@ -742,6 +761,7 @@ fn tool_continuation_allowed(active_turn: Option<u64>, tool_result_used: bool, t
     active_turn == Some(turn) && !tool_result_used
 }
 
+#[cfg(feature = "trueos_lumen")]
 async fn run_generation(
     tokenizer: &trueos_lfm25_cpu::Lfm25Tokenizer,
     module: &LfmModule,
