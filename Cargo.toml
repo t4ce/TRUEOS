@@ -139,7 +139,6 @@ rand_chacha = { version = "0.3", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 libm = { workspace = true }
 half = { workspace = true }
-skrifa = { version = "0.44.0", default-features = false, features = ["libm"] }
 hashbrown = { version = "0.17.0", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
 microfont = { path = "vendor/microfont", features = ["raster", "han"] }
