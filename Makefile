@@ -136,7 +136,17 @@ TRUEOS_TTSTT_TARGET_DIR ?= tools/trueos-ttstt/target
 INTEL_GPU_BAKERY_DIR := tools/intel-gpu-bakery
 INTEL_GPU_CPP_ARTIFACT_DIR := crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
 INTEL_GPU_CPP_COPY_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/copy_rect_rgba8.bin
-INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_COPY_BIN),$(wildcard $(INTEL_GPU_CPP_ARTIFACT_DIR)/*.bin))
+# Legacy glyph-mask and gradient composition are not required in the default kernel.
+INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_COPY_BIN) $(INTEL_GPU_CPP_ARTIFACT_DIR)/glyph_mask_rgba8.bin $(INTEL_GPU_CPP_ARTIFACT_DIR)/gradient_rect_worklist_rgba8.bin,$(wildcard $(INTEL_GPU_CPP_ARTIFACT_DIR)/*.bin))
+# Kokoro GPU kernels belong to the opt-in TTSTT feature, which release does not enable.
+INTEL_GPU_FEATURE_COMMA := ,
+INTEL_GPU_FEATURE_FLAGS = $(subst $(INTEL_GPU_FEATURE_COMMA), ,$(subst =, ,$(CARGO_BUILD_FLAGS)))
+ifeq ($(filter trueos_lumen TRUEOS/trueos_lumen --all-features,$(INTEL_GPU_FEATURE_FLAGS)),)
+INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_ARTIFACT_DIR)/lfm25_q8_project_packed.bin,$(INTEL_GPU_CPP_REQUIRED_BINS))
+endif
+ifeq ($(filter trueos_ttstt TRUEOS/trueos_ttstt --all-features,$(INTEL_GPU_FEATURE_FLAGS)),)
+INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_ARTIFACT_DIR)/kokoro_conv1d_u8_u8.bin $(INTEL_GPU_CPP_ARTIFACT_DIR)/kokoro_qgemm_u8_i8.bin,$(INTEL_GPU_CPP_REQUIRED_BINS))
+endif
 INTEL_GPU_BAKERY_PYTHON ?= python3
 INTEL_GPU_LINKED_ELF ?= $(KERNEL_BIN)
 INTEL_GPU_CPP_PROBE_LOG ?=
