@@ -575,18 +575,33 @@ pub(crate) fn with_warmed_atlas<T>(
     consumer(atlas)
 }
 
+pub(crate) const START_GLYPH_EM_MM: u32 = 50;
 static START_GLYPH: spin::Once<OwnedGlyphMask> = spin::Once::new();
+static START_GLYPH_READY: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+
+/// Return the service-owned mask as soon as its one-time production completes.
+/// Observe before checking publication so completion cannot race waiter setup.
+pub(crate) async fn wait_for_start_glyph() -> &'static OwnedGlyphMask {
+    loop {
+        let observed = START_GLYPH_READY.observe();
+        if let Some(glyph) = START_GLYPH.get() {
+            return glyph;
+        }
+        START_GLYPH_READY.wait_after(observed).await;
+    }
+}
 
 // Called under the atlas service lock, before any regular atlas production.
 fn warm_start_glyph() -> Result<(), &'static str> {
     if START_GLYPH.get().is_some() { return Ok(()); }
-    let (_, height) = crate::intel::physical_extent_pixels(50, 50)
+    let (_, height) = crate::intel::physical_extent_pixels(START_GLYPH_EM_MM, START_GLYPH_EM_MM)
         .ok_or("microfont-start-glyph-physical-size-unavailable")?;
     let glyph = build_single_glyph_mask('§', height)?;
+    let glyph = START_GLYPH.call_once(|| glyph);
+    START_GLYPH_READY.notify_all();
     crate::log_important!(target: "microfont-mask";
-        "microfont-start-glyph: ready glyph=U+00A7 em_mm=50 em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
-        glyph.em_height_px, glyph.width, glyph.height, glyph.pixels.len());
-    START_GLYPH.call_once(|| glyph);
+        "microfont-start-glyph: ready glyph=U+00A7 em_mm={} em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
+        START_GLYPH_EM_MM, glyph.em_height_px, glyph.width, glyph.height, glyph.pixels.len());
     Ok(())
 }
 

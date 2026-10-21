@@ -17,12 +17,10 @@ use super::{
     WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
     cancel_frame_buffer, commit_window_frame_replacement, create_frame, create_window,
     destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
-    publish_frame_buffer, publish_gpgpu_frame_buffer, 
-    publish_window_frame, publish_window_frames, reselect_window_for_cursor,
-    retire_frame_when_released, take_owner_input_events, window_placement, window_resize_state,
-    writable_rgba_view,
+    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_window_frame, publish_window_frames,
+    reselect_window_for_cursor, retire_frame_when_released, take_owner_input_events,
+    window_placement, window_resize_state, writable_rgba_view,
 };
-
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
 const PREVIEW_WIDTH: u32 = super::DEFAULT_FRAME_WIDTH;
@@ -45,7 +43,7 @@ pub(crate) const GPGPU_PREVIEW_MAX_PUBLISH_EVERY: u32 = 1_024;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuPreviewPreset {
     Static,
-    
+
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Lab256,
     CppGallery,
@@ -57,15 +55,13 @@ pub(crate) enum GpgpuPreviewPreset {
     CppRetroSun,
     CppAudio,
     CppParticle,
-    
-    
 }
 
 impl GpgpuPreviewPreset {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Static => "static",
-            
+
             Self::Lab256 => "lab256",
             Self::CppGallery => "cpp-gallery",
             Self::CppCloudHighWisps => "cpp-cloud-high-wisps",
@@ -76,9 +72,6 @@ impl GpgpuPreviewPreset {
             Self::CppRetroSun => "cpp-retro-sun",
             Self::CppAudio => "cpp-audio",
             Self::CppParticle => "cpp-particle",
-            
-
-            
         }
     }
 
@@ -94,8 +87,6 @@ impl GpgpuPreviewPreset {
                 | Self::CppRetroSun
                 | Self::CppAudio
                 | Self::CppParticle
-                
-                
         )
     }
 
@@ -104,22 +95,23 @@ impl GpgpuPreviewPreset {
     }
 
     pub(crate) const fn buffering_label(self) -> &'static str {
-        match self {
-            
-
-            
-            _ => "double",
-        }
+        "double"
     }
 
     pub(crate) const fn plane_layout_label(self) -> &'static str {
         match self {
             Self::Static => "slot1-direct",
-            
-            Self::Lab256 => "slot1-alpha-256x256",
-            Self::CppGallery | Self::CppCloudHighWisps | Self::CppAurora | Self::CppJulia | Self::CppSdf | Self::CppVoronoi | Self::CppRetroSun | Self::CppAudio | Self::CppParticle => "slot1-direct",
 
-            
+            Self::Lab256 => "slot1-alpha-256x256",
+            Self::CppGallery
+            | Self::CppCloudHighWisps
+            | Self::CppAurora
+            | Self::CppJulia
+            | Self::CppSdf
+            | Self::CppVoronoi
+            | Self::CppRetroSun
+            | Self::CppAudio
+            | Self::CppParticle => "slot1-direct",
         }
     }
 }
@@ -350,7 +342,6 @@ struct ActivePreview {
     particle_craft: Option<crate::intel::gpgpu::GpgpuOwnedParticleCraftState>,
     cloud_brush: CloudBrushState,
 
-
     metrics: GpgpuPreviewMetrics,
 }
 
@@ -360,10 +351,6 @@ struct StaticPreviewSurface {
     window: WindowId,
     scheme: u8,
 }
-
-
-
-
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn request_gpgpu_lab256_startup(
@@ -398,7 +385,7 @@ fn request_gpgpu_preview_start_with_policy(
 ) -> Result<u64, &'static str> {
     let config = config.validate()?;
     let mut control = PREVIEW_CONTROL.lock();
-    CPP_FONT_REQUEST.lock().take();
+
     let serial = next_serial(control.desired.serial);
     control.desired = DesiredPreview {
         serial,
@@ -421,7 +408,7 @@ pub(crate) fn request_gpgpu_preview_stop() -> u64 {
     control.desired.running = false;
     control.status.desired_running = false;
     control.status.request_serial = serial;
-    CPP_FONT_REQUEST.lock().take();
+
     serial
 }
 
@@ -535,7 +522,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
         let now = Instant::now();
         let mut duration_expired = false;
         let mut render_fault = None;
-        
+
         {
             for preview in &mut active {
                 if render_fault.is_some() {
@@ -604,9 +591,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 }
 
 fn initialize_previews(desired: DesiredPreview) -> Result<Vec<ActivePreview>, &'static str> {
-    {
-        Ok(alloc::vec![initialize_preview(desired)?])
-    }
+    { Ok(alloc::vec![initialize_preview(desired)?]) }
 }
 
 fn abandon_preview_initialization(session: WindowSessionId, previews: &[ActivePreview]) {
@@ -617,8 +602,6 @@ fn abandon_preview_initialization(session: WindowSessionId, previews: &[ActivePr
 }
 
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
-    
-    
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
     let (width, height) = preview_extent(desired.config.preset);
     let frame =
@@ -691,13 +674,9 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         particle_craft: None,
         cloud_brush: CloudBrushState::new(),
 
-
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
-
-
-
 
 const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str {
     match error {
@@ -760,10 +739,7 @@ fn create_preview_frame(
     })
 }
 
-
 async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
-    
-    
     preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
     let publish_this_frame = preview.pending_resize_previous_frame.is_some()
         || (preview.metrics.attempted - 1) % u64::from(preview.config.publish_every) == 0;
@@ -873,7 +849,7 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
             preview.metrics.published,
         );
     }
-    
+
     if preview.config.preset == GpgpuPreviewPreset::Static {
         preview.static_needs_publish = false;
         crate::log_info!(
@@ -964,9 +940,6 @@ fn publish_preview_window_frame(
     );
     Ok(true)
 }
-
-
-
 
 /// Paint one unmistakable CPU-authored frame. This path deliberately does not
 /// request a GPGPU surface, upload a kernel, submit through GuC, or poll a GPU
@@ -1200,8 +1173,6 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppParticle => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static => "clflush-mfence-before-publish",
-        
-        
     }
 }
 
@@ -1209,7 +1180,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
         GpgpuPreviewPreset::Lab256 => "guc-lab256-three-pass",
         GpgpuPreviewPreset::Static => "cpu-static",
-        
+
         GpgpuPreviewPreset::CppGallery
         | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
@@ -1219,18 +1190,24 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
         GpgpuPreviewPreset::CppParticle => "guc-cpp-stateful-three-pass",
-        
-        
     }
 }
 
 const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
     match preset {
-        GpgpuPreviewPreset::Static => {
-            WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8)
+        GpgpuPreviewPreset::Static => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
+        GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppCloudHighWisps
+        | GpgpuPreviewPreset::CppAurora
+        | GpgpuPreviewPreset::CppJulia
+        | GpgpuPreviewPreset::CppSdf
+        | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppRetroSun
+        | GpgpuPreviewPreset::CppAudio
+        | GpgpuPreviewPreset::CppParticle => {
+            WindowPlane::Universal(preview_plane_slot(preset) as u8)
         }
-        GpgpuPreviewPreset::CppGallery | GpgpuPreviewPreset::CppCloudHighWisps | GpgpuPreviewPreset::CppAurora | GpgpuPreviewPreset::CppJulia | GpgpuPreviewPreset::CppSdf | GpgpuPreviewPreset::CppVoronoi | GpgpuPreviewPreset::CppRetroSun | GpgpuPreviewPreset::CppAudio | GpgpuPreviewPreset::CppParticle => WindowPlane::Universal(preview_plane_slot(preset) as u8),
-        
+
         GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
 }
@@ -1247,11 +1224,8 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
-        
 
-        
         GpgpuPreviewPreset::Static => "ui4-overlay",
-        
     }
 }
 
@@ -1272,10 +1246,7 @@ fn preview_needs_render(preview: &ActivePreview) -> bool {
     if preview.policy.frame_limit != 0 && preview.metrics.published >= preview.policy.frame_limit {
         return false;
     }
-    !matches!(
-        preview.config.preset,
-        GpgpuPreviewPreset::Static  
-    ) || preview.static_needs_publish
+    !matches!(preview.config.preset, GpgpuPreviewPreset::Static) || preview.static_needs_publish
 }
 
 fn schedule_next_render(preview: &mut ActivePreview) {
@@ -1406,7 +1377,7 @@ fn queue_interactive_win_stop() {
         control.desired.policy.refocus_source = None;
         control.status.desired_running = false;
         control.status.request_serial = serial;
-        CPP_FONT_REQUEST.lock().take();
+
         serial
     };
     crate::log_info!(target: "ui4";
@@ -1622,11 +1593,7 @@ fn stop_active_previews(
     {
         crate::aud::audio_visualizer::set_enabled(false);
     }
-    // Rush2 remains one ordinary UI4 session from open through close. Its
-    // settled plane canvases animate through the same transition machinery;
-    // Font's steady-state direct scanout is not a reason to skip user-visible
-    // lifecycle behavior.
-    
+
     let direct_close = previews_support_direct_close(&previews);
     let frame_lifecycle_transferred = if direct_close {
         finish_window_session_with_request(
@@ -1665,11 +1632,7 @@ fn stop_active_previews(
         metrics.elapsed_ms,
         reason,
         if frame_lifecycle_transferred {
-            if font_rush2_close {
-                "ordinary-ui4-transition/direct-plane-scaler+alpha"
-            } else {
-                "direct-plane-scaler+alpha"
-            }
+            "direct-plane-scaler+alpha"
         } else {
             "broker-detach-no-animation"
         },
@@ -1911,7 +1874,6 @@ fn aggregate_preview_metrics(previews: &[ActivePreview]) -> GpgpuPreviewMetrics 
 }
 
 const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
-    
     if matches!(
         preset,
         GpgpuPreviewPreset::CppGallery
@@ -1969,7 +1931,6 @@ mod tests {
             (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE)
         );
     }
-
 
     #[test]
     fn cpp_modes_share_the_resizable_slot1_application_surface() {

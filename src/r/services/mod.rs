@@ -18,7 +18,6 @@ pub(crate) mod shell3_font_service;
 mod microfont_line_overlap;
 pub mod mouse_motion_service;
 pub(crate) mod pxeproc_service;
-pub(crate) mod oceancache;
 pub mod spawn_service;
 pub mod vcpy_service;
 pub mod video_service;

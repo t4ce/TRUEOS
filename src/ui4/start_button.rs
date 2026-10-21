@@ -1,14 +1,15 @@
 //! Always-resident TRUEOS menu button on UI4's interaction plane.
 //!
 //! The frame is kernel-owned rather than a Blueprint. Its physical extent is
-//! derived from the active mode and EDID exactly like Gridpaper. FontKernel
-//! produces the centered `§` coverage once; the AP1 UI service thereafter
-//! changes only a small static sprite or the broker's whole-window opacity.
+//! follows the service-owned Microfont `§` mask at its warmed physical size.
+//! After the readiness notification, AP1 only recolors the retained coverage
+//! or changes the broker's whole-window opacity.
 
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use trueos_time::{Duration, Instant, Timer};
+
+use crate::r::services::microfont_mask_service::{self, OwnedGlyphMask};
 
 use super::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
@@ -20,8 +21,6 @@ use super::{
 };
 
 const OWNER: WindowOwner = WindowOwner::START_BUTTON_SERVICE;
-const BUTTON_WIDTH_MM: u32 = 20;
-const BUTTON_HEIGHT_MM: u32 = 40;
 const BUTTON_CORNER_RADIUS_MM: u32 = 4;
 const BUTTON_GLYPH_PADDING_MM: u32 = 2;
 /// The screen-edge reveal cap surrounding the attached button.
@@ -65,7 +64,7 @@ struct ActiveStartButton {
     corner_radius: u32,
     reveal_cap_x: u32,
     reveal_cap_y: u32,
-    glyph_alpha: Vec<u8>,
+    glyph: &'static OwnedGlyphMask,
     visual_state: ButtonVisualState,
     pressed_by: Option<Ui4CursorSource>,
     released_until_ms: u64,
@@ -102,13 +101,10 @@ pub(super) fn constrain_drag_placement(
 
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_start_button_service_task() {
-    crate::intel::gpu_font::wait_for_font_face_available(
-        crate::intel::gpu_font::GpuFontFace::Default,
-    )
-    .await;
+    let glyph = microfont_mask_service::wait_for_start_glyph().await;
 
     let mut active = loop {
-        match initialize_start_button() {
+        match initialize_start_button(glyph) {
             Ok(active) => break active,
             Err(reason) => crate::log_warn!(target: "ui4/start-button";
                 "ui4/start-button: initialization deferred reason={} retry_ms=1000\n",
@@ -119,11 +115,10 @@ pub(crate) async fn ui4_start_button_service_task() {
     };
 
     crate::log_info!(target: "ui4/start-button";
-        "ui4/start-button: service online carrier=ap1-ui-core owner=kernel-ui4 plane=slot4-interaction glyph=section-sign font=font extent={}x{} physical_mm={}x{} edge_cap_mm={} placement=left-or-right-attached drag=secondary/vertical-band select=stock click=primary-release action=shell.bp alpha=half-sine-fast-decay fade_ms={} home_reveal_hold_ms={} states=normal-gray/hover-white/press-green/release-blue\n",
+        "ui4/start-button: service online carrier=ap1-ui-core owner=kernel-ui4 plane=slot4-interaction glyph=section-sign font=microfont extent={}x{} em_mm={} edge_cap_mm={} placement=left-or-right-attached drag=secondary/vertical-band select=stock click=primary-release action=shell.bp alpha=half-sine-fast-decay fade_ms={} home_reveal_hold_ms={} states=normal-gray/hover-white/press-green/release-blue\n",
         active.width,
         active.height,
-        BUTTON_WIDTH_MM,
-        BUTTON_HEIGHT_MM,
+        microfont_mask_service::START_GLYPH_EM_MM,
         REVEAL_CAP_MM,
         FADE_DURATION_MS,
         HOME_REVEAL_HOLD_MS,
@@ -135,17 +130,10 @@ pub(crate) async fn ui4_start_button_service_task() {
     }
 }
 
-fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
+fn initialize_start_button(glyph: &'static OwnedGlyphMask) -> Result<ActiveStartButton, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-unavailable")?;
     let (screen_width, screen_height) =
         crate::ui4::output_dimensions().ok_or("scanout-unavailable")?;
-    let (width, height, extent_source) =
-        crate::intel::physical_extent_pixels(BUTTON_WIDTH_MM, BUTTON_HEIGHT_MM)
-            .map(|extent| (extent.0, extent.1, "edid-physical-mm"))
-            .unwrap_or((BUTTON_WIDTH_MM, BUTTON_HEIGHT_MM, "logical-fallback"));
-    if width == 0 || height == 0 || width > screen_width || height > screen_height {
-        return Err("button-extent-invalid");
-    }
     let (corner_radius, _) =
         crate::intel::physical_extent_pixels(BUTTON_CORNER_RADIUS_MM, BUTTON_CORNER_RADIUS_MM)
             .unwrap_or((BUTTON_CORNER_RADIUS_MM, BUTTON_CORNER_RADIUS_MM));
@@ -156,32 +144,11 @@ fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
         crate::intel::physical_extent_pixels(REVEAL_CAP_MM, REVEAL_CAP_MM)
             .unwrap_or((REVEAL_CAP_MM, REVEAL_CAP_MM));
 
-    let glyph_alpha = if crate::virtio_gpu_logo::output_dimensions().is_some() {
-        alloc::vec![0; width as usize * height as usize]
-    } else {
-        let glyph = crate::intel::gpu_font::render_centered_text_sprite_readback(
-            "§",
-            crate::intel::gpu_font::GpuFontFace::Default,
-            width,
-            height,
-            glyph_padding,
-        )?;
-        if glyph.width != width || glyph.height != height {
-            return Err("font-sprite-extent-mismatch");
-        }
-        let glyph_alpha = glyph
-            .pixels
-            .chunks_exact(4)
-            .map(|pixel| pixel[3])
-            .collect::<Vec<_>>();
-        if glyph_alpha.len() != width as usize * height as usize
-            || !glyph_alpha.iter().any(|alpha| *alpha != 0)
-        {
-            return Err("font-sprite-empty");
-        }
-
-        glyph_alpha
-    };
+    let (width, height) = start_button_extent(glyph.width, glyph.height, glyph_padding)
+        .ok_or("button-extent-overflow")?;
+    if width == 0 || height == 0 || width > screen_width || height > screen_height {
+        return Err("button-extent-invalid");
+    }
 
     let session = begin_window_session(OWNER).map_err(|_| "session-create")?;
     let frame = match create_frame(FrameSpec {
@@ -245,7 +212,7 @@ fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
         corner_radius: corner_radius.min(width / 2).min(height / 2).max(1),
         reveal_cap_x,
         reveal_cap_y,
-        glyph_alpha,
+        glyph,
         visual_state: ButtonVisualState::Normal,
         pressed_by: None,
         released_until_ms: 0,
@@ -261,12 +228,12 @@ fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
         return Err("initial-sprite-publish");
     }
     crate::log_info!(target: "ui4/start-button";
-        "ui4/start-button: initialized frame={} window={} extent={}x{} extent_source={} font_sprite=fontkernel-readback-once transparent_background=1 rounded_radius_px={} edge_cap_px={}x{} initial_alpha=255\n",
+        "ui4/start-button: initialized frame={} window={} extent={}x{} extent_source={} glyph=microfont-service-warmed-r8 transparent_background=1 rounded_radius_px={} edge_cap_px={}x{} initial_alpha=255\n",
         frame.raw(),
         window.raw(),
         width,
         height,
-        extent_source,
+        "microfont-service-mask+physical-padding",
         active.corner_radius,
         reveal_cap_x,
         reveal_cap_y,
@@ -385,6 +352,30 @@ fn service_start_button(button: &mut ActiveStartButton) {
     }
 }
 
+fn start_button_extent(width: u32, height: u32, padding: u32) -> Option<(u32, u32)> {
+    let padding = padding.checked_mul(2)?;
+    Some((width.checked_add(padding)?, height.checked_add(padding)?))
+}
+
+fn start_button_glyph_alpha(
+    glyph: &OwnedGlyphMask,
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+) -> u8 {
+    let Some(glyph_x) = x.checked_sub(width.saturating_sub(glyph.width) / 2) else {
+        return 0;
+    };
+    let Some(glyph_y) = y.checked_sub(height.saturating_sub(glyph.height) / 2) else {
+        return 0;
+    };
+    if glyph_x >= glyph.width || glyph_y >= glyph.height {
+        return 0;
+    }
+    glyph.pixels[(glyph_y * glyph.width + glyph_x) as usize]
+}
+
 fn render_button_sprite(button: &ActiveStartButton, state: ButtonVisualState) -> Result<(), ()> {
     let lease = acquire_frame_buffer(button.frame).map_err(|_| ())?;
     let view = match writable_rgba_view(lease) {
@@ -403,7 +394,7 @@ fn render_button_sprite(button: &ActiveStartButton, state: ButtonVisualState) ->
             if !rounded_rect_contains(x, y, button.width, button.height, button.corner_radius) {
                 continue;
             }
-            let glyph = button.glyph_alpha[(y * button.width + x) as usize];
+            let glyph = start_button_glyph_alpha(button.glyph, button.width, button.height, x, y);
             let inverse = u16::from(u8::MAX - glyph);
             let blend = |foreground: u8, background: u8| -> u8 {
                 ((u16::from(foreground) * u16::from(glyph) + u16::from(background) * inverse + 127)
@@ -419,39 +410,7 @@ fn render_button_sprite(button: &ActiveStartButton, state: ButtonVisualState) ->
         }
     }
     if crate::virtio_gpu_logo::output_dimensions().is_some() {
-        use super::emulator_paint::{Paint, Vertex};
-        use alloc::sync::Arc;
         super::emulator_paint::begin(lease);
-        let mesh =
-            crate::graphics::font::tessellate_text_mesh("font", "§", button.height as f32 * 0.8);
-        let bounds = &mesh.summary;
-        let scale = ((button.width as f32 - 4.0) / (bounds.max_x - bounds.min_x))
-            .min((button.height as f32 - 4.0) / (bounds.max_y - bounds.min_y));
-        let dx = button.width as f32 * 0.5 - (bounds.min_x + bounds.max_x) * scale * 0.5;
-        let dy = button.height as f32 * 0.5 - (bounds.min_y + bounds.max_y) * scale * 0.5;
-        let vertices = mesh
-            .indices
-            .iter()
-            .map(|i| {
-                let p = mesh.vertices[*i as usize];
-                Vertex {
-                    position: [p[0] * scale + dx, p[1] * scale + dy],
-                    uv: [0.5, 0.5],
-                }
-            })
-            .collect();
-        if !super::emulator_paint::append(
-            lease,
-            alloc::vec![Paint {
-                vertices: Arc::new(vertices),
-                image: None,
-                color: u32::from_le_bytes([foreground[0], foreground[1], foreground[2], 255]),
-                source_over: true
-            }],
-        ) {
-            let _ = super::cancel_frame_buffer(lease);
-            return Err(());
-        }
     }
     crate::intel::dma_flush(view.virt, view.byte_len);
     publish_frame_buffer(lease).map_err(|_| ())?;

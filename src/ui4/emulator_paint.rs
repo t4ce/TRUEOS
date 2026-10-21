@@ -87,6 +87,3 @@ pub(crate) fn snapshot(lease: FrameReadLease) -> Vec<Paint> {
         .map(|b| b.paints.clone())
         .unwrap_or_default()
 }
-
-
-
