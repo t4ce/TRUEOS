@@ -540,7 +540,7 @@ pub(super) fn fit_meta_strips(
             })
             .collect()
     };
-    fit_strips(cells(left), cells(right), columns, (' ', None), (super::SpecialSeperator, None))
+    fit_strips(cells(left), cells(right), columns, (' ', None), (super::SPECIAL_SEPARATOR, None))
 }
 
 /// Rendering and pointer targets must use exactly the same clipping and alignment.

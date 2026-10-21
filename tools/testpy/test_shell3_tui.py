@@ -26,8 +26,8 @@ mod log_os {pub fn blueprint_important_line(line:core::fmt::Arguments) {
     assert!(crate::tui::registry_unlocked_for_test(),"rejection logging retained ROUTES");
     crate::CLAIM_REJECTIONS.lock().unwrap().push(line.to_string());
 }}
-const SpecialSeperator:char='│';
-const Default_COLUMNS:usize=100;const Default_ROWS:usize=25;
+const SPECIAL_SEPARATOR:char='│';
+const DEFAULT_COLUMNS:usize=100;const DEFAULT_ROWS:usize=25;
 mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
 mod service {pub use crate::shell2::cmds::run::QueuedBlueprint;pub fn notify_work(){}}
 struct MatrixSlots;

@@ -86,8 +86,7 @@ pub(crate) use context_menu::{
 pub(crate) use context_menu::{ContextMenuError, ContextMenuRequest};
 pub(crate) use cursor_frame_inout::{
     CursorFrameError, CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId,
-    Ui4CursorIcon, Ui4CursorImage, Ui4CursorSource, Ui4CursorStep, center_snapped_frame_for_source,
-    cursor_color, cursor_image_for_source, cursor_presentation_for_source,
+    Ui4CursorIcon, Ui4CursorImage, Ui4CursorSource, Ui4CursorStep, center_snapped_frame_for_source, cursor_image_for_source, cursor_presentation_for_source,
     register_global_keyboard_hook, register_window_cursor_image, select_window_cursor_image,
     selected_frame, selected_frame_for_source, selection_strips, set_window_center_snapped_mouse,
     set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,

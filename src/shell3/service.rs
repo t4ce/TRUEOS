@@ -499,8 +499,8 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                 aka_names,
                 appdb_names,
                 Vec::new(),
-                super::Default_COLUMNS,
-                super::Default_ROWS,
+                super::DEFAULT_COLUMNS,
+                super::DEFAULT_ROWS,
             ) {
                 Ok(index) => {
                     if let Some(shell) = owned_shells.get_mut(index) {

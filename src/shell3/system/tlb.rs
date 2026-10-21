@@ -5,9 +5,6 @@ use crate::efi::acpi::tlb::{
 };
 use alloc::{string::String, vec::Vec};
 // Preserve the existing in-kernel export entry points for callers.
-pub(crate) use crate::efi::acpi::tlb::{
-    DUMP_FILE_PATH, build_dump_text, write_dump_bytes_to_default_path,
-};
 
 use super::{
     helper::{self, Screen},

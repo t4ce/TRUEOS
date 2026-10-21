@@ -10,6 +10,8 @@
 //! configured bit has arrived. Intel CUR_SURFLIVE is the separate downstream
 //! proof that completes the public Spirit fence.
 
+#![allow(dead_code)]
+
 use core::ops::BitOr;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 

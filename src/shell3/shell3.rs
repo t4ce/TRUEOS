@@ -70,8 +70,8 @@ use zeroize::Zeroize;
 pub const MAX_SHELL3_INSTANCES: usize = 256;
 pub const OPERATOR: char = '§';
 pub const PROMPT_CURSOR: char = ' ';
-pub const Default_COLUMNS: usize = 100;
-pub const Default_ROWS: usize = 25;
+pub const DEFAULT_COLUMNS: usize = 100;
+pub const DEFAULT_ROWS: usize = 25;
 pub const MIN_COLUMNS: usize = 20;
 pub const MIN_ROWS: usize = 5;
 
@@ -156,7 +156,7 @@ pub enum SpecialRows {
     /// Zero-based line within the visible Matrix transcript.
     MatrixRow(usize) = 4,
 }
-pub const SpecialSeperator: char = '│';
+pub const SPECIAL_SEPARATOR: char = '│';
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -34,7 +34,7 @@ mod r {pub mod readiness {pub fn mask()->u32 {0}} pub mod keyboard {
     #[derive(Default)] pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32,pub flags:u32,pub utf8:[u8;4],pub utf8_len:u8 }
 } }
 const PROMPT_CURSOR:char=' ';
-const SpecialSeperator:char='│';
+const SPECIAL_SEPARATOR:char='│';
 const OPERATOR:char='§';
 '''
     source += f'\n#[path = "{ROOT}/src/allcaps.rs"] mod allcaps;\n'

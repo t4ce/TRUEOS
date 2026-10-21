@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use heapless::String as HString;
 use spin::Mutex;

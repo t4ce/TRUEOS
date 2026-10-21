@@ -241,7 +241,7 @@ fn park_native_for_attachment(routes: &mut Registry, frontend: Option<u64>) {
 fn create_route(frontend: Option<Frontend>, target: &MatrixTarget) -> Result<(), String> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
     let (cols, rows) = frontend
-        .map_or((super::Default_COLUMNS, super::Default_ROWS), |view| (view.cols, view.rows));
+        .map_or((super::DEFAULT_COLUMNS, super::DEFAULT_ROWS), |view| (view.cols, view.rows));
     let frontend_id = frontend.map(|view| view.id);
     {
         let mut routes = ROUTES.lock();

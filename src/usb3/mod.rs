@@ -14,17 +14,7 @@ mod pen;
 mod scsi;
 mod skhynix;
 
-pub use self::heal_protocol::{
-    HealApiDescription, HealErrorCode, HealPattern, HealPatternDescription, HealPortSelector,
-    HealRequest, HealResponse, HealResponseStatus, HealSubmitError, PendingHealRequest,
-    api_description_json as xhci_heal_api_json, latest_report_json as xhci_heal_report_json,
-    submit as submit_xhci_heal_request, submit_json as submit_xhci_heal_json,
-};
-pub use self::heal_service::{
-    HealPortReport, HealProtocolReport, HealServiceReport, HealServiceStage, HealTransportProof,
-    HealXhciSeed, IntelXhciProfile, QemuXhciProfile, XhciBackendSelection,
-    latest_report as xhci_heal_report,
-};
+pub use self::heal_service::XhciBackendSelection;
 pub use self::hid::midi;
 pub use self::lib::*;
 pub use crab_usb as crabusb;

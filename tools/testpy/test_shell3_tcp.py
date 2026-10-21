@@ -38,7 +38,7 @@ static SSH_LOGS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
 #[macro_export] macro_rules! log_info { (target: $target:literal; $($args:tt)*) => {crate::SSH_LOGS.lock().unwrap().push(format!($($args)*));}; }
 mod service {pub static RELEASED:std::sync::Mutex<Vec<u32>>=std::sync::Mutex::new(Vec::new());pub fn release_shell_on_executor(slot:u32){RELEASED.lock().unwrap().push(slot);}}
 const OPERATOR: char = '§';
-const SpecialSeperator:char='│';
+const SPECIAL_SEPARATOR:char='│';
 struct RowStrips {left:Vec<MetaFmtStr>}
 mod tui {
 #[path="__REMOTE_PATH__"] mod remote;

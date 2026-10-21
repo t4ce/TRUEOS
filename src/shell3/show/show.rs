@@ -266,7 +266,7 @@ impl Show {
 
     /// Present the Shell3's three text strips in a UI4 window.
     /// MetaFmt foreground colors are preserved; bold has no raster effect yet.
-    pub(crate) async fn present(
+    pub(super) async fn present(
         &mut self,
         lines: &[&[(char, Option<RgbaColor>)]],
         columns: usize,

@@ -5,7 +5,7 @@
 //! reuse the same exact-surface publication lifecycle on slot 1.
 //! Display pipe programming remains exclusively compositor-owned.
 
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 
 use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer};

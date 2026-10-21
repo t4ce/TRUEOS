@@ -4,6 +4,8 @@
 //! executable pattern proves controller transport. USB2 port activation is
 //! intentionally declared but rejected until its state machine lands.
 
+#![allow(dead_code)]
+
 use alloc::{
     collections::VecDeque,
     format,

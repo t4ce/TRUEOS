@@ -25,7 +25,7 @@ use metafmtstr::MetaFmtStr;
 #[path = "{ROOT}/src/shell3/update.rs"] mod update;
 #[path = "{ROOT}/src/shell3/transition.rs"] mod transition;
 use update::SegmentUpdate;
-const SpecialSeperator: char = '│';
+const SPECIAL_SEPARATOR: char = '│';
 const OPERATOR: char = '§';
 const MIN_COLUMNS: usize = 20;
 const MIN_ROWS: usize = 5;

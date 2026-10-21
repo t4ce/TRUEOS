@@ -4387,7 +4387,6 @@ fn submit_resident_scene_capture_inner_for_carrier(
             None
         };
         let mut changed_pixels = 0usize;
-        let mut rgba = None;
         if frame_complete && matches!(frame_output, ResidentSceneFrameOutput::Readback) {
             crate::intel::dma_flush(warm.streamout_virt, target_bytes);
             let pixels = unsafe {
@@ -4396,27 +4395,12 @@ fn submit_resident_scene_capture_inner_for_carrier(
                     target_width * target_height,
                 )
             };
-            let mut visible_rgba = Vec::with_capacity(target_bytes);
             for pixel in pixels {
                 let raw = pixel.to_le_bytes();
                 if raw != clear {
                     changed_pixels += 1;
                 }
-                // Fixed-function over blending produces premultiplied RGB.
-                // Screenshots expose straight RGBA, while UI4 consumes the
-                // native premultiplied bytes without a redundant conversion.
-                let [mut r, mut g, mut b, a] = raw;
-                if straight_alpha_output && a != 0 && a != u8::MAX {
-                    r = (((u16::from(r) * u16::from(u8::MAX)) + u16::from(a) / 2) / u16::from(a))
-                        .min(u16::from(u8::MAX)) as u8;
-                    g = (((u16::from(g) * u16::from(u8::MAX)) + u16::from(a) / 2) / u16::from(a))
-                        .min(u16::from(u8::MAX)) as u8;
-                    b = (((u16::from(b) * u16::from(u8::MAX)) + u16::from(a) / 2) / u16::from(a))
-                        .min(u16::from(u8::MAX)) as u8;
-                }
-                visible_rgba.extend_from_slice(&[r, g, b, a]);
             }
-            rgba = Some(visible_rgba);
         } else if frame_complete {
             // Direct output deliberately avoids the CPU changed-pixel scan.
             // The producer publishes full damage, so report the number of

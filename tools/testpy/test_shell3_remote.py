@@ -27,7 +27,7 @@ use alloc::{string::String, vec::Vec};
 mod update {pub const CONTROL_BACKGROUND:[u8;4]=[16,16,16,255];pub const MATRIX_BACKGROUND:[u8;4]=[24,24,24,255];pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>;}
 mod tty {pub const OUTPUT_LIMIT:usize=1024*1024;}
 mod service {pub use crate::shell2::cmds::run::QueuedBlueprint;pub fn notify_work() {}}
-const Default_COLUMNS:usize=100;const Default_ROWS:usize=25;
+const DEFAULT_COLUMNS:usize=100;const DEFAULT_ROWS:usize=25;
 struct MatrixSlots;impl MatrixSlots {fn echo_output(_: &shell2::MatrixSlotLease,_:String) {}}
 mod shell3 {pub use crate::shell2::{MatrixSlotLease,MatrixTarget,matrix_target_slot_lease};}
 mod matrix_target {

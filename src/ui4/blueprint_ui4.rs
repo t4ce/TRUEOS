@@ -6,7 +6,6 @@
 
 pub(crate) mod clipboard_api;
 pub(crate) mod collapse_api;
-pub use collapse_api::trueos_cabi_ui4_scene_enable_collapse_v1;
 pub(crate) mod cursor_image_api;
 pub(crate) mod display_api;
 pub(crate) mod drag_drop_api;
@@ -22,7 +21,6 @@ use crate::intel::gpgpu::shadertoy_package::{
 };
 use alloc::{
     collections::{BTreeMap, VecDeque},
-    string::String,
     vec::Vec,
 };
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -32,7 +30,7 @@ use trueos_time::Instant;
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
     ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
-    GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState, GpgpuOwnedRgba8Surface, GpgpuPoint,
+    GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState,
     GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSolidRect,
     GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun, GpgpuSubmissionOutcome,
     ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,

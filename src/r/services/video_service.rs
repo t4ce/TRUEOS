@@ -82,7 +82,7 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
         if let Err(e) = vgpu::device_info(principal(owner), DeviceHandle::from_raw(a)) {
             return e.errno();
         }
-        let Ok(id) = NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+        let Ok(id) = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
             (id < i32::MAX as u32).then_some(id + 1)
         }) else {
             return BUSY;

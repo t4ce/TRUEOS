@@ -44,7 +44,7 @@ const _: () = {
 };
 mod mirror_map_dp_engine;
 pub(crate) use self::mirror_map_dp_engine::{
-    MirrorMapMode, WdCaptureError, WdCapturePoll,  WdXyuv8888Frame,
+    WdCapturePoll,  WdXyuv8888Frame,
     begin_ui4_wd_xyuv8888_capture, pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture,
     start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
 };
@@ -1094,9 +1094,9 @@ enum OverlayAlphaMode {
 const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::PremultipliedRgba;
 /// Slot0 is an application plane, not an opaque framebuffer. Its composition
 /// starts transparent and remains native premultiplied RGBA through scanout.
-/// The topmost covering frame supplies the pixel, preserving its alpha for
-/// fixed-function blending with the pipe background. Empty pixels stay clear.
-const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = crate::intel::gpgpu::UI4_COMPOSE_FLAG_OPAQUE_RECTS;
+/// Frames source-over blend in broker-z order before display hardware blends
+/// the result with the pipe background. Empty pixels stay clear.
+const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = 0;
 
 /// Give the firmware-compatible XRGB boot phase deterministic pixels. UI4
 /// discards this boot content when Slot0 becomes its transparent RGBA slice.
@@ -6142,8 +6142,8 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     _sparse_static_painter: bool,
 ) -> GpgpuCompositionResult {
     // Slot0 has exactly one legal compositor: the asynchronous layer kernel.
-    // It selects the topmost covering frame in broker-z order; the display
-    // plane source-over blends the resulting premultiplied RGBA with Pipe A.
+    // It source-over blends frames in broker-z order; the display plane then
+    // blends the resulting premultiplied RGBA with Pipe A.
     if !asynchronous || surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, 0) {
         return GpgpuCompositionResult::Unavailable;
     }
@@ -6183,8 +6183,8 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
         return GpgpuCompositionResult::Unavailable;
     }
 
-    // The async Slot0 kernel picks the topmost covering descriptor for each
-    // output pixel, leaving uncovered pixels transparent.
+    // The async Slot0 kernel blends covering descriptors for each output
+    // pixel, leaving uncovered pixels transparent.
     if asynchronous {
         let Some(bounds) = damage
             .bounding_rect()
@@ -7645,17 +7645,7 @@ mod direct_plane_scaler_tests {
 
     #[test]
     fn rgba_primary_source_preserves_native_order_and_premultiplied_alpha() {
-        assert_eq!(
-            UI4_PRIMARY_COMPOSITION_FLAGS
-                & (crate::intel::gpgpu::UI4_COMPOSE_FLAG_BASE_XRGB
-                    | crate::intel::gpgpu::UI4_COMPOSE_FLAG_DEST_XRGB),
-            0
-        );
-
-        assert_ne!(
-            UI4_PRIMARY_COMPOSITION_FLAGS & crate::intel::gpgpu::UI4_COMPOSE_FLAG_OPAQUE_RECTS,
-            0
-        );
+        assert_eq!(UI4_PRIMARY_COMPOSITION_FLAGS, 0);
 
         let plane_ctl = primary_plane_ctl_enabled_for_format(
             0,

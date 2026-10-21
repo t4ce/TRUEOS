@@ -318,7 +318,7 @@ pub(crate) async fn run_quarantined(
         Ok(host) => host,
         Err(error) => {
             fail(&mut report, format!("quarantined controller construction failed: {error:?}"));
-            return super::heal_protocol::service_without_controller(report).await;
+            super::heal_protocol::service_without_controller(report).await;
         }
     };
 
