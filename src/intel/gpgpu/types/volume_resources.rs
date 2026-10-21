@@ -5,7 +5,6 @@
 /// only the page-backed allocation addresses. Intel SURFACE_STATE and
 /// SAMPLER_STATE bit encoding deliberately remains a later, hardware-proven
 /// lowering step.
-#[allow(dead_code)]
 pub(crate) mod volume_resources {
     use super::{GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL, GpgpuRgba16FloatVolume3d};
     #[cfg(test)]

@@ -9,12 +9,10 @@ pub(crate) const MAX_PACKAGE_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) struct ShaderToyPackageContract {
     pub(crate) shader_id: u32,
     // Build-time provenance size; runtime uploads may differ in metadata size.
-    #[allow(dead_code)]
     pub(crate) bytes: usize,
     pub(crate) bin_bytes: usize,
     pub(crate) spv_bytes: usize,
     // Complete-package provenance hash used by offline build verification only.
-    #[allow(dead_code)]
     pub(crate) sha256: [u8; 32],
 }
 

@@ -1272,14 +1272,12 @@ fn input_combo_color_rgba(color_id: u8) -> crate::graphics::primitives::Rgba8 {
     crate::graphics::primitives::Rgba8::new(r, g, b, a)
 }
 
-#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GlobalKeyboardDisposition {
     Consume,
     PassThrough,
 }
 
-#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GlobalKeyboardHookId(u32);
 
@@ -1307,7 +1305,6 @@ impl GlobalKeyboardRegistry {
 static GLOBAL_KEYBOARD_REGISTRY: Mutex<GlobalKeyboardRegistry> =
     Mutex::new(GlobalKeyboardRegistry::new());
 
-#[allow(dead_code)]
 pub(crate) fn register_global_keyboard_hook(
     priority: u8,
     callback: fn(&crate::r::keyboard::TrueosKeyboardOutputEvent) -> GlobalKeyboardDisposition,
@@ -1330,7 +1327,6 @@ pub(crate) fn register_global_keyboard_hook(
     Ok(id)
 }
 
-#[allow(dead_code)]
 pub(crate) fn unregister_global_keyboard_hook(id: GlobalKeyboardHookId) -> bool {
     let mut registry = GLOBAL_KEYBOARD_REGISTRY.lock();
     let Some(index) = registry.hooks.iter().position(|hook| hook.id == id) else {

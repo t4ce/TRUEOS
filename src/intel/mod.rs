@@ -5,7 +5,6 @@ mod blt;
 mod display;
 pub(crate) mod format;
 #[path = "gpgpu/gpgpu.rs"]
-#[allow(dead_code)]
 pub(crate) mod gpgpu;
 mod gpu_device;
 mod gt_state;

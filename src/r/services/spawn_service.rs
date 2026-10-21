@@ -124,7 +124,7 @@ define_started_flags!(HV_VM_STORE_STARTED, HV_VM_STORE_NET_STARTED);
 
 macro_rules! define_stop_flags {
     ($($name:ident),* $(,)?) => {
-        $(#[allow(dead_code)] static $name: AtomicBool = AtomicBool::new(false);)*
+        $(static $name: AtomicBool = AtomicBool::new(false);)*
     };
 }
 

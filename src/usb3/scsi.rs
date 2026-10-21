@@ -51,14 +51,10 @@ pub const OP_READ_10: u8 = 0x28;
 pub const OP_WRITE_10: u8 = 0x2A;
 pub const OP_SYNCHRONIZE_CACHE_10: u8 = 0x35;
 
-#[allow(dead_code)]
 pub const CDB6_LEN: usize = 6;
-#[allow(dead_code)]
 pub const CDB10_LEN: usize = 10;
-#[allow(dead_code)]
 pub const READ_WRITE_10_MAX_BLOCKS: u32 = u16::MAX as u32;
 
-#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CdbBuildError {
     ZeroBlockSize,
@@ -80,7 +76,6 @@ pub fn cdb_write_10(lba: u32, blocks: u16) -> [u8; 10] {
     cdb_rw_10(OP_WRITE_10, lba, blocks)
 }
 
-#[allow(dead_code)]
 pub fn cdb_read_10_for_bytes(
     offset_bytes: u64,
     transfer_bytes: u32,
@@ -90,7 +85,6 @@ pub fn cdb_read_10_for_bytes(
     Ok(cdb_read_10(lba, blocks))
 }
 
-#[allow(dead_code)]
 pub fn cdb_write_10_for_bytes(
     offset_bytes: u64,
     transfer_bytes: u32,
@@ -100,7 +94,6 @@ pub fn cdb_write_10_for_bytes(
     Ok(cdb_write_10(lba, blocks))
 }
 
-#[allow(dead_code)]
 fn rw_10_lba_blocks(
     offset_bytes: u64,
     transfer_bytes: u32,

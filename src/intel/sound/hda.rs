@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 //! Intel High Definition Audio (HDA) Driver
 //!

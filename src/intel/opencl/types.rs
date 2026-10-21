@@ -187,10 +187,8 @@ macro_rules! id_newtype {
     ($name:ident) => {
         #[repr(transparent)]
         #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-        #[allow(dead_code)]
         pub(crate) struct $name(u32);
 
-        #[allow(dead_code)]
         impl $name {
             pub(crate) const INVALID: Self = Self(0);
 
@@ -251,10 +249,8 @@ macro_rules! bitflags_newtype {
     ($name:ident, $bits:ty, $valid:expr, {$($flag:ident = $value:expr,)*}) => {
         #[repr(transparent)]
         #[derive(Copy, Clone, Default, Debug, Eq, PartialEq)]
-        #[allow(dead_code)]
         pub(crate) struct $name($bits);
 
-        #[allow(dead_code)]
         impl $name {
             pub(crate) const EMPTY: Self = Self(0);
             pub(crate) const VALID_BITS: $bits = $valid;

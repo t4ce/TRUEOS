@@ -181,7 +181,6 @@ impl CaptureStatus {
     }
 }
 
-#[allow(dead_code, reason = "GNA PCM consumer follows HDA capture bring-up")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CaptureRead {
     pub samples: usize,
@@ -1213,7 +1212,6 @@ pub(crate) fn status() -> CaptureStatus {
 /// Samples are signed little-endian i16 in the lane's native interleaved
 /// channel layout. This is intentionally a read-only tap: GNA or another
 /// consumer cannot move the hardware cursor or alter stream ownership.
-#[allow(dead_code, reason = "GNA PCM consumer follows HDA capture bring-up")]
 pub(crate) fn copy_latest_i16(out: &mut [i16]) -> Option<CaptureRead> {
     if out.is_empty() {
         return None;

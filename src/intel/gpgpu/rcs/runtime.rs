@@ -1026,7 +1026,6 @@ fn direct_rcs_update_ppgtt_region(
 /// unmapping a VA already recycled to another allocation.  This touches only
 /// the Font context's private PPGTT leaves: no GGTT write, global invalidate,
 /// engine reset, or other RCS/Spirit state is involved.
-#[allow(dead_code)]
 pub(crate) fn retire_font_rcs_ppgtt_range(gpu: u64, phys: u64, len: usize) -> bool {
     let Some(end) = u64::try_from(len).ok().and_then(|len| gpu.checked_add(len)) else {
         return false;

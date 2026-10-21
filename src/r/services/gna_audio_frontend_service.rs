@@ -108,18 +108,10 @@ static WAKE_SOURCE_TIMESTAMP_MS: AtomicU64 = AtomicU64::new(0);
 static WAKE_LOGS: AtomicU64 = AtomicU64::new(0);
 static WAKE_EVENTS_COALESCED: AtomicU64 = AtomicU64::new(0);
 
-#[allow(
-    dead_code,
-    reason = "GNA hardware/model owner integration follows capture bring-up"
-)]
 pub(crate) fn publish_pipeline_state(state: PipelineState) {
     PIPELINE_STATE.store(state as u8, Ordering::Release);
 }
 
-#[allow(
-    dead_code,
-    reason = "GNA hardware/model owner integration follows capture bring-up"
-)]
 #[must_use]
 pub(crate) fn publish_noise_reduction_observation(
     active: bool,
@@ -137,10 +129,6 @@ pub(crate) fn publish_noise_reduction_observation(
     )
 }
 
-#[allow(
-    dead_code,
-    reason = "GNA hardware/model owner integration follows capture bring-up"
-)]
 #[must_use]
 pub(crate) fn publish_vad_observation(
     active: bool,
@@ -158,10 +146,6 @@ pub(crate) fn publish_vad_observation(
     )
 }
 
-#[allow(
-    dead_code,
-    reason = "GNA hardware/model owner integration follows capture bring-up"
-)]
 #[must_use]
 pub(crate) fn publish_wake_word(
     word_id: u32,
@@ -178,10 +162,6 @@ pub(crate) fn publish_wake_word(
     true
 }
 
-#[allow(
-    dead_code,
-    reason = "GNA hardware/model owner integration follows capture bring-up"
-)]
 pub(crate) fn status() -> FrontEndStatus {
     let noise = load_level(
         &NOISE_SEQUENCE,
