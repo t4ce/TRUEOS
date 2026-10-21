@@ -6,7 +6,6 @@
 //! for compatibility, while new call sites should prefer `crate::graphics`.
 pub(crate) mod decoder;
 pub(crate) mod encoder;
-pub(crate) mod font;
 pub(crate) mod path_mesh;
 pub(crate) use self::decoder::bmp as bmp_codec;
 pub(crate) use self::decoder::jpeg as jpeg_codec;

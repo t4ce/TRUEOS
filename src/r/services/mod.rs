@@ -1,9 +1,6 @@
 //! Long-lived kernel service authorities and worker control planes.
 pub(crate) mod codex_progress_service;
 
-pub mod font_kernel_service;
-pub mod font_plan_service;
-pub mod font_producer_service;
 pub mod gamepad_control_service;
 pub mod gna_audio_frontend_service;
 pub mod gridpaper_service;

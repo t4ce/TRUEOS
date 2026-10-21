@@ -4155,7 +4155,7 @@ fn render_print_page(
             .ok_or("gridpaper-print-raster-readback")?;
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: print raster ready job={} generation={} grid={}x{} extent={}x{} rgba_bytes={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} font_path=skrifa-r8-identity-mask renderer=gpgpu-compute-blueprint-scene readback=one-shot-after-release next=pwg-raster\n",
+            "gridpaper: print raster ready job={} generation={} grid={}x{} extent={}x{} rgba_bytes={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} font_path=outline-r8-identity-mask renderer=gpgpu-compute-blueprint-scene readback=one-shot-after-release next=pwg-raster\n",
             job_id,
             generation,
             size.columns(),
@@ -5662,7 +5662,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=skrifa-r8-to-glyph-mask-compat persistence=coverage+static-rgba-base-retained-until-next-snapshot static_base_cache=pat0-wb present_cache=pat3-uc affine_motion=identity frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 resident3d_ui4=disabled\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} changed_pixels={} frame_us={} rectangles_us={} coverage_us={} release_us={} font_path=outline-r8-to-glyph-mask-compat persistence=coverage+static-rgba-base-retained-until-next-snapshot static_base_cache=pat0-wb present_cache=pat3-uc affine_motion=identity frame_path=gpgpu-compute-blueprint-scene cpu_readback=0 cpu_frame_copy=0 gpu_frame_copy=1 resident3d_ui4=disabled\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -5802,7 +5802,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             if cell_patch_changed {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: cell-patch-frame instance={} edit_seq={} retained_cells={} queued_cells={} patch_serial={} ui4_damage={},{}+{}x{} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} font_path=skrifa-r8-identity-mask submission=aligned-multi-walker-batch static_base_cache=pat0-wb present_cache=pat3-uc action=retain-page-topology+patch-static-vm\n",
+                    "gridpaper: cell-patch-frame instance={} edit_seq={} retained_cells={} queued_cells={} patch_serial={} ui4_damage={},{}+{}x{} rectangle_descs={} rectangle_submits={} coverage_submits={} coverage_walkers={} static_base_rebuilt={} frame_us={} font_path=outline-r8-identity-mask submission=aligned-multi-walker-batch static_base_cache=pat0-wb present_cache=pat3-uc action=retain-page-topology+patch-static-vm\n",
                     runtime.surface.instance_id,
                     runtime.keyboard_edits,
                     page.cell_patches.len(),

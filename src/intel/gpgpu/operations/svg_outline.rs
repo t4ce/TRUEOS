@@ -3,7 +3,7 @@
 // This is intentionally not a general XML/SVG renderer.  The probe accepts
 // byte-embedded, trusted SVG documents containing one `viewBox` and a small
 // number of solid-color `<path>` elements.  Absolute M/L/Q/C/Z path commands
-// lower directly into the same eight-dword outline ABI produced by Skrifa.
+// lower directly into the same eight-dword outline ABI supplied by callers.
 // That lets the existing SIMD16 non-zero-winding coverage kernel prove the
 // vector-to-UI4 lifecycle before a host-side usvg normalizer is introduced.
 

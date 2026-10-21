@@ -1,7 +1,7 @@
 // TRUEOS small-font analytical coverage.
 // Canonical source language: C++ for OpenCL.
 //
-// Skrifa remains the authority for the outline command stream. This kernel is
+// The caller supplies the outline command stream. This kernel is
 // the post-outline GPU stage: it evaluates non-zero-winding fill coverage into
 // a reusable linear R8 mask. Coordinates in the command stream are already in
 // mask-pixel space. Quadratic and cubic curves are flattened locally so no CPU

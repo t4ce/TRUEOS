@@ -41,9 +41,6 @@ define_started_flags!(
     TRUEOSFS_REQUEST_BROKER_STARTED,
     DNS_REQUEST_BROKER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
-    FONT_WARM_POOL_STARTED,
-    FONT_PLAN_SERVICE_STARTED,
-    FONT_KERNEL_SERVICE_STARTED,
     MICROFONT_RASTER_PREVIEW_STARTED,
     MICROFONT_LINE_PREVIEW_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
@@ -306,31 +303,10 @@ fn spawn_blocking_service_lanes(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::blocking::blocking_job_dispatcher_task())
 }
 
-fn font_warm_pool_gate() -> bool {
+// Shell3 still requires the complete worker topology before starting its pool.
+fn background_pool_gate() -> bool {
     crate::workers::all_topology_spawners_registered()
         && crate::workers::has_background_worker_slot()
-}
-
-fn spawn_font_warm_pool(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    spawn_bool_result_to_attempt(crate::graphics::font::spawn_font_warm_pool())
-}
-
-fn font_plan_pool_gate() -> bool {
-    // E-core preference can only be resolved once the complete topology has
-    // registered. Starting after the first AP would incorrectly conclude that
-    // a later-registering efficiency core does not exist.
-    crate::workers::all_topology_spawners_registered()
-        && crate::workers::has_background_worker_slot()
-}
-
-fn spawn_font_plan_pool(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    spawn_bool_result_to_attempt(crate::r::services::font_plan_service::start_font_plan_workers())
-}
-
-pub(crate) fn retry_font_plan_pool_autostart() {
-    FONT_PLAN_SERVICE_STARTED.store(false, Ordering::Release);
 }
 
 fn spawn_microfont_raster_preview(spawner: Spawner) -> SpawnAttempt {
@@ -343,19 +319,6 @@ fn spawn_microfont_line_preview(spawner: Spawner) -> SpawnAttempt {
 
 fn microfont_raster_preview_gate() -> bool {
     crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some()
-}
-
-fn spawn_font_kernel_service(spawner: Spawner) -> SpawnAttempt {
-    // This task is only the asynchronous queue controller. CPU font warming
-    // and synchronous GPU retirement polling are dispatched through leased
-    // blocking-service lanes, so a VM cannot strand the request pump.
-    spawn_local(spawner, |_spawner| {
-        crate::r::services::font_kernel_service::font_kernel_service_task()
-    })
-}
-
-pub(crate) fn retry_font_warm_pool_autostart() {
-    FONT_WARM_POOL_STARTED.store(false, Ordering::Release);
 }
 
 #[cfg(feature = "trueos_ttstt")]
@@ -1454,21 +1417,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_blocking_service_lanes,
     ),
     TaskSpec::enabled_gated(
-        "font-warm-pool",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        font_warm_pool_gate,
-        &FONT_WARM_POOL_STARTED,
-        spawn_font_warm_pool,
-    ),
-    TaskSpec::enabled_gated(
-        "font-plan-producer-pool",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        font_plan_pool_gate,
-        &FONT_PLAN_SERVICE_STARTED,
-        spawn_font_plan_pool,
-    ),
-    TaskSpec::enabled_gated(
         "microfont-raster-preview",
         crate::r::readiness::UI4_COMPOSITOR_READY
             | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
@@ -1483,13 +1431,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         microfont_raster_preview_gate,
         &MICROFONT_LINE_PREVIEW_STARTED,
         spawn_microfont_line_preview,
-    ),
-    TaskSpec::enabled_gated(
-        "font-kernel-service",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        intel_device_gate,
-        &FONT_KERNEL_SERVICE_STARTED,
-        spawn_font_kernel_service,
     ),
     #[cfg(feature = "trueos_ttstt")]
     TaskSpec::configured_gated(
@@ -1594,7 +1535,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "sh3srv",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        font_warm_pool_gate,
+        background_pool_gate,
         &SH3SRV_STARTED,
         spawn_sh3srv,
     ),

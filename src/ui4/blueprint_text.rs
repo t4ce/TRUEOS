@@ -12,7 +12,6 @@ pub use collapse_api::trueos_cabi_ui4_scene_enable_collapse_v1;
 pub(crate) mod cursor_image_api;
 pub(crate) mod display_api;
 pub(crate) mod drag_drop_api;
-pub(crate) mod font_api;
 pub use cursor_image_api::{
     trueos_cabi_ui4_scene_register_cursor_image_v1, trueos_cabi_ui4_scene_select_cursor_image_v1,
 };
@@ -5354,7 +5353,7 @@ fn retain_font_canvas_for_surface(
             canvas.ready = Some(buffer);
             crate::log_info!(
                 target: "ui4/font-canvas";
-                "FontKernel RGBA canvas ready owner={:?} window={} ticket={} rows={} internal_layers={} extent={}x{} glyphs={} submits={} walkers={} build_ms={} storage=gpu-vm-rgba8 alpha=premultiplied-coverage context=kernel-gpgpu-font path=skrifa->gpu-vm-r8->cpp-igc->guc-font-rcs->owned-rgba8 cpu_readback=0 cpu_frame_copy=0\n",
+                "FontKernel RGBA canvas ready owner={:?} window={} ticket={} rows={} internal_layers={} extent={}x{} glyphs={} submits={} walkers={} build_ms={} storage=gpu-vm-rgba8 alpha=premultiplied-coverage context=kernel-gpgpu-font path=outline->gpu-vm-r8->cpp-igc->guc-font-rcs->owned-rgba8 cpu_readback=0 cpu_frame_copy=0\n",
                 owner,
                 window_id,
                 ticket,

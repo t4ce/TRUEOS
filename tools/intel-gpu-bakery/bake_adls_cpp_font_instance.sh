@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Canonical pinned bake for the persistent Skrifa coverage instance engine.
+# Canonical pinned bake for the persistent glyph coverage instance engine.
 
 tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trueos_root="$(cd "${tool_dir}/../.." && pwd)"

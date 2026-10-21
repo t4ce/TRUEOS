@@ -1,6 +1,6 @@
 // TRUEOS persistent font-instance compositor.
 //
-// Skrifa outline interpretation and the analytical R8 coverage build happen
+// Font outline interpretation and the analytical R8 coverage build happen
 // once. This C++ for OpenCL kernel owns the volatile presentation layer:
 // inverse affine sampling, foreground/background source-over, CSS-like color
 // keyframes, and bounded sine animation. The descriptor array is persistent

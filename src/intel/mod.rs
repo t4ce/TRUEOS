@@ -8,7 +8,6 @@ pub(crate) mod format;
 #[allow(dead_code)]
 pub(crate) mod gpgpu;
 mod gpu_device;
-pub(crate) mod gpu_font;
 mod gt_state;
 mod guc;
 pub(crate) mod guc_ctb;

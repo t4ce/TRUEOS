@@ -312,7 +312,7 @@ pub(crate) struct GpgpuFontOutlineCoverageRun<'a> {
     pub(crate) optical_bias_px: f32,
 }
 
-/// Add one positioned Skrifa outline stream into a persistent R8 mask.
+/// Add one positioned vector outline stream into a persistent R8 mask.
 /// Existing coverage is retained with `max`, allowing bold duplicate runs and
 /// multiple glyphs to share one color-layer mask without CPU mask blending.
 pub(crate) fn font_outline_coverage_r8(
@@ -543,7 +543,7 @@ fn lower_font_instance_layer(
     Some(GpgpuRect::new(left as i32, top as i32, (right - left) as u32, (bottom - top) as u32))
 }
 
-/// Composite persistent Skrifa R8 layers through the C++ font-instance
+/// Composite persistent glyph R8 layers through the C++ font-instance
 /// engine. Descriptor storage remains resident across frames; this call
 /// changes only scene centers and monotonic animation time.
 pub(crate) fn font_instance_layers_rgba8_2d_mode(

@@ -1431,7 +1431,7 @@ async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'stat
     preview.static_needs_publish = false;
     crate::log_info!(
         target: "ui4";
-        "ui4 cpp-font preview ready request={} frame={} window={} extent={}x{} glyphs={} submits={} walkers={} release={} context=kernel-gpgpu-font path=skrifa->gpu-vm-r8->cpp-igc->guc-font-rcs->ui4-font-scene\n",
+        "ui4 cpp-font preview ready request={} frame={} window={} extent={}x{} glyphs={} submits={} walkers={} release={} context=kernel-gpgpu-font path=outline->gpu-vm-r8->cpp-igc->guc-font-rcs->ui4-font-scene\n",
         preview.request_serial,
         preview.frame.raw(),
         preview.window.raw(),
@@ -1538,7 +1538,7 @@ async fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'sta
     preview.static_needs_publish = false;
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview static30 published request={} frames={} windows={} slots=1+2+3 per_slot=10 glyphs={} font_jobs={} kernel_submits={} active_walkers={} release_sequence={} producer=font-kernel-service path=skrifa->gpu-vm-r8->cpp-font-instance->ui4-frame cadence=immutable/single publish_passes=1 cpu_readback=0 cpu_frame_copy=0\n",
+        "ui4 gpgpu-preview static30 published request={} frames={} windows={} slots=1+2+3 per_slot=10 glyphs={} font_jobs={} kernel_submits={} active_walkers={} release_sequence={} producer=font-kernel-service path=outline->gpu-vm-r8->cpp-font-instance->ui4-frame cadence=immutable/single publish_passes=1 cpu_readback=0 cpu_frame_copy=0\n",
         preview.request_serial,
         preview.metrics.published,
         preview_surface_count(preview),
