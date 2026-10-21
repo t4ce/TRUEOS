@@ -3227,7 +3227,7 @@ fn submit_resident_scene_geometry_batched(
         return Err("scene-frame-target-format");
     }
     if render_target_surface_format == SURFACE_FORMAT_R8_UNORM
-        && (draws.is_empty() || clear != Some([0; 4]) || opaque_depth_enabled
+        && (draws.is_empty() || clear.is_some_and(|color| color != [0; 4]) || opaque_depth_enabled
             || depth_config.is_some() || carrier.is_some() || drawable_depth.is_some()
             || draws.iter().any(|draw| !resident_coverage_draw_is_valid(draw)))
     { return Err("scene-frame-mask-contract"); }

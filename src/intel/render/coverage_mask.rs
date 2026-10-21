@@ -4,6 +4,53 @@
 const RESIDENT_COVERAGE_MASK_MAX_WIDTH: u32 = 4096;
 const RESIDENT_COVERAGE_MASK_MAX_HEIGHT: u32 = 4096;
 
+// Logical atlas limit; each retired hardware submission retains the renderer's
+// existing bounded batch/state allocation and audited GPU address ranges.
+const RESIDENT_COVERAGE_MASK_MAX_DRAWS: usize = 3000;
+
+fn sum_coverage_gpu_intervals(
+    a: Option<ResidentSceneGpuTimestamp>,
+    b: Option<ResidentSceneGpuTimestamp>,
+) -> Option<ResidentSceneGpuTimestamp> {
+    let (a, b) = (a?, b?);
+    (a.hz == b.hz).then_some(ResidentSceneGpuTimestamp {
+        ticks: a.ticks.saturating_add(b.ticks), hz: a.hz,
+        ns: a.ns.saturating_add(b.ns),
+    })
+}
+
+fn submit_coverage_mask_batches<T>(
+    draws: &[T],
+    mut submit: impl FnMut(&[T], Option<[u8; 4]>) -> Result<ResidentSceneGeometryResult, &'static str>,
+) -> Result<ResidentSceneGeometryResult, &'static str> {
+    if draws.is_empty() { return Err("microfont-coverage-mask-mesh"); }
+    if draws.len() > RESIDENT_COVERAGE_MASK_MAX_DRAWS {
+        return Err("microfont-coverage-draw-limit");
+    }
+    let mut chunks = draws.chunks(RESIDENT_SCENE_MAX_DRAWS);
+    let mut total = submit(chunks.next().unwrap(), Some([0; 4]))?;
+    if !total.completed { return Ok(total); }
+    for chunk in chunks {
+        // The preceding chunk has retired. Preserve its pixels and reuse the
+        // same bounded command/state storage; clear only on the first chunk.
+        let next = submit(chunk, None)?;
+        total.completed = next.completed;
+        total.prepare_us = total.prepare_us.saturating_add(next.prepare_us);
+        total.gpu_poll_us = total.gpu_poll_us.saturating_add(next.gpu_poll_us);
+        total.gpu_poll_iters = total.gpu_poll_iters.saturating_add(next.gpu_poll_iters);
+        // GPU intervals sum active command-stream time. The frame's wall time
+        // below also includes CPU preparation and gaps between submissions.
+        total.gpu_timestamp = sum_coverage_gpu_intervals(total.gpu_timestamp, next.gpu_timestamp);
+        total.gpu_target_ready_timestamp = sum_coverage_gpu_intervals(total.gpu_target_ready_timestamp, next.gpu_target_ready_timestamp);
+        total.gpu_clear_setup_timestamp = sum_coverage_gpu_intervals(total.gpu_clear_setup_timestamp, next.gpu_clear_setup_timestamp);
+        total.gpu_writeback_timestamp = sum_coverage_gpu_intervals(total.gpu_writeback_timestamp, next.gpu_writeback_timestamp);
+        total.pipeline_stats = None;
+        total.vue_capture |= next.vue_capture;
+        if !total.completed { break; }
+    }
+    Ok(total)
+}
+
 pub(crate) struct ResidentCoverageMask {
     backing: crate::intel::gpgpu::GpgpuOwnedMask8Surface,
     render_gpu: u64,
@@ -128,6 +175,9 @@ pub(crate) fn render_resident_coverage_mask(
     {
         return Err("microfont-coverage-mask-unavailable");
     }
+    if draws.len() > RESIDENT_COVERAGE_MASK_MAX_DRAWS {
+        return Err("microfont-coverage-draw-limit");
+    }
     if draws.is_empty()
         || draws
             .iter()
@@ -158,11 +208,11 @@ pub(crate) fn render_resident_coverage_mask(
         // All Err exits from the batched encoder occur before submission.
         // Accepted submissions without retirement return completed=false and
         // pin the destination here before it can be reused or dropped.
-        let geometry = submit_resident_scene_geometry_batched(
+        let geometry = submit_coverage_mask_batches(draws, |chunk, clear| submit_resident_scene_geometry_batched(
             dev,
             warm,
-            draws,
-            Some([0; 4]),
+            chunk,
+            clear,
             false,
             None,
             destination.render_gpu,
@@ -172,10 +222,16 @@ pub(crate) fn render_resident_coverage_mask(
             surface.height as usize,
             None,
             None,
-        )?;
+        ))?;
         destination.retired = geometry.completed;
         if !geometry.completed {
             destination.backing.quarantine_backing();
+        }
+        if geometry.completed && draws.len() > RESIDENT_SCENE_MAX_DRAWS {
+            crate::log_important!(target: "render";
+                "microfont-coverage-mask: draws={} submissions={} draw_cap={} per_submission={} completed=1\n",
+                draws.len(), draws.len().div_ceil(RESIDENT_SCENE_MAX_DRAWS),
+                RESIDENT_COVERAGE_MASK_MAX_DRAWS, RESIDENT_SCENE_MAX_DRAWS);
         }
         let frame_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
         Ok(ResidentSceneFrameResult {

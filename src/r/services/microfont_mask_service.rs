@@ -500,17 +500,10 @@ impl CoverageAtlas {
                 clip_adjacency: batch.topology == Topology::LineStripAdj,
             })
             .collect();
-        let result =
-            match render::render_resident_coverage_mask(&draws, self.mask.as_mut().unwrap()) {
-                Ok(result) => result,
-                Err(reason @ ("render-busy" | "in-flight" | "render-storage-busy")) => {
-                    return Err(reason);
-                }
-                Err(reason) => {
-                    self.poisoned = true;
-                    return Err(reason);
-                }
-            };
+        // Err means no unretired GPU work: the encoder rejected the request,
+        // or earlier chunks retired before a later chunk was rejected. Keep
+        // the mask cold and reusable. Only uncertain completion below pins it.
+        let result = render::render_resident_coverage_mask(&draws, self.mask.as_mut().unwrap())?;
         if let Some(reason) = result.completion_error() {
             self.poisoned = true;
             return Err(reason);

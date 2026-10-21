@@ -107,6 +107,7 @@ mod intel {
                 s.params.push(p);
             }
             if s.fault==2 {return Err("render-busy");}
+            if s.fault==5 {return Err("scene-frame-draw-limit");}
             let scale=mask.width/96;
             let height=f32::from_bits(s.params[0][9]) as u32;
             let (cell_width,cell_height)=if height==0 {(6*scale,11*scale)}
@@ -269,6 +270,16 @@ fn expected_lines()->usize {
     let uploads=STATE.lock().unwrap().uploads;STATE.lock().unwrap().fault=0;
     with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
     let s=STATE.lock().unwrap();assert_eq!(s.uploads,uploads);assert_eq!((s.allocations,s.releases),(1,0));
+}
+#[test] fn rejected_submission_does_not_quarantine_shared_atlas() {
+    reset(5);
+    assert_eq!(with_warmed_atlas(AtlasConfig::default(),|_|Ok(())),Err("scene-frame-draw-limit"));
+    let uploads=STATE.lock().unwrap().uploads;
+    STATE.lock().unwrap().fault=0;
+    with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
+    let state=STATE.lock().unwrap();
+    assert_eq!(state.uploads,uploads);
+    assert_eq!((state.renders,state.allocations,state.releases),(2,1,0));
 }
 #[test] fn partial_startup_releases_only_successful_uploads() {
     reset(1);assert_eq!(with_warmed_atlas(AtlasConfig::default(),|_|Ok(())),Err("upload"));
