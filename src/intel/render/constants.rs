@@ -1,4 +1,3 @@
-const FONT_PROOF_TARGET_SIZE: usize = 512;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const FORCEWAKE_RENDER: usize = 0x0A278;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -123,6 +122,7 @@ const LINEAR_RENDER_TARGET_PITCH_ALIGN: usize = 64;
 // Legacy/resident compatibility probes retain their proven square target.
 // Shell2's one-shot stamp path bypasses this scale API and uses a fitted
 // rectangular target up to the full scanout dimensions below.
+const FONT_PROOF_TARGET_SIZE: usize = 512;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;

@@ -1,6 +1,7 @@
 use super::hvlogf;
 use crate::phys::HeapArena;
 use crate::r::static_slots::StaticSlots;
+#[cfg(feature = "legacy_vm_checkpoint")]
 use alloc::vec::Vec;
 use spin::Mutex;
 
@@ -167,6 +168,7 @@ static GUEST_HULL_RW_TEMPLATE: Mutex<GuestHullRwBacking> = Mutex::new(GuestHullR
 
 #[derive(Copy, Clone)]
 pub struct VmSnapshotMeta {
+    #[cfg(feature = "legacy_vm_checkpoint")]
     pub guest_cr3: u64,
     pub guest_rip: u64,
     pub guest_rsp: u64,
@@ -176,8 +178,11 @@ pub struct VmSnapshotMeta {
     pub guest_extended_state: [u8; crate::hv::vmx::VMX_EXTENDED_STATE_BYTES],
     pub code_base: u64,
     pub code_len: u64,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     pub exit_reason: u64,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     pub exit_qualification: u64,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     pub exit_guest_rip: u64,
 }
 
@@ -1192,6 +1197,30 @@ pub fn release_guest_stack_for_vm(vm_id: u8) -> bool {
 
 
 
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub fn snapshot_guest_hull_rw_for_vm(vm_id: u8) -> Result<Vec<u8>, &'static str> {
+    let backing = active_guest_hull_rw_backing_for_vm(vm_id).ok_or("guest hull rw backing")?;
+    let arena = backing.arena.ok_or("guest hull rw arena")?;
+    Ok(unsafe {
+        core::slice::from_raw_parts(arena.virt_start as *const u8, backing.active_bytes).to_vec()
+    })
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub fn restore_guest_hull_rw_for_vm(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
+    ensure_guest_hull_rw_template_ready()?;
+    let backing =
+        prepare_guest_hull_rw_backing_for_vm(vm_id, true)?.ok_or("guest hull rw backing")?;
+    let arena = backing.arena.ok_or("guest hull rw arena")?;
+    if bytes.len() != backing.active_bytes || bytes.len() > arena.length {
+        return Err("guest hull rw image length");
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), arena.virt_start as *mut u8, bytes.len());
+    }
+    Ok(())
+}
+
 pub fn release_guest_hull_rw_for_vm(vm_id: u8) -> bool {
     let Ok(idx) = vm_index(vm_id) else {
         return false;
@@ -1460,6 +1489,7 @@ pub fn build_guest_cr3_for_vm_with_mode(
         )?;
         if let Some(meta_lock) = vm_snapshot_meta_lock(current_vm_id_for_log()) {
             *meta_lock.lock() = Some(VmSnapshotMeta {
+                #[cfg(feature = "legacy_vm_checkpoint")]
                 guest_cr3: pml4_pa,
                 guest_rip,
                 guest_rsp,
@@ -1469,8 +1499,11 @@ pub fn build_guest_cr3_for_vm_with_mode(
                 guest_extended_state: [0; crate::hv::vmx::VMX_EXTENDED_STATE_BYTES],
                 code_base: mapped_code_base,
                 code_len: mapped_code_len,
+                #[cfg(feature = "legacy_vm_checkpoint")]
                 exit_reason: 0,
+                #[cfg(feature = "legacy_vm_checkpoint")]
                 exit_qualification: 0,
+                #[cfg(feature = "legacy_vm_checkpoint")]
                 exit_guest_rip: guest_rip,
             });
         }
@@ -1486,6 +1519,26 @@ pub fn clear_restore_meta_for_vm(vm_id: u8) {
     if let Some(meta) = vm_restore_meta_lock(vm_id) {
         *meta.lock() = None;
     }
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub fn rebind_restored_guest_memory_for_vm(
+    vm_id: u8,
+    boot_mode: crate::hv::VmBootMode,
+) -> Result<(), &'static str> {
+    let restore_lock = vm_restore_meta_lock(vm_id).ok_or("restore metadata slot")?;
+    let mut restored = (*restore_lock.lock()).ok_or("restore metadata missing")?;
+    let cr3 =
+        build_guest_cr3_for_vm_with_mode(vm_id, restored.guest_rip, restored.guest_rsp, boot_mode)?;
+    restored.guest_cr3 = cr3;
+    *restore_lock.lock() = Some(restored);
+    if let Some(snapshot_lock) = vm_snapshot_meta_lock(vm_id)
+        && let Some(mut snapshot) = *snapshot_lock.lock()
+    {
+        snapshot.guest_cr3 = cr3;
+        *snapshot_lock.lock() = Some(snapshot);
+    }
+    Ok(())
 }
 
 pub fn clear_snapshot_state_for_vm(vm_id: u8) {
@@ -1760,6 +1813,35 @@ pub(crate) fn active_guest_rel_exec_range_for_vm(vm_id: u8) -> Option<(u64, u64)
         .then_some((state.start, state.end))
 }
 
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub(crate) fn restore_guest_rel_exec_range_for_vm(
+    vm_id: u8,
+    start: u64,
+    end: u64,
+) -> Result<(), &'static str> {
+    if start & (PAGE_SIZE_4K as u64 - 1) != 0
+        || end & (PAGE_SIZE_4K as u64 - 1) != 0
+        || start >= end
+        || end.saturating_sub(start) > crate::allcaps::blueprint::PORTAL_IMAGE_CAP_BYTES as u64
+    {
+        return Err("guest rel exec saved range");
+    }
+    let heap =
+        crate::allocators::hv_guest_heap_stats_if_configured(vm_id).ok_or("guest rel exec heap")?;
+    if !heap.initialized || start < heap.heap_start as u64 || end > heap.heap_end as u64 {
+        return Err("guest rel exec saved range outside heap");
+    }
+    let slot = GUEST_REL_EXEC_STATES
+        .get(vm_id as usize)
+        .ok_or("guest rel exec vm")?;
+    *slot.lock() = GuestRelExecState {
+        phase: GuestRelExecPhase::Active,
+        start,
+        end,
+    };
+    Ok(())
+}
 
 /// Temporarily make only the trusted loader's REL allocation executable.
 /// Guest heap leaves are NX by default, and vVideoMem admission requires that
@@ -2711,4 +2793,143 @@ fn pt_index(addr: u64) -> usize {
 
 unsafe fn zero_guest_page(page: *mut [u64; 512]) {
     core::ptr::write_bytes(page as *mut u8, 0, PAGE_SIZE_4K);
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub unsafe fn copy_into_guest_page(dst: *mut [u64; 512], src: &[u8]) {
+    core::ptr::copy_nonoverlapping(src.as_ptr(), dst.cast::<u8>(), PAGE_SIZE_4K);
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+unsafe fn push_guest_page_sparse(
+    out: &mut alloc::vec::Vec<u8>,
+    bitmap_offset: usize,
+    page_index: usize,
+    page: *const [u64; 512],
+) -> Result<bool, &'static str> {
+    let bitmap_byte = bitmap_offset
+        .checked_add(page_index / 8)
+        .ok_or("snapshot bitmap overflow")?;
+    let bitmap_slot = out.get_mut(bitmap_byte).ok_or("snapshot bitmap bounds")?;
+    let page_bytes = unsafe { core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K) };
+    if page_bytes.iter().all(|byte| *byte == 0) {
+        return Ok(false);
+    }
+    *bitmap_slot |= 1 << (page_index % 8);
+    out.extend_from_slice(page_bytes);
+    Ok(true)
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub unsafe fn push_guest_pages_sparse_for_vm(
+    vm_id: u8,
+    out: &mut alloc::vec::Vec<u8>,
+    bitmap_offset: usize,
+) -> Result<usize, &'static str> {
+    let tables = guest_tables_ptr_for_vm(vm_id)?;
+    let mut page_index = 0usize;
+    let mut stored_pages = 0usize;
+    let mut push_page = |page: *const [u64; 512]| -> Result<(), &'static str> {
+        if unsafe { push_guest_page_sparse(out, bitmap_offset, page_index, page)? } {
+            stored_pages = stored_pages.saturating_add(1);
+        }
+        page_index = page_index.saturating_add(1);
+        Ok(())
+    };
+    unsafe {
+        push_page(core::ptr::addr_of!((*tables).pml4.0))?;
+        push_page(core::ptr::addr_of!((*tables).low_pdpt.0))?;
+        push_page(core::ptr::addr_of!((*tables).low_pd.0))?;
+        for i in 0..GUEST_LOW_PT_COUNT {
+            push_page(core::ptr::addr_of!((*tables).low_pts[i].0))?;
+        }
+        push_page(core::ptr::addr_of!((*tables).high_pdpt.0))?;
+        push_page(core::ptr::addr_of!((*tables).high_pd.0))?;
+        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
+            push_page(core::ptr::addr_of!((*tables).image_pts[i].0))?;
+        }
+        push_page(core::ptr::addr_of!((*tables).code_pt.0))?;
+    }
+    let expected = 6usize
+        .saturating_add(GUEST_LOW_PT_COUNT)
+        .saturating_add(GUEST_HIGH_IMAGE_PT_COUNT);
+    if page_index != expected {
+        return Err("snapshot page count mismatch");
+    }
+    Ok(stored_pages)
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub unsafe fn restore_guest_pages_for_vm(
+    vm_id: u8,
+    bytes: &[u8],
+    off: &mut usize,
+) -> Result<(), &'static str> {
+    unsafe { restore_guest_pages_impl(vm_id, bytes, off, None) }
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub unsafe fn restore_guest_pages_sparse_for_vm(
+    vm_id: u8,
+    bytes: &[u8],
+    off: &mut usize,
+    bitmap: &[u8],
+) -> Result<(), &'static str> {
+    let expected_pages = 6usize
+        .saturating_add(GUEST_LOW_PT_COUNT)
+        .saturating_add(GUEST_HIGH_IMAGE_PT_COUNT);
+    if bitmap.len() < expected_pages.div_ceil(8) {
+        return Err("snapshot bitmap bounds");
+    }
+    unsafe { restore_guest_pages_impl(vm_id, bytes, off, Some(bitmap)) }
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+unsafe fn restore_guest_pages_impl(
+    vm_id: u8,
+    bytes: &[u8],
+    off: &mut usize,
+    bitmap: Option<&[u8]>,
+) -> Result<(), &'static str> {
+    let tables = guest_tables_ptr_for_vm(vm_id)?;
+    let mut page_index = 0usize;
+    let mut take_page = |dst: *mut [u64; 512]| -> Result<(), &'static str> {
+        let present = bitmap
+            .map(|map| map[page_index / 8] & (1 << (page_index % 8)) != 0)
+            .unwrap_or(true);
+        page_index = page_index.saturating_add(1);
+        if !present {
+            unsafe { zero_guest_page(dst) };
+            return Ok(());
+        }
+        let end = off
+            .checked_add(PAGE_SIZE_4K)
+            .ok_or("snapshot page overflow")?;
+        let src = bytes.get(*off..end).ok_or("snapshot page bounds")?;
+        unsafe { copy_into_guest_page(dst, src) };
+        *off = end;
+        Ok(())
+    };
+
+    unsafe {
+        take_page(core::ptr::addr_of_mut!((*tables).pml4.0))?;
+        take_page(core::ptr::addr_of_mut!((*tables).low_pdpt.0))?;
+        take_page(core::ptr::addr_of_mut!((*tables).low_pd.0))?;
+        for i in 0..GUEST_LOW_PT_COUNT {
+            take_page(core::ptr::addr_of_mut!((*tables).low_pts[i].0))?;
+        }
+        take_page(core::ptr::addr_of_mut!((*tables).high_pdpt.0))?;
+        take_page(core::ptr::addr_of_mut!((*tables).high_pd.0))?;
+        for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
+            take_page(core::ptr::addr_of_mut!((*tables).image_pts[i].0))?;
+        }
+        take_page(core::ptr::addr_of_mut!((*tables).code_pt.0))?;
+    }
+    let expected = 6usize
+        .saturating_add(GUEST_LOW_PT_COUNT)
+        .saturating_add(GUEST_HIGH_IMAGE_PT_COUNT);
+    if page_index != expected {
+        return Err("snapshot page count mismatch");
+    }
+    Ok(())
 }

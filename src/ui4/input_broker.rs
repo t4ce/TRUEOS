@@ -104,13 +104,17 @@ pub(crate) struct Ui4PointerEvent {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Ui4KeyboardEvent {
+    #[cfg(feature = "gridpaper")]
     pub(crate) source: Ui4CursorSource,
     pub(crate) window: WindowId,
     pub(crate) event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+    #[cfg(feature = "gridpaper")]
     pub(crate) combo_id: u32,
+    #[cfg(feature = "gridpaper")]
     pub(crate) virtual_keyboard: bool,
 }
 
+#[cfg(feature = "gridpaper")]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4FocusEvent {
     pub(crate) source: Ui4CursorSource,
@@ -182,6 +186,7 @@ pub(crate) enum Ui4InputEvent {
     Pan(Ui4PanEvent),
     Resize(Ui4ResizeEvent),
     Keyboard(Ui4KeyboardEvent),
+    #[cfg(feature = "gridpaper")]
     Focus(Ui4FocusEvent),
 }
 
@@ -478,6 +483,7 @@ impl InputBroker {
             self.cursors[cursor_index].clear_frame_interaction();
         }
         if change.focus_changed {
+            #[cfg(feature = "gridpaper")]
             if let Some(previous) = change.previous.map(WindowTarget::from) {
                 enqueue_owner_event(
                     previous.owner,
@@ -496,6 +502,7 @@ impl InputBroker {
                 // and otherwise keeps presenting from the stack, so this can
                 // neither fail nor gate the focus event below.
                 let _ = super::window_broker::note_window_focused(next.owner, next.window);
+                #[cfg(feature = "gridpaper")]
                 enqueue_owner_event(
                     next.owner,
                     Ui4InputEvent::Focus(Ui4FocusEvent {
@@ -609,7 +616,12 @@ impl InputBroker {
             let destination = hit.map(|window| {
                 let frame = WindowTarget::from(window).cursor_frame_key();
                 let recipient = super::drag_drop::recipient(frame);
-                (recipient, frame, signed_local(x, window.presentation_placement.x), signed_local(y, window.presentation_placement.y))
+                (
+                    recipient,
+                    frame,
+                    signed_local(x, window.presentation_placement.x),
+                    signed_local(y, window.presentation_placement.y),
+                )
             });
             super::drag_drop::pointer_released(source, destination);
         }
@@ -629,10 +641,15 @@ impl InputBroker {
                     route.selection_anchor = Some((x, y));
                 }
                 if released & PRIMARY_BUTTON_MASK != 0 {
-                    let area = route.selection_anchor.take().map(|anchor| selection_rect_between(anchor, (x, y)));
+                    let area = route
+                        .selection_anchor
+                        .take()
+                        .map(|anchor| selection_rect_between(anchor, (x, y)));
                     route.screenshot_latch = false;
                     if let Some(area) = area {
-                        if let Err(error) = super::screenshot::request_wd_postblend_capture(None, Some(area)) {
+                        if let Err(error) =
+                            super::screenshot::request_wd_postblend_capture(None, Some(area))
+                        {
                             crate::log_warn!(target: "ui4/screenshot"; "ui4/screenshot: selection failed error={}\n", error);
                         }
                     }
@@ -1433,10 +1450,13 @@ impl InputBroker {
         enqueue_owner_event(
             target.owner,
             Ui4InputEvent::Keyboard(Ui4KeyboardEvent {
+                #[cfg(feature = "gridpaper")]
                 source: route_source,
                 window: target.window,
                 event,
+                #[cfg(feature = "gridpaper")]
                 combo_id,
+                #[cfg(feature = "gridpaper")]
                 virtual_keyboard,
             }),
         );
@@ -1500,10 +1520,13 @@ impl InputBroker {
             super::blueprint_ui4::clipboard_api::trusted_paste(key.owner, key.window);
         }
         let routed = Ui4KeyboardEvent {
+            #[cfg(feature = "gridpaper")]
             source: route_source,
             window: key.window,
             event,
+            #[cfg(feature = "gridpaper")]
             combo_id,
+            #[cfg(feature = "gridpaper")]
             virtual_keyboard,
         };
         // Retain the press destination: focus changes must never deliver its
@@ -1916,10 +1939,15 @@ pub(super) fn request_desktop_shell_launch(source: Ui4CursorSource, x: u32, y: u
 #[trueos_executor::task(pool_size = 1)]
 async fn ui4_desktop_shell_launcher_task() {
     loop {
-        let request = { let mut requests = DESKTOP_SHELL_LAUNCH_REQUESTS.lock();
-            (!requests.is_empty()).then(|| requests.remove(0)) };
-        if request.is_some() { let _ = crate::shell3::service::request_shell3(); }
-        else { DESKTOP_SHELL_LAUNCH_SIGNAL.wait().await; }
+        let request = {
+            let mut requests = DESKTOP_SHELL_LAUNCH_REQUESTS.lock();
+            (!requests.is_empty()).then(|| requests.remove(0))
+        };
+        if request.is_some() {
+            let _ = crate::shell3::service::request_shell3();
+        } else {
+            DESKTOP_SHELL_LAUNCH_SIGNAL.wait().await;
+        }
     }
 }
 
@@ -2031,6 +2059,37 @@ pub(super) fn claim_drag_gesture(source: Ui4CursorSource) {
     }
 }
 
+#[cfg(feature = "gridpaper")]
+pub(crate) fn show_context_menu(
+    source: Ui4CursorSource,
+    owner: WindowOwner,
+    window: WindowId,
+    request: super::ContextMenuRequest,
+) -> Result<(), super::ContextMenuError> {
+    super::context_menu::validate_request(&request)?;
+    let (anchor, color) = {
+        let mut broker = INPUT_BROKER.lock();
+        let Some(route) = broker
+            .cursors
+            .iter_mut()
+            .find(|route| route.source == source)
+        else {
+            return Err(super::ContextMenuError::NotFocused);
+        };
+        let selected = super::selected_frame_for_source(source);
+        if selected != Some(super::CursorFrameKey::new(owner, window))
+            || window_snapshot_for_target(WindowTarget { owner, window }).is_none()
+        {
+            return Err(super::ContextMenuError::NotFocused);
+        }
+        route.context_menu = None;
+        route.context_menu_owns_gesture = false;
+        route.context_menu_pressed_action = None;
+        route.suppress_context_menu_open = false;
+        ((route.x, route.y), route.color)
+    };
+    super::context_menu::open(source, owner, window, anchor, color, request)
+}
 
 pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
     let routes = INPUT_BROKER.lock().release_owner(owner);
@@ -2399,6 +2458,7 @@ fn owner_event_kind(event: Ui4InputEvent) -> &'static str {
         Ui4InputEvent::Pan(_) => "pan",
         Ui4InputEvent::Resize(_) => "resize",
         Ui4InputEvent::Keyboard(_) => "keyboard",
+        #[cfg(feature = "gridpaper")]
         Ui4InputEvent::Focus(_) => "focus",
     }
 }

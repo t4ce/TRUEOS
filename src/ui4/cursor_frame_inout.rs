@@ -668,10 +668,17 @@ pub(super) fn frame_closed(owner: WindowOwner, window: WindowId) {
 pub(super) fn session_closed(owner: WindowOwner, session: WindowSessionId) {
     let (frames, changed) = {
         let mut rig = CURSOR_FRAME_RIG.lock();
-        let frames: AllocVec<_> = rig.frames.iter().filter(|frame| frame.key.owner == owner && frame.session == session).map(|frame| frame.key).collect();
+        let frames: AllocVec<_> = rig
+            .frames
+            .iter()
+            .filter(|frame| frame.key.owner == owner && frame.session == session)
+            .map(|frame| frame.key)
+            .collect();
         (frames, rig.session_closed(owner, session))
     };
-    for frame in frames { super::drag_drop::frame_closed(frame); }
+    for frame in frames {
+        super::drag_drop::frame_closed(frame);
+    }
     if changed {
         signal_visual_change();
     }

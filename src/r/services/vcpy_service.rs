@@ -22,9 +22,18 @@ pub(crate) fn poll_rgba_copies(
     crate::intel::poll_guc_bcs0_rgba_copies(submission)
 }
 
+/// Copy a released linear RGBA8 source to a destination at (0, 0).
+#[cfg(feature = "gridpaper")]
+pub(crate) fn copy_rgba8_complete(
+    source: crate::intel::gpgpu::GpgpuRgba8Surface,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> crate::intel::gpgpu::GpgpuSubmissionOutcome {
+    copy_rgba8_complete_for(source, destination, RgbaCopyConsumer::Gridpaper)
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum RgbaCopyConsumer {
+    #[cfg(feature = "gridpaper")]
     Gridpaper,
     ResidentScene,
 }
@@ -83,6 +92,7 @@ pub(crate) fn copy_rgba8_complete_for(
         }
     })();
     let (copies, bytes, fallbacks, failures) = match consumer {
+        #[cfg(feature = "gridpaper")]
         RgbaCopyConsumer::Gridpaper => {
             (&CONSUMER_COPIES, &CONSUMER_BYTES, &CONSUMER_FALLBACKS, &CONSUMER_FAILURES)
         }
@@ -120,6 +130,7 @@ static SCENE_FAILURES: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy)]
 pub(crate) enum RgbaFillConsumer {
     Font,
+    #[cfg(feature = "gridpaper")]
     Gridpaper,
     Probe,
     Ui4,
@@ -130,6 +141,7 @@ static FILL_COUNTS: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
 pub(crate) fn fill_stats(consumer: RgbaFillConsumer) -> [u64; 4] {
     let base = match consumer {
         RgbaFillConsumer::Font => 0,
+        #[cfg(feature = "gridpaper")]
         RgbaFillConsumer::Gridpaper => 4,
         RgbaFillConsumer::Probe => 8,
         RgbaFillConsumer::Ui4 => 12,
@@ -179,6 +191,7 @@ pub(crate) fn fill_rgba8_complete(
     })();
     let base = match consumer {
         RgbaFillConsumer::Font => 0,
+        #[cfg(feature = "gridpaper")]
         RgbaFillConsumer::Gridpaper => 4,
         RgbaFillConsumer::Probe => 8,
         RgbaFillConsumer::Ui4 => 12,

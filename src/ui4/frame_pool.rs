@@ -673,7 +673,6 @@ pub(crate) fn mark_frame_buffer_fully_opaque(lease: FrameWriteLease) -> Result<(
     Ok(())
 }
 
-
 /// Publish one Blueprint scene written directly by the resident Render0
 /// producer. This is the graphics-pipeline counterpart to
 /// `publish_gpgpu_scene_frame_buffer`: both retain the Blueprint frame's
@@ -703,7 +702,6 @@ pub(crate) fn publish_resident_scene_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
-
 /// Publish one full-surface compute allocation only after its final
 /// PIPE_CONTROL and post-sync marker retired. This is the double-buffered
 /// counterpart to resident-scene publication: metadata changes ownership, while the
@@ -730,7 +728,6 @@ pub(crate) fn publish_gpgpu_frame_buffer(
     frame.gpu_release[index] = Some(FrameGpuRelease::Compute(release));
     publish_checked_frame(frame, lease)
 }
-
 
 /// Publish one decoder-converted RGBA allocation. GuC completion proves the
 /// native NV12 source is no longer read; only this exact streaming Frame

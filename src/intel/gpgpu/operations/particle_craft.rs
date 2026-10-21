@@ -60,13 +60,41 @@ const _: () = assert!(
         <= PARTICLE_CRAFT_PARAMS_BYTES
 );
 
+pub(crate) const fn particle_craft_sample_extent(
+    destination_width: u32,
+    destination_height: u32,
+) -> (u32, u32) {
+    let render_divisor = particle_craft_render_divisor(destination_width, destination_height);
+    (destination_width.div_ceil(render_divisor), destination_height.div_ceil(render_divisor))
+}
 
+pub(crate) const fn particle_craft_tile_extent(
+    destination_width: u32,
+    destination_height: u32,
+) -> (u32, u32) {
+    let (sample_width, sample_height) =
+        particle_craft_sample_extent(destination_width, destination_height);
+    (
+        sample_width.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_WIDTH),
+        sample_height.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT),
+    )
+}
 
+pub(crate) const fn particle_craft_bin_candidate_tests(
+    destination_width: u32,
+    destination_height: u32,
+    active_count: u32,
+) -> u64 {
+    let (tile_columns, tile_rows) =
+        particle_craft_tile_extent(destination_width, destination_height);
+    tile_columns as u64 * tile_rows as u64 * active_count as u64
+}
 
-
-
-
-
+const fn particle_craft_tile_mask_fits(destination_width: u32, destination_height: u32) -> bool {
+    let (tile_columns, tile_rows) =
+        particle_craft_tile_extent(destination_width, destination_height);
+    tile_columns <= PARTICLE_CRAFT_MAX_TILE_COLUMNS && tile_rows <= PARTICLE_CRAFT_MAX_TILE_ROWS
+}
 
 /// Keep the ordinary 640x400 window unchanged. Once the logical window is
 /// large enough to contain a half-resolution backing without reducing either

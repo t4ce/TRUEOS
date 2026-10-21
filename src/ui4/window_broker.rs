@@ -331,7 +331,6 @@ impl<'a> WindowSessionCloseRequest<'a> {
         self
     }
 
-
     pub(crate) const fn transfers_frame_ownership(self) -> bool {
         self.retire_frames
     }
@@ -1639,7 +1638,10 @@ impl WindowRecord {
             maximized: self.dock_target == Some(WindowDockTarget::Maximize),
             dock_target: self.dock_target,
         };
-        Some(self.collapse.map_or(snapshot, |collapse| collapse.project(snapshot)))
+        Some(
+            self.collapse
+                .map_or(snapshot, |collapse| collapse.project(snapshot)),
+        )
     }
 
     fn presentation_placement(self) -> WindowPlacement {
@@ -1679,7 +1681,6 @@ pub(crate) fn latest_window_broker_snapshot() -> WindowBrokerSnapshot {
 pub(super) fn live_resource_counts() -> (usize, usize) {
     WINDOW_BROKER.lock().live_resource_counts()
 }
-
 
 /// Optionally subscribe to future diagnostic publications.
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1900,14 +1901,15 @@ pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBro
     Ok(id)
 }
 
-
 pub(super) fn attach_window_background_scaled(
     owner: WindowOwner,
     id: WindowId,
     frame: FrameHandle,
     scene_divisor: u32,
 ) -> Result<(), WindowBrokerError> {
-    if !matches!(scene_divisor, 1 | 2 | 4) { return Err(WindowBrokerError::EmptyExtent); }
+    if !matches!(scene_divisor, 1 | 2 | 4) {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
     let plan = super::frame_snapshot(frame)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
         .plan;
@@ -1924,7 +1926,10 @@ pub(super) fn attach_window_background_scaled(
         || window.background.is_some()
         || window.output != plan.output
         || window.frame == frame
-        || ((window.placement.width / scene_divisor).max(1), (window.placement.height / scene_divisor).max(1)) != (plan.width, plan.height)
+        || (
+            (window.placement.width / scene_divisor).max(1),
+            (window.placement.height / scene_divisor).max(1),
+        ) != (plan.width, plan.height)
         || plan.format != super::ScanoutFormat::Rgba8888Premultiplied
     {
         return Err(WindowBrokerError::InvalidPlane);
@@ -1993,7 +1998,6 @@ pub(crate) fn commit_window_frame_replacement(
     commit_window_replacement(owner, id, frame, None, placement, resize_epoch, damage)
 }
 
-
 pub(super) fn commit_window_layered_replacement_scaled(
     owner: WindowOwner,
     id: WindowId,
@@ -2003,11 +2007,15 @@ pub(super) fn commit_window_layered_replacement_scaled(
     resize_epoch: u64,
     scene_divisor: u32,
 ) -> Result<u64, WindowBrokerError> {
-    if !matches!(scene_divisor, 1 | 2 | 4) { return Err(WindowBrokerError::EmptyExtent); }
+    if !matches!(scene_divisor, 1 | 2 | 4) {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
     let plan = super::frame_snapshot(background)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
         .plan;
-    if (plan.width, plan.height) != ((placement.width / scene_divisor).max(1), (placement.height / scene_divisor).max(1)) {
+    if (plan.width, plan.height)
+        != ((placement.width / scene_divisor).max(1), (placement.height / scene_divisor).max(1))
+    {
         return Err(WindowBrokerError::EmptyExtent);
     }
     commit_window_replacement(
@@ -2240,7 +2248,6 @@ pub(crate) fn set_window_opacity(
         ..placement
     })
 }
-
 
 /// Read the authoritative state exposed by the narrow Blueprint window API.
 pub(crate) fn window_state(
@@ -2511,7 +2518,6 @@ pub(crate) fn window_escape_key_action(
     let mut broker = WINDOW_BROKER.lock();
     Ok(broker.checked_window_mut(owner, id)?.escape_key_action)
 }
-
 
 /// Translate a window through UI4's frame interaction policy.
 ///
@@ -2907,7 +2913,6 @@ pub(crate) fn publish_window_frame(
     Ok(publish_serial)
 }
 
-
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
     let icon = {
         let mut broker = WINDOW_BROKER.lock();
@@ -3155,7 +3160,6 @@ pub(crate) fn visible_windows_for_output(output: OutputId) -> Vec<WindowSnapshot
     WINDOW_BROKER.lock().snapshots(output)
 }
 
-
 pub(super) fn interaction_windows_for_output(output: OutputId) -> Vec<WindowSnapshot> {
     WINDOW_BROKER
         .lock()
@@ -3219,7 +3223,6 @@ pub(super) fn acknowledge_window_surface(window: WindowSnapshot) -> bool {
     }
     acknowledge_window_frame_revision(window.id, window.publish_serial, window.revision)
 }
-
 
 /// Slot 4 advances independently from the application compositor. Require the
 /// exact broker revision copied into its pending scene so an older SURFLIVE

@@ -340,16 +340,84 @@
         }
     }
 
-    
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub(crate) enum Error {
+        BadMagic,
+        UnsupportedVersion(u16),
+        MalformedHeader,
+        LengthMismatch,
+        OutOfBounds,
+        NonZeroReserved,
+        TooManyRecords,
+        InvalidEnum,
+        InvalidVolume,
+        InvalidView,
+        InvalidSampler,
+        InvalidBinding,
+        DuplicateId,
+        MissingResource,
+        MissingView,
+        MissingBinding,
+        BindingTargetMismatch,
+        MissingSection,
+        WrongSectionKind,
+        MissingCompilerMetadata,
+        WrongCompilerMetadataKind,
+        MissingCompilerMetadataHash,
+        CompilerMetadataHashMismatch,
+        InvalidRuntimeAllocation,
+    }
 
-    
+    fn same_binding_slot(
+        left_pipeline: u32,
+        left_group_id: u32,
+        left_stage: ShaderStage,
+        left_group: u16,
+        left_binding: u16,
+        right_pipeline: u32,
+        right_group_id: u32,
+        right_stage: ShaderStage,
+        right_group: u16,
+        right_binding: u16,
+    ) -> bool {
+        left_pipeline == right_pipeline
+            && left_group_id == right_group_id
+            && left_stage == right_stage
+            && left_group == right_group
+            && left_binding == right_binding
+    }
 
-    
+    fn record_end(offset: usize, count: usize, stride: usize) -> Result<usize, Error> {
+        offset
+            .checked_add(count.checked_mul(stride).ok_or(Error::OutOfBounds)?)
+            .ok_or(Error::OutOfBounds)
+    }
 
-    
+    fn indexed_offset(
+        base: usize,
+        index: usize,
+        count: usize,
+        stride: usize,
+    ) -> Result<usize, Error> {
+        if index >= count {
+            return Err(Error::OutOfBounds);
+        }
+        base.checked_add(index.checked_mul(stride).ok_or(Error::OutOfBounds)?)
+            .ok_or(Error::OutOfBounds)
+    }
 
-    
+    fn to_usize(value: u32) -> Result<usize, Error> {
+        usize::try_from(value).map_err(|_| Error::OutOfBounds)
+    }
 
-    
+    fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, Error> {
+        let end = offset.checked_add(2).ok_or(Error::OutOfBounds)?;
+        let raw = bytes.get(offset..end).ok_or(Error::OutOfBounds)?;
+        Ok(u16::from_le_bytes([raw[0], raw[1]]))
+    }
 
-    
+    fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, Error> {
+        let end = offset.checked_add(4).ok_or(Error::OutOfBounds)?;
+        let raw = bytes.get(offset..end).ok_or(Error::OutOfBounds)?;
+        Ok(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+    }

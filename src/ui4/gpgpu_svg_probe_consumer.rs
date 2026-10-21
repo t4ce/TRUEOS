@@ -46,8 +46,7 @@ pub(crate) enum GpgpuSvgProbePhase {
     Faulted,
 }
 
-impl GpgpuSvgProbePhase {
-}
+impl GpgpuSvgProbePhase {}
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GpgpuSvgProbeMetrics {
@@ -134,9 +133,6 @@ struct ActiveSvgProbe {
     height: u32,
     metrics: GpgpuSvgProbeMetrics,
 }
-
-
-
 
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn gpgpu_svg_probe_consumer_service_task(worker_slot: u32) {

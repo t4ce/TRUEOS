@@ -38,8 +38,11 @@ pub(crate) async fn codex_progress_task() {
             }
             let mut allocator_rows = 0usize;
             for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
-                if allocator_rows == 4 { break; }
-                let Some(work) = crate::allocators::hv_guest_allocator_work_snapshot(vm_id as u8) else {
+                if allocator_rows == 4 {
+                    break;
+                }
+                let Some(work) = crate::allocators::hv_guest_allocator_work_snapshot(vm_id as u8)
+                else {
                     continue;
                 };
                 crate::log_info!(target: "blueprint";

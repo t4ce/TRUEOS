@@ -232,6 +232,7 @@ pub struct CpuTaskContext {
     pub core_kind: u8,
 }
 
+#[cfg(feature = "trueos_lumen")]
 impl CpuTaskContext {
     /// Confirm that the executor did not lose the AP affinity selected at
     /// admission. Current TRUEOS executors are per-CPU, but keeping this check
@@ -254,6 +255,7 @@ impl CpuTaskContext {
     }
 }
 
+#[cfg(feature = "trueos_lumen")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CpuVnniStatus {
     pub ymm_state: bool,
@@ -262,6 +264,7 @@ pub struct CpuVnniStatus {
     pub supported: bool,
 }
 
+#[cfg(feature = "trueos_lumen")]
 impl CpuVnniStatus {
     fn detect_current() -> Self {
         let simd = crate::cpu::simd_status();

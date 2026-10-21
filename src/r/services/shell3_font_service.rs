@@ -47,8 +47,13 @@ struct CellCache {
 /// the same initialization; no executor is blocked while the native pass runs.
 pub(crate) async fn prepare() -> Result<(), &'static str> {
     loop {
-        if FONT.get().is_some() { return Ok(()); }
-        if PREPARING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        if FONT.get().is_some() {
+            return Ok(());
+        }
+        if PREPARING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             Timer::after(Duration::from_millis(10)).await;
             continue;
         }
@@ -59,7 +64,9 @@ pub(crate) async fn prepare() -> Result<(), &'static str> {
             PREPARING.store(false, Ordering::Release);
             response.signal(result);
         });
-        if let Err(job) = crate::r::blocking::try_spawn_blocking_job_with_purpose(job, "shell3-font") {
+        if let Err(job) =
+            crate::r::blocking::try_spawn_blocking_job_with_purpose(job, "shell3-font")
+        {
             drop(job);
             PREPARING.store(false, Ordering::Release);
             Timer::after(Duration::from_millis(20)).await;
@@ -75,14 +82,21 @@ pub(crate) async fn prepare() -> Result<(), &'static str> {
 }
 
 fn prepare_once() -> Result<(), &'static str> {
-    if FONT.get().is_some() { return Ok(()); }
+    if FONT.get().is_some() {
+        return Ok(());
+    }
     let (_, height) = crate::intel::physical_extent_pixels(5, 5)
         .ok_or("shell3-font-physical-size-unavailable")?;
     let alpha = build_shell3_alpha_atlas(height)?;
-    alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?;
+    alpha
+        .glyph('?')
+        .ok_or("shell3-font-missing-question-mark")?;
     let glyphs = alpha.glyphs().count();
     let line_width_px = alpha.line_width_px;
-    FONT.call_once(|| Font { alpha, cache: spin::Mutex::new(CellCache::default()) });
+    FONT.call_once(|| Font {
+        alpha,
+        cache: spin::Mutex::new(CellCache::default()),
+    });
     crate::log_important!(target: "microfont-mask";
         "shell3-font: ready format=r8 em_mm=5 em_height_px={} width_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=unchanged missing_glyph=red-question-mark\n",
         height, line_width_px, glyphs);
@@ -103,17 +117,36 @@ pub(crate) fn glyph(
     if cell_width == 0 || cell_height == 0 || cell_width > 256 || cell_height > 256 {
         return Err("shell3-font-cell-size");
     }
-    let key = CellKey { character, width: cell_width, height: cell_height, foreground, background, underline };
+    let key = CellKey {
+        character,
+        width: cell_width,
+        height: cell_height,
+        foreground,
+        background,
+        underline,
+    };
     let mut cache = font.cache.lock();
-    if let Some(copy) = cache.cells.get(&key) { return Ok(*copy); }
+    if let Some(copy) = cache.cells.get(&key) {
+        return Ok(*copy);
+    }
     let page_index = if let Some(index) = cache.pages.iter().position(|page| {
-        page.cell_width == cell_width && page.cell_height == cell_height
+        page.cell_width == cell_width
+            && page.cell_height == cell_height
             && page.used < PAGE_COLUMNS * PAGE_ROWS
-    }) { index } else {
+    }) {
+        index
+    } else {
         let backing = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(
-            cell_width * PAGE_COLUMNS, cell_height * PAGE_ROWS,
-        ).ok_or("shell3-font-cell-allocation")?;
-        cache.pages.push(CellPage { backing, cell_width, cell_height, used: 0 });
+            cell_width * PAGE_COLUMNS,
+            cell_height * PAGE_ROWS,
+        )
+        .ok_or("shell3-font-cell-allocation")?;
+        cache.pages.push(CellPage {
+            backing,
+            cell_width,
+            cell_height,
+            used: 0,
+        });
         cache.pages.len() - 1
     };
     let page = &mut cache.pages[page_index];
@@ -124,7 +157,9 @@ pub(crate) fn glyph(
     let (mask, foreground) = match font.alpha.glyph(character) {
         Some(mask) => (mask, foreground),
         None => (
-            font.alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?,
+            font.alpha
+                .glyph('?')
+                .ok_or("shell3-font-missing-question-mark")?,
             [255, 0, 0, foreground[3]],
         ),
     };
@@ -132,19 +167,25 @@ pub(crate) fn glyph(
     let mut uniform = true;
     for y in 0..cell_height {
         for x in 0..cell_width {
-            let mut coverage = sample_native(
-                &font.alpha, mask, x, y, cell_width, cell_height,
-            );
-            if underline && y * microfont::FHEIGHT as u32 / cell_height == microfont::FHEIGHT as u32 - 1 {
+            let mut coverage = sample_native(&font.alpha, mask, x, y, cell_width, cell_height);
+            if underline
+                && y * microfont::FHEIGHT as u32 / cell_height == microfont::FHEIGHT as u32 - 1
+            {
                 coverage = 255;
             }
             let pixel = tint(coverage, foreground, background);
-            if let Some(first) = first_pixel { uniform &= first == pixel; }
-            else { first_pixel = Some(pixel); }
+            if let Some(first) = first_pixel {
+                uniform &= first == pixel;
+            } else {
+                first_pixel = Some(pixel);
+            }
             unsafe {
-                core::ptr::write_unaligned(destination.add(
-                    (top + y) as usize * s.pitch_bytes as usize + (left + x) as usize * 4,
-                ).cast::<u32>(), u32::from_le_bytes(pixel));
+                core::ptr::write_unaligned(
+                    destination
+                        .add((top + y) as usize * s.pitch_bytes as usize + (left + x) as usize * 4)
+                        .cast::<u32>(),
+                    u32::from_le_bytes(pixel),
+                );
             }
         }
     }
@@ -152,19 +193,38 @@ pub(crate) fn glyph(
     // bytes held by an in-flight copy, including copies owned by another shell.
     let rows = [crate::intel::DmaFlushRows::new(
         unsafe { destination.add(top as usize * s.pitch_bytes as usize + left as usize * 4) },
-        cell_width as usize * 4, s.pitch_bytes as usize, cell_height as usize,
+        cell_width as usize * 4,
+        s.pitch_bytes as usize,
+        cell_height as usize,
     )];
     if !crate::intel::dma_flush_strided_row_spans(&rows) {
         return Err("shell3-font-cell-publish");
     }
     let copy = GucBcs0RgbaCopy {
-        source: GucBcs0RgbaSurface { phys: s.phys, gpu: s.gpu, bytes: s.bytes,
-            width: s.width, height: s.height, pitch_bytes: s.pitch_bytes },
-        source_x: left, source_y: top, destination_x: 0, destination_y: 0,
-        width: cell_width, height: cell_height,
+        source: GucBcs0RgbaSurface {
+            phys: s.phys,
+            gpu: s.gpu,
+            bytes: s.bytes,
+            width: s.width,
+            height: s.height,
+            pitch_bytes: s.pitch_bytes,
+        },
+        source_x: left,
+        source_y: top,
+        destination_x: 0,
+        destination_y: 0,
+        width: cell_width,
+        height: cell_height,
     };
     page.used += 1;
-    cache.solids.insert((s.gpu, left, top), if uniform { first_pixel.map(u32::from_le_bytes) } else { None });
+    cache.solids.insert(
+        (s.gpu, left, top),
+        if uniform {
+            first_pixel.map(u32::from_le_bytes)
+        } else {
+            None
+        },
+    );
     cache.cells.insert(key, copy);
     Ok(copy)
 }
@@ -172,22 +232,35 @@ pub(crate) fn glyph(
 /// Warm-time metadata for Shell3's existing solid-fill batching. A clipped
 /// subrectangle of a uniform full cell is uniform too; mixed cells stay copies.
 pub(crate) fn solid_color(copy: &GucBcs0RgbaCopy) -> Option<u32> {
-    FONT.get()?.cache.lock().solids.get(&(copy.source.gpu, copy.source_x, copy.source_y))
-        .copied().flatten()
+    FONT.get()?
+        .cache
+        .lock()
+        .solids
+        .get(&(copy.source.gpu, copy.source_x, copy.source_y))
+        .copied()
+        .flatten()
 }
 
-fn sample_native(atlas: &OwnedAlphaAtlas, mask: &[u8],
-    x: u32, y: u32, width: u32, height: u32) -> u8 {
+fn sample_native(
+    atlas: &OwnedAlphaAtlas,
+    mask: &[u8],
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> u8 {
     // Every glyph uses the same 6x11 cell. Gutters are atlas storage, not
     // character advance. Round the rasterized width to its covered columns;
     // ceil would include an unpainted column at fractional cell widths.
     let content_width = ((atlas.em_height_px * microfont::FWIDTH as u32
-        + microfont::FHEIGHT as u32 / 2) / microfont::FHEIGHT as u32).max(1);
-    let sx = atlas.gutter_px
-        + ((2 * x + 1) * content_width / (2 * width)).min(content_width - 1);
+        + microfont::FHEIGHT as u32 / 2)
+        / microfont::FHEIGHT as u32)
+        .max(1);
+    let sx = atlas.gutter_px + ((2 * x + 1) * content_width / (2 * width)).min(content_width - 1);
     let sy = atlas.gutter_px
         + ((2 * y + 1) * atlas.em_height_px / (2 * height)).min(atlas.em_height_px - 1);
-    mask[(sy.min(atlas.glyph_height - 1) * atlas.glyph_width + sx.min(atlas.glyph_width - 1)) as usize]
+    mask[(sy.min(atlas.glyph_height - 1) * atlas.glyph_width + sx.min(atlas.glyph_width - 1))
+        as usize]
 }
 
 fn tint(coverage: u8, foreground: [u8; 4], background: [u8; 4]) -> [u8; 4] {

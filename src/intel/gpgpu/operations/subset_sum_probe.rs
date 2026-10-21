@@ -62,6 +62,7 @@ pub(crate) const SUBSET_SUM_PROBE_ARENA_LAYOUT: SubsetSumArenaLayout =
         Some(layout) => layout,
         None => panic!("fixed Collapse5 layout"),
     };
+pub(crate) const SUBSET_SUM_PROBE_ARENA_WORDS: usize = SUBSET_SUM_PROBE_ARENA_LAYOUT.arena_words;
 pub(crate) const SUBSET_SUM_PROBE_ARENA_BYTES: usize = SUBSET_SUM_PROBE_ARENA_LAYOUT.arena_bytes();
 pub(crate) const SUBSET_SUM_PROBE_ARENA_PAGES: usize = SUBSET_SUM_PROBE_ARENA_LAYOUT.arena_pages();
 
@@ -195,7 +196,9 @@ unsafe impl Sync for SubsetSumProbeArena {}
 static SUBSET_SUM_PROBE_ARENA: spin::Mutex<Option<SubsetSumProbeArena>> =
     spin::Mutex::new(None);
 
-
+pub(crate) fn subset_sum_boot_probe_report() -> SubsetSumBootProbeReport {
+    *SUBSET_SUM_BOOT_PROBE_REPORT.lock()
+}
 
 fn collapse5(weights: &[u32; SUBSET_SUM_PROBE_LEAF_WIDTH]) -> [u32; SUBSET_SUM_PROBE_LEAF_STATES] {
     let mut output = [0u32; SUBSET_SUM_PROBE_LEAF_STATES];

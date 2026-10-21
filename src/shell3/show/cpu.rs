@@ -85,7 +85,10 @@ fn paint_segment(
     };
     let cell_width = (microfont::FWIDTH as u32).checked_mul(scale).ok_or(())?;
     let cell_height = (microfont::FHEIGHT as u32).checked_mul(scale).ok_or(())?;
-    let y = u32::try_from(row).ok().and_then(|row| row.checked_mul(cell_height)).ok_or(())?;
+    let y = u32::try_from(row)
+        .ok()
+        .and_then(|row| row.checked_mul(cell_height))
+        .ok_or(())?;
     if y >= view.height {
         return Ok(());
     }
@@ -93,17 +96,27 @@ fn paint_segment(
     let count = segment.remove.max(segment.text.chars().count());
     let mut copies = Vec::new();
     for column in 0..count {
-        let x = segment.offset.checked_add(column)
+        let x = segment
+            .offset
+            .checked_add(column)
             .and_then(|x| u32::try_from(x).ok())
-            .and_then(|x| x.checked_mul(cell_width)).ok_or(())?;
+            .and_then(|x| x.checked_mul(cell_width))
+            .ok_or(())?;
         if x >= view.width {
             break;
         }
         let character = characters.next().unwrap_or(' ');
-        copies.push(super::copy::glyph_for_cell(
-            x, y, cell_width.min(view.width - x), cell_height.min(view.height - y),
-            (character, segment.colors.get(column).copied().flatten()), scale,
-        ).map_err(|_| ())?);
+        copies.push(
+            super::copy::glyph_for_cell(
+                x,
+                y,
+                cell_width.min(view.width - x),
+                cell_height.min(view.height - y),
+                (character, segment.colors.get(column).copied().flatten()),
+                scale,
+            )
+            .map_err(|_| ())?,
+        );
     }
     if copies.is_empty() {
         return Ok(());

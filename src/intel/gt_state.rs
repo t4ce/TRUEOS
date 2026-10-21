@@ -80,7 +80,11 @@ pub(super) struct Gen12TransientGtBoostLease {
     pub(super) generation: u64,
 }
 
-
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum Gen12TransientGtBoostStart {
+    Armed(Gen12TransientGtBoostLease),
+    AlreadyActive,
+}
 
 const fn expected_mocs_control_table() -> [u32; GEN12_GLOBAL_MOCS_ENTRIES] {
     let mut table = [GEN12_MOCS_DEFAULT_CONTROL; GEN12_GLOBAL_MOCS_ENTRIES];
@@ -219,7 +223,19 @@ pub(crate) struct Gen12GtStateSnapshot {
     pub(crate) rpnswreq_raw: u32,
 }
 
-
+/// Turn-scoped ownership of the Gen9+ unslice frequency request.
+///
+/// Lumen restores the exact request bits it observed on entry. If another
+/// owner changes the request while the turn is active, drop deliberately
+/// leaves that newer request untouched.
+#[must_use = "keep the guard alive for the complete Lumen inference turn"]
+pub(crate) struct Gen12LumenGtBoost {
+    dev: super::Dev,
+    previous_request: u32,
+    previous_ratio: u32,
+    boost_ratio: u32,
+    active: bool,
+}
 
 impl Drop for Gen12LumenGtBoost {
     fn drop(&mut self) {
@@ -453,42 +469,6 @@ fn fused_rp0_ratio(dev: super::Dev) -> Result<u32, &'static str> {
 }
 
 fn transition_global_gt_power_mode_locked(
-/// Turn-scoped ownership of the Gen9+ unslice frequency request.
-///
-/// Lumen restores the exact request bits it observed on entry. If another
-/// owner changes the request while the turn is active, drop deliberately
-/// leaves that newer request untouched.
-#[must_use = "keep the guard alive for the complete Lumen inference turn"]
-pub(crate) struct Gen12LumenGtBoost {
-/// Expire a bounded boost only if the global state has not changed since the
-/// boost itself enabled it.  In particular, an F12 toggle clears the lease and
-/// changes the marker generation before this can reach the hardware.
-pub(super) fn expire_transient_global_gt_boost(
-    dev: super::Dev,
-    lease: Gen12TransientGtBoostLease,
-) -> Result<bool, &'static str> {
-    let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
-    if !transient_boost_owns_current_state(&state, lease) {
-        return Ok(false);
-    }
-
-    // The off path must not depend on being able to rediscover RP0 two
-    // seconds later.  This lease already proved the fused ratio when it was
-    // admitted, and `boost_ratio` is the exact value that transition stored
-    // for its owned request.  Reusing it keeps expiry able to restore the
-    // predecessor even if a later capability read is temporarily unavailable.
-    let rp0_ratio = state.boost_ratio;
-    let marker = transition_global_gt_power_mode_locked(dev, &mut state, rp0_ratio)?;
-    debug_assert!(!marker.active);
-    state.transient_boost = None;
-    Ok(true)
-}
-    dev: super::Dev,
-    previous_request: u32,
-    previous_ratio: u32,
-    boost_ratio: u32,
-    active: bool,
-}
     dev: super::Dev,
     state: &mut Gen12GlobalGtPowerState,
     rp0_ratio: u32,
@@ -577,13 +557,123 @@ pub(super) fn toggle_global_gt_power_mode(
     Ok(marker)
 }
 
+pub(super) fn begin_transient_global_gt_boost(
+    dev: super::Dev,
+) -> Result<Gen12TransientGtBoostStart, &'static str> {
+    let rp0_ratio = fused_rp0_ratio(dev)?;
+    let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+    if state.active {
+        return Ok(Gen12TransientGtBoostStart::AlreadyActive);
+    }
 
+    let marker = transition_global_gt_power_mode_locked(dev, &mut state, rp0_ratio)?;
+    debug_assert!(marker.active);
+    state.next_transient_boost_token = state.next_transient_boost_token.wrapping_add(1).max(1);
+    let lease = Gen12TransientGtBoostLease {
+        token: state.next_transient_boost_token,
+        generation: marker.generation,
+    };
+    state.transient_boost = Some(lease);
+    Ok(Gen12TransientGtBoostStart::Armed(lease))
+}
 
+/// Expire a bounded boost only if the global state has not changed since the
+/// boost itself enabled it.  In particular, an F12 toggle clears the lease and
+/// changes the marker generation before this can reach the hardware.
+pub(super) fn expire_transient_global_gt_boost(
+    dev: super::Dev,
+    lease: Gen12TransientGtBoostLease,
+) -> Result<bool, &'static str> {
+    let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+    if !transient_boost_owns_current_state(&state, lease) {
+        return Ok(false);
+    }
 
+    // The off path must not depend on being able to rediscover RP0 two
+    // seconds later.  This lease already proved the fused ratio when it was
+    // admitted, and `boost_ratio` is the exact value that transition stored
+    // for its owned request.  Reusing it keeps expiry able to restore the
+    // predecessor even if a later capability read is temporarily unavailable.
+    let rp0_ratio = state.boost_ratio;
+    let marker = transition_global_gt_power_mode_locked(dev, &mut state, rp0_ratio)?;
+    debug_assert!(!marker.active);
+    state.transient_boost = None;
+    Ok(true)
+}
 
+fn transient_boost_owns_current_state(
+    state: &Gen12GlobalGtPowerState,
+    lease: Gen12TransientGtBoostLease,
+) -> bool {
+    state.transient_boost == Some(lease)
+        && state.active
+        && state.marker.active
+        && state.marker.generation == lease.generation
+}
 
+pub(super) fn begin_lumen_gt_boost(dev: super::Dev) -> Option<Gen12LumenGtBoost> {
+    let global_power_state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+    if global_power_state.active {
+        return None;
+    }
+    if !gt_state_registers_available(dev)
+        || GEN12_LUMEN_GT_BOOST_ACTIVE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return None;
+    }
 
-
+    let previous_request = super::mmio_read(dev, GEN12_RPNSWREQ);
+    GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(previous_request, Ordering::Release);
+    let previous_ratio =
+        (previous_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+    let state_cap = super::mmio_read(dev, GEN12_RP_STATE_CAP);
+    let rp0_ratio = rp_cap_50mhz_to_request_ratio(state_cap & GEN12_RP0_CAP_MASK);
+    if rp0_ratio == 0 || rp0_ratio > GEN12_CAGF_MASK {
+        GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(0, Ordering::Release);
+        GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
+        return None;
+    }
+    let boost_ratio = core::cmp::max(previous_ratio, rp0_ratio);
+    let boost_request = (previous_request & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
+        | (boost_ratio << GEN9_SW_REQ_UNSLICE_RATIO_SHIFT);
+    super::mmio_write(dev, GEN12_RPNSWREQ, boost_request);
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    let observed_request = super::mmio_read(dev, GEN12_RPNSWREQ);
+    let observed_ratio =
+        (observed_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+    if observed_ratio != boost_ratio {
+        GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(0, Ordering::Release);
+        GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/lumen-gt-boost: stage=begin accepted=0 previous_ratio={} requested_ratio={} observed_ratio={} ownership=turn-scoped action=continue-at-firmware-frequency\n",
+            previous_ratio,
+            boost_ratio,
+            observed_ratio,
+        );
+        return None;
+    }
+    drop(global_power_state);
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/lumen-gt-boost: stage=begin accepted=1 previous_ratio={} previous_mhz={} requested_ratio={} requested_mhz={} actual_ratio={} actual_mhz={} rp0_policy=turn-scoped restore=on-drop\n",
+        previous_ratio,
+        ratio_to_mhz(previous_ratio),
+        boost_ratio,
+        ratio_to_mhz(boost_ratio),
+        actual_ratio(dev),
+        ratio_to_mhz(actual_ratio(dev)),
+    );
+    Some(Gen12LumenGtBoost {
+        dev,
+        previous_request,
+        previous_ratio,
+        boost_ratio,
+        active: true,
+    })
+}
 
 pub(super) fn actual_ratio(dev: super::Dev) -> u32 {
     if !gt_state_registers_available(dev) {

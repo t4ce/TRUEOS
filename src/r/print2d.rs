@@ -14,18 +14,30 @@ use alloc::{
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
+#[cfg(feature = "gridpaper")]
+pub const DOCUMENT_GRIDPAPER_A4: u32 = 1;
+#[cfg(feature = "gridpaper")]
+pub const DOCUMENT_GRIDPAPER_REQUEST: u32 = 2;
 
 pub const ERROR_INVALID_DOCUMENT: i64 = -1;
+#[cfg(feature = "gridpaper")]
+pub const ERROR_QUEUE_FULL: i64 = -2;
 pub const ERROR_NOT_OWNER: i64 = -3;
 pub const ERROR_UNKNOWN_JOB: i32 = -4;
 pub const ERROR_TRANSPORT: i64 = -5;
 
+#[cfg(feature = "gridpaper")]
+const QUEUE_CAPACITY: usize = 8;
+#[cfg(feature = "gridpaper")]
+const STATUS_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub enum PrintJobState {
+    #[cfg(feature = "gridpaper")]
     Queued = 1,
     WaitingForPrinter = 2,
+    #[cfg(feature = "gridpaper")]
     Rendering = 3,
     Connecting = 4,
     Sending = 5,
@@ -40,14 +52,17 @@ pub enum PrintJobState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PrintOwner {
     Blueprint(u8),
+    #[cfg(feature = "gridpaper")]
     Kernel,
 }
 
 impl PrintJobState {
     pub const fn name(self) -> &'static str {
         match self {
+            #[cfg(feature = "gridpaper")]
             Self::Queued => "queued",
             Self::WaitingForPrinter => "waiting-for-printer",
+            #[cfg(feature = "gridpaper")]
             Self::Rendering => "rendering",
             Self::Connecting => "connecting",
             Self::Sending => "sending",
@@ -60,8 +75,13 @@ impl PrintJobState {
         }
     }
 
+    #[cfg(any(feature = "gridpaper", test))]
+    pub const fn terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Canceled | Self::OutcomeUnknown)
+    }
 }
 
+#[cfg(feature = "gridpaper")]
 pub(crate) enum PrintDocument {
     #[cfg(feature = "gridpaper")]
     GridPaperA4 {
@@ -75,6 +95,7 @@ pub(crate) struct PrintJob {
     pub id: u32,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub owner: PrintOwner,
+    #[cfg(feature = "gridpaper")]
     pub document: PrintDocument,
     pub printer_uri: Option<String>,
 }
@@ -99,12 +120,70 @@ impl PrintQueue {
         }
     }
 
+    #[cfg(feature = "gridpaper")]
+    fn retain_status_capacity(&mut self) {
+        while self.records.len() >= STATUS_CAPACITY {
+            let removable = self
+                .records
+                .iter()
+                .position(|record| record.state.terminal())
+                .unwrap_or(0);
+            let _ = self.records.remove(removable);
+        }
+    }
 
+    #[cfg(feature = "gridpaper")]
+    fn has_job_capacity(&self) -> bool {
+        self.records
+            .iter()
+            .filter(|record| !record.state.terminal())
+            .count()
+            < QUEUE_CAPACITY
+    }
 }
 
+#[cfg(feature = "gridpaper")]
+static NEXT_JOB_ID: AtomicU32 = AtomicU32::new(1);
 static PRINT_QUEUE: Mutex<PrintQueue> = Mutex::new(PrintQueue::new());
 
+#[cfg(feature = "gridpaper")]
+fn next_job_id() -> u32 {
+    loop {
+        let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+        if id != 0 {
+            return id;
+        }
+    }
+}
 
+#[cfg(feature = "gridpaper")]
+fn enqueue(
+    owner: PrintOwner,
+    document: PrintDocument,
+    printer_uri: Option<String>,
+) -> Result<u32, i64> {
+    let id = next_job_id();
+    {
+        let mut queue = PRINT_QUEUE.lock();
+        if !queue.has_job_capacity() {
+            return Err(ERROR_QUEUE_FULL);
+        }
+        queue.retain_status_capacity();
+        queue.records.push_back(JobRecord {
+            id,
+            owner,
+            state: PrintJobState::Queued,
+        });
+        queue.pending.push_back(PrintJob {
+            id,
+            owner,
+            document,
+            printer_uri,
+        });
+    }
+    crate::log_os::print2d_job_state(id, PrintJobState::Queued.name(), "accepted");
+    Ok(id)
+}
 
 #[cfg(feature = "gridpaper")]
 fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {

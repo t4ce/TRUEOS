@@ -800,6 +800,14 @@ pub async fn vm_store_replication_task() {
                         }
                     }
                 }
+                NetEvent::TcpReadClosed { handle } => {
+                    if tcp_handle == Some(handle) {
+                        // The peer has half-closed its request stream. Keep the
+                        // connection writable so queued listing/checkpoint data
+                        // can still drain before the peer closes fully.
+                        rx_buf.clear();
+                    }
+                }
                 NetEvent::Closed { handle } => {
                     if tcp_handle == Some(handle) {
                         tcp_handle = None;

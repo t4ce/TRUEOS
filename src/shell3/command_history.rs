@@ -4,9 +4,19 @@ use spin::Mutex;
 use zeroize::{Zeroize, Zeroizing};
 
 const LIVE_CAP: usize = 10;
-struct Entry { account: u64, text: Zeroizing<String>, count: u64 }
-struct LiveHistory { entries: Vec<Entry>, generation: u64 }
-static LIVE: Mutex<LiveHistory> = Mutex::new(LiveHistory { entries: Vec::new(), generation: 0 });
+struct Entry {
+    account: u64,
+    text: Zeroizing<String>,
+    count: u64,
+}
+struct LiveHistory {
+    entries: Vec<Entry>,
+    generation: u64,
+}
+static LIVE: Mutex<LiveHistory> = Mutex::new(LiveHistory {
+    entries: Vec::new(),
+    generation: 0,
+});
 
 pub(super) struct CommandHistory {
     pub(super) entries: Vec<String>,
@@ -20,8 +30,15 @@ pub(super) struct CommandHistory {
 
 impl Default for CommandHistory {
     fn default() -> Self {
-        Self { entries: Vec::new(), cursor: None, draft: String::new(), scope_id: super::matrix_target::TRANSPORT_LOCAL_SCOPE,
-            session: None, generation: 0, recording: true }
+        Self {
+            entries: Vec::new(),
+            cursor: None,
+            draft: String::new(),
+            scope_id: super::matrix_target::TRANSPORT_LOCAL_SCOPE,
+            session: None,
+            generation: 0,
+            recording: true,
+        }
     }
 }
 
@@ -31,17 +48,23 @@ fn redacted(line: &str) -> String {
     let first = words.next().unwrap_or("");
     if first.trim_start_matches('§').eq_ignore_ascii_case("cry") {
         let action = words.next().unwrap_or("");
-        if (action.eq_ignore_ascii_case("login") || action.eq_ignore_ascii_case("unlock")) && words.next().is_some() {
+        if (action.eq_ignore_ascii_case("login") || action.eq_ignore_ascii_case("unlock"))
+            && words.next().is_some()
+        {
             return alloc::format!("cry {action} ******");
         }
         if action.eq_ignore_ascii_case("ssh") {
             let operation = words.next().unwrap_or("");
-            if (operation.eq_ignore_ascii_case("add") || operation.eq_ignore_ascii_case("remove")) && words.next().is_some() {
+            if (operation.eq_ignore_ascii_case("add") || operation.eq_ignore_ascii_case("remove"))
+                && words.next().is_some()
+            {
                 return alloc::format!("cry ssh {operation} ******");
             }
         }
     }
-    if !first.is_empty() && first.bytes().all(|byte| byte.is_ascii_digit()) { return String::from("******"); }
+    if !first.is_empty() && first.bytes().all(|byte| byte.is_ascii_digit()) {
+        return String::from("******");
+    }
     String::from(line)
 }
 
@@ -54,10 +77,14 @@ impl CommandHistory {
 
     // SSH's transport adapter owns its submission boundary, preventing a
     // second encrypted record when it calls the same Shell3 command dispatcher.
-    pub fn set_recording(&mut self, recording: bool) { self.recording = recording; }
+    pub fn set_recording(&mut self, recording: bool) {
+        self.recording = recording;
+    }
 
     fn wipe(&mut self) {
-        for entry in &mut self.entries { entry.zeroize(); }
+        for entry in &mut self.entries {
+            entry.zeroize();
+        }
         self.entries.clear();
         self.end_recall();
     }
@@ -70,11 +97,18 @@ impl CommandHistory {
             self.session = session;
             self.generation = u64::MAX;
         }
-        let Some((account, _)) = session else { return changed; };
+        let Some((account, _)) = session else {
+            return changed;
+        };
         let live = LIVE.lock();
         if self.generation != live.generation {
             self.wipe();
-            self.entries.extend(live.entries.iter().filter(|entry| entry.account == account).map(|entry| String::from(entry.text.as_str())));
+            self.entries.extend(
+                live.entries
+                    .iter()
+                    .filter(|entry| entry.account == account)
+                    .map(|entry| String::from(entry.text.as_str())),
+            );
             self.generation = live.generation;
         }
         changed
@@ -82,13 +116,17 @@ impl CommandHistory {
 
     pub fn remember(&mut self, line: &str) {
         self.sync();
-        if !self.recording || line.trim().is_empty() { return; }
+        if !self.recording || line.trim().is_empty() {
+            return;
+        }
         let text = Zeroizing::new(redacted(line));
         // Development SSH and UI4 need recall even without a Cry login.
         // These entries stay with this frontend and never reach the writer
         // or the account-shared cache. Authentication changes wipe them.
         let Some((account, _)) = self.session else {
-            if self.entries.iter().any(|entry| entry == text.as_str()) { return; }
+            if self.entries.iter().any(|entry| entry == text.as_str()) {
+                return;
+            }
             if self.entries.len() == LIVE_CAP {
                 let mut oldest = self.entries.remove(0);
                 oldest.zeroize();
@@ -99,12 +137,22 @@ impl CommandHistory {
         crate::user_input_record::capture(self.scope_id, &text);
         {
             let mut live = LIVE.lock();
-            if let Some(entry) = live.entries.iter_mut().find(|entry| entry.account == account && entry.text.as_str() == text.as_str()) {
+            if let Some(entry) = live
+                .entries
+                .iter_mut()
+                .find(|entry| entry.account == account && entry.text.as_str() == text.as_str())
+            {
                 entry.count = entry.count.saturating_add(1);
                 return;
             }
-            if live.entries.len() == LIVE_CAP { live.entries.remove(0); }
-            live.entries.push(Entry { account, text, count: 1 });
+            if live.entries.len() == LIVE_CAP {
+                live.entries.remove(0);
+            }
+            live.entries.push(Entry {
+                account,
+                text,
+                count: 1,
+            });
             live.generation = live.generation.wrapping_add(1);
         }
         self.sync();
@@ -113,20 +161,31 @@ impl CommandHistory {
     pub fn recall(&mut self, up: bool, input: &str) -> Option<String> {
         let changed = self.sync();
         if changed && self.entries.is_empty() {
-            return if input.is_empty() { None } else { Some(String::new()) };
+            return if input.is_empty() {
+                None
+            } else {
+                Some(String::new())
+            };
         }
         if up && self.cursor.is_none() && !self.draft.is_empty() {
             return Some(core::mem::take(&mut self.draft));
         }
         if self.entries.is_empty() {
-            if input.is_empty() { return None; }
+            if input.is_empty() {
+                return None;
+            }
             self.draft.zeroize();
             self.draft = String::from(input);
             return Some(String::new());
         }
         if up {
-            if self.cursor.is_none() { self.draft.zeroize(); self.draft = String::from(input); }
-            let index = self.cursor.map_or(self.entries.len() - 1, |i| i.saturating_sub(1));
+            if self.cursor.is_none() {
+                self.draft.zeroize();
+                self.draft = String::from(input);
+            }
+            let index = self
+                .cursor
+                .map_or(self.entries.len() - 1, |i| i.saturating_sub(1));
             self.cursor = Some(index);
             Some(self.entries[index].clone())
         } else if let Some(index) = self.cursor {
@@ -141,10 +200,19 @@ impl CommandHistory {
             self.draft.zeroize();
             self.draft = String::from(input);
             Some(String::new())
-        } else { None }
+        } else {
+            None
+        }
     }
 
-    pub fn end_recall(&mut self) { self.cursor = None; self.draft.zeroize(); }
+    pub fn end_recall(&mut self) {
+        self.cursor = None;
+        self.draft.zeroize();
+    }
 }
 
-impl Drop for CommandHistory { fn drop(&mut self) { self.wipe(); } }
+impl Drop for CommandHistory {
+    fn drop(&mut self) {
+        self.wipe();
+    }
+}

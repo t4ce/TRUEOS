@@ -1207,7 +1207,6 @@ pub(crate) fn status() -> CaptureStatus {
     *STATUS.lock()
 }
 
-
 /// Independent sequential tap; never changes the hardware or another reader.
 pub(crate) struct CaptureCursor {
     last_read_ms: u64,

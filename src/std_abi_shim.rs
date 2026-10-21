@@ -7866,3 +7866,14 @@ pub unsafe extern "C" fn trueos_cabi_thread_set_name(name: *const c_char) -> c_i
     crate::r::blocking::set_current_service_lane_pthread_name(name.as_str());
     0
 }
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub(crate) fn refresh_reserved_environment(vm_id: u8, key: &str, value: &str) {
+    let Some(state) = blueprint_process_state(vm_id) else {return;};
+    let mut env = state.environment.lock();
+    if !env.initialized() {return;}
+    let result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || env.refresh_reserved(key.as_bytes(),value.as_bytes()));
+    if !matches!(result, Some(Ok(()))) {
+        crate::log_important!(target: "hv"; "std-abi environment reserved refresh failed vm={}\n",vm_id);
+    }
+}

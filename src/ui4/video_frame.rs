@@ -844,8 +844,6 @@ pub(super) fn decoded_video_window_closed(owner: WindowOwner, window: WindowId) 
     }
 }
 
-
-
 fn decoded_video_conversion_idle(session: VideoPlaybackSession) -> bool {
     let state = session.state().conversion.lock();
     state.active == 0 && state.queue.is_empty() && state.outstanding() == 0

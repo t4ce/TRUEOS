@@ -19,7 +19,16 @@ pub(crate) fn fill_rect_rgba8_stats(
     }
 }
 
-
+/// Copy one rectangle with one two-dimensional submission and report success
+/// only after that dispatch retired.
+pub(crate) fn copy_rect_rgba8_complete(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+) -> bool {
+    copy_rect_rgba8_complete_mode(src, src_rect, dst, dst_xy, false)
+}
 
 pub(crate) fn copy_rect_rgba8_complete_mode(
     src: GpgpuRgba8Surface,
@@ -34,7 +43,41 @@ pub(crate) fn copy_rect_rgba8_complete_mode(
     submit_copy_rect_2d(src, dst, params, direct_scanout)
 }
 
-
+/// Release completed system-compute writes before a different engine reads
+/// them. Uses the existing HDC/L3 drain and ordered PIPE_CONTROL cookie without
+/// changing any surface's PAT policy or issuing a copy walker.
+pub(crate) fn release_compute_writes_for_copy() -> GpgpuSubmissionOutcome {
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    if !direct_rcs_forcewake(dev)
+        || !direct_rcs_map_state(dev, state)
+        || !direct_rcs_init_ppgtt(state)
+        || !direct_rcs_encode_rgba8_scanout_release_batch(state)
+    {
+        return GpgpuSubmissionOutcome::Unavailable;
+    }
+    let submission = direct_rcs_submit_batch_state(dev, state);
+    if !submission.may_have_submitted() {
+        return GpgpuSubmissionOutcome::Unavailable;
+    }
+    if submission.can_poll()
+        && direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            RGBA8_SCANOUT_RELEASE_MARKER_SLOT,
+            RGBA8_SCANOUT_RELEASE_MARKER,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
+        ) == RGBA8_SCANOUT_RELEASE_MARKER
+    {
+        GpgpuSubmissionOutcome::Complete
+    } else {
+        GpgpuSubmissionOutcome::SubmittedIncomplete
+    }
+}
 
 fn reserve_font_coverage_gpu_va(bytes: usize) -> Option<u64> {
     let bytes = align_up(bytes, super::WARM_ALIGN)? as u64;
@@ -230,17 +273,83 @@ pub(crate) fn allocate_font_instance_rgba8_surface_cleared(
     })
 }
 
+pub(crate) fn allocate_font_instance_state(capacity: usize) -> Option<GpgpuOwnedFontInstanceState> {
+    if capacity == 0 || capacity > GPGPU_FONT_INSTANCE_MAX_LAYERS {
+        return None;
+    }
+    let raw_bytes = capacity.checked_mul(GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES)?;
+    let bytes = align_up(raw_bytes, super::WARM_ALIGN)?;
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    let Some(gpu) = reserve_font_coverage_gpu_va(bytes) else {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    };
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    super::dma_flush(virt, bytes);
+    Some(GpgpuOwnedFontInstanceState {
+        phys,
+        gpu,
+        bytes,
+        virt,
+        capacity,
+    })
+}
 
+/// Submission ownership state for a direct-RCS operation. A submitted command
+/// that missed its retirement marker is not an ordinary `false`: its mapped
+/// inputs and outputs must remain alive and the shared direct context must not
+/// accept another batch.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuDispatchRetirement {
+    NotSubmitted,
+    Complete,
+    SubmittedIncomplete,
+}
 
+/// One independently bounded analytical-outline walker. All runs in one
+/// call share the destination mask but retain their own stateful ops binding,
+/// payload, rectangle, and optical-bias policy.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuFontOutlineCoverageRun<'a> {
+    pub(crate) outline_ops: &'a [[u32; 8]],
+    pub(crate) rect: GpgpuRect,
+    pub(crate) subdivisions: u32,
+    pub(crate) optical_bias_px: f32,
+}
 
+/// Composite one R8 glyph layer in a single native two-dimensional dispatch.
+/// A valid layer that is fully outside the destination is already complete:
+/// panning a resident scene must not turn an empty clip into a GPU failure and
+/// demote all of its other analytical layers to triangle rendering.
+pub(crate) fn glyph_mask_rgba8_2d(blit: GpgpuGlyphMaskBlit) -> bool {
+    glyph_mask_rgba8_2d_mode(blit, false)
+}
 
+pub(crate) fn glyph_mask_rgba8_2d_mode(blit: GpgpuGlyphMaskBlit, direct_scanout: bool) -> bool {
+    if !blit.mask.is_valid()
+        || !blit.dst.is_valid()
+        || !rect_is_inside_mask(blit.mask, blit.mask_rect)
+    {
+        return false;
+    }
+    let Some(params) = lower_glyph_mask_blit(blit) else {
+        return true;
+    };
+    submit_glyph_mask_2d(blit.mask, blit.dst, params, blit.color_rgba, direct_scanout)
+}
 
-
-
-
-
-
-
+/// Composite all persistent R8 coverage layers into one RGBA destination with
+/// one RCS submission and one retirement marker. Each active layer retains an
+/// independent stateless mask address, clip, destination point, and RGBA
+/// payload; fully clipped layers are successful no-ops.
+pub(crate) fn glyph_mask_layers_rgba8_2d(
+    layers: &[GpgpuGlyphMaskLayer],
+    dst: GpgpuRgba8Surface,
+) -> GpgpuGlyphMaskBatchResult {
+    glyph_mask_layers_rgba8_2d_mode(layers, dst, false)
+}
 
 pub(crate) fn glyph_mask_layers_rgba8_2d_mode(
     layers: &[GpgpuGlyphMaskLayer],
@@ -281,4 +390,30 @@ pub(crate) fn glyph_mask_layers_rgba8_2d_mode(
     result
 }
 
-
+fn lower_font_instance_layer(
+    layer: GpgpuFontInstanceLayer,
+    state: &GpgpuOwnedFontInstanceState,
+    dst: GpgpuRgba8Surface,
+) -> Option<GpgpuRect> {
+    if !layer.mask.is_valid()
+        || !dst.is_valid()
+        || !rect_is_inside_mask(layer.mask, layer.mask_rect)
+        || layer.descriptor_index >= state.capacity()
+        || !layer.dst_center[0].is_finite()
+        || !layer.dst_center[1].is_finite()
+        || layer.dispatch_rect.width == 0
+        || layer.dispatch_rect.height == 0
+    {
+        return None;
+    }
+    let left = i64::from(layer.dispatch_rect.x).max(0);
+    let top = i64::from(layer.dispatch_rect.y).max(0);
+    let right = (i64::from(layer.dispatch_rect.x) + i64::from(layer.dispatch_rect.width))
+        .min(i64::from(dst.width));
+    let bottom = (i64::from(layer.dispatch_rect.y) + i64::from(layer.dispatch_rect.height))
+        .min(i64::from(dst.height));
+    if right <= left || bottom <= top {
+        return Some(GpgpuRect::default());
+    }
+    Some(GpgpuRect::new(left as i32, top as i32, (right - left) as u32, (bottom - top) as u32))
+}

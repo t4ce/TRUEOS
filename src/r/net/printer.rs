@@ -18,9 +18,9 @@ use super::{
     ipp_print::{IppClient, IppError, RemoteJobState},
     pwg_raster,
 };
-use crate::r::print2d::{self, PrintJob, PrintJobState};
 #[cfg(feature = "gridpaper")]
 use crate::r::print2d::PrintDocument;
+use crate::r::print2d::{self, PrintJob, PrintJobState};
 
 const MDNS_PORT: u16 = 5_353;
 const MDNS_MULTICAST: v::vnet::EndpointV4 = v::vnet::EndpointV4::new([224, 0, 0, 251], MDNS_PORT);
@@ -30,6 +30,8 @@ const SPOOL_IDLE_MS: u64 = 25;
 const PRINTER_WAIT_MS: u64 = 1_000;
 const PRINT_RETRY_MS: u64 = 2_000;
 const REMOTE_JOB_POLL_MS: u64 = 1_000;
+#[cfg(feature = "gridpaper")]
+const RENDER_TIMEOUT_MS: u64 = 30_000;
 const SERVICES: [&str; 3] = [
     "_ipp._tcp.local.",
     "_print._sub._ipp._tcp.local.",
@@ -69,6 +71,10 @@ fn monotonic_ms() -> u64 {
     embassy_time_driver::now().saturating_mul(1_000) / hz
 }
 
+#[cfg(feature = "gridpaper")]
+pub fn snapshot() -> Vec<PrinterSnapshot> {
+    PRINTERS.lock().clone()
+}
 
 /// Select the one implicit printer used by the current compact print2d ABI.
 /// Plain IPP is required until the BSP TLS transport can be attached here.

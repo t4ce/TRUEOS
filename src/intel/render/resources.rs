@@ -1331,7 +1331,58 @@ pub(crate) fn update_resident_triangle_vertices(
     Ok(())
 }
 
-
+/// Publish one exact WGPU/Helio DrawIndexedIndirectArgs record beside a
+/// resident mesh. The RCS scene path consumes these bytes without translating
+/// them into a CPU-authored 3DPRIMITIVE payload.
+pub(crate) fn update_resident_triangle_draw_indexed_indirect(
+    mesh: &ResidentTriangleMesh,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    base_vertex: i32,
+    first_instance: u32,
+) -> Result<(), &'static str> {
+    let draw_end = first_index
+        .checked_add(index_count)
+        .ok_or("resident-indirect-index-range")?;
+    if index_count == 0
+        // This first retained backend expands transforms into vertices and
+        // has no instance storage binding yet. Zero remains valid for Helio's
+        // GPU culling result; one is the only drawable instance contract.
+        || instance_count > 1
+        || base_vertex != 0
+        || first_instance != 0
+        || draw_end > mesh.index_count
+        || mesh.indirect_args_offset.saturating_add(DRAW_INDEXED_INDIRECT_BYTES)
+            > mesh.storage_bytes
+        || mesh.indirect_args_gpu_addr
+            != mesh.gpu_base.saturating_add(mesh.indirect_args_offset as u64)
+    {
+        return Err("resident-indirect-shape");
+    }
+    let words = [
+        index_count,
+        instance_count,
+        first_index,
+        base_vertex as u32,
+        first_instance,
+    ];
+    unsafe {
+        for (index, value) in words.into_iter().enumerate() {
+            core::ptr::copy_nonoverlapping(
+                value.to_le_bytes().as_ptr(),
+                mesh.storage_virt
+                    .add(mesh.indirect_args_offset + index * core::mem::size_of::<u32>()),
+                core::mem::size_of::<u32>(),
+            );
+        }
+        crate::intel::dma_flush(
+            mesh.storage_virt.add(mesh.indirect_args_offset),
+            DRAW_INDEXED_INDIRECT_BYTES,
+        );
+    }
+    Ok(())
+}
 
 pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> bool {
     if let Some(carrier) = mesh.carrier {
@@ -1784,9 +1835,54 @@ fn build_churn_expanded_indices(max_instances: usize) -> Result<Vec<u8>, &'stati
     Ok(indices)
 }
 
+fn churn_material_srgba8(material: trueos_helio_runtime::churn::GpuMaterial) -> Option<[u8; 4]> {
+    let [r, g, b, alpha] = material.base_color;
+    if [r, g, b, alpha]
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+    {
+        return None;
+    }
+    let encode = |linear: f32| {
+        let srgb = if linear <= 0.003_130_8 {
+            linear * 12.92
+        } else {
+            1.055 * libm::powf(linear, 1.0 / 2.4) - 0.055
+        };
+        ((srgb * alpha * 255.0) + 0.5).clamp(0.0, 255.0) as u8
+    };
+    Some([
+        encode(r),
+        encode(g),
+        encode(b),
+        ((alpha * 255.0) + 0.5).clamp(0.0, 255.0) as u8,
+    ])
+}
 
-
-
+fn publish_churn_material_rgba(
+    resident: &ResidentChurnForward,
+    materials: &[trueos_helio_runtime::churn::GpuMaterial;
+         trueos_helio_runtime::churn::MATERIAL_COUNT],
+) -> Result<(), &'static str> {
+    const FALLBACK_RGBA: [[u8; 4]; trueos_helio_runtime::churn::MATERIAL_COUNT] = [
+        [64, 179, 255, 255],
+        [255, 82, 158, 255],
+        [82, 255, 148, 255],
+        [255, 199, 64, 255],
+    ];
+    for (index, (target, material)) in resident.material_rgba.iter().zip(materials).enumerate() {
+        // Some retained side demos intentionally carry no forward-material
+        // payload because the old native shader supplied its own four-color
+        // palette. Preserve that visible contract on the storage-free path.
+        let rgba = if material.base_color == [0.0; 4] {
+            FALLBACK_RGBA[index]
+        } else {
+            churn_material_srgba8(*material).ok_or("churn-expanded-material")?
+        };
+        target.store(u32::from_le_bytes(rgba), Ordering::Release);
+    }
+    Ok(())
+}
 
 const _: () = {
     assert!(
@@ -1799,15 +1895,215 @@ const _: () = {
     );
 };
 
+fn encode_churn_hierarchy_nodes(
+    nodes: &[trueos_helio_runtime::retained_transform::RetainedTransformNode],
+) -> Vec<u8> {
+    let mut bytes =
+        Vec::with_capacity(nodes.len() * crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_NODE_BYTES);
+    for node in nodes {
+        bytes.extend_from_slice(&node.to_le_bytes());
+    }
+    bytes
+}
 
+fn encode_churn_affines(
+    affines: &[trueos_helio_runtime::retained_transform::Affine3x4],
+) -> Vec<u8> {
+    let mut bytes =
+        Vec::with_capacity(affines.len() * crate::intel::gpgpu::GPGPU_HELIO_AFFINE_BYTES);
+    for affine in affines {
+        bytes.extend_from_slice(&affine.to_le_bytes());
+    }
+    bytes
+}
 
+fn encode_churn_hierarchy_indices(indices: &[u32]) -> Vec<u8> {
+    let mut bytes =
+        Vec::with_capacity(indices.len() * crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_INDEX_BYTES);
+    for index in indices {
+        bytes.extend_from_slice(&index.to_le_bytes());
+    }
+    bytes
+}
 
+fn stage_resident_churn_hierarchy_inputs(
+    resident: &ResidentChurnHierarchy,
+    frame: &trueos_helio_runtime::retained_transform::TransformHierarchyFrame<'_>,
+    row_count: u32,
+) -> Result<crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch, &'static str> {
+    use trueos_helio_runtime::retained_transform::{CONSTANT_NODE, NO_PARENT};
 
+    let node_count = u32::try_from(frame.nodes.len()).map_err(|_| "churn-hierarchy-capacity")?;
+    let dirty_local_count = u32::try_from(frame.dirty_local_nodes.len())
+        .map_err(|_| "churn-hierarchy-dirty-capacity")?;
+    let dirty_world_count = u32::try_from(frame.dirty_world_nodes.len())
+        .map_err(|_| "churn-hierarchy-dirty-capacity")?;
+    let dirty_row_count =
+        u32::try_from(frame.dirty_rows.len()).map_err(|_| "churn-hierarchy-dirty-capacity")?;
+    let max_depth = frame.report.max_depth;
+    let level_node_count = frame
+        .levels
+        .iter()
+        .try_fold(0u32, |total, level| total.checked_add(level.count));
+    if node_count == 0
+        || frame.nodes.len() > resident.node_capacity
+        || frame.local_affines.len() != frame.nodes.len()
+        || frame.dynamic_bindings.len() != frame.nodes.len()
+        || frame.row_leaf_nodes.len() != row_count as usize
+        || frame.level_indices.len() != frame.nodes.len()
+        || level_node_count != Some(node_count)
+        || frame.levels.len() != max_depth as usize
+        || frame.report.runtime_nodes != node_count
+        || frame.report.dirty_local != dirty_local_count
+        || frame.report.dirty_world != dirty_world_count
+        || max_depth == 0
+        || max_depth > crate::intel::gpgpu::GPGPU_HELIO_MAX_HIERARCHY_DEPTH
+        || dirty_row_count > row_count
+        || frame.nodes.iter().any(|node| {
+            (node.parent != NO_PARENT && node.parent >= node_count) || node.level >= max_depth
+        })
+        || frame
+            .dynamic_bindings
+            .iter()
+            .any(|binding| *binding != CONSTANT_NODE && *binding >= row_count)
+        || frame
+            .level_indices
+            .iter()
+            .chain(frame.dirty_local_nodes)
+            .chain(frame.dirty_world_nodes)
+            .chain(frame.row_leaf_nodes)
+            .any(|node| *node >= node_count)
+        || frame.dirty_rows.iter().any(|row| *row >= row_count)
+    {
+        return Err("churn-hierarchy-frame-contract");
+    }
 
+    // These compact CPU-authored tables are exact frame inputs, not a cache
+    // keyed only by node count. Uploading them each frame makes same-sized
+    // reparenting, rebinding, and row remapping visible without a lossy hash.
+    let node_bytes = encode_churn_hierarchy_nodes(frame.nodes);
+    let binding_bytes = encode_churn_hierarchy_indices(frame.dynamic_bindings);
+    let row_leaf_bytes = encode_churn_hierarchy_indices(frame.row_leaf_nodes);
+    if !resident.nodes.write_and_flush(0, &node_bytes) {
+        return Err("churn-hierarchy-node-upload");
+    }
+    if !resident.dynamic_bindings.write_and_flush(0, &binding_bytes) {
+        return Err("churn-hierarchy-binding-upload");
+    }
+    if !resident.row_leaf_nodes.write_and_flush(0, &row_leaf_bytes) {
+        return Err("churn-hierarchy-row-leaf-upload");
+    }
 
+    // Never overwrite a clean GPU-authored dynamic local with its CPU identity
+    // placeholder. Folded constants are the only authoritative CPU locals, so
+    // upload their contiguous runs exactly (normally one 48-byte root row).
+    let mut first = 0usize;
+    while first < frame.dynamic_bindings.len() {
+        if frame.dynamic_bindings[first] != CONSTANT_NODE {
+            first += 1;
+            continue;
+        }
+        let mut end = first + 1;
+        while end < frame.dynamic_bindings.len() && frame.dynamic_bindings[end] == CONSTANT_NODE {
+            end += 1;
+        }
+        let local_bytes = encode_churn_affines(&frame.local_affines[first..end]);
+        let local_offset = first
+            .checked_mul(crate::intel::gpgpu::GPGPU_HELIO_AFFINE_BYTES)
+            .ok_or("churn-hierarchy-local-upload")?;
+        if !resident
+            .local_affines
+            .write_and_flush(local_offset, &local_bytes)
+        {
+            return Err("churn-hierarchy-local-upload");
+        }
+        first = end;
+    }
 
+    for (buffer, indices, error) in [
+        (
+            &resident.dirty_local_nodes,
+            frame.dirty_local_nodes,
+            "churn-hierarchy-dirty-local-upload",
+        ),
+        (
+            &resident.dirty_world_nodes,
+            frame.dirty_world_nodes,
+            "churn-hierarchy-dirty-world-upload",
+        ),
+        (&resident.dirty_rows, frame.dirty_rows, "churn-hierarchy-dirty-row-upload"),
+    ] {
+        if !indices.is_empty() {
+            let bytes = encode_churn_hierarchy_indices(indices);
+            if !buffer.write_and_flush(0, &bytes) {
+                return Err(error);
+            }
+        }
+    }
 
+    Ok(crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch {
+        nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.nodes.gpu_base(),
+            resident.nodes.storage_bytes(),
+        ),
+        dynamic_bindings: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.dynamic_bindings.gpu_base(),
+            resident.dynamic_bindings.storage_bytes(),
+        ),
+        local_affines: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.local_affines.gpu_base(),
+            resident.local_affines.storage_bytes(),
+        ),
+        world_affines: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.world_affines.gpu_base(),
+            resident.world_affines.storage_bytes(),
+        ),
+        dirty_local_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.dirty_local_nodes.gpu_base(),
+            resident.dirty_local_nodes.storage_bytes(),
+        ),
+        dirty_world_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.dirty_world_nodes.gpu_base(),
+            resident.dirty_world_nodes.storage_bytes(),
+        ),
+        dirty_rows: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.dirty_rows.gpu_base(),
+            resident.dirty_rows.storage_bytes(),
+        ),
+        row_leaf_nodes: crate::intel::gpgpu::GpgpuHelioBufferSlice::new(
+            resident.row_leaf_nodes.gpu_base(),
+            resident.row_leaf_nodes.storage_bytes(),
+        ),
+        node_count,
+        dirty_local_count,
+        dirty_world_count,
+        dirty_row_count,
+        max_depth,
+    })
+}
 
+fn publish_resident_churn_hierarchy_counts(
+    resident: &ResidentChurnHierarchy,
+    dispatch: crate::intel::gpgpu::GpgpuHelioRetainedHierarchyDispatch,
+) {
+    resident
+        .dirty_local_count
+        .store(dispatch.dirty_local_count, Ordering::Release);
+    resident
+        .dirty_world_count
+        .store(dispatch.dirty_world_count, Ordering::Release);
+    resident
+        .dirty_row_count
+        .store(dispatch.dirty_row_count, Ordering::Release);
+    resident
+        .max_depth
+        .store(dispatch.max_depth, Ordering::Release);
+    // Node count is the graph-present flag read by the Render encoder. Publish
+    // it last so every preceding input write and metadata count is visible.
+    resident
+        .node_count
+        .store(dispatch.node_count, Ordering::Release);
+}
 
 fn churn_hierarchy_node_capacity(max_instances: usize) -> Option<usize> {
     let max_rows = crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize;
@@ -1946,9 +2242,34 @@ fn create_resident_churn_transform(
     })
 }
 
+/// Cold-path activation of the artifact-authenticated Helio Churn pipeline.
+pub(crate) fn create_resident_churn_forward(
+    artifact_bytes: &'static [u8],
+    max_instances: usize,
+    meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+) -> Result<ResidentChurnForward, &'static str> {
+    create_resident_churn_forward_with_admission(
+        artifact_bytes,
+        max_instances,
+        meshes,
+        ChurnHardwareAdmission::ValidatedProduction,
+        None,
+    )
+}
 
-
-
+pub(crate) fn create_resident_churn_forward_adls_retained_probe(
+    artifact_bytes: &'static [u8],
+    max_instances: usize,
+    meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+) -> Result<ResidentChurnForward, &'static str> {
+    create_resident_churn_forward_with_admission(
+        artifact_bytes,
+        max_instances,
+        meshes,
+        ChurnHardwareAdmission::Adls4680Rev0cPhysicalProbe,
+        None,
+    )
+}
 
 fn create_resident_churn_forward_with_admission(
     artifact_bytes: &'static [u8],
@@ -2245,7 +2566,90 @@ fn create_resident_churn_forward_with_admission(
     })
 }
 
-
+pub(crate) fn update_resident_churn_forward_frame(
+    resident: &ResidentChurnForward,
+    frame: &trueos_helio_runtime::churn::InstanceFrame<'_>,
+) -> Result<(), &'static str> {
+    if frame.instances.len() > resident.max_instances
+        || frame.compacted_indices.len() > resident.max_instances
+        || frame.instances.len() != frame.compacted_indices.len()
+        || frame.draws.len() != CHURN_FORWARD_DRAW_COUNT
+    {
+        return Err("churn-native-frame-capacity");
+    }
+    publish_churn_material_rgba(resident, frame.materials)?;
+    let instance_first = frame.instance_dirty.first as usize;
+    let instance_count = frame.instance_dirty.count as usize;
+    let instance_end = instance_first
+        .checked_add(instance_count)
+        .ok_or("churn-native-dirty-range")?;
+    let compacted_first = frame.compacted_indices_dirty.first as usize;
+    let compacted_count = frame.compacted_indices_dirty.count as usize;
+    let compacted_end = compacted_first
+        .checked_add(compacted_count)
+        .ok_or("churn-native-dirty-range")?;
+    if instance_end > frame.instances.len() || compacted_end > frame.compacted_indices.len() {
+        return Err("churn-native-dirty-range");
+    }
+    if !resident
+        .camera
+        .write_and_flush(0, &frame.camera.to_le_bytes())
+    {
+        return Err("churn-native-camera-upload");
+    }
+    let mut instance_bytes =
+        Vec::with_capacity(instance_count * trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN);
+    for instance in &frame.instances[instance_first..instance_end] {
+        instance_bytes.extend_from_slice(&instance.to_le_bytes());
+    }
+    let instance_offset = instance_first
+        .checked_mul(trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN)
+        .ok_or("churn-native-dirty-range")?;
+    if !resident
+        .instances
+        .write_and_flush(instance_offset, &instance_bytes)
+    {
+        return Err("churn-native-instance-upload");
+    }
+    let mut compacted_bytes = Vec::with_capacity(compacted_count * 4);
+    for index in &frame.compacted_indices[compacted_first..compacted_end] {
+        compacted_bytes.extend_from_slice(&index.to_le_bytes());
+    }
+    let compacted_offset = compacted_first
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("churn-native-dirty-range")?;
+    if !resident
+        .compacted_indices
+        .write_and_flush(compacted_offset, &compacted_bytes)
+    {
+        return Err("churn-native-compacted-upload");
+    }
+    let mut indirect_bytes = Vec::with_capacity(
+        CHURN_FORWARD_DRAW_COUNT * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN,
+    );
+    for (group, draw) in frame.draws.iter().enumerate() {
+        let mesh = frame.meshes[group / trueos_helio_runtime::churn::MATERIAL_COUNT];
+        if draw.index_count != mesh.index_count
+            || draw.first_index != mesh.first_index
+            || draw.base_vertex != mesh.base_vertex
+            || draw.first_instance as usize > frame.instances.len()
+            || draw
+                .first_instance
+                .checked_add(draw.instance_count)
+                .map_or(true, |end| end as usize > frame.instances.len())
+        {
+            return Err("churn-native-indirect-contract");
+        }
+        indirect_bytes.extend_from_slice(&draw.to_le_bytes());
+    }
+    if !resident.indirect_args.write_and_flush(0, &indirect_bytes) {
+        return Err("churn-native-indirect-upload");
+    }
+    // Preserve the CPU-expanded ABI as an explicit fallback. A successful
+    // legacy update disables the compute secondary for the following frame.
+    resident.disable_retained_transform_dispatch();
+    Ok(())
+}
 
 /// Create the geometry half of Picasso's retained-transform path.
 ///
@@ -2666,7 +3070,140 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     transform.row_count.store(row_count, Ordering::Release);
     Ok(())
 }
+/// Publish one compact retained-transform frame. Instances, compacted indices,
+/// and WGPU indexed-indirect records remain GPU-owned outputs; the following
+/// Render submission consumes them directly through the native artifact VS or
+/// selects the expanded-position compatibility handoff explicitly.
+pub(crate) fn update_resident_churn_forward_transform_frame(
+    resident: &ResidentChurnForward,
+    frame: &trueos_helio_runtime::churn::TransformFrame<'_>,
+) -> Result<(), &'static str> {
+    let transform = resident.transform.as_ref().ok_or(
+        resident
+            .retained_transform_unavailable_reason()
+            .unwrap_or("churn-transform-unavailable"),
+    )?;
+    let row_count = u32::try_from(frame.seeds.len()).map_err(|_| "churn-transform-capacity")?;
+    if row_count == 0
+        || frame.seeds.len() > resident.max_instances
+        || frame.draw_templates.len() != CHURN_FORWARD_DRAW_COUNT
+    {
+        return Err("churn-transform-capacity");
+    }
+    publish_churn_material_rgba(resident, frame.materials)?;
 
+    let seed_first = frame.seed_dirty.first as usize;
+    let seed_count = frame.seed_dirty.count as usize;
+    let seed_end = seed_first
+        .checked_add(seed_count)
+        .ok_or("churn-transform-dirty-range")?;
+    let template_first = frame.draw_templates_dirty.first as usize;
+    let template_count = frame.draw_templates_dirty.count as usize;
+    let template_end = template_first
+        .checked_add(template_count)
+        .ok_or("churn-transform-dirty-range")?;
+    if seed_end > frame.seeds.len() || template_end > frame.draw_templates.len() {
+        return Err("churn-transform-dirty-range");
+    }
+    let previous_rows = transform.row_count.load(Ordering::Acquire);
+    if (previous_rows == 0 || previous_rows != row_count)
+        && (seed_first != 0 || seed_count != frame.seeds.len())
+    {
+        return Err("churn-transform-initial-seed-range");
+    }
+    if previous_rows == 0 && (template_first != 0 || template_count != CHURN_FORWARD_DRAW_COUNT) {
+        return Err("churn-transform-initial-template-range");
+    }
+
+    let gpu_templates: [crate::intel::gpgpu::GpgpuHelioRetainedDrawTemplate;
+        CHURN_FORWARD_DRAW_COUNT] = core::array::from_fn(|group| {
+        let template = frame.draw_templates[group];
+        crate::intel::gpgpu::GpgpuHelioRetainedDrawTemplate {
+            index_count: template.index_count,
+            first_index: template.first_index,
+            base_vertex: template.base_vertex,
+            first_instance: template.first_instance,
+            capacity: template.capacity,
+            packed_mesh_material: template.packed_mesh_material,
+        }
+    });
+    for (group, template) in frame.draw_templates.iter().enumerate() {
+        let mesh = frame.meshes[group / trueos_helio_runtime::churn::MATERIAL_COUNT];
+        let draw_group = frame.groups[group];
+        if template.index_count != mesh.index_count
+            || template.first_index != mesh.first_index
+            || template.base_vertex != mesh.base_vertex
+            || template.mesh_id() != draw_group.mesh_id
+            || template.material_id() != draw_group.material_id
+        {
+            return Err("churn-transform-template-contract");
+        }
+    }
+    if frame.seeds.iter().any(|seed| {
+        seed.draw_group
+            != trueos_helio_runtime::churn::GpuRetainedTransformSeed::DISABLED_DRAW_GROUP
+            && seed.draw_group as usize >= CHURN_FORWARD_DRAW_COUNT
+    }) {
+        return Err("churn-transform-seed-group");
+    }
+
+    let mut seed_bytes = Vec::with_capacity(
+        seed_count * trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN,
+    );
+    for seed in &frame.seeds[seed_first..seed_end] {
+        seed_bytes.extend_from_slice(&seed.to_le_bytes());
+    }
+    let seed_offset = seed_first
+        .checked_mul(trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN)
+        .ok_or("churn-transform-dirty-range")?;
+
+    let mut template_bytes = Vec::with_capacity(
+        template_count * trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN,
+    );
+    for template in &frame.draw_templates[template_first..template_end] {
+        template_bytes.extend_from_slice(&template.to_le_bytes());
+    }
+    let template_offset = template_first
+        .checked_mul(trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN)
+        .ok_or("churn-transform-dirty-range")?;
+
+    // Stop the Render encoder from acquiring an old row count while its
+    // persistent hierarchy/worklists are being refreshed.  A failed upload
+    // deliberately leaves the transformer disabled instead of exposing a
+    // mixture of old and new graph inputs.
+    transform.row_count.store(0, Ordering::Release);
+    let hierarchy_dispatch =
+        stage_resident_churn_hierarchy_inputs(&transform.hierarchy, &frame.hierarchy, row_count)?;
+    let dispatch = resident
+        .transform_dispatch_for_rows_with_hierarchy(row_count, Some(hierarchy_dispatch))
+        .ok_or("churn-transform-unavailable")?;
+    dispatch
+        .validate_templates(&gpu_templates)
+        .map_err(|_| "churn-transform-dispatch-contract")?;
+
+    if !resident
+        .camera
+        .write_and_flush(0, &frame.camera.to_le_bytes())
+    {
+        return Err("churn-transform-camera-upload");
+    }
+    if !transform.seeds.write_and_flush(seed_offset, &seed_bytes) {
+        return Err("churn-transform-seed-upload");
+    }
+    if !transform
+        .draw_templates
+        .write_and_flush(template_offset, &template_bytes)
+    {
+        return Err("churn-transform-template-upload");
+    }
+
+    // Publish graph metadata after every CPU-written range is cache-clean.
+    // Node count is the hierarchy-present flag; row count is the final
+    // transaction commit observed by the Render encoder.
+    publish_resident_churn_hierarchy_counts(&transform.hierarchy, hierarchy_dispatch);
+    transform.row_count.store(row_count, Ordering::Release);
+    Ok(())
+}
 
 /// Native retained graphics handoff. The preceding GPU pass owns all mutable
 /// inputs: 208-byte matrix rows, compacted row indices, and the exact indirect
@@ -3892,7 +4429,48 @@ fn submit_triangle_to_surface(
     )
 }
 
-
+/// Append the compiler's 96-byte constant range, with the last 16 bytes zero.
+pub(crate) fn create_resident_voxy_headless_mesh(
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
+) -> Result<ResidentTriangleMesh, &'static str> {
+    if !crate::intel::voxy_headless_target_active() {
+        return Err("voxy-headless-target");
+    }
+    if vertices.is_empty()
+        || indices.is_empty()
+        || indices.len() % 3 != 0
+        || vertices
+            .iter()
+            .flatten()
+            .chain(camera.iter())
+            .any(|v| !v.is_finite())
+        || indices.iter().any(|i| *i as usize >= vertices.len())
+    {
+        return Err("voxy-headless-shape");
+    }
+    let mut upload: Vec<[f32; 8]> = vertices
+        .iter()
+        .map(|v| v[..8].try_into().unwrap())
+        .collect();
+    let vertex_bytes = (upload.len() * 32) as u32;
+    // Vertex stride 32 keeps the appended constant range 32-byte aligned.
+    let mut padded = [0.0; 24];
+    padded[..20].copy_from_slice(camera);
+    for row in padded.chunks_exact(8) {
+        upload.push(row.try_into().unwrap());
+    }
+    let mut mesh = create_resident_triangle_mesh_typed(
+        &upload,
+        indices,
+        TriangleVertexFormat::VoxyHeadless,
+        None,
+    )?;
+    mesh.vertex_count = vertices.len() as u32;
+    mesh.vertex_bytes = vertex_bytes;
+    Ok(mesh)
+}
 
 pub(crate) const VOXY_HEADLESS_MAX_STREAM_CAPACITY: usize = ((u32::MAX as usize - 96) / 32) / 3 * 3;
 pub(crate) const VOXY_HEADLESS_VERTEX_STRIDE: usize = 32;
@@ -3930,9 +4508,55 @@ pub(crate) fn voxy_headless_stream_storage_bytes(capacity: usize) -> Option<usiz
     voxy_headless_stream_layout(capacity).map(|layout| layout.3)
 }
 
+fn validate_voxy_headless_stream_shape(
+    capacity: usize,
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
+) -> Result<(), &'static str> {
+    if voxy_headless_stream_layout(capacity).is_none()
+        || vertices.is_empty()
+        || indices.is_empty()
+        || indices.len() % 3 != 0
+        || vertices.len() > capacity
+        || indices.len() > capacity
+        || vertices
+            .iter()
+            .flatten()
+            .chain(camera.iter())
+            .any(|v| !v.is_finite())
+        || indices.iter().any(|i| *i as usize >= vertices.len())
+        || camera[16] <= 0.0
+        || camera[17] <= 0.0
+        || camera[18] <= 0.0
+        || camera[19] <= camera[18]
+    {
+        return Err("voxy-headless-stream-shape");
+    }
+    Ok(())
+}
 
-
-
+/// Retain capacity descriptors and fixed camera/index/indirect addresses.
+/// Only the indexed-indirect record carries the current live draw count.
+pub(crate) fn create_resident_voxy_headless_streaming_mesh(
+    capacity: usize,
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
+) -> Result<ResidentTriangleMesh, &'static str> {
+    if !crate::intel::voxy_headless_target_active() {
+        return Err("voxy-headless-target");
+    }
+    validate_voxy_headless_stream_shape(capacity, vertices, indices, camera)?;
+    let mesh = allocate_resident_voxy_headless_streaming_mesh(capacity)?;
+    if let Err(error) =
+        update_resident_voxy_headless_streaming_mesh(&mesh, vertices, indices, camera)
+    {
+        let _ = release_resident_triangle_mesh(&mesh);
+        return Err(error);
+    }
+    Ok(mesh)
+}
 
 fn allocate_resident_voxy_headless_streaming_mesh(
     capacity: usize,
@@ -3992,7 +4616,47 @@ fn validate_voxy_headless_stream_mesh_layout(
     Ok((camera_offset, index_offset, indirect_offset, storage_bytes))
 }
 
-
+/// Update a previously retired producer allocation in place. The caller must
+/// hold an exclusive broker operation lease through the following submission;
+/// this function neither admits GPU work nor establishes GPU retirement.
+pub(crate) fn update_resident_voxy_headless_streaming_mesh(
+    mesh: &ResidentTriangleMesh,
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
+) -> Result<(), &'static str> {
+    validate_voxy_headless_stream_shape(mesh.vertex_count as usize, vertices, indices, camera)?;
+    let (camera_offset, index_offset, _, _) = validate_voxy_headless_stream_mesh_layout(mesh)?;
+    let mut padded = [0.0f32; 24];
+    padded[..20].copy_from_slice(camera);
+    unsafe {
+        for (index, vertex) in vertices.iter().enumerate() {
+            core::ptr::copy_nonoverlapping(
+                vertex.as_ptr().cast::<u8>(),
+                mesh.storage_virt.add(index * VOXY_HEADLESS_VERTEX_STRIDE),
+                VOXY_HEADLESS_VERTEX_STRIDE,
+            );
+        }
+        core::ptr::copy_nonoverlapping(
+            padded.as_ptr().cast::<u8>(),
+            mesh.storage_virt.add(camera_offset),
+            VOXY_HEADLESS_CAMERA_BYTES,
+        );
+        core::ptr::copy_nonoverlapping(
+            indices.as_ptr().cast::<u8>(),
+            mesh.storage_virt.add(index_offset),
+            core::mem::size_of_val(indices),
+        );
+        crate::intel::dma_flush(mesh.storage_virt, vertices.len() * VOXY_HEADLESS_VERTEX_STRIDE);
+        crate::intel::dma_flush(mesh.storage_virt.add(camera_offset), VOXY_HEADLESS_CAMERA_BYTES);
+        crate::intel::dma_flush(
+            mesh.storage_virt.add(index_offset),
+            core::mem::size_of_val(indices),
+        );
+    }
+    // Publish the live count only after the addressed payload is coherent.
+    update_resident_triangle_draw_indexed_indirect(mesh, indices.len() as u32, 1, 0, 0, 0)
+}
 
 fn validate_voxy_headless_raw_stream_shape(
     capacity: usize,

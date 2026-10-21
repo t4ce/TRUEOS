@@ -26,7 +26,7 @@ mod uc_fw;
 pub(crate) use self::blt::{
     GUC_BCS0_MONO_MAX_GLYPHS, GucBcs0CopyCompletion, GucBcs0CopySubmission, GucBcs0CopySubmitError,
     GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaFill, GucBcs0RgbaSurface, guc_bcs0_last_timeout,
-    poll_guc_bcs0_rgba_copies, queue_guc_bcs0_legacy_rgba_copies,
+    poll_guc_bcs0_rgba_copies, queue_guc_bcs0_legacy_rgba_copies, queue_guc_bcs0_marker,
     queue_guc_bcs0_mono_glyphs, queue_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_fill,
     queue_guc_bcs0_rgba_fills, queue_guc_bcs0_uncached_copies, submit_guc_bcs0_fast_copy_probe_now,
 };
@@ -474,7 +474,9 @@ pub(crate) fn voxy_headless_texture_target_active() -> bool {
     )
 }
 
-
+pub(crate) fn gen12_actual_gt_ratio(dev: Dev) -> u32 {
+    self::gt_state::actual_ratio(dev)
+}
 
 pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSnapshot> {
     claimed_device()
@@ -500,6 +502,60 @@ pub(crate) fn toggle_global_gt_power_mode()
 
 const TRANSIENT_GT_BOOST_MILLIS: u64 = 2_000;
 
+/// Ask for a short F12-equivalent boost for an interactive operation.
+///
+/// This only enables the global mode when it was previously inactive. A
+/// pre-existing manual F12 selection remains entirely untouched. The timer
+/// carries the generation created by this call, so it cannot switch off a
+/// later manual selection or a later transient lease.
+pub(crate) fn begin_transient_global_gt_boost(spawner: &Spawner, origin: &'static str) {
+    let Some(dev) = claimed_device() else {
+        return;
+    };
+    if !device_uses_gen12_integrated_pat(dev.device_id) || !physical_gt_ready(dev) {
+        return;
+    }
+
+    match self::gt_state::begin_transient_global_gt_boost(dev) {
+        Ok(self::gt_state::Gen12TransientGtBoostStart::AlreadyActive) => {
+            crate::log_info!(
+                target: "render";
+                "intel/gt-transient-boost: origin={} accepted=0 reason=global-f12-already-active action=unclaimed-state-preserved\n",
+                origin,
+            );
+        }
+        Ok(self::gt_state::Gen12TransientGtBoostStart::Armed(lease)) => {
+            match transient_global_gt_boost_expiry(lease) {
+                Ok(token) => {
+                    spawner.spawn(token);
+                    crate::log_info!(
+                        target: "render";
+                        "intel/gt-transient-boost: origin={} accepted=1 duration_ms={} generation={} ownership=timed-generation-lease\n",
+                        origin,
+                        TRANSIENT_GT_BOOST_MILLIS,
+                        lease.generation,
+                    );
+                }
+                Err(_) => {
+                    // Never leave an enabled transient mode behind merely
+                    // because its bounded expiry task could not be allocated.
+                    let _ = self::gt_state::expire_transient_global_gt_boost(dev, lease);
+                    crate::log_warn!(
+                        target: "render";
+                        "intel/gt-transient-boost: origin={} accepted=0 reason=expiry-task-unavailable action=immediate-owned-restore\n",
+                        origin,
+                    );
+                }
+            }
+        }
+        Err(reason) => crate::log_info!(
+            target: "render";
+            "intel/gt-transient-boost: origin={} accepted=0 reason={} ownership=none\n",
+            origin,
+            reason,
+        ),
+    }
+}
 
 #[task(pool_size = 2)]
 async fn transient_global_gt_boost_expiry(lease: self::gt_state::Gen12TransientGtBoostLease) {
@@ -527,7 +583,16 @@ async fn transient_global_gt_boost_expiry(lease: self::gt_state::Gen12TransientG
     }
 }
 
-
+pub(crate) fn begin_lumen_gt_boost() -> Option<self::gt_state::Gen12LumenGtBoost> {
+    let dev = claimed_device()?;
+    if !device_uses_gen12_integrated_pat(dev.device_id)
+        || !gen12_lumen_mocs_ready()
+        || !physical_gt_ready(dev)
+    {
+        return None;
+    }
+    self::gt_state::begin_lumen_gt_boost(dev)
+}
 
 fn log_gen12_lumen_mocs_init(dev: Dev, report: self::gt_state::Gen12LumenMocsInitReport) {
     crate::log_info!(
@@ -602,7 +667,9 @@ pub(crate) fn gen12_lumen_mocs_ready() -> bool {
     GEN12_LUMEN_MOCS_READY.load(Ordering::Acquire)
 }
 
-
+pub(crate) fn validate_gen12_lumen_mocs(checkpoint: &str) -> bool {
+    claimed_device().is_some_and(|dev| validate_gen12_lumen_mocs_for_dev(dev, checkpoint))
+}
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn guc_boot_enabled() -> bool {
@@ -695,7 +762,9 @@ pub(crate) fn ui4_rgba8_plane_stack_is_ready() -> bool {
     self::display::ui4_rgba8_plane_stack_is_ready()
 }
 
-
+pub(crate) fn ui4_direct_scanout_ready_for_frame(producer_frame: u64) -> Option<u64> {
+    self::display::ui4_direct_scanout_ready_for_frame(producer_frame)
+}
 
 pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u32, u32)> {
     self::display::physical_extent_pixels(width_mm, height_mm)
@@ -718,9 +787,9 @@ pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, MirrorMapMode,
     RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll,
     Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
-    WdCaptureError, WdCapturePoll, WdXyuv8888Frame, begin_ui4_wd_xyuv8888_capture,
-    pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture,
-    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
+    WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame, begin_ui4_wd_xyuv8888_capture,
+    pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture, set_mirror_map_mode,
+    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture, ui4_wd_xyuv8888_capture_status,
 };
 
 pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {

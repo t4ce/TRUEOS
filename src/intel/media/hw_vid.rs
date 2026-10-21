@@ -18,9 +18,10 @@ const H264_FS_READ_ERROR: i32 = -35;
 const H264_MEDIA_SESSION_WAIT_MS: u64 = 5_000;
 const H264_MEDIA_SESSION_RETRY_MS: u64 = 1;
 const H264_UI4_PRESENT_ERROR: i32 = -34;
+pub(crate) const UI4_FRAMED_VIDEO_FS_DEFAULT_PATH: &str = "x31_head_movie.annexb.h264";
 const UI4_FRAMED_VIDEO_FPS: u16 = 60;
-
 const H264_ONLINE_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
+
 static H264_UI4_HANDOFF_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 // Diagnostic switches are shared with still-picture probes. Only the first
@@ -516,7 +517,33 @@ pub(crate) async fn run_prepared_trueosfs_ui4_video(
     }
 }
 
-
+pub(crate) async fn run_online_ui4_framed_video_playback(
+    session: crate::ui4::VideoPlaybackSession,
+) -> Result<H264PlaybackReport, &'static str> {
+    let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
+    crate::log!(
+        "intel/hw_vid: online-ui4-framed-video stage=download-begin url={} fps={} presentation=ui4-rgba-stream rgba_buffers={}\n",
+        H264_ONLINE_MEDIA_URL,
+        UI4_FRAMED_VIDEO_FPS,
+        crate::ui4::VIDEO_RGBA_BUFFER_COUNT,
+    );
+    let report = run_media_url_playback(
+        session,
+        H264_ONLINE_MEDIA_URL,
+        options,
+        "online-ui4-framed-video",
+        "online-ui4-framed-video",
+        None,
+    )
+    .await?;
+    if session.is_cancelled() && report.presented == 0 {
+        Err("playback cancelled")
+    } else if report.presented == 0 {
+        Err("online video produced no decodable frames")
+    } else {
+        Ok(report)
+    }
+}
 
 /// Browser-resolved HTTPS media uses the same bounded download/demux/decode path
 /// as the fixed online demo. Resolution and page JavaScript stay in the browser.

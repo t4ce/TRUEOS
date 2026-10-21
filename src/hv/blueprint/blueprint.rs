@@ -42,7 +42,6 @@ const ASSET_HEADER_LEN: usize = 12;
 const ASSET_ENTRY_HEADER_LEN: usize = 4 + 8 + 32;
 
 pub(crate) struct BlueprintModule<'a> {
-    pub(crate) version: u16,
     pub(crate) flags: u16,
     pub(crate) entry: u64,
     pub(crate) raw_payload_len: usize,
@@ -82,7 +81,6 @@ struct EmbeddedAssetEntry<'a> {
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct ElfAllocStats {
-    pub(crate) sections: usize,
     pub(crate) alloc_sections: usize,
     pub(crate) alloc_bytes: usize,
 }
@@ -1084,7 +1082,6 @@ pub(crate) fn elf_alloc_stats(bytes: &[u8]) -> Result<ElfAllocStats, String> {
 
 fn elf_alloc_stats_from_file(file: &ParsedElf<'_>) -> ElfAllocStats {
     let mut stats = ElfAllocStats {
-        sections: file.elf_section_table().len(),
         alloc_sections: 0,
         alloc_bytes: 0,
     };
@@ -1854,7 +1851,6 @@ pub(crate) fn parse_blueprint(bytes: &[u8]) -> Result<BlueprintModule<'_>, &'sta
         return Err("bad blueprint magic");
     }
 
-    let version = le_u16(bytes, 4).ok_or("module truncated")?;
     let flags = le_u16(bytes, 6).ok_or("module truncated")?;
     let entry = le_u64(bytes, 8).ok_or("module truncated")?;
     let payload_len = le_u32(bytes, 16).ok_or("module truncated")? as usize;
@@ -1867,7 +1863,6 @@ pub(crate) fn parse_blueprint(bytes: &[u8]) -> Result<BlueprintModule<'_>, &'sta
         .ok_or("payload truncated")?;
 
     Ok(BlueprintModule {
-        version,
         flags,
         entry,
         raw_payload_len,

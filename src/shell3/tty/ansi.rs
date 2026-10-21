@@ -62,7 +62,8 @@ impl Terminal {
         if let Some(color) = run.color {
             let [r, g, b, _] = color.rgba();
             self.write(format!("\x1b[38;2;{r};{g};{b}m").as_bytes());
-            if let Some([r, g, b, _]) = color.background()
+            if let Some([r, g, b, _]) = color
+                .background()
                 .filter(|bg| *bg != RgbaColor::BlackTransparent.rgba())
             {
                 self.write(format!("\x1b[48;2;{r};{g};{b}m").as_bytes());
@@ -93,7 +94,8 @@ impl Terminal {
             return;
         }
         if let Some(drain) = tui::take_remote_output(
-            self.shell.tui_frontend, super::OUTPUT_LIMIT.saturating_sub(self.output.len()),
+            self.shell.tui_frontend,
+            super::OUTPUT_LIMIT.saturating_sub(self.output.len()),
         ) {
             self.write(&drain.bytes);
             if drain.failed && !drain.pending {
@@ -143,7 +145,9 @@ impl Terminal {
                     {
                         *style = Some(if color.blink() {
                             RgbaColor::Blinking {
-                                foreground: color.rgba(), background: None, underline: color.underline(),
+                                foreground: color.rgba(),
+                                background: None,
+                                underline: color.underline(),
                             }
                         } else {
                             RgbaColor::Terminal {

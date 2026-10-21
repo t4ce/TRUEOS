@@ -1,11 +1,3 @@
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-use core::arch::x86_64::__cpuid;
-use core::fmt::Write;
-use core::sync::atomic::{Ordering, compiler_fence};
-
-use spin::Mutex;
-use x86_64::registers::model_specific::Msr;
 
 const CPUID_LEAF_FEATURES: u32 = 0x01;
 const CPUID_LEAF_THERMAL_POWER: u32 = 0x06;

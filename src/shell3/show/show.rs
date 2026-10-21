@@ -27,14 +27,9 @@ const FOREGROUND: RgbaColor = RgbaColor::White;
 pub enum Backend {
     #[default]
     Cpu,
-    Render,
     Copy,
-    VirGL,
-    Headless, // nowhere
     Network,
-    File,
 }
-
 
 struct Ui4Surface {
     frame: FrameHandle,
@@ -125,7 +120,6 @@ impl Show {
         Ok(extent)
     }
 
-
     pub fn set_backend(&mut self, backend: Backend) {
         self.backend = backend;
     }
@@ -192,9 +186,24 @@ impl Show {
         };
         let render_result = match self.backend {
             Backend::Cpu => cpu::present(&mut staged, lines, &[]),
-            Backend::Copy => copy::present(&mut staged, lines, &[], &mut self.poisoned,
-                &mut self.pan, self.pan_budget.get_or_insert_with(||
-                    crate::ui4::text_area::RasterBudget::new(crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES)), area, &mut self.strips, &[]).await,
+            Backend::Copy => {
+                copy::present(
+                    &mut staged,
+                    lines,
+                    &[],
+                    &mut self.poisoned,
+                    &mut self.pan,
+                    self.pan_budget.get_or_insert_with(|| {
+                        crate::ui4::text_area::RasterBudget::new(
+                            crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES,
+                        )
+                    }),
+                    area,
+                    &mut self.strips,
+                    &[],
+                )
+                .await
+            }
             _ => Err("shell3-show-backend-not-implemented"),
         };
         if let Err(error) = render_result {
@@ -280,7 +289,10 @@ impl Show {
             .as_ref()
             .filter(|surface| surface.broker_resized)
             .map(|surface| (surface.width, surface.height))
-            .or_else(|| self.initial_geometry.map(|geometry| (geometry.width, geometry.height)))
+            .or_else(|| {
+                self.initial_geometry
+                    .map(|geometry| (geometry.width, geometry.height))
+            })
             .unwrap_or(requested_extent);
         let (width, height) = extent;
         let recreate_surface = self.surface.as_ref().is_none_or(|surface| {
@@ -288,7 +300,8 @@ impl Show {
         });
         if recreate_surface {
             self.release_surface();
-            self.surface = Some(create_surface(width, height, self.backend, self.initial_geometry)?);
+            self.surface =
+                Some(create_surface(width, height, self.backend, self.initial_geometry)?);
             self.surface.as_mut().unwrap().scale = self.font_scale;
         }
         if !recreate_surface
@@ -304,9 +317,22 @@ impl Show {
         let damage = match self.backend {
             Backend::Cpu => cpu::present(surface, lines, &batch.segments)?,
             Backend::Copy => {
-                copy::present(surface, lines, &batch.segments, &mut self.poisoned,
-                    &mut self.pan, self.pan_budget.get_or_insert_with(||
-                        crate::ui4::text_area::RasterBudget::new(crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES)), area, &mut self.strips, reveals).await?
+                copy::present(
+                    surface,
+                    lines,
+                    &batch.segments,
+                    &mut self.poisoned,
+                    &mut self.pan,
+                    self.pan_budget.get_or_insert_with(|| {
+                        crate::ui4::text_area::RasterBudget::new(
+                            crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES,
+                        )
+                    }),
+                    area,
+                    &mut self.strips,
+                    reveals,
+                )
+                .await?
             }
             _ => return Err("shell3-show-backend-not-implemented"),
         };
@@ -369,7 +395,12 @@ fn show_extent(columns: usize, rows: usize, scale: u32) -> Result<(u32, u32), &'
     Ok((width, height))
 }
 
-fn create_surface(width: u32, height: u32, backend: Backend, geometry: Option<super::service::WindowGeometry>) -> Result<Ui4Surface, &'static str> {
+fn create_surface(
+    width: u32,
+    height: u32,
+    backend: Backend,
+    geometry: Option<super::service::WindowGeometry>,
+) -> Result<Ui4Surface, &'static str> {
     let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or("shell3-show-scanout-unavailable")?;
@@ -388,8 +419,12 @@ fn create_surface(width: u32, height: u32, backend: Backend, geometry: Option<su
         output,
         plane: WindowPlane::Universal(crate::ui4::ALPHA_OVERLAY_PLANE_SLOT as u8),
         placement: WindowPlacement {
-            x: geometry.map(|g| g.x).unwrap_or(screen_width.saturating_sub(width) as i32 / 2),
-            y: geometry.map(|g| g.y).unwrap_or(screen_height.saturating_sub(height) as i32 / 2),
+            x: geometry
+                .map(|g| g.x)
+                .unwrap_or(screen_width.saturating_sub(width) as i32 / 2),
+            y: geometry
+                .map(|g| g.y)
+                .unwrap_or(screen_height.saturating_sub(height) as i32 / 2),
             width,
             height,
             z: 90,

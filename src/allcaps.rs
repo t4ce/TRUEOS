@@ -91,11 +91,22 @@ pub mod gfx {
     pub const SCREENSHOT_CAPTURE_ENABLED: bool = false;
 }
 
+#[cfg(feature = "trueos_lumen")]
 pub mod lumen {
+    /// Current single-model intensive-test profile. Disable this one switch
+    /// when boot-resident inference assets are no longer the desired policy.
+    pub const BOOT_RESIDENT_WARM_ENABLED: bool = true;
 
+    /// Let the compositor enter its steady service loop before model I/O and
+    /// in-place Q8 packing begin on a background performance core.
+    pub const BOOT_RESIDENT_WARM_SETTLE_MS: u64 = 2_000;
 }
 
+#[cfg(feature = "trueos_ttstt")]
 pub mod ttstt {
+    /// Keep the service available for command-driven lazy startup without
+    /// reading the complete model set during normal BSP boot.
+    pub const BOOT_RESIDENT_WARM_ENABLED: bool = false;
 }
 
 pub mod media_encode {
@@ -187,7 +198,6 @@ pub mod usb {
     // Keep the xHCI event pump responsive, but give controller-owner maintenance
     // only a small cooperative window at a deliberately low idle cadence.
     pub const CONTROLLER_MAINTENANCE_CADENCE_MS: u64 = 100;
-    pub const CONTROLLER_MAINTENANCE_BUDGET_MS: u64 = 5;
     pub const CONTROLLER_SNAPSHOT_CADENCE_MS: u64 = 5_000;
 }
 

@@ -45,13 +45,7 @@ pub(crate) enum GpgpuPreviewPreset {
 
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Lab256,
-    CppGallery,
     CppCloudHighWisps,
-    CppAurora,
-    CppJulia,
-    CppSdf,
-    CppVoronoi,
-    CppRetroSun,
     CppAudio,
     CppParticle,
 }
@@ -61,31 +55,14 @@ impl GpgpuPreviewPreset {
         match self {
             Self::Static => "static",
             Self::Lab256 => "lab256",
-            Self::CppGallery => "cpp-gallery",
             Self::CppCloudHighWisps => "cpp-cloud-high-wisps",
-            Self::CppAurora => "cpp-aurora",
-            Self::CppJulia => "cpp-julia",
-            Self::CppSdf => "cpp-sdf",
-            Self::CppVoronoi => "cpp-voronoi",
-            Self::CppRetroSun => "cpp-retro-sun",
             Self::CppAudio => "cpp-audio",
             Self::CppParticle => "cpp-particle",
         }
     }
 
     pub(crate) const fn is_cpp(self) -> bool {
-        matches!(
-            self,
-            Self::CppGallery
-                | Self::CppCloudHighWisps
-                | Self::CppAurora
-                | Self::CppJulia
-                | Self::CppSdf
-                | Self::CppVoronoi
-                | Self::CppRetroSun
-                | Self::CppAudio
-                | Self::CppParticle
-        )
+        matches!(self, |Self::CppCloudHighWisps| Self::CppAudio | Self::CppParticle)
     }
 
     pub(crate) const fn is_resizable_cpp(self) -> bool {
@@ -101,15 +78,7 @@ impl GpgpuPreviewPreset {
             Self::Static => "slot1-direct",
 
             Self::Lab256 => "slot1-alpha-256x256",
-            Self::CppGallery
-            | Self::CppCloudHighWisps
-            | Self::CppAurora
-            | Self::CppJulia
-            | Self::CppSdf
-            | Self::CppVoronoi
-            | Self::CppRetroSun
-            | Self::CppAudio
-            | Self::CppParticle => "slot1-direct",
+            Self::CppCloudHighWisps | Self::CppAudio | Self::CppParticle => "slot1-direct",
         }
     }
 }
@@ -258,7 +227,6 @@ impl PreviewRunPolicy {
         interactive_win_demo: false,
         refocus_source: None,
     };
-
 }
 
 struct PreviewControl {
@@ -329,7 +297,6 @@ struct ActivePreview {
 struct StaticPreviewSurface {
     frame: FrameHandle,
     window: WindowId,
-    scheme: u8,
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -380,8 +347,6 @@ fn request_gpgpu_preview_start_with_policy(
     control.status.last_error = "none";
     Ok(serial)
 }
-
-
 
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
@@ -770,13 +735,7 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
     }
     let publish_result = match preview.config.preset {
         GpgpuPreviewPreset::Lab256
-        | GpgpuPreviewPreset::CppGallery
         | GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAurora
-        | GpgpuPreviewPreset::CppJulia
-        | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi
-        | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => match gpu_release {
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
@@ -1016,26 +975,9 @@ fn dispatch_preview_kernel(
                 error: "lab256-dispatch-failed",
             }
         }
-        GpgpuPreviewPreset::CppGallery
-        | GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAurora
-        | GpgpuPreviewPreset::CppJulia
-        | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi
-        | GpgpuPreviewPreset::CppRetroSun => {
+        GpgpuPreviewPreset::CppCloudHighWisps => {
             let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
-            let mode = match preview.config.preset {
-                GpgpuPreviewPreset::CppGallery => crate::intel::gpgpu::CPP_DEMO_MODE_GALLERY,
-                GpgpuPreviewPreset::CppCloudHighWisps => {
-                    crate::intel::gpgpu::CPP_DEMO_MODE_CLOUD_HIGH_WISPS
-                }
-                GpgpuPreviewPreset::CppAurora => crate::intel::gpgpu::CPP_DEMO_MODE_AURORA,
-                GpgpuPreviewPreset::CppJulia => crate::intel::gpgpu::CPP_DEMO_MODE_JULIA,
-                GpgpuPreviewPreset::CppSdf => crate::intel::gpgpu::CPP_DEMO_MODE_SDF,
-                GpgpuPreviewPreset::CppVoronoi => crate::intel::gpgpu::CPP_DEMO_MODE_VORONOI,
-                GpgpuPreviewPreset::CppRetroSun => crate::intel::gpgpu::CPP_DEMO_MODE_RETRO_SUN,
-                _ => crate::intel::gpgpu::CPP_DEMO_MODE_GALLERY,
-            };
+            let mode = crate::intel::gpgpu::CPP_DEMO_MODE_CLOUD_HIGH_WISPS;
             let seed = (preview.request_serial as u32)
                 .rotate_left(13)
                 .wrapping_add(0xC0DE_C901);
@@ -1122,13 +1064,7 @@ fn dispatch_preview_kernel(
 
 const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
-        GpgpuPreviewPreset::CppGallery
-        | GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAurora
-        | GpgpuPreviewPreset::CppJulia
-        | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi
-        | GpgpuPreviewPreset::CppRetroSun
+        GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
@@ -1141,14 +1077,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::Lab256 => "guc-lab256-three-pass",
         GpgpuPreviewPreset::Static => "cpu-static",
 
-        GpgpuPreviewPreset::CppGallery
-        | GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAurora
-        | GpgpuPreviewPreset::CppJulia
-        | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi
-        | GpgpuPreviewPreset::CppRetroSun
-        | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
+        GpgpuPreviewPreset::CppCloudHighWisps | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
         GpgpuPreviewPreset::CppParticle => "guc-cpp-stateful-three-pass",
     }
 }
@@ -1156,13 +1085,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
 const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
     match preset {
         GpgpuPreviewPreset::Static => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
-        GpgpuPreviewPreset::CppGallery
-        | GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAurora
-        | GpgpuPreviewPreset::CppJulia
-        | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi
-        | GpgpuPreviewPreset::CppRetroSun
+        GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => {
             WindowPlane::Universal(preview_plane_slot(preset) as u8)
@@ -1175,13 +1098,7 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
 const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
         GpgpuPreviewPreset::Lab256 => "ui4-alpha-slot1-256x256",
-        GpgpuPreviewPreset::CppGallery
-        | GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAurora
-        | GpgpuPreviewPreset::CppJulia
-        | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi
-        | GpgpuPreviewPreset::CppRetroSun
+        GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
 
@@ -1830,17 +1747,7 @@ fn aggregate_preview_metrics(previews: &[ActivePreview]) -> GpgpuPreviewMetrics 
 }
 
 const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
-    if matches!(
-        preset,
-        GpgpuPreviewPreset::CppGallery
-            | GpgpuPreviewPreset::CppAurora
-            | GpgpuPreviewPreset::CppJulia
-            | GpgpuPreviewPreset::CppSdf
-            | GpgpuPreviewPreset::CppVoronoi
-            | GpgpuPreviewPreset::CppRetroSun
-            | GpgpuPreviewPreset::CppAudio
-            | GpgpuPreviewPreset::CppParticle
-    ) {
+    if matches!(preset, |GpgpuPreviewPreset::CppAudio| GpgpuPreviewPreset::CppParticle) {
         return 1;
     }
     super::ALPHA_OVERLAY_PLANE_SLOT
@@ -1891,13 +1798,7 @@ mod tests {
     #[test]
     fn cpp_modes_share_the_resizable_slot1_application_surface() {
         let modes = [
-            GpgpuPreviewPreset::CppGallery,
             GpgpuPreviewPreset::CppCloudHighWisps,
-            GpgpuPreviewPreset::CppAurora,
-            GpgpuPreviewPreset::CppJulia,
-            GpgpuPreviewPreset::CppSdf,
-            GpgpuPreviewPreset::CppVoronoi,
-            GpgpuPreviewPreset::CppRetroSun,
             GpgpuPreviewPreset::CppAudio,
         ];
         for mode in modes {

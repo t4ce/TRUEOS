@@ -50,10 +50,11 @@ static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CAPTURE_REQUESTS: Mutex<VecDeque<CaptureRequest>> = Mutex::new(VecDeque::new());
 static CAPTURE_QUEUE: Mutex<VecDeque<CapturedComposition>> = Mutex::new(VecDeque::new());
-static SHOT_TARGETS: Mutex<VecDeque<(Option<crate::shell3::MatrixTarget>, Option<super::input_broker::Ui4VisualRect>)>> = Mutex::new(VecDeque::new());
+static SHOT_TARGETS: Mutex<
+    VecDeque<(Option<crate::shell3::MatrixTarget>, Option<super::input_broker::Ui4VisualRect>)>,
+> = Mutex::new(VecDeque::new());
 
 pub(super) enum CaptureError {
-    NoScanout,
     DimensionTooLarge,
     InvalidFrameLayout,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -107,7 +108,6 @@ impl fmt::Debug for CompactWindowObservation {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CompactWindowObservationError {
-    NoScanout,
     DimensionTooLarge,
     InvalidFrameLayout,
     WindowUnavailable(super::WindowId),
@@ -124,7 +124,6 @@ pub(crate) enum CompactWindowObservationError {
 impl From<CaptureError> for CompactWindowObservationError {
     fn from(error: CaptureError) -> Self {
         match error {
-            CaptureError::NoScanout => Self::NoScanout,
             CaptureError::DimensionTooLarge => Self::DimensionTooLarge,
             CaptureError::InvalidFrameLayout => Self::InvalidFrameLayout,
             CaptureError::WindowUnavailable(window) => Self::WindowUnavailable(window),
@@ -142,7 +141,6 @@ impl From<crate::graphics::encoder::png::PngEncodeError> for CompactWindowObserv
 impl fmt::Debug for CaptureError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoScanout => formatter.write_str("NoScanout"),
             Self::DimensionTooLarge => formatter.write_str("DimensionTooLarge"),
             Self::InvalidFrameLayout => formatter.write_str("InvalidFrameLayout"),
             Self::WindowUnavailable(window) => formatter
@@ -233,12 +231,12 @@ pub(crate) fn request_wd_postblend_capture(
     Ok(())
 }
 
-fn report_shot_result(
-    target: Option<&crate::shell3::MatrixTarget>,
-    result: Result<&str, &str>,
-) {
+fn report_shot_result(target: Option<&crate::shell3::MatrixTarget>, result: Result<&str, &str>) {
     if let Some(target) = target {
-        let message = match result { Ok(path) => crate::shell3::capture::saved_result(path), Err(error) => crate::shell3::capture::error_result(error) };
+        let message = match result {
+            Ok(path) => crate::shell3::capture::saved_result(path),
+            Err(error) => crate::shell3::capture::error_result(error),
+        };
         crate::shell3::tui::native_notice(target, &message);
         crate::shell3::capture::print_line(target, &message);
     }
@@ -1114,7 +1112,10 @@ pub(crate) async fn ui4_screenshot_service_task() {
     loop {
         drive_manual_wd_capture_if_needed().await;
         if crate::intel::media::wd_xyuv8888::take_failed_screenshot() {
-            let target = SHOT_TARGETS.lock().pop_front().and_then(|(target, _)| target);
+            let target = SHOT_TARGETS
+                .lock()
+                .pop_front()
+                .and_then(|(target, _)| target);
             report_shot_result(target.as_ref(), Err("Screenshot copy failed."));
         }
         if let Some(capture) = take_wd_postblend_capture() {
@@ -1133,7 +1134,10 @@ pub(crate) async fn ui4_screenshot_service_task() {
                 );
                 queue.push_back(capture);
             } else {
-                report_shot_result(capture.shot_target.as_ref(), Err("Screenshot save queue is full."));
+                report_shot_result(
+                    capture.shot_target.as_ref(),
+                    Err("Screenshot save queue is full."),
+                );
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: wd snapshot dropped wd_sequence={} reason=encode-queue-full\n",
                     wd_sequence,
@@ -1159,7 +1163,10 @@ pub(crate) async fn ui4_screenshot_service_task() {
             if queue.len() < MAX_CAPTURE_QUEUE {
                 queue.push_front(capture);
             } else {
-                report_shot_result(capture.shot_target.as_ref(), Err("No writable root; screenshot queue is full."));
+                report_shot_result(
+                    capture.shot_target.as_ref(),
+                    Err("No writable root; screenshot queue is full."),
+                );
                 release_interactive_capture_gate(&capture);
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: capture dropped sequence={} reason=no-root-and-queue-full\n",

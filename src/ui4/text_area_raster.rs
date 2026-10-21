@@ -139,7 +139,6 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         Ok(true)
     }
 
-
     /// Paint retained RGBA glyph cells without rebuilding one-bit masks.
     /// The glyph provider owns stable source backing through service lifetime;
     /// this raster retains the same cancellation and retirement ownership rules.
@@ -154,10 +153,17 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         if self.unretired || *poisoned {
             return Err("text-area-backing-pinned");
         }
-        let update = self.cells.update(view, revision, produce).ok_or("text-area-view")?;
+        let update = self
+            .cells
+            .update(view, revision, produce)
+            .ok_or("text-area-view")?;
         let layout = self.layout();
-        let copies = match update.writes.into_iter().map(|write| glyph(write, layout))
-            .collect::<Result<Vec<_>, _>>() {
+        let copies = match update
+            .writes
+            .into_iter()
+            .map(|write| glyph(write, layout))
+            .collect::<Result<Vec<_>, _>>()
+        {
             Ok(copies) => copies,
             Err(error) => {
                 // Cell identities were updated above. Recreate every pending
@@ -167,10 +173,12 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             }
         };
         let started = super::text_blit::stamp();
-        let cpu_paint = unsafe {
-            super::text_blit::try_glyph_copy(self.surface(), &copies)
+        let cpu_paint = unsafe { super::text_blit::try_glyph_copy(self.surface(), &copies) };
+        let batches = if cpu_paint {
+            0
+        } else {
+            copies.len().div_ceil(128)
         };
-        let batches = if cpu_paint { 0 } else { copies.len().div_ceil(128) };
         let work = RasterWork {
             produced: update.produced,
             reused: update.reused,
@@ -182,12 +190,19 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             let queued = crate::intel::queue_guc_bcs0_legacy_rgba_copies(self.surface(), chunk);
             if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
                 self.invalidate();
-                if *poisoned { self.quarantine(); }
+                if *poisoned {
+                    self.quarantine();
+                }
                 return Err(error);
             }
         }
-        super::text_blit::report("cache-glyph-copy", super::text_blit::copy_pixels(&copies),
-            cpu_paint, batches, started);
+        super::text_blit::report(
+            "cache-glyph-copy",
+            super::text_blit::copy_pixels(&copies),
+            cpu_paint,
+            batches,
+            started,
+        );
         Ok(work)
     }
 
@@ -198,7 +213,8 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         origin: (u32, u32),
         poisoned: &mut bool,
     ) -> Result<usize, &'static str> {
-        self.copy_views(&[(view, origin)], destination, poisoned).await
+        self.copy_views(&[(view, origin)], destination, poisoned)
+            .await
     }
 
     /// Copy disjoint pieces of one cached area in bounded batches.
@@ -216,7 +232,10 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         for &(view, origin) in views {
             let pieces = self.cells.view_copies(view).ok_or("text-area-copy-view")?;
             for piece in pieces {
-                converted.push(rgba_copy(piece, self.surface(), layout, origin).ok_or("text-area-copy-origin")?);
+                converted.push(
+                    rgba_copy(piece, self.surface(), layout, origin)
+                        .ok_or("text-area-copy-origin")?,
+                );
             }
         }
         let copies: Vec<_> = converted
@@ -240,18 +259,32 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         // Caller holds the destination's writable frame lease; this cache has
         // no unretired work and supplies stable pixels through the sync copy.
         if unsafe { super::text_blit::try_copy(destination, &copies, layout.cell_height) } {
-            super::text_blit::report("viewport-copy",super::text_blit::copy_pixels(&copies),true,0,started);
+            super::text_blit::report(
+                "viewport-copy",
+                super::text_blit::copy_pixels(&copies),
+                true,
+                0,
+                started,
+            );
             return Ok(count);
         }
         // Stay below BCS0's 160-copy admission limit, including ring wraps.
         for chunk in copies.chunks(128) {
             let queued = crate::intel::queue_guc_bcs0_rgba_copies(destination, chunk);
             if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
-                if *poisoned { self.quarantine(); }
+                if *poisoned {
+                    self.quarantine();
+                }
                 return Err(error);
             }
         }
-        super::text_blit::report("viewport-copy",super::text_blit::copy_pixels(&copies),false,copies.len().div_ceil(128),started);
+        super::text_blit::report(
+            "viewport-copy",
+            super::text_blit::copy_pixels(&copies),
+            false,
+            copies.len().div_ceil(128),
+            started,
+        );
         Ok(count)
     }
 }

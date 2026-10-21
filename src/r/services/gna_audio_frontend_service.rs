@@ -53,7 +53,6 @@ impl PipelineState {
     }
 }
 
-
 #[derive(Clone, Copy)]
 struct LevelSnapshot {
     sequence: u64,
@@ -95,14 +94,6 @@ static WAKE_SOURCE_TIMESTAMP_MS: AtomicU64 = AtomicU64::new(0);
 
 static WAKE_LOGS: AtomicU64 = AtomicU64::new(0);
 static WAKE_EVENTS_COALESCED: AtomicU64 = AtomicU64::new(0);
-
-
-
-
-
-
-
-
 
 fn load_level(
     sequence: &AtomicU64,

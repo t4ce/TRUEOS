@@ -9,7 +9,7 @@ use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer};
 
 use crate::r::fs::trueosfs as fs;
-use crate::shell3::{MatrixTarget};
+use crate::shell3::MatrixTarget;
 use crate::ui4::h264_capture_session::CaptureSessionGate;
 
 const DIRECTORY: &str = "screenfilms";
@@ -35,14 +35,25 @@ pub(super) fn set_encoder_ready() {
     ENCODER_READY.store(true, Ordering::Release);
 }
 
-pub(crate) fn request_capture_film(origin: MatrixTarget, recording: crate::shell3::capture::Recording) -> Result<(), &'static str> {
+pub(crate) fn request_capture_film(
+    origin: MatrixTarget,
+    recording: crate::shell3::capture::Recording,
+) -> Result<(), &'static str> {
     request_film_inner(0, origin, Some(recording))
 }
-fn request_film_inner(minutes: u8, origin: MatrixTarget, capture: Option<crate::shell3::capture::Recording>) -> Result<(), &'static str> {
+fn request_film_inner(
+    minutes: u8,
+    origin: MatrixTarget,
+    capture: Option<crate::shell3::capture::Recording>,
+) -> Result<(), &'static str> {
     if !ENCODER_READY.load(Ordering::Acquire) {
         return Err("hardware encoder is not ready");
     }
-    let disk = match &capture {Some(recording) => recording.disk, None => crate::ui4::screenshot::writable_capture_root_handle().ok_or("no writable TRUEOSFS root is mounted")?};
+    let disk = match &capture {
+        Some(recording) => recording.disk,
+        None => crate::ui4::screenshot::writable_capture_root_handle()
+            .ok_or("no writable TRUEOSFS root is mounted")?,
+    };
     let now = crate::chronos::monotonic_nanos();
     let mut admission = ADMISSION.lock();
     admission.claim_film(now)?;
@@ -53,9 +64,21 @@ fn request_film_inner(minutes: u8, origin: MatrixTarget, capture: Option<crate::
     let target = origin.clone();
     let session = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let wall = crate::chronos::best_effort_unix_time_seconds().unwrap_or(0);
-    let path = capture.as_ref().map(|recording| recording.path.clone()).unwrap_or_else(|| format!("{DIRECTORY}/wd-postblend-{wall}-{}-film{session:06}.h264", now / 1_000_000));
-    let duration = capture.as_ref().map(|c| format!("{} sec", c.seconds())).unwrap_or_else(|| format!("{minutes} min"));
-    let stop = if capture.is_some() {"stop and save from the capture menu"} else {"stop and save with §film§"};
+    let path = capture
+        .as_ref()
+        .map(|recording| recording.path.clone())
+        .unwrap_or_else(|| {
+            format!("{DIRECTORY}/wd-postblend-{wall}-{}-film{session:06}.h264", now / 1_000_000)
+        });
+    let duration = capture
+        .as_ref()
+        .map(|c| format!("{} sec", c.seconds()))
+        .unwrap_or_else(|| format!("{minutes} min"));
+    let stop = if capture.is_some() {
+        "stop and save from the capture menu"
+    } else {
+        "stop and save with §film§"
+    };
     crate::shell3::capture::print_line(
         &target,
         &format!(
@@ -237,23 +260,34 @@ async fn run_recording(request: FilmRequest) {
         if let Some(capture) = &request.capture {
             let timeout = started + 10_000_000_000;
             while !super::prepared_scanout_ready(request.session, 0) {
-                if capture.stopped() || crate::shell3::capture::interrupted(&request.target) || crate::chronos::monotonic_nanos() >= timeout {
-                    ready = false; break;
+                if capture.stopped()
+                    || crate::shell3::capture::interrupted(&request.target)
+                    || crate::chronos::monotonic_nanos() >= timeout
+                {
+                    ready = false;
+                    break;
                 }
                 Timer::after(Duration::from_millis(1)).await;
             }
             if ready {
                 if let Some(epoch) = capture.ready().await {
-                    started = epoch; deadline = capture.deadline(epoch);
+                    started = epoch;
+                    deadline = capture.deadline(epoch);
                     capture.started(crate::chronos::monotonic_nanos(), 0);
                     next_progress = started + PROGRESS_NS;
                     next_flush = next_progress;
-                } else {ready = false;}
+                } else {
+                    ready = false;
+                }
             }
-            if !ready {reason = "capture startup cancelled or timed out";}
+            if !ready {
+                reason = "capture startup cancelled or timed out";
+            }
         }
         while ready {
-            if crate::shell3::capture::interrupted(&request.target) || request.capture.as_ref().is_some_and(|c| c.stopped()) {
+            if crate::shell3::capture::interrupted(&request.target)
+                || request.capture.as_ref().is_some_and(|c| c.stopped())
+            {
                 reason = "stopped by Matrix slot";
                 break;
             }
@@ -295,13 +329,17 @@ async fn run_recording(request: FilmRequest) {
                 reason = "encoded frame exceeded recording limit";
                 break;
             }
-            if let Some(capture) = &request.capture {capture.frame(bytes.len(), frame_ns);}
+            if let Some(capture) = &request.capture {
+                capture.frame(bytes.len(), frame_ns);
+            }
             spool.pending.extend_from_slice(&bytes);
             sequence += 1;
         }
     }
 
-    if let Some(capture) = &request.capture {capture.stop();}
+    if let Some(capture) = &request.capture {
+        capture.stop();
+    }
     let retired = if started_capture {
         super::end_preparation_session(request.session).await
     } else {
@@ -310,7 +348,10 @@ async fn run_recording(request: FilmRequest) {
     };
     let finished = crate::chronos::monotonic_nanos();
     progress(&request, &stats, &spool, started, finished);
-    crate::shell3::capture::print_line(&request.target, &format!("film: {reason}; saving recording"));
+    crate::shell3::capture::print_line(
+        &request.target,
+        &format!("film: {reason}; saving recording"),
+    );
     let saved = spool.finish(&request.target).await;
     let saved_ok = saved.is_ok();
     let result = match saved {
@@ -326,7 +367,9 @@ async fn run_recording(request: FilmRequest) {
         ),
     };
     crate::shell3::capture::print_line(&request.target, &result);
-    if crate::shell3::matrix_target_slot_lease(&request.target) != crate::shell3::matrix_target_slot_lease(&request.origin) {
+    if crate::shell3::matrix_target_slot_lease(&request.target)
+        != crate::shell3::matrix_target_slot_lease(&request.origin)
+    {
         crate::shell3::capture::print_line(&request.origin, &result);
     }
     crate::log_info!(target: "intel/media-encode"; "{}\n", result);
@@ -338,7 +381,9 @@ async fn run_recording(request: FilmRequest) {
         );
     }
     ADMISSION.lock().finish_film(retired);
-    if let Some(capture) = &request.capture {capture.finish(&result, saved_ok);}
+    if let Some(capture) = &request.capture {
+        capture.finish(&result, saved_ok);
+    }
 }
 
 fn progress(
@@ -355,7 +400,10 @@ fn progress(
         &format!(
             "film: {}s/{}s frames={} fps={}.{:03} saved={} bytes buffered={} bytes capture_avg={}us encode_avg={}us",
             elapsed_ms / 1_000,
-            request.capture.as_ref().map_or(u64::from(request.minutes)*60, |c| u64::from(c.seconds())),
+            request
+                .capture
+                .as_ref()
+                .map_or(u64::from(request.minutes) * 60, |c| u64::from(c.seconds())),
             stats.frames,
             fps_milli / 1_000,
             fps_milli % 1_000,

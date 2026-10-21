@@ -2,11 +2,11 @@
 mod ansi;
 mod input;
 
+use super::command_history::CommandHistory;
 use super::{MetaFmtStr, RgbaColor, Shell3, SpecialRows};
 use alloc::{string::String, vec::Vec};
 use ansi::AnsiView;
 use input::InputDecoder;
-use super::command_history::CommandHistory;
 use zeroize::Zeroize;
 
 const LINE_LIMIT: usize = 1024;
@@ -27,13 +27,14 @@ pub(super) struct Terminal {
 }
 
 impl Terminal {
-
     pub fn new_ssh(shell: Shell3) -> Self {
         Self::start(shell, true)
     }
 
     fn start(mut shell: Shell3, controls: bool) -> Self {
-        if controls { super::tui::bind_remote_frontend(shell.tui_frontend); }
+        if controls {
+            super::tui::bind_remote_frontend(shell.tui_frontend);
+        }
         shell.command_history.set_recording(false);
         let mut history = CommandHistory::default();
         history.set_scope(super::matrix_target::TRANSPORT_NET_TCP_SCOPE);
@@ -104,7 +105,9 @@ impl Terminal {
             self.shell.set(columns, rows);
             // PTY geometry reaches the app through the lease's surface query.
             // It alone decides how to repaint its remote terminal on resize.
-            if super::tui::remote_active(self.shell.tui_frontend) { return; }
+            if super::tui::remote_active(self.shell.tui_frontend) {
+                return;
+            }
             if let Some(lines) = self.view.lines.as_mut() {
                 lines.clear();
                 self.clear_screen();
@@ -117,4 +120,10 @@ impl Terminal {
     }
 }
 
-impl Drop for Terminal { fn drop(&mut self) { self.line.zeroize(); self.decoder.utf8.zeroize(); self.decoder.csi.zeroize(); } }
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        self.line.zeroize();
+        self.decoder.utf8.zeroize();
+        self.decoder.csi.zeroize();
+    }
+}

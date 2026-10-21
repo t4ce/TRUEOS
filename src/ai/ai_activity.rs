@@ -12,12 +12,15 @@ const AI_ACTIVITY_EVENT_CAPACITY: usize = 64;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AiActivitySource {
+    #[cfg(feature = "trueos_lumen")]
     Lumen,
 }
 
 impl AiActivitySource {
+    #[cfg(feature = "trueos_lumen")]
     const fn name(self) -> &'static str {
         match self {
+            #[cfg(feature = "trueos_lumen")]
             Self::Lumen => "lumen",
         }
     }
@@ -25,14 +28,19 @@ impl AiActivitySource {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AiReasoningPhase {
+    #[cfg(feature = "trueos_lumen")]
     Started,
+    #[cfg(feature = "trueos_lumen")]
     Finished,
 }
 
 impl AiReasoningPhase {
+    #[cfg(feature = "trueos_lumen")]
     const fn name(self) -> &'static str {
         match self {
+            #[cfg(feature = "trueos_lumen")]
             Self::Started => "started",
+            #[cfg(feature = "trueos_lumen")]
             Self::Finished => "finished",
         }
     }
@@ -49,6 +57,7 @@ static ACTIVE_REASONING_COUNT: AtomicU32 = AtomicU32::new(0);
 static AI_ACTIVITY_EVENTS: Mutex<Deque<AiReasoningEvent, AI_ACTIVITY_EVENT_CAPACITY>> =
     Mutex::new(Deque::new());
 
+#[cfg(feature = "trueos_lumen")]
 #[must_use = "keep the guard alive for the whole AI turn"]
 pub(crate) struct AiReasoningGuard {
     source: AiActivitySource,
@@ -56,6 +65,7 @@ pub(crate) struct AiReasoningGuard {
     active: bool,
 }
 
+#[cfg(feature = "trueos_lumen")]
 impl AiReasoningGuard {
     pub(crate) fn finish(mut self) {
         self.publish_finished();
@@ -75,12 +85,14 @@ impl AiReasoningGuard {
     }
 }
 
+#[cfg(feature = "trueos_lumen")]
 impl Drop for AiReasoningGuard {
     fn drop(&mut self) {
         self.publish_finished();
     }
 }
 
+#[cfg(feature = "trueos_lumen")]
 pub(crate) fn begin_reasoning(source: AiActivitySource, turn: u64) -> AiReasoningGuard {
     ACTIVE_REASONING_COUNT.fetch_add(1, Ordering::AcqRel);
     publish(AiReasoningEvent {
@@ -104,6 +116,7 @@ pub(crate) fn try_take_reasoning_event() -> Option<AiReasoningEvent> {
     AI_ACTIVITY_EVENTS.lock().pop_front()
 }
 
+#[cfg(feature = "trueos_lumen")]
 fn publish(event: AiReasoningEvent) {
     let queued = AI_ACTIVITY_EVENTS.lock().push_back(event).is_ok();
     crate::log_info!(

@@ -67,14 +67,7 @@ pub enum ComputeWorkerPolicy {
 }
 
 impl ComputeWorkerPolicy {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::PerformanceOnly => "perf-only",
-            Self::PerformanceFirst => "perf-first",
-            Self::EfficiencyOnly => "eff-only",
-            Self::AnyBackground => "any-background",
-        }
-    }
+    
 }
 
 /// Runtime view of the AP carriers eligible for a compute policy.
@@ -614,4 +607,20 @@ mod tests {
             Some(0)
         );
     }
+}
+
+#[cfg(feature = "trueos_lumen")]
+/// Report whether a strict AP2+ performance-core worker is registered without
+/// advancing the round-robin selector used by actual task placement.
+pub fn has_perf_background_worker_slot() -> bool {
+    registered_background_slot_range().any(|slot| {
+        is_slot_registered(slot)
+            && is_general_background_worker_slot(slot)
+            && core_kind_for_slot(slot) == CORE_KIND_PERF
+    })
+}
+
+#[cfg(feature = "trueos_lumen")]
+pub fn pick_perf_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawner)> {
+    pick_background_spawner_with_filter(|slot| core_kind_for_slot(slot) == CORE_KIND_PERF)
 }

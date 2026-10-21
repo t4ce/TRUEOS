@@ -12,7 +12,10 @@ pub(crate) struct MatrixSlotLease {
 
 impl MatrixSlotLease {
     pub(crate) fn from_identity(id: String, lifetime_generation: u64) -> Self {
-        Self { id, lifetime_generation }
+        Self {
+            id,
+            lifetime_generation,
+        }
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -39,21 +42,32 @@ pub(crate) fn matrix_target_slot_lease(target: &MatrixTarget) -> MatrixSlotLease
     target.lease.clone()
 }
 
-
 /// A resource retired when its exact slot lifetime disappears.
 pub(crate) trait MatrixSlotAttachment: Send + Sync {
     fn on_matrix_slot_freed(&self, lease: &MatrixSlotLease);
 }
 
 pub(crate) fn matrix_slot_is_live(lease: &MatrixSlotLease) -> bool {
-    super::matrix_slots().lock().lifetimes.iter()
-        .any(|(name, generation)| name == lease.name() && *generation == lease.lifetime_generation())
+    super::matrix_slots()
+        .lock()
+        .lifetimes
+        .iter()
+        .any(|(name, generation)| {
+            name == lease.name() && *generation == lease.lifetime_generation()
+        })
 }
 
 /// Admission binds the VM while deletion is excluded by the slot registry lock.
-pub(crate) fn with_live_matrix_slot<T>(lease: &MatrixSlotLease, bind: impl FnOnce() -> T) -> Option<T> {
+pub(crate) fn with_live_matrix_slot<T>(
+    lease: &MatrixSlotLease,
+    bind: impl FnOnce() -> T,
+) -> Option<T> {
     let slots = super::matrix_slots().lock();
-    if !slots.lifetimes.iter().any(|(name, generation)| name == lease.name() && *generation == lease.lifetime_generation()) { return None; }
+    if !slots.lifetimes.iter().any(|(name, generation)| {
+        name == lease.name() && *generation == lease.lifetime_generation()
+    }) {
+        return None;
+    }
     Some(bind())
 }
 
@@ -62,8 +76,9 @@ pub(crate) fn attach_matrix_slot_resource(
     resource: alloc::sync::Arc<dyn MatrixSlotAttachment>,
 ) -> Result<(), ()> {
     let mut slots = super::matrix_slots().lock();
-    if !slots.lifetimes.iter().any(|(name, generation)|
-        name == lease.name() && *generation == lease.lifetime_generation()) {
+    if !slots.lifetimes.iter().any(|(name, generation)| {
+        name == lease.name() && *generation == lease.lifetime_generation()
+    }) {
         return Err(());
     }
     slots.attachments.push((lease.clone(), resource));
@@ -71,17 +86,21 @@ pub(crate) fn attach_matrix_slot_resource(
 }
 
 /// Callbacks run after dropping the slot registry lock.
-pub(super) fn retire_expired_attachments(slots: &mut super::MatrixSlotsState)
-    -> alloc::vec::Vec<(MatrixSlotLease, alloc::sync::Arc<dyn MatrixSlotAttachment>)>
-{
-    slots.background_active.retain(|lease| slots.lifetimes.iter().any(|(name, generation)|
-        name == lease.name() && *generation == lease.lifetime_generation()));
+pub(super) fn retire_expired_attachments(
+    slots: &mut super::MatrixSlotsState,
+) -> alloc::vec::Vec<(MatrixSlotLease, alloc::sync::Arc<dyn MatrixSlotAttachment>)> {
+    slots.background_active.retain(|lease| {
+        slots.lifetimes.iter().any(|(name, generation)| {
+            name == lease.name() && *generation == lease.lifetime_generation()
+        })
+    });
     let mut retired = alloc::vec::Vec::new();
     let mut index = 0;
     while index < slots.attachments.len() {
         let lease = &slots.attachments[index].0;
-        if slots.lifetimes.iter().any(|(name, generation)|
-            name == lease.name() && *generation == lease.lifetime_generation()) {
+        if slots.lifetimes.iter().any(|(name, generation)| {
+            name == lease.name() && *generation == lease.lifetime_generation()
+        }) {
             index += 1;
         } else {
             retired.push(slots.attachments.remove(index));

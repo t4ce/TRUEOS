@@ -8,7 +8,6 @@ use core::sync::atomic::{AtomicU64, Ordering, compiler_fence};
 use super::vmx::{self, LaunchResult};
 
 pub const MAX_DEBUG_ADDRESSES: usize = 64;
-pub const MAX_STACK_READ_BYTES: u64 = 64 * 1024;
 pub const SNAPSHOT_MAGIC: u64 = 0x5041_4e53_4346_4344; // "DCFCSNAP" in memory.
 pub const SNAPSHOT_SCHEMA_VERSION: u64 = 1;
 
@@ -93,25 +92,6 @@ fn armed_resume_rip(enabled: u64, archive: &str, interruption: u32, rip: u64) ->
 
 /// Translate a bounded raw stack read using the snapshot's retained backing.
 /// Callers must use CR3/EPT translation for addresses outside this low stack.
-pub fn bounded_stack_host_address(
-    guest_stack_base: u64,
-    stack_host_base: u64,
-    stack_bytes: u64,
-    guest_address: u64,
-    bytes: u64,
-) -> Option<u64> {
-    if stack_host_base == 0 || bytes == 0 || bytes > MAX_STACK_READ_BYTES {
-        return None;
-    }
-    let offset = guest_address.checked_sub(guest_stack_base)?;
-    let end = offset.checked_add(bytes)?;
-    if end > stack_bytes {
-        return None;
-    }
-    let host = stack_host_base.checked_add(offset)?;
-    host.checked_add(bytes)?;
-    Some(host)
-}
 
 /// Return true only for the explicit debugger-owned exception. All locks used
 /// to resolve archive/stack identity have been released before the host hook.

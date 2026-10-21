@@ -1,4 +1,5 @@
 pub(crate) mod hfi;
+#[cfg(feature = "trueos_ttstt")]
 pub(crate) mod hwp;
 pub(crate) mod rapl;
 pub(crate) mod thermal;

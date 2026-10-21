@@ -9,7 +9,6 @@ pub const WORK_PACKAGE_MAGIC: u32 = 0x4B50_5754; // "TWPK"
 pub const FLAG_INTERRUPT_ON_COMPLETE: u32 = 1;
 pub const HEARTBEAT_REPLY: u32 = 0x5453_4154; // "TGAT"
 
-pub const BAR0_LED_OFFSET: usize = 0x000;
 pub const BAR0_LIVENESS_MAGIC_OFFSET: usize = 0x020;
 pub const BAR0_CALL_DOORBELL_OFFSET: usize = 0x080;
 pub const BAR0_CALL_IRQ_ACK_OFFSET: usize = 0x084;

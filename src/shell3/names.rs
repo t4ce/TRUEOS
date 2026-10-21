@@ -85,7 +85,7 @@ const CAPTURE_NAMES: [NameEntry; 5] = [
     NameEntry {
         name: "cam",
         color: RgbaColor::White,
-    }
+    },
 ];
 
 const CMD_APPDB_NAMES: [NameEntry; 0] = [];
@@ -201,8 +201,12 @@ pub(super) const VME_GROUP: NameGroup = NameGroup {
 /// Global online fastspawn is submitted by Enter, never exact-name recognition.
 pub(super) fn fastspawn_selector(input: &str) -> Option<&str> {
     let name = input.strip_prefix("§§")?;
-    if name.is_empty() || name.chars().count() > 16
-        || name.chars().any(|ch| ch == '§' || ch.is_whitespace() || ch.is_control()) {
+    if name.is_empty()
+        || name.chars().count() > 16
+        || name
+            .chars()
+            .any(|ch| ch == '§' || ch.is_whitespace() || ch.is_control())
+    {
         return None;
     }
     Some(name)
@@ -210,14 +214,26 @@ pub(super) fn fastspawn_selector(input: &str) -> Option<&str> {
 #[cfg(test)]
 mod fastspawn_tests {
     use super::fastspawn_selector;
-    #[test] fn accepts_one_to_sixteen_characters_and_preserves_case() {
-        assert_eq!(fastspawn_selector("§§Appname"),Some("Appname"));
-        assert_eq!(fastspawn_selector("§§abcdefghijklmnop"),Some("abcdefghijklmnop"));
-        assert_eq!(fastspawn_selector("§§é"),Some("é"));
+    #[test]
+    fn accepts_one_to_sixteen_characters_and_preserves_case() {
+        assert_eq!(fastspawn_selector("§§Appname"), Some("Appname"));
+        assert_eq!(fastspawn_selector("§§abcdefghijklmnop"), Some("abcdefghijklmnop"));
+        assert_eq!(fastspawn_selector("§§é"), Some("é"));
     }
-    #[test] fn leaves_bare_operator_and_slot_forms_outside_fastspawn() {
-        for input in ["§", "§§", "§sh1", "§sh1§", "§§§", "§§a§", "§§a b", "§§a\n", "§§abcdefghijklmnopq"] {
-            assert_eq!(fastspawn_selector(input),None,"{input:?}");
+    #[test]
+    fn leaves_bare_operator_and_slot_forms_outside_fastspawn() {
+        for input in [
+            "§",
+            "§§",
+            "§sh1",
+            "§sh1§",
+            "§§§",
+            "§§a§",
+            "§§a b",
+            "§§a\n",
+            "§§abcdefghijklmnopq",
+        ] {
+            assert_eq!(fastspawn_selector(input), None, "{input:?}");
         }
     }
 }

@@ -300,7 +300,15 @@ fn direct_rcs_ctx_control_value(inhibit_restore: bool) -> u32 {
     ctl
 }
 
-
+fn direct_rcs_wait_eq(dev: super::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
+    for _ in 0..n {
+        if (super::mmio_read(dev, reg) & mask) == want {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
 
 fn direct_rcs_mi_lri_cmd(num_regs: u32, flags: u32) -> u32 {
     MI_LOAD_REGISTER_IMM | MI_LRI_CS_MMIO | flags | num_regs.saturating_mul(2).saturating_sub(1)
@@ -313,7 +321,9 @@ fn direct_rcs_push_nops(state: &mut [u32], idx: &mut usize, count: usize) {
     }
 }
 
-
+fn direct_rcs_masked_bit_enable(bit: u32) -> u32 {
+    bit | (bit << 16)
+}
 
 fn direct_rcs_masked_bit_disable(bit: u32) -> u32 {
     bit << 16

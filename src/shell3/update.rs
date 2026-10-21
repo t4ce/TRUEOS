@@ -13,22 +13,29 @@ pub(super) const CONTROL_BACKGROUND: [u8; 4] = [16, 16, 16, 255];
 
 pub(super) fn cell_color(style: Option<RgbaColor>, default: [u8; 4]) -> RgbaColor {
     let color = style.unwrap_or(RgbaColor::White);
-    let background = color.background()
+    let background = color
+        .background()
         .filter(|bg| *bg != RgbaColor::BlackTransparent.rgba())
         .unwrap_or(default);
     if color.blink() {
         RgbaColor::Blinking {
-            foreground: color.rgba(), background: Some(background), underline: color.underline(),
+            foreground: color.rgba(),
+            background: Some(background),
+            underline: color.underline(),
         }
     } else {
         RgbaColor::Terminal {
-            foreground: color.rgba(), background, underline: color.underline(),
+            foreground: color.rgba(),
+            background,
+            underline: color.underline(),
         }
     }
 }
 
 fn styled_line(mut line: RenderedLine, background: [u8; 4]) -> RenderedLine {
-    for (_, style) in &mut line { *style = Some(cell_color(*style, background)); }
+    for (_, style) in &mut line {
+        *style = Some(cell_color(*style, background));
+    }
     line
 }
 
@@ -76,10 +83,18 @@ pub(crate) struct MatrixAreaSnapshot {
 
 impl MatrixAreaSnapshot {
     pub fn cell(&self, x: i64, y: i64) -> (char, Option<RgbaColor>) {
-        usize::try_from(y).ok().and_then(|y| y.checked_sub(self.first))
+        usize::try_from(y)
+            .ok()
+            .and_then(|y| y.checked_sub(self.first))
             .and_then(|y| self.cells.get(y))
-            .and_then(|row| usize::try_from(x).ok().and_then(|x| x.checked_sub(self.first_column)).and_then(|x| row.get(x)))
-            .copied().unwrap_or_else(|| (' ', Some(cell_color(None, MATRIX_BACKGROUND))))
+            .and_then(|row| {
+                usize::try_from(x)
+                    .ok()
+                    .and_then(|x| x.checked_sub(self.first_column))
+                    .and_then(|x| row.get(x))
+            })
+            .copied()
+            .unwrap_or_else(|| (' ', Some(cell_color(None, MATRIX_BACKGROUND))))
     }
 }
 
@@ -124,7 +139,10 @@ impl Snapshot {
             reveals: Vec::new(),
             rows: strips
                 .map(|(left, right)| VisibleRow {
-                    rendered: styled_line(fit_meta_strips(left, right, columns), CONTROL_BACKGROUND),
+                    rendered: styled_line(
+                        fit_meta_strips(left, right, columns),
+                        CONTROL_BACKGROUND,
+                    ),
                 })
                 .into(),
         }
@@ -133,28 +151,53 @@ impl Snapshot {
     pub(super) fn controls_match(&self, current: &Self) -> bool {
         self.rows.get(..3) == current.rows.get(..3)
     }
-    pub(super) fn reveals(&self) -> &[StripReveal] { &self.reveals }
-    pub(super) fn with_reveal(mut self, row: usize, left: &[MetaFmtStr], frame: Option<super::transition::Frame>) -> Self {
-        let Some(frame) = frame else { return self; };
+    pub(super) fn reveals(&self) -> &[StripReveal] {
+        &self.reveals
+    }
+    pub(super) fn with_reveal(
+        mut self,
+        row: usize,
+        left: &[MetaFmtStr],
+        frame: Option<super::transition::Frame>,
+    ) -> Self {
+        let Some(frame) = frame else {
+            return self;
+        };
         let columns = self.size.0;
         let left_width = left.iter().map(|r| r.text.chars().count()).sum();
         let right_width = frame.source.iter().map(|r| r.text.chars().count()).sum();
-        let tags = fit_strips(alloc::vec![false; left_width], alloc::vec![true; right_width], columns, false, false);
-        let Some(start) = tags.iter().position(|tag| *tag) else { return self; };
-        let mut source = styled_line(fit_meta_strips(left, &frame.source, columns), CONTROL_BACKGROUND);
+        let tags = fit_strips(
+            alloc::vec![false; left_width],
+            alloc::vec![true; right_width],
+            columns,
+            false,
+            false,
+        );
+        let Some(start) = tags.iter().position(|tag| *tag) else {
+            return self;
+        };
+        let mut source =
+            styled_line(fit_meta_strips(left, &frame.source, columns), CONTROL_BACKGROUND);
         let cells = source[start..].to_vec();
         let mut spans: Vec<core::ops::Range<usize>> = Vec::new();
         for index in 0..cells.len() {
             if frame.visible[index] {
                 if let Some(last) = spans.last_mut().filter(|last| last.end == index) {
                     last.end += 1;
-                } else { spans.push(index..index + 1); }
+                } else {
+                    spans.push(index..index + 1);
+                }
             } else {
                 source[start + index] = (' ', Some(cell_color(None, CONTROL_BACKGROUND)));
             }
         }
         self.rows[row].rendered = source;
-        self.reveals.push(StripReveal { row, start, spans, cells });
+        self.reveals.push(StripReveal {
+            row,
+            start,
+            spans,
+            cells,
+        });
         self
     }
 
@@ -162,70 +205,159 @@ impl Snapshot {
         self.with_matrix_offset(lines, generation, 0)
     }
 
-    pub(super) fn with_matrix_offset(self, lines: &[String], generation: u64, offset: usize) -> Self {
+    pub(super) fn with_matrix_offset(
+        self,
+        lines: &[String],
+        generation: u64,
+        offset: usize,
+    ) -> Self {
         self.with_matrix_guard(lines, generation, offset, 0)
     }
 
-    pub(super) fn with_matrix_guard(self, lines: &[String], generation: u64, offset: usize, guard: usize) -> Self {
+    pub(super) fn with_matrix_guard(
+        self,
+        lines: &[String],
+        generation: u64,
+        offset: usize,
+        guard: usize,
+    ) -> Self {
         self.with_matrix_pan(lines, generation, 0, offset, guard)
     }
 
-    pub(super) fn with_matrix_pan(mut self, lines: &[String], generation: u64, column: usize, offset: usize, guard: usize) -> Self {
+    pub(super) fn with_matrix_pan(
+        mut self,
+        lines: &[String],
+        generation: u64,
+        column: usize,
+        offset: usize,
+        guard: usize,
+    ) -> Self {
         self.matrix_generation = generation;
         let count = self.size.1.saturating_sub(3);
         let first = offset.min(lines.len().saturating_sub(count));
         let start = first.saturating_sub(guard);
-        let end = first.saturating_add(count).saturating_add(guard).min(lines.len());
-        let maximum_column = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0).saturating_sub(self.size.0);
+        let end = first
+            .saturating_add(count)
+            .saturating_add(guard)
+            .min(lines.len());
+        let maximum_column = lines
+            .iter()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(self.size.0);
         let column = column.min(maximum_column);
         let first_column = column.saturating_sub(guard);
         let width = column - first_column + self.size.0.saturating_add(guard);
-        let cells: Vec<_> = lines[start.min(end)..end].iter().map(|text| {
-            let mut row: RenderedLine = text.chars().skip(first_column).take(width).map(|ch| (ch, None)).collect();
-            row.resize(width, (' ', None));
-            styled_line(row, MATRIX_BACKGROUND)
-        }).collect();
+        let cells: Vec<_> = lines[start.min(end)..end]
+            .iter()
+            .map(|text| {
+                let mut row: RenderedLine = text
+                    .chars()
+                    .skip(first_column)
+                    .take(width)
+                    .map(|ch| (ch, None))
+                    .collect();
+                row.resize(width, (' ', None));
+                styled_line(row, MATRIX_BACKGROUND)
+            })
+            .collect();
         for index in 0..count {
-            let rendered = cells.get(first + index - start)
+            let rendered = cells
+                .get(first + index - start)
                 .map(|row| row[column - first_column..column - first_column + self.size.0].to_vec())
-                .unwrap_or_else(|| styled_line(fit_meta_strips(&[], &[], self.size.0), MATRIX_BACKGROUND));
-            self.rows.push(VisibleRow {
-                rendered,
-            });
+                .unwrap_or_else(|| {
+                    styled_line(fit_meta_strips(&[], &[], self.size.0), MATRIX_BACKGROUND)
+                });
+            self.rows.push(VisibleRow { rendered });
         }
-        self.matrix_area = Some(MatrixAreaSnapshot { offset: first, column_offset: column, first_column, first: start,
-            columns: self.size.0, rows: count, revision: generation,
+        self.matrix_area = Some(MatrixAreaSnapshot {
+            offset: first,
+            column_offset: column,
+            first_column,
+            first: start,
+            columns: self.size.0,
+            rows: count,
+            revision: generation,
             blink_phase: None,
-            identity: (None, None), cells });
+            identity: (None, None),
+            cells,
+        });
         self
     }
 
-    pub(super) fn with_matrix_identity(mut self, name: Option<String>, lifetime: Option<u64>) -> Self {
-        if let Some(area) = &mut self.matrix_area { area.identity = (name, lifetime); }
+    pub(super) fn with_matrix_identity(
+        mut self,
+        name: Option<String>,
+        lifetime: Option<u64>,
+    ) -> Self {
+        if let Some(area) = &mut self.matrix_area {
+            area.identity = (name, lifetime);
+        }
         self
     }
 
-    pub(super) fn matrix_area(&self) -> Option<&MatrixAreaSnapshot> { self.matrix_area.as_ref() }
-
-    pub(super) fn terminal(size: (usize, usize), layout_generation: usize, lines: Vec<RenderedLine>, revision: u64) -> Self {
-        Self {size, layout_generation, rows: lines.into_iter().map(|rendered| VisibleRow {rendered}).collect(), matrix_generation: 0, tui_revision: revision, terminal_active: true, blink_phase: None, matrix_area: None, reveals: Vec::new()}
+    pub(super) fn matrix_area(&self) -> Option<&MatrixAreaSnapshot> {
+        self.matrix_area.as_ref()
     }
-    pub(super) fn with_tui_revision(mut self, revision: u64) -> Self { self.tui_revision = revision; self }
-    pub(super) fn tui_revision(&self) -> u64 { self.tui_revision }
-    pub(super) fn terminal_active(&self) -> bool { self.terminal_active }
 
-    pub(super) fn blink_phase(&self) -> Option<bool> { self.blink_phase }
+    pub(super) fn terminal(
+        size: (usize, usize),
+        layout_generation: usize,
+        lines: Vec<RenderedLine>,
+        revision: u64,
+    ) -> Self {
+        Self {
+            size,
+            layout_generation,
+            rows: lines
+                .into_iter()
+                .map(|rendered| VisibleRow { rendered })
+                .collect(),
+            matrix_generation: 0,
+            tui_revision: revision,
+            terminal_active: true,
+            blink_phase: None,
+            matrix_area: None,
+            reveals: Vec::new(),
+        }
+    }
+    pub(super) fn with_tui_revision(mut self, revision: u64) -> Self {
+        self.tui_revision = revision;
+        self
+    }
+    pub(super) fn tui_revision(&self) -> u64 {
+        self.tui_revision
+    }
+    pub(super) fn terminal_active(&self) -> bool {
+        self.terminal_active
+    }
+
+    pub(super) fn blink_phase(&self) -> Option<bool> {
+        self.blink_phase
+    }
 
     pub(super) fn with_blink_phase(mut self, visible: bool) -> Self {
         for (index, row) in self.rows.iter_mut().enumerate() {
-            let background = if self.terminal_active { RgbaColor::BlackTransparent.rgba() }
-                else if index < 3 { CONTROL_BACKGROUND } else { MATRIX_BACKGROUND };
+            let background = if self.terminal_active {
+                RgbaColor::BlackTransparent.rgba()
+            } else if index < 3 {
+                CONTROL_BACKGROUND
+            } else {
+                MATRIX_BACKGROUND
+            };
             for (_, style) in &mut row.rendered {
-                if let Some(color) = *style && color.blink() {
+                if let Some(color) = *style
+                    && color.blink()
+                {
                     self.blink_phase = Some(visible);
                     *style = Some(super::RgbaColor::Terminal {
                         foreground: if visible { color.rgba() } else { background },
-                        background: if visible { color.background().unwrap_or(background) } else { background },
+                        background: if visible {
+                            color.background().unwrap_or(background)
+                        } else {
+                            background
+                        },
                         underline: visible && color.underline(),
                     });
                 }
@@ -235,12 +367,22 @@ impl Snapshot {
             // Mirror the visible blink styling into the guarded source cells.
             for row in &mut area.cells {
                 for (_, style) in row {
-                    if let Some(color) = *style && color.blink() {
+                    if let Some(color) = *style
+                        && color.blink()
+                    {
                         self.blink_phase = Some(visible);
                         area.blink_phase = Some(visible);
                         *style = Some(super::RgbaColor::Terminal {
-                            foreground: if visible { color.rgba() } else { MATRIX_BACKGROUND },
-                            background: if visible { color.background().unwrap_or(MATRIX_BACKGROUND) } else { MATRIX_BACKGROUND },
+                            foreground: if visible {
+                                color.rgba()
+                            } else {
+                                MATRIX_BACKGROUND
+                            },
+                            background: if visible {
+                                color.background().unwrap_or(MATRIX_BACKGROUND)
+                            } else {
+                                MATRIX_BACKGROUND
+                            },
                             underline: visible && color.underline(),
                         });
                     }
@@ -329,8 +471,12 @@ pub(super) fn diff_rendered_lines(
             // A fresh frame (or a cleared retry) already has its background.
             // Emit only occupied spans, never a blit per padded blank cell.
             let blank_on_base = |cell: &(char, Option<RgbaColor>)| {
-                cell.0 == ' ' && !cell.1.is_some_and(RgbaColor::underline)
-                    && cell.1.and_then(RgbaColor::background).is_none_or(|bg| bg == MATRIX_BACKGROUND)
+                cell.0 == ' '
+                    && !cell.1.is_some_and(RgbaColor::underline)
+                    && cell
+                        .1
+                        .and_then(RgbaColor::background)
+                        .is_none_or(|bg| bg == MATRIX_BACKGROUND)
             };
             let mut start = 0;
             while start < line.len() {
@@ -377,10 +523,18 @@ pub(super) fn fit_meta_strips(
                         ch,
                         if run.blink {
                             let color = run.color.unwrap_or(RgbaColor::White);
-                            Some(RgbaColor::Blinking {foreground: color.rgba(), background: color.background(), underline: run.underline || color.underline()})
+                            Some(RgbaColor::Blinking {
+                                foreground: color.rgba(),
+                                background: color.background(),
+                                underline: run.underline || color.underline(),
+                            })
                         } else if run.underline {
-                            Some(RgbaColor::Underlined {foreground: run.color.unwrap_or(RgbaColor::White).rgba()})
-                        } else { run.color }
+                            Some(RgbaColor::Underlined {
+                                foreground: run.color.unwrap_or(RgbaColor::White).rgba(),
+                            })
+                        } else {
+                            run.color
+                        },
                     )
                 })
             })

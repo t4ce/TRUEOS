@@ -78,11 +78,15 @@ pub(crate) unsafe fn install(surface: Surface) -> bool {
 
 /// Called synchronously by NIC configuration; independent of AP/task timers.
 pub(crate) fn assignment_changed(assigned: bool) {
-    let Some(surface) = surface() else { return; };
+    let Some(surface) = surface() else {
+        return;
+    };
     let mut frozen = VERDICT_FROZEN.lock();
     if !*frozen {
         // Clear the old centered No before drawing the wider Yes.
-        unsafe { clear_surface(surface); }
+        unsafe {
+            clear_surface(surface);
+        }
         paint_verdict(surface, assigned);
         crate::intel::dma_cache_flush_range(surface.virt as *const u8, surface.byte_len);
         *frozen = true;

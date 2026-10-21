@@ -32,15 +32,14 @@ use trueos_time::Instant;
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
     ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
-    GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState,
-    GpgpuOwnedRgba8Surface, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence,
-    GpgpuRgba8Surface, GpgpuSolidRect, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
-    GpgpuSubmissionOutcome, ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION,
-    SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams,
-    ShaderToyRuntimeState, SkyboxSampleRgb565Params, Ui4CompositorCompletion,
-    Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
-    alpha_blend_worklist_max_descs, fill_solid_rects_rgba8_scanout_result,
-    particle_craft_rgba8_frame, poll_ui4_bcs0_sprite_copy,
+    GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState, GpgpuOwnedRgba8Surface, GpgpuPoint,
+    GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSolidRect,
+    GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun, GpgpuSubmissionOutcome,
+    ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
+    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams, ShaderToyRuntimeState,
+    SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
+    Ui4CompositorSubmitError, Ui4SpriteSceneCompletion, alpha_blend_worklist_max_descs,
+    fill_solid_rects_rgba8_scanout_result, particle_craft_rgba8_frame, poll_ui4_bcs0_sprite_copy,
     poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
     queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
     release_rgba8_surface_for_scanout, skybox_sample_rgb565_to_rgba8,
@@ -5830,7 +5829,6 @@ mod sprite_overlay_tests {
         assert_eq!((fill.x, fill.y, fill.width, fill.height, fill.color), (0, 0, 8, 8, 0));
         assert!(!sprite_scene_uses_bcs0_clear(&[TrueosUi4SpriteQuad::default()]));
     }
-
 }
 
 pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {

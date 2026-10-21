@@ -20,7 +20,13 @@ impl Lab256SpiritSubmission {
     }
 }
 
-
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Lab256SpiritCompletion {
+    Pending,
+    Complete(GpgpuRgba8ReleaseFence),
+    Failed,
+    InvalidSubmission,
+}
 
 #[derive(Copy, Clone, Debug)]
 struct Lab256Buffer {
@@ -216,9 +222,120 @@ fn lab256_report_audit(report: Lab256Buffer, frame: u32) -> bool {
     true
 }
 
+/// Admit one Lab256 frame for Spirit and return immediately. The returned tag
+/// owns the execution direct-RCS lane until `poll_lab256_spirit_submission`
+/// observes both the post-sync marker and the matching saved LRC head;
+/// admission never waits for GPU execution.
+pub(crate) fn submit_lab256_spirit_frame(
+    dst: GpgpuRgba8Surface,
+    present_fps: u32,
+    pointer_xy: Option<(u16, u16)>,
+) -> Option<Lab256SpiritSubmission> {
+    let _submit_guard = EXECUTION_RCS_SUBMIT_LOCK.try_lock()?;
+    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
+        || LAB256_SPIRIT_PENDING.lock().is_some()
+    {
+        return None;
+    }
+    let submitted = submit_lab256_batch(dst, None, present_fps, pointer_xy)?;
+    let tag = LAB256_SPIRIT_NEXT_TAG
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1)
+        .max(1);
+    let handle = Lab256SpiritSubmission {
+        tag,
+        frame: submitted.frame,
+    };
 
+    // Publish detached ownership before dropping the direct-submit lock. Any
+    // later direct-RCS issuer will now defer before touching shared state.
+    EXECUTION_RCS_DETACHED_TAG.store(tag, Ordering::Release);
+    *LAB256_SPIRIT_PENDING.lock() = Some(Lab256SpiritPending {
+        handle,
+        submitted,
+        timeout_logged: false,
+    });
 
+    if submitted.submit_ambiguous || lab256_trace_spirit_frame(submitted.frame) {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: lab256 one-shot accepted tag={} frame={} present_fps={} pointer_active={} pointer_xy={:?} dst=0x{:X} owner=spirit-worker lane=execution admission={} wait=detached producer_lease=retained\n",
+            tag,
+            submitted.frame,
+            submitted.present_fps,
+            submitted.pointer_xy.is_some() as u8,
+            submitted.pointer_xy,
+            dst.gpu,
+            if submitted.submit_ambiguous {
+                "ambiguous-quarantined"
+            } else {
+                "gpu-executor/vgpu/guc"
+            },
+        );
+    }
+    Some(handle)
+}
 
+/// Observe one exact Spirit completion tag once. Pending returns without
+/// spinning until both the post-sync marker and the saved LRC head prove that
+/// GuC has retired and saved the persistent execution context.
+pub(crate) fn poll_lab256_spirit_submission(
+    handle: Lab256SpiritSubmission,
+) -> Lab256SpiritCompletion {
+    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != handle.tag {
+        return Lab256SpiritCompletion::InvalidSubmission;
+    }
+    let mut pending_slot = LAB256_SPIRIT_PENDING.lock();
+    let Some(mut pending) = *pending_slot else {
+        return Lab256SpiritCompletion::InvalidSubmission;
+    };
+    if pending.handle != handle {
+        return Lab256SpiritCompletion::InvalidSubmission;
+    }
+
+    let marker = direct_rcs_read_result_slot(pending.submitted.state, LAB256_POST_MARKER_SLOT);
+    let elapsed_ms = direct_rcs_elapsed_ms_since(pending.submitted.started_tick);
+    let proof =
+        execution_rcs_retirement_proof(pending.submitted.state, marker == LAB256_POST_MARKER);
+    if !proof.complete() {
+        if elapsed_ms < LAB256_COMPLETION_TIMEOUT_MS {
+            return Lab256SpiritCompletion::Pending;
+        }
+        if !pending.timeout_logged {
+            let reason = if marker == LAB256_POST_MARKER {
+                "lab256-marker-observed-context-save-timeout"
+            } else {
+                "lab256-marker-timeout"
+            };
+            quarantine_execution_rcs_context(reason);
+            crate::log_error!(target: "gpgpu";
+                "intel/gpgpu: lab256 detached retirement timeout tag={} frame={} marker=0x{:08X} marker_observed={} saved_head={} published_tail={} pending=retained detached_tag=retained timeline=retained producer_lease=retained backing=retained action=quarantine-execution-lane-and-keep-polling\n",
+                handle.tag,
+                pending.submitted.frame,
+                marker,
+                proof.marker_observed as u8,
+                proof.saved_head_bytes,
+                proof.published_tail_bytes,
+            );
+            pending.timeout_logged = true;
+            *pending_slot = Some(pending);
+        }
+        return Lab256SpiritCompletion::Pending;
+    }
+
+    // Claim the terminal transition so a copied/stale handle cannot retire the
+    // executor token or mint the exact-allocation release twice.
+    *pending_slot = None;
+    drop(pending_slot);
+
+    let report_ok = lab256_report_audit(pending.submitted.report, pending.submitted.frame);
+    complete_execution_rcs_submission();
+    finish_lab256_runtime(pending.submitted.frame, true);
+    EXECUTION_RCS_DETACHED_TAG.store(0, Ordering::Release);
+    log_lab256_completion(pending.submitted, marker, report_ok, "spirit-worker");
+
+    Lab256SpiritCompletion::Complete(gpgpu_rgba8_release(pending.submitted.dst))
+}
 
 /// Produce the next persistent Lab256 frame for a live UI4 preview.
 ///

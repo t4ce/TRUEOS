@@ -1005,3 +1005,15 @@ pub mod logtotcp {
         }
     }
 }
+
+#[cfg(feature = "gridpaper")]
+pub(crate) fn gridpaper_print_requested(owner: u8, token: u32, generation: u64) {
+    log_with_area_level(
+        flags::LogArea::Net,
+        LogLevel::Info,
+        format_args!(
+            "print2d: gridpaper request owner={} token={} generation={} trigger=PrintScreen\n",
+            owner, token, generation
+        ),
+    );
+}

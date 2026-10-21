@@ -130,7 +130,20 @@ pub(crate) enum WdCapturePoll {
     Failed { status: u32 },
 }
 
-
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WdCaptureStatus {
+    pub(crate) running: bool,
+    pub(crate) capture_pending: bool,
+    pub(crate) sequence: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+    pub(crate) wd_func_ctl: u32,
+    pub(crate) wd_trans_conf: u32,
+    pub(crate) wd_frame_status: u32,
+    pub(crate) transcoder_c_conf: u32,
+    pub(crate) map_mode: MirrorMapMode,
+}
 
 /// The complete first-version mapping policy. Slots 0 and 4 are invariant;
 /// Spirit's dedicated hardware cursor slot 5 is mirrored separately and is
@@ -371,7 +384,9 @@ static STATE: Mutex<WdCaptureState> = Mutex::new(WdCaptureState::new());
 static CAPTURE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 static MAP_MODE: AtomicU8 = AtomicU8::new(MirrorMapMode::Identity as u8);
 
-
+pub(crate) fn set_mirror_map_mode(mode: MirrorMapMode) {
+    MAP_MODE.store(mode as u8, Ordering::Release);
+}
 
 fn mirror_map_mode() -> MirrorMapMode {
     MirrorMapMode::from_raw(MAP_MODE.load(Ordering::Acquire))
@@ -829,7 +844,40 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
     Ok(())
 }
 
-
+pub(crate) fn ui4_wd_xyuv8888_capture_status() -> WdCaptureStatus {
+    let state = *STATE.lock();
+    let Some(dev) = crate::intel::claimed_device() else {
+        return WdCaptureStatus {
+            running: state.running,
+            capture_pending: state.pending,
+            sequence: state.sequence,
+            width: state.width,
+            height: state.height,
+            pitch_bytes: state.pitch_bytes,
+            wd_func_ctl: u32::MAX,
+            wd_trans_conf: u32::MAX,
+            wd_frame_status: u32::MAX,
+            transcoder_c_conf: u32::MAX,
+            map_mode: mirror_map_mode(),
+        };
+    };
+    WdCaptureStatus {
+        running: state.running,
+        capture_pending: state.pending,
+        sequence: state.sequence,
+        width: state.width,
+        height: state.height,
+        pitch_bytes: state.pitch_bytes,
+        wd_func_ctl: crate::intel::mmio_read(dev, WD0_FUNC_CTL),
+        wd_trans_conf: crate::intel::mmio_read(dev, WD0_TRANS_CONF),
+        wd_frame_status: crate::intel::mmio_read(dev, WD0_FRAME_STATUS),
+        transcoder_c_conf: crate::intel::mmio_read(
+            dev,
+            PIPECONF_A + MIRROR_PIPE_SLOT * PIPE_MMIO_STRIDE,
+        ),
+        map_mode: mirror_map_mode(),
+    }
+}
 
 #[cfg(test)]
 mod tests {

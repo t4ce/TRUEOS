@@ -4,9 +4,9 @@
 //! not expose a guest/userspace ABI; the compositor service owns presentation.
 
 pub(crate) mod blueprint_ui4;
-mod color_picker;
 mod collapse;
-pub(crate) use collapse::{enable_window_collapse, CollapseError, MAX_COLLAPSE_IMAGE_SIZE};
+mod color_picker;
+pub(crate) use collapse::{CollapseError, MAX_COLLAPSE_IMAGE_SIZE, enable_window_collapse};
 mod compositor_service;
 mod context_menu;
 mod cursor_frame_inout;
@@ -32,8 +32,8 @@ mod start_button;
 pub(crate) mod text_area;
 pub(crate) mod text_area_raster;
 pub(crate) mod text_blit;
-pub(crate) mod text_paint;
 mod text_blit_bench;
+pub(crate) mod text_paint;
 mod video_frame;
 pub(crate) mod window_arc;
 mod window_broker;
@@ -97,10 +97,9 @@ pub(crate) use frame_pool::{
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
     create_gpu_full_overwrite_frame, destroy_frame, frame_buffer_ownership_probe, frame_snapshot,
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
-    publish_frame_buffer, publish_gpgpu_frame_buffer,
-    publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
-    publish_resident_scene_frame_buffer,
-    published_rgba_view, release_published_frame, retain_published_frame, writable_rgba_view,
+    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_gpgpu_scene_frame_buffer,
+    publish_gpgpu_video_frame_buffer, publish_resident_scene_frame_buffer, published_rgba_view,
+    release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewPreset,
@@ -113,11 +112,13 @@ pub(crate) use gpgpu_svg_probe_consumer::{
 pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
+#[cfg(feature = "gridpaper")]
+pub(crate) use input_broker::show_context_menu;
 pub(crate) use input_broker::{
-    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PointerEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
-    Ui4VisualRect, focused_keyboard_state, reselect_window_for_cursor, select_window_for_cursor,
-    software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
-    window_input_routes,
+    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4PointerEvent,
+    Ui4ResizeEvent, Ui4VisualRect, focused_keyboard_state, reselect_window_for_cursor,
+    select_window_for_cursor, software_cursor_visuals, take_owner_input_events,
+    ui4_input_service_task, window_input_routes,
 };
 pub(crate) use link_service::{request_open as request_link_open, ui4_link_service_task};
 pub(crate) use screenshot::{
@@ -144,8 +145,8 @@ pub(crate) use window_broker::{
     application_windows_for_output_with_revision, begin_additional_window_session,
     begin_window_session, close_window, commit_window_frame_refresh,
     commit_window_frame_replacement, create_window, dock_window, finish_window_session,
-    finish_window_session_with_request, move_window, note_window_focused,
-    publish_window_frame, replace_window_frame, restore_docked_window, retire_frame_when_released,
+    finish_window_session_with_request, move_window, note_window_focused, publish_window_frame,
+    replace_window_frame, restore_docked_window, retire_frame_when_released,
     set_window_escape_key_action, set_window_hit_testable, set_window_opacity,
     set_window_placement, set_window_position, set_window_state, set_window_title,
     take_window_first_presentation, ui4_window_broker_snapshot_service_task,
@@ -177,9 +178,7 @@ pub(crate) struct Ui4LiveResourceUsage {
     pub(crate) live_windows: usize,
 }
 
-impl Ui4LiveResourceUsage {
-
-}
+impl Ui4LiveResourceUsage {}
 
 /// Read live ownership state rather than the low-frequency diagnostic watch.
 ///

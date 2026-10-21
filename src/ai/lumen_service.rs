@@ -47,7 +47,9 @@ type LfmModule =
     crate::lumen::decode::Lfm25Decode<crate::ai::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>;
 
 enum LumenRequest {
+    #[cfg(feature = "trueos_lumen")]
     TemplateOpen(String),
+    #[cfg(feature = "trueos_lumen")]
     Prompt {
         turn: u64,
         tail: [u32; 2],
@@ -55,6 +57,7 @@ enum LumenRequest {
         prompt: String,
         no_argument_tool: Option<String>,
     },
+    #[cfg(feature = "trueos_lumen")]
     ToolResult {
         turn: u64,
         tail: [u32; 2],
@@ -62,9 +65,36 @@ enum LumenRequest {
         result: String,
     },
     Checkpoint,
+    #[cfg(feature = "trueos_lumen")]
     Restore(Vec<u8>),
     Close,
 }
+
+#[cfg(feature = "trueos_lumen")]
+fn template_request(system: String) -> Option<LumenRequest> {
+    Some(LumenRequest::TemplateOpen(system))
+}
+#[cfg(not(feature = "trueos_lumen"))]
+fn template_request(_: String) -> Option<LumenRequest> { None }
+
+#[cfg(feature = "trueos_lumen")]
+fn prompt_request(turn: u64, tail: [u32; 2], tail_len: usize, prompt: String, no_argument_tool: Option<String>) -> Option<LumenRequest> {
+    Some(LumenRequest::Prompt { turn, tail, tail_len, prompt, no_argument_tool })
+}
+#[cfg(not(feature = "trueos_lumen"))]
+fn prompt_request(_: u64, _: [u32; 2], _: usize, _: String, _: Option<String>) -> Option<LumenRequest> { None }
+
+#[cfg(feature = "trueos_lumen")]
+fn tool_result_request(turn: u64, tail: [u32; 2], tail_len: usize, result: String) -> Option<LumenRequest> {
+    Some(LumenRequest::ToolResult { turn, tail, tail_len, result })
+}
+#[cfg(not(feature = "trueos_lumen"))]
+fn tool_result_request(_: u64, _: [u32; 2], _: usize, _: String) -> Option<LumenRequest> { None }
+
+#[cfg(feature = "trueos_lumen")]
+fn restore_request(image: Vec<u8>) -> Option<LumenRequest> { Some(LumenRequest::Restore(image)) }
+#[cfg(not(feature = "trueos_lumen"))]
+fn restore_request(_: Vec<u8>) -> Option<LumenRequest> { None }
 
 struct LumenSlot {
     phase: u32,
@@ -186,7 +216,7 @@ pub(crate) fn template_open(owner: u8, system: &[u8]) -> i32 {
     state.reset();
     state.phase = v::bp_abi::LUMEN_PHASE_OPENING;
     state.worker_active = true;
-    state.request = Some(LumenRequest::TemplateOpen(system.to_string()));
+    state.request = template_request(system.to_string());
     drop(state);
     if spawn_worker(owner) {
         0
@@ -252,13 +282,13 @@ fn prompt_submit_inner(
     state.active_turn = Some(turn);
     state.tool_result_used = false;
     state.phase = v::bp_abi::LUMEN_PHASE_RUNNING;
-    state.request = Some(LumenRequest::Prompt {
+    state.request = prompt_request(
         turn,
-        tail: stored_tail,
-        tail_len: tail.len(),
-        prompt: prompt.to_string(),
-        no_argument_tool: no_argument_tool.map(ToString::to_string),
-    });
+        stored_tail,
+        tail.len(),
+        prompt.to_string(),
+        no_argument_tool.map(ToString::to_string),
+    );
     0
 }
 
@@ -293,12 +323,7 @@ pub(crate) fn tool_result_submit(owner: u8, turn: u64, tail: &[u32], result: &[u
     state.reply_tail_len = 0;
     state.tool_result_used = true;
     state.phase = v::bp_abi::LUMEN_PHASE_RUNNING;
-    state.request = Some(LumenRequest::ToolResult {
-        turn,
-        tail: stored_tail,
-        tail_len: tail.len(),
-        result: result.to_string(),
-    });
+    state.request = tool_result_request(turn, stored_tail, tail.len(), result.to_string());
     0
 }
 
@@ -413,7 +438,7 @@ pub(crate) fn restore_commit(owner: u8) -> i32 {
     state.restore_written = 0;
     state.phase = v::bp_abi::LUMEN_PHASE_RESTORING;
     state.worker_active = true;
-    state.request = Some(LumenRequest::Restore(image));
+    state.request = restore_request(image);
     drop(state);
     if spawn_worker(owner) {
         0

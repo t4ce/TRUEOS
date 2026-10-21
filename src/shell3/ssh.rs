@@ -4,7 +4,6 @@ use super::tty::Terminal;
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 use sunset::{ChanData, ChanHandle, Event, Runner, ServEvent, Server, SignKey};
-use zeroize::Zeroizing;
 
 const INPUT_LIMIT: usize = 64 * 1024;
 const AUTH_TIMEOUT_MS: u64 = 60_000;
@@ -14,8 +13,6 @@ pub(super) struct AuthCompletion {
     cancelled: AtomicBool,
 }
 pub(super) struct AuthRequest {
-    username: String,
-    code: Zeroizing<String>,
     completion: Arc<AuthCompletion>,
 }
 static AUTH_REQUESTS: spin::Once<&'static crate::net::adapter::NetQueue<AuthRequest>> =
@@ -27,7 +24,9 @@ pub(super) fn init() {
 
 /// Called by the BSP authentication worker; never block an AP executor on IO.
 pub(super) async fn service_auth() {
-    let Some(queue) = AUTH_REQUESTS.get() else { return; };
+    let Some(queue) = AUTH_REQUESTS.get() else {
+        return;
+    };
     for request in queue.drain(1) {
         // Recovery login needs the removed persistence command. Fail closed.
         *request.completion.result.lock() = Some(false);
@@ -148,8 +147,6 @@ impl Session {
                                 cancelled: AtomicBool::new(false),
                             });
                             let request = AuthRequest {
-                                username: String::from(h.username()?),
-                                code: Zeroizing::new(String::from(h.password()?)),
                                 completion: completion.clone(),
                             };
                             if AUTH_REQUESTS

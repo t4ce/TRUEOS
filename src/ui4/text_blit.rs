@@ -214,13 +214,12 @@ pub(crate) unsafe fn try_fill(s: GucBcs0RgbaSurface, fills: &[GucBcs0RgbaFill]) 
 /// transfers below retain their independently tuned copy allowance.
 pub(crate) fn glyph_copy_on_cpu(s: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy]) -> bool {
     let pixels = copy_pixels(copies);
-    let half_row = copies.first().map_or(0, |c| s.width as usize * c.height as usize / 2);
+    let half_row = copies
+        .first()
+        .map_or(0, |c| s.width as usize * c.height as usize / 2);
     pixels != 0 && pixels <= crate::allcaps::text_blit::CPU_MONO_MAX_PIXELS.min(half_row)
 }
-pub(crate) unsafe fn try_glyph_copy(
-    s: GucBcs0RgbaSurface,
-    copies: &[GucBcs0RgbaCopy],
-) -> bool {
+pub(crate) unsafe fn try_glyph_copy(s: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy]) -> bool {
     glyph_copy_on_cpu(s, copies) && unsafe { copy(s, copies) }
 }
 

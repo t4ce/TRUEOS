@@ -108,8 +108,10 @@ const BITSTREAM_GPU: u64 = ARENA_PPGTT_BASE + BITSTREAM_OFFSET as u64;
 const MFX_STATS_GPU: u64 = ARENA_PPGTT_BASE + MFX_STATS_OFFSET as u64;
 const VDENC_STATS_GPU: u64 = ARENA_PPGTT_BASE + VDENC_STATS_OFFSET as u64;
 const SLICE_SIZE_GPU: u64 = ARENA_PPGTT_BASE + SLICE_SIZE_OFFSET as u64;
+const MV_OBJECT_GPU: u64 = ARENA_PPGTT_BASE + MV_OBJECT_OFFSET as u64;
 const DMV_0_GPU: u64 = ARENA_PPGTT_BASE + DMV_0_OFFSET as u64;
 const DMV_1_GPU: u64 = ARENA_PPGTT_BASE + DMV_1_OFFSET as u64;
+const MPR_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + MPR_ROWSTORE_OFFSET as u64;
 const INTRA_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + INTRA_ROWSTORE_OFFSET as u64;
 const DEBLOCK_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + DEBLOCK_ROWSTORE_OFFSET as u64;
 const BSP_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + BSP_ROWSTORE_OFFSET as u64;
@@ -917,7 +919,10 @@ impl AvcXyuv8888DmaSurface {
 }
 
 impl AvcNv12DmaSurface {
-    
+    pub(crate) fn new(phys: u64, bytes: usize) -> Option<Self> {
+        (phys != 0 && phys.is_multiple_of(crate::intel::WARM_ALIGN as u64) && bytes == SOURCE_BYTES)
+            .then_some(Self { phys, bytes })
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -961,7 +966,16 @@ pub(crate) fn snapshot() -> AvcEncodeProbeReport {
     *REPORT.lock()
 }
 
-
+/// Submit a GPU-produced linear NV12 surface directly as the VDBOX source.
+/// The caller retains the DMA allocation until the submission retires, but
+/// fence completion is awaited cooperatively. No CPU-side full-frame copy is
+/// performed.
+pub(crate) async fn run_nv12_dma_frame(
+    surface: AvcNv12DmaSurface,
+    sequence: u32,
+) -> AvcEncodeProbeReport {
+    run_live_frame(AvcFrameSource::Nv12Dma(surface), AvcPicture::for_sequence(sequence)).await
+}
 
 /// Submit a completed WD XYUV8888 surface directly as VDEnc's raw source.
 /// XYUV8888's X:Y:U:V layout matches VDEnc's packed A:Y:U:V YUV444 input;

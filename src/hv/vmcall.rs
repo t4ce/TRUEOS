@@ -433,6 +433,7 @@ pub struct CommPage {
 pub enum DispatchOutcome {
     Resume,
     Stop,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     Pause,
     Preserve,
     Yield,
@@ -867,19 +868,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
-            match crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1) {
-                Some(crate::hv::BlueprintReadyDisposition::Pause) => {
-                    write_response(vm_id, seq, STATUS_OK, arg0, 0);
-                    DispatchOutcome::Pause
+            #[cfg(feature = "legacy_vm_checkpoint")]
+            {
+                match crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1) {
+                    Some(crate::hv::BlueprintReadyDisposition::Pause) => {
+                        write_response(vm_id, seq, STATUS_OK, arg0, 0);
+                        DispatchOutcome::Pause
+                    }
+                    Some(crate::hv::BlueprintReadyDisposition::Snapshot) => {
+                        write_response(vm_id, seq, STATUS_OK, arg0, 0);
+                        DispatchOutcome::Preserve
+                    }
+                    None => {
+                        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                        DispatchOutcome::Resume
+                    }
                 }
-                Some(crate::hv::BlueprintReadyDisposition::Snapshot) => {
-                    write_response(vm_id, seq, STATUS_OK, arg0, 0);
-                    DispatchOutcome::Preserve
-                }
-                None => {
-                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                    DispatchOutcome::Resume
-                }
+            }
+            #[cfg(not(feature = "legacy_vm_checkpoint"))]
+            {
+                let _ = crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1);
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                DispatchOutcome::Resume
             }
         }
         OP_BP_LIFECYCLE_IDENTITY => {

@@ -69,8 +69,15 @@ const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const GUEST_FS_BASE_RESET: u64 = 0;
 const STOP_CLEANUP_TIMEOUT_MS: u64 = 2_000;
 const PAUSE_CHECKPOINT_TIMEOUT_MS: u64 = 15_000;
+#[cfg(feature = "legacy_vm_checkpoint")]
+const BLUEPRINT_PREPARE_PAUSE_TIMEOUT_MS: u64 = 15_000;
+#[cfg(feature = "legacy_vm_checkpoint")]
+const BLUEPRINT_LIFECYCLE_PHASE_ARMING: u8 = 3;
+#[cfg(feature = "legacy_vm_checkpoint")]
+const BLUEPRINT_REPLICATION_CHECKPOINT_MAX_BYTES: usize = trueos_vm::vmcall::PAYLOAD_CAP;
 const BLUEPRINT_LIFECYCLE_PHASE_RUNNING: u8 = 0;
 const BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE: u8 = 1;
+#[cfg(feature = "legacy_vm_checkpoint")]
 const BLUEPRINT_LIFECYCLE_PHASE_READY: u8 = 2;
 static BLUEPRINT_LIFECYCLE_OPERATION_SEQ: AtomicU64 = AtomicU64::new(1);
 /// A child Hull deliberately has no presentation or terminal authority.  The
@@ -142,6 +149,11 @@ async fn await_vm_control_boundary<F: core::future::Future>(
     }
 }
 
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub const fn cross_principal_snapshot_restore_supported() -> bool {
+    false
+}
+
 struct TrueosVmId {
     running: AtomicBool,
     starting: AtomicBool,
@@ -162,6 +174,8 @@ struct TrueosVmId {
     lifecycle_phase: AtomicU8,
     lifecycle_operation: AtomicU64,
     lifecycle_deadline_ms: AtomicU64,
+    #[cfg(feature = "legacy_vm_checkpoint")]
+    lifecycle_reason: AtomicU8,
     lifecycle_checkpoint_version: AtomicU64,
     run_generation: AtomicU64,
     restore_inflight: AtomicBool,
@@ -191,6 +205,8 @@ impl TrueosVmId {
             lifecycle_phase: AtomicU8::new(BLUEPRINT_LIFECYCLE_PHASE_RUNNING),
             lifecycle_operation: AtomicU64::new(0),
             lifecycle_deadline_ms: AtomicU64::new(0),
+            #[cfg(feature = "legacy_vm_checkpoint")]
+            lifecycle_reason: AtomicU8::new(BlueprintPauseReason::Pause as u8),
             lifecycle_checkpoint_version: AtomicU64::new(0),
             run_generation: AtomicU64::new(0),
             restore_inflight: AtomicBool::new(false),
@@ -823,13 +839,6 @@ impl BlueprintConsoleRoute {
     }
 }
 
-fn blueprint_uses_net_shell_direct_path(
-    console_surface: BlueprintConsoleSurface,
-    console_target: Option<&MatrixTarget>,
-) -> bool {
-    false
-}
-
 fn blueprint_uses_local_terminal_handoff(
     console_surface: BlueprintConsoleSurface,
     console_target: Option<&MatrixTarget>,
@@ -842,6 +851,8 @@ pub(crate) struct BlueprintProcessContext {
     args: AllocVec<AllocString>,
     vars: BTreeMap<AllocString, AllocString>,
     console_target: Option<MatrixTarget>,
+    #[cfg(feature = "legacy_vm_checkpoint")]
+    console_surface: BlueprintConsoleSurface,
     console_attached: bool,
     app_command_passthrough: bool,
     terminal_lease: BlueprintTerminalLeaseState,
@@ -880,6 +891,7 @@ impl BlueprintTerminalCleanup {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StopError {
     UnsupportedVmId,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     VgpuQuarantined,
 }
 
@@ -898,6 +910,7 @@ pub enum EjectError {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PreserveMode {
     Stop,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     Pause,
 }
 
@@ -907,7 +920,15 @@ pub enum PreserveMode {
 pub enum BlueprintPauseReason {
     Pause = 1,
     Replicate = 2,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     Migrate = 3,
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+impl BlueprintPauseReason {
+    const fn from_raw(raw: u8) -> Self {
+        match raw { 2 => Self::Replicate, 3 => Self::Migrate, _ => Self::Pause }
+    }
 }
 
 /// Host action to take after a Blueprint reaches its exact Ready boundary.
@@ -917,7 +938,9 @@ pub enum BlueprintPauseReason {
 /// warm per-VM store. `apps store` is the explicit reboot-persistent commit.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BlueprintReadyDisposition {
+    #[cfg(feature = "legacy_vm_checkpoint")]
     Pause,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     Snapshot,
 }
 
@@ -978,6 +1001,8 @@ pub struct HvVmState {
     pub replicatable: bool,
     pub pause_latched: bool,
     pub pause_snapshot_ready: bool,
+    #[cfg(feature = "legacy_vm_checkpoint")]
+    pub prepare_pause_pending: bool,
     pub restore_inflight: bool,
 }
 
@@ -1525,6 +1550,8 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
             replicatable: false,
             pause_latched: false,
             pause_snapshot_ready: false,
+            #[cfg(feature = "legacy_vm_checkpoint")]
+            prepare_pause_pending: false,
             restore_inflight: false,
         };
     };
@@ -1549,6 +1576,9 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
         replicatable: vm.replicatable.load(Ordering::Acquire),
         pause_latched,
         pause_snapshot_ready,
+        #[cfg(feature = "legacy_vm_checkpoint")]
+        prepare_pause_pending: vm.lifecycle_phase.load(Ordering::Acquire)
+            == BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE,
         restore_inflight: vm.restore_inflight.load(Ordering::Acquire),
     }
 }
@@ -1864,6 +1894,12 @@ fn report_shutdown_diagnostics(vm_id: u8) {
     }
 }
 
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<(), StartError> {
+    let _ = spawner;
+    start_with_mode(vm_id, VmBootMode::Hull, stack_mb, None, false)
+}
 
 pub fn start_blueprint_app_vm(
     vm_id: u8,
@@ -3053,11 +3089,9 @@ pub fn stage_blueprint_launch(
                 .any(|import| import.name == "trueos_cabi_shell_attached_read_byte");
         }
     }
-    let direct_terminal_handoff =
-        blueprint_uses_net_shell_direct_path(console_surface, console_target.as_ref());
-    let local_terminal_handoff = !direct_terminal_handoff
-        && blueprint_uses_local_terminal_handoff(console_surface, console_target.as_ref());
-    if console_surface.is_terminal() && !direct_terminal_handoff && !local_terminal_handoff {
+    let local_terminal_handoff =
+        blueprint_uses_local_terminal_handoff(console_surface, console_target.as_ref());
+    if console_surface.is_terminal() && !local_terminal_handoff {
         hvwarnf(format_args!(
             "hv: vm{} console route: terminal surface has no exact-owner backend",
             vm_id
@@ -3103,6 +3137,8 @@ pub fn stage_blueprint_launch(
             trueosfs_scope,
         ),
         console_target,
+        #[cfg(feature = "legacy_vm_checkpoint")]
+        console_surface,
         console_attached: true,
         app_command_passthrough,
         terminal_lease: BlueprintTerminalLeaseState::for_surface(console_surface),
@@ -3969,6 +4005,15 @@ fn suspend_blueprint_process_context(vm_id: u8) {
 }
 
 
+#[cfg(feature = "legacy_vm_checkpoint")]
+fn resume_blueprint_process_context(vm_id: u8) {
+    if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
+        if let Some(context) = slot.lock().as_mut() {
+            context.console_attached = false;
+        }
+    }
+}
+
 pub(crate) fn blueprint_launch_states_span() -> (u64, usize) {
     (
         (&BLUEPRINT_LAUNCH_STATES as *const _) as u64,
@@ -4807,6 +4852,7 @@ async fn vmx_launch_once_with_ept_vpid(
                     match outcome {
                         crate::hv::vmcall::DispatchOutcome::Resume => break 'vmcall,
                         crate::hv::vmcall::DispatchOutcome::Stop => break 'vmexit,
+                        #[cfg(feature = "legacy_vm_checkpoint")]
                         crate::hv::vmcall::DispatchOutcome::Pause => {
                             hvlogf(format_args!(
                                 "hv: vm{} reporting: cooperative pause retained at rip=0x{:016X}",

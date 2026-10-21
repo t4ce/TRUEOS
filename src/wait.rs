@@ -408,6 +408,7 @@ impl<T> CompletionCell<T> {
 
 
 
+    #[cfg(any(feature = "trueos_lumen", feature = "legacy_vm_checkpoint"))]
     pub async fn join(&self) -> T {
         loop {
             let observed = self.wait.observe();

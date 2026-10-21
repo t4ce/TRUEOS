@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 use core::mem::ManuallyDrop;
 
-use trueos_vm::vmcall;
 
 fn attached_write(bytes: &[u8]) {
     let mut written = 0usize;

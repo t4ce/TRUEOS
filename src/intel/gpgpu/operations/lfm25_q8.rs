@@ -1,7 +1,34 @@
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Lfm25Q8ProjectError {
+    UnsupportedTarget,
+    InvalidModel,
+    NonContiguousModel,
+    InvalidShape,
+    Allocation,
+    CachePolicyUnavailable,
+    RuntimeUnavailable,
+    MappingFailed,
+    EncodeFailed,
+    SubmitFailed,
+    CompletionTimeout,
+}
 
-
-const LFM25_Q8_SUBMISSION_SIGNATURE_COUNT: usize = LFM25_Q8_SUBMISSION_SIGNATURES.len();
-
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8ProjectStats {
+    pub(crate) available: bool,
+    pub(crate) ready: bool,
+    pub(crate) launches: u64,
+    pub(crate) submissions: u64,
+    pub(crate) failures: u64,
+    pub(crate) total_submit_ms: u64,
+    pub(crate) total_encode_us: u64,
+    pub(crate) total_admission_us: u64,
+    pub(crate) total_completion_us: u64,
+    pub(crate) total_gpu_us: u64,
+    pub(crate) gpu_timestamp_samples: u64,
+    pub(crate) gpu_timestamp_hz: u32,
+    pub(crate) last_rows: u32,
+}
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -13,121 +40,6 @@ pub(crate) enum Lfm25Q8SubmissionSignature {
     FfnDown = 4,
     Vocabulary = 5,
     Unknown = 6,
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Lfm25Q8PhaseProbeStats {
-    pub(crate) samples: u64,
-    pub(crate) valid_samples: u64,
-    pub(crate) queue_to_batch_us: u64,
-    pub(crate) preamble_us: u64,
-    pub(crate) walkers_us: u64,
-    pub(crate) epilogue_us: u64,
-    pub(crate) release_to_observe_us: u64,
-    pub(crate) queue_to_observe_us: u64,
-    pub(crate) gt_start_active_samples: u64,
-    pub(crate) gt_end_active_samples: u64,
-    pub(crate) gt_start_ratio_sum: u64,
-    pub(crate) gt_end_ratio_sum: u64,
-struct Lfm25Q8SubmissionSignatureCounters {
-    submissions: AtomicU64,
-    projections: AtomicU64,
-    submit_ms: AtomicU64,
-    completion_us: AtomicU64,
-    gpu_us: AtomicU64,
-    gpu_samples: AtomicU64,
-    submit_min_ms: AtomicU64,
-    submit_max_ms: AtomicU64,
-    completion_min_us: AtomicU64,
-    completion_max_us: AtomicU64,
-    gpu_min_us: AtomicU64,
-    gpu_max_us: AtomicU64,
-struct Lfm25Q8PhaseProbeCounters {
-    samples: AtomicU64,
-    valid_samples: AtomicU64,
-    queue_to_batch_us: AtomicU64,
-    preamble_us: AtomicU64,
-    walkers_us: AtomicU64,
-    epilogue_us: AtomicU64,
-    release_to_observe_us: AtomicU64,
-    queue_to_observe_us: AtomicU64,
-    gt_start_active_samples: AtomicU64,
-    gt_end_active_samples: AtomicU64,
-    gt_start_ratio_sum: AtomicU64,
-    gt_end_ratio_sum: AtomicU64,
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-struct Lfm25Q8PhaseProbeSample {
-    sampled: bool,
-    valid: bool,
-    queue_to_batch_us: u64,
-    preamble_us: u64,
-    walkers_us: u64,
-    epilogue_us: u64,
-    release_to_observe_us: u64,
-    queue_to_observe_us: u64,
-    gt_start_ratio: u32,
-    gt_end_ratio: u32,
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Lfm25Q8ModelMapping {
-    mapping_phys: u64,
-    mapping_gpu: u64,
-    mapping_bytes: usize,
-    model_gpu: u64,
-    model_bytes: usize,
-    model_virt: *mut u8,
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Lfm25Q8SubmissionSignatureStats {
-    pub(crate) submissions: u64,
-    pub(crate) projections: u64,
-    pub(crate) submit_ms: u64,
-    pub(crate) completion_us: u64,
-    pub(crate) gpu_us: u64,
-    pub(crate) gpu_samples: u64,
-    pub(crate) submit_min_ms: u64,
-    pub(crate) submit_max_ms: u64,
-    pub(crate) completion_min_us: u64,
-    pub(crate) completion_max_us: u64,
-    pub(crate) gpu_min_us: u64,
-    pub(crate) gpu_max_us: u64,
-    /// Exact extrema are derivable from two cumulative snapshots only while
-    /// the earlier snapshot has no samples for the relevant signature.
-    pub(crate) submission_extrema_valid: bool,
-    pub(crate) gpu_extrema_valid: bool,
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-struct Lfm25Q8SubmitTimings {
-    encode_us: u64,
-    admission_us: u64,
-    completion_us: u64,
-    gpu_us: u64,
-    gpu_timestamp_valid: bool,
-    gpu_timestamp_hz: u32,
-    phase_probe: Lfm25Q8PhaseProbeSample,
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Lfm25Q8SubmissionSignatureSnapshot {
-    buckets: [Lfm25Q8SubmissionSignatureStats; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT],
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Lfm25Q8PhaseProbeSnapshot {
-    buckets: [Lfm25Q8PhaseProbeStats; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT],
-#[derive(Copy, Clone)]
-struct Lfm25Q8Buffer {
-    phys: u64,
-    gpu: u64,
-    virt: *mut u8,
-    bytes: usize,
-struct Lfm25Q8Runtime {
-    activation: Lfm25Q8Buffer,
-    output: Lfm25Q8Buffer,
-    bound_model: Option<Lfm25Q8ModelMapping>,
-    ready: bool,
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
 }
 
 impl Lfm25Q8SubmissionSignature {
@@ -157,8 +69,27 @@ pub(crate) const LFM25_Q8_SUBMISSION_SIGNATURES: [Lfm25Q8SubmissionSignature; 7]
     Lfm25Q8SubmissionSignature::Vocabulary,
     Lfm25Q8SubmissionSignature::Unknown,
 ];
+const LFM25_Q8_SUBMISSION_SIGNATURE_COUNT: usize = LFM25_Q8_SUBMISSION_SIGNATURES.len();
 
-
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8SubmissionSignatureStats {
+    pub(crate) submissions: u64,
+    pub(crate) projections: u64,
+    pub(crate) submit_ms: u64,
+    pub(crate) completion_us: u64,
+    pub(crate) gpu_us: u64,
+    pub(crate) gpu_samples: u64,
+    pub(crate) submit_min_ms: u64,
+    pub(crate) submit_max_ms: u64,
+    pub(crate) completion_min_us: u64,
+    pub(crate) completion_max_us: u64,
+    pub(crate) gpu_min_us: u64,
+    pub(crate) gpu_max_us: u64,
+    /// Exact extrema are derivable from two cumulative snapshots only while
+    /// the earlier snapshot has no samples for the relevant signature.
+    pub(crate) submission_extrema_valid: bool,
+    pub(crate) gpu_extrema_valid: bool,
+}
 
 impl Lfm25Q8SubmissionSignatureStats {
     fn delta_since(self, before: Self) -> Self {
@@ -209,7 +140,10 @@ impl Lfm25Q8SubmissionSignatureStats {
     }
 }
 
-
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8SubmissionSignatureSnapshot {
+    buckets: [Lfm25Q8SubmissionSignatureStats; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT],
+}
 
 impl Lfm25Q8SubmissionSignatureSnapshot {
     pub(crate) const fn bucket(
@@ -231,7 +165,21 @@ impl Lfm25Q8SubmissionSignatureSnapshot {
     }
 }
 
-
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8PhaseProbeStats {
+    pub(crate) samples: u64,
+    pub(crate) valid_samples: u64,
+    pub(crate) queue_to_batch_us: u64,
+    pub(crate) preamble_us: u64,
+    pub(crate) walkers_us: u64,
+    pub(crate) epilogue_us: u64,
+    pub(crate) release_to_observe_us: u64,
+    pub(crate) queue_to_observe_us: u64,
+    pub(crate) gt_start_active_samples: u64,
+    pub(crate) gt_end_active_samples: u64,
+    pub(crate) gt_start_ratio_sum: u64,
+    pub(crate) gt_end_ratio_sum: u64,
+}
 
 impl Lfm25Q8PhaseProbeStats {
     fn delta_since(self, before: Self) -> Self {
@@ -293,7 +241,10 @@ impl Lfm25Q8PhaseProbeStats {
     }
 }
 
-
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8PhaseProbeSnapshot {
+    buckets: [Lfm25Q8PhaseProbeStats; LFM25_Q8_SUBMISSION_SIGNATURE_COUNT],
+}
 
 impl Lfm25Q8PhaseProbeSnapshot {
     pub(crate) const fn bucket(
@@ -321,30 +272,107 @@ pub(crate) struct Lfm25Q8ProjectSpec {
     pub(crate) rows: u32,
 }
 
-
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Lfm25Q8ModelMapping {
+    mapping_phys: u64,
+    mapping_gpu: u64,
+    mapping_bytes: usize,
+    model_gpu: u64,
+    model_bytes: usize,
+    model_virt: *mut u8,
+}
 
 unsafe impl Send for Lfm25Q8ModelMapping {}
 unsafe impl Sync for Lfm25Q8ModelMapping {}
 
-
+#[derive(Copy, Clone)]
+struct Lfm25Q8Buffer {
+    phys: u64,
+    gpu: u64,
+    virt: *mut u8,
+    bytes: usize,
+}
 
 unsafe impl Send for Lfm25Q8Buffer {}
 unsafe impl Sync for Lfm25Q8Buffer {}
 
-
+struct Lfm25Q8Runtime {
+    activation: Lfm25Q8Buffer,
+    output: Lfm25Q8Buffer,
+    bound_model: Option<Lfm25Q8ModelMapping>,
+    ready: bool,
+}
 
 unsafe impl Send for Lfm25Q8Runtime {}
 unsafe impl Sync for Lfm25Q8Runtime {}
 
+#[derive(Copy, Clone)]
+struct Lfm25Q8ProjectParams {
+    weights_gpu: u64,
+    activation_gpu: u64,
+    output_gpu: u64,
+    model_bytes: usize,
+    activation_bytes: usize,
+    output_bytes: usize,
+    weight_offset: u32,
+    columns: u32,
+    rows: u32,
+}
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+struct Lfm25Q8PhaseProbeSample {
+    sampled: bool,
+    valid: bool,
+    queue_to_batch_us: u64,
+    preamble_us: u64,
+    walkers_us: u64,
+    epilogue_us: u64,
+    release_to_observe_us: u64,
+    queue_to_observe_us: u64,
+    gt_start_ratio: u32,
+    gt_end_ratio: u32,
+}
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+struct Lfm25Q8SubmitTimings {
+    encode_us: u64,
+    admission_us: u64,
+    completion_us: u64,
+    gpu_us: u64,
+    gpu_timestamp_valid: bool,
+    gpu_timestamp_hz: u32,
+    phase_probe: Lfm25Q8PhaseProbeSample,
+}
 
+struct Lfm25Q8SubmissionSignatureCounters {
+    submissions: AtomicU64,
+    projections: AtomicU64,
+    submit_ms: AtomicU64,
+    completion_us: AtomicU64,
+    gpu_us: AtomicU64,
+    gpu_samples: AtomicU64,
+    submit_min_ms: AtomicU64,
+    submit_max_ms: AtomicU64,
+    completion_min_us: AtomicU64,
+    completion_max_us: AtomicU64,
+    gpu_min_us: AtomicU64,
+    gpu_max_us: AtomicU64,
+}
 
-
-
-
-
-
+struct Lfm25Q8PhaseProbeCounters {
+    samples: AtomicU64,
+    valid_samples: AtomicU64,
+    queue_to_batch_us: AtomicU64,
+    preamble_us: AtomicU64,
+    walkers_us: AtomicU64,
+    epilogue_us: AtomicU64,
+    release_to_observe_us: AtomicU64,
+    queue_to_observe_us: AtomicU64,
+    gt_start_active_samples: AtomicU64,
+    gt_end_active_samples: AtomicU64,
+    gt_start_ratio_sum: AtomicU64,
+    gt_end_ratio_sum: AtomicU64,
+}
 
 impl Lfm25Q8PhaseProbeCounters {
     const fn new() -> Self {
@@ -520,17 +548,310 @@ const _: () = {
     assert!(shortconv * 2 + attention * 2 + layers * 2 == LFM25_Q8_SUBMISSIONS_PER_PREFILL_TOKEN);
 };
 
+pub(crate) fn lfm25_q8_packed_project_supported() -> bool {
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT
+        .target_policy
+        .supports(dev.device_id, dev.revision_id)
+        && super::gen12_lumen_mocs_ready()
+        && !lfm25_rcs_context_is_quarantined()
+}
 
+pub(crate) fn lfm25_q8_project_stats() -> Lfm25Q8ProjectStats {
+    Lfm25Q8ProjectStats {
+        available: lfm25_q8_packed_project_supported(),
+        ready: LFM25_Q8_READY.load(Ordering::Acquire),
+        launches: LFM25_Q8_LAUNCHES.load(Ordering::Relaxed),
+        submissions: LFM25_Q8_SUBMISSIONS.load(Ordering::Relaxed),
+        failures: LFM25_Q8_FAILURES.load(Ordering::Relaxed),
+        total_submit_ms: LFM25_Q8_TOTAL_SUBMIT_MS.load(Ordering::Relaxed),
+        total_encode_us: LFM25_Q8_TOTAL_ENCODE_US.load(Ordering::Relaxed),
+        total_admission_us: LFM25_Q8_TOTAL_ADMISSION_US.load(Ordering::Relaxed),
+        total_completion_us: LFM25_Q8_TOTAL_COMPLETION_US.load(Ordering::Relaxed),
+        total_gpu_us: LFM25_Q8_TOTAL_GPU_US.load(Ordering::Relaxed),
+        gpu_timestamp_samples: LFM25_Q8_GPU_TIMESTAMP_SAMPLES.load(Ordering::Relaxed),
+        gpu_timestamp_hz: LFM25_Q8_GPU_TIMESTAMP_HZ.load(Ordering::Relaxed),
+        last_rows: LFM25_Q8_LAST_ROWS.load(Ordering::Relaxed),
+    }
+}
 
+pub(crate) fn lfm25_q8_submission_signature_snapshot() -> Lfm25Q8SubmissionSignatureSnapshot {
+    let mut buckets =
+        [Lfm25Q8SubmissionSignatureStats::default(); LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
+    let mut index = 0;
+    while index < LFM25_Q8_SUBMISSION_SIGNATURE_COUNT {
+        buckets[index] = LFM25_Q8_SUBMISSION_SIGNATURE_STATS[index].snapshot();
+        index += 1;
+    }
+    Lfm25Q8SubmissionSignatureSnapshot { buckets }
+}
 
+pub(crate) fn lfm25_q8_phase_probe_snapshot() -> Lfm25Q8PhaseProbeSnapshot {
+    let mut buckets = [Lfm25Q8PhaseProbeStats::default(); LFM25_Q8_SUBMISSION_SIGNATURE_COUNT];
+    let mut index = 0;
+    while index < LFM25_Q8_SUBMISSION_SIGNATURE_COUNT {
+        buckets[index] = LFM25_Q8_PHASE_PROBE_STATS[index].snapshot();
+        index += 1;
+    }
+    Lfm25Q8PhaseProbeSnapshot { buckets }
+}
 
+pub(crate) fn bind_lfm25_q8_packed_model(
+    model: &[u8],
+) -> Result<Lfm25Q8ModelMapping, Lfm25Q8ProjectError> {
+    if !lfm25_q8_packed_project_supported() {
+        return Err(Lfm25Q8ProjectError::UnsupportedTarget);
+    }
+    if model.len() != trueos_lfm25_model::lfm25::PINNED_NATIVE_IMAGE_BYTES as usize
+        || model.is_empty()
+    {
+        return Err(Lfm25Q8ProjectError::InvalidModel);
+    }
+    let model_virt = model.as_ptr() as *mut u8;
+    let required_alignment = 64usize;
+    if model_virt as usize % required_alignment != 0 {
+        return Err(Lfm25Q8ProjectError::InvalidModel);
+    }
+    let start_phys =
+        crate::phys::virt_to_phys_checked(model_virt).ok_or(Lfm25Q8ProjectError::InvalidModel)?;
+    for offset in (0..model.len()).step_by(4096) {
+        let observed = crate::phys::virt_to_phys_checked(unsafe { model_virt.add(offset) })
+            .ok_or(Lfm25Q8ProjectError::InvalidModel)?;
+        let expected = start_phys
+            .checked_add(offset as u64)
+            .ok_or(Lfm25Q8ProjectError::InvalidModel)?;
+        if observed != expected {
+            return Err(Lfm25Q8ProjectError::NonContiguousModel);
+        }
+    }
+    let last_virt = unsafe { model_virt.add(model.len() - 1) };
+    let last_phys =
+        crate::phys::virt_to_phys_checked(last_virt).ok_or(Lfm25Q8ProjectError::InvalidModel)?;
+    if last_phys != start_phys + (model.len() - 1) as u64 {
+        return Err(Lfm25Q8ProjectError::NonContiguousModel);
+    }
+    let page_offset = (start_phys & 0xFFF) as usize;
+    let mapping_bytes = page_offset
+        .checked_add(model.len())
+        .and_then(|bytes| bytes.checked_add(4095))
+        .map(|bytes| bytes & !4095usize)
+        .ok_or(Lfm25Q8ProjectError::InvalidModel)?;
+    let mapping = Lfm25Q8ModelMapping {
+        mapping_phys: start_phys & !0xFFF,
+        mapping_gpu: LFM25_Q8_MODEL_MAPPING_GPU_BASE,
+        mapping_bytes,
+        model_gpu: LFM25_Q8_MODEL_MAPPING_GPU_BASE + page_offset as u64,
+        model_bytes: model.len(),
+        model_virt,
+    };
+    if mapping.model_gpu % required_alignment as u64 != 0
+        || mapping.mapping_gpu + mapping.mapping_bytes as u64 > LFM25_Q8_ACTIVATION_GPU
+    {
+        return Err(Lfm25Q8ProjectError::InvalidModel);
+    }
 
+    // The sealed bytes become immutable for the lifetime of the decoder.
+    // Publish them once before the persistent PPGTT mapping is installed.
+    super::dma_flush(model_virt, model.len());
+    let _guard = LFM25_RCS_SUBMIT_LOCK.lock();
+    let mut runtime_slot = LFM25_Q8_RUNTIME.lock();
+    ensure_lfm25_q8_runtime(&mut runtime_slot)?;
+    prepare_lfm25_q8_runtime(runtime_slot.as_mut().unwrap(), mapping)?;
+    Ok(mapping)
+}
 
+pub(crate) fn lfm25_q8_project_batch(
+    model: Lfm25Q8ModelMapping,
+    specs: &[Lfm25Q8ProjectSpec],
+    activation: &[u8],
+    outputs: &mut [&mut [f32]],
+) -> Result<u64, Lfm25Q8ProjectError> {
+    if specs.is_empty()
+        || specs.len() > LFM25_Q8_MAX_BATCH_PROJECTIONS
+        || outputs.len() != specs.len()
+    {
+        return Err(Lfm25Q8ProjectError::InvalidShape);
+    }
+    let columns = specs[0].columns;
+    let row_bytes = usize::try_from(columns)
+        .ok()
+        .and_then(|columns| columns.checked_div(32))
+        .and_then(|blocks| blocks.checked_mul(34))
+        .ok_or(Lfm25Q8ProjectError::InvalidShape)?;
+    if activation.len() != row_bytes {
+        return Err(Lfm25Q8ProjectError::InvalidShape);
+    }
+    let activation_payload_bytes =
+        trueos_lfm25_cpu::packed_q8x16_activation_bytes(columns as usize)
+            .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
+    if activation_payload_bytes > LFM25_Q8_ACTIVATION_ALLOC_BYTES {
+        return Err(Lfm25Q8ProjectError::InvalidShape);
+    }
+    let mut output_bytes = 0usize;
+    for (spec, output) in specs.iter().zip(outputs.iter()) {
+        let matrix_bytes = row_bytes
+            .checked_mul(spec.rows as usize)
+            .ok_or(Lfm25Q8ProjectError::InvalidShape)?;
+        let matrix_end = (spec.weight_offset as usize)
+            .checked_add(matrix_bytes)
+            .ok_or(Lfm25Q8ProjectError::InvalidShape)?;
+        output_bytes = align_up(output_bytes, 64)
+            .and_then(|offset| offset.checked_add(spec.rows as usize * core::mem::size_of::<f32>()))
+            .ok_or(Lfm25Q8ProjectError::InvalidShape)?;
+        if spec.columns != columns
+            || !lfm25_q8_admitted_shape(spec.columns, spec.rows)
+            || output.len() != spec.rows as usize
+            || matrix_end > model.model_bytes
+            || !lfm25_q8_exact_tensor_spec(spec, matrix_bytes)
+        {
+            return Err(Lfm25Q8ProjectError::InvalidShape);
+        }
+    }
+    if output_bytes > LFM25_Q8_OUTPUT_ALLOC_BYTES {
+        return Err(Lfm25Q8ProjectError::InvalidShape);
+    }
 
+    let _guard = LFM25_RCS_SUBMIT_LOCK.lock();
+    let mut runtime_slot = LFM25_Q8_RUNTIME.lock();
+    ensure_lfm25_q8_runtime(&mut runtime_slot)?;
+    let runtime = runtime_slot.as_mut().unwrap();
+    prepare_lfm25_q8_runtime(runtime, model)?;
 
+    let activation_destination = unsafe {
+        core::slice::from_raw_parts_mut(runtime.activation.virt, activation_payload_bytes)
+    };
+    trueos_lfm25_cpu::pack_q8x16_activation(activation, columns as usize, activation_destination)
+        .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
+    super::dma_flush(runtime.activation.virt, activation_payload_bytes);
 
+    let mut params = Vec::new();
+    params
+        .try_reserve_exact(specs.len())
+        .map_err(|_| Lfm25Q8ProjectError::Allocation)?;
+    let mut output_offset = 0usize;
+    for spec in specs {
+        output_offset = align_up(output_offset, 64).ok_or(Lfm25Q8ProjectError::InvalidShape)?;
+        let bytes = spec.rows as usize * core::mem::size_of::<f32>();
+        params.push(Lfm25Q8ProjectParams {
+            weights_gpu: model.model_gpu,
+            activation_gpu: runtime.activation.gpu,
+            output_gpu: runtime.output.gpu + output_offset as u64,
+            model_bytes: model.model_bytes,
+            activation_bytes: activation_payload_bytes,
+            output_bytes: bytes,
+            weight_offset: spec.weight_offset,
+            columns: spec.columns,
+            rows: spec.rows,
+        });
+        output_offset = output_offset
+            .checked_add(bytes)
+            .ok_or(Lfm25Q8ProjectError::InvalidShape)?;
+    }
 
-
+    let signature = lfm25_q8_submission_signature(specs);
+    // `_guard` serializes this ordinal read through the successful counter
+    // publication below, so two completed submissions cannot claim one sample
+    // ordinal. A rejected submission deliberately retries the same ordinal.
+    // Keep the profile gate in this hot path so disabling it compile-folds the
+    // complete sampler, including the ordinal load, back to the legacy path.
+    let phase_probe_ordinal = if crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+        lfm25_q8_phase_probe_next_ordinal(signature)
+    } else {
+        0
+    };
+    let phase_probe_sampled = crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED
+        && lfm25_q8_phase_probe_sample_ordinal(phase_probe_ordinal);
+    let started = direct_rcs_now_tick();
+    let result = submit_lfm25_q8_project(runtime, model, &params, phase_probe_sampled);
+    let elapsed_ms = direct_rcs_elapsed_ms_since(started);
+    match result {
+        Ok(timings) => {
+            if LFM25_Q8_SUBMISSIONS.load(Ordering::Relaxed) == 0
+                && !super::validate_gen12_lumen_mocs("first-lfm-retire")
+            {
+                runtime.ready = false;
+                LFM25_Q8_READY.store(false, Ordering::Release);
+                quarantine_lfm25_rcs_context("lumen-mocs-lost-after-first-retire");
+                LFM25_Q8_FAILURES.fetch_add(1, Ordering::Relaxed);
+                return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
+            }
+            for (params, output) in params.iter().zip(outputs.iter_mut()) {
+                let offset = (params.output_gpu - runtime.output.gpu) as usize;
+                let source = unsafe { runtime.output.virt.add(offset) };
+                super::dma_flush(source, params.output_bytes);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        source as *const f32,
+                        output.as_mut_ptr(),
+                        output.len(),
+                    );
+                }
+            }
+            let projection_count = specs.len() as u64;
+            debug_assert!(
+                !crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED
+                    || phase_probe_ordinal
+                        == LFM25_Q8_SUBMISSION_SIGNATURE_STATS[signature.index()]
+                            .submissions
+                            .load(Ordering::Relaxed)
+                            .checked_add(1)
+                            .expect("LFM submission ordinal overflow")
+            );
+            LFM25_Q8_SUBMISSION_SIGNATURE_STATS[signature.index()].record(
+                projection_count,
+                elapsed_ms,
+                timings,
+            );
+            if crate::log_os::flags::LUMEN_PERF_DIAG_PROFILE_ENABLED {
+                LFM25_Q8_PHASE_PROBE_STATS[signature.index()].record(timings.phase_probe);
+            }
+            let launches = LFM25_Q8_LAUNCHES
+                .fetch_add(projection_count, Ordering::Relaxed)
+                .saturating_add(projection_count);
+            let submissions = LFM25_Q8_SUBMISSIONS
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
+            LFM25_Q8_TOTAL_SUBMIT_MS.fetch_add(elapsed_ms, Ordering::Relaxed);
+            LFM25_Q8_TOTAL_ENCODE_US.fetch_add(timings.encode_us, Ordering::Relaxed);
+            LFM25_Q8_TOTAL_ADMISSION_US.fetch_add(timings.admission_us, Ordering::Relaxed);
+            LFM25_Q8_TOTAL_COMPLETION_US.fetch_add(timings.completion_us, Ordering::Relaxed);
+            if timings.gpu_timestamp_valid {
+                LFM25_Q8_TOTAL_GPU_US.fetch_add(timings.gpu_us, Ordering::Relaxed);
+                LFM25_Q8_GPU_TIMESTAMP_SAMPLES.fetch_add(1, Ordering::Relaxed);
+                LFM25_Q8_GPU_TIMESTAMP_HZ.store(timings.gpu_timestamp_hz, Ordering::Relaxed);
+            }
+            LFM25_Q8_LAST_ROWS.store(specs.last().unwrap().rows, Ordering::Relaxed);
+            if submissions == 1 || submissions.is_power_of_two() {
+                crate::log_info!(
+                    target: "gpgpu";
+                    "intel/gpgpu: lfm25-q8 batch ok launches={} submissions={} batch_projections={} columns={} last_rows={} last_weight_offset=0x{:X} submit_ms={} phase_us=encode:{},admission:{},completion:{},gpu:{} gpu_timestamp_valid={} gpu_timestamp_hz={} lane=lfm25 weight_layout={} artifact={}\n",
+                    launches,
+                    submissions,
+                    specs.len(),
+                    columns,
+                    specs.last().unwrap().rows,
+                    specs.last().unwrap().weight_offset,
+                    elapsed_ms,
+                    timings.encode_us,
+                    timings.admission_us,
+                    timings.completion_us,
+                    timings.gpu_us,
+                    timings.gpu_timestamp_valid as u8,
+                    timings.gpu_timestamp_hz,
+                    "pair1088-x16-dp4a",
+                    LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT.name,
+                );
+            }
+            Ok(elapsed_ms)
+        }
+        Err(error) => {
+            LFM25_Q8_FAILURES.fetch_add(1, Ordering::Relaxed);
+            Err(error)
+        }
+    }
+}
 
 const fn lfm25_q8_submission_signature(specs: &[Lfm25Q8ProjectSpec]) -> Lfm25Q8SubmissionSignature {
     match specs {
@@ -583,7 +904,14 @@ const fn lfm25_q8_phase_probe_samples_through(submissions: u64) -> u64 {
     samples
 }
 
-
+fn lfm25_q8_phase_probe_next_ordinal(signature: Lfm25Q8SubmissionSignature) -> u64 {
+    let completed = LFM25_Q8_SUBMISSION_SIGNATURE_STATS[signature.index()]
+        .submissions
+        .load(Ordering::Relaxed);
+    completed
+        .checked_add(1)
+        .expect("LFM submission ordinal overflow")
+}
 
 const _: () = {
     const fn spec(columns: u32, rows: u32) -> Lfm25Q8ProjectSpec {
@@ -645,14 +973,282 @@ const _: () = {
     assert!(canonical_hi_samples * 100 < 1_226 * 4);
 };
 
+fn ensure_lfm25_q8_runtime(slot: &mut Option<Lfm25Q8Runtime>) -> Result<(), Lfm25Q8ProjectError> {
+    if !super::gen12_lumen_mocs_ready() {
+        return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
+    }
+    if slot.is_some() {
+        return Ok(());
+    }
+    let (activation_phys, activation_virt) =
+        crate::dma::alloc(LFM25_Q8_ACTIVATION_ALLOC_BYTES, 4096)
+            .ok_or(Lfm25Q8ProjectError::Allocation)?;
+    let (output_phys, output_virt) = crate::dma::alloc(LFM25_Q8_OUTPUT_ALLOC_BYTES, 4096)
+        .ok_or(Lfm25Q8ProjectError::Allocation)?;
+    unsafe {
+        core::ptr::write_bytes(activation_virt, 0, LFM25_Q8_ACTIVATION_ALLOC_BYTES);
+        core::ptr::write_bytes(output_virt, 0, LFM25_Q8_OUTPUT_ALLOC_BYTES);
+    }
+    super::dma_flush(activation_virt, LFM25_Q8_ACTIVATION_ALLOC_BYTES);
+    super::dma_flush(output_virt, LFM25_Q8_OUTPUT_ALLOC_BYTES);
+    *slot = Some(Lfm25Q8Runtime {
+        activation: Lfm25Q8Buffer {
+            phys: activation_phys,
+            gpu: LFM25_Q8_ACTIVATION_GPU,
+            virt: activation_virt,
+            bytes: LFM25_Q8_ACTIVATION_ALLOC_BYTES,
+        },
+        output: Lfm25Q8Buffer {
+            phys: output_phys,
+            gpu: LFM25_Q8_OUTPUT_GPU,
+            virt: output_virt,
+            bytes: LFM25_Q8_OUTPUT_ALLOC_BYTES,
+        },
+        bound_model: None,
+        ready: false,
+    });
+    Ok(())
+}
 
+fn prepare_lfm25_q8_runtime(
+    runtime: &mut Lfm25Q8Runtime,
+    model: Lfm25Q8ModelMapping,
+) -> Result<(), Lfm25Q8ProjectError> {
+    if !super::gen12_lumen_mocs_ready() {
+        runtime.ready = false;
+        LFM25_Q8_READY.store(false, Ordering::Release);
+        return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
+    }
+    if runtime.ready && runtime.bound_model == Some(model) {
+        return Ok(());
+    }
+    let dev = super::claimed_device().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
+    let upload =
+        upload_lfm25_q8_project_packed_kernel().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
+    let state = lfm25_rcs_state_once(dev).ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
+    let mapped = direct_rcs_forcewake(dev)
+        && direct_rcs_map_state(dev, state)
+        && direct_rcs_init_ppgtt(state)
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            model.mapping_gpu,
+            model.mapping_phys,
+            model.mapping_bytes,
+        )
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            runtime.activation.gpu,
+            runtime.activation.phys,
+            runtime.activation.bytes,
+        )
+        && direct_rcs_map_ppgtt_kernel(
+            state,
+            runtime.output.gpu,
+            runtime.output.phys,
+            runtime.output.bytes,
+        );
+    if !mapped {
+        runtime.ready = false;
+        LFM25_Q8_READY.store(false, Ordering::Release);
+        return Err(Lfm25Q8ProjectError::MappingFailed);
+    }
+    runtime.bound_model = Some(model);
+    runtime.ready = true;
+    LFM25_Q8_READY.store(true, Ordering::Release);
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: lfm25-q8 runtime ready model_phys=0x{:X} model_gpu=0x{:X} model_bytes=0x{:X} mapped_bytes=0x{:X} activation_gpu=0x{:X} output_gpu=0x{:X} lane=lfm25 weight_layout={} artifact={} target={} device=0x{:04X} revision=0x{:02X}\n",
+        model.mapping_phys,
+        model.model_gpu,
+        model.model_bytes,
+        model.mapping_bytes,
+        runtime.activation.gpu,
+        runtime.output.gpu,
+        "pair1088-x16-dp4a",
+        LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT.name,
+        LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT.target,
+        dev.device_id,
+        dev.revision_id,
+    );
+    Ok(())
+}
 
+fn submit_lfm25_q8_project(
+    runtime: &Lfm25Q8Runtime,
+    model: Lfm25Q8ModelMapping,
+    params: &[Lfm25Q8ProjectParams],
+    phase_probe_sampled: bool,
+) -> Result<Lfm25Q8SubmitTimings, Lfm25Q8ProjectError> {
+    if !super::gen12_lumen_mocs_ready() {
+        return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
+    }
+    let dev = super::claimed_device().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
+    let upload =
+        upload_lfm25_q8_project_packed_kernel().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
+    let state = lfm25_rcs_state_once(dev).ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
+    if !runtime.ready || runtime.bound_model != Some(model) {
+        return Err(Lfm25Q8ProjectError::RuntimeUnavailable);
+    }
+    let encode_started = direct_rcs_now_tick();
+    if !direct_rcs_forcewake(dev) {
+        return Err(Lfm25Q8ProjectError::RuntimeUnavailable);
+    }
+    if !direct_rcs_encode_lfm25_q8_batch(state, upload, params, phase_probe_sampled) {
+        return Err(Lfm25Q8ProjectError::EncodeFailed);
+    }
+    let encode_us = direct_rcs_elapsed_us_since(encode_started);
+    let gpu_host_pre_submit = if phase_probe_sampled {
+        direct_rcs_read_render_timestamp(dev)
+    } else {
+        0
+    };
+    let gt_start_ratio = if phase_probe_sampled {
+        super::gen12_actual_gt_ratio(dev)
+    } else {
+        0
+    };
+    let admission_started = direct_rcs_now_tick();
+    if !lfm25_rcs_submit_batch(dev, state) {
+        return Err(Lfm25Q8ProjectError::SubmitFailed);
+    }
+    let admission_us = direct_rcs_elapsed_us_since(admission_started);
+    let completion_started = direct_rcs_now_tick();
+    let (observed, gpu_host_observe) = if phase_probe_sampled {
+        lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
+            dev,
+            state,
+            LFM25_Q8_POST_MARKER_SLOT,
+            LFM25_Q8_POST_MARKER,
+            LFM25_Q8_COMPLETION_TIMEOUT_MS,
+        )
+    } else {
+        (
+            lfm25_rcs_poll_result_slot_timeout_ms(
+                state,
+                LFM25_Q8_POST_MARKER_SLOT,
+                LFM25_Q8_POST_MARKER,
+                LFM25_Q8_COMPLETION_TIMEOUT_MS,
+            ),
+            0,
+        )
+    };
+    if observed != LFM25_Q8_POST_MARKER {
+        return Err(Lfm25Q8ProjectError::CompletionTimeout);
+    }
+    let gt_end_ratio = if phase_probe_sampled {
+        super::gen12_actual_gt_ratio(dev)
+    } else {
+        0
+    };
+    let completion_us = direct_rcs_elapsed_us_since(completion_started);
+    let gpu_start = direct_rcs_read_result_qword(state, LFM25_Q8_GPU_START_TIMESTAMP_SLOT);
+    let gpu_end = direct_rcs_read_result_qword(state, LFM25_Q8_GPU_END_TIMESTAMP_SLOT);
+    let gpu_timestamp_hz = direct_rcs_timestamp_frequency_hz(dev);
+    let gpu_interval =
+        direct_rcs_timestamp_interval_us(gpu_start, gpu_end, u64::from(gpu_timestamp_hz));
+    let phase_probe = if phase_probe_sampled {
+        lfm25_q8_read_phase_probe_sample(
+            state,
+            gpu_host_pre_submit,
+            gpu_start,
+            gpu_end,
+            gpu_host_observe,
+            u64::from(gpu_timestamp_hz),
+            gt_start_ratio,
+            gt_end_ratio,
+        )
+    } else {
+        Lfm25Q8PhaseProbeSample::default()
+    };
+    debug_assert!(
+        !phase_probe.valid
+            || gpu_interval
+                .map(|(_, gpu_us)| gpu_us == phase_probe.walkers_us)
+                .unwrap_or(false)
+    );
+    Ok(Lfm25Q8SubmitTimings {
+        encode_us,
+        admission_us,
+        completion_us,
+        gpu_us: gpu_interval.map(|(_, us)| us).unwrap_or(0),
+        gpu_timestamp_valid: gpu_interval.is_some(),
+        gpu_timestamp_hz,
+        phase_probe,
+    })
+}
 
+fn lfm25_q8_read_phase_probe_sample(
+    state: DirectRcsState,
+    gpu_host_pre_submit: u64,
+    gpu_start: u64,
+    gpu_end: u64,
+    gpu_host_observe: u64,
+    gpu_timestamp_hz: u64,
+    gt_start_ratio: u32,
+    gt_end_ratio: u32,
+) -> Lfm25Q8PhaseProbeSample {
+    let mut sample = Lfm25Q8PhaseProbeSample {
+        sampled: true,
+        gt_start_ratio,
+        gt_end_ratio,
+        ..Lfm25Q8PhaseProbeSample::default()
+    };
+    let gpu_batch_enter =
+        direct_rcs_read_result_qword(state, LFM25_Q8_GPU_BATCH_ENTER_TIMESTAMP_SLOT);
+    let gpu_post_release =
+        direct_rcs_read_result_qword(state, LFM25_Q8_GPU_POST_RELEASE_TIMESTAMP_SLOT);
+    let queue_to_batch =
+        direct_rcs_timestamp_interval_us(gpu_host_pre_submit, gpu_batch_enter, gpu_timestamp_hz);
+    let preamble = direct_rcs_timestamp_interval_us(gpu_batch_enter, gpu_start, gpu_timestamp_hz);
+    let walkers = direct_rcs_timestamp_interval_us(gpu_start, gpu_end, gpu_timestamp_hz);
+    let epilogue = direct_rcs_timestamp_interval_us(gpu_end, gpu_post_release, gpu_timestamp_hz);
+    let release_to_observe =
+        direct_rcs_timestamp_interval_us(gpu_post_release, gpu_host_observe, gpu_timestamp_hz);
+    let queue_to_observe =
+        direct_rcs_timestamp_interval_us(gpu_host_pre_submit, gpu_host_observe, gpu_timestamp_hz);
+    if let (
+        Some((queue_to_batch_ticks, queue_to_batch_us)),
+        Some((preamble_ticks, preamble_us)),
+        Some((walkers_ticks, walkers_us)),
+        Some((epilogue_ticks, epilogue_us)),
+        Some((release_to_observe_ticks, release_to_observe_us)),
+        Some((queue_to_observe_ticks, queue_to_observe_us)),
+    ) = (queue_to_batch, preamble, walkers, epilogue, release_to_observe, queue_to_observe)
+    {
+        let phase_sum_ticks = queue_to_batch_ticks
+            .saturating_add(preamble_ticks)
+            .saturating_add(walkers_ticks)
+            .saturating_add(epilogue_ticks)
+            .saturating_add(release_to_observe_ticks);
+        if phase_sum_ticks == queue_to_observe_ticks {
+            sample.valid = true;
+            sample.queue_to_batch_us = queue_to_batch_us;
+            sample.preamble_us = preamble_us;
+            sample.walkers_us = walkers_us;
+            sample.epilogue_us = epilogue_us;
+            sample.release_to_observe_us = release_to_observe_us;
+            sample.queue_to_observe_us = queue_to_observe_us;
+        }
+    }
+    sample
+}
 
+const fn lfm25_q8_admitted_shape(columns: u32, rows: u32) -> bool {
+    (columns == 1_024 && matches!(rows, 512 | 1_024 | 3_072 | 4_608 | 65_536))
+        || (columns == 4_608 && rows == 1_024)
+}
 
-
-
-
-
-
-
+fn lfm25_q8_exact_tensor_spec(spec: &Lfm25Q8ProjectSpec, matrix_bytes: usize) -> bool {
+    trueos_lfm25_model::lfm25::generated::TENSORS
+        .iter()
+        .any(|descriptor| {
+            descriptor.rank == 2
+                && trueos_lfm25_model::lfm25::TensorFormat::from_raw(descriptor.format)
+                    == Some(trueos_lfm25_model::lfm25::TensorFormat::Q8_0)
+                && descriptor.native_offset == spec.weight_offset
+                && descriptor.native_bytes as usize == matrix_bytes
+                && descriptor.ggml_ne0 == spec.columns
+                && descriptor.ggml_ne1 == spec.rows
+        })
+}

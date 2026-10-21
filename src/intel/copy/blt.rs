@@ -798,7 +798,13 @@ pub(crate) fn queue_guc_bcs0_mono_glyphs(
     queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::LegacyMono(glyphs))
 }
 
-
+/// First bring-up rung: flush/write a completion cookie and end the batch,
+/// without issuing any command to either BLT backend.
+pub(crate) fn queue_guc_bcs0_marker(
+    destination: GucBcs0RgbaSurface,
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::FastCopy)
+}
 
 /// Bit-preserving 32-bit copies from a device-written system-memory source.
 /// Use UC source mappings for display writeback; no RGBA interpretation occurs.

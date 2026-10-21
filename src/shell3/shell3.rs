@@ -1,55 +1,57 @@
-#[path = "system/picker.rs"]
-mod picker;
-#[path = "system/output.rs"]
-pub(crate) mod output;
+mod admin;
 #[path = "system/gpu.rs"]
 mod gpu;
+mod helper;
+mod lifecycle;
+mod os;
+#[path = "system/output.rs"]
+pub(crate) mod output;
+#[path = "system/picker.rs"]
+mod picker;
 #[path = "system/tlb.rs"]
 pub(crate) mod tlb;
 #[path = "system/vcpy.rs"]
 mod vcpy;
-mod helper;
-mod lifecycle;
-mod admin;
-mod os;
 pub(crate) use os::matrix_target_interrupted;
-mod os_update;
-mod monitor;
-pub(crate) mod table;
+pub(crate) mod capture;
 #[path = "system/cry.rs"]
 mod cry;
 #[path = "system/disc.rs"]
 mod disc;
+mod log_tap;
+pub(crate) mod matrix_target;
+mod monitor;
+mod os_update;
 #[path = "system/ram.rs"]
 mod ram;
 #[path = "system/smp.rs"]
 mod smp;
-#[path = "system/net.rs"]
-mod system_net;
-pub(crate) mod capture;
-pub(crate) mod matrix_target;
-mod log_tap;
 #[path = "system/log.rs"]
 mod system_log;
-pub(crate) use matrix_target::{matrix_target_print_line, MatrixTarget, MatrixSlotLease, matrix_target_slot_lease};
+#[path = "system/net.rs"]
+mod system_net;
+pub(crate) mod table;
+pub(crate) use matrix_target::{
+    MatrixSlotLease, MatrixTarget, matrix_target_print_line, matrix_target_slot_lease,
+};
+mod command_history;
+mod command_latch;
 mod metafmtstr;
 mod names;
 pub mod net;
+pub(crate) mod sessions;
 mod ssh;
 mod ssh_boot;
-mod tty;
-pub(crate) mod sessions;
 mod status;
+mod transition;
+mod tty;
 pub(crate) mod tui;
 mod update;
-mod transition;
-mod command_latch;
-mod command_history;
 
 pub mod service;
-pub(crate) mod startup;
 #[path = "show/show.rs"]
 pub mod show;
+pub(crate) mod startup;
 
 pub use metafmtstr::MetaFmtStr;
 pub use show::{Backend as ShowBackend, Show};
@@ -84,28 +86,32 @@ pub enum Mode {
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RgbaColor {
-    Gray = 0x808080FF,
     White = 0xFFFFFFFF,
     Pink = 0xFF69B4FF,
-    Blue = 0x4285F4FF,
-    Green = 0x34A853FF,
-    Orange = 0xFB8C00FF,
     BlackTransparent = 0x00000080,
-    Underlined { foreground: [u8;4] },
-    Blinking { foreground: [u8;4], background: Option<[u8;4]>, underline: bool },
-    Terminal { foreground: [u8;4], background: [u8;4], underline: bool },
+    Underlined {
+        foreground: [u8; 4],
+    },
+    Blinking {
+        foreground: [u8; 4],
+        background: Option<[u8; 4]>,
+        underline: bool,
+    },
+    Terminal {
+        foreground: [u8; 4],
+        background: [u8; 4],
+        underline: bool,
+    },
 }
 
 impl RgbaColor {
     pub const fn rgba(self) -> [u8; 4] {
         let value: u32 = match self {
-            Self::Terminal {foreground, ..} | Self::Underlined {foreground} | Self::Blinking {foreground, ..} => return foreground,
-            Self::Gray => 0x808080FF,
+            Self::Terminal { foreground, .. }
+            | Self::Underlined { foreground }
+            | Self::Blinking { foreground, .. } => return foreground,
             Self::White => 0xFFFFFFFF,
             Self::Pink => 0xFF69B4FF,
-            Self::Blue => 0x4285F4FF,
-            Self::Green => 0x34A853FF,
-            Self::Orange => 0xFB8C00FF,
             Self::BlackTransparent => 0x00000080,
         };
         [
@@ -115,15 +121,30 @@ impl RgbaColor {
             (value & 0xFF) as u8,
         ]
     }
-    pub const fn background(self) -> Option<[u8;4]> {
-        match self { Self::Terminal {background, ..} => Some(background), Self::Blinking {background, ..} => background, _ => None }
+    pub const fn background(self) -> Option<[u8; 4]> {
+        match self {
+            Self::Terminal { background, .. } => Some(background),
+            Self::Blinking { background, .. } => background,
+            _ => None,
+        }
     }
-    pub const fn blink(self) -> bool { matches!(self, Self::Blinking {..}) }
+    pub const fn blink(self) -> bool {
+        matches!(self, Self::Blinking { .. })
+    }
 
     pub const fn underline(self) -> bool {
-        matches!(self, Self::Terminal {underline: true, ..} | Self::Underlined {..} | Self::Blinking {underline: true, ..})
+        matches!(
+            self,
+            Self::Terminal {
+                underline: true,
+                ..
+            } | Self::Underlined { .. }
+                | Self::Blinking {
+                    underline: true,
+                    ..
+                }
+        )
     }
-
 }
 
 #[repr(u8)]
@@ -141,7 +162,6 @@ pub const SpecialSeperator: char = '│';
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StripSide {
     Left = 1,
-    Right = 2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,7 +170,6 @@ pub enum Shell3Error {
     NoExecutor,
     WrongExecutor { expected: u32, actual: u32 },
 }
-
 
 pub struct TitleTime;
 
@@ -163,8 +182,6 @@ impl TitleTime {
         let minutes_of_day = (local_seconds / 60) % (24 * 60);
         alloc::format!("{:02}:{:02}", minutes_of_day / 60, minutes_of_day % 60)
     }
-
-
 }
 
 fn title_left_text(time: &str) -> String {
@@ -225,7 +242,9 @@ fn matrix_slots_meta(ids: &[String], active: Option<&str>) -> Vec<MetaFmtStr> {
 fn matrix_slots_text(ids: &[String]) -> String {
     let mut text = String::new();
     for (index, id) in ids.iter().enumerate() {
-        if index != 0 { text.push(' '); }
+        if index != 0 {
+            text.push(' ');
+        }
         text.push(OPERATOR);
         text.push_str(id);
     }
@@ -238,18 +257,21 @@ fn current_matrix_slots_text() -> String {
 }
 
 impl MatrixSlots {
-
     /// Background host activity is independent of selection and VMX affinity.
     pub(super) fn set_background_active(lease: &MatrixSlotLease, active: bool) -> bool {
         let mut slots = matrix_slots().lock();
-        if !slots.lifetimes.iter().any(|(name, lifetime)| name == lease.name() && *lifetime == lease.lifetime_generation()) {
+        if !slots.lifetimes.iter().any(|(name, lifetime)| {
+            name == lease.name() && *lifetime == lease.lifetime_generation()
+        }) {
             return false;
         }
         if active && !slots.background_active.contains(lease) {
             slots.background_active.push(lease.clone());
         } else if !active {
             slots.background_active.retain(|entry| entry != lease);
-        } else { return true; }
+        } else {
+            return true;
+        }
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
         service::notify_work();
@@ -257,9 +279,13 @@ impl MatrixSlots {
     }
 
     pub(super) fn background_active_slots() -> Vec<String> {
-        matrix_slots().lock().background_active.iter().map(|lease| lease.name().to_string()).collect()
+        matrix_slots()
+            .lock()
+            .background_active
+            .iter()
+            .map(|lease| lease.name().to_string())
+            .collect()
     }
-
 
     /// Demand a slot and return its lifetime, so a freed/recreated id cannot
     /// silently reattach an old Shell3 view to the new slot.
@@ -280,7 +306,9 @@ impl MatrixSlots {
 
     /// Allocate under one lock so simultaneous connections cannot share a name.
     pub(crate) fn fresh_slot(peer_port: Option<u16>) -> (String, u64) {
-        let preferred = peer_port.filter(|port| *port != 0).map(|port| port.to_string());
+        let preferred = peer_port
+            .filter(|port| *port != 0)
+            .map(|port| port.to_string());
         Self::allocate_slot(preferred, "sh")
     }
 
@@ -327,7 +355,14 @@ impl MatrixSlots {
 
     fn drop_slot_inner(name: Option<&str>, expected: Option<u64>) -> bool {
         let mut slots = matrix_slots().lock();
-        if expected.is_some_and(|generation| !slots.lifetimes.iter().any(|(id, lifetime)| Some(id.as_str()) == name && *lifetime == generation)) { return false; }
+        if expected.is_some_and(|generation| {
+            !slots
+                .lifetimes
+                .iter()
+                .any(|(id, lifetime)| Some(id.as_str()) == name && *lifetime == generation)
+        }) {
+            return false;
+        }
         if let Some(name) = name {
             if !slots.ids.iter().any(|id| id == name) {
                 return false;
@@ -339,7 +374,9 @@ impl MatrixSlots {
         slots.generation = slots.generation.wrapping_add(1);
         let retired = matrix_target::retire_expired_attachments(&mut slots);
         drop(slots);
-        for (lease, resource) in retired { resource.on_matrix_slot_freed(&lease); }
+        for (lease, resource) in retired {
+            resource.on_matrix_slot_freed(&lease);
+        }
         service::notify_work();
         true
     }
@@ -377,19 +414,29 @@ impl MatrixSlots {
     /// Append guest output only to the exact live slot, never the bare slot.
     pub(crate) fn echo_output(lease: &MatrixSlotLease, text: String) {
         let mut slots = matrix_slots().lock();
-        if !slots.lifetimes.iter().any(|(name, generation)|
-            name == lease.name() && *generation == lease.lifetime_generation()) { return; }
+        if !slots.lifetimes.iter().any(|(name, generation)| {
+            name == lease.name() && *generation == lease.lifetime_generation()
+        }) {
+            return;
+        }
         let id = Some(lease.name().to_string());
-        let index = slots.echoes.iter().position(|(name, _)| *name == id)
-            .unwrap_or_else(|| { slots.echoes.push((id, VecDeque::new())); slots.echoes.len() - 1 });
+        let index = slots
+            .echoes
+            .iter()
+            .position(|(name, _)| *name == id)
+            .unwrap_or_else(|| {
+                slots.echoes.push((id, VecDeque::new()));
+                slots.echoes.len() - 1
+            });
         let lines = &mut slots.echoes[index].1;
-        if lines.len() == 256 { lines.pop_back(); }
+        if lines.len() == 256 {
+            lines.pop_back();
+        }
         lines.push_front(text);
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
         service::notify_work();
     }
-
 
     fn echo_snapshot(active: Option<&str>) -> (u64, Vec<String>) {
         let slots = matrix_slots().lock();
@@ -420,13 +467,7 @@ impl MatrixSlots {
         (slots.generation, lines)
     }
 
-
-
-
     // Active selection is per shell, not shared.
-
-
-
 }
 
 #[derive(Clone, Debug)]
@@ -457,7 +498,18 @@ impl SpecialRowsState {
             title: RowStrips::new(&title_left_text(time), ""),
             // StatusRow/Left is read from the shared MatrixSlots system.
             status: RowStrips::new("", ""),
-            promt: RowStrips {left: vec![MetaFmtStr::new(prompt_left).color(RgbaColor::Terminal {foreground: [0,0,0,255], background: RgbaColor::White.rgba(), underline: false}).blink()], right: vec![]},
+            promt: RowStrips {
+                left: vec![
+                    MetaFmtStr::new(prompt_left)
+                        .color(RgbaColor::Terminal {
+                            foreground: [0, 0, 0, 255],
+                            background: RgbaColor::White.rgba(),
+                            underline: false,
+                        })
+                        .blink(),
+                ],
+                right: vec![],
+            },
         }
     }
 
@@ -469,7 +521,6 @@ impl SpecialRowsState {
             SpecialRows::MatrixRow(_) => panic!("Matrix transcript is not a special strip"),
         }
     }
-
 }
 
 #[derive(Clone, Debug)]
@@ -479,7 +530,11 @@ struct PromptState {
     cursor: usize,
 }
 
-impl Drop for PromptState { fn drop(&mut self) { self.text.zeroize(); } }
+impl Drop for PromptState {
+    fn drop(&mut self) {
+        self.text.zeroize();
+    }
+}
 
 impl PromptState {
     fn new() -> Self {
@@ -516,10 +571,22 @@ impl PromptState {
 
 enum LatchedNavigation {
     Default,
-    Slot { name: String, lifetime: Option<u64> },
-    Native { name: String, lifetime: Option<u64> },
-    App { app: service::QueuedBlueprint, lifetime: u64 },
-    Resume { name: String, lifetime: Option<u64> },
+    Slot {
+        name: String,
+        lifetime: Option<u64>,
+    },
+    Native {
+        name: String,
+        lifetime: Option<u64>,
+    },
+    App {
+        app: service::QueuedBlueprint,
+        lifetime: u64,
+    },
+    Resume {
+        name: String,
+        lifetime: Option<u64>,
+    },
 }
 
 pub struct Shell3 {
@@ -564,13 +631,20 @@ impl Drop for Shell3 {
 }
 
 impl Shell3 {
-
     pub(super) fn active_matrix_lease(&self) -> Option<MatrixSlotLease> {
-        Some(MatrixSlotLease::from_identity(self.active_matrix_slot.clone()?, self.active_matrix_lifetime?))
+        Some(MatrixSlotLease::from_identity(
+            self.active_matrix_slot.clone()?,
+            self.active_matrix_lifetime?,
+        ))
     }
 
     /// SSH supplies its accepted PTY size before model construction or drawing.
-    pub(super) fn new_terminal_sized_reserved(slot: u32, peer_port: Option<u16>, columns: usize, rows: usize) -> Self {
+    pub(super) fn new_terminal_sized_reserved(
+        slot: u32,
+        peer_port: Option<u16>,
+        columns: usize,
+        rows: usize,
+    ) -> Self {
         debug_assert_eq!(crate::percpu::current_slot() as u32, slot);
         let mut shell = Self::new_inner(
             &TitleTime::current(),
@@ -581,7 +655,9 @@ impl Shell3 {
             rows,
             slot,
         );
-        shell.command_history.set_scope(matrix_target::TRANSPORT_NET_TCP_SCOPE);
+        shell
+            .command_history
+            .set_scope(matrix_target::TRANSPORT_NET_TCP_SCOPE);
         shell.set_show_backend(ShowBackend::Network);
         let (name, lifetime) = MatrixSlots::fresh_slot(peer_port);
         shell.active_matrix_slot = Some(name);
@@ -590,7 +666,6 @@ impl Shell3 {
         tui::select(shell.tui_frontend(), shell.active_matrix_slot.as_deref());
         shell
     }
-
 
     pub(super) fn new_reserved(
         time: &str,
@@ -689,18 +764,23 @@ impl Shell3 {
         }
     }
 
-
     pub(super) fn configure_window(&mut self, mut geometry: service::WindowGeometry) {
         let scale = service::microfont_scale();
-        geometry.width = geometry.width.max(MIN_COLUMNS as u32 * microfont::FWIDTH as u32 * scale);
-        geometry.height = geometry.height.max(MIN_ROWS as u32 * microfont::FHEIGHT as u32 * scale);
+        geometry.width = geometry
+            .width
+            .max(MIN_COLUMNS as u32 * microfont::FWIDTH as u32 * scale);
+        geometry.height = geometry
+            .height
+            .max(MIN_ROWS as u32 * microfont::FHEIGHT as u32 * scale);
         if let Some((width, height)) = crate::intel::active_scanout_dimensions() {
             geometry.width = geometry.width.min(width);
             geometry.height = geometry.height.min(height);
         }
         self.show.configure_window(geometry);
-        self.set((geometry.width / (microfont::FWIDTH as u32 * scale)) as usize,
-                 (geometry.height / (microfont::FHEIGHT as u32 * scale)) as usize);
+        self.set(
+            (geometry.width / (microfont::FWIDTH as u32 * scale)) as usize,
+            (geometry.height / (microfont::FHEIGHT as u32 * scale)) as usize,
+        );
     }
 
     pub fn set_show_backend(&mut self, backend: ShowBackend) {
@@ -759,8 +839,19 @@ impl Shell3 {
             let lines = lines.clone();
             let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
             let (columns, rows) = snapshot.size();
-            self.show.present(&line_refs, columns, rows, &batch, snapshot.reveals(), snapshot.matrix_area()).await?;
-            if let Some(window) = self.show.window() { tui::bind_ui4_window(self.tui_frontend, window); }
+            self.show
+                .present(
+                    &line_refs,
+                    columns,
+                    rows,
+                    &batch,
+                    snapshot.reveals(),
+                    snapshot.matrix_area(),
+                )
+                .await?;
+            if let Some(window) = self.show.window() {
+                tui::bind_ui4_window(self.tui_frontend, window);
+            }
             self.pending_presentation = None;
             if self.capture_update_snapshot() == snapshot {
                 break;
@@ -795,7 +886,9 @@ impl Shell3 {
         let snapshot = self.capture_update_snapshot();
         let lines = snapshot.rendered_lines();
         let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
-        self.show.resize_to_current(&line_refs, snapshot.matrix_area()).await
+        self.show
+            .resize_to_current(&line_refs, snapshot.matrix_area())
+            .await
     }
 
     pub(super) fn ui4_resize_needed(&self) -> bool {
@@ -812,19 +905,26 @@ impl Shell3 {
     }
 
     fn tui_frontend(&self) -> tui::Frontend {
-        tui::Frontend {id: self.tui_frontend, cols: self.columns, rows: self.rows_count}
+        tui::Frontend {
+            id: self.tui_frontend,
+            cols: self.columns,
+            rows: self.rows_count,
+        }
     }
 
     pub fn get_size(&self) -> (usize, usize) {
         (self.columns, self.rows_count)
     }
 
-
     pub(super) fn refresh_clock(&mut self) -> bool {
-        let Some(tick) = self.clock.take() else { return false; };
+        let Some(tick) = self.clock.take() else {
+            return false;
+        };
         let minutes = (tick.local_seconds / 60) % (24 * 60);
         let time = alloc::format!("{:02}:{:02}", minutes / 60, minutes % 60);
-        if self.time == time { return false; }
+        if self.time == time {
+            return false;
+        }
         self.set_time(&time);
         true
     }
@@ -834,7 +934,6 @@ impl Shell3 {
         self.time.push_str(time);
         self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time))];
     }
-
 
     pub fn set_mode(&mut self, mode: u8) -> bool {
         if self.active_vmx_app().is_some() {
@@ -846,7 +945,9 @@ impl Shell3 {
             3 => Mode::ADM,
             _ => return false,
         };
-        if mode != self.mode { self.tab_from_right = !self.tab_from_right; }
+        if mode != self.mode {
+            self.tab_from_right = !self.tab_from_right;
+        }
         self.mode = mode;
         self.refresh_mode_title();
         true
@@ -854,10 +955,14 @@ impl Shell3 {
 
     fn refresh_mode_title(&mut self) {
         let target = mode_title_meta(self.mode, &self.aka_names, &self.appdb_names);
-        self.title_transition.start(&self.rows.title.right, &target, crate::chronos::monotonic_nanos(), self.tab_from_right);
+        self.title_transition.start(
+            &self.rows.title.right,
+            &target,
+            crate::chronos::monotonic_nanos(),
+            self.tab_from_right,
+        );
         self.rows.title.right = target;
     }
-
 
     pub fn get_mode(&self) -> u8 {
         self.mode as u8
@@ -869,7 +974,9 @@ impl Shell3 {
                 self.latched_navigation = Some(LatchedNavigation::Default);
                 return true;
             }
-            if !tui::park(self.tui_frontend) || !tui::select(self.tui_frontend(), None) {return false;}
+            if !tui::park(self.tui_frontend) || !tui::select(self.tui_frontend(), None) {
+                return false;
+            }
             self.active_matrix_slot = None;
             self.active_matrix_lifetime = None;
             self.matrix_selection_dirty = true;
@@ -886,13 +993,22 @@ impl Shell3 {
         };
 
         let name = name.clone();
-        let lifetime = slots.lifetimes.iter().find(|(id,_)| id == &name).map(|(_,lifetime)| *lifetime);
+        let lifetime = slots
+            .lifetimes
+            .iter()
+            .find(|(id, _)| id == &name)
+            .map(|(_, lifetime)| *lifetime);
         drop(slots);
         if self.command_feedback.is_some() {
-            self.latched_navigation = Some(LatchedNavigation::Slot { name: name.to_string(), lifetime });
+            self.latched_navigation = Some(LatchedNavigation::Slot {
+                name: name.to_string(),
+                lifetime,
+            });
             return true;
         }
-        if !tui::select_for_navigation(self.tui_frontend(), &name) {return false;}
+        if !tui::select_for_navigation(self.tui_frontend(), &name) {
+            return false;
+        }
         self.active_matrix_slot = Some(name);
         self.active_matrix_lifetime = lifetime;
         self.matrix_selection_dirty = true;
@@ -909,13 +1025,22 @@ impl Shell3 {
             return false;
         }
 
-        let lifetime = slots.lifetimes.iter().find(|(id,_)| id == name).map(|(_,lifetime)| *lifetime);
+        let lifetime = slots
+            .lifetimes
+            .iter()
+            .find(|(id, _)| id == name)
+            .map(|(_, lifetime)| *lifetime);
         drop(slots);
         if self.command_feedback.is_some() {
-            self.latched_navigation = Some(LatchedNavigation::Slot { name: name.to_string(), lifetime });
+            self.latched_navigation = Some(LatchedNavigation::Slot {
+                name: name.to_string(),
+                lifetime,
+            });
             return true;
         }
-        if !tui::select_for_navigation(self.tui_frontend(), name) {return false;}
+        if !tui::select_for_navigation(self.tui_frontend(), name) {
+            return false;
+        }
         self.active_matrix_slot = Some(name.to_string());
         self.active_matrix_lifetime = lifetime;
         self.matrix_selection_dirty = true;
@@ -925,7 +1050,6 @@ impl Shell3 {
         service::notify_work();
         true
     }
-
 
     pub fn active_matrix_slot_name(&self) -> Option<String> {
         let active = self.active_matrix_slot.as_deref()?;
@@ -941,7 +1065,9 @@ impl Shell3 {
     pub(super) fn reconcile_matrix_selection(&mut self) {
         self.finish_command_latch(false);
         let recalled = self.command_history.cursor.is_some();
-        if self.command_history.sync() && recalled { self.set_prompt(""); }
+        if self.command_history.sync() && recalled {
+            self.set_prompt("");
+        }
         self.sync_aka_names();
         if tui::active(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
             self.title_transition.finish();
@@ -951,23 +1077,43 @@ impl Shell3 {
             self.select_queued_app(app);
         }
         if let Some(destination) = tlb::take_return(self.tui_frontend) {
-            if let Some(lease) = destination.0 && matrix_target::matrix_slot_is_live(&lease) {
+            if let Some(lease) = destination.0
+                && matrix_target::matrix_slot_is_live(&lease)
+            {
                 self.select_matrix_slot_name(lease.name());
-            } else { self.select_matrix_slot_index(0); }
-        } else if tui::take_native_return(self.tui_frontend) || (self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none()) {
+            } else {
+                self.select_matrix_slot_index(0);
+            }
+        } else if tui::take_native_return(self.tui_frontend)
+            || (self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none())
+        {
             self.select_matrix_slot_index(0);
         }
     }
 
     /// Prompt-row input is addressed by the selected app lifetime, not a view.
     fn submit_app_prompt(&mut self) -> bool {
-        if self.active_vmx_app().is_none() || self.prompt.text.starts_with(OPERATOR) { return false; }
-        let (Some(name), Some(lifetime)) = (self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) else { return false; };
-        let Some(vm) = crate::hv::matrix::vm_for_slot(name, lifetime) else { return false; };
-        let Some(run) = crate::hv::vm_run_generation(vm) else { return false; };
+        if self.active_vmx_app().is_none() || self.prompt.text.starts_with(OPERATOR) {
+            return false;
+        }
+        let (Some(name), Some(lifetime)) =
+            (self.active_matrix_slot.as_deref(), self.active_matrix_lifetime)
+        else {
+            return false;
+        };
+        let Some(vm) = crate::hv::matrix::vm_for_slot(name, lifetime) else {
+            return false;
+        };
+        let Some(run) = crate::hv::vm_run_generation(vm) else {
+            return false;
+        };
         let lease = MatrixSlotLease::from_identity(name.into(), lifetime);
         let input = format!("{}\n", self.prompt.text);
-        if crate::hv::blueprint_console_submit_stdin_for_lease(vm, &lease, run, input.as_bytes()) != input.len() { return false; }
+        if crate::hv::blueprint_console_submit_stdin_for_lease(vm, &lease, run, input.as_bytes())
+            != input.len()
+        {
+            return false;
+        }
         MatrixSlots::echo(Some(name), Some(lifetime), self.prompt.text.clone());
         self.command_history.remember(&self.prompt.text);
         self.command_history.end_recall();
@@ -994,7 +1140,8 @@ impl Shell3 {
     /// is discarded. Stop early when the prompt cannot become a valid name.
     pub(super) fn replay_terminal_line(&mut self, line: &str) {
         use crate::r::keyboard::*;
-        if self.active_vmx_app().is_some() && !line.starts_with(OPERATOR) && !self.parse_name(line) {
+        if self.active_vmx_app().is_some() && !line.starts_with(OPERATOR) && !self.parse_name(line)
+        {
             self.set_prompt(line);
             self.submit_app_prompt();
             return;
@@ -1042,21 +1189,32 @@ impl Shell3 {
         event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
     ) -> (bool, bool) {
         use crate::r::keyboard::*;
-        if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 { return (false, false); }
+        if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 {
+            return (false, false);
+        }
         self.finish_command_latch(true);
         // Tab leaves a VMX view before terminal input routing can consume it.
         // Keep the guest alive and the shell's mode; the next Tab cycles normally.
-        if event.kind == KEYBOARD_OUTPUT_KIND_KEY && event.key_code == KEYBOARD_KEY_TAB
-            && self.active_vmx_app().is_some() {
+        if event.kind == KEYBOARD_OUTPUT_KIND_KEY
+            && event.key_code == KEYBOARD_KEY_TAB
+            && self.active_vmx_app().is_some()
+        {
             return (self.select_matrix_slot_index(0), false);
         }
         // A terminal owner receives ordinary text, including the Matrix
         // operator. Shell operators are parsed only while Shell3 owns input.
-        if tui::keyboard(self.tui_frontend, self.active_matrix_slot_name().as_deref(), event) { return (true, false); }
+        if tui::keyboard(self.tui_frontend, self.active_matrix_slot_name().as_deref(), event) {
+            return (true, false);
+        }
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
             match event.key_code {
                 KEYBOARD_KEY_ARROW_UP | KEYBOARD_KEY_ARROW_DOWN => {
-                    let Some(text) = self.command_history.recall(event.key_code == KEYBOARD_KEY_ARROW_UP, &self.prompt.text) else { return (false, false); };
+                    let Some(text) = self
+                        .command_history
+                        .recall(event.key_code == KEYBOARD_KEY_ARROW_UP, &self.prompt.text)
+                    else {
+                        return (false, false);
+                    };
                     self.set_prompt(&text);
                     self.set_cursor(text.chars().count());
                     return (true, false);
@@ -1146,26 +1304,54 @@ impl Shell3 {
 
     fn finish_command_latch(&mut self, force: bool) {
         let now = crate::chronos::monotonic_nanos();
-        if !self.command_feedback.as_ref().is_some_and(|feedback| force || feedback.finished(now)) { return; }
+        if !self
+            .command_feedback
+            .as_ref()
+            .is_some_and(|feedback| force || feedback.finished(now))
+        {
+            return;
+        }
         self.command_feedback = None;
         tui::hold_navigation(self.tui_frontend, false);
         match self.latched_navigation.take() {
-            Some(LatchedNavigation::Default) => { self.select_matrix_slot_index(0); }
+            Some(LatchedNavigation::Default) => {
+                self.select_matrix_slot_index(0);
+            }
             Some(LatchedNavigation::Slot { name, lifetime }) => {
                 // Do not navigate into a different slot that reused this name.
-                let live = matrix_slots().lock().lifetimes.iter().any(|(id, generation)| id == &name && Some(*generation) == lifetime);
-                if live { self.select_matrix_slot_name(&name); }
+                let live = matrix_slots()
+                    .lock()
+                    .lifetimes
+                    .iter()
+                    .any(|(id, generation)| id == &name && Some(*generation) == lifetime);
+                if live {
+                    self.select_matrix_slot_name(&name);
+                }
             }
             Some(LatchedNavigation::Native { name, lifetime }) => {
-                let live = matrix_slots().lock().lifetimes.iter().any(|(id, generation)| id == &name && Some(*generation) == lifetime);
-                if live { self.enter_native_terminal(&name); }
+                let live = matrix_slots()
+                    .lock()
+                    .lifetimes
+                    .iter()
+                    .any(|(id, generation)| id == &name && Some(*generation) == lifetime);
+                if live {
+                    self.enter_native_terminal(&name);
+                }
             }
             Some(LatchedNavigation::App { app, lifetime }) => {
-                let live = matrix_slots().lock().lifetimes.iter().any(|(name, generation)| name == &app.slot && *generation == lifetime);
-                if live { self.select_queued_app(app); }
+                let live = matrix_slots()
+                    .lock()
+                    .lifetimes
+                    .iter()
+                    .any(|(name, generation)| name == &app.slot && *generation == lifetime);
+                if live {
+                    self.select_queued_app(app);
+                }
             }
             Some(LatchedNavigation::Resume { name, lifetime }) => {
-                if self.active_matrix_slot.as_deref() == Some(&name) && self.active_matrix_lifetime == lifetime {
+                if self.active_matrix_slot.as_deref() == Some(&name)
+                    && self.active_matrix_lifetime == lifetime
+                {
                     if let Err(error) = tui::request_takeover(self.tui_frontend(), &name) {
                         MatrixSlots::echo(Some(&name), lifetime, error.into());
                     }
@@ -1180,10 +1366,17 @@ impl Shell3 {
     // Starting a helper is an explicit entry action; selecting its retained
     // slot later uses the command pane until the user requests `tui`.
     fn enter_native_terminal(&mut self, name: &str) {
-        let lifetime = matrix_slots().lock().lifetimes.iter()
-            .find(|(id, _)| id == name).map(|(_, lifetime)| *lifetime);
+        let lifetime = matrix_slots()
+            .lock()
+            .lifetimes
+            .iter()
+            .find(|(id, _)| id == name)
+            .map(|(_, lifetime)| *lifetime);
         if self.command_feedback.is_some() {
-            self.latched_navigation = Some(LatchedNavigation::Native { name: name.into(), lifetime });
+            self.latched_navigation = Some(LatchedNavigation::Native {
+                name: name.into(),
+                lifetime,
+            });
         } else if self.select_matrix_slot_name(name) {
             if let Err(error) = tui::request(self.tui_frontend(), name) {
                 MatrixSlots::echo(Some(name), lifetime, error.into());
@@ -1192,7 +1385,9 @@ impl Shell3 {
     }
 
     fn select_queued_app(&mut self, app: service::QueuedBlueprint) {
-        if crate::hv::matrix::app(&app.slot, Some(app.lifetime)).is_none() { return; }
+        if crate::hv::matrix::app(&app.slot, Some(app.lifetime)).is_none() {
+            return;
+        }
         if self.command_feedback.is_some() {
             let lifetime = app.lifetime;
             self.latched_navigation = Some(LatchedNavigation::App { app, lifetime });
@@ -1217,11 +1412,17 @@ impl Shell3 {
     /// the first recognized name; trailing input never reaches echo or history.
     fn latch_prompt_prefix(&mut self) -> bool {
         self.sync_aka_names();
-        if self.prompt().starts_with(OPERATOR) { return false; }
-        let matched_end = self.prompt().char_indices()
+        if self.prompt().starts_with(OPERATOR) {
+            return false;
+        }
+        let matched_end = self
+            .prompt()
+            .char_indices()
             .map(|(index, ch)| index + ch.len_utf8())
             .find(|&end| self.parse_name(&self.prompt()[..end]));
-        let Some(end) = matched_end else { return false; };
+        let Some(end) = matched_end else {
+            return false;
+        };
         let name = self.prompt()[..end].to_string();
         self.set_prompt(&name);
         let latched = self.echo_recognized_prompt();
@@ -1237,7 +1438,11 @@ impl Shell3 {
         let mut text = core::mem::take(&mut self.prompt.text);
         self.command_history.remember(&text);
         self.command_history.end_recall();
-        self.command_feedback = Some(command_latch::Feedback::new(&text, crate::chronos::monotonic_nanos(), self.tab_from_right));
+        self.command_feedback = Some(command_latch::Feedback::new(
+            &text,
+            crate::chronos::monotonic_nanos(),
+            self.tab_from_right,
+        ));
         self.latched_navigation = None;
         tui::hold_navigation(self.tui_frontend, true);
         service::notify_work();
@@ -1246,14 +1451,32 @@ impl Shell3 {
         let is_alias = self.aka_names.iter().any(|name| name == &text);
         if self.mode == Mode::ADM && text == "log" {
             match system_log::start(self.tui_frontend()) {
-                Ok(()) => { self.enter_native_terminal(&text); }
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+                Ok(()) => {
+                    self.enter_native_terminal(&text);
+                }
+                Err(error) => MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    error,
+                ),
             }
         } else if text == "env" && (self.mode == Mode::ADM || self.active_vmx_app().is_some()) {
-            for line in service::environment_lines(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime) {
-                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+            for line in service::environment_lines(
+                self.active_matrix_slot.as_deref(),
+                self.active_matrix_lifetime,
+            ) {
+                MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    line,
+                );
             }
-        } else if self.mode == Mode::ADM && matches!(text.as_str(), "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb") {
+        } else if self.mode == Mode::ADM
+            && matches!(
+                text.as_str(),
+                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb"
+            )
+        {
             let frontend = self.tui_frontend();
             let result = match text.as_str() {
                 "cry" => cry::start(frontend),
@@ -1264,14 +1487,24 @@ impl Shell3 {
                 "gpu" => gpu::start(frontend),
                 "vcpy" => vcpy::start(frontend),
                 _ => {
-                    let origin = output::DumpTarget(self.active_matrix_slot.clone().zip(self.active_matrix_lifetime)
-                        .map(|(name,lifetime)| MatrixSlotLease::from_identity(name,lifetime)));
-                    tlb::start(frontend,origin)
-                },
+                    let origin = output::DumpTarget(
+                        self.active_matrix_slot
+                            .clone()
+                            .zip(self.active_matrix_lifetime)
+                            .map(|(name, lifetime)| MatrixSlotLease::from_identity(name, lifetime)),
+                    );
+                    tlb::start(frontend, origin)
+                }
             };
             match result {
-                Ok(()) => { self.enter_native_terminal(&text); }
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+                Ok(()) => {
+                    self.enter_native_terminal(&text);
+                }
+                Err(error) => MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    error,
+                ),
             }
         } else if self.mode == Mode::ADM && text == "sh3" {
             if let Err(error) = service::request_shell3() {
@@ -1280,30 +1513,65 @@ impl Shell3 {
                     Shell3Error::InstanceLimit => "sh3: Shell3 instance limit reached".into(),
                     other => format!("sh3: {other:?}"),
                 };
-                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, message);
+                MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    message,
+                );
             }
         } else if self.mode == Mode::HV && text == "status" {
             for line in service::hv_status_lines() {
-                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+                MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    line,
+                );
             }
         } else if self.mode == Mode::HV && matches!(text.as_str(), "peer" | "probe") {
-            let lines = if text == "peer" { service::peer_lines() } else { service::probe_lines() };
+            let lines = if text == "peer" {
+                service::peer_lines()
+            } else {
+                service::probe_lines()
+            };
             for line in lines {
-                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line);
+                MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    line,
+                );
             }
-        } else if self.mode == Mode::HV && self.active_vmx_app().is_none() && lifecycle::recognizes(&text) {
+        } else if self.mode == Mode::HV
+            && self.active_vmx_app().is_none()
+            && lifecycle::recognizes(&text)
+        {
             match lifecycle::start(&text, self.tui_frontend()) {
-                Ok(()) => { self.enter_native_terminal(&text); }
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+                Ok(()) => {
+                    self.enter_native_terminal(&text);
+                }
+                Err(error) => MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    error,
+                ),
             }
         } else if text == "Aka" {
             if let Err(error) = service::edit_aka(self.tui_frontend()) {
-                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error);
+                MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    error,
+                );
             }
         } else if self.mode == Mode::ADM && capture::recognizes(&text) {
             match capture::start(&text, self.tui_frontend()) {
-                Ok(()) => { self.enter_native_terminal(&text); }
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+                Ok(()) => {
+                    self.enter_native_terminal(&text);
+                }
+                Err(error) => MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    error,
+                ),
             }
         } else if is_alias {
             self.launch_named_app(&text, true);
@@ -1315,8 +1583,12 @@ impl Shell3 {
                 let message = lifecycle::control(&text, &lease);
                 MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), message);
             }
-        } else if text == "tui" && (self.active_vmx_app().is_some()
-            || self.active_matrix_slot_name().is_some_and(|name| tui::native_slot(&name))) {
+        } else if text == "tui"
+            && (self.active_vmx_app().is_some()
+                || self
+                    .active_matrix_slot_name()
+                    .is_some_and(|name| tui::native_slot(&name)))
+        {
             self.latched_navigation = Some(LatchedNavigation::Resume {
                 name: self.active_matrix_slot.clone().unwrap_or_default(),
                 lifetime: self.active_matrix_lifetime,
@@ -1326,8 +1598,11 @@ impl Shell3 {
         } else if is_app {
             self.launch_named_app(&text, false);
         } else {
-            MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, text.clone());
-
+            MatrixSlots::echo(
+                self.active_matrix_slot.as_deref(),
+                self.active_matrix_lifetime,
+                text.clone(),
+            );
         }
         text.zeroize();
         self.prompt.colors.clear();
@@ -1339,12 +1614,17 @@ impl Shell3 {
         self.aka_generation != crate::r::startup_config::generation()
             || self.appdb_generation != service::appdb_names_snapshot().0
             || self.matrix_selection_dirty
-            || self.update_baseline.blink_phase().is_some_and(|phase| phase != Self::cursor_blink_phase())
+            || self
+                .update_baseline
+                .blink_phase()
+                .is_some_and(|phase| phase != Self::cursor_blink_phase())
             || tui::revision(self.tui_frontend) != self.update_baseline.tui_revision()
             || (!self.update_baseline.terminal_active()
                 && matrix_slots().lock().generation != self.update_baseline.matrix_generation())
             || (!self.update_baseline.terminal_active()
-                && !self.update_baseline.controls_match(&self.capture_controls_snapshot()))
+                && !self
+                    .update_baseline
+                    .controls_match(&self.capture_controls_snapshot()))
     }
 
     pub fn set_prompt(&mut self, text: &str) {
@@ -1370,7 +1650,6 @@ impl Shell3 {
         true
     }
 
-
     fn refresh_prompt_strip(&mut self) {
         let mut colors = self.prompt.colors.clone();
         colors.resize(self.prompt.char_len(), None);
@@ -1384,8 +1663,14 @@ impl Shell3 {
             .map(|(index, (ch, color))| MetaFmtStr {
                 text: ch.to_string(),
                 color: if index == self.prompt.cursor {
-                    Some(RgbaColor::Terminal {foreground: [0,0,0,255], background: RgbaColor::White.rgba(), underline: false})
-                } else { color },
+                    Some(RgbaColor::Terminal {
+                        foreground: [0, 0, 0, 255],
+                        background: RgbaColor::White.rgba(),
+                        underline: false,
+                    })
+                } else {
+                    color
+                },
                 bold: false,
                 underline: false,
                 blink: index == self.prompt.cursor,
@@ -1393,24 +1678,31 @@ impl Shell3 {
             .collect();
     }
 
-
-
     pub fn get_strip(&self, row: SpecialRows, side: StripSide) -> String {
         if let SpecialRows::MatrixRow(index) = row {
-            if side != StripSide::Left { return String::new(); }
-            let (_, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
-            let offset = self.matrix_scroll.min(lines.len().saturating_sub(self.rows_count.saturating_sub(3)));
-            return lines.get(offset.saturating_add(index)).map(|line| line.chars().skip(self.matrix_column).collect()).unwrap_or_default();
+            if side != StripSide::Left {
+                return String::new();
+            }
+            let (_, lines) = MatrixSlots::view_echo_snapshot(
+                self.active_matrix_slot.as_deref(),
+                self.active_matrix_lifetime,
+            );
+            let offset = self.matrix_scroll.min(
+                lines
+                    .len()
+                    .saturating_sub(self.rows_count.saturating_sub(3)),
+            );
+            return lines
+                .get(offset.saturating_add(index))
+                .map(|line| line.chars().skip(self.matrix_column).collect())
+                .unwrap_or_default();
         }
         if row == SpecialRows::StatusRow && side == StripSide::Left {
             return current_matrix_slots_text();
         }
 
         let strip = self.row_for_render(row);
-        match side {
-            StripSide::Left => strip.left.iter().map(|run| run.text.as_str()).collect(),
-            StripSide::Right => strip.right.iter().map(|run| run.text.as_str()).collect(),
-        }
+        strip.left.iter().map(|run| run.text.as_str()).collect()
     }
 
     fn row_for_render(&self, row: SpecialRows) -> RowStrips {
@@ -1421,26 +1713,36 @@ impl Shell3 {
         if row == SpecialRows::TitleRow {
             // The title operator is the permanent default-slot control.
             let mut column = 0;
-            strips.left = strips.left.into_iter().flat_map(|run| {
-                let mut parts = Vec::new();
-                for ch in run.text.chars() {
-                    let mut part = run.clone();
-                    part.text = ch.to_string();
-                    if column == 7 && ch == OPERATOR {
-                        part.color = Some(if self.active_matrix_slot_name().is_none() {
-                            RgbaColor::Pink
-                        } else { RgbaColor::White });
-                        part.bold = true;
-                        part.underline = self.status_hover == Some(status::Target::Default);
+            strips.left = strips
+                .left
+                .into_iter()
+                .flat_map(|run| {
+                    let mut parts = Vec::new();
+                    for ch in run.text.chars() {
+                        let mut part = run.clone();
+                        part.text = ch.to_string();
+                        if column == 7 && ch == OPERATOR {
+                            part.color = Some(if self.active_matrix_slot_name().is_none() {
+                                RgbaColor::Pink
+                            } else {
+                                RgbaColor::White
+                            });
+                            part.bold = true;
+                            part.underline = self.status_hover == Some(status::Target::Default);
+                        }
+                        column += 1;
+                        parts.push(part);
                     }
-                    column += 1;
-                    parts.push(part);
-                }
-                parts
-            }).collect();
+                    parts
+                })
+                .collect();
             if let Some(app) = self.active_vmx_app() {
-                strips.left.push(MetaFmtStr::new(format!(" {}", app.app)).bold());
-                strips.left.push(MetaFmtStr::new(format!(" {}", vmx_hash_text(&app.sha256))));
+                strips
+                    .left
+                    .push(MetaFmtStr::new(format!(" {}", app.app)).bold());
+                strips
+                    .left
+                    .push(MetaFmtStr::new(format!(" {}", vmx_hash_text(&app.sha256))));
                 strips.right = vmx_title_meta();
             }
         }
@@ -1455,11 +1757,17 @@ impl Shell3 {
             let working = service::working_vmx_slots();
             let background_active = MatrixSlots::background_active_slots();
             let slots = matrix_slots().lock();
-            strips = status::runs_with_activity(&slots.ids, active.as_deref(), &self.aka_names, self.status_hover.as_ref(), &working, &background_active);
+            strips = status::runs_with_activity(
+                &slots.ids,
+                active.as_deref(),
+                &self.aka_names,
+                self.status_hover.as_ref(),
+                &working,
+                &background_active,
+            );
         }
         strips
     }
-
 
     /// Move this view through the shared newest-first transcript. Positive
     /// rows move down toward older entries; each Shell3 owns its own offset.
@@ -1468,50 +1776,93 @@ impl Shell3 {
     }
 
     pub(super) fn pan_matrix(&mut self, columns: i32, rows: i32) -> bool {
-        let (_, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
-        let maximum = lines.len().saturating_sub(self.rows_count.saturating_sub(3));
+        let (_, lines) = MatrixSlots::view_echo_snapshot(
+            self.active_matrix_slot.as_deref(),
+            self.active_matrix_lifetime,
+        );
+        let maximum = lines
+            .len()
+            .saturating_sub(self.rows_count.saturating_sub(3));
         let previous = self.matrix_scroll.min(maximum);
         self.matrix_scroll = if rows >= 0 {
             previous.saturating_add(rows as usize).min(maximum)
         } else {
             previous.saturating_sub(rows.unsigned_abs() as usize)
         };
-        let maximum_column = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0).saturating_sub(self.columns);
+        let maximum_column = lines
+            .iter()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(self.columns);
         let previous_column = self.matrix_column.min(maximum_column);
         self.matrix_column = if columns >= 0 {
-            previous_column.saturating_add(columns as usize).min(maximum_column)
-        } else { previous_column.saturating_sub(columns.unsigned_abs() as usize) };
+            previous_column
+                .saturating_add(columns as usize)
+                .min(maximum_column)
+        } else {
+            previous_column.saturating_sub(columns.unsigned_abs() as usize)
+        };
         self.matrix_scroll != previous || self.matrix_column != previous_column
     }
 
     /// Grab the transcript in cell-sized steps, retaining sub-cell movement.
-    pub(super) fn drag_matrix(&mut self, position: (i32, i32), pressed: bool, held: bool, inside: bool, cell: (i32, i32)) -> bool {
+    pub(super) fn drag_matrix(
+        &mut self,
+        position: (i32, i32),
+        pressed: bool,
+        held: bool,
+        inside: bool,
+        cell: (i32, i32),
+    ) -> bool {
         if !held || cell.0 <= 0 || cell.1 <= 0 {
             self.matrix_drag = None;
             return false;
         }
-        if pressed && inside { self.matrix_drag = Some(position); }
-        let Some(anchor) = self.matrix_drag else { return false; };
+        if pressed && inside {
+            self.matrix_drag = Some(position);
+        }
+        let Some(anchor) = self.matrix_drag else {
+            return false;
+        };
         let columns = (anchor.0 as i64 - position.0 as i64) / cell.0 as i64;
         let rows = (anchor.1 as i64 - position.1 as i64) / cell.1 as i64;
-        if columns == 0 && rows == 0 { return false; }
-        self.matrix_drag = Some(((anchor.0 as i64 - columns * cell.0 as i64) as i32,
-            (anchor.1 as i64 - rows * cell.1 as i64) as i32));
-        self.pan_matrix(columns.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-            rows.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+        if columns == 0 && rows == 0 {
+            return false;
+        }
+        self.matrix_drag = Some((
+            (anchor.0 as i64 - columns * cell.0 as i64) as i32,
+            (anchor.1 as i64 - rows * cell.1 as i64) as i32,
+        ));
+        self.pan_matrix(
+            columns.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            rows.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        )
     }
 
     fn capture_matrix_snapshot(&self) -> update::Snapshot {
-        let (generation, lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
+        let (generation, lines) = MatrixSlots::view_echo_snapshot(
+            self.active_matrix_slot.as_deref(),
+            self.active_matrix_lifetime,
+        );
         self.capture_controls_snapshot()
-            .with_matrix_pan(&lines, generation, self.matrix_column, self.matrix_scroll,
-                crate::allcaps::shell3::PANBUFFER_GUARD_CELLS as usize)
+            .with_matrix_pan(
+                &lines,
+                generation,
+                self.matrix_column,
+                self.matrix_scroll,
+                crate::allcaps::shell3::PANBUFFER_GUARD_CELLS as usize,
+            )
             .with_matrix_identity(self.active_matrix_slot.clone(), self.active_matrix_lifetime)
     }
 
     fn record_terminal_notice(&mut self, text: &str) {
         for line in text.lines().rev() {
-            MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, line.into());
+            MatrixSlots::echo(
+                self.active_matrix_slot.as_deref(),
+                self.active_matrix_lifetime,
+                line.into(),
+            );
         }
     }
 
@@ -1523,17 +1874,25 @@ impl Shell3 {
         let snapshot = update::Snapshot::new(
             (self.columns, self.rows_count),
             self.layout_generation,
-            [(&title.left, &title.right), (&status.left, &status.right), (&promt.left, &promt.right)],
+            [
+                (&title.left, &title.right),
+                (&status.left, &status.right),
+                (&promt.left, &promt.right),
+            ],
             self.columns,
         );
         let now = crate::chronos::monotonic_nanos();
         let snapshot = if self.active_vmx_app().is_none() {
             snapshot.with_reveal(0, &title.left, self.title_transition.frame(now))
-        } else { snapshot };
+        } else {
+            snapshot
+        };
         snapshot.with_reveal(1, &status.left, self.aka_transition.frame(now))
     }
 
-    fn cursor_blink_phase() -> bool { trueos_time::Instant::now().as_millis() / 500 % 2 == 0 }
+    fn cursor_blink_phase() -> bool {
+        trueos_time::Instant::now().as_millis() / 500 % 2 == 0
+    }
 
     fn capture_update_snapshot(&self) -> update::Snapshot {
         let revision = tui::revision(self.tui_frontend);
@@ -1544,13 +1903,20 @@ impl Shell3 {
         {
             return self.update_baseline.clone().with_tui_revision(revision);
         }
-        if let Some(lines) = tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
-            return update::Snapshot::terminal((self.columns, self.rows_count), self.layout_generation, lines, revision);
+        if let Some(lines) =
+            tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref())
+        {
+            return update::Snapshot::terminal(
+                (self.columns, self.rows_count),
+                self.layout_generation,
+                lines,
+                revision,
+            );
         }
-        self.capture_matrix_snapshot().with_tui_revision(revision).with_blink_phase(Self::cursor_blink_phase())
+        self.capture_matrix_snapshot()
+            .with_tui_revision(revision)
+            .with_blink_phase(Self::cursor_blink_phase())
     }
-
-
 
     fn sync_aka_names(&mut self) {
         let (appdb_generation, appdb_names) = service::appdb_names_snapshot();
@@ -1563,7 +1929,12 @@ impl Shell3 {
             self.aka_names = crate::r::restart::startup_alias_names();
             self.aka_generation = generation;
             let target = status::alias_runs(&self.aka_names);
-            self.aka_transition.start(&self.rows.status.right, &target, crate::chronos::monotonic_nanos(), self.tab_from_right);
+            self.aka_transition.start(
+                &self.rows.status.right,
+                &target,
+                crate::chronos::monotonic_nanos(),
+                self.tab_from_right,
+            );
             self.rows.status.right = target;
             self.refresh_mode_title();
         }
@@ -1575,13 +1946,16 @@ impl Shell3 {
         self.refresh_mode_title();
     }
 
-
     /// Operator contract: §, §id, §id§, §§, and §§Appname, submitted by Enter.
     pub fn parse_operator(&mut self, input: &str) -> bool {
         if let Some(name) = names::fastspawn_selector(input) {
             match service::launch_appstore(name, self.tui_frontend()) {
                 Ok(app) => self.select_queued_app(app),
-                Err(error) => MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error),
+                Err(error) => MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    error,
+                ),
             }
             return true;
         }
@@ -1614,10 +1988,15 @@ impl Shell3 {
             self.reconcile_matrix_selection();
             return true;
         }
-        if !tui::park(self.tui_frontend) { return false; }
+        if !tui::park(self.tui_frontend) {
+            return false;
+        }
         let lifetime = MatrixSlots::ensure_named(name);
         if self.command_feedback.is_some() {
-            self.latched_navigation = Some(LatchedNavigation::Slot { name: name.to_string(), lifetime: Some(lifetime) });
+            self.latched_navigation = Some(LatchedNavigation::Slot {
+                name: name.to_string(),
+                lifetime: Some(lifetime),
+            });
             return true;
         }
         self.active_matrix_slot = Some(name.to_string());
@@ -1632,7 +2011,9 @@ impl Shell3 {
     }
 
     pub(super) fn stop_active_vmx(&mut self) -> bool {
-        let Some(app) = self.active_vmx_app() else { return false };
+        let Some(app) = self.active_vmx_app() else {
+            return false;
+        };
         let lease = MatrixSlotLease::from_identity(app.slot.clone(), app.lifetime);
         MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), lifecycle::control("stop", &lease));
         true
@@ -1650,12 +2031,21 @@ impl Shell3 {
     /// Exact recognition and prefix viability consult the same live registry.
     fn any_name_matching(&self, matches: impl Fn(&str) -> bool) -> bool {
         // Aka remains visible and available independently of Tab/VM context.
-        if matches("Aka") || self.aka_names.iter().any(|alias| matches(alias)) { return true; }
-        if matches("tui") && self.active_matrix_slot_name().is_some_and(|name| tui::native_slot(&name)) {
+        if matches("Aka") || self.aka_names.iter().any(|alias| matches(alias)) {
+            return true;
+        }
+        if matches("tui")
+            && self
+                .active_matrix_slot_name()
+                .is_some_and(|name| tui::native_slot(&name))
+        {
             return true;
         }
         if self.active_vmx_app().is_some() {
-            return names::VME_GROUP.names.iter().any(|entry| matches(entry.name));
+            return names::VME_GROUP
+                .names
+                .iter()
+                .any(|entry| matches(entry.name));
         }
         match self.mode {
             Mode::HV => HV_GROUPS
@@ -1673,7 +2063,6 @@ impl Shell3 {
         }
     }
 }
-
 
 /// The mode legend and exact-name recognizer use the same three registries.
 fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) -> Vec<MetaFmtStr> {
@@ -1710,7 +2099,9 @@ fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) ->
         }
         Mode::CMD => {
             for group in &CMD_GROUPS {
-                if group.name == "Aka" { continue; }
+                if group.name == "Aka" {
+                    continue;
+                }
                 let dynamic = match group.name {
                     "AppDB" => Some(appdb_names),
                     _ => None,

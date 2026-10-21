@@ -177,8 +177,6 @@ static AP_VMX_CONTRACT_DONE_MASK: [AtomicU64; CPU_MASK_WORDS] =
     [const { AtomicU64::new(0) }; CPU_MASK_WORDS];
 static AP_VMXOFF_EXECUTED_MASK: [AtomicU64; CPU_MASK_WORDS] =
     [const { AtomicU64::new(0) }; CPU_MASK_WORDS];
-static WARM_VM_RANGE_CLAIMED: [AtomicBool; VM_ID_LIMIT] =
-    [const { AtomicBool::new(false) }; VM_ID_LIMIT];
 
 #[repr(C, align(64))]
 struct TransitionControl {
@@ -215,6 +213,7 @@ pub enum LiveUpdateError {
     VmNotReplicatable(u8),
     VmCheckpointRequest(u8),
     VmCheckpointTimeout(u8),
+    #[cfg(feature = "legacy_vm_checkpoint")]
     VmCheckpointStore(u8),
     ApRendezvous(&'static str),
 }
@@ -233,6 +232,7 @@ impl fmt::Display for LiveUpdateError {
             }
             Self::VmCheckpointRequest(vm) => write!(f, "vm{vm} checkpoint request failed"),
             Self::VmCheckpointTimeout(vm) => write!(f, "vm{vm} checkpoint timed out"),
+            #[cfg(feature = "legacy_vm_checkpoint")]
             Self::VmCheckpointStore(vm) => write!(f, "vm{vm} persistent checkpoint failed"),
             Self::ApRendezvous(reason) => write!(f, "AP rendezvous failed ({reason})"),
         }
@@ -675,20 +675,6 @@ pub fn for_each_warm_reserved_phys_range(mut visit: impl FnMut(u64, u64)) {
     }
 }
 
-pub fn claim_warm_vm_heap_range(phys_start: u64, length: u64) -> bool {
-    let Some(handoff) = warm_handoff() else {
-        return false;
-    };
-    for (index, range) in handoff.vm_heap_ranges.iter().copied().enumerate() {
-        if range.phys_start == phys_start && range.length == length && range.valid() {
-            return WARM_VM_RANGE_CLAIMED[index]
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok();
-        }
-    }
-    false
-}
-
 pub fn warm_kernel_file_bytes() -> Option<&'static [u8]> {
     let handoff = warm_handoff()?;
     let virt = handoff.hhdm_base.checked_add(handoff.kernel_file_phys)?;
@@ -748,9 +734,13 @@ pub fn spawn_post_boot(_spawner: Spawner) {
 }
 
 pub(crate) struct WarmVmRestartEntry {
+    #[cfg(feature = "legacy_vm_checkpoint")]
     pub(crate) vm_id: u8,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     pub(crate) checkpoint_name: String,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     pub(crate) resume: bool,
+    #[cfg(feature = "legacy_vm_checkpoint")]
     pub(crate) replicate: bool,
 }
 
@@ -802,6 +792,7 @@ pub(crate) async fn warm_vm_restart_plan() -> Option<WarmVmRestartPlan> {
     let mut entries = Vec::new();
     for vm_index in 0..VM_ID_LIMIT {
         if mask_contains(&restore_mask, vm_index) {
+            #[cfg(feature = "legacy_vm_checkpoint")]
             let Ok(vm_id) = u8::try_from(vm_index) else {
                 crate::log_error!(target: "global";
                     "live-update: VM id does not fit restart ABI generation={} vm_index={}\n",
@@ -811,9 +802,13 @@ pub(crate) async fn warm_vm_restart_plan() -> Option<WarmVmRestartPlan> {
                 continue;
             };
             entries.push(WarmVmRestartEntry {
+                #[cfg(feature = "legacy_vm_checkpoint")]
                 vm_id,
+                #[cfg(feature = "legacy_vm_checkpoint")]
                 checkpoint_name: checkpoint_name(vm_id),
+                #[cfg(feature = "legacy_vm_checkpoint")]
                 resume: mask_contains(&resume_mask, vm_index),
+                #[cfg(feature = "legacy_vm_checkpoint")]
                 replicate: !handoff.vm_heap_ranges[vm_index].valid(),
             });
         }
@@ -827,10 +822,6 @@ pub(crate) async fn warm_vm_restart_plan() -> Option<WarmVmRestartPlan> {
 
 pub(crate) fn mark_post_boot_uplift_complete(generation: u64) {
     POST_BOOT_UPLIFT_COMPLETE_GENERATION.store(generation, Ordering::Release);
-}
-
-pub(crate) fn post_boot_uplift_complete(generation: u64) -> bool {
-    POST_BOOT_UPLIFT_COMPLETE_GENERATION.load(Ordering::Acquire) == generation
 }
 
 pub(crate) async fn stage_and_swap(
@@ -2522,10 +2513,12 @@ fn fnv1a64_value(mut hash: u64, value: u64) -> u64 {
     hash
 }
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 fn checkpoint_name(vm_id: u8) -> String {
     format!("live-update-vm-{vm_id:02}")
 }
 
+#[cfg(feature = "legacy_vm_checkpoint")]
 fn mask_insert(mask: &mut [u64; RESTORE_WORDS], index: usize) {
     if let Some(word) = mask.get_mut(index / 64) {
         *word |= 1u64 << (index % 64);

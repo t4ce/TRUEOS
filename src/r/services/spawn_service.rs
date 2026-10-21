@@ -116,9 +116,11 @@ define_started_flags!(
     UNIX_FD_PROBE_STARTED
 );
 
-#[cfg(feature = "legacy_vm_checkpoint")]
-define_started_flags!(HV_VM_STORE_STARTED, HV_VM_STORE_NET_STARTED);
+#[cfg(feature = "trueos_ttstt")]
+define_started_flags!(TTSTT_CPU_SERVICE_STARTED, TTSTT_CAPTURE_WRITER_STARTED);
 
+#[cfg(feature = "trueos_lumen")]
+define_started_flags!(LUMEN_BOOT_WARM_STARTED);
 
 #[cfg(feature = "legacy_vm_checkpoint")]
 define_started_flags!(HV_VM_STORE_STARTED, HV_VM_STORE_NET_STARTED);
@@ -974,8 +976,6 @@ fn html_shack_gate() -> bool {
         || crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
 }
 
-
-
 #[inline]
 #[cfg(feature = "trueos_ttstt")]
 fn ttstt_cpu_service_gate() -> bool {
@@ -1201,8 +1201,6 @@ const fn unix_fd_probe_task_spec() -> TaskSpec {
     }
 }
 
-
-
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::r::restart::restart_apps_task(spawner))
 }
@@ -1426,16 +1424,14 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled_gated(
         "microfont-raster-preview",
-        crate::r::readiness::UI4_COMPOSITOR_READY
-            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         microfont_raster_preview_gate,
         &MICROFONT_RASTER_PREVIEW_STARTED,
         spawn_microfont_raster_preview,
     ),
     TaskSpec::enabled_gated(
         "microfont-line-preview",
-        crate::r::readiness::UI4_COMPOSITOR_READY
-            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         microfont_raster_preview_gate,
         &MICROFONT_LINE_PREVIEW_STARTED,
         spawn_microfont_line_preview,
