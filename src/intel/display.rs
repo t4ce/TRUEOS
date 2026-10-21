@@ -44,10 +44,9 @@ const _: () = {
 };
 mod mirror_map_dp_engine;
 pub(crate) use self::mirror_map_dp_engine::{
-    MirrorMapMode, WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame,
+    MirrorMapMode, WdCaptureError, WdCapturePoll,  WdXyuv8888Frame,
     begin_ui4_wd_xyuv8888_capture, pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture,
-    set_mirror_map_mode, start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
-    ui4_wd_xyuv8888_capture_status,
+    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
 };
 
 macro_rules! intel_display_focus_log {
@@ -5044,18 +5043,10 @@ static UI4_DIRECT_PLANE_SCALER_LOGGED: AtomicBool = AtomicBool::new(false);
 static UI4_EMPTY_OVERLAY_CPU_PARK_LOGGED: AtomicBool = AtomicBool::new(false);
 static UI4_PRIMARY_STACK_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 
-#[derive(Copy, Clone)]
-struct Ui4DirectScanoutProof {
-    producer_frame: u64,
-    publish_serial: u64,
-}
 
-const UI4_DIRECT_SCANOUT_PROOF_EMPTY: Ui4DirectScanoutProof = Ui4DirectScanoutProof {
-    producer_frame: 0,
-    publish_serial: 0,
-};
-static UI4_DIRECT_SCANOUT_PROOFS: Mutex<[Ui4DirectScanoutProof; 5]> =
-    Mutex::new([UI4_DIRECT_SCANOUT_PROOF_EMPTY; 5]);
+
+
+
 
 const fn overlay_composition_constant_alpha(tile_count: usize, all_tiles_transparent: bool) -> u8 {
     if tile_count == 0 || all_tiles_transparent {
@@ -5065,18 +5056,6 @@ const fn overlay_composition_constant_alpha(tile_count: usize, all_tiles_transpa
     }
 }
 
-pub(crate) fn ui4_direct_scanout_ready_for_frame(producer_frame: u64) -> Option<u64> {
-    (producer_frame != 0)
-        .then(|| {
-            UI4_DIRECT_SCANOUT_PROOFS
-                .lock()
-                .iter()
-                .filter(|proof| proof.producer_frame == producer_frame)
-                .map(|proof| proof.publish_serial)
-                .max()
-        })
-        .flatten()
-}
 
 const fn should_log_ui4_direct_checkpoint(sequence: u64) -> bool {
     crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED
@@ -5838,8 +5817,7 @@ pub(crate) fn poll_ui4_composition(composition: Ui4AsyncComposition) -> Ui4Async
                     verify_ui4_composition_proof(composition);
                     Ui4AsyncCompositionPoll::Ready
                 }
-                crate::intel::gpgpu::Ui4CompositorCompletion::Failed
-                | crate::intel::gpgpu::Ui4CompositorCompletion::InvalidSubmission => {
+                crate::intel::gpgpu::Ui4CompositorCompletion::InvalidSubmission => {
                     Ui4AsyncCompositionPoll::Failed
                 }
             }
@@ -6079,12 +6057,6 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         );
     }
     if let Ui4AsyncCompositionTarget::DirectOverlay { surface } = composition.target {
-        if let Some(proof) = UI4_DIRECT_SCANOUT_PROOFS.lock().get_mut(surface.plane_slot) {
-            *proof = Ui4DirectScanoutProof {
-                producer_frame: surface.producer_frame,
-                publish_serial: surface.producer_publish_serial,
-            };
-        }
         let scanout_sequence = UI4_DIRECT_SCANOUT_LOG_SEQUENCE
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);

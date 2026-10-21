@@ -59,32 +59,8 @@ pub(super) fn active(pipe: PipeInfo) -> bool {
     pipe.slot == 0 && crate::intel::tgl_native_panel::native_scanout_ready()
 }
 
-pub(super) fn primary_swap_gpu(index: usize) -> Option<u64> {
-    if index >= BUFFER_COUNT {
-        return None;
-    }
-    Some(PRIMARY_SWAP_GPU + index as u64 * PRIMARY_BYTES)
-}
 
-pub(super) fn overlay_gpu(slot: usize, index: usize) -> Option<u64> {
-    if !(1..=OVERLAY_COUNT).contains(&slot) || index >= BUFFER_COUNT {
-        return None;
-    }
-    Some(OVERLAY_GPU + ((slot - 1) * BUFFER_COUNT + index) as u64 * OVERLAY_BYTES)
-}
 
-pub(super) fn compose_gpu(slot: usize, index: usize) -> Option<u64> {
-    if index >= BUFFER_COUNT {
-        return None;
-    }
-    if slot == 0 {
-        return Some(PRIMARY_COMPOSE_GPU + index as u64 * PRIMARY_BYTES);
-    }
-    if slot > COMPOSE_OVERLAY_COUNT {
-        return None;
-    }
-    Some(OVERLAY_COMPOSE_GPU + ((slot - 1) * BUFFER_COUNT + index) as u64 * OVERLAY_BYTES)
-}
 
 pub(super) fn primary_swap_capacity(pipe: PipeInfo) -> u64 {
     if active(pipe) {

@@ -69,26 +69,13 @@ pub(crate) struct GpgpuSpriteQuadWorklistRun<'a> {
     pub(crate) descs: &'a [GpgpuSpriteQuadWorklistDesc],
 }
 
-/// Result of one Font-owned ordered RGBA sprite worklist.
-///
-/// `release` is present only when the final cache-draining marker and the
-/// Font HW context-save boundary both retired for the exact destination.
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuSpriteQuadWorklistResult {
-    pub(crate) stats: GpgpuWorklistSubmitStats,
-    pub(crate) outcome: GpgpuSubmissionOutcome,
-    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
-}
 
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER: u32 = 1 << 0;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC: u32 = 1 << 1;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_CLEAR: u32 = 1 << 2;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_SOURCE_XRGB: u32 = 1 << 3;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_DEST_XRGB: u32 = 1 << 4;
-pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_TILEMAP: u32 = 1 << 5;
 
-pub(crate) const SPRITE_QUAD_TILEMAP_MAGIC: u32 = 0x454C_4954;
-pub(crate) const SPRITE_QUAD_TILEMAP_VERSION: u32 = 1;
 pub(crate) const SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS: usize = 2_048;
 
 pub(crate) const fn sprite_quad_worklist_max_descs() -> usize {

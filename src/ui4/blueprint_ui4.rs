@@ -6649,8 +6649,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                         }
                         true
                     }
-                    Ui4CompositorCompletion::Failed
-                    | Ui4CompositorCompletion::InvalidSubmission => {
+                    Ui4CompositorCompletion::InvalidSubmission => {
                         quarantine_blueprint_sprite_submission(
                             surface,
                             owner,

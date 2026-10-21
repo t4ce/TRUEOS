@@ -73,10 +73,9 @@ def main():
                 raise SystemExit(f"{output}: stale package")
         else:
             output.write_bytes(data)
-        digest = ", ".join(f"0x{x:02x}" for x in hashlib.sha256(data).digest())
         generated += f"pub(crate) const SHADERTOY_{name.upper()}_PACKAGE: ShaderToyPackageContract = ShaderToyPackageContract {{\n"
-        generated += f"    shader_id: {shader_id}, bytes: {len(data)}, bin_bytes: {len(parts[0])}, spv_bytes: {len(parts[1])},\n"
-        generated += f"    sha256: [{digest}],\n}};\n"
+        generated += f"    shader_id: {shader_id}, bin_bytes: {len(parts[0])}, spv_bytes: {len(parts[1])},\n"
+        generated += "};\n"
         print(f"{name}: {len(data)} package bytes, {len(parts[0])} executable bytes")
     trust = ROOT / "src/intel/gpgpu/artifacts/shadertoy_packages.rs"
     if args.update_trust:

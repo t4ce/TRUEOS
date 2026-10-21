@@ -10,7 +10,7 @@
 //! No candidate-kernel bytes are written to the ESP or TRUEOSFS. Persistent
 //! storage is used only for VM application checkpoints selected by this handoff.
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{format, vec::Vec};
 use core::{
     convert::Infallible,
     fmt,
@@ -737,7 +737,7 @@ pub(crate) struct WarmVmRestartEntry {
     #[cfg(feature = "legacy_vm_checkpoint")]
     pub(crate) vm_id: u8,
     #[cfg(feature = "legacy_vm_checkpoint")]
-    pub(crate) checkpoint_name: String,
+    pub(crate) checkpoint_name: alloc::string::String,
     #[cfg(feature = "legacy_vm_checkpoint")]
     pub(crate) resume: bool,
     #[cfg(feature = "legacy_vm_checkpoint")]
@@ -2514,7 +2514,7 @@ fn fnv1a64_value(mut hash: u64, value: u64) -> u64 {
 }
 
 #[cfg(feature = "legacy_vm_checkpoint")]
-fn checkpoint_name(vm_id: u8) -> String {
+fn checkpoint_name(vm_id: u8) -> alloc::string::String {
     format!("live-update-vm-{vm_id:02}")
 }
 
@@ -2633,4 +2633,23 @@ fn elf_string(table: &[u8], offset: usize) -> Result<&str, LiveUpdateError> {
 fn report_update(target: &MatrixTarget, line: &str) {
     crate::shell3::matrix_target_print_line(target, line);
     crate::log_important!(target: "global"; "{}\n", line);
+}
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+static WARM_VM_RANGE_CLAIMED: [AtomicBool; VM_ID_LIMIT] =
+    [const { AtomicBool::new(false) }; VM_ID_LIMIT];
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+pub fn claim_warm_vm_heap_range(phys_start: u64, length: u64) -> bool {
+    let Some(handoff) = warm_handoff() else {
+        return false;
+    };
+    for (index, range) in handoff.vm_heap_ranges.iter().copied().enumerate() {
+        if range.phys_start == phys_start && range.length == length && range.valid() {
+            return WARM_VM_RANGE_CLAIMED[index]
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok();
+        }
+    }
+    false
 }

@@ -66,8 +66,16 @@ pub enum ComputeWorkerPolicy {
     AnyBackground,
 }
 
+#[cfg(feature = "trueos_lumen")]
 impl ComputeWorkerPolicy {
-    
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::PerformanceOnly => "perf-only",
+            Self::PerformanceFirst => "perf-first",
+            Self::EfficiencyOnly => "eff-only",
+            Self::AnyBackground => "any-background",
+        }
+    }
 }
 
 /// Runtime view of the AP carriers eligible for a compute policy.

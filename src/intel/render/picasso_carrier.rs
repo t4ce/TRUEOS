@@ -257,7 +257,6 @@ unsafe impl Send for PicassoCarrierAllocation {}
 pub(crate) struct PicassoCarrierSceneStorage {
     pub(crate) state_phys: u64,
     pub(crate) state_virt: *mut u8,
-    pub(crate) depth_phys: u64,
     pub(crate) depth_virt: *mut u8,
     pub(crate) depth_bytes: usize,
 }
@@ -687,7 +686,6 @@ pub(crate) fn prepare_picasso_render1_scene_storage(
         return Some(PicassoCarrierSceneStorage {
             state_phys: state.phys,
             state_virt: state.virt,
-            depth_phys: depth.phys,
             depth_virt: depth.virt,
             depth_bytes: depth.bytes,
         });
@@ -761,7 +759,6 @@ pub(crate) fn prepare_picasso_render1_scene_storage(
     Some(PicassoCarrierSceneStorage {
         state_phys: state.phys,
         state_virt: state.virt,
-        depth_phys: depth.phys,
         depth_virt: depth.virt,
         depth_bytes: depth.bytes,
     })
@@ -1204,17 +1201,6 @@ pub(crate) fn claim_picasso_render1(
     Err("picasso-carrier-capacity")
 }
 
-/// Look up an already-claimed carrier without creating an ownership edge.
-pub(crate) fn picasso_render1_for(device_raw: u64, epoch: u64) -> Option<PicassoCarrierLease> {
-    PicassoCarrierId::ALL.iter().find_map(|carrier| {
-        picasso_carrier_slot(*carrier)
-            .lock()
-            .state
-            .as_ref()
-            .map(|state| state.lease)
-            .filter(|lease| lease.matches(device_raw, epoch))
-    })
-}
 
 fn aligned_carrier_bytes(bytes: usize) -> Option<usize> {
     (bytes != 0)
@@ -1426,33 +1412,6 @@ pub(crate) fn unmap_picasso_render1_range(
     unmap_picasso_render1_range_inner(lease, physical, gpu, bytes, false)
 }
 
-/// Return this carrier to the pool only after the owner has destroyed its
-/// GuC context and unmapped every carrier-local resource.  A mismatched epoch
-/// is intentionally a no-op: it denotes a stale close racing a newer device.
-pub(crate) fn release_picasso_render1(lease: PicassoCarrierLease) -> bool {
-    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
-    if slot.state.as_ref().is_some_and(|current| {
-        current.lease == lease
-            && !current.frame_active
-            && !current.mapping_in_flight
-            && !current.quarantined
-            && current.mappings.is_empty()
-    }) {
-        slot.state = None;
-        PICASSO_CARRIER_SUBMIT_PROOF_LOGGED_MASK.fetch_and(
-            !picasso_carrier_submit_proof_bit(lease.carrier()),
-            Ordering::AcqRel,
-        );
-        drop(slot);
-        crate::log_info!(target: "render";
-            "picasso-carrier release carrier={} device=0x{:X} epoch={} gpuvm={} reusable=1\n",
-            lease.carrier().label(), lease.device_raw(), lease.epoch(), lease.gpuvm().raw(),
-        );
-        true
-    } else {
-        false
-    }
-}
 
 /// Final carrier teardown, called only after the broker has destroyed every
 /// tracked GuC context and released every resident mesh.  This drains warm,

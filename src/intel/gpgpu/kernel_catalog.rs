@@ -8,7 +8,6 @@ pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/copy_rect_rgba8.clcpp");
 pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
     "src/intel/gpgpu/kernels/copy_rect_rgba8.clcpp";
-pub(crate) const COPY_RECT_RGBA8_ARTIFACT_FRONTEND: &str = "cpp-for-opencl";
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME: &str = "gradient_rect_worklist_rgba8";
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/gradient_rect_worklist_rgba8.clcpp");
@@ -196,8 +195,6 @@ pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.bin");
 pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.spv");
-pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN_SHA256: [u8; 32] =
     SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () =
@@ -306,7 +303,6 @@ include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.contract.rs"
 );
 pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN_BYTES: usize = shadertoy_package::SHADERTOY_CPP_GALLERY_PACKAGE.bin_bytes;
-pub(crate) const CPP_DEMO_RGBA8_ADLS_SPV_BYTES: usize = shadertoy_package::SHADERTOY_CPP_GALLERY_PACKAGE.spv_bytes;
 pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = assert!(matches!(CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
@@ -387,7 +383,6 @@ include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_audio_visualizer_rgba8.contract.rs"
 );
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN_BYTES: usize = shadertoy_package::SHADERTOY_AUDIO_VISUALIZER_PACKAGE.bin_bytes;
-pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_SPV_BYTES: usize = shadertoy_package::SHADERTOY_AUDIO_VISUALIZER_PACKAGE.spv_bytes;
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () =
@@ -676,23 +671,9 @@ const _: () = {
     assert!(sprite.per_thread_data_bytes == 96);
     assert!(sprite.bindings.len() == 3);
 };
-pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    GRADIENT_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 
-pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    ALPHA_BLEND_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () =
     assert!(matches!(ALPHA_BLEND_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    GLYPH_MASK_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256: [u8; 32] =
-    UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    SPRITE_QUAD_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    UI4_COMPOSE_LAYERS_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256: [u8; 32] =
-    SKYBOX_SAMPLE_RGB565_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256: [u8; 32] =
     HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = {

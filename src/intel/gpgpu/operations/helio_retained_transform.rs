@@ -102,7 +102,6 @@ pub(crate) enum GpgpuHelioTransformError {
     HierarchyDirtyWorldBuffer,
     HierarchyDirtyRowBuffer,
     HierarchyRowLeafBuffer,
-    DrawTemplate,
     BatchBuffer,
     Artifact,
 }
@@ -114,7 +113,6 @@ pub(crate) const GPGPU_HELIO_CAMERA_BYTES: usize =
     trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN;
 pub(crate) const GPGPU_HELIO_SOURCE_VERTICES_PER_MESH: usize = 24;
 pub(crate) const GPGPU_HELIO_SOURCE_VERTEX_BYTES: usize = 24;
-pub(crate) const GPGPU_HELIO_INDICES_PER_MESH: u32 = 36;
 pub(crate) const GPGPU_HELIO_EXPANDED_VERTICES_PER_ROW: usize = 24;
 pub(crate) const GPGPU_HELIO_EXPANDED_POSITION_BYTES: usize = 12;
 pub(crate) const GPGPU_HELIO_HIERARCHY_NODE_BYTES: usize = 16;
@@ -195,9 +193,6 @@ impl<'a> GpgpuHelioRetainedTransformStateBlob<'a> {
         Ok(Self { bytes, gpu })
     }
 
-    pub(crate) fn bytes(&self) -> &[u8] {
-        &self.bytes[..GPGPU_HELIO_TRANSFORM_STATE_BLOB_BYTES]
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -415,51 +410,6 @@ impl GpgpuHelioRetainedTransformDispatch {
         Ok(())
     }
 
-    /// Validate fixed compacted slices before the immutable template buffer is
-    /// published. The GPGPU dispatch itself receives only GPU addresses.
-    pub(crate) fn validate_templates(
-        self,
-        templates: &[GpgpuHelioRetainedDrawTemplate],
-    ) -> Result<(), GpgpuHelioTransformError> {
-        use GpgpuHelioTransformError as Error;
-
-        self.validate()?;
-        if templates.len() != self.draw_count as usize {
-            return Err(Error::DrawTemplate);
-        }
-        for template in templates {
-            if template.index_count != GPGPU_HELIO_INDICES_PER_MESH
-                || template.mesh_id() as usize >= trueos_helio_runtime::churn::SHAPE_COUNT
-            {
-                return Err(Error::DrawTemplate);
-            }
-            let end = template
-                .first_instance
-                .checked_add(template.capacity)
-                .ok_or(Error::DrawTemplate)?;
-            if end > self.row_count {
-                return Err(Error::DrawTemplate);
-            }
-        }
-        for left in 0..templates.len() {
-            if templates[left].capacity == 0 {
-                continue;
-            }
-            let left_range = templates[left].first_instance
-                ..templates[left].first_instance + templates[left].capacity;
-            for right in left + 1..templates.len() {
-                if templates[right].capacity == 0 {
-                    continue;
-                }
-                let right_range = templates[right].first_instance
-                    ..templates[right].first_instance + templates[right].capacity;
-                if left_range.start < right_range.end && right_range.start < left_range.end {
-                    return Err(Error::DrawTemplate);
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 fn ranges_overlap(left: (u64, usize), right: (u64, usize)) -> bool {

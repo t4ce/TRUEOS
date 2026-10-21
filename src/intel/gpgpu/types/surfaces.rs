@@ -273,63 +273,7 @@ impl GpgpuNv12Tile64Surface {
     }
 }
 
-/// Linear NV12 storage shared by the UI4 RCS converter and VDEnc input path.
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuNv12LinearSurface {
-    pub(crate) phys: u64,
-    pub(crate) gpu: u64,
-    pub(crate) bytes: usize,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) pitch_bytes: u32,
-    pub(crate) uv_offset: u32,
-}
 
-impl GpgpuNv12LinearSurface {
-    pub(crate) fn new(
-        phys: u64,
-        gpu: u64,
-        bytes: usize,
-        width: u32,
-        height: u32,
-        pitch_bytes: u32,
-    ) -> Option<Self> {
-        let uv_offset = pitch_bytes.checked_mul(height)?;
-        let surface = Self {
-            phys,
-            gpu,
-            bytes,
-            width,
-            height,
-            pitch_bytes,
-            uv_offset,
-        };
-        surface.is_valid().then_some(surface)
-    }
-
-    pub(crate) fn is_valid(self) -> bool {
-        if self.phys == 0
-            || self.gpu == 0
-            || !self.phys.is_multiple_of(4096)
-            || !self.gpu.is_multiple_of(4096)
-            || self.width == 0
-            || self.height == 0
-            || !self.width.is_multiple_of(2)
-            || !self.height.is_multiple_of(2)
-            || self.pitch_bytes < self.width
-        {
-            return false;
-        }
-        let Some(required) = u64::from(self.pitch_bytes)
-            .checked_mul(u64::from(self.height))
-            .and_then(|luma| luma.checked_add(luma / 2))
-        else {
-            return false;
-        };
-        self.uv_offset == self.pitch_bytes.saturating_mul(self.height)
-            && required <= self.bytes as u64
-    }
-}
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuRgb565Surface {
@@ -411,11 +355,6 @@ pub(crate) struct GpgpuOwnedMask8Surface {
     quarantined: AtomicBool,
 }
 
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct GpgpuMask8Audit {
-    pub(crate) nonzero_pixels: usize,
-    pub(crate) bounds: GpgpuRect,
-}
 
 unsafe impl Send for GpgpuOwnedMask8Surface {}
 unsafe impl Sync for GpgpuOwnedMask8Surface {}
@@ -448,125 +387,8 @@ impl GpgpuOwnedMask8Surface {
         true
     }
 
-    /// Zero one bounded region before it is handed to a new GPU producer.
-    /// Callers must first prove that no submitted batch can still reference
-    /// the region; atlas tile leases provide that proof for cache reuse.
-    fn clear_rect_cpu(&self, rect: GpgpuRect) -> bool {
-        if self.backing_is_quarantined()
-            || self.virt.is_null()
-            || rect.x < 0
-            || rect.y < 0
-            || rect.width == 0
-            || rect.height == 0
-            || (rect.x as u32)
-                .checked_add(rect.width)
-                .is_none_or(|right| right > self.surface.width)
-            || (rect.y as u32)
-                .checked_add(rect.height)
-                .is_none_or(|bottom| bottom > self.surface.height)
-        {
-            return false;
-        }
-        let Some(row_offset) = (rect.y as usize)
-            .checked_mul(self.surface.pitch_bytes as usize)
-            .and_then(|offset| offset.checked_add(rect.x as usize))
-        else {
-            return false;
-        };
-        let Some(last_row_offset) = (rect.height as usize)
-            .checked_sub(1)
-            .and_then(|row| row.checked_mul(self.surface.pitch_bytes as usize))
-            .and_then(|offset| row_offset.checked_add(offset))
-        else {
-            return false;
-        };
-        if last_row_offset
-            .checked_add(rect.width as usize)
-            .is_none_or(|end| end > self.surface.bytes)
-        {
-            return false;
-        }
-        for row in 0..rect.height as usize {
-            let offset = row_offset + row * self.surface.pitch_bytes as usize;
-            unsafe {
-                core::ptr::write_bytes(self.virt.add(offset), 0, rect.width as usize);
-            }
-        }
-        super::dma_flush_strided_rows(
-            unsafe { self.virt.add(row_offset) },
-            rect.width as usize,
-            self.surface.pitch_bytes as usize,
-            rect.height as usize,
-        )
-    }
 
-    /// Read back the persistent mask once after generation.  This is a cold
-    /// path integrity check, not part of frame composition.
-    pub(crate) fn nonzero_audit(&self) -> Option<GpgpuMask8Audit> {
-        self.nonzero_audit_rect(self.surface.bounds())
-    }
 
-    /// Audit exactly one retired atlas tile. Returned bounds are tile-local,
-    /// so the result stays valid when the immutable tile is stamped elsewhere.
-    fn nonzero_audit_rect(&self, rect: GpgpuRect) -> Option<GpgpuMask8Audit> {
-        if !self.surface.is_valid()
-            || self.virt.is_null()
-            || rect.x < 0
-            || rect.y < 0
-            || rect.width == 0
-            || rect.height == 0
-            || (rect.x as u32)
-                .checked_add(rect.width)
-                .is_none_or(|right| right > self.surface.width)
-            || (rect.y as u32)
-                .checked_add(rect.height)
-                .is_none_or(|bottom| bottom > self.surface.height)
-        {
-            return None;
-        }
-        let row_offset = (rect.y as usize)
-            .checked_mul(self.surface.pitch_bytes as usize)?
-            .checked_add(rect.x as usize)?;
-        if !super::dma_flush_strided_rows(
-            unsafe { self.virt.add(row_offset) },
-            rect.width as usize,
-            self.surface.pitch_bytes as usize,
-            rect.height as usize,
-        ) {
-            return None;
-        }
-        let mut min_x = rect.width;
-        let mut min_y = rect.height;
-        let mut max_x = 0u32;
-        let mut max_y = 0u32;
-        let mut nonzero_pixels = 0usize;
-        for y in 0..rect.height {
-            let row_offset = ((rect.y as u32 + y) as usize)
-                .checked_mul(self.surface.pitch_bytes as usize)?
-                .checked_add(rect.x as usize)?;
-            for x in 0..rect.width {
-                let offset = row_offset.checked_add(x as usize)?;
-                let coverage = unsafe { core::ptr::read_volatile(self.virt.add(offset)) };
-                if coverage == 0 {
-                    continue;
-                }
-                nonzero_pixels = nonzero_pixels.saturating_add(1);
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x);
-                max_y = max_y.max(y);
-            }
-        }
-        (nonzero_pixels != 0).then_some(GpgpuMask8Audit {
-            nonzero_pixels,
-            bounds: GpgpuRect::new(
-                min_x as i32,
-                min_y as i32,
-                max_x.saturating_sub(min_x).saturating_add(1),
-                max_y.saturating_sub(min_y).saturating_add(1),
-            ),
-        })
-    }
 }
 
 impl Drop for GpgpuOwnedMask8Surface {
@@ -595,241 +417,15 @@ impl Drop for GpgpuOwnedMask8Surface {
     }
 }
 
-pub(crate) const GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS: usize = 64;
-pub(crate) const GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES: usize =
-    GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS * core::mem::size_of::<u32>();
-pub(crate) const GPGPU_FONT_INSTANCE_MAX_LAYERS: usize = 64;
 
-const GPGPU_FONT_INSTANCE_MAGIC: u32 = 0x3149_5446;
-const GPGPU_FONT_INSTANCE_FLAG_ENABLED: u32 = 1 << 0;
-const GPGPU_FONT_INSTANCE_FLAG_BACKGROUND: u32 = 1 << 1;
-const GPGPU_FONT_INSTANCE_FLAG_COLOR_ANIMATION: u32 = 1 << 2;
-const GPGPU_FONT_INSTANCE_FLAG_TIMING_SINE: u32 = 1 << 3;
-const GPGPU_FONT_INSTANCE_ITERATION_SHIFT: u32 = 4;
-const GPGPU_FONT_INSTANCE_CHANNELS_SHIFT: u32 = 8;
-const GPGPU_FONT_INSTANCE_FRAME_COUNT_SHIFT: u32 = 16;
-const GPGPU_FONT_INSTANCE_FLAG_AFFINE_TRANSFORM: u32 = 1 << 20;
-const GPGPU_FONT_INSTANCE_FLAG_MOTION: u32 = 1 << 21;
 
-/// One immutable-layout font presentation record consumed directly by the
-/// C++/IGC font-instance kernel. The complete record is copied into persistent
-/// GPU-visible storage only when its style program changes.
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct GpgpuFontInstanceDescriptor {
-    dwords: [u32; GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS],
-}
 
-impl GpgpuFontInstanceDescriptor {
-    pub(crate) fn new(
-        mask: GpgpuMask8Surface,
-        mask_rect: GpgpuRect,
-        foreground_rgba: u32,
-    ) -> Option<Self> {
-        if !mask.is_valid()
-            || mask_rect.x < 0
-            || mask_rect.y < 0
-            || mask_rect.width == 0
-            || mask_rect.height == 0
-            || (mask_rect.x as u32).checked_add(mask_rect.width)? > mask.width
-            || (mask_rect.y as u32).checked_add(mask_rect.height)? > mask.height
-        {
-            return None;
-        }
-        let mut dwords = [0u32; GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS];
-        dwords[0] = GPGPU_FONT_INSTANCE_MAGIC;
-        dwords[1] = GPGPU_FONT_INSTANCE_FLAG_ENABLED;
-        dwords[2] = mask.pitch_bytes;
-        dwords[3] = mask_rect.x as u32;
-        dwords[4] = mask_rect.y as u32;
-        dwords[5] = mask_rect.width;
-        dwords[6] = mask_rect.height;
-        dwords[7] = 1.0f32.to_bits();
-        dwords[8] = 0.0f32.to_bits();
-        dwords[9] = 1.0f32.to_bits();
-        dwords[10] = foreground_rgba;
-        dwords[11] = 0;
-        dwords[12] = 1.0f32.to_bits();
-        dwords[13] = 1.0f32.to_bits();
-        Some(Self { dwords })
-    }
 
-    pub(crate) fn set_transform(&mut self, scale: f32, rotation_radians: f32, opacity: f32) {
-        let scale = scale.clamp(0.125, 8.0);
-        let rotation = rotation_radians.clamp(-core::f32::consts::PI, core::f32::consts::PI);
-        self.dwords[7] = scale.to_bits();
-        self.dwords[8] = rotation.to_bits();
-        self.dwords[9] = opacity.clamp(0.0, 1.0).to_bits();
-        if (scale - 1.0).abs() > f32::EPSILON || rotation.abs() > f32::EPSILON {
-            self.dwords[1] |= GPGPU_FONT_INSTANCE_FLAG_AFFINE_TRANSFORM;
-        } else {
-            self.dwords[1] &= !GPGPU_FONT_INSTANCE_FLAG_AFFINE_TRANSFORM;
-        }
-    }
 
-    pub(crate) fn set_background(&mut self, rgba: u32) {
-        self.dwords[11] = rgba;
-        if rgba >> 24 == 0 {
-            self.dwords[1] &= !GPGPU_FONT_INSTANCE_FLAG_BACKGROUND;
-        } else {
-            self.dwords[1] |= GPGPU_FONT_INSTANCE_FLAG_BACKGROUND;
-        }
-    }
 
-    pub(crate) fn set_motion(
-        &mut self,
-        period_seconds: f32,
-        phase_cycles: f32,
-        rotation_amplitude_radians: f32,
-        scale_amplitude: f32,
-        opacity_amplitude: f32,
-        translation_amplitude_px: [f32; 2],
-    ) {
-        self.dwords[13] = period_seconds.clamp(0.016, 600.0).to_bits();
-        self.dwords[14] = phase_cycles.to_bits();
-        self.dwords[15] = rotation_amplitude_radians
-            .clamp(-core::f32::consts::PI, core::f32::consts::PI)
-            .to_bits();
-        self.dwords[16] = scale_amplitude.clamp(-0.875, 4.0).to_bits();
-        self.dwords[17] = opacity_amplitude.clamp(-1.0, 1.0).to_bits();
-        self.dwords[18] = translation_amplitude_px[0].clamp(-4096.0, 4096.0).to_bits();
-        self.dwords[19] = translation_amplitude_px[1].clamp(-4096.0, 4096.0).to_bits();
-        if rotation_amplitude_radians.abs() > f32::EPSILON
-            || scale_amplitude.abs() > f32::EPSILON
-            || opacity_amplitude.abs() > f32::EPSILON
-            || translation_amplitude_px[0].abs() > f32::EPSILON
-            || translation_amplitude_px[1].abs() > f32::EPSILON
-        {
-            self.dwords[1] |= GPGPU_FONT_INSTANCE_FLAG_MOTION;
-        } else {
-            self.dwords[1] &= !GPGPU_FONT_INSTANCE_FLAG_MOTION;
-        }
-    }
 
-    pub(crate) fn set_color_animation(
-        &mut self,
-        channels: u8,
-        timing_sine: bool,
-        iteration: u8,
-        duration_seconds: f32,
-        frames: &[(u16, u32)],
-    ) -> bool {
-        if channels == 0
-            || channels & !0x0F != 0
-            || iteration > 2
-            || !(2..=8).contains(&frames.len())
-            || frames[0].0 != 0
-            || frames[frames.len() - 1].0 != 1_000
-            || frames.windows(2).any(|pair| pair[1].0 <= pair[0].0)
-        {
-            return false;
-        }
-        let mut flags = self.dwords[1]
-            | GPGPU_FONT_INSTANCE_FLAG_COLOR_ANIMATION
-            | (u32::from(iteration) << GPGPU_FONT_INSTANCE_ITERATION_SHIFT)
-            | (u32::from(channels) << GPGPU_FONT_INSTANCE_CHANNELS_SHIFT)
-            | ((frames.len() as u32) << GPGPU_FONT_INSTANCE_FRAME_COUNT_SHIFT);
-        if timing_sine {
-            flags |= GPGPU_FONT_INSTANCE_FLAG_TIMING_SINE;
-        }
-        self.dwords[1] = flags;
-        self.dwords[12] = duration_seconds.clamp(0.016, 600.0).to_bits();
-        for (index, &(offset, rgba)) in frames.iter().enumerate() {
-            self.dwords[32 + index * 2] = u32::from(offset);
-            self.dwords[33 + index * 2] = rgba;
-        }
-        true
-    }
-}
 
-/// Persistent VM-backed descriptor storage shared by all font walkers in one
-/// retained page. Its PPGTT range is unique for the allocation lifetime.
-pub(crate) struct GpgpuOwnedFontInstanceState {
-    phys: u64,
-    gpu: u64,
-    bytes: usize,
-    virt: *mut u8,
-    capacity: usize,
-}
 
-unsafe impl Send for GpgpuOwnedFontInstanceState {}
-unsafe impl Sync for GpgpuOwnedFontInstanceState {}
-
-impl GpgpuOwnedFontInstanceState {
-    pub(crate) const fn phys(&self) -> u64 {
-        self.phys
-    }
-
-    pub(crate) const fn gpu(&self) -> u64 {
-        self.gpu
-    }
-
-    pub(crate) const fn bytes(&self) -> usize {
-        self.bytes
-    }
-
-    pub(crate) const fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    pub(crate) fn descriptor_gpu(&self, index: usize) -> Option<u64> {
-        (index < self.capacity)
-            .then_some(self.gpu + (index * GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES) as u64)
-    }
-
-    pub(crate) fn write(&self, index: usize, descriptor: &GpgpuFontInstanceDescriptor) -> bool {
-        if index >= self.capacity || self.virt.is_null() {
-            return false;
-        }
-        let offset = index * GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES;
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                descriptor.dwords.as_ptr() as *const u8,
-                self.virt.add(offset),
-                GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES,
-            );
-        }
-        super::dma_flush(unsafe { self.virt.add(offset) }, GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES);
-        true
-    }
-}
-
-impl Drop for GpgpuOwnedFontInstanceState {
-    fn drop(&mut self) {
-        if !retire_font_rcs_ppgtt_range(self.gpu, self.phys, self.bytes) {
-            crate::log_error!(
-                target: "gpgpu";
-                "intel/gpgpu: font-instance state retirement refused phys=0x{:X} gpu=0x{:X} bytes={} action=no-unmap-no-free\n",
-                self.phys,
-                self.gpu,
-                self.bytes,
-            );
-            return;
-        }
-        crate::dma::dealloc(self.virt, self.bytes);
-        recycle_font_coverage_gpu_va(self.gpu, self.bytes);
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct GpgpuFontInstanceLayer {
-    pub(crate) mask: GpgpuMask8Surface,
-    pub(crate) mask_rect: GpgpuRect,
-    pub(crate) dst_center: [f32; 2],
-    pub(crate) dispatch_rect: GpgpuRect,
-    pub(crate) descriptor_index: usize,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuFontInstanceBatchResult {
-    pub(crate) ok: bool,
-    pub(crate) submitted: bool,
-    pub(crate) requested_layers: usize,
-    pub(crate) active_walkers: usize,
-    pub(crate) submits: usize,
-    /// Exact destination ownership minted from the final cache-draining
-    /// completion packet when this batch targets direct scanout.
-    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
-}
 
 impl GpgpuMask8Surface {
     pub(crate) fn new(
@@ -870,9 +466,6 @@ impl GpgpuMask8Surface {
         min_bytes <= self.bytes
     }
 
-    pub(crate) const fn bounds(self) -> GpgpuRect {
-        GpgpuRect::new(0, 0, self.width, self.height)
-    }
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -881,7 +474,6 @@ pub(crate) struct GpgpuGlyphMaskBlit {
     pub(crate) mask_rect: GpgpuRect,
     pub(crate) dst: GpgpuRgba8Surface,
     pub(crate) dst_xy: GpgpuPoint,
-    pub(crate) color_rgba: u32,
 }
 
 /// One independently positioned/colorized persistent R8 coverage layer.
@@ -910,10 +502,7 @@ pub(crate) struct GpgpuGlyphMaskBatchResult {
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuSubmitStats {
-    pub(crate) spans: usize,
     pub(crate) submits: usize,
-    pub(crate) submit_ms: u64,
-    pub(crate) total_ms: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -1027,7 +616,6 @@ pub(crate) enum Ui4CompositorSubmitError {
 pub(crate) enum Ui4CompositorCompletion {
     Pending,
     Complete(GpgpuWorklistSubmitStats),
-    Failed,
     InvalidSubmission,
 }
 
@@ -1051,23 +639,6 @@ pub(crate) enum Ui4SpriteSceneCompletion {
     Failed,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuShellMandel64WorklistResult {
-    pub(crate) ok: bool,
-    pub(crate) submitted: bool,
-    pub(crate) marker: u32,
-    pub(crate) requested: usize,
-    pub(crate) descriptors: usize,
-    pub(crate) walkers: usize,
-    pub(crate) pixels: usize,
-    pub(crate) submit_ms: u64,
-    pub(crate) desc_gpu: u64,
-    pub(crate) last_src_xy: GpgpuPoint,
-    pub(crate) last_dst_xy: GpgpuPoint,
-    /// Present only for a complete direct-scanout render whose final
-    /// PIPE_CONTROL and post-sync marker retired for this exact allocation.
-    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
-}
 
 /// Common result for a full-surface compute node that does not own
 /// presentation. UI4 consumers decide whether and when to publish the frame.
@@ -1159,66 +730,7 @@ pub(crate) fn release_rgba8_surface_for_scanout(dst: GpgpuRgba8Surface) -> Gpgpu
     }
 }
 
-/// Font Engine equivalent of the scanout release packet. The packet encoding
-/// is shared, but every mutable execution object and retirement proof belongs
-/// to the Font GuC context.
-pub(crate) fn font_release_rgba8_surface_for_scanout(
-    dst: GpgpuRgba8Surface,
-) -> GpgpuRgba8KernelResult {
-    let started = direct_rcs_now_tick();
-    if !dst.is_valid() {
-        return GpgpuRgba8KernelResult::default();
-    }
-    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
-    let Some(dev) = super::claimed_device() else {
-        return GpgpuRgba8KernelResult::default();
-    };
-    let Some(state) = font_rcs_state_once(dev) else {
-        return GpgpuRgba8KernelResult::default();
-    };
-    let prepared = direct_rcs_forcewake(dev)
-        && direct_rcs_map_state(dev, state)
-        && font_rcs_init_ppgtt_once(state)
-        && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
-        && direct_rcs_encode_rgba8_scanout_release_batch(state);
-    let submission = if prepared {
-        font_rcs_submit_batch_state(dev, state)
-    } else {
-        DirectRcsSubmissionState::Rejected
-    };
-    let submitted = submission.may_have_submitted();
-    let marker = if submission.can_poll() {
-        font_rcs_poll_result_slot_timeout_ms(
-            state,
-            RGBA8_SCANOUT_RELEASE_MARKER_SLOT,
-            RGBA8_SCANOUT_RELEASE_MARKER,
-            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
-        )
-    } else {
-        0
-    };
-    let ok = marker == RGBA8_SCANOUT_RELEASE_MARKER;
-    GpgpuRgba8KernelResult {
-        ok,
-        submitted,
-        marker,
-        submit_ms: direct_rcs_elapsed_ms_since(started),
-        release: ok.then(|| gpgpu_rgba8_release(dst)),
-    }
-}
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuMandel64Placement {
-    pub(crate) src_x: i32,
-    pub(crate) src_y: i32,
-    pub(crate) dst_x: i32,
-    pub(crate) dst_y: i32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) view_height: u32,
-    pub(crate) mirror_at_center: bool,
-    pub(crate) iterations: u32,
-}
 
 #[derive(Copy, Clone, Debug)]
 struct GpgpuRectWorklistDescBuffer {

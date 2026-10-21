@@ -21,7 +21,6 @@ include!("types/kernel.rs");
 include!("types/worklists.rs");
 include!("types/surfaces.rs");
 include!("types/volumes.rs");
-include!("types/volume_resources.rs");
 include!("artifacts/metadata.rs");
 include!("artifacts/uploads.rs");
 include!("operations/primitives.rs");
@@ -35,7 +34,6 @@ include!("operations/lab256.rs");
 include!("operations/spirit_vfx.rs");
 include!("operations/probes.rs");
 include!("operations/subset_sum_probe.rs");
-include!("operations/entropy_stream.rs");
 include!("operations/submission_2d.rs");
 include!("operations/effects.rs");
 include!("operations/cpp_demo.rs");
@@ -46,14 +44,12 @@ include!("operations/shadertoy_catalog.rs");
 include!("operations/shadertoy_environment.rs");
 include!("operations/cpp_audio_visualizer.rs");
 include!("operations/particle_craft.rs");
-include!("operations/lfm25_q8.rs");
 include!("operations/kokoro_qgemm.rs");
 include!("operations/kokoro_conv1d.rs");
 include!("operations/helio_retained_transform.rs");
 include!("operations/worklists.rs");
 include!("artifacts/runtime.rs");
 include!("rcs/runtime.rs");
-include!("rcs/font_tessellation.rs");
 include!("rcs/worklists.rs");
 include!("rcs/two_d.rs");
 include!("rcs/effects.rs");
@@ -61,9 +57,6 @@ include!("rcs/cpp_demo.rs");
 include!("rcs/shadertoy.rs");
 include!("rcs/cpp_audio_visualizer.rs");
 include!("rcs/particle_craft.rs");
-include!("rcs/lfm25_q8.rs");
-include!("rcs/kokoro_qgemm.rs");
-include!("rcs/kokoro_conv1d.rs");
 include!("rcs/subset_sum.rs");
 include!("rcs/payloads.rs");
 include!("rcs/descriptors.rs");
@@ -75,3 +68,15 @@ include!("rcs/spirit_vfx.rs");
 
 include!("operations/lz4_blocks.rs");
 include!("rcs/lz4_blocks.rs");
+
+#[cfg(feature = "trueos_lumen")]
+pub(crate) fn lfm25_q8_packed_project_supported() -> bool {
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT
+        .target_policy
+        .supports(dev.device_id, dev.revision_id)
+        && super::gen12_lumen_mocs_ready()
+        && !lfm25_rcs_context_is_quarantined()
+}

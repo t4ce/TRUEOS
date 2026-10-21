@@ -188,37 +188,29 @@ macro_rules! id_newtype {
         #[repr(transparent)]
         #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
         pub(crate) struct $name(u32);
-
+    };
+    ($name:ident, from_raw) => {
+        id_newtype!($name);
         impl $name {
-            pub(crate) const INVALID: Self = Self(0);
-
+            pub(crate) const fn from_raw(raw: u32) -> Self { Self(raw) }
+        }
+    };
+    ($name:ident, new) => {
+        id_newtype!($name);
+        impl $name {
             pub(crate) const fn new(raw: u32) -> Option<Self> {
                 if raw == 0 { None } else { Some(Self(raw)) }
-            }
-
-            pub(crate) const fn from_raw(raw: u32) -> Self {
-                Self(raw)
-            }
-
-            pub(crate) const fn raw(self) -> u32 {
-                self.0
-            }
-
-            pub(crate) const fn is_valid(self) -> bool {
-                self.0 != 0
             }
         }
     };
 }
 
-id_newtype!(PlatformId);
-id_newtype!(DeviceId);
-id_newtype!(ContextId);
-id_newtype!(QueueId);
-id_newtype!(ProgramId);
+id_newtype!(DeviceId, from_raw);
+id_newtype!(ContextId, from_raw);
+id_newtype!(QueueId, from_raw);
 id_newtype!(KernelId);
-id_newtype!(MemId);
-id_newtype!(EventId);
+id_newtype!(MemId, new);
+id_newtype!(EventId, from_raw);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -252,45 +244,9 @@ macro_rules! bitflags_newtype {
         pub(crate) struct $name($bits);
 
         impl $name {
-            pub(crate) const EMPTY: Self = Self(0);
             pub(crate) const VALID_BITS: $bits = $valid;
             $(pub(crate) const $flag: Self = Self($value);)*
 
-            pub(crate) const fn from_bits(bits: $bits) -> Option<Self> {
-                if bits & !Self::VALID_BITS == 0 {
-                    Some(Self(bits))
-                } else {
-                    None
-                }
-            }
-
-            pub(crate) const fn from_bits_truncate(bits: $bits) -> Self {
-                Self(bits & Self::VALID_BITS)
-            }
-
-            pub(crate) const fn bits(self) -> $bits {
-                self.0
-            }
-
-            pub(crate) const fn is_empty(self) -> bool {
-                self.0 == 0
-            }
-
-            pub(crate) const fn contains(self, other: Self) -> bool {
-                self.0 & other.0 == other.0
-            }
-
-            pub(crate) const fn intersects(self, other: Self) -> bool {
-                self.0 & other.0 != 0
-            }
-
-            pub(crate) fn insert(&mut self, other: Self) {
-                self.0 |= other.0;
-            }
-
-            pub(crate) fn remove(&mut self, other: Self) {
-                self.0 &= !other.0;
-            }
         }
 
         impl BitOr for $name {
@@ -359,13 +315,9 @@ bitflags_newtype!(MemFlags, u64, 0x0000_0000_0000_13BF, {
     READ_WRITE = 1 << 0,
     WRITE_ONLY = 1 << 1,
     READ_ONLY = 1 << 2,
-    USE_HOST_PTR = 1 << 3,
-    ALLOC_HOST_PTR = 1 << 4,
-    COPY_HOST_PTR = 1 << 5,
     HOST_WRITE_ONLY = 1 << 7,
     HOST_READ_ONLY = 1 << 8,
     HOST_NO_ACCESS = 1 << 9,
-    KERNEL_READ_AND_WRITE = 1 << 12,
 });
 
 impl MemFlags {
@@ -395,10 +347,6 @@ impl MemFlags {
 }
 
 bitflags_newtype!(QueueProperties, u64, 0xF, {
-    OUT_OF_ORDER_EXEC_MODE_ENABLE = 1 << 0,
-    PROFILING_ENABLE = 1 << 1,
-    ON_DEVICE = 1 << 2,
-    ON_DEVICE_DEFAULT = 1 << 3,
 });
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -563,4 +511,16 @@ impl NdRange {
                 .fold(1usize, usize::saturating_mul)
         })
     }
+}
+
+impl AccessFlags {
+    pub(crate) const EMPTY: Self = Self(0);
+    pub(crate) const fn bits(self) -> u32 { self.0 }
+    pub(crate) const fn contains(self, other: Self) -> bool { self.0 & other.0 == other.0 }
+}
+impl MemFlags {
+    pub(crate) const fn contains(self, other: Self) -> bool { self.0 & other.0 == other.0 }
+}
+impl QueueProperties {
+    pub(crate) const EMPTY: Self = Self(0);
 }

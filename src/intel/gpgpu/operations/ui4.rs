@@ -1061,7 +1061,7 @@ pub(crate) fn poll_ui4_video_frame_submission(
             stats,
             release: gpgpu_rgba8_release(dst),
         },
-        Ui4CompositorCompletion::Failed | Ui4CompositorCompletion::InvalidSubmission => {
+        Ui4CompositorCompletion::InvalidSubmission => {
             Ui4VideoFrameCompletion::Failed
         }
     }
@@ -1081,7 +1081,7 @@ pub(crate) fn poll_ui4_blueprint_sprite_scene(
             stats,
             release: gpgpu_rgba8_release(dst),
         },
-        Ui4CompositorCompletion::Failed | Ui4CompositorCompletion::InvalidSubmission => {
+        Ui4CompositorCompletion::InvalidSubmission => {
             Ui4SpriteSceneCompletion::Failed
         }
     }

@@ -24,30 +24,12 @@ pub(crate) struct RenderJokerResult {
 /// consumers may compare the independently colored results, but visibility
 /// requires an ordinary UI4 frame/window producer.
 pub(crate) struct FontRenderTargetReadback {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
     pub(crate) pixels: Vec<u8>,
 }
 
 
-pub(crate) const fn font_native_scale_supported(native_scale: u32) -> bool {
-    native_scale > 0 && native_scale <= FONT_STAMP_MAX_NATIVE_SCALE
-}
 
-pub(crate) const fn font_native_scale_count() -> u32 {
-    FONT_STAMP_MAX_NATIVE_SCALE
-}
 
-/// Return the square render-target extent selected by one supported native
-/// font scale. Consumers use this instead of duplicating the render backend's
-/// scale-to-pixel mapping.
-pub(crate) const fn font_native_scale_target_pixels(native_scale: u32) -> Option<u32> {
-    if font_native_scale_supported(native_scale) {
-        Some(FONT_STAMP_BASE_SIZE as u32 * native_scale)
-    } else {
-        None
-    }
-}
 
 
 
@@ -145,10 +127,6 @@ impl ResidentScenePrimitiveTopology {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
-    /// Rounded End corners: two endpoint frames, style, and color; all float bits.
-    RoundedLineEnds([u32; 16]),
-    /// Native line AA, or analytic patch coverage; same private 64-byte ABI.
-    MicrofontAa([u32; 16]),
     /// Immutable source-cell geometry, GPU width/scale expansion, R8 coverage.
     MicrofontMask(u64),
     ClipPosition3UvTexture,
@@ -170,13 +148,6 @@ fn resident_scene_shader_pipeline(
             if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 =>
         {
             Ok(crate::intel::shader::microfont_mask_pipeline())
-        }
-        (
-            ResidentSceneFragmentContract::RoundedLineEnds(_)
-            | ResidentSceneFragmentContract::MicrofontAa(_),
-            false,
-        ) if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 => {
-            Ok(crate::intel::shader::microfont_line_end_pipeline())
         }
         (ResidentSceneFragmentContract::ConstantRgba, false) => {
             Ok(crate::intel::shader::triangle_pipeline_simd16())
@@ -638,11 +609,6 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) width: u32,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) height: u32,
-    pub(crate) frame_us: u64,
-    pub(crate) geometry_us: u64,
-    /// CPU time spent constructing and publishing scene state/batches before
-    /// handing the already-resident workload to GuC.
-    pub(crate) geometry_prepare_us: u64,
     /// Time spent waiting for the RCS release cookie after GuC accepted the
     /// submission. This excludes CPU batch preparation and LRC setup.
     pub(crate) gpu_poll_us: u64,
@@ -654,11 +620,6 @@ pub(crate) struct ResidentSceneFrameResult {
     /// RGBA8 backbuffer or R8 mask is ready for single-sample scenes without later
     /// coverage/copy passes; it excludes any separately submitted resolve.
     pub(crate) gpu_target_ready_timestamp: Option<ResidentSceneGpuTimestamp>,
-    /// Commands from target-begin through the fullscreen clear and setup
-    /// preceding the Dista draw, measured by the existing ordered markers.
-    pub(crate) gpu_clear_setup_timestamp: Option<ResidentSceneGpuTimestamp>,
-    /// Ordered color-target/tile writeback from draw-end to target-ready.
-    pub(crate) gpu_writeback_timestamp: Option<ResidentSceneGpuTimestamp>,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) resolve_us: u64,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -670,7 +631,6 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) coverage_submits: usize,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) coverage_walkers: usize,
-    pub(crate) rgba: Option<Vec<u8>>,
     /// True only when geometry, resolve, coverage, and any compatibility copy
     /// completed. This remains separate from `release_fence`: a caller that
     /// appends one final GPU writer may deliberately defer the release proof.
@@ -1269,9 +1229,6 @@ fn prepare_picasso_resident_scene_depth(
     })
 }
 
-pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
-    (RESIDENT_SCENE_TARGET_WIDTH, RESIDENT_SCENE_TARGET_HEIGHT)
-}
 
 /// UI4-sized 4x triangle scene followed by persistent analytical font masks.
 /// Coverage is composited only after the MSAA resolve, preserving its R8 alpha
@@ -1456,31 +1413,6 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
     )
 }
 
-/// Helio Churn rendered into UI4's leased linear RGBA surface in one scene
-/// submission. Retained-transform frames can feed GPU-authored matrices and
-/// compacted indices straight into the artifact-native VS; the GPU-expanded
-/// Float3 stream remains an explicit fallback during physical admission.
-pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
-    resident: &ResidentChurnForward,
-    clear_rgba: Option<[u8; 4]>,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_scene_capture_inner(
-        &[],
-        Some(resident),
-        None,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        true,
-        ResidentSceneRasterQuality::SingleSample,
-        destination.width as usize,
-        destination.height as usize,
-        ResidentSceneFrameOutput::DirectGpuSurface(destination),
-    )
-}
 
 /// Submit one retained GPU-transform scene together with ordinary resident
 /// primitives. The retained object owns the compute/native-matrix secondary;
@@ -1580,8 +1512,7 @@ fn stage_resident_scene_secondary(
 
     draw.microfont_aa = matches!(
         fragment_contract,
-        ResidentSceneFragmentContract::MicrofontAa(_)
-            | ResidentSceneFragmentContract::MicrofontMask(_)
+        ResidentSceneFragmentContract::MicrofontMask(_)
     );
     if draw.microfont_aa && depth_config.is_some() {
         return Err("microfont-aa-depth");
@@ -1610,9 +1541,7 @@ fn stage_resident_scene_secondary(
             && !draw.voxy_figure
             && !matches!(
                 fragment_contract,
-                ResidentSceneFragmentContract::RoundedLineEnds(_)
-                    | ResidentSceneFragmentContract::MicrofontAa(_)
-                    | ResidentSceneFragmentContract::MicrofontMask(_)
+                ResidentSceneFragmentContract::MicrofontMask(_)
             ))
         .then_some(rgba),
         state_gpu,
@@ -1638,34 +1567,6 @@ fn stage_resident_scene_secondary(
             secondary_index, sampled_texture.is_some(), reason,
         );
     })?;
-    if let ResidentSceneFragmentContract::RoundedLineEnds(params)
-    | ResidentSceneFragmentContract::MicrofontAa(params) = fragment_contract
-    {
-        let line = matches!(
-            topology,
-            ResidentScenePrimitiveTopology::LineListAdj
-                | ResidentScenePrimitiveTopology::LineStripAdj
-        ) && clip_adjacency;
-        let patch = draw.microfont_aa
-            && topology == ResidentScenePrimitiveTopology::TriangleList
-            && !clip_adjacency;
-        if !(line || patch) || !matches!(state_warm.device_id, 0x4680 | 0xa780) {
-            return Err("rounded-line-contract");
-        }
-        let offset = (probe_state.used_bytes as usize + 63) & !63;
-        if offset + 64 > state_warm.draw_state_len {
-            return Err("rounded-line-constants-capacity");
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                params.as_ptr() as *const u8,
-                state_warm.draw_state_virt.add(offset),
-                64,
-            );
-        }
-        probe_state.push_constant_offset_bytes = offset as u32;
-        probe_state.used_bytes = (offset + 64) as u32;
-    }
     if let ResidentSceneFragmentContract::MicrofontMask(address) = fragment_contract {
         if address == 0
             || address & 63 != 0
@@ -3361,8 +3262,7 @@ fn submit_resident_scene_geometry_batched(
         };
         let blend_mode = match scene_draw.fragment_contract {
             ResidentSceneFragmentContract::VoxyFigure => TriangleBlendProbeMode::MesaZeroedState,
-            ResidentSceneFragmentContract::MicrofontAa(_)
-            | ResidentSceneFragmentContract::MicrofontMask(_) => {
+            ResidentSceneFragmentContract::MicrofontMask(_) => {
                 TriangleBlendProbeMode::StraightAlpha
             }
 
@@ -4594,15 +4494,10 @@ fn submit_resident_scene_capture_inner_for_carrier(
             presented: false,
             width: target_width as u32,
             height: target_height as u32,
-            frame_us,
-            geometry_us,
-            geometry_prepare_us: geometry.prepare_us,
             gpu_poll_us: geometry.gpu_poll_us,
             gpu_poll_iters: geometry.gpu_poll_iters,
             gpu_timestamp: geometry.gpu_timestamp,
             gpu_target_ready_timestamp: geometry.gpu_target_ready_timestamp,
-            gpu_clear_setup_timestamp: geometry.gpu_clear_setup_timestamp,
-            gpu_writeback_timestamp: geometry.gpu_writeback_timestamp,
             resolve_us: resolve_finished_ns.saturating_sub(geometry_finished_ns) / 1_000,
             coverage_us: coverage_finished_ns.saturating_sub(resolve_finished_ns) / 1_000,
             present_copy_us: present_copy_finished_ns.saturating_sub(present_copy_started_ns)
@@ -4610,7 +4505,6 @@ fn submit_resident_scene_capture_inner_for_carrier(
             present_copy_performed,
             coverage_submits,
             coverage_walkers,
-            rgba,
             frame_complete,
             incomplete_stage,
             release_fence,
@@ -8357,8 +8251,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                     }
                 }
                 *output = Some(FontRenderTargetReadback {
-                    width: target_width as u32,
-                    height: target_height as u32,
                     pixels: visible_rgba,
                 });
                 true

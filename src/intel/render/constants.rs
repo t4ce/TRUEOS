@@ -122,12 +122,9 @@ const LINEAR_RENDER_TARGET_PITCH_ALIGN: usize = 64;
 // Legacy/resident compatibility probes retain their proven square target.
 // Shell2's one-shot stamp path bypasses this scale API and uses a fitted
 // rectangular target up to the full scanout dimensions below.
-const FONT_PROOF_TARGET_SIZE: usize = 512;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;
-pub(crate) const FONT_STAMP_MAX_NATIVE_SCALE: u32 =
-    (FONT_PROOF_TARGET_SIZE / FONT_STAMP_BASE_SIZE) as u32;
 pub(crate) const RESIDENT_SCENE_TARGET_WIDTH: usize = 2560;
 pub(crate) const RESIDENT_SCENE_TARGET_HEIGHT: usize = 1440;
 const WARM_STREAMOUT_BYTES: usize =
@@ -442,6 +439,7 @@ pub(crate) const fn device_supports_adjacency_geometry_shader(
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ChurnHardwareAdmission {
     ValidatedProduction,
+    #[cfg(test)]
     Adls4680Rev0cPhysicalProbe,
 }
 
@@ -454,6 +452,7 @@ const fn device_admits_churn_forward_native(
         ChurnHardwareAdmission::ValidatedProduction => {
             device_supports_churn_forward_native(device_id, revision_id)
         }
+        #[cfg(test)]
         ChurnHardwareAdmission::Adls4680Rev0cPhysicalProbe => {
             device_id == 0x4680 && revision_id == 0x0C
         }
@@ -469,6 +468,7 @@ const fn device_admits_churn_retained_transform(
         ChurnHardwareAdmission::ValidatedProduction => {
             device_supports_churn_retained_transform(device_id, revision_id)
         }
+        #[cfg(test)]
         ChurnHardwareAdmission::Adls4680Rev0cPhysicalProbe => {
             device_id == 0x4680 && revision_id == 0x0C
         }

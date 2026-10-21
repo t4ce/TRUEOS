@@ -108,9 +108,6 @@ pub(crate) fn fill_solid_rects_rgba8_scanout_result(
     solid_rects_rgba8_result_mode(dst, rects, true)
 }
 
-pub(crate) fn fill_solid_rects_rgba8(dst: GpgpuRgba8Surface, rects: &[GpgpuSolidRect]) -> bool {
-    fill_solid_rects_rgba8_mode(dst, rects, false)
-}
 
 pub(crate) fn fill_solid_rects_rgba8_scanout(
     dst: GpgpuRgba8Surface,

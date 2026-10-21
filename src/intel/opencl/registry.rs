@@ -57,7 +57,6 @@ pub(crate) enum KnownKernelRole {
     KokoroQgemm,
     KokoroConv1d,
     SubsetSum,
-    Font,
 }
 
 const ADLS: &str = "adls";

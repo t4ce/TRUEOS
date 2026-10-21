@@ -1,3 +1,4 @@
+use core::arch::x86_64::__cpuid;
 
 const CPUID_LEAF_FEATURES: u32 = 0x01;
 const CPUID_LEAF_THERMAL_POWER: u32 = 0x06;

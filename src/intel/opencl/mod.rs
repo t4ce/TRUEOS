@@ -38,7 +38,7 @@ pub(crate) use queue::{Command, CommandKind, CommandQueue, EventRecord, EventSta
 pub(crate) use registry::{KnownAotKernel, KnownKernelRole};
 pub(crate) use types::{
     AccessFlags, ClError, ClResult, ContextId, DeviceId, DeviceKind, EventId, KernelId, MemFlags,
-    MemId, NdRange, PlatformId, ProgramId, QueueId, QueueProperties,
+    MemId, NdRange,  QueueId, QueueProperties,
 };
 pub(crate) use validation::{
     KnownAotValidationIssue, KnownAotValidationIssueKind, KnownAotValidationReport,

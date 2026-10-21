@@ -38,9 +38,6 @@ pub(crate) fn cpp_audio_visualizer_rgba8_upload_status() -> Option<UploadedKerne
     *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn particle_craft_upload_status() -> Option<UploadedKernelArtifact> {
-    *PARTICLE_CRAFT_UPLOAD.lock()
-}
 
 pub(crate) fn lfm25_q8_project_packed_upload_status() -> Option<UploadedKernelArtifact> {
     *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock()
@@ -54,13 +51,7 @@ pub(crate) fn kokoro_conv1d_u8_u8_upload_status() -> Option<UploadedKernelArtifa
     *KOKORO_CONV1D_U8_U8_UPLOAD.lock()
 }
 
-pub(crate) fn spirit_vfx_background_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD.lock()
-}
 
-pub(crate) fn spirit_vfx_sprite_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *SPIRIT_VFX_SPRITE_RGBA8_UPLOAD.lock()
-}
 
 pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *COPY_RECT_RGBA8_UPLOAD.lock() {
@@ -489,13 +480,6 @@ pub(crate) enum GpgpuArtifactReloadError {
 }
 
 impl GpgpuArtifactReloadError {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::UnknownKernel => "unknown-kernel",
-            Self::NoClaimedDevice => "no-claimed-device",
-            Self::UploadFailed => "upload-failed",
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

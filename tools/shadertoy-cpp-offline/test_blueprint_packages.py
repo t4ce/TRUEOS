@@ -97,7 +97,7 @@ fn real_packages_pass_all_existing_admission_checks() {
         let mut bad_spv = spv.to_vec();
         bad_spv[0] ^= 1;
         assert_eq!(admit_kernel_artifact_payloads(artifact, 0x4680, 0x0c, bin, &bad_spv), Err(GpgpuArtifactAdmissionError::ContractSpirvHashMismatch));
-        assert!(admit_kernel_artifact_bytes(artifact, 0x4680, 0x0c, bin).is_err());
+        assert!(admit_kernel_artifact_payloads(artifact, 0x4680, 0x0c, bin, &[]).is_err());
     }
 }
 

@@ -28,9 +28,7 @@ impl AiActivitySource {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AiReasoningPhase {
-    #[cfg(feature = "trueos_lumen")]
     Started,
-    #[cfg(feature = "trueos_lumen")]
     Finished,
 }
 
@@ -38,9 +36,7 @@ impl AiReasoningPhase {
     #[cfg(feature = "trueos_lumen")]
     const fn name(self) -> &'static str {
         match self {
-            #[cfg(feature = "trueos_lumen")]
             Self::Started => "started",
-            #[cfg(feature = "trueos_lumen")]
             Self::Finished => "finished",
         }
     }

@@ -108,10 +108,6 @@ const BITSTREAM_GPU: u64 = ARENA_PPGTT_BASE + BITSTREAM_OFFSET as u64;
 const MFX_STATS_GPU: u64 = ARENA_PPGTT_BASE + MFX_STATS_OFFSET as u64;
 const VDENC_STATS_GPU: u64 = ARENA_PPGTT_BASE + VDENC_STATS_OFFSET as u64;
 const SLICE_SIZE_GPU: u64 = ARENA_PPGTT_BASE + SLICE_SIZE_OFFSET as u64;
-const MV_OBJECT_GPU: u64 = ARENA_PPGTT_BASE + MV_OBJECT_OFFSET as u64;
-const DMV_0_GPU: u64 = ARENA_PPGTT_BASE + DMV_0_OFFSET as u64;
-const DMV_1_GPU: u64 = ARENA_PPGTT_BASE + DMV_1_OFFSET as u64;
-const MPR_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + MPR_ROWSTORE_OFFSET as u64;
 const INTRA_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + INTRA_ROWSTORE_OFFSET as u64;
 const DEBLOCK_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + DEBLOCK_ROWSTORE_OFFSET as u64;
 const BSP_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + BSP_ROWSTORE_OFFSET as u64;
@@ -256,23 +252,7 @@ impl AvcPicture {
         }
     }
 
-    const fn current_dmv_gpu(self) -> u64 {
-        if self.frame_num & 1 == 0 {
-            DMV_0_GPU
-        } else {
-            DMV_1_GPU
-        }
-    }
 
-    const fn reference_dmv_gpu(self) -> Option<u64> {
-        if self.is_idr {
-            None
-        } else if self.frame_num & 1 == 0 {
-            Some(DMV_1_GPU)
-        } else {
-            Some(DMV_0_GPU)
-        }
-    }
 }
 
 const fn mfx_surface_state(surface_id: u32, width: usize, height: usize, pitch: usize) -> [u32; 6] {
@@ -897,11 +877,7 @@ impl AvcRawSurfaceFormat {
     }
 }
 
-#[derive(Copy, Clone)]
-pub(crate) struct AvcNv12DmaSurface {
-    phys: u64,
-    bytes: usize,
-}
+
 
 #[derive(Copy, Clone)]
 pub(crate) struct AvcXyuv8888DmaSurface {
@@ -918,24 +894,18 @@ impl AvcXyuv8888DmaSurface {
     }
 }
 
-impl AvcNv12DmaSurface {
-    pub(crate) fn new(phys: u64, bytes: usize) -> Option<Self> {
-        (phys != 0 && phys.is_multiple_of(crate::intel::WARM_ALIGN as u64) && bytes == SOURCE_BYTES)
-            .then_some(Self { phys, bytes })
-    }
-}
+
 
 #[derive(Copy, Clone)]
 enum AvcFrameSource {
     BootProof,
-    Nv12Dma(AvcNv12DmaSurface),
     Xyuv8888Dma(AvcXyuv8888DmaSurface),
 }
 
 impl AvcFrameSource {
     const fn raw_format(self) -> AvcRawSurfaceFormat {
         match self {
-            Self::BootProof | Self::Nv12Dma(_) => AvcRawSurfaceFormat::Nv12,
+            Self::BootProof => AvcRawSurfaceFormat::Nv12,
             Self::Xyuv8888Dma(_) => AvcRawSurfaceFormat::Xyuv8888,
         }
     }
@@ -966,16 +936,6 @@ pub(crate) fn snapshot() -> AvcEncodeProbeReport {
     *REPORT.lock()
 }
 
-/// Submit a GPU-produced linear NV12 surface directly as the VDBOX source.
-/// The caller retains the DMA allocation until the submission retires, but
-/// fence completion is awaited cooperatively. No CPU-side full-frame copy is
-/// performed.
-pub(crate) async fn run_nv12_dma_frame(
-    surface: AvcNv12DmaSurface,
-    sequence: u32,
-) -> AvcEncodeProbeReport {
-    run_live_frame(AvcFrameSource::Nv12Dma(surface), AvcPicture::for_sequence(sequence)).await
-}
 
 /// Submit a completed WD XYUV8888 surface directly as VDEnc's raw source.
 /// XYUV8888's X:Y:U:V layout matches VDEnc's packed A:Y:U:V YUV444 input;
@@ -1108,18 +1068,6 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
                 return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
             }
             (arena_source_phys, fnv1a32(source))
-        }
-        AvcFrameSource::Nv12Dma(surface) => {
-            if surface.bytes != SOURCE_BYTES {
-                return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
-            }
-            // The live surface is produced by RCS, whose terminal PIPE_CONTROL
-            // drains HDC/L3 before its completion marker is published. VDBOX
-            // consumes the same DMA allocation directly after that marker.
-            // Do not walk all 5.5 MiB through CPU CLFLUSH or sample it between
-            // those two GPU owners; live source-change telemetry is collected
-            // from the CPU-authored RGBA composition before RCS submission.
-            (surface.phys, 0)
         }
         AvcFrameSource::Xyuv8888Dma(surface) => {
             if surface.bytes != XYUV8888_SOURCE_BYTES {

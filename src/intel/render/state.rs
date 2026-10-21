@@ -437,7 +437,6 @@ struct ResidentChurnHierarchy {
     dirty_world_nodes: ResidentRenderBuffer,
     dirty_rows: ResidentRenderBuffer,
     row_leaf_nodes: ResidentRenderBuffer,
-    node_capacity: usize,
     node_count: AtomicU32,
     dirty_local_count: AtomicU32,
     dirty_world_count: AtomicU32,
@@ -537,9 +536,6 @@ impl ResidentChurnForward {
         self.draw_group_count.load(Ordering::Acquire) as usize
     }
 
-    pub(crate) const fn max_instances(&self) -> usize {
-        self.max_instances
-    }
 
     pub(crate) const fn sampled_material(&self) -> bool {
         self.sampled_material
@@ -558,9 +554,6 @@ impl ResidentChurnForward {
         self.index_count
     }
 
-    pub(crate) const fn retained_transform_available(&self) -> bool {
-        self.transform.is_some()
-    }
 
     pub(crate) const fn retained_transform_unavailable_reason(&self) -> Option<&'static str> {
         self.transform_unavailable_reason
@@ -589,11 +582,6 @@ impl ResidentChurnForward {
             .to_le_bytes()
     }
 
-    pub(crate) fn disable_retained_transform_dispatch(&self) {
-        if let Some(transform) = self.transform.as_ref() {
-            transform.row_count.store(0, Ordering::Release);
-        }
-    }
 
     fn transform_dispatch(
         &self,
@@ -785,12 +773,6 @@ enum TriangleBlendProbeMode {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ExplicitRt0,
     StraightAlpha,
-    FixedFunction {
-        source_color: u8,
-        destination_color: u8,
-        source_alpha: u8,
-        destination_alpha: u8,
-    },
     MesaZeroedState,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     MesaZeroedNoBlendPointer,
@@ -830,7 +812,6 @@ impl TriangleBlendProbeMode {
         match self {
             Self::ExplicitRt0 => "explicit-rt0",
             Self::StraightAlpha => "straight-alpha",
-            Self::FixedFunction { .. } => "fixed-function",
             Self::MesaZeroedState => "mesa-zeroed",
             Self::MesaZeroedNoBlendPointer => "mesa-zeroed-no-blend-ptr",
         }

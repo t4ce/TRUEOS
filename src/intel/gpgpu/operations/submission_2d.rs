@@ -75,27 +75,6 @@ fn lower_glyph_mask_blit(blit: GpgpuGlyphMaskBlit) -> Option<CopyRectRgba8Params
     })
 }
 
-fn clip_rect_to_surface(rect: GpgpuRect, surface: GpgpuRgba8Surface) -> Option<GpgpuRect> {
-    let mut x = rect.x as i64;
-    let mut y = rect.y as i64;
-    let mut width = rect.width as i64;
-    let mut height = rect.height as i64;
-
-    if x < 0 {
-        width += x;
-        x = 0;
-    }
-    if y < 0 {
-        height += y;
-        y = 0;
-    }
-    width = width.min(surface.width as i64 - x);
-    height = height.min(surface.height as i64 - y);
-    if width <= 0 || height <= 0 {
-        return None;
-    }
-    Some(GpgpuRect::new(x as i32, y as i32, width as u32, height as u32))
-}
 
 fn clip_copy_axis(
     src_pos: &mut i64,
@@ -203,58 +182,6 @@ fn submit_copy_rect_2d(
     completed
 }
 
-fn submit_glyph_mask_2d(
-    mask: GpgpuMask8Surface,
-    dst: GpgpuRgba8Surface,
-    params: CopyRectRgba8Params,
-    color_rgba: u32,
-    direct_scanout: bool,
-) -> bool {
-    if fill_rect_2d_dispatch(params.width, params.height).is_none() {
-        return false;
-    }
-    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
-    let Some(dev) = super::claimed_device() else {
-        return false;
-    };
-    let Some(upload) = upload_glyph_mask_rgba8_kernel() else {
-        return false;
-    };
-    let Some(state) = font_rcs_state_once(dev) else {
-        return false;
-    };
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && font_rcs_init_ppgtt_once(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let mask_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, params.src_gpu, mask.phys, mask.bytes);
-    let dst_ppgtt_ok = mask_ppgtt_ok
-        && direct_rcs_map_ppgtt_destination(
-            state,
-            params.dst_gpu,
-            dst.phys,
-            dst.bytes,
-            direct_scanout,
-        );
-    let batch_ok = dst_ppgtt_ok
-        && direct_rcs_encode_glyph_mask_2d_batch(
-            state, upload, params, color_rgba, mask.bytes, dst.bytes,
-        );
-    let submitted = batch_ok && font_rcs_submit_batch(dev, state);
-    let observed = if submitted {
-        font_rcs_poll_result_slot_timeout_ms(
-            state,
-            COPY_RECT_POST_MARKER_SLOT,
-            COPY_RECT_POST_MARKER,
-            DIRECT_RCS_2D_COMPLETION_TIMEOUT_MS,
-        )
-    } else {
-        0
-    };
-    observed == COPY_RECT_POST_MARKER
-}
 
 fn submit_glyph_mask_layers_2d(
     layers: &[GpgpuGlyphMaskLayer],
@@ -290,7 +217,6 @@ fn submit_glyph_mask_layers_2d(
             mask_rect: layer.mask_rect,
             dst,
             dst_xy: layer.dst_xy,
-            color_rgba: layer.color_rgba,
         };
         if lower_glyph_mask_blit(blit).is_none() {
             continue;

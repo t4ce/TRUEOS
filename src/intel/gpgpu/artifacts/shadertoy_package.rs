@@ -9,11 +9,9 @@ pub(crate) const MAX_PACKAGE_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) struct ShaderToyPackageContract {
     pub(crate) shader_id: u32,
     // Build-time provenance size; runtime uploads may differ in metadata size.
-    pub(crate) bytes: usize,
     pub(crate) bin_bytes: usize,
     pub(crate) spv_bytes: usize,
     // Complete-package provenance hash used by offline build verification only.
-    pub(crate) sha256: [u8; 32],
 }
 
 include!("shadertoy_packages.rs");
@@ -22,14 +20,8 @@ include!("shadertoy_mandelbox_package.rs");
 pub(crate) const SKYBOX_SAMPLE_RGB565_PACKAGE: ShaderToyPackageContract =
     ShaderToyPackageContract {
         shader_id: 17,
-        bytes: 99_748,
         bin_bytes: 37_624,
         spv_bytes: 21_292,
-        sha256: [
-            0x17, 0x0f, 0x02, 0x40, 0xc0, 0xb8, 0x43, 0x6f, 0x60, 0x3e, 0xf1, 0x6e, 0xd3, 0x3d,
-            0xff, 0x70, 0xa6, 0x7d, 0xbc, 0x2f, 0x95, 0xdc, 0xf7, 0x0b, 0x72, 0x8e, 0x35, 0x56,
-            0x8c, 0x5f, 0xf4, 0x04,
-        ],
     };
 
 /// Several gallery selectors use one program with different mode uniforms.

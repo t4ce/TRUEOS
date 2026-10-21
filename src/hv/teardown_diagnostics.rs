@@ -3,8 +3,22 @@ use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 #[repr(u8)]
 pub(super) enum Stage {
-    Offline, Preparing, Hull, NativeDrain, Archive, Gridpaper, Media, Ui4,
-    Input, Vgpu, Net, State, WaitQueues, CrashReport, CarrierRelease,
+    Offline = 0,
+    Preparing = 1,
+    Hull = 2,
+    NativeDrain = 3,
+    Archive = 4,
+    #[cfg(feature = "gridpaper")]
+    Gridpaper = 5,
+    Media = 6,
+    Ui4 = 7,
+    Input = 8,
+    Vgpu = 9,
+    Net = 10,
+    State = 11,
+    WaitQueues = 12,
+    CrashReport = 13,
+    CarrierRelease = 14,
 }
 const LABELS: [&str; 15] = [
     "offline", "preparing", "hull", "native-drain", "archive-release",

@@ -500,3 +500,40 @@ const fn align_down_u64(value: u64, align: u64) -> u64 {
     }
     value - (value % align)
 }
+
+#[cfg(feature = "legacy_vm_checkpoint")]
+/// Reserve an exact physical arena. Snapshot restoration uses this only for
+/// pointer-bearing guest heaps whose virtual addresses cannot be relocated.
+pub fn reserve_heap_arena_at(phys_start: u64, size: usize) -> Option<HeapArena> {
+    if size == 0 || HHDM_BASE.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    let size_u64 = u64::try_from(size).ok()?;
+    let end = phys_start.checked_add(size_u64)?;
+    {
+        let mut guard = PMM.lock();
+        let state = guard.as_mut()?;
+        if let Some(reserved) = state.allocate(size_u64, 1, phys_start, Some(end)) {
+            if reserved == phys_start {
+                return Some(HeapArena {
+                    phys_start,
+                    virt_start: phys_to_virt(phys_start as usize),
+                    length: size,
+                });
+            }
+            let _ = state.release(reserved, size_u64);
+        }
+    }
+
+    // A warm-generation boot excluded pointer-bearing VM heaps from the new
+    // PMM. Claim an exact handoff range once instead of exposing it to normal
+    // host allocations between PMM initialization and VM restoration.
+    if !crate::live_update::claim_warm_vm_heap_range(phys_start, size_u64) {
+        return None;
+    }
+    Some(HeapArena {
+        phys_start,
+        virt_start: phys_to_virt(phys_start as usize),
+        length: size,
+    })
+}

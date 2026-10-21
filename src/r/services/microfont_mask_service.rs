@@ -23,9 +23,7 @@ const fn extra_count() -> usize {
     let mut count = 0;
     let mut i = 0;
     while i < microfont::raster_line::GLYPH_CHARACTERS.len() {
-        if is_extra_line(microfont::raster_line::GLYPH_CHARACTERS[i]) {
-            count += 1;
-        }
+        if is_extra_line(microfont::raster_line::GLYPH_CHARACTERS[i]) { count += 1; }
         i += 1;
     }
     count
@@ -36,8 +34,7 @@ pub(crate) const ATLAS_ROWS: u32 = SLOT_COUNT.div_ceil(ATLAS_COLUMNS as usize) a
 // Only line slots use packed joins; Braille quads follow them in the atlas.
 // Join recipes use seven bits of X and eight bits of Y. Reject overflow
 // explicitly rather than silently changing the shape of a future glyph.
-const _: () =
-    assert!(ATLAS_COLUMNS * 6 <= 128 && (BRAILLE_START as u32).div_ceil(ATLAS_COLUMNS) * 11 <= 256);
+const _: () = assert!(ATLAS_COLUMNS * 6 <= 128 && (BRAILLE_START as u32).div_ceil(ATLAS_COLUMNS) * 11 <= 256);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AtlasConfig {
@@ -65,11 +62,8 @@ impl AtlasConfig {
             || self.line_width_px < 0.25
             || self.line_width_px > 32.0
             || (self.glyph_height_px.is_none() && self.line_width_px > self.glyph_scale as f32)
-            || self
-                .glyph_height_px
-                .is_some_and(|h| !(11..=253).contains(&h))
-            || self.extent().0 > 4096
-            || self.extent().1 > 4096
+            || self.glyph_height_px.is_some_and(|h| !(11..=253).contains(&h))
+            || self.extent().0 > 4096 || self.extent().1 > 4096
         {
             return Err("microfont-atlas-config");
         }
@@ -79,15 +73,11 @@ impl AtlasConfig {
         })
     }
     fn scale(self) -> f32 {
-        self.glyph_height_px
-            .map_or(self.glyph_scale as f32, |h| h as f32 / 11.0)
+        self.glyph_height_px.map_or(self.glyph_scale as f32, |h| h as f32 / 11.0)
     }
     fn gutter(self) -> u32 {
-        if self.glyph_height_px.is_some() {
-            (libm::ceilf(self.line_width_px * 0.5) as u32 + 1).max(6)
-        } else {
-            0
-        }
+        if self.glyph_height_px.is_some() { (libm::ceilf(self.line_width_px * 0.5) as u32 + 1).max(6) }
+        else { 0 }
     }
     pub(crate) fn cell_extent(self) -> (u32, u32) {
         let height = self.glyph_height_px.unwrap_or(11 * self.glyph_scale);
@@ -106,12 +96,9 @@ pub(crate) fn glyph_slot(ch: char) -> Option<usize> {
         '\u{2500}'..='\u{257f}' => Some(BOX_START + ch as usize - 0x2500),
         '\u{2580}'..='\u{259f}' => Some(BLOCK_START + ch as usize - 0x2580),
         '\u{2800}'..='\u{28ff}' => Some(BRAILLE_START + ch as usize - 0x2800),
-        _ => microfont::raster_line::GLYPH_CHARACTERS
-            .iter()
-            .copied()
-            .filter(|&candidate| is_extra_line(candidate))
-            .position(|candidate| candidate == ch)
-            .map(|index| EXTRA_START + index),
+        _ => microfont::raster_line::GLYPH_CHARACTERS.iter()
+            .copied().filter(|&candidate| is_extra_line(candidate))
+            .position(|candidate| candidate == ch).map(|index| EXTRA_START + index),
     }
 }
 
@@ -273,17 +260,14 @@ fn append_join(out: &mut Vec<[f32; 3]>, slot: usize, triple: &[microfont::raster
     // Reflex exterior >270 degrees means the two outward normals are
     // more than 90 degrees apart. Only these sharp tips get a circular join.
     if a[0] * b[0] + a[1] * b[1] < -1e-6 {
-        let length = libm::sqrtf((a[0] + b[0]) * (a[0] + b[0]) + (a[1] + b[1]) * (a[1] + b[1]));
-        let middle = [(a[0] + b[0]) * 0.5 / length, (a[1] + b[1]) * 0.5 / length];
+        let length = libm::sqrtf((a[0]+b[0])*(a[0]+b[0]) + (a[1]+b[1])*(a[1]+b[1]));
+        let middle = [(a[0]+b[0])*0.5/length, (a[1]+b[1])*0.5/length];
         let round_code = (code as u32 | 0x8000) as f32;
         // Two bounded tangent envelopes cover the circular sector. Four
         // triangles share one centre; the PS supplies the exact circular edge.
         for (left, right) in [(a, middle), (middle, b)] {
-            let divisor = 1.0 + 4.0 * (left[0] * right[0] + left[1] * right[1]);
-            let tangent = [
-                (left[0] + right[0]) / divisor,
-                (left[1] + right[1]) / divisor,
-            ];
+            let divisor = 1.0 + 4.0*(left[0]*right[0]+left[1]*right[1]);
+            let tangent = [(left[0]+right[0])/divisor, (left[1]+right[1])/divisor];
             for (one, two) in [(left, tangent), (tangent, right)] {
                 out.extend_from_slice(&[
                     [round_code, 0.0, 0.0],
@@ -303,11 +287,7 @@ fn append_join(out: &mut Vec<[f32; 3]>, slot: usize, triple: &[microfont::raster
         [code, b[0], b[1]],
     ]);
 }
-pub(super) fn append_strip_joins(
-    out: &mut Vec<[f32; 3]>,
-    slot: usize,
-    strip: &microfont::raster_line::Strip,
-) {
+pub(super) fn append_strip_joins(out: &mut Vec<[f32; 3]>, slot: usize, strip: &microfont::raster_line::Strip) {
     use microfont::raster_line::Boundary::Junction;
     let points: Vec<_> = strip.iter_points().collect();
     for triple in points.windows(3) {
@@ -315,12 +295,10 @@ pub(super) fn append_strip_joins(
     }
     // The repeated point already supplies the closing line segment. Only the
     // join spanning the end/start boundary is absent from windows(3).
-    if points.len() >= 4
-        && points.first() == points.last()
-        && strip.start == Junction
-        && strip.end == Junction
+    if points.len() >= 4 && points.first() == points.last()
+        && strip.start == Junction && strip.end == Junction
     {
-        append_join(out, slot, &[points[points.len() - 2], points[0], points[1]]);
+        append_join(out, slot, &[points[points.len()-2], points[0], points[1]]);
     }
 }
 
@@ -358,22 +336,15 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
         for quad in microfont::raster_quad::braille_quad_slice(ch).unwrap() {
             let [l, t] = quad.top_left.map(f32::from);
             let [r, b] = quad.bottom_right.map(f32::from);
-            append_quad(
-                &mut vertices,
-                &mut indices,
-                BRAILLE_START + (code - 0x2800) as usize,
-                [[l, t], [r, t], [r, b], [l, b]],
-            );
+            append_quad(&mut vertices, &mut indices, BRAILLE_START + (code - 0x2800) as usize,
+                [[l, t], [r, t], [r, b], [l, b]]);
         }
     }
     upload(&mut resident, &vertices, &indices, Topology::TriangleList, [0; 16])?;
-    for ch in (' '..='~').chain(
-        microfont::raster_line::GLYPH_CHARACTERS
-            .iter()
-            .copied()
-            .filter(|&ch| is_extra_line(ch)),
-    ) {
-        upload_line_glyph(&mut resident, ch, glyph_slot(ch).ok_or("microfont-glyph-slot")?)?;
+    for ch in (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter()
+        .copied().filter(|&ch| is_extra_line(ch))) {
+        upload_line_glyph(&mut resident, ch,
+            glyph_slot(ch).ok_or("microfont-glyph-slot")?)?;
     }
     finish_upload(&mut resident)?;
     crate::log_important!(target:"microfont-mask";
@@ -397,11 +368,7 @@ fn finish_upload(resident: &mut ResidentGlyphs) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn upload_line_glyph(
-    resident: &mut ResidentGlyphs,
-    ch: char,
-    slot: usize,
-) -> Result<(), &'static str> {
+fn upload_line_glyph(resident: &mut ResidentGlyphs, ch: char, slot: usize) -> Result<(), &'static str> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let Some(strips) = microfont::raster_line::glyph_strips(ch) else {
@@ -415,13 +382,7 @@ fn upload_line_glyph(
             let [x, y, z] = strip.adjacency_vertex(i).ok_or("microfont-adjacency")?;
             // Z is a resident VS recipe marker, not a seed-data change.
             // Identify real endpoints by index, including coincident points.
-            let z = if i == 1 {
-                0.25
-            } else if i == strip.points.len() {
-                0.75
-            } else {
-                z
-            };
+            let z = if i == 1 { 0.25 } else if i == strip.points.len() { 0.75 } else { z };
             vertices.push([at[0] + x + 0.5, at[1] + y + 0.5, z]);
         }
         indices.extend(0..vertices.len() as u32);
@@ -444,6 +405,7 @@ fn upload_line_glyph(
     upload(resident, &vertices, &indices, Topology::TriangleList, params)?;
     Ok(())
 }
+
 
 pub(crate) struct CoverageAtlas {
     geometry: ResidentGlyphs,
@@ -482,8 +444,7 @@ impl CoverageAtlas {
         Some([
             (slot % ATLAS_COLUMNS as usize) as u32 * width,
             (slot / ATLAS_COLUMNS as usize) as u32 * height,
-            width,
-            height,
+            width, height,
         ])
     }
     pub(crate) fn config(&self) -> AtlasConfig {
@@ -492,11 +453,7 @@ impl CoverageAtlas {
     fn warm(&mut self, config: AtlasConfig) -> Result<(), &'static str> {
         self.warm_extent(config, config.extent())
     }
-    fn warm_extent(
-        &mut self,
-        config: AtlasConfig,
-        (width, height): (u32, u32),
-    ) -> Result<(), &'static str> {
+    fn warm_extent(&mut self, config: AtlasConfig, (width, height): (u32, u32)) -> Result<(), &'static str> {
         if self.poisoned {
             return Err("microfont-atlas-quarantined");
         }
@@ -532,12 +489,8 @@ impl CoverageAtlas {
         for (i, batch) in self.geometry.batches.iter().enumerate() {
             // Physical-size mode packs independent cells with a stroke-sized
             // gutter. It prevents wide strokes leaking into adjacent masks.
-            if !constants.write(
-                i * 64 + 36,
-                &(config.glyph_height_px.unwrap_or(0) as f32)
-                    .to_bits()
-                    .to_le_bytes(),
-            ) {
+            if !constants.write(i * 64 + 36,
+                &(config.glyph_height_px.unwrap_or(0) as f32).to_bits().to_le_bytes()) {
                 return Err("microfont-constants-size");
             }
             if batch.topology == Topology::LineStripAdj
@@ -640,9 +593,7 @@ pub(crate) async fn wait_for_start_glyph() -> &'static OwnedGlyphMask {
 
 // Called under the atlas service lock, before any regular atlas production.
 fn warm_start_glyph() -> Result<(), &'static str> {
-    if START_GLYPH.get().is_some() {
-        return Ok(());
-    }
+    if START_GLYPH.get().is_some() { return Ok(()); }
     let (_, height) = crate::intel::physical_extent_pixels(START_GLYPH_EM_MM, START_GLYPH_EM_MM)
         .ok_or("microfont-start-glyph-physical-size-unavailable")?;
     let glyph = build_single_glyph_mask('§', height)?;
@@ -662,49 +613,25 @@ pub(crate) struct OwnedGlyphMask {
     pub(crate) pixels: Vec<u8>,
 }
 
-pub(crate) fn build_single_glyph_mask(
-    ch: char,
-    em_height_px: u32,
-) -> Result<OwnedGlyphMask, &'static str> {
+pub(crate) fn build_single_glyph_mask(ch: char, em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
     if microfont::raster_line::glyph_strips(ch).is_none() {
         return Err("microfont-single-glyph-missing");
     }
     // A single glyph can be much larger than a full-atlas cell. Its 6x11
     // geometry and the existing native-line/cap/join shaders remain identical.
-    let config = AtlasConfig {
-        glyph_height_px: Some(em_height_px),
-        line_width_px: 16.0,
-        ..AtlasConfig::default()
-    };
-    if !(11..=4000).contains(&em_height_px) {
-        return Err("microfont-single-glyph-size");
-    }
+    let config = AtlasConfig { glyph_height_px: Some(em_height_px), line_width_px: 16.0, ..AtlasConfig::default() };
+    if !(11..=4000).contains(&em_height_px) { return Err("microfont-single-glyph-size"); }
     let (width, height) = config.cell_extent();
-    let mut geometry = ResidentGlyphs {
-        batches: Vec::new(),
-        bytes: 0,
-        constants: None,
-    };
+    let mut geometry = ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None };
     upload_line_glyph(&mut geometry, ch, 0)?;
     finish_upload(&mut geometry)?;
-    let mut glyph = CoverageAtlas {
-        geometry,
-        mask: None,
-        config: None,
-        generation: 0,
-        poisoned: false,
-    };
+    let mut glyph = CoverageAtlas { geometry, mask: None, config: None, generation: 0, poisoned: false };
     glyph.warm_extent(config, (width, height))?;
     let surface = glyph.surface();
     let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;
-    if !crate::intel::dma_flush_strided_row_spans(&[crate::intel::DmaFlushRows::new(
-        source,
-        width as usize,
-        surface.pitch_bytes as usize,
-        height as usize,
-    )]) {
-        return Err("microfont-single-glyph-cache");
-    }
+    if !crate::intel::dma_flush_strided_row_spans(&[
+        crate::intel::DmaFlushRows::new(source, width as usize, surface.pitch_bytes as usize, height as usize),
+    ]) { return Err("microfont-single-glyph-cache"); }
     let mut pixels = alloc::vec![0; width as usize * height as usize];
     for y in 0..height as usize {
         for x in 0..width as usize {
@@ -713,15 +640,8 @@ pub(crate) fn build_single_glyph_mask(
             };
         }
     }
-    if !pixels.iter().any(|&coverage| coverage != 0) {
-        return Err("microfont-single-glyph-empty");
-    }
-    Ok(OwnedGlyphMask {
-        width,
-        height,
-        em_height_px,
-        pixels,
-    })
+    if !pixels.iter().any(|&coverage| coverage != 0) { return Err("microfont-single-glyph-empty"); }
+    Ok(OwnedGlyphMask { width, height, em_height_px, pixels })
 }
 
 /// Immutable service-owned R8 snapshot. Keeping this data alive does not hold
@@ -739,11 +659,9 @@ impl OwnedAlphaAtlas {
     pub(crate) fn glyph(&self, ch: char) -> Option<&[u8]> {
         // Unminted line slots stay blank for the demo, but are absent to font
         // consumers so they can apply their missing-glyph policy.
-        if ch != ' '
-            && microfont::raster_line::glyph_strips(ch).is_none()
+        if ch != ' ' && microfont::raster_line::glyph_strips(ch).is_none()
             && !('\u{2500}'..='\u{259f}').contains(&ch)
-            && !('\u{2800}'..='\u{28ff}').contains(&ch)
-        {
+            && !('\u{2800}'..='\u{28ff}').contains(&ch) {
             return None;
         }
         let slot = glyph_slot(ch)?;
@@ -751,15 +669,9 @@ impl OwnedAlphaAtlas {
         self.pixels.get(slot * bytes..(slot + 1) * bytes)
     }
     pub(crate) fn glyphs(&self) -> impl Iterator<Item = (char, &[u8])> + '_ {
-        (' '..='~')
-            .chain('\u{2500}'..='\u{259f}')
-            .chain('\u{2800}'..='\u{28ff}')
-            .chain(
-                microfont::raster_line::GLYPH_CHARACTERS
-                    .iter()
-                    .copied()
-                    .filter(|&ch| is_extra_line(ch)),
-            )
+        (' '..='~').chain('\u{2500}'..='\u{259f}').chain('\u{2800}'..='\u{28ff}')
+            .chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
+                .filter(|&ch| is_extra_line(ch)))
             .filter_map(|ch| self.glyph(ch).map(|pixels| (ch, pixels)))
     }
 }
@@ -776,12 +688,10 @@ pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<OwnedAlphaAt
     with_warmed_atlas(config, |atlas| {
         let surface = atlas.surface();
         let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;
-        if !crate::intel::dma_flush_strided_row_spans(&[crate::intel::DmaFlushRows::new(
-            source,
-            surface.width as usize,
-            surface.pitch_bytes as usize,
-            surface.height as usize,
-        )]) {
+        if !crate::intel::dma_flush_strided_row_spans(&[
+            crate::intel::DmaFlushRows::new(source, surface.width as usize,
+                surface.pitch_bytes as usize, surface.height as usize),
+        ]) {
             return Err("microfont-shell3-alpha-cache");
         }
         let (glyph_width, glyph_height) = config.cell_extent();
@@ -793,9 +703,8 @@ pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<OwnedAlphaAt
             for y in 0..glyph_height as usize {
                 for x in 0..glyph_width as usize {
                     pixels[slot * glyph_bytes + y * glyph_width as usize + x] = unsafe {
-                        core::ptr::read_volatile(
-                            source.add((top + y) * surface.pitch_bytes as usize + left + x),
-                        )
+                        core::ptr::read_volatile(source.add(
+                            (top + y) * surface.pitch_bytes as usize + left + x))
                     };
                 }
             }
@@ -836,16 +745,7 @@ pub(crate) fn stamp_preview_colored(
     inks: &[[u8; 4]],
     background: [u8; 4],
 ) -> Result<usize, &'static str> {
-    stamp_preview_colored_with_header(
-        frame,
-        config,
-        glyphs,
-        columns,
-        display_scale,
-        inks,
-        background,
-        None,
-    )
+    stamp_preview_colored_with_header(frame, config, glyphs, columns, display_scale, inks, background, None)
 }
 
 /// Optional fixed-size status row, separate from the native-line glyphs.
@@ -859,11 +759,7 @@ pub(crate) fn stamp_preview_colored_with_header(
     background: [u8; 4],
     header: Option<&str>,
 ) -> Result<usize, &'static str> {
-    let header_height = if header.is_some() {
-        PREVIEW_HEADER_HEIGHT
-    } else {
-        0
-    };
+    let header_height = if header.is_some() { PREVIEW_HEADER_HEIGHT } else { 0 };
     if inks.len() != 1 && inks.len() != glyphs.len() {
         return Err("microfont-stamp-colors");
     }
@@ -875,35 +771,22 @@ pub(crate) fn stamp_preview_colored_with_header(
             let scale = atlas.config().glyph_scale;
             let (cell_width, cell_height) = if atlas.config().glyph_height_px.is_some() {
                 atlas.config().cell_extent()
-            } else {
-                (6 * display_scale, 11 * display_scale)
-            };
+            } else { (6 * display_scale, 11 * display_scale) };
             if columns == 0
                 || display_scale == 0
                 || (atlas.config().glyph_height_px.is_none() && scale % display_scale != 0)
                 || view.width != columns as u32 * cell_width
-                || view.height
-                    != (glyphs.len().div_ceil(columns)) as u32 * cell_height + header_height
+                || view.height != (glyphs.len().div_ceil(columns)) as u32 * cell_height + header_height
             {
                 return Err("microfont-stamp-shape");
             }
             let header_width = view.width.saturating_sub(8) as usize / 2;
-            let header_mask = header
-                .map(|text| {
-                    let mut pixels = alloc::vec![0u8; header_width * microfont::FHEIGHT];
-                    microfont::stamp_bytes(
-                        &mut pixels,
-                        header_width,
-                        microfont::FHEIGHT,
-                        0,
-                        0,
-                        text.as_bytes(),
-                        255u8,
-                    )
-                    .map_err(|_| "microfont-header-text")?;
-                    Ok::<_, &'static str>(pixels)
-                })
-                .transpose()?;
+            let header_mask = header.map(|text| {
+                let mut pixels = alloc::vec![0u8; header_width * microfont::FHEIGHT];
+                microfont::stamp_bytes(&mut pixels, header_width, microfont::FHEIGHT,
+                    0, 0, text.as_bytes(), 255u8).map_err(|_| "microfont-header-text")?;
+                Ok::<_, &'static str>(pixels)
+            }).transpose()?;
             let source = crate::phys::phys_to_virt(mask.phys as usize) as *mut u8;
             let spans = [
                 crate::intel::DmaFlushRows::new(
@@ -928,19 +811,16 @@ pub(crate) fn stamp_preview_colored_with_header(
                 for x in 0..view.width {
                     let in_header = y < header_height;
                     let body_y = y.saturating_sub(header_height);
-                    let cell =
-                        (body_y / cell_height) as usize * columns + (x / cell_width) as usize;
+                    let cell = (body_y / cell_height) as usize * columns
+                        + (x / cell_width) as usize;
                     let coverage = glyphs
-                        .get(cell)
-                        .filter(|_| !in_header)
+                        .get(cell).filter(|_| !in_header)
                         .and_then(|&ch| atlas.glyph_rect(ch))
                         .map_or(0, |rect| {
                             let sx = rect[0]
-                                + ((2 * (x % cell_width) + 1) * rect[2] / (2 * cell_width))
-                                    .min(rect[2] - 1);
+                                + ((2 * (x % cell_width) + 1) * rect[2] / (2 * cell_width)).min(rect[2] - 1);
                             let sy = rect[1]
-                                + ((2 * (body_y % cell_height) + 1) * rect[3] / (2 * cell_height))
-                                    .min(rect[3] - 1);
+                                + ((2 * (body_y % cell_height) + 1) * rect[3] / (2 * cell_height)).min(rect[3] - 1);
                             unsafe {
                                 core::ptr::read_volatile(
                                     source.add((sy * mask.pitch_bytes + sx) as usize),
@@ -949,24 +829,16 @@ pub(crate) fn stamp_preview_colored_with_header(
                         });
                     partial += usize::from(coverage != 0 && coverage != 255);
                     nonzero += usize::from(coverage != 0);
-                    let ink = if inks.len() == 1 {
-                        inks[0]
-                    } else {
-                        inks.get(cell).copied().unwrap_or([0; 4])
-                    };
+                    let ink = if inks.len() == 1 { inks[0] }
+                        else { inks.get(cell).copied().unwrap_or([0; 4]) };
                     let pixel = if in_header {
                         let hx = x.saturating_sub(4) as usize / 2;
                         let hy = y.saturating_sub(4) as usize / 2;
-                        let a = if x >= 4 && y >= 4 && hx < header_width && hy < microfont::FHEIGHT
-                        {
+                        let a = if x >= 4 && y >= 4 && hx < header_width && hy < microfont::FHEIGHT {
                             header_mask.as_ref().unwrap()[hy * header_width + hx]
-                        } else {
-                            0
-                        };
+                        } else { 0 };
                         tint_coverage(a, [48, 64, 96, 255], background)
-                    } else {
-                        tint_coverage(coverage, ink, background)
-                    };
+                    } else { tint_coverage(coverage, ink, background) };
                     unsafe {
                         core::ptr::write_unaligned(
                             view.virt

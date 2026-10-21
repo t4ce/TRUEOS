@@ -81,10 +81,6 @@ mod backing {
     }
 
     impl Mapping {
-        pub(super) fn new(len: usize) -> Option<Self> {
-            Self::new_for_vm(len, None)
-        }
-
         pub(super) fn new_for_vm(len: usize, vm_id: Option<u8>) -> Option<Self> {
             // The Hull's EPT already admits its private heap. Host PMM stack
             // pages are not guest memory and cannot back shared stack pointers.

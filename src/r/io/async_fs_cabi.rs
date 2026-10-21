@@ -745,10 +745,6 @@ pub(crate) fn start_remove(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Remove { path })
 }
 
-pub(crate) fn start_rename(owner: u32, source: String, destination: String) -> i32 {
-    start_rename_with_policy(owner, source, destination, false)
-}
-
 pub(crate) fn start_rename_with_policy(
     owner: u32,
     source: String,

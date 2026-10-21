@@ -9,7 +9,6 @@ pub(crate) enum AbiOperation {
     None = 0,
     Alloc = 1,
     Dealloc = 2,
-    Realloc = 3,
     Mutex = 4,
     Condvar = 5,
     Stat = 6,
@@ -24,6 +23,7 @@ impl AbiOperation {
             0 => "none",
             1 => "alloc",
             2 => "dealloc",
+            // Preserve the historical value for older diagnostic snapshots.
             3 => "realloc",
             4 => "mutex",
             5 => "condvar",

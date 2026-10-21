@@ -57,13 +57,10 @@ static UI4_COMPOSITOR_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static GPGPU_RECT_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
 static GPGPU_SPRITE_QUAD_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
     Mutex::new(None);
-static HELIO_SPRITE_ATLAS_SURFACE: spin::Once<GpgpuRgba8Surface> = spin::Once::new();
 // Font owns a separate descriptor allocation even though its private PPGTT can
 // reuse the ordinary sprite descriptor VA.  An ambiguous Font submission pins
 // these exact bytes without preventing UI4 or the system-service context from
 // preparing their own worklists.
-static FONT_SPRITE_QUAD_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
-    Mutex::new(None);
 static UI4_COMPOSITOR_SPRITE_QUAD_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
     Mutex::new(None);
 static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
@@ -79,7 +76,6 @@ static FONT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 // Its tag, lock, state, batch, result page, PPGTT, and quarantine state are all
 // independent from system-service direct-RCS work.
 static EXECUTION_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
-static LFM25_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static EXECUTION_RCS_DETACHED_TAG: AtomicU64 = AtomicU64::new(0);
 static EXECUTION_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static LFM25_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
@@ -108,8 +104,6 @@ static SPRITE_QUAD_WORKLIST_RAN: AtomicBool = AtomicBool::new(false);
 static SPRITE_QUAD_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
 
 static SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS: AtomicU32 = AtomicU32::new(0);
-static HELIO_SPRITE_TILEMAP_REJECTION_LOGS: AtomicU32 = AtomicU32::new(0);
-static FONT_SPRITE_QUAD_WORKLIST_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
 static DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);

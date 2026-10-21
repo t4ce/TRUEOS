@@ -91,7 +91,6 @@ static CONTENT_REJECT_EVIDENCE_MISMATCH: AtomicU64 = AtomicU64::new(0);
 static CONTENT_REJECT_TYPE_REQUIRED: AtomicU64 = AtomicU64::new(0);
 static CONTENT_REJECT_UNREGISTERED: AtomicU64 = AtomicU64::new(0);
 static CONTENT_REJECT_LEGACY_DOWNGRADE: AtomicU64 = AtomicU64::new(0);
-static CONTENT_REJECT_TYPE_MISMATCH: AtomicU64 = AtomicU64::new(0);
 static CONTENT_REJECT_OTHER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,7 +100,6 @@ pub enum ContentIdentityRejectReason {
     TypeRequired,
     UnregisteredType,
     LegacyDowngrade,
-    TypeMismatch,
     Other,
 }
 
@@ -113,7 +111,6 @@ impl ContentIdentityRejectReason {
             Self::TypeRequired => "type-required",
             Self::UnregisteredType => "unregistered-type",
             Self::LegacyDowngrade => "legacy-downgrade",
-            Self::TypeMismatch => "type-mismatch",
             Self::Other => "other",
         }
     }
@@ -146,9 +143,6 @@ pub fn record_type_reject(reason: ContentIdentityRejectReason) {
         }
         ContentIdentityRejectReason::LegacyDowngrade => {
             CONTENT_REJECT_LEGACY_DOWNGRADE.fetch_add(1, Ordering::Relaxed);
-        }
-        ContentIdentityRejectReason::TypeMismatch => {
-            CONTENT_REJECT_TYPE_MISMATCH.fetch_add(1, Ordering::Relaxed);
         }
         ContentIdentityRejectReason::Other => {
             CONTENT_REJECT_OTHER.fetch_add(1, Ordering::Relaxed);

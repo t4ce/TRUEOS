@@ -76,6 +76,7 @@ const BLUEPRINT_LIFECYCLE_PHASE_ARMING: u8 = 3;
 #[cfg(feature = "legacy_vm_checkpoint")]
 const BLUEPRINT_REPLICATION_CHECKPOINT_MAX_BYTES: usize = trueos_vm::vmcall::PAYLOAD_CAP;
 const BLUEPRINT_LIFECYCLE_PHASE_RUNNING: u8 = 0;
+#[cfg(feature = "legacy_vm_checkpoint")]
 const BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE: u8 = 1;
 #[cfg(feature = "legacy_vm_checkpoint")]
 const BLUEPRINT_LIFECYCLE_PHASE_READY: u8 = 2;
@@ -3098,6 +3099,7 @@ pub fn stage_blueprint_launch(
         ));
         return Err(StartError::ConsoleUnsupported);
     }
+    let direct_terminal_handoff = false;
     let console_route = if direct_terminal_handoff {
         BlueprintConsoleRoute::NetShellDirect
     } else {

@@ -246,7 +246,7 @@ pub mod kfs {
 pub mod env {
     use super::{BTreeMap, String, Vec};
     use crate::shell3::MatrixTarget;
-    use core::{ffi::c_char, ptr, slice, str};
+    use core::str;
 
     const VM_CONTEXT_SLOTS: usize = crate::allcaps::hv::VM_ID_LIMIT;
     const HOST_CONTEXT_SLOTS: usize = 64;
@@ -256,7 +256,6 @@ pub mod env {
     struct LaunchContext {
         args: Vec<String>,
         vars: BTreeMap<String, String>,
-        console_target: Option<MatrixTarget>,
         app_fs_root: Option<String>,
     }
 
@@ -314,7 +313,7 @@ pub mod env {
     pub(crate) fn with_launch_context_console_and_fs_root<R>(
         args: Vec<String>,
         vars: BTreeMap<String, String>,
-        console_target: Option<MatrixTarget>,
+        _console_target: Option<MatrixTarget>,
         app_fs_root: Option<String>,
         f: impl FnOnce() -> R,
     ) -> R {
@@ -325,7 +324,6 @@ pub mod env {
             stack.push(LaunchContext {
                 args,
                 vars,
-                console_target,
                 app_fs_root,
             });
         }

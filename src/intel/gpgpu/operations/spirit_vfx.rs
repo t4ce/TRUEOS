@@ -266,7 +266,6 @@ pub(crate) fn submit_spirit_vfx_frame(
     let _submit_guard = EXECUTION_RCS_SUBMIT_LOCK.try_lock()?;
     if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
         || SPIRIT_VFX_PENDING.lock().is_some()
-        || LAB256_SPIRIT_PENDING.lock().is_some()
     {
         return None;
     }

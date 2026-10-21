@@ -5,7 +5,6 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::future::Future;
@@ -33,7 +32,6 @@ static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static SERVICE: Mutex<ServiceState> = Mutex::new(ServiceState::new());
 
-pub type CompletionCallback = Box<dyn FnOnce(CallResult) + Send + 'static>;
 pub type CallResult = Result<Completion, Error>;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -89,7 +87,6 @@ enum Delivery {
         waiter: Option<Waker>,
         detached: bool,
     },
-    Callback(Option<CompletionCallback>),
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -280,7 +277,7 @@ fn take_next_request() -> Option<Request> {
 }
 
 fn finish_call(call_id: CallId, result: CallResult) {
-    let (waker, callback) = {
+    let waker = {
         let mut service = SERVICE.lock();
         let Some(index) = service
             .calls
@@ -302,20 +299,12 @@ fn finish_call(call_id: CallId, result: CallResult) {
                 } else {
                     service.calls[index].result = Some(result);
                 }
-                (waker, None)
-            }
-            Delivery::Callback(callback) => {
-                let callback = callback.take();
-                service.calls.remove(index);
-                (None, callback)
+                waker
             }
         }
     };
     if let Some(waker) = waker {
         waker.wake();
-    }
-    if let Some(callback) = callback {
-        callback(result);
     }
 }
 
