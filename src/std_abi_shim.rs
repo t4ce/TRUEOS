@@ -119,7 +119,6 @@ const TRUEOS_SA_SIGINFO: c_int = 0x0000_0004;
 const TRUEOS_SIGKILL: c_int = 9;
 const TRUEOS_SIGSTOP: c_int = 19;
 const TRUEOS_SIGNAL_MAX: c_int = 64;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRUEOS_ENOMEM: c_int = 12;
 const TRUEOS_O_ACCMODE: c_int = 0x3;
 const TRUEOS_O_RDONLY: c_int = 0;

@@ -241,10 +241,6 @@ impl fmt::Display for LiveUpdateError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NonReplicatableVmPolicy {
-    #[expect(
-        dead_code,
-        reason = "safe default for any future live-update entry point without UI confirmation"
-    )]
     Reject,
     DiscardAtCommit,
 }
@@ -1921,10 +1917,10 @@ fn stage_candidate(kernel: &[u8]) -> Result<StagedCandidate, LiveUpdateError> {
     if trampoline_len == 0 || trampoline_len > MAX_TRAMPOLINE_BYTES {
         return Err(LiveUpdateError::Incompatible("transition trampoline size is invalid"));
     }
-    let ap_park_offset = (trueos_live_update_ap_park_trampoline as usize)
+    let ap_park_offset = (trueos_live_update_ap_park_trampoline as *const () as usize)
         .checked_sub(trampoline_start)
         .ok_or(LiveUpdateError::Incompatible("AP trampoline is outside transition section"))?;
-    let bsp_commit_offset = (trueos_live_update_bsp_commit_trampoline as usize)
+    let bsp_commit_offset = (trueos_live_update_bsp_commit_trampoline as *const () as usize)
         .checked_sub(trampoline_start)
         .ok_or(LiveUpdateError::Incompatible("BSP trampoline is outside transition section"))?;
     if ap_park_offset >= trampoline_len || bsp_commit_offset >= trampoline_len {

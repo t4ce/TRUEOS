@@ -164,6 +164,6 @@ pub fn tcp_write(vm_id: u8, bytes: &[u8]) -> Result<usize, VmNetStatus> {
     Ok(bytes.len())
 }
 
-pub fn tcp_read(vm_id: u8, out: &mut [u8]) -> Result<usize, VmNetStatus> {
+pub fn tcp_read(_vm_id: u8, _out: &mut [u8]) -> Result<usize, VmNetStatus> {
     Err(VmNetStatus::Unsupported)
 }

@@ -418,7 +418,7 @@ pub mod env {
 
 
 
-    pub(crate) fn retarget_console_slot(requested: &str) -> bool {
+    pub(crate) fn retarget_console_slot(_requested: &str) -> bool {
         false
 }
 

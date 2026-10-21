@@ -463,6 +463,8 @@ impl InputBroker {
         combo_id: u32,
         vcursor: bool,
     ) -> bool {
+        #[cfg(not(feature = "gridpaper"))]
+        let _ = (combo_id, vcursor);
         let source = self.cursors[cursor_index].source;
         let color = self.cursors[cursor_index].color;
         let change = super::cursor_frame_inout::select_frame(
@@ -1500,6 +1502,8 @@ impl InputBroker {
             return;
         }
         let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
+        #[cfg(not(feature = "gridpaper"))]
+        let _ = virtual_keyboard;
         let Some(index) = self.keyboard_route_index(&event, combo_id, true) else {
             return;
         };

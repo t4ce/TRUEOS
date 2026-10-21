@@ -71,7 +71,6 @@ impl WifiNetwork {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiState {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     NoHardware,
     Disabled,
     Disconnected,
@@ -85,7 +84,6 @@ pub enum WifiState {
 
 pub trait WifiDriver: NetworkDriver + Send {
     fn wifi_state(&self) -> WifiState;
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn scan(&mut self) -> Result<(), &'static str>;
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn scan_results(&self) -> Vec<WifiNetwork>;
@@ -98,11 +96,9 @@ pub trait WifiDriver: NetworkDriver + Send {
 }
 
 pub(crate) static WIFI_DRIVER: Mutex<Option<Box<dyn WifiDriver>>> = Mutex::new(None);
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static WIFI_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Deferred WiFi PCI location (bus, device, function) — set during boot, probed on first use
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DEFERRED_PCI: Mutex<Option<(u8, u8, u8)>> = Mutex::new(None);
 
 /// Last scan results (cached for UI)
@@ -110,7 +106,6 @@ static DEFERRED_PCI: Mutex<Option<(u8, u8, u8)>> = Mutex::new(None);
 static SCAN_RESULTS: Mutex<Vec<WifiNetwork>> = Mutex::new(Vec::new());
 
 /// Current connection state
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static CONNECTION_STATE: Mutex<WifiState> = Mutex::new(WifiState::NoHardware);
 
 /// Currently connected SSID
@@ -137,7 +132,6 @@ pub fn has_active_driver() -> bool {
     WIFI_ACTIVE.load(Ordering::Relaxed)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn lazy_probe() -> Result<(), &'static str> {
     // Already probed?
     if WIFI_ACTIVE.load(Ordering::Relaxed) {
@@ -193,7 +187,6 @@ pub fn signal_strength() -> Option<i8> {
         .and_then(|d| d.signal_strength())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ensure_started() -> Result<(), &'static str> {
     // Lazy probe if not yet done (deferred from boot)
     if !WIFI_ACTIVE.load(Ordering::Relaxed) {
@@ -221,7 +214,6 @@ pub fn ensure_started() -> Result<(), &'static str> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn start_scan() -> Result<(), &'static str> {
     // Lazy probe + auto-start
     ensure_started()?;
@@ -300,7 +292,6 @@ pub fn disconnect() -> Result<(), &'static str> {
     Ok(())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_driver(driver: Box<dyn WifiDriver>) {
     crate::log!("wifi: WiFi driver active: {}", driver.info().name);
     *WIFI_DRIVER.lock() = Some(driver);
@@ -308,7 +299,6 @@ pub fn set_driver(driver: Box<dyn WifiDriver>) {
     *CONNECTION_STATE.lock() = WifiState::Disconnected;
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn probe_pci(pci_dev: &PciDevice) -> bool {
     // AX211 is an integrated Gen2 device. Keep it out of the legacy 4965
     // probe and let the dedicated path perform the single PCI claim.

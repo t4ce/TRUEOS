@@ -2714,7 +2714,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS => {
-            let dimensions = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_output_dimensions();
+            let dimensions = if arg0 != 0 && arg1 != 0 {
+                crate::intel::physical_extent_pixels(arg0 as u32, arg1 as u32)
+                    .map(|(w, h)| (u64::from(w) << 32) | u64::from(h)).unwrap_or(0)
+            } else {
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_output_dimensions()
+            };
             write_response(vm_id, seq, STATUS_OK, dimensions, 0);
             DispatchOutcome::Resume
         }

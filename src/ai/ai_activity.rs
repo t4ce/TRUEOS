@@ -27,6 +27,7 @@ impl AiActivitySource {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(not(any(feature = "trueos_lumen", feature = "trueos_ttstt")), expect(dead_code, reason = "Spirit consumes phases produced by optional AI features"))]
 pub(crate) enum AiReasoningPhase {
     Started,
     Finished,

@@ -31,20 +31,15 @@ const PCI_CAP_ID_MSI: u8 = 0x05;
 const PCI_CAP_ID_PCI_EXPRESS: u8 = 0x10;
 const PCI_CAP_ID_MSIX: u8 = 0x11;
 const PCI_MSI_CONTROL: u16 = 0x02;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_ADDRESS_LO: u16 = 0x04;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_ADDRESS_HI: u16 = 0x08;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_DATA_32: u16 = 0x08;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_DATA_64: u16 = 0x0C;
 const PCI_MSI_ENABLE: u16 = 1 << 0;
 const PCI_MSI_MULTIPLE_MESSAGE_ENABLE: u16 = 0b111 << 1;
 const PCI_MSIX_CONTROL: u16 = 0x02;
 const PCI_MSIX_FUNCTION_MASK: u16 = 1 << 14;
 const PCI_MSIX_ENABLE: u16 = 1 << 15;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_64_BIT_CAPABLE: u16 = 1 << 7;
 const PCI_EXP_DEVCAP: u16 = 0x04;
 const PCI_EXP_DEVCTL: u16 = 0x08;
@@ -674,7 +669,6 @@ pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
 }
 
 /// Enable BAR memory decoding while explicitly leaving DMA/bus mastering disabled.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn enable_mem_space_only(bus: u8, slot: u8, function: u8) {
     let mut cmd = config_read_u16(bus, slot, function, 0x04);
     cmd |= PCI_COMMAND_MEM_SPACE;
@@ -691,7 +685,6 @@ pub fn enable_mem_space_only(bus: u8, slot: u8, function: u8) {
 /// DMA: an MSI is a device-originated Memory Write TLP, and PCIe suppresses it while
 /// Bus Master Enable is clear. Enabling the command bit grants requester permission;
 /// it does not create a DMA/requester datapath in the endpoint firmware.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn enable_single_msi(
     bus: u8,
     slot: u8,

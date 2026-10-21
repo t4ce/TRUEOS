@@ -5,7 +5,6 @@ pub(crate) fn fill_rect_rgba8_stats(
     rect: GpgpuRect,
     color_rgba: u32,
 ) -> GpgpuSubmitStats {
-    let started = direct_rcs_now_tick();
     if !dst.is_valid() || clip_gpgpu_rect_to_surface(rect, dst.width, dst.height).is_none() {
         return GpgpuSubmitStats::default();
     }

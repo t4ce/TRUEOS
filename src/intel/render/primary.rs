@@ -575,7 +575,6 @@ enum ResidentSceneIncompleteStage {
 }
 
 impl ResidentSceneIncompleteStage {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn error(self) -> &'static str {
         match self {
             Self::Geometry => "resident-scene-geometry-incomplete",
@@ -634,9 +633,7 @@ pub(crate) struct ResidentSceneFrameResult {
     /// True only when geometry, resolve, coverage, and any compatibility copy
     /// completed. This remains separate from `release_fence`: a caller that
     /// appends one final GPU writer may deliberately defer the release proof.
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) frame_complete: bool,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     incomplete_stage: Option<ResidentSceneIncompleteStage>,
     /// Present only after the final GPU writer's cache release plus ordered
     /// post-sync retirement marker completed for the returned UI4 allocation.
@@ -644,7 +641,6 @@ pub(crate) struct ResidentSceneFrameResult {
 }
 
 impl ResidentSceneFrameResult {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn completion_error(&self) -> Option<&'static str> {
         match self.incomplete_stage {
             Some(stage) => Some(stage.error()),
@@ -1641,7 +1637,7 @@ fn stage_resident_scene_secondary(
         line_width_raw,
         clip_adjacency,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
-        { TRIANGLE_DEFAULT_FRONT_END_CONTRACT },
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         viewport_translation_px,
         BackendProbeMode::MesaLike,
         // All scene secondaries execute below one primary batch. They only

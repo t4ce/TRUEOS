@@ -724,6 +724,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_frame_was_presented_v1(window_id: u32, publish_serial: u64)
     -> i32;
     pub fn trueos_cabi_ui4_scene_output_dimensions() -> u64;
+    pub fn trueos_cabi_ui4_scene_physical_extent_v1(width_mm: u32, height_mm: u32) -> u64;
     pub fn trueos_cabi_clipboard_command_v1(
         window_id: u32,
         command: u32,

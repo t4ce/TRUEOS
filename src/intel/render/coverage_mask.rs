@@ -192,7 +192,6 @@ pub(crate) fn render_resident_coverage_mask(
         return Err("render-busy");
     }
     let _summary_only = RenderSummaryOnlyGuard::enter();
-    let started_ns = crate::chronos::monotonic_nanos();
     let result = (|| {
         let dev = crate::intel::claimed_device().ok_or("no-device")?;
         let warm = warm_state().ok_or("render-boot-not-ready")?;
@@ -233,7 +232,6 @@ pub(crate) fn render_resident_coverage_mask(
                 draws.len(), draws.len().div_ceil(RESIDENT_SCENE_MAX_DRAWS),
                 RESIDENT_COVERAGE_MASK_MAX_DRAWS, RESIDENT_SCENE_MAX_DRAWS);
         }
-        let frame_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
         Ok(ResidentSceneFrameResult {
             completed_draws: if geometry.completed { draws.len() } else { 0 },
             requested_draws: draws.len(),

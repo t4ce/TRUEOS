@@ -116,6 +116,7 @@ pub(crate) const UI4_COMPOSE_FLAG_BASE_XRGB: u32 = 1 << 0;
 /// windows.  The compositor chooses the topmost covering frame and writes its
 /// already-authored RGBA pixel once; transparent pixels then belong to the
 /// Slot0 plane itself and are blended only by display hardware over Pipe A.
+#[expect(dead_code, reason = "Optional compositor ABI mode; Slot0 currently uses source-over blending")]
 pub(crate) const UI4_COMPOSE_FLAG_OPAQUE_RECTS: u32 = 1 << 2;
 
 #[derive(Copy, Clone, Debug)]

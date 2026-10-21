@@ -506,7 +506,6 @@ pub(crate) struct ResidentChurnForward {
     vertex_gpu_addr: u64,
     vertex_stride: u32,
     vertex_format: TriangleVertexFormat,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     vertex_count: u32,
     vertex_bytes: u32,
     index_gpu_addr: u64,
@@ -738,7 +737,6 @@ struct TriangleProbeStateLayout {
     cc_viewport_offset_bytes: u32,
     sf_clip_viewport_offset_bytes: u32,
     scissor_rect_offset_bytes: u32,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     push_constant_offset_bytes: u32,
     /// Retained Microfont parameter block; fixed metadata is never restaged.
     push_constant_gpu_addr: u64,

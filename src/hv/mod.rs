@@ -3476,9 +3476,9 @@ pub(crate) fn blueprint_console_konsole_size(vm_id: u8) -> (u32, u32) {
 
 pub(crate) fn blueprint_console_konsole_begin_frame(
     vm_id: u8,
-    cols: usize,
-    rows: usize,
-    terminal_handoff: bool,
+    _cols: usize,
+    _rows: usize,
+    _terminal_handoff: bool,
 ) -> (u32, u32) {
     blueprint_console_konsole_size(vm_id)
 }
@@ -3803,7 +3803,7 @@ pub(crate) fn blueprint_terminal_lease_poll_reentry(
 }
 
 
-fn blueprint_console_text_lines(vm_id: u8, target: Option<&MatrixTarget>, data: &[u8]) {
+fn blueprint_console_text_lines(vm_id: u8, _target: Option<&MatrixTarget>, data: &[u8]) {
     crate::log!("blueprint vm{}: {}\n", vm_id, AllocString::from_utf8_lossy(data));
 }
 
@@ -5608,11 +5608,11 @@ fn setup_vmcs_host_and_controls(
             vmwrite(VMCS_GUEST_GDTR_BASE, gdtr.base.as_u64())?;
             vmwrite(VMCS_GUEST_IDTR_BASE, idtr.base.as_u64())?;
 
-            vmwrite(VMCS_GUEST_CS_AR, { 0xA09B })?;
+            vmwrite(VMCS_GUEST_CS_AR, 0xA09B)?;
             vmwrite(VMCS_GUEST_SS_AR, 0xC093)?;
             vmwrite(VMCS_GUEST_DS_AR, 0xC093)?;
             vmwrite(VMCS_GUEST_ES_AR, 0xC093)?;
-            vmwrite(VMCS_GUEST_FS_AR, { 0x10000 })?;
+            vmwrite(VMCS_GUEST_FS_AR, 0x10000)?;
             vmwrite(VMCS_GUEST_GS_AR, 0x10000)?;
             vmwrite(VMCS_GUEST_TR_AR, 0x008B)?;
             vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
@@ -5809,7 +5809,7 @@ fn setup_vmcs_host_and_controls(
     vmwrite(VMCS_GUEST_GDTR_BASE, gdtr.base.as_u64())?;
     vmwrite(VMCS_GUEST_IDTR_BASE, idtr.base.as_u64())?;
 
-    vmwrite(VMCS_GUEST_CS_AR, { 0xA09B })?;
+    vmwrite(VMCS_GUEST_CS_AR, 0xA09B)?;
     vmwrite(VMCS_GUEST_SS_AR, if ss == 0 { 0x10000 } else { 0xC093 })?;
     vmwrite(VMCS_GUEST_DS_AR, if ds == 0 { 0x10000 } else { 0xC093 })?;
     vmwrite(VMCS_GUEST_ES_AR, if es == 0 { 0x10000 } else { 0xC093 })?;

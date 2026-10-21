@@ -25,4 +25,5 @@
 # Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
-2564a3b40f48b5297c2b0a4ed60f42fc397f223b9e36a071246bd3febab86482
+# Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
+82990c8edc159c03b41aeb24485c5b2b801cdf67b48053233c8fa888d87c9331

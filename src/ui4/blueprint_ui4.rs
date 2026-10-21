@@ -2484,6 +2484,20 @@ pub extern "C" fn trueos_cabi_ui4_scene_output_dimensions() -> u64 {
     pack_u32_pair(width, height)
 }
 
+/// Convert millimetres using the active output's EDID metrics; zero means unavailable.
+pub extern "C" fn trueos_cabi_ui4_scene_physical_extent_v1(width_mm: u32, height_mm: u32) -> u64 {
+    if width_mm == 0 || height_mm == 0 { return 0; }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, extent) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS,
+            u64::from(width_mm), u64::from(height_mm), &[], &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK { extent } else { 0 };
+    }
+    crate::intel::physical_extent_pixels(width_mm, height_mm)
+        .map(|(w, h)| pack_u32_pair(w, h)).unwrap_or(0)
+}
+
 /// Take the next dock/restore extent notification for this Blueprint
 /// window. A return value of one means the queue is currently empty; zero
 /// writes one event. The producer chooses whether and when to resize.
@@ -6726,9 +6740,7 @@ fn finish_emulator_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 else {
                     return ERROR_NOT_FOUND;
                 };
-                let BlueprintSpriteSource::Uploaded(owned) = source else {
-                    return ERROR_UI4;
-                };
+                let BlueprintSpriteSource::Uploaded(owned) = source;
                 let view = source.surface();
                 let mut pixels = Vec::with_capacity(view.width as usize * view.height as usize * 4);
                 for y in 0..view.height as usize {

@@ -523,7 +523,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 }
 
 fn initialize_previews(desired: DesiredPreview) -> Result<Vec<ActivePreview>, &'static str> {
-    { Ok(alloc::vec![initialize_preview(desired)?]) }
+    Ok(alloc::vec![initialize_preview(desired)?])
 }
 
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
@@ -743,13 +743,10 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
         },
         GpgpuPreviewPreset::Static => publish_frame_buffer(lease),
     };
-    let published = match publish_result {
-        Ok(published) => published,
-        Err(_) => {
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("frame-publish-failed");
-        }
-    };
+    if publish_result.is_err() {
+        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+        return Err("frame-publish-failed");
+    }
     match publish_preview_window_frame(preview, DamageRect::FULL) {
         Ok(true) => {}
         Ok(false) => return Ok(()),

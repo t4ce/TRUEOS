@@ -4448,13 +4448,29 @@ pub(crate) fn submit_ui4_indexed_batch(
             }
         })
         .collect();
-    let rendered =
+    // Plain line lists need no rasterized fullscreen clear triangle. Retire
+    // the BCS fill before RCS reads the target; an uncertain fill must retain
+    // the imported surface through the existing failed-submission path.
+    let native_lines = scene_draws.iter().all(|draw|
+        draw.topology == crate::intel::render::ResidentScenePrimitiveTopology::LineList);
+    let clear_result = if native_lines {
+        use crate::intel::gpgpu::GpgpuSubmissionOutcome;
+        match crate::r::services::vcpy_service::fill_rgba8_complete(
+            destination, batch.clear_rgba8_srgb,
+            crate::r::services::vcpy_service::RgbaFillConsumer::Ui4,
+        ) {
+            GpgpuSubmissionOutcome::Complete => Ok(None),
+            GpgpuSubmissionOutcome::Unavailable => Err("render-busy"),
+            GpgpuSubmissionOutcome::SubmittedIncomplete => Err("line-bcs-clear-incomplete"),
+        }
+    } else {
+        Ok(Some(batch.clear_rgba8_srgb.to_le_bytes()))
+    };
+    let rendered = clear_result.and_then(|clear| {
         crate::intel::render::render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
-            &scene_draws,
-            Some(batch.clear_rgba8_srgb.to_le_bytes()),
-            destination,
-            false,
-        );
+            &scene_draws, clear, destination, false,
+        )
+    });
     let render_error = rendered.as_ref().err().copied();
     // This direct single-sample route rejects Busy before accepting geometry.
     let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));

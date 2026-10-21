@@ -181,10 +181,9 @@ impl Drop for FpgaCall {
             return;
         };
         let complete = service.calls[index].result.is_some();
-        if let Delivery::Future { waiter, detached } = &mut service.calls[index].delivery {
-            *waiter = None;
-            *detached = true;
-        }
+        let Delivery::Future { waiter, detached } = &mut service.calls[index].delivery;
+        *waiter = None;
+        *detached = true;
         if complete {
             service.calls.remove(index);
         }

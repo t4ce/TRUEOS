@@ -269,7 +269,6 @@ fn try_lease(slot: u32, role: LaneRole) -> Option<LaneLease> {
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn is_carrier_lane_free(slot: u32) -> bool {
     LANE_OWNER
         .get(slot as usize)

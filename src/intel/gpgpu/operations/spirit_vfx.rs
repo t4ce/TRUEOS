@@ -47,6 +47,7 @@ impl SpiritVfxSubmission {
 pub(crate) enum SpiritVfxCompletion {
     Pending,
     Complete(GpgpuRgba8ReleaseFence),
+    #[expect(dead_code, reason = "Failure completion retained for Spirit consumers")]
     Failed,
     InvalidSubmission,
 }
