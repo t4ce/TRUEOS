@@ -289,6 +289,7 @@ lfm25-igpu-packed-verify:
 	./tools/lfm2.5-350m/verify_igpu_packed.sh
 
 intel-gpu-verify-cpp-artifacts: lfm25-packed-isa-verify
+	python3 tools/shadertoy-cpp-offline/package_blueprint.py --blueprints-root "$(BLUEPRINTS_DIR)" --check
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"
 	$(INTEL_GPU_BAKERY_PYTHON) -B -m unittest discover -s "$(INTEL_GPU_BAKERY_DIR)" -p 'test_*.py'
 

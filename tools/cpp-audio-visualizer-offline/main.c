@@ -85,8 +85,7 @@ enum {
 };
 
 static const char *const SPIRV_PATH =
-    "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
-    "cpp_audio_visualizer_rgba8.spv";
+    "../TRUEOS-Blueprints/apps/shadertoy/assets/audio_visualizer/kernel.spv";
 
 static void die(const char *message) {
     fprintf(stderr, "cpp-audio-visualizer-offline: %s\n", message);

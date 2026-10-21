@@ -1,5 +1,10 @@
 # ParticleCraft
 
+The source and executable payloads are owned by
+`TRUEOS-Blueprints/apps/shadertoy/assets/particle_craft/` (`kernel.clcpp`,
+`kernel.bin`, `kernel.spv`, and local headers). TRUEOS retains hash/ABI trust
+metadata and dispatch support; runtime bytes arrive through Blueprint registration.
+
 ParticleCraft is TRUEOS's first persistent, general-purpose C++/IGC particle
 engine. It is not a font or sprite adaptation: one exact-target artifact owns
 three C++ for OpenCL entries and the kernel retains compact particle state for
@@ -31,7 +36,7 @@ all 128 particles at every pixel.
 
 ## Artifact and ABI
 
-`particle_craft.bin` contains exactly:
+`kernel.bin` contains exactly:
 
 - `particle_craft_step`: one SIMD16 work-item per particle, updating two
   `float4` records (32 bytes) in place.

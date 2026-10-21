@@ -7,12 +7,15 @@ tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trueos_root="$(cd "${tool_dir}/../.." && pwd)"
 python_bin="${PYTHON:-python3}"
 
-exec "${python_bin}" -B "${tool_dir}/bake.py" \
-  --source "${trueos_root}/crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp" \
+blueprints_root="${TRUEOS_BLUEPRINTS_DIR:-${trueos_root}/../TRUEOS-Blueprints}"
+output_dir="${trueos_root}/bld/shadertoy-native/particle_craft"
+
+"${python_bin}" -B "${tool_dir}/bake.py" \
+  --source "${blueprints_root}/apps/shadertoy/assets/particle_craft/kernel.clcpp" \
   --artifact-name particle_craft \
   --profile "${tool_dir}/profiles/adls-4680-r0c-cpp.json" \
   --variant cpp-native \
-  --publish-dir "${trueos_root}/crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp" \
+  --publish-dir "${output_dir}" \
   --expect-kernel particle_craft_step \
   --expect-kernel particle_craft_bin_tiles \
   --expect-kernel particle_craft_render_rgba8 \
@@ -22,3 +25,8 @@ exec "${python_bin}" -B "${tool_dir}/bake.py" \
   --repro-check \
   --toolchain-lock "${tool_dir}/toolchains/adls-cpp-proof.lock.json" \
   "$@"
+
+"${python_bin}" "${trueos_root}/tools/shadertoy-cpp-offline/import_native.py" \
+  --blueprints-root "${blueprints_root}" --artifact-dir "${output_dir}" --program particle_craft
+"${python_bin}" "${trueos_root}/tools/shadertoy-cpp-offline/package_blueprint.py" \
+  --blueprints-root "${blueprints_root}" --update-trust

@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -36,6 +37,11 @@ ARTIFACT_ROOT = (
 )
 KERNEL_ROOT = ARTIFACT_ROOT.parent.parent
 MIGRATED_BAKE_SCRIPT = TOOL_DIR / "bake_adls_cpp_migrated.sh"
+
+
+def native_artifact(name, suffix):
+    app = {"cpp_demo_rgba8": "cpp_gallery", "cpp_audio_visualizer_rgba8": "audio_visualizer", "particle_craft": "particle_craft"}[name]
+    return REPO_ROOT.parent / "TRUEOS-Blueprints/apps/shadertoy/assets" / app / f"kernel.{suffix}"
 
 
 class ArtifactContractTests(unittest.TestCase):
@@ -238,10 +244,27 @@ class ArtifactContractTests(unittest.TestCase):
         serialized = json.dumps(manifest, sort_keys=True)
         self.assertNotIn(str(REPO_ROOT.parent), serialized)
 
+    def test_blueprint_native_sources_and_payloads_verify(self) -> None:
+        for name in ("cpp_demo_rgba8", "cpp_audio_visualizer_rgba8", "particle_craft"):
+            with self.subTest(name=name):
+                verify_manifest(native_artifact(name, "manifest.json"),
+                                native_artifact(name, "bin"), native_artifact(name, "spv"),
+                                native_artifact(name, "contract.rs"), REPO_ROOT)
+
+    def test_blueprint_native_verification_rejects_edited_header(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "cpp_gallery"
+            shutil.copytree(native_artifact("cpp_demo_rgba8", "bin").parent, candidate)
+            header = candidate / "include/trueos_clcpp.hpp"
+            header.write_bytes(header.read_bytes() + b"\n// unbaked change\n")
+            with self.assertRaisesRegex(ContractError, "package input is stale"):
+                verify_manifest(candidate / "kernel.manifest.json", candidate / "kernel.bin",
+                                candidate / "kernel.spv", candidate / "kernel.contract.rs", REPO_ROOT)
+
     def test_particle_craft_is_one_exact_three_entry_artifact(self) -> None:
         analysis = analyze_zebin(
-            ARTIFACT_ROOT / "cpp" / "particle_craft.bin",
-            ARTIFACT_ROOT / "cpp" / "particle_craft.spv",
+            native_artifact("particle_craft", "bin"),
+            native_artifact("particle_craft", "spv"),
         )
         kernels = {kernel["kernel_name"]: kernel for kernel in analysis["kernels"]}
         self.assertEqual(
@@ -319,7 +342,7 @@ class ArtifactContractTests(unittest.TestCase):
     def test_cpp_native_demo_has_reviewed_standalone_policy(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
         manifest = json.loads(
-            (root / "cpp_demo_rgba8.manifest.json").read_text(encoding="utf-8")
+            (native_artifact("cpp_demo_rgba8", "manifest.json")).read_text(encoding="utf-8")
         )
         self.assertEqual(manifest["variant"], "cpp-native")
         self.assertIsNone(manifest["abi_reference"])
@@ -334,7 +357,7 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual(manifest["target"]["revision_min"], 0x0C)
         self.assertEqual(manifest["target"]["revision_max"], 0x0C)
         analysis = analyze_zebin(
-            root / "cpp_demo_rgba8.bin", root / "cpp_demo_rgba8.spv"
+            native_artifact("cpp_demo_rgba8", "bin"), native_artifact("cpp_demo_rgba8", "spv")
         )
         self.assertEqual(
             [kernel["kernel_name"] for kernel in analysis["kernels"]],
@@ -350,7 +373,7 @@ class ArtifactContractTests(unittest.TestCase):
     def test_cpp_audio_visualizer_has_reviewed_single_kernel_policy(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
         manifest = json.loads(
-            (root / "cpp_audio_visualizer_rgba8.manifest.json").read_text(
+            (native_artifact("cpp_audio_visualizer_rgba8", "manifest.json")).read_text(
                 encoding="utf-8"
             )
         )
@@ -367,8 +390,8 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual(manifest["target"]["revision_min"], 0x0C)
         self.assertEqual(manifest["target"]["revision_max"], 0x0C)
         analysis = analyze_zebin(
-            root / "cpp_audio_visualizer_rgba8.bin",
-            root / "cpp_audio_visualizer_rgba8.spv",
+            native_artifact("cpp_audio_visualizer_rgba8", "bin"),
+            native_artifact("cpp_audio_visualizer_rgba8", "spv"),
         )
         self.assertEqual(
             [kernel["kernel_name"] for kernel in analysis["kernels"]],
@@ -444,7 +467,7 @@ class ArtifactContractTests(unittest.TestCase):
 
     def test_cpp_native_publication_gates_cannot_be_removed(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
-        manifest_path = root / "cpp_demo_rgba8.manifest.json"
+        manifest_path = native_artifact("cpp_demo_rgba8", "manifest.json")
         original = json.loads(manifest_path.read_text(encoding="utf-8"))
         mutations = {
             "source inputs": lambda value: value["source"].update(inputs=[]),
@@ -477,9 +500,9 @@ class ArtifactContractTests(unittest.TestCase):
                     with self.assertRaises(ContractError):
                         verify_manifest(
                             candidate,
-                            root / "cpp_demo_rgba8.bin",
-                            root / "cpp_demo_rgba8.spv",
-                            root / "cpp_demo_rgba8.contract.rs",
+                            native_artifact("cpp_demo_rgba8", "bin"),
+                            native_artifact("cpp_demo_rgba8", "spv"),
+                            native_artifact("cpp_demo_rgba8", "contract.rs"),
                             REPO_ROOT,
                         )
 

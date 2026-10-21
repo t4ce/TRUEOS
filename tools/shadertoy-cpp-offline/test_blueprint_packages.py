@@ -24,6 +24,7 @@ def main():
     runtime = runtime[runtime.index("#[derive(Copy, Clone, Debug, Eq, PartialEq)]\npub(crate) enum GpgpuArtifactAdmissionError"):]
     runtime = runtime.split("#[cfg(test)]")[0]
     code = "#![allow(dead_code)]\nextern crate alloc;\nuse sha2::{Digest, Sha256};\nuse core::fmt::Write;\n"
+    code += "#[macro_export] macro_rules! log_error { ($($tt:tt)*) => {{}} }\n"
     code += contract + metadata + runtime
     code += f'\n#[path = "{gpu}/artifacts/shadertoy_package.rs"] mod package;\n'
     for _, name in PROGRAMS:
@@ -38,7 +39,11 @@ def main():
     manifest = json.loads((mandelbox / "kernel.manifest.json").read_text())
     for symbol in manifest["rust_symbols"].values():
         code += f'(16, include_bytes!("{mandelbox}/mandelbox.stpkg"), &{symbol}),\n'
-    code += '] }\n' + TESTS
+    code += '] }\n'
+    skybox = ROOT / "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/skybox_sample_rgb565.contract.rs"
+    code += f'include!("{skybox}");\n'
+    code += "fn shadertoy_artifact_slot(id: u32) -> Option<(GpgpuKernelArtifact,)> { fixtures().into_iter().find(|(shader, _, _)| *shader == id).map(|(_, _, abi)| (GpgpuKernelArtifact::contracted(abi.kernel_name, &[], &[], abi),)) }\n"
+    code += TESTS
     with tempfile.TemporaryDirectory(prefix="trueos-shadertoy-packages-") as temporary:
         project = Path(temporary)
         # The Blueprint's build guard must reject edited source beside a stale bundle.
@@ -97,14 +102,14 @@ fn real_packages_pass_all_existing_admission_checks() {
 }
 
 #[test]
-fn every_package_component_is_authenticated_including_raw_source() {
+fn executable_payloads_are_authenticated_and_metadata_is_non_executable() {
     for (id, bytes, _) in fixtures() {
         let contract = package::contract(id).unwrap();
         let mut offset = 0;
         for part in 0..7 {
             let mut changed = bytes.to_vec();
             changed[offset] ^= 1;
-            assert!(contract.payloads(&changed).is_none(), "shader {id} part {part}");
+            assert_eq!(contract.payloads(&changed).is_none(), part <= 2, "shader {id} part {part}");
             offset = if part == 0 { 32 } else {
                 let at = 8 + (part - 1) * 4;
                 offset + u32::from_le_bytes(bytes[at..at+4].try_into().unwrap()) as usize
@@ -121,7 +126,7 @@ fn every_package_component_is_authenticated_including_raw_source() {
 #[test]
 fn staging_requires_complete_contiguous_correct_shader_bytes() {
     for (id, bytes, _) in fixtures() {
-        let mut upload = package::ShaderToyPackageUpload::new(id).unwrap();
+        let mut upload = package::ShaderToyPackageUpload::new(id, bytes.len()).unwrap();
         assert!(!upload.append(id, usize::MAX, &[0]));
         assert!(!upload.append(id, 0, &[]));
         assert!(!upload.append(id % 6 + 1, 0, &[0]));
@@ -135,8 +140,8 @@ fn staging_requires_complete_contiguous_correct_shader_bytes() {
         assert_eq!(upload.bytes, bytes);
         assert!(upload.contract.payloads(&upload.bytes).is_some());
     }
-    for id in [0, 9, 14, 17, 31, 32, u32::MAX] {
-        assert!(package::ShaderToyPackageUpload::new(id).is_none());
+    for id in [0, 9, 14, 31, 32, u32::MAX] {
+        assert!(package::ShaderToyPackageUpload::new(id, 32).is_none());
     }
 }
 '''

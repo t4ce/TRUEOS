@@ -27,8 +27,14 @@ views) with their raw sources live under
 `TRUEOS-Blueprints/apps/shadertoy/assets/`. The kernel retains trusted hashes and
 ABI contracts; the Blueprint transfers complete authenticated packages at startup.
 See [the runtime path](../../crates/trueos-shader/gpgpu/kernels/SHADERTOY.md).
-`import_native.py` copies the unchanged audio, gallery and ParticleCraft artifacts
-and all hashed C++ inputs into the Blueprint. Shell2 `cpp` is retired; `win`
+The audio, gallery and ParticleCraft sources, headers, Zebin and SPIR-V files
+are owned by the Blueprint asset directories. The corresponding bakery targets
+read `kernel.clcpp` there, bake candidates under `bld/shadertoy-native/`, then
+import the outputs and regenerate package trust metadata. `import_native.py`
+requires an explicit `--artifact-dir` and accepts `--program` for a single bake.
+The kernel has no embedded fallback for these programs: package registration
+must succeed before rendering. Binary/SPIR-V SHA-256 and all three ParticleCraft
+entry-point ABI checks remain mandatory. Shell2 `cpp` is retired; `win`
 opens the separate 30-window retained UI4 demo.
 Candidate preview sessions remain under `bld/` and are not automatically admitted.
 

@@ -57,6 +57,13 @@ def main():
                     raise SystemExit(f"{name}: archived input differs from baked provenance: {path}")
             if archive[source["path"]].encode() != parts[3]:
                 raise SystemExit(f"{name}: entry source differs from source archive")
+            for path, text in archive.items():
+                if path == source["path"]:
+                    continue
+                relative = Path(path).relative_to(Path(source["path"]).parent)
+                local = assets / name / relative
+                if local.read_bytes() != text.encode():
+                    raise SystemExit(f"{name}: editable header differs from baked archive: {relative}")
         contract = ROOT / f"crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/{artifact}.contract.rs"
         if contract.read_bytes() != parts[5]:
             raise SystemExit(f"{name}: Blueprint contract differs from kernel trust contract")

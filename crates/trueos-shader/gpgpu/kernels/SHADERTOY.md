@@ -169,7 +169,12 @@ the duration of rendering, then restores it after retirement. Audio subscription
 paint history and persistent particle storage do not cross window ownership.
 The original six Image passes continue through their existing row/focus path.
 
-`tools/shadertoy-cpp-offline/import_native.py` copies reviewed native artifacts
+The three native programs are owned by the Blueprint asset directories, including
+editable C++ and headers. Their bakery scripts read those sources and stage
+candidates under `bld/shadertoy-native/`. The kernel retains no embedded payload
+or upload fallback for these programs.
+
+`tools/shadertoy-cpp-offline/import_native.py --artifact-dir <reviewed-output>` copies reviewed native artifacts
 and checks every raw input against their manifests; `package_blueprint.py`
 then checks packaging and refreshes trust only with `--update-trust`.
 The Blueprint README has the full key map and migration validation commands.

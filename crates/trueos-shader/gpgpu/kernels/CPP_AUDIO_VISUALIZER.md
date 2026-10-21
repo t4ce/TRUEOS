@@ -1,6 +1,11 @@
 # Single-kernel C++ audiovisual instrument
 
-`cpp_audio_visualizer_rgba8.clcpp` is one composed C++ for OpenCL kernel, not
+The source and executable payloads are owned by
+`TRUEOS-Blueprints/apps/shadertoy/assets/audio_visualizer/` (`kernel.clcpp`,
+`kernel.bin`, `kernel.spv`, and local headers). TRUEOS retains hash/ABI trust
+metadata and dispatch support; runtime bytes arrive through Blueprint registration.
+
+`kernel.clcpp` is one composed C++ for OpenCL kernel, not
 a collection of interchangeable effects. It renders a live, aspect-correct
 instrument from the final stereo stream accepted by the HDA output path:
 

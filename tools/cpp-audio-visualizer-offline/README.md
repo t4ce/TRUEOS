@@ -1,7 +1,7 @@
 # C++ audio visualizer offline replay
 
 This host-only lane loads the production
-`cpp_audio_visualizer_rgba8.spv` with `clCreateProgramWithIL`, sends one
+`TRUEOS-Blueprints/apps/shadertoy/assets/audio_visualizer/kernel.spv` with `clCreateProgramWithIL`, sends one
 synthetic snapshot through the exact two-binding ABI, renders the real
 horizontal-pair walker at 2560x1440, and writes an RGBA PNG. It also reports
 five profiled kernel dispatches after one warm-up launch.

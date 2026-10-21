@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy reviewed native gallery artifacts and every baked source into the Blueprint.
+"""Import reviewed bake outputs into the Blueprint-owned native shader assets.
 
 Run package_blueprint.py --update-trust after reviewing these imports. This does
 not rebake or alter executable code; stale source provenance fails closed.
@@ -15,9 +15,13 @@ from package_blueprint import ROOT, NATIVE_PROGRAMS
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--blueprints-root", type=Path, default=ROOT.parent / "TRUEOS-Blueprints")
+    parser.add_argument("--artifact-dir", type=Path, required=True, help="reviewed bakery output directory")
+    parser.add_argument("--program", choices=[name for name, _ in NATIVE_PROGRAMS.values()])
     args = parser.parse_args()
-    artifacts = ROOT / "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp"
+    artifacts = args.artifact_dir
     for name, artifact in NATIVE_PROGRAMS.values():
+        if args.program and args.program != name:
+            continue
         manifest = json.loads((artifacts / f"{artifact}.manifest.json").read_bytes())
         sources = {}
         for entry in manifest["source"]["inputs"]:
@@ -34,6 +38,8 @@ def main():
             (dest / f"kernel.{suffix}").write_bytes((artifacts / f"{artifact}.{suffix}").read_bytes())
         (dest / "kernel.clcpp").write_text(sources[manifest["source"]["path"]])
         (dest / "input.sources.json").write_text(json.dumps(sources, sort_keys=True, indent=2) + "\n")
+        trust = ROOT / f"crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/{artifact}.contract.rs"
+        trust.write_bytes((dest / "kernel.contract.rs").read_bytes())
         print(f"{name}: imported {len(binary)} executable bytes and {len(sources)} raw source files")
 
 

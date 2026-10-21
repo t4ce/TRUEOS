@@ -1053,17 +1053,36 @@ def verify_manifest(
         raise ContractError(
             f"{manifest_path}: primary source is absent from compiler inputs"
         )
+    archive_path = manifest_path.parent / "input.sources.json"
+    source_archive = json.loads(archive_path.read_text()) if archive_path.is_file() else None
+    if source_archive is not None and not isinstance(source_archive, dict):
+        raise ContractError(f"{manifest_path}: malformed source archive")
     for record in source_inputs:
         if not isinstance(record, dict):
             raise ContractError(f"{manifest_path}: malformed source input record")
         raw_path = Path(record["path"])
         input_path = raw_path if raw_path.is_absolute() else repo_root / raw_path
-        if not input_path.is_file():
-            raise ContractError(f"{manifest_path}: recorded input is missing: {raw_path}")
+        if source_archive is not None:
+            archived = source_archive.get(record["path"])
+            if not isinstance(archived, str):
+                raise ContractError(f"{manifest_path}: archived input is missing: {raw_path}")
+            data = archived.encode()
+            # Historical bake paths remain provenance; editable inputs live beside the package.
+            try:
+                relative = raw_path.relative_to(Path(source_path).parent)
+            except ValueError as error:
+                raise ContractError(f"{manifest_path}: input outside package source tree: {raw_path}") from error
+            local = manifest_path.parent / ("kernel.clcpp" if record["path"] == source_path else relative)
+            if not local.is_file() or local.read_bytes() != data:
+                raise ContractError(f"{manifest_path}: package input is stale: {local}")
+        else:
+            if not input_path.is_file():
+                raise ContractError(f"{manifest_path}: recorded input is missing: {raw_path}")
+            data = input_path.read_bytes()
         actual_record = {
             "path": record["path"],
-            "size_bytes": input_path.stat().st_size,
-            "sha256": sha256_file(input_path),
+            "size_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
         }
         if actual_record != record:
             raise ContractError(f"{manifest_path}: recorded input is stale: {raw_path}")

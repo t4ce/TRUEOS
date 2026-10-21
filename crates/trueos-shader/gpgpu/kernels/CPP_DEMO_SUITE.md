@@ -1,6 +1,11 @@
 # C++/IGC generative demo suite
 
-`cpp_demo_rgba8.clcpp` turns the proven C++ for OpenCL pipeline into a reusable
+The source and executable payloads are owned by
+`TRUEOS-Blueprints/apps/shadertoy/assets/cpp_gallery/` (`kernel.clcpp`,
+`kernel.bin`, `kernel.spv`, and local headers). TRUEOS retains hash/ABI trust
+metadata and dispatch support; runtime bytes arrive through Blueprint registration.
+
+`kernel.clcpp` turns the proven C++ for OpenCL pipeline into a reusable
 TRUEOS application surface. It is one offline-compiled kernel, one stable
 output ABI, one resident upload, and seven scalar-selected workloads:
 
@@ -75,7 +80,7 @@ under a potentially late GPU writer.
 
 ## Generated contract
 
-The checked artifact is `artifacts/adls/cpp/cpp_demo_rgba8.bin`:
+The checked artifact is `TRUEOS-Blueprints/apps/shadertoy/assets/cpp_gallery/kernel.bin`:
 
 ```text
 Zebin SHA-256: 6dd432e9666035c5d68b6c9fe71abaec72a4e09dfdf7f2c0e9e07043da4e7ab5
