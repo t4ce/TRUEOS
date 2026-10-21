@@ -18,7 +18,9 @@ use super::{
     ipp_print::{IppClient, IppError, RemoteJobState},
     pwg_raster,
 };
-use crate::r::print2d::{self, PrintDocument, PrintJob, PrintJobState};
+use crate::r::print2d::{self, PrintJob, PrintJobState};
+#[cfg(feature = "gridpaper")]
+use crate::r::print2d::PrintDocument;
 
 const MDNS_PORT: u16 = 5_353;
 const MDNS_MULTICAST: v::vnet::EndpointV4 = v::vnet::EndpointV4::new([224, 0, 0, 251], MDNS_PORT);
@@ -305,6 +307,7 @@ pub async fn printer_discovery_task() {
     }
 }
 
+#[cfg(feature = "gridpaper")]
 async fn render_job(job: &PrintJob) -> Result<Vec<u8>, &'static str> {
     let (generation, size, raw) = match &job.document {
         PrintDocument::GridPaperA4 {
@@ -737,4 +740,9 @@ mod tests {
         assert_eq!(printers.len(), 1);
         assert_eq!(printers[0].uri, "ipp://192.168.1.20:631/ipp/print");
     }
+}
+
+#[cfg(not(feature = "gridpaper"))]
+async fn render_job(_job: &PrintJob) -> Result<Vec<u8>, &'static str> {
+    Err("gridpaper-feature-disabled")
 }

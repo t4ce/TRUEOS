@@ -1439,6 +1439,7 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_vlayer_print2d_status" => {
             Some(crate::r::net::vlayer::trueos_vlayer_print2d_status as *const () as usize)
         }
+        #[cfg(feature = "gridpaper")]
         "trueos_cabi_gridpaper_print_request_take" => Some(
             crate::r::services::gridpaper_service::trueos_cabi_gridpaper_print_request_take
                 as *const () as usize,

@@ -11,16 +11,11 @@ fn usage(io: &Output) {
     Output::line(io, "gpu cull on|off (Picasso diagnostic)");
     Output::line(io, "gpu pipeline pbr|uv|uv8 (Picasso diagnostic)");
     Output::line(io, "gpu capture vue (one Picasso draw)");
-    Output::line(io, "gpu frush [start|stop|status] (Font Rush2)");
 }
 
 pub(super) fn execute(io: &Output, rest: &str) {
     let mut args = rest.split_whitespace();
     match (args.next(), args.next(), args.next()) {
-        (Some(cmd), action, None) if cmd.eq_ignore_ascii_case("frush") => {
-            let action = action.unwrap_or("start");
-            return frush(io, action);
-        }
         (Some(cmd), None, None) if cmd.eq_ignore_ascii_case("status") => print_status(io),
         (Some(cmd), Some("vue"), None) if cmd.eq_ignore_ascii_case("capture") => {
             crate::intel::render::request_picasso_vue_capture();
@@ -474,54 +469,7 @@ fn test_blit(io: &Output) -> bool {
     probe.passed() && timeline
 }
 
-fn frush_usage(io: &Output) {
-    Output::line(io, "gpu frush [start|stop|status]");
-}
 
-fn frush(io: &Output, rest: &str) {
-    match rest
-        .split_whitespace()
-        .collect::<alloc::vec::Vec<_>>()
-        .as_slice()
-    {
-        [] | ["start"] => match crate::ui4::request_cpp_font_rush2_start() {
-            Ok(serial) => Output::line(
-                io,
-                format!("gpu frush: queued=1 request={} workers=8 canvases=4", serial).as_str(),
-            ),
-            Err(reason) => {
-                Output::line(io, format!("gpu frush: queued=0 reason={reason}").as_str())
-            }
-        },
-        ["stop"] => match crate::ui4::request_cpp_font_rush2_stop() {
-            Ok(serial) => {
-                Output::line(io, format!("gpu frush stop: queued=1 request={serial}").as_str())
-            }
-            Err(reason) => {
-                Output::line(io, format!("gpu frush stop: queued=0 reason={reason}").as_str())
-            }
-        },
-        ["status"] => {
-            let status = crate::ui4::gpgpu_preview_status();
-            let active = status.desired_running
-                && status.config.preset == crate::ui4::GpgpuPreviewPreset::CppFontRush2;
-            Output::line(
-                io,
-                format!(
-                    "gpu frush: active={} phase={} request={} published={} failed={} error={}",
-                    active as u8,
-                    status.phase.label(),
-                    status.request_serial,
-                    status.metrics.published,
-                    status.metrics.failed,
-                    status.last_error,
-                )
-                .as_str(),
-            );
-        }
-        _ => frush_usage(io),
-    }
-}
 
 pub(super) fn snapshot(width: usize) -> alloc::vec::Vec<alloc::string::String> {
     let out = Output::collect(width);

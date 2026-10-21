@@ -29,14 +29,6 @@ pub(crate) struct FontRenderTargetReadback {
     pub(crate) pixels: Vec<u8>,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn submit_font_mesh_once(
-    vertices: &[[f32; 2]],
-    indices: &[u32],
-    bounds: (f32, f32, f32, f32),
-) -> Result<RenderJokerResult, &'static str> {
-    submit_font_mesh_once_scaled(vertices, indices, bounds, FONT_STAMP_DEFAULT_NATIVE_SCALE)
-}
 
 pub(crate) const fn font_native_scale_supported(native_scale: u32) -> bool {
     native_scale > 0 && native_scale <= FONT_STAMP_MAX_NATIVE_SCALE
@@ -57,228 +49,14 @@ pub(crate) const fn font_native_scale_target_pixels(native_scale: u32) -> Option
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn transient_font_mesh_upload_bytes(
-    vertex_count: usize,
-    index_count: usize,
-) -> Option<usize> {
-    let Some(vertex_bytes) = vertex_count.checked_mul(3 * core::mem::size_of::<f32>()) else {
-        return None;
-    };
-    let Some(index_offset) = crate::intel::align_up(vertex_bytes, 64) else {
-        return None;
-    };
-    let Some(index_bytes) = index_count.checked_mul(core::mem::size_of::<u32>()) else {
-        return None;
-    };
-    index_offset.checked_add(index_bytes)
-}
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) const fn transient_font_mesh_upload_capacity_bytes() -> usize {
-    WARM_VERTEX_BYTES
-}
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) const fn transient_font_mesh_refinement_budget_bytes() -> usize {
-    FONT_MESH_REFINEMENT_BUDGET_BYTES
-}
 
-/// Submit the already-tessellated font mesh at a native pixel scale.
-///
-/// Scaling is performed by the 3D viewport after tessellation: the mesh and
-/// index topology remain unchanged, and presentation remains a 1:1 copy.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn submit_font_mesh_once_scaled(
-    vertices: &[[f32; 2]],
-    indices: &[u32],
-    bounds: (f32, f32, f32, f32),
-    native_scale: u32,
-) -> Result<RenderJokerResult, &'static str> {
-    submit_font_mesh_once_scaled_inner(vertices, indices, bounds, native_scale, None)
-}
 
-/// Render a transient font mesh once and return its transparent native-size
-/// RGBA target instead of claiming the hardware overlay plane.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn submit_font_mesh_readback_once_scaled(
-    vertices: &[[f32; 2]],
-    indices: &[u32],
-    bounds: (f32, f32, f32, f32),
-    native_scale: u32,
-) -> Result<(RenderJokerResult, Option<FontRenderTargetReadback>), &'static str> {
-    let mut readback = None;
-    let render = submit_font_mesh_once_scaled_inner(
-        vertices,
-        indices,
-        bounds,
-        native_scale,
-        Some(&mut readback),
-    )?;
-    Ok((render, readback))
-}
 
-/// Render one transient font mesh into a caller-sized rectangular target.
-/// The supplied pixel allocation is recycled into the completed readback so
-/// repeated shell stamps do not repeatedly allocate native-size RGBA buffers.
-pub(crate) fn submit_font_mesh_readback_once_at_extent_reusing(
-    vertices: &[[f32; 2]],
-    indices: &[u32],
-    bounds: (f32, f32, f32, f32),
-    target_width: u32,
-    target_height: u32,
-    padding_pixels: u32,
-    reusable_pixels: Vec<u8>,
-) -> Result<(RenderJokerResult, FontRenderTargetReadback), &'static str> {
-    let mut readback = Some(FontRenderTargetReadback {
-        width: 0,
-        height: 0,
-        pixels: reusable_pixels,
-    });
-    let render = submit_font_mesh_once_at_extent_inner(
-        vertices,
-        indices,
-        bounds,
-        target_width,
-        target_height,
-        padding_pixels,
-        Some(&mut readback),
-    )?;
-    Ok((render, readback.expect("font readback recycle slot")))
-}
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-fn submit_font_mesh_once_scaled_inner(
-    vertices: &[[f32; 2]],
-    indices: &[u32],
-    bounds: (f32, f32, f32, f32),
-    native_scale: u32,
-    readback: Option<&mut Option<FontRenderTargetReadback>>,
-) -> Result<RenderJokerResult, &'static str> {
-    if !font_native_scale_supported(native_scale) {
-        return Err("font-native-scale-range");
-    }
-    let target_size = (FONT_STAMP_BASE_SIZE as u32)
-        .checked_mul(native_scale)
-        .ok_or("font-target-size-overflow")?;
-    submit_font_mesh_once_at_extent_inner(
-        vertices,
-        indices,
-        bounds,
-        target_size,
-        target_size,
-        target_size / 20,
-        readback,
-    )
-}
 
-fn submit_font_mesh_once_at_extent_inner(
-    vertices: &[[f32; 2]],
-    indices: &[u32],
-    bounds: (f32, f32, f32, f32),
-    target_width: u32,
-    target_height: u32,
-    padding_pixels: u32,
-    readback: Option<&mut Option<FontRenderTargetReadback>>,
-) -> Result<RenderJokerResult, &'static str> {
-    if vertices.is_empty() || indices.is_empty() || !indices.len().is_multiple_of(3) {
-        return Err("font-mesh-shape");
-    }
-    if target_width == 0
-        || target_height == 0
-        || target_width as usize > RESIDENT_SCENE_TARGET_WIDTH
-        || target_height as usize > RESIDENT_SCENE_TARGET_HEIGHT
-    {
-        return Err("font-target-extent-range");
-    }
-    if PRIMARY_PROBE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("in-flight");
-    }
 
-    let (min_x, min_y, max_x, max_y) = bounds;
-    let width = (max_x - min_x).max(1.0);
-    let height = (max_y - min_y).max(1.0);
-    let padding_pixels = padding_pixels
-        .min(target_width.saturating_sub(1) / 2)
-        .min(target_height.saturating_sub(1) / 2);
-    let content_width = target_width
-        .saturating_sub(padding_pixels.saturating_mul(2))
-        .max(1);
-    let content_height = target_height
-        .saturating_sub(padding_pixels.saturating_mul(2))
-        .max(1);
-    let pixel_scale = (content_width as f32 / width).min(content_height as f32 / height);
-    let center_x = (min_x + max_x) * 0.5;
-    let center_y = (min_y + max_y) * 0.5;
-    let ndc_x_scale = 2.0 * pixel_scale / target_width as f32;
-    let ndc_y_scale = 2.0 * pixel_scale / target_height as f32;
-    let mut draw_vertices = Vec::with_capacity(vertices.len());
-    for source in vertices {
-        draw_vertices.push([
-            (source[0] - center_x) * ndc_x_scale,
-            (center_y - source[1]) * ndc_y_scale,
-            0.5,
-        ]);
-    }
-    let mut draw_indices = Vec::with_capacity(indices.len());
-    for triangle in indices.chunks_exact(3) {
-        let Some(v0) = draw_vertices.get(triangle[0] as usize) else {
-            PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-            return Err("font-index-range");
-        };
-        let Some(v1) = draw_vertices.get(triangle[1] as usize) else {
-            PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-            return Err("font-index-range");
-        };
-        let Some(v2) = draw_vertices.get(triangle[2] as usize) else {
-            PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-            return Err("font-index-range");
-        };
-        let area2 = (v1[0] - v0[0]) * (v2[1] - v0[1]) - (v1[1] - v0[1]) * (v2[0] - v0[0]);
-        if area2 < 0.0 {
-            draw_indices.extend_from_slice(&[triangle[0], triangle[2], triangle[1]]);
-        } else {
-            draw_indices.extend_from_slice(triangle);
-        }
-    }
-
-    let result = submit_render_custom_triangle_probe_locked_at_extent(
-        &draw_vertices,
-        Some(&draw_indices),
-        None,
-        None,
-        "font-tessel-once",
-        "font-tessel-3d-once",
-        "font-tessel-full-mesh",
-        "path-fill-indexed-mesh/gpu-index-fetch",
-        TriangleBlendProbeMode::MesaZeroedState,
-        BackendProbeMode::MesaLike,
-        PostDrawSyncVariant::HeavyAll,
-        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
-        TriangleBatchMode::Draw,
-        StreamoutProofExperiment::HeaderAndPositionSlots01,
-        target_width as usize,
-        target_height as usize,
-        readback,
-    );
-    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-    result
-}
-
-/// Draw a kernel-owned font mesh directly from its persistent render-PPGTT
-/// allocation. Only transient pipeline state and the target are rebuilt; the
-/// vertex and index bytes are neither copied nor uploaded again.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn submit_resident_font_mesh_once(
-    mesh: &ResidentFontMesh,
-    native_scale: u32,
-    rgba: crate::intel::gpu_font::GpuFontRgba,
-) -> Result<RenderJokerResult, &'static str> {
-    submit_resident_font_mesh_inner(mesh, native_scale, rgba, None)
-}
 
 pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) mesh: &'a ResidentTriangleMesh,
@@ -3581,10 +3359,6 @@ fn submit_resident_scene_geometry_batched(
         } else {
             (TriangleBlendProbeMode::StraightAlpha, None)
         };
-        let preserve_depth_clear_color = draw_flags.is_some_and(|flags| {
-            flags & (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR)
-                == (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR)
-        });
         let blend_mode = match scene_draw.fragment_contract {
             ResidentSceneFragmentContract::VoxyFigure => TriangleBlendProbeMode::MesaZeroedState,
             ResidentSceneFragmentContract::MicrofontAa(_)
@@ -4860,69 +4634,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
     result
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn submit_resident_font_mesh_readback_once(
-    mesh: &ResidentFontMesh,
-    native_scale: u32,
-    rgba: crate::intel::gpu_font::GpuFontRgba,
-) -> Result<(RenderJokerResult, Option<FontRenderTargetReadback>), &'static str> {
-    let mut readback = None;
-    let render = submit_resident_font_mesh_inner(mesh, native_scale, rgba, Some(&mut readback))?;
-    Ok((render, readback))
-}
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-fn submit_resident_font_mesh_inner(
-    mesh: &ResidentFontMesh,
-    native_scale: u32,
-    rgba: crate::intel::gpu_font::GpuFontRgba,
-    readback: Option<&mut Option<FontRenderTargetReadback>>,
-) -> Result<RenderJokerResult, &'static str> {
-    if mesh.vertex_count < 3
-        || mesh.index_count < 3
-        || !mesh.index_count.is_multiple_of(3)
-        || mesh.vertex_bytes == 0
-        || mesh.index_bytes == 0
-    {
-        return Err("resident-font-shape");
-    }
-    if !font_native_scale_supported(native_scale) {
-        return Err("font-native-scale-range");
-    }
-    if PRIMARY_PROBE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("in-flight");
-    }
-
-    let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
-    // One RGBA path for every font draw, including the historical default
-    // blue. Both enabled SIMD widths receive the same draw-time color and
-    // alpha specialization; resident geometry remains untouched.
-    let draw_rgba = Some([rgba.r, rgba.g, rgba.b, rgba.a]);
-    let result = submit_render_custom_triangle_probe_locked_at_extent(
-        &[],
-        None,
-        Some(mesh),
-        draw_rgba,
-        "font-resident-reuse",
-        "font-resident-3d",
-        "kernel-font-service-resident-indexed-mesh",
-        "resident-render-ppgtt-vb-ib",
-        TriangleBlendProbeMode::MesaZeroedState,
-        BackendProbeMode::MesaLike,
-        PostDrawSyncVariant::HeavyAll,
-        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
-        TriangleBatchMode::Draw,
-        StreamoutProofExperiment::HeaderAndPositionSlots01,
-        target_size,
-        target_size,
-        readback,
-    );
-    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-    result
-}
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct RenderOaControlResult {

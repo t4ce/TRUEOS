@@ -2792,6 +2792,7 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     clear_blueprint_lifecycle_capability(vm_id);
     clear_blueprint_replication_checkpoint(vm_id);
     let _ = crate::ai::lumen_service::close(vm_id);
+    #[cfg(feature = "gridpaper")]
     let _ = crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
     let _ = crate::r::services::media_service::release_vm(vm_id);
     let _ = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
@@ -4695,6 +4696,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
     if vm.pause_latched.load(Ordering::Acquire) {
         suspend_blueprint_process_context(vm_id);
+        #[cfg(feature = "gridpaper")]
         crate::r::services::gridpaper_service::pause_owner_lifecycle(vm_id);
     }
     let mut pending_crash = None;
@@ -4772,14 +4774,17 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 vm_id, archive_released
             ));
         }
-        teardown_diagnostics::set(vm_id, TeardownStage::Gridpaper);
-        let gridpaper_released =
-            crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
-        if gridpaper_released != 0 {
-            hvlogf(format_args!(
-                "hv: vm{} lifecycle: gridpaper cleanup released={}",
-                vm_id, gridpaper_released
-            ));
+        #[cfg(feature = "gridpaper")]
+        {
+            teardown_diagnostics::set(vm_id, TeardownStage::Gridpaper);
+            let gridpaper_released =
+                crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
+            if gridpaper_released != 0 {
+                hvlogf(format_args!(
+                    "hv: vm{} lifecycle: gridpaper cleanup released={}",
+                    vm_id, gridpaper_released
+                ));
+            }
         }
         teardown_diagnostics::set(vm_id, TeardownStage::Media);
         let media_released = crate::r::services::media_service::release_vm(vm_id);

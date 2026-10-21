@@ -5,8 +5,11 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 const DPI: u32 = 300;
+#[cfg(feature = "gridpaper")]
 const A4_WIDTH_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_WIDTH_MM * 10;
+#[cfg(feature = "gridpaper")]
 const A4_HEIGHT_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_HEIGHT_MM * 10;
+#[cfg(feature = "gridpaper")]
 const RULER_GUTTER_TENTH_MM: u32 = crate::r::services::gridpaper_service::RULER_GUTTER_MM * 10;
 const PAGE_HEADER_BYTES: usize = 1_796;
 const MAX_DOCUMENT_BYTES: usize = 7 * 1024 * 1024;
@@ -19,6 +22,7 @@ pub(crate) enum EncodeError {
     TooLarge,
 }
 
+#[cfg(feature = "gridpaper")]
 pub(crate) fn encode_gridpaper_a4(
     size: crate::r::services::gridpaper_service::GridSize,
     source_width: u32,
@@ -205,7 +209,7 @@ fn write_cstring(destination: &mut [u8], value: &str) {
     destination[..length].copy_from_slice(&value.as_bytes()[..length]);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gridpaper"))]
 mod tests {
     use super::*;
 

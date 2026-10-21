@@ -11,6 +11,12 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for task startup.
 
+#[cfg(feature = "gridpaper")]
+static GRIDPAPER_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "gridpaper")]
+static SPIRIT_RESPONSE_WINDOW_STARTED: AtomicBool = AtomicBool::new(false);
+
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
 const SPAWN_SERVICE_PENDING_MS: u64 = 150;
 const SPAWN_SERVICE_IDLE_MS: u64 = 250;
@@ -60,7 +66,6 @@ define_started_flags!(
     CLOCK_SIGNALS_STARTED,
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
-    GRIDPAPER_SERVICE_STARTED,
     SH3SRV_STARTED,
     SHELL3_TCP_STARTED,
     HID_UDP_SRV_STARTED,
@@ -78,7 +83,6 @@ define_started_flags!(
     GPU_FAULT_CONTAINMENT_STARTED,
     INTEL_SUBSET_SUM_BOOT_PROBE_STARTED,
     TRUEOS_SPIRIT_STARTED,
-    SPIRIT_RESPONSE_WINDOW_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
     KEYBOARD_CONTROL_SERVICE_STARTED,
     GAMEPAD_CONTROL_SERVICE_STARTED,
@@ -581,6 +585,7 @@ fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::sntp::sntp_service_task())
 }
 
+#[cfg(feature = "gridpaper")]
 fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| {
         crate::r::services::gridpaper_service::gridpaper_service_task()
@@ -734,6 +739,7 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+#[cfg(feature = "gridpaper")]
 fn spawn_spirit_response_window_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         crate::spirit::spirit_response_window_service_task(worker_spawner.cpu_slot())
@@ -1365,7 +1371,8 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 74
+const TASK_COUNT: usize = 72
+    + 2 * cfg!(feature = "gridpaper") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
@@ -1526,6 +1533,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     // The current Gridpaper Blueprint still submits snapshots to this
     // consumer, which owns the corresponding UI4 presentation.
+    #[cfg(feature = "gridpaper")]
     TaskSpec::enabled(
         "gridpaper-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
@@ -1655,6 +1663,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     // waits for its paired Lilly keyboard and UI4 presentation internally,
     // types through the ordinary input route, and hides without releasing the
     // resident scene between replies.
+    #[cfg(feature = "gridpaper")]
     TaskSpec::enabled(
         "spirit-response-gridpaper",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,

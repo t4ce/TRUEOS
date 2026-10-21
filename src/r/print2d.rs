@@ -71,6 +71,7 @@ impl PrintJobState {
 }
 
 pub(crate) enum PrintDocument {
+    #[cfg(feature = "gridpaper")]
     GridPaperA4 {
         generation: u64,
         size: crate::r::services::gridpaper_service::GridSize,
@@ -166,6 +167,7 @@ fn enqueue(
     Ok(id)
 }
 
+#[cfg(feature = "gridpaper")]
 fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
     let id = {
         // Keep queue capacity and request consumption atomic from the caller's
@@ -203,6 +205,7 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
     Ok(id)
 }
 
+#[cfg(feature = "gridpaper")]
 pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw: &[u8]) -> i64 {
     let document = match document_kind {
         DOCUMENT_GRIDPAPER_A4 => {
@@ -233,6 +236,7 @@ pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw:
     }
 }
 
+#[cfg(feature = "gridpaper")]
 pub(crate) fn submit_gridpaper_to_printer(
     owner: u8,
     generation: u64,
@@ -255,6 +259,7 @@ pub(crate) fn submit_gridpaper_to_printer(
     )
 }
 
+#[cfg(feature = "gridpaper")]
 pub(crate) fn submit_kernel_gridpaper(
     generation: u64,
     size: crate::r::services::gridpaper_service::GridSize,
@@ -274,6 +279,7 @@ pub(crate) fn submit_kernel_gridpaper(
     )
 }
 
+#[cfg(feature = "gridpaper")]
 pub(crate) fn submit_kernel_gridpaper_to_printer(
     generation: u64,
     size: crate::r::services::gridpaper_service::GridSize,
@@ -338,4 +344,9 @@ mod tests {
         assert!(PrintJobState::Failed.terminal());
         assert!(!PrintJobState::Submitted.terminal());
     }
+}
+
+#[cfg(not(feature = "gridpaper"))]
+pub(crate) fn submit_for_owner(_owner: u8, _document_kind: u32, _subject: u64, _raw: &[u8]) -> i64 {
+    ERROR_INVALID_DOCUMENT
 }

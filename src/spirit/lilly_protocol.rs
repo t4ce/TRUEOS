@@ -734,6 +734,7 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             return next_idle_animation(*LAST_RGBA.lock());
         };
         log_drained_package(&package, ring_remaining);
+        #[cfg(feature = "gridpaper")]
         if let Some(text) = package.text.as_deref() {
             super::response_window::enqueue_package_text(text);
         }

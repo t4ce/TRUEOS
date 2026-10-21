@@ -3362,6 +3362,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
 
 
+        #[cfg(feature = "gridpaper")]
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -3397,6 +3398,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        #[cfg(feature = "gridpaper")]
         OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT => {
             let Some(page) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -3418,6 +3420,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len);
             DispatchOutcome::Resume
         }
+        #[cfg(feature = "gridpaper")]
         OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -3431,11 +3434,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        #[cfg(feature = "gridpaper")]
         OP_BP_GRIDPAPER_CLOSE => {
             let rc = crate::r::services::gridpaper_service::close_owner(vm_id, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        #[cfg(feature = "gridpaper")]
         OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE => {
             let packed = crate::r::services::gridpaper_service::take_print_request_for_owner(
                 vm_id,

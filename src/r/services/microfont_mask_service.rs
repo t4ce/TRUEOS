@@ -343,40 +343,17 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
     upload(&mut resident, &vertices, &indices, Topology::TriangleList, [0; 16])?;
     for ch in (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter()
         .copied().filter(|&ch| is_extra_line(ch))) {
-        let Some(strips) = microfont::raster_line::glyph_strips(ch) else {
-            continue;
-        };
-        let slot = glyph_slot(ch).ok_or("microfont-glyph-slot")?;
-        let at = cell_origin(slot);
-        for strip in strips {
-            vertices.clear();
-            indices.clear();
-            for i in 0..strip.points.len() + 2 {
-                let [x, y, z] = strip.adjacency_vertex(i).ok_or("microfont-adjacency")?;
-                // Z is a resident VS recipe marker, not a seed-data change.
-                // Identify real endpoints by index, including coincident points.
-                let z = if i == 1 { 0.25 } else if i == strip.points.len() { 0.75 } else { z };
-                vertices.push([at[0] + x + 0.5, at[1] + y + 0.5, z]);
-            }
-            indices.extend(0..vertices.len() as u32);
-            upload(
-                &mut resident,
-                &vertices,
-                &indices,
-                Topology::LineStripAdj,
-                endpoint_params(strip, slot),
-            )?;
-        }
-        vertices.clear();
-        indices.clear();
-        for strip in strips {
-            append_strip_joins(&mut vertices, slot, strip);
-        }
-        indices.extend(0..vertices.len() as u32);
-        let mut params = [0; 16];
-        params[8] = (-1.0f32).to_bits();
-        upload(&mut resident, &vertices, &indices, Topology::TriangleList, params)?;
+        upload_line_glyph(&mut resident, ch,
+            glyph_slot(ch).ok_or("microfont-glyph-slot")?)?;
     }
+    finish_upload(&mut resident)?;
+    crate::log_important!(target:"microfont-mask";
+        "microfont-mask: geometry-ready uploads=1 draws={} geometry_bytes={} metadata_bytes={} slots={} cpu_geometry_rebuilds=0 storage=none\n",
+        resident.batches.len(),resident.bytes,resident.batches.len()*64,SLOT_COUNT);
+    Ok(resident)
+}
+
+fn finish_upload(resident: &mut ResidentGlyphs) -> Result<(), &'static str> {
     resident.constants =
         Some(render::allocate_resident_render_buffer(resident.batches.len() * 64)?);
     let constants = resident.constants.as_ref().unwrap();
@@ -388,11 +365,47 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
         }
     }
     constants.flush();
-    crate::log_important!(target:"microfont-mask";
-        "microfont-mask: geometry-ready uploads=1 draws={} geometry_bytes={} metadata_bytes={} slots={} cpu_geometry_rebuilds=0 storage=none\n",
-        resident.batches.len(),resident.bytes,resident.batches.len()*64,SLOT_COUNT);
-    Ok(resident)
+    Ok(())
 }
+
+fn upload_line_glyph(resident: &mut ResidentGlyphs, ch: char, slot: usize) -> Result<(), &'static str> {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let Some(strips) = microfont::raster_line::glyph_strips(ch) else {
+        return Ok(());
+    };
+    let at = cell_origin(slot);
+    for strip in strips {
+        vertices.clear();
+        indices.clear();
+        for i in 0..strip.points.len() + 2 {
+            let [x, y, z] = strip.adjacency_vertex(i).ok_or("microfont-adjacency")?;
+            // Z is a resident VS recipe marker, not a seed-data change.
+            // Identify real endpoints by index, including coincident points.
+            let z = if i == 1 { 0.25 } else if i == strip.points.len() { 0.75 } else { z };
+            vertices.push([at[0] + x + 0.5, at[1] + y + 0.5, z]);
+        }
+        indices.extend(0..vertices.len() as u32);
+        upload(
+            resident,
+            &vertices,
+            &indices,
+            Topology::LineStripAdj,
+            endpoint_params(strip, slot),
+        )?;
+    }
+    vertices.clear();
+    indices.clear();
+    for strip in strips {
+        append_strip_joins(&mut vertices, slot, strip);
+    }
+    indices.extend(0..vertices.len() as u32);
+    let mut params = [0; 16];
+    params[8] = (-1.0f32).to_bits();
+    upload(resident, &vertices, &indices, Topology::TriangleList, params)?;
+    Ok(())
+}
+
 
 pub(crate) struct CoverageAtlas {
     geometry: ResidentGlyphs,
@@ -413,6 +426,8 @@ impl Drop for CoverageAtlas {
             if let Some(mask) = self.mask.take() {
                 core::mem::forget(mask);
             }
+        } else if let Some(mask) = self.mask.take() {
+            let _ = render::release_resident_coverage_mask(mask);
         }
     }
 }
@@ -436,13 +451,15 @@ impl CoverageAtlas {
         self.config.unwrap()
     }
     fn warm(&mut self, config: AtlasConfig) -> Result<(), &'static str> {
+        self.warm_extent(config, config.extent())
+    }
+    fn warm_extent(&mut self, config: AtlasConfig, (width, height): (u32, u32)) -> Result<(), &'static str> {
         if self.poisoned {
             return Err("microfont-atlas-quarantined");
         }
         if self.config == Some(config) {
             return Ok(());
         }
-        let (width, height) = config.extent();
         if self
             .mask
             .as_ref()
@@ -543,6 +560,7 @@ pub(crate) fn with_warmed_atlas<T>(
 ) -> Result<T, &'static str> {
     let config = config.normalized()?;
     let mut guard = ATLAS.try_lock().ok_or("microfont-atlas-busy")?;
+    warm_start_glyph()?;
     if guard.is_none() {
         *guard = Some(CoverageAtlas {
             geometry: upload_glyphs()?,
@@ -555,6 +573,60 @@ pub(crate) fn with_warmed_atlas<T>(
     let atlas = guard.as_mut().unwrap();
     atlas.warm(config)?;
     consumer(atlas)
+}
+
+static START_GLYPH: spin::Once<OwnedGlyphMask> = spin::Once::new();
+
+// Called under the atlas service lock, before any regular atlas production.
+fn warm_start_glyph() -> Result<(), &'static str> {
+    if START_GLYPH.get().is_some() { return Ok(()); }
+    let (_, height) = crate::intel::physical_extent_pixels(50, 50)
+        .ok_or("microfont-start-glyph-physical-size-unavailable")?;
+    let glyph = build_single_glyph_mask('§', height)?;
+    crate::log_important!(target: "microfont-mask";
+        "microfont-start-glyph: ready glyph=U+00A7 em_mm=50 em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
+        glyph.em_height_px, glyph.width, glyph.height, glyph.pixels.len());
+    START_GLYPH.call_once(|| glyph);
+    Ok(())
+}
+
+/// One independently warmed glyph. It never enlarges or invalidates the atlas.
+pub(crate) struct OwnedGlyphMask {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) em_height_px: u32,
+    pub(crate) pixels: Vec<u8>,
+}
+
+pub(crate) fn build_single_glyph_mask(ch: char, em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
+    if microfont::raster_line::glyph_strips(ch).is_none() {
+        return Err("microfont-single-glyph-missing");
+    }
+    // A single glyph can be much larger than a full-atlas cell. Its 6x11
+    // geometry and the existing native-line/cap/join shaders remain identical.
+    let config = AtlasConfig { glyph_height_px: Some(em_height_px), ..AtlasConfig::default() };
+    if !(11..=4000).contains(&em_height_px) { return Err("microfont-single-glyph-size"); }
+    let (width, height) = config.cell_extent();
+    let mut geometry = ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None };
+    upload_line_glyph(&mut geometry, ch, 0)?;
+    finish_upload(&mut geometry)?;
+    let mut glyph = CoverageAtlas { geometry, mask: None, config: None, generation: 0, poisoned: false };
+    glyph.warm_extent(config, (width, height))?;
+    let surface = glyph.surface();
+    let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;
+    if !crate::intel::dma_flush_strided_row_spans(&[
+        crate::intel::DmaFlushRows::new(source, width as usize, surface.pitch_bytes as usize, height as usize),
+    ]) { return Err("microfont-single-glyph-cache"); }
+    let mut pixels = alloc::vec![0; width as usize * height as usize];
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            pixels[y * width as usize + x] = unsafe {
+                core::ptr::read_volatile(source.add(y * surface.pitch_bytes as usize + x))
+            };
+        }
+    }
+    if !pixels.iter().any(|&coverage| coverage != 0) { return Err("microfont-single-glyph-empty"); }
+    Ok(OwnedGlyphMask { width, height, em_height_px, pixels })
 }
 
 /// Immutable service-owned R8 snapshot. Keeping this data alive does not hold

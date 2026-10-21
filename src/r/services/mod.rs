@@ -3,6 +3,7 @@ pub(crate) mod codex_progress_service;
 
 pub mod gamepad_control_service;
 pub mod gna_audio_frontend_service;
+#[cfg(feature = "gridpaper")]
 pub mod gridpaper_service;
 pub mod hda_capture_lane;
 pub mod hid_udp_service;

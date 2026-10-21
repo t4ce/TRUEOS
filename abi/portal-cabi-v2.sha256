@@ -1,3 +1,4 @@
+# Intentional removal of private XPAPP/x86 contexts and prepared-raster batch; surviving signatures unchanged.
 # Intentional retirement of the eight legacy UI4 font/text imports with the removed font backend.
 # All surviving signatures are unchanged; old font/text Blueprint imports are no longer supported.
 # Additive bounded native Xe-LP scalar-call v1; all previous signatures verified unchanged.
@@ -24,4 +25,4 @@
 # Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
-6938db29c96679a2bbaab9d39771ed988b6295ecece7c7cdb72d07bbbc60d6d5
+2564a3b40f48b5297c2b0a4ed60f42fc397f223b9e36a071246bd3febab86482

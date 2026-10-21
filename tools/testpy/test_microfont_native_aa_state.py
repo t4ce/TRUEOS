@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check scoped Gen12 native-AA state and the ordinary render-cache message."""
 from pathlib import Path
-import subprocess,tempfile
+import re,subprocess,tempfile
 ROOT=Path(__file__).resolve().parents[2]
 pipeline=(ROOT/'src/intel/render/pipeline.rs').read_text()
 a=pipeline.index('const fn microfont_line_aa_raster(')
@@ -33,7 +33,7 @@ isa=(ROOT/'crates/trueos-shader/microfont_line_ends/line_ends.ps.iga.txt').read_
 assert 'render target write SIMD16' in isa and 'replicated' not in isa
 assert '0x10031000' in isa  # Regular RTW, slot group LO: bypassed AA/coverage data.
 primary=(ROOT/'src/intel/render/primary.rs').read_text()
-assert 'ResidentSceneFragmentContract::MicrofontAa(_) | ResidentSceneFragmentContract::MicrofontMask(_) => TriangleBlendProbeMode::StraightAlpha' in primary
+assert re.search(r'ResidentSceneFragmentContract::MicrofontAa\(_\)\s*\|\s*ResidentSceneFragmentContract::MicrofontMask\(_\)\s*=>\s*\{?\s*TriangleBlendProbeMode::StraightAlpha', primary)
 assert 'if draw.microfont_aa && depth_config.is_some()' in primary
 
 assert 'microfont_line_aa_wm(0x8000_0040 | wm_barycentric_mode, native_line_aa)' in pipeline

@@ -140,6 +140,12 @@ fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
     let mut generated =
         String::from("fn resolve_cabi_import(name: &str) -> Option<usize> {\n    match name {\n");
     for name in import_names {
+        // Disabled Gridpaper has no kernel implementation to bind.
+        if name.starts_with("trueos_cabi_gridpaper_")
+            && env::var_os("CARGO_FEATURE_GRIDPAPER").is_none()
+        {
+            continue;
+        }
         let Some(symbol_path) = defined_exports.get(&name) else {
             println!(
                 "cargo:warning=declared CABI symbol {name} has no kernel export and will stay unresolved"

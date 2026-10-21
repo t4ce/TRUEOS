@@ -99,15 +99,13 @@ pub(crate) use frame_pool::{
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
     publish_frame_buffer, publish_gpgpu_frame_buffer, publish_gpgpu_render_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
-    publish_gpu_font_frame_buffer, publish_gpu_frame_buffer, publish_resident_scene_frame_buffer,
+    publish_gpu_frame_buffer, publish_resident_scene_frame_buffer,
     published_rgba_view, release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewPreset,
-    gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_cpp_font_preview_start,
-    request_cpp_font_rush2_start, request_cpp_font_rush2_stop, request_gpgpu_preview_stop,
-    request_win_demo_start,
-};
+    gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_gpgpu_preview_stop,
+    };
 pub(crate) use gpgpu_svg_probe_consumer::{
     GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
     request_gpgpu_svg_probe_start, request_gpgpu_svg_probe_stop,

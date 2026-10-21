@@ -17,17 +17,12 @@ use super::{
     WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
     cancel_frame_buffer, commit_window_frame_replacement, create_frame, create_window,
     destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
-    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_gpu_font_frame_buffer,
+    publish_frame_buffer, publish_gpgpu_frame_buffer, 
     publish_window_frame, publish_window_frames, reselect_window_for_cursor,
     retire_frame_when_released, take_owner_input_events, window_placement, window_resize_state,
     writable_rgba_view,
 };
 
-mod font_rush2;
-use font_rush2::{
-    CppFontRush2PlaneState, grow_cpp_font_rush2, initialize_cpp_font_rush2_set,
-    render_cpp_font_rush2_frame, retire_cpp_font_rush2_frames,
-};
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
 const PREVIEW_WIDTH: u32 = super::DEFAULT_FRAME_WIDTH;
@@ -40,12 +35,6 @@ const IDLE_POLL_MS: u64 = 20;
 const COMMAND_POLL_MAX_MS: u64 = 10;
 const RESIZE_RETRY_MS: u64 = 250;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
-const STATIC30_FRAME_COUNT: usize = 30;
-const STATIC30_PLANE_COUNT: usize = 3;
-const STATIC30_COLUMNS: u32 = 6;
-const STATIC30_ROWS: u32 = 5;
-const STATIC30_MAX_WIDTH: u32 = 320;
-const STATIC30_MAX_HEIGHT: u32 = 180;
 
 pub(crate) const GPGPU_PREVIEW_DEFAULT_DURATION_MS: u64 = 5_000;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_CADENCE_MS: u64 = 33;
@@ -56,7 +45,7 @@ pub(crate) const GPGPU_PREVIEW_MAX_PUBLISH_EVERY: u32 = 1_024;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuPreviewPreset {
     Static,
-    Static30,
+    
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Lab256,
     CppGallery,
@@ -68,15 +57,15 @@ pub(crate) enum GpgpuPreviewPreset {
     CppRetroSun,
     CppAudio,
     CppParticle,
-    CppFont,
-    CppFontRush2,
+    
+    
 }
 
 impl GpgpuPreviewPreset {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Static => "static",
-            Self::Static30 => "static30",
+            
             Self::Lab256 => "lab256",
             Self::CppGallery => "cpp-gallery",
             Self::CppCloudHighWisps => "cpp-cloud-high-wisps",
@@ -87,9 +76,9 @@ impl GpgpuPreviewPreset {
             Self::CppRetroSun => "cpp-retro-sun",
             Self::CppAudio => "cpp-audio",
             Self::CppParticle => "cpp-particle",
-            Self::CppFont => "cpp-font",
+            
 
-            Self::CppFontRush2 => "cpp-font-rush2",
+            
         }
     }
 
@@ -105,20 +94,20 @@ impl GpgpuPreviewPreset {
                 | Self::CppRetroSun
                 | Self::CppAudio
                 | Self::CppParticle
-                | Self::CppFont
-                | Self::CppFontRush2
+                
+                
         )
     }
 
     pub(crate) const fn is_resizable_cpp(self) -> bool {
-        self.is_cpp() && !matches!(self, Self::CppFont | Self::CppFontRush2)
+        self.is_cpp()
     }
 
     pub(crate) const fn buffering_label(self) -> &'static str {
         match self {
-            Self::Static30 | Self::CppFont => "single",
+            
 
-            Self::CppFontRush2 => "double-per-plane-canvas",
+            
             _ => "double",
         }
     }
@@ -126,20 +115,11 @@ impl GpgpuPreviewPreset {
     pub(crate) const fn plane_layout_label(self) -> &'static str {
         match self {
             Self::Static => "slot1-direct",
-            Self::Static30 => "slots1+2+3/10-each",
+            
             Self::Lab256 => "slot1-alpha-256x256",
-            Self::CppGallery
-            | Self::CppCloudHighWisps
-            | Self::CppAurora
-            | Self::CppJulia
-            | Self::CppSdf
-            | Self::CppVoronoi
-            | Self::CppRetroSun
-            | Self::CppAudio
-            | Self::CppParticle
-            | Self::CppFont => "slot1-direct",
+            Self::CppGallery | Self::CppCloudHighWisps | Self::CppAurora | Self::CppJulia | Self::CppSdf | Self::CppVoronoi | Self::CppRetroSun | Self::CppAudio | Self::CppParticle => "slot1-direct",
 
-            Self::CppFontRush2 => "slots0+1+2+3-four-canvases/eight-producers",
+            
         }
     }
 }
@@ -329,9 +309,6 @@ impl PreviewControl {
 }
 
 static PREVIEW_CONTROL: Mutex<PreviewControl> = Mutex::new(PreviewControl::new());
-static CPP_FONT_REQUEST: Mutex<
-    Option<(u64, crate::r::services::font_kernel_service::FontStampRequest)>,
-> = Mutex::new(None);
 
 struct CloudBrushState {
     brush: crate::intel::gpgpu::CppCloudBrush,
@@ -372,8 +349,8 @@ struct ActivePreview {
     extra_surfaces: Vec<StaticPreviewSurface>,
     particle_craft: Option<crate::intel::gpgpu::GpgpuOwnedParticleCraftState>,
     cloud_brush: CloudBrushState,
-    font_stamp: Option<crate::r::services::font_kernel_service::FontStampRequest>,
-    font_rush2: Option<CppFontRush2PlaneState>,
+
+
     metrics: GpgpuPreviewMetrics,
 }
 
@@ -384,95 +361,9 @@ struct StaticPreviewSurface {
     scheme: u8,
 }
 
-pub(crate) fn request_win_demo_start() -> Result<u64, &'static str> {
-    request_gpgpu_preview_start_with_policy(
-        GpgpuPreviewConfig {
-            preset: GpgpuPreviewPreset::Static30,
-            duration_ms: 0,
-            cadence_ms: GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
-            publish_every: GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
-        },
-        PreviewRunPolicy::WIN_DEMO,
-    )
-}
 
-pub(crate) fn request_cpp_font_preview_start(
-    request: crate::r::services::font_kernel_service::FontStampRequest,
-) -> Result<u64, &'static str> {
-    let first = request.layers.first().ok_or("font-stamp-layer-count")?;
-    if request.fit != crate::r::services::font_kernel_service::FontStampFit::Canvas {
-        return Err("font-preview-requires-canvas");
-    }
-    let width = first.scene.raster_width;
-    let height = first.scene.raster_height;
-    let config = GpgpuPreviewConfig {
-        preset: GpgpuPreviewPreset::CppFont,
-        duration_ms: 0,
-        cadence_ms: GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
-        publish_every: 1,
-    };
-    let mut control = PREVIEW_CONTROL.lock();
-    let serial = next_serial(control.desired.serial);
-    *CPP_FONT_REQUEST.lock() = Some((serial, request));
-    control.desired = DesiredPreview {
-        serial,
-        running: true,
-        config,
-        policy: PreviewRunPolicy::SHELL,
-    };
-    control.status.desired_running = true;
-    control.status.phase = GpgpuPreviewPhase::Starting;
-    control.status.request_serial = serial;
-    control.status.config = config;
-    control.status.width = width;
-    control.status.height = height;
-    control.status.last_error = "none";
-    Ok(serial)
-}
 
-pub(crate) fn request_cpp_font_rush2_start() -> Result<u64, &'static str> {
-    if !crate::r::services::font_kernel_service::status().online {
-        return Err("font-service-offline");
-    }
-    font_rush2::ensure_application_planes_idle("request-rush2")?;
-    let config = GpgpuPreviewConfig {
-        preset: GpgpuPreviewPreset::CppFontRush2,
-        duration_ms: 0,
-        cadence_ms: 33,
-        publish_every: 1,
-    };
-    let mut control = PREVIEW_CONTROL.lock();
-    if control.desired.running {
-        return Err("gpgpu-preview-busy");
-    }
-    let serial = next_serial(control.desired.serial);
-    control.desired = DesiredPreview {
-        serial,
-        running: true,
-        config,
-        policy: PreviewRunPolicy::SHELL,
-    };
-    control.status.desired_running = true;
-    control.status.phase = GpgpuPreviewPhase::Starting;
-    control.status.request_serial = serial;
-    control.status.config = config;
-    control.status.last_error = "none";
-    Ok(serial)
-}
 
-pub(crate) fn request_cpp_font_rush2_stop() -> Result<u64, &'static str> {
-    let mut control = PREVIEW_CONTROL.lock();
-    if !control.desired.running || control.desired.config.preset != GpgpuPreviewPreset::CppFontRush2
-    {
-        return Err("font-rush2-not-running");
-    }
-    let serial = next_serial(control.desired.serial);
-    control.desired.serial = serial;
-    control.desired.running = false;
-    control.status.desired_running = false;
-    control.status.request_serial = serial;
-    Ok(serial)
-}
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn request_gpgpu_lab256_startup(
@@ -558,7 +449,6 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
     let mut retired_frames = Vec::new();
 
     loop {
-        retire_cpp_font_rush2_frames();
         retire_frames(&mut retired_frames);
         drain_preview_input(&mut active, &mut retired_frames);
         reconcile_preview_extents(&mut active, &mut retired_frames);
@@ -645,23 +535,8 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
         let now = Instant::now();
         let mut duration_expired = false;
         let mut render_fault = None;
-        let font_rush2_active = active
-            .first()
-            .is_some_and(|preview| preview.config.preset == GpgpuPreviewPreset::CppFontRush2);
-        if font_rush2_active {
-            if let Err(reason) = grow_cpp_font_rush2(&mut active, now) {
-                render_fault = Some(reason);
-            }
-            for preview in &mut active {
-                preview.metrics.elapsed_ms =
-                    now.saturating_duration_since(preview.started).as_millis();
-                if render_fault.is_none() && preview.static_needs_publish {
-                    if let Err(reason) = render_cpp_font_rush2_frame(preview) {
-                        render_fault = Some(reason);
-                    }
-                }
-            }
-        } else {
+        
+        {
             for preview in &mut active {
                 if render_fault.is_some() {
                     break;
@@ -729,9 +604,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 }
 
 fn initialize_previews(desired: DesiredPreview) -> Result<Vec<ActivePreview>, &'static str> {
-    if desired.config.preset == GpgpuPreviewPreset::CppFontRush2 {
-        initialize_cpp_font_rush2_set(desired)
-    } else {
+    {
         Ok(alloc::vec![initialize_preview(desired)?])
     }
 }
@@ -744,12 +617,8 @@ fn abandon_preview_initialization(session: WindowSessionId, previews: &[ActivePr
 }
 
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
-    if desired.config.preset == GpgpuPreviewPreset::CppFont {
-        return initialize_cpp_font_preview(desired);
-    }
-    if desired.config.preset == GpgpuPreviewPreset::Static30 {
-        return initialize_static30_preview(desired);
-    }
+    
+    
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
     let (width, height) = preview_extent(desired.config.preset);
     let frame =
@@ -821,228 +690,14 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         extra_surfaces: Vec::new(),
         particle_craft: None,
         cloud_brush: CloudBrushState::new(),
-        font_stamp: None,
-        font_rush2: None,
+
+
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
 
-fn initialize_cpp_font_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
-    let request = {
-        let mut queued = CPP_FONT_REQUEST.lock();
-        match queued.take() {
-            Some((serial, request)) if serial == desired.serial => request,
-            Some(stale) => {
-                *queued = Some(stale);
-                return Err("font-preview-request-serial-mismatch");
-            }
-            None => return Err("font-preview-request-missing"),
-        }
-    };
-    let scene = &request.layers[0].scene;
-    let (width, height) = (scene.raster_width, scene.raster_height);
-    let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
-    let frame = create_frame(FrameSpec {
-        output,
-        content: FrameContent::FontScene2d,
-        cadence: FrameCadence::Immutable,
-        buffering: super::FrameBuffering::Single,
-        format: ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
-        base_color: Some(PremultipliedRgba8::from_straight_rgba(10, 14, 24, u8::MAX)),
-    })
-    .map_err(preview_frame_create_error_label)?;
-    let session = match begin_window_session(PREVIEW_OWNER) {
-        Ok(session) => session,
-        Err(_) => {
-            let _ = destroy_frame(frame);
-            return Err("font-preview-window-session-create-failed");
-        }
-    };
-    let (scanout_width, _) = crate::intel::active_scanout_dimensions().unwrap_or((width, height));
-    let x = scanout_width.saturating_sub(width.saturating_add(PREVIEW_MARGIN)) as i32;
-    let window = match create_window(WindowCreate {
-        owner: PREVIEW_OWNER,
-        session,
-        frame,
-        output,
-        plane: preview_plane(GpgpuPreviewPreset::CppFont),
-        placement: WindowPlacement {
-            x,
-            y: PREVIEW_MARGIN as i32,
-            width,
-            height,
-            z: PREVIEW_Z,
-            opacity: u8::MAX,
-            visible: true,
-        },
-        interaction: super::WindowInteraction::MOVABLE_FRAME,
-    }) {
-        Ok(window) => window,
-        Err(_) => {
-            let _ = finish_window_session(PREVIEW_OWNER, session);
-            let _ = destroy_frame(frame);
-            return Err("font-preview-window-create-failed");
-        }
-    };
-    let now = Instant::now();
-    Ok(ActivePreview {
-        request_serial: desired.serial,
-        config: desired.config,
-        policy: desired.policy,
-        cadence_phase: 0,
-        session,
-        frame,
-        window,
-        width,
-        height,
-        resize_retry_width: 0,
-        resize_retry_height: 0,
-        resize_retry_at: now,
-        pending_resize_previous_frame: None,
-        pending_resize_logical_extent: None,
-        pending_resize_epoch: None,
-        committed_logical_extent: (width, height),
-        started: now,
-        next_render: now,
-        static_needs_publish: true,
-        extra_surfaces: Vec::new(),
-        particle_craft: None,
-        cloud_brush: CloudBrushState::new(),
-        font_stamp: Some(request),
-        font_rush2: None,
-        metrics: GpgpuPreviewMetrics::default(),
-    })
-}
 
-fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
-    let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
-    let (output_width, output_height) = crate::intel::active_scanout_dimensions()
-        .unwrap_or((PREVIEW_WIDTH.saturating_mul(2), PREVIEW_HEIGHT.saturating_mul(2)));
-    let cell_width = (output_width / STATIC30_COLUMNS).max(1);
-    let cell_height = (output_height / STATIC30_ROWS).max(1);
-    let mut frames = Vec::with_capacity(STATIC30_FRAME_COUNT);
-    let mut surfaces = Vec::with_capacity(STATIC30_FRAME_COUNT);
-    let session =
-        begin_window_session(PREVIEW_OWNER).map_err(|_| "static30-session-create-failed")?;
 
-    for index in 0..STATIC30_FRAME_COUNT {
-        let index_u32 = index as u32;
-        let plane_slot = index % STATIC30_PLANE_COUNT + 1;
-        let plane_offset = plane_slot as u32 * 4;
-        let inset = 8u32.saturating_add(plane_offset);
-        let width = cell_width
-            .saturating_sub(inset.saturating_mul(2))
-            .min(STATIC30_MAX_WIDTH)
-            .max(1);
-        let height = cell_height
-            .saturating_sub(inset.saturating_mul(2))
-            .min(STATIC30_MAX_HEIGHT)
-            .max(1);
-        let x = (index_u32 % STATIC30_COLUMNS)
-            .saturating_mul(cell_width)
-            .saturating_add(inset);
-        let y = (index_u32 / STATIC30_COLUMNS)
-            .saturating_mul(cell_height)
-            .saturating_add(inset);
-        let frame = match create_static30_frame(output, width, height, index as u8) {
-            Ok(frame) => frame,
-            Err(_) => {
-                abandon_static30_initialization(session, &frames);
-                return Err("static30-frame-create-failed");
-            }
-        };
-        frames.push(frame);
-        let window = match create_window(WindowCreate {
-            owner: PREVIEW_OWNER,
-            session,
-            frame,
-            output,
-            plane: WindowPlane::Universal(plane_slot as u8),
-            placement: WindowPlacement {
-                x: x as i32,
-                y: y as i32,
-                width,
-                height,
-                z: PREVIEW_Z.saturating_add(index as i32),
-                opacity: u8::MAX,
-                visible: true,
-            },
-            interaction: if desired.policy.interactive_win_demo {
-                super::WindowInteraction::APPLICATION_FIXED_FRAME
-            } else {
-                super::WindowInteraction::MOVABLE_FRAME
-            },
-        }) {
-            Ok(window) => window,
-            Err(error) => {
-                crate::log_warn!(
-                    target: "ui4";
-                    "ui4 gpgpu-preview static30 window admission failed index={} plane_slot={} session={} active_frames={} error={:?}\n",
-                    index,
-                    plane_slot,
-                    session.raw(),
-                    frames.len(),
-                    error,
-                );
-                abandon_static30_initialization(session, &frames);
-                return Err("static30-window-create-failed");
-            }
-        };
-        surfaces.push(StaticPreviewSurface {
-            frame,
-            window,
-            scheme: index as u8,
-        });
-    }
-
-    let first = surfaces[0];
-    let now = Instant::now();
-    Ok(ActivePreview {
-        request_serial: desired.serial,
-        config: desired.config,
-        policy: desired.policy,
-        cadence_phase: 0,
-        session,
-        frame: first.frame,
-        window: first.window,
-        width: cell_width.saturating_sub(24).min(STATIC30_MAX_WIDTH).max(1),
-        height: cell_height
-            .saturating_sub(24)
-            .min(STATIC30_MAX_HEIGHT)
-            .max(1),
-        resize_retry_width: 0,
-        resize_retry_height: 0,
-        resize_retry_at: now,
-        pending_resize_previous_frame: None,
-        pending_resize_logical_extent: None,
-        pending_resize_epoch: None,
-        committed_logical_extent: (
-            cell_width.saturating_sub(24).min(STATIC30_MAX_WIDTH).max(1),
-            cell_height
-                .saturating_sub(24)
-                .min(STATIC30_MAX_HEIGHT)
-                .max(1),
-        ),
-        started: now,
-        next_render: now,
-        static_needs_publish: true,
-        extra_surfaces: surfaces.iter().copied().skip(1).collect(),
-        particle_craft: None,
-        cloud_brush: CloudBrushState::new(),
-        font_stamp: None,
-        font_rush2: None,
-        metrics: GpgpuPreviewMetrics::default(),
-    })
-}
-
-fn abandon_static30_initialization(session: WindowSessionId, frames: &[FrameHandle]) {
-    let _ = finish_window_session(PREVIEW_OWNER, session);
-    for frame in frames.iter().copied() {
-        let _ = destroy_frame(frame);
-    }
-}
 
 const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str {
     match error {
@@ -1105,40 +760,10 @@ fn create_preview_frame(
     })
 }
 
-fn create_static30_frame(
-    output: OutputId,
-    width: u32,
-    height: u32,
-    scheme: u8,
-) -> Result<FrameHandle, FramePoolError> {
-    let seed = u16::from(scheme);
-    create_frame(FrameSpec {
-        output,
-        content: FrameContent::FontScene2d,
-        // Every Lorem Ipsum canvas is stamped and published exactly once. A
-        // single buffer keeps the full lease/release contract honest while
-        // avoiding redundant storage across the 30-window probe.
-        cadence: FrameCadence::Immutable,
-        buffering: super::FrameBuffering::Single,
-        format: ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
-        base_color: Some(PremultipliedRgba8::from_straight_rgba(
-            (10 + seed * 7 % 28) as u8,
-            (14 + seed * 11 % 32) as u8,
-            (28 + seed * 13 % 44) as u8,
-            u8::MAX,
-        )),
-    })
-}
 
 async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
-    if preview.config.preset == GpgpuPreviewPreset::CppFont {
-        return render_cpp_font_frame(preview).await;
-    }
-    if preview.config.preset == GpgpuPreviewPreset::Static30 {
-        return render_static30_frames(preview).await;
-    }
+    
+    
     preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
     let publish_this_frame = preview.pending_resize_previous_frame.is_some()
         || (preview.metrics.attempted - 1) % u64::from(preview.config.publish_every) == 0;
@@ -1221,10 +846,7 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
             None => Err(FramePoolError::ProducerReleaseRequired),
         },
-        GpgpuPreviewPreset::Static
-        | GpgpuPreviewPreset::Static30
-        | GpgpuPreviewPreset::CppFont
-        | GpgpuPreviewPreset::CppFontRush2 => publish_frame_buffer(lease),
+        GpgpuPreviewPreset::Static => publish_frame_buffer(lease),
     };
     let published = match publish_result {
         Ok(published) => published,
@@ -1251,24 +873,7 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
             preview.metrics.published,
         );
     }
-    if !matches!(preview.config.preset, GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30)
-        && should_log_preview_checkpoint(preview.metrics.published)
-    {
-        crate::log_info!(
-            target: "ui4";
-            "ui4 gpgpu-preview frame-ready request={} preset={} frame={} buffer={} publish_serial={} marker=0x{:08X} producer_release={} consumer={} compositor_backpressure=read-lease buffering=double published={} dropped_busy={}\n",
-            preview.request_serial,
-            preview.config.preset.label(),
-            published.frame.raw(),
-            published.buffer_index,
-            published.publish_serial,
-            preview.metrics.last_marker,
-            preview_release_label(preview.config.preset),
-            preview_consumer_label(preview.config.preset),
-            preview.metrics.published,
-            preview.metrics.dropped_busy,
-        );
-    }
+    
     if preview.config.preset == GpgpuPreviewPreset::Static {
         preview.static_needs_publish = false;
         crate::log_info!(
@@ -1360,253 +965,8 @@ fn publish_preview_window_frame(
     Ok(true)
 }
 
-async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
-    preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
-    let lease = match acquire_frame_buffer(preview.frame) {
-        Ok(lease) => lease,
-        Err(FramePoolError::Busy) => {
-            preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
-            return Ok(());
-        }
-        Err(_) => {
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("font-preview-frame-acquire-failed");
-        }
-    };
-    let destination = match gpgpu_rgba_surface(lease) {
-        Ok(destination) => destination,
-        Err(_) => {
-            let _ = cancel_frame_buffer(lease);
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("font-preview-surface-unavailable");
-        }
-    };
-    let Some(request) = preview.font_stamp.take() else {
-        let _ = cancel_frame_buffer(lease);
-        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        return Err("font-preview-request-consumed");
-    };
-    let pending = match crate::r::services::font_kernel_service::submit_frame_stamp(
-        request.clone(),
-        destination,
-    ) {
-        Ok(pending) => pending,
-        Err(crate::r::services::font_kernel_service::FontKernelError::QueueFull) => {
-            preview.font_stamp = Some(request);
-            let _ = cancel_frame_buffer(lease);
-            preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
-            return Ok(());
-        }
-        Err(_) => {
-            let _ = cancel_frame_buffer(lease);
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("font-preview-submit-failed");
-        }
-    };
-    let stamped = match pending.wait().await {
-        Ok(stamped) => stamped,
-        Err(crate::r::services::font_kernel_service::FontKernelError::SubmittedIncomplete(_)) => {
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("font-preview-submit-incomplete");
-        }
-        Err(_) => {
-            let _ = cancel_frame_buffer(lease);
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("font-preview-stamp-failed");
-        }
-    };
-    preview.metrics.submitted = preview.metrics.submitted.saturating_add(1);
-    preview.metrics.completed = preview.metrics.completed.saturating_add(1);
-    if publish_gpu_font_frame_buffer(lease, stamped.release()).is_err() {
-        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        return Err("font-preview-frame-publish-failed");
-    }
-    if publish_window_frame(PREVIEW_OWNER, preview.window, DamageRect::FULL).is_err() {
-        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        return Err("font-preview-window-publish-failed");
-    }
-    preview.metrics.published = preview.metrics.published.saturating_add(1);
-    preview.metrics.last_iterations = stamped.glyphs() as u32;
-    preview.metrics.last_marker = stamped.release().sequence() as u32;
-    preview.static_needs_publish = false;
-    crate::log_info!(
-        target: "ui4";
-        "ui4 cpp-font preview ready request={} frame={} window={} extent={}x{} glyphs={} submits={} walkers={} release={} context=kernel-gpgpu-font path=outline->gpu-vm-r8->cpp-igc->guc-font-rcs->ui4-font-scene\n",
-        preview.request_serial,
-        preview.frame.raw(),
-        preview.window.raw(),
-        preview.width,
-        preview.height,
-        stamped.glyphs(),
-        stamped.submits(),
-        stamped.active_walkers(),
-        stamped.release().sequence(),
-    );
-    Ok(())
-}
 
-async fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static str> {
-    let mut surfaces = Vec::with_capacity(STATIC30_FRAME_COUNT);
-    surfaces.push(StaticPreviewSurface {
-        frame: preview.frame,
-        window: preview.window,
-        scheme: 0,
-    });
-    surfaces.extend(preview.extra_surfaces.iter().copied());
 
-    let mut glyphs = 0usize;
-    let mut kernel_submits = 0usize;
-    let mut active_walkers = 0usize;
-    let mut last_release = 0u64;
-    for surface in &surfaces {
-        preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
-        let lease = match acquire_frame_buffer(surface.frame) {
-            Ok(lease) => lease,
-            Err(FramePoolError::Busy) => {
-                preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
-                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-                return Err("static30-frame-busy");
-            }
-            Err(_) => {
-                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-                return Err("static30-frame-acquire-failed");
-            }
-        };
-        let destination = match gpgpu_rgba_surface(lease) {
-            Ok(destination) => destination,
-            Err(_) => {
-                let _ = cancel_frame_buffer(lease);
-                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-                return Err("static30-font-surface-unavailable");
-            }
-        };
-        let request =
-            static30_font_stamp_request(destination.width, destination.height, surface.scheme);
-        let pending =
-            match crate::r::services::font_kernel_service::submit_frame_stamp(request, destination)
-            {
-                Ok(pending) => pending,
-                Err(_) => {
-                    let _ = cancel_frame_buffer(lease);
-                    preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-                    return Err("static30-font-submit-failed");
-                }
-            };
-        let stamped = match pending.wait().await {
-            Ok(stamped) => stamped,
-            Err(crate::r::services::font_kernel_service::FontKernelError::SubmittedIncomplete(
-                _,
-            )) => {
-                // The accepted producer may still target this exact surface.
-                // Preserve the write lease so neither UI4 nor a future
-                // producer can recycle it underneath a late GPU write.
-                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-                return Err("static30-font-submit-incomplete");
-            }
-            Err(_) => {
-                let _ = cancel_frame_buffer(lease);
-                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-                return Err("static30-font-stamp-failed");
-            }
-        };
-        preview.metrics.submitted = preview.metrics.submitted.saturating_add(1);
-        preview.metrics.completed = preview.metrics.completed.saturating_add(1);
-        glyphs = glyphs.saturating_add(stamped.glyphs());
-        kernel_submits = kernel_submits.saturating_add(stamped.submits());
-        active_walkers = active_walkers.saturating_add(stamped.active_walkers());
-        last_release = stamped.release().sequence();
-        if publish_gpu_font_frame_buffer(lease, stamped.release()).is_err() {
-            let _ = cancel_frame_buffer(lease);
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("static30-font-frame-publish-failed");
-        }
-    }
-
-    let publications = surfaces
-        .iter()
-        .map(|surface| (surface.window, DamageRect::FULL))
-        .collect::<Vec<_>>();
-    if publish_window_frames(PREVIEW_OWNER, &publications).is_err() {
-        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        return Err("static30-window-publish-failed");
-    }
-    preview.metrics.published = preview
-        .metrics
-        .published
-        .saturating_add(publications.len() as u64);
-
-    preview.static_needs_publish = false;
-    crate::log_info!(
-        target: "ui4";
-        "ui4 gpgpu-preview static30 published request={} frames={} windows={} slots=1+2+3 per_slot=10 glyphs={} font_jobs={} kernel_submits={} active_walkers={} release_sequence={} producer=font-kernel-service path=outline->gpu-vm-r8->cpp-font-instance->ui4-frame cadence=immutable/single publish_passes=1 cpu_readback=0 cpu_frame_copy=0\n",
-        preview.request_serial,
-        preview.metrics.published,
-        preview_surface_count(preview),
-        glyphs,
-        preview.metrics.submitted,
-        kernel_submits,
-        active_walkers,
-        last_release,
-    );
-    Ok(())
-}
-
-fn static30_font_stamp_request(
-    width: u32,
-    height: u32,
-    scheme: u8,
-) -> crate::r::services::font_kernel_service::FontStampRequest {
-    use crate::r::services::font_kernel_service::{
-        FontStampFit, FontStampLayer, FontStampRequest, RetainSceneRequest,
-        RetainedFontPositioning, RetainedFontRun,
-    };
-
-    let horizontal_padding = 10.0f32;
-    let vertical_padding = 8.0f32;
-    let width_fit = (width.saturating_sub(20) as f32 / 9.0).max(8.0);
-    let height_fit = (height.saturating_sub(16) as f32 / 5.4).max(8.0);
-    let font_pixels = width_fit.min(height_fit).clamp(8.0, 26.0);
-    let baseline = vertical_padding + font_pixels;
-    let line_advance = font_pixels * 1.22;
-    let scene = |runs| RetainSceneRequest {
-        runs,
-        font: crate::intel::gpu_font::GpuFontFace::Default,
-        viewport_width: width,
-        viewport_height: height,
-        raster_width: width,
-        raster_height: height,
-        positioning: RetainedFontPositioning::SceneOrigin,
-    };
-    let run = |text: &'static str, row: usize| RetainedFontRun {
-        text: String::from(text),
-        position: [horizontal_padding, baseline + row as f32 * line_advance],
-        font_pixels,
-        slant: if scheme.is_multiple_of(3) { 0.08 } else { 0.0 },
-    };
-    let seed = u16::from(scheme);
-    FontStampRequest {
-        layers: alloc::vec![
-            FontStampLayer {
-                scene: scene(alloc::vec![run("Lorem ipsum", 0)]),
-                foreground: crate::intel::gpu_font::GpuFontRgba::new(
-                    (112 + seed * 37 % 143) as u8,
-                    (144 + seed * 53 % 111) as u8,
-                    (176 + seed * 29 % 79) as u8,
-                    u8::MAX,
-                ),
-            },
-            FontStampLayer {
-                scene: scene(alloc::vec![
-                    run("dolor sit amet,", 1),
-                    run("consectetur", 2),
-                    run("adipiscing elit.", 3),
-                ]),
-                foreground: crate::intel::gpu_font::GpuFontRgba::new(238, 244, 255, u8::MAX,),
-            },
-        ],
-        fit: FontStampFit::Canvas,
-    }
-}
 
 /// Paint one unmistakable CPU-authored frame. This path deliberately does not
 /// request a GPGPU surface, upload a kernel, submit through GuC, or poll a GPU
@@ -1702,10 +1062,7 @@ fn dispatch_preview_kernel(
     surface: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> PreviewDispatchResult {
     match preview.config.preset {
-        GpgpuPreviewPreset::Static
-        | GpgpuPreviewPreset::Static30
-        | GpgpuPreviewPreset::CppFont
-        | GpgpuPreviewPreset::CppFontRush2 => PreviewDispatchResult {
+        GpgpuPreviewPreset::Static => PreviewDispatchResult {
             ok: false,
             submitted: false,
             iterations: 0,
@@ -1843,10 +1200,8 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppParticle => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static => "clflush-mfence-before-publish",
-        GpgpuPreviewPreset::Static30 => "font-instance+pipe-control+post-marker-exact-surface",
-        GpgpuPreviewPreset::CppFont | GpgpuPreviewPreset::CppFontRush2 => {
-            "font-instance+pipe-control+post-marker-exact-surface"
-        }
+        
+        
     }
 }
 
@@ -1854,7 +1209,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
         GpgpuPreviewPreset::Lab256 => "guc-lab256-three-pass",
         GpgpuPreviewPreset::Static => "cpu-static",
-        GpgpuPreviewPreset::Static30 => "font-kernel-service-cpp",
+        
         GpgpuPreviewPreset::CppGallery
         | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
@@ -1864,27 +1219,18 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
         GpgpuPreviewPreset::CppParticle => "guc-cpp-stateful-three-pass",
-        GpgpuPreviewPreset::CppFont => "font-kernel-service-cpp",
-        GpgpuPreviewPreset::CppFontRush2 => "font-kernel-service-semi-persistent-producers",
+        
+        
     }
 }
 
 const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
     match preset {
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
+        GpgpuPreviewPreset::Static => {
             WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8)
         }
-        GpgpuPreviewPreset::CppGallery
-        | GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAurora
-        | GpgpuPreviewPreset::CppJulia
-        | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi
-        | GpgpuPreviewPreset::CppRetroSun
-        | GpgpuPreviewPreset::CppAudio
-        | GpgpuPreviewPreset::CppParticle
-        | GpgpuPreviewPreset::CppFont => WindowPlane::Universal(preview_plane_slot(preset) as u8),
-        GpgpuPreviewPreset::CppFontRush2 => WindowPlane::Primary,
+        GpgpuPreviewPreset::CppGallery | GpgpuPreviewPreset::CppCloudHighWisps | GpgpuPreviewPreset::CppAurora | GpgpuPreviewPreset::CppJulia | GpgpuPreviewPreset::CppSdf | GpgpuPreviewPreset::CppVoronoi | GpgpuPreviewPreset::CppRetroSun | GpgpuPreviewPreset::CppAudio | GpgpuPreviewPreset::CppParticle => WindowPlane::Universal(preview_plane_slot(preset) as u8),
+        
         GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
 }
@@ -1901,11 +1247,11 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppRetroSun
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
-        GpgpuPreviewPreset::CppFont => "ui4-font-scene-slot1",
+        
 
-        GpgpuPreviewPreset::CppFontRush2 => "ui4-font-scene-slots0+1+2+3-four-direct-canvases",
+        
         GpgpuPreviewPreset::Static => "ui4-overlay",
-        GpgpuPreviewPreset::Static30 => "ui4-font-scene-slots1+2+3",
+        
     }
 }
 
@@ -1928,7 +1274,7 @@ fn preview_needs_render(preview: &ActivePreview) -> bool {
     }
     !matches!(
         preview.config.preset,
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 | GpgpuPreviewPreset::CppFont
+        GpgpuPreviewPreset::Static  
     ) || preview.static_needs_publish
 }
 
@@ -2280,18 +1626,9 @@ fn stop_active_previews(
     // settled plane canvases animate through the same transition machinery;
     // Font's steady-state direct scanout is not a reason to skip user-visible
     // lifecycle behavior.
-    let font_rush2_close = previews
-        .first()
-        .is_some_and(|preview| matches!(preview.config.preset, GpgpuPreviewPreset::CppFontRush2));
-    let direct_close = !font_rush2_close && previews_support_direct_close(&previews);
-    let frame_lifecycle_transferred = if font_rush2_close {
-        finish_window_session_with_request(
-            PREVIEW_OWNER,
-            first.session,
-            WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames(),
-        )
-        .is_ok()
-    } else if direct_close {
+    
+    let direct_close = previews_support_direct_close(&previews);
+    let frame_lifecycle_transferred = if direct_close {
         finish_window_session_with_request(
             PREVIEW_OWNER,
             first.session,
@@ -2381,9 +1718,7 @@ fn stop_active_previews(
                 }
             }
         }
-        if let Some(state) = preview.font_rush2.take() {
-            font_rush2::retire(preview.frame, state);
-        } else if pending_resize_previous.is_none() && !frame_lifecycle_transferred {
+        if pending_resize_previous.is_none() && !frame_lifecycle_transferred {
             if !retired_frames.contains(&preview.frame) {
                 retired_frames.push(preview.frame);
             }
@@ -2576,9 +1911,7 @@ fn aggregate_preview_metrics(previews: &[ActivePreview]) -> GpgpuPreviewMetrics 
 }
 
 const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
-    if matches!(preset, GpgpuPreviewPreset::CppFontRush2) {
-        return 0;
-    }
+    
     if matches!(
         preset,
         GpgpuPreviewPreset::CppGallery
@@ -2598,13 +1931,7 @@ const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
 fn active_preview_plane_slot(preview: &ActivePreview) -> usize {
     super::window_broker::window_snapshot(PREVIEW_OWNER, preview.window)
         .map(|window| window.plane.slot())
-        .unwrap_or_else(|| {
-            preview
-                .font_rush2
-                .as_ref()
-                .map(|state| usize::from(state.plane_index()))
-                .unwrap_or_else(|| preview_plane_slot(preview.config.preset))
-        })
+        .unwrap_or_else(|| preview_plane_slot(preview.config.preset))
 }
 
 fn next_preview_group_poll_ms(previews: &[ActivePreview]) -> u64 {
@@ -2632,7 +1959,7 @@ mod tests {
     use super::{
         FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
         GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent,
-        preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request,
+        preview_frame_create_error_label, preview_plane_slot,
     };
 
     #[test]
@@ -2643,27 +1970,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn static30_builds_bounded_lorem_canvas_layers() {
-        let request = static30_font_stamp_request(320, 180, 7);
-        assert_eq!(request.fit, crate::r::services::font_kernel_service::FontStampFit::Canvas);
-        assert_eq!(request.layers.len(), 2);
-        assert!(request.layers.iter().all(|layer| {
-            layer.scene.raster_width == 320
-                && layer.scene.raster_height == 180
-                && layer.scene.viewport_width == 320
-                && layer.scene.viewport_height == 180
-        }));
-        assert_eq!(
-            request
-                .layers
-                .iter()
-                .flat_map(|layer| layer.scene.runs.iter())
-                .map(|run| run.text.chars().count())
-                .sum::<usize>(),
-            53
-        );
-    }
 
     #[test]
     fn cpp_modes_share_the_resizable_slot1_application_surface() {

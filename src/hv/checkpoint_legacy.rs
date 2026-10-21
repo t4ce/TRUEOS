@@ -317,6 +317,7 @@ pub(super) fn prepare_replicatable_resume(vm_id: u8) {
             }
         }
         resume_blueprint_process_context(vm_id);
+        #[cfg(feature = "gridpaper")]
         crate::r::services::gridpaper_service::resume_owner_lifecycle(vm_id);
     }
 }

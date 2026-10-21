@@ -8,6 +8,12 @@ extern crate alloc;
 use std::sync::Mutex;
 mod libm { pub fn ceilf(v:f32)->f32 {v.ceil()} pub fn sqrtf(v:f32)->f32 {v.sqrt()} pub fn roundf(v:f32)->f32 {v.round()} }
 mod spin {
+    pub struct Once<T>(std::sync::OnceLock<T>);
+    impl<T> Once<T> {
+        pub const fn new()->Self {Self(std::sync::OnceLock::new())}
+        pub fn get(&self)->Option<&T> {self.0.get()}
+        pub fn call_once(&self,f:impl FnOnce()->T)->&T {self.0.get_or_init(f)}
+    }
     pub struct Mutex<T>(std::sync::Mutex<T>);
     impl<T> Mutex<T> { pub const fn new(v:T)->Self {Self(std::sync::Mutex::new(v))}
         pub fn try_lock(&self)->Option<std::sync::MutexGuard<'_,T>> {self.0.try_lock().ok()}
@@ -114,7 +120,7 @@ mod intel {
                 else {((height*6+10)/11+12,height+12)};
             // Synthetic coverage tests the actual copy/tint sink independently
             // of hardware rasterization, which is exercised on the rig.
-            let slot=('A' as usize)-32;
+            let slot=if mask.width==cell_width {0}else{('A' as usize)-32};
             mask.data.fill(0);
             for y in 0..cell_height { for x in 0..cell_width {
                 let px=(slot%16) as u32*cell_width+x;let py=(slot/16) as u32*cell_height+y;
@@ -128,6 +134,8 @@ mod intel {
 TESTS=r'''
 use services::microfont_mask_service::*;
 fn reset(fault:u8) {
+    // Complete the one-off boot production before measuring atlas reuse.
+    warm_start_glyph().unwrap();
     let old=services::microfont_mask_service::ATLAS.try_lock().unwrap().take();drop(old);
     *STATE.lock().unwrap()=State {fault,..State::default()};
 }
@@ -135,6 +143,30 @@ fn expected_lines()->usize {
     (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
         .filter(|ch| !(' '..='~').contains(ch) && !('\u{2500}'..='\u{259f}').contains(ch)))
         .filter_map(microfont::raster_line::glyph_strips).map(|s|s.len()).sum()
+}
+#[test] fn start_section_sign_is_retained_once_as_a_single_physical_size_glyph() {
+    reset(0);
+    let cached=START_GLYPH.get().unwrap();
+    assert_eq!((cached.em_height_px,cached.width,cached.height),(213,129,225));
+    assert_eq!(cached.pixels.len(),129*225);
+    assert!(cached.pixels.iter().any(|&p|p!=0));
+    let pointer=cached.pixels.as_ptr();
+    warm_start_glyph().unwrap();warm_start_glyph().unwrap();
+    assert_eq!(START_GLYPH.get().unwrap().pixels.as_ptr(),pointer);
+    assert_eq!(STATE.lock().unwrap().renders,0);
+    with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
+    assert_eq!(START_GLYPH.get().unwrap().pixels.as_ptr(),pointer);
+    assert_eq!(STATE.lock().unwrap().renders,1);
+}
+#[test] fn standalone_large_glyph_uses_only_its_strips_and_one_small_target() {
+    reset(0);
+    let glyph=build_single_glyph_mask('§',320).unwrap();
+    assert_eq!((glyph.width,glyph.height),(187,332));
+    let state=STATE.lock().unwrap();
+    let strips=microfont::raster_line::glyph_strips('§').unwrap();
+    assert_eq!(state.uploads,strips.len()+1);
+    assert_eq!((state.renders,state.allocations,state.mask_releases),(1,1,1));
+    assert!(state.params.iter().all(|p|f32::from_bits(p[9])==320.0));
 }
 #[test] fn maps_all_three_ranges_without_collisions() {
     assert!(SLOT_COUNT>255);assert_eq!(glyph_slot(' '),Some(0));assert_eq!(glyph_slot('~'),Some(94));
@@ -408,6 +440,7 @@ def main():
     # Tests access the private owner only to reset between simulated boots.
     service=service.replace('static ATLAS:', 'pub(crate) static ATLAS:').replace('fn append_join(', 'pub(crate) fn append_join(').replace('pub(super) fn append_strip_joins(', 'pub(crate) fn append_strip_joins(')
     service=service.replace('pub(super) fn corner_triangle(', 'pub(crate) fn corner_triangle(')
+    service=service.replace('static START_GLYPH:', 'pub(crate) static START_GLYPH:').replace('fn warm_start_glyph(', 'pub(crate) fn warm_start_glyph(')
     # The fixture discards production logging, so its partial-coverage counter
     # has no reader. Keep the counter in production, where the log consumes it.
     service=service.replace('            let mut partial = 0usize;\n', '')
@@ -433,7 +466,7 @@ const ROWS:usize=10;
     }
 }
 '''
-    mocks=MOCKS.replace('mod intel {','mod intel { pub fn physical_extent_pixels_fraction(w:u32,h:u32,d:u32)->Option<(u32,u32)> {Some(((2560*w+300*d)/(600*d),(1440*h+170*d)/(340*d)))}')
+    mocks=MOCKS.replace('mod intel {','mod intel { pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert_eq!((w,h),(50,50));Some((213,213))} pub fn physical_extent_pixels_fraction(w:u32,h:u32,d:u32)->Option<(u32,u32)> {Some(((2560*w+300*d)/(600*d),(1440*h+170*d)/(340*d)))}')
     source=mocks+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n} mod preview_size {\n'+helpers+helper_tests+'\n}}\n'+TESTS
     with tempfile.TemporaryDirectory(prefix='microfont-mask-test-') as tmp:
         tmp=Path(tmp);lib=tmp/'libmicrofont.rlib'

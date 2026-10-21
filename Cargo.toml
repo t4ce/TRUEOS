@@ -83,6 +83,8 @@ trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
+# Retained Gridpaper/font backend; disabled while the legacy font stack is removed.
+gridpaper = []
 # Compatibility experiments are excluded from the normal VMX lifecycle.
 # RAM pause/resume does not require checkpoint storage or replication.
 legacy_vm_checkpoint = []
