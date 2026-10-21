@@ -560,6 +560,16 @@ fn direct_rcs_push_gpgpu_dispatch_prologue_with_vfe_dw5(
     batch_gpu: u64,
     vfe_dw5: u32,
 ) -> bool {
+    direct_rcs_push_gpgpu_prologue_with_instruction_base(batch, cursor, batch_gpu, upload.gpu, vfe_dw5)
+}
+
+fn direct_rcs_push_gpgpu_prologue_with_instruction_base(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    batch_gpu: u64,
+    instruction_gpu: u64,
+    vfe_dw5: u32,
+) -> bool {
     direct_rcs_push_pipe_control_full(
         batch,
         cursor,
@@ -588,7 +598,7 @@ fn direct_rcs_push_gpgpu_dispatch_prologue_with_vfe_dw5(
                 | PIPE_CONTROL_DEPTH_STALL
                 | PIPE_CONTROL_CS_STALL,
         )
-        && direct_rcs_push_state_base_address(batch, cursor, batch_gpu, batch_gpu, upload.gpu)
+        && direct_rcs_push_state_base_address(batch, cursor, batch_gpu, batch_gpu, instruction_gpu)
         && direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_INVALIDATE_BITS)
         && direct_rcs_push(batch, cursor, PIPELINE_SELECT_GPGPU)
         && direct_rcs_push_pipe_control_full(batch, cursor, 1 << 9, PIPE_CONTROL_CS_STALL)

@@ -794,6 +794,12 @@ impl Device {
         Ok(Buffer(handle))
     }
 
+    pub fn call_scalar_f32_v1(self, code: Buffer, bytes: usize, a: f32, b: f32) -> Result<f32, i32> {
+        let mut result = 0.0;
+        rc_result(unsafe { vcabi::trueos_cabi_vgpu_scalar_f32_v1(self.0, code.0, bytes, a, b, &mut result) })?;
+        Ok(result)
+    }
+
     pub fn allocate_vvideo_mem(self, bytes: usize, usage: u32) -> Result<VVideoMem, i32> {
         if bytes == 0 {
             return Err(ERR_UNSUPPORTED);

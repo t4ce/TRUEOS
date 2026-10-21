@@ -1433,6 +1433,8 @@ unsafe extern "C" {
     pub fn trueos_cabi_audio_native_sample_remove_v1(handle: u32, sample_id: u64) -> i32;
 
     pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
+    pub fn trueos_cabi_vgpu_scalar_f32_v1(device: u64, code: u64, bytes: usize, a: f32, b: f32, out: *mut f32) -> i32;
+    pub fn trueos_cabi_vgpu_call_f32_v1(code: *const u8, bytes: usize, a: f32, b: f32, out: *mut f32) -> i32;
     pub fn trueos_cabi_vgpu_close(device: u64) -> i32;
     pub fn trueos_cabi_vgpu_device_info(device: u64, out_info: *mut crate::vgpu::DeviceInfo)
     -> i32;

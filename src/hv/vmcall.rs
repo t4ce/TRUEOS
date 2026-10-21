@@ -78,6 +78,7 @@ pub const OP_BP_VGPU_QUEUE_DESTROY: u32 = 0xAC; // arg0 device,arg1 queue -> rc
 pub const OP_BP_VGPU_SUBMIT_CONTROL_NOP: u32 = 0xAD; // arg0 device,arg1 queue -> TimelinePoint
 pub const OP_BP_VGPU_TIMELINE: u32 = 0xAE; // arg0 device,arg1 queue -> TimelineStatus
 pub const OP_BP_VGPU_WAIT: u32 = 0xAF; // arg0 device,arg1 queue,payload value -> rc
+pub const OP_BP_VGPU_SCALAR_F32_V1: u32 = 0x234;
 pub const OP_BP_VGPU_BUFFER_WRITE: u32 = 0xB0; // arg0 device,arg1 buffer,payload offset+bytes
 pub const OP_BP_VGPU_BUFFER_READ: u32 = 0xB1; // arg0 device,arg1 buffer,payload offset+len
 pub const OP_BP_VGPU_UI4_SURFACE_ACQUIRE: u32 = 0x124; // arg0 device,arg1 window -> SurfaceInfo
@@ -1470,6 +1471,29 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let out = unsafe { &mut (&mut (*page).payload)[..count] };
             match crate::r::io::vgpu_cabi::broker_buffer_read(principal, arg0, arg1, offset, out) {
                 Ok(got) => write_response(vm_id, seq, STATUS_OK, got as u64, got as u32),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_SCALAR_F32_V1 => {
+            let result = request_payload(vm_id, req_len)
+                .filter(|p| p.len() == 12)
+                .ok_or(-22)
+                .and_then(|p| crate::r::io::vgpu_cabi::broker_scalar_f32_v1(
+                    crate::gpu::vgpu::Principal::HullGuest(vm_id as u16), arg0, arg1,
+                    u32::from_le_bytes(p[0..4].try_into().unwrap()) as usize,
+                    u32::from_le_bytes(p[4..8].try_into().unwrap()),
+                    u32::from_le_bytes(p[8..12].try_into().unwrap()),
+                ));
+            match result {
+                Ok(bits) => {
+                    let Some(page) = host_ptr(vm_id) else {
+                        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                        return DispatchOutcome::Resume;
+                    };
+                    unsafe { (&mut (*page).payload)[..4].copy_from_slice(&bits.to_le_bytes()); }
+                    write_response(vm_id, seq, STATUS_OK, 0, 4);
+                }
                 Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
             }
             DispatchOutcome::Resume

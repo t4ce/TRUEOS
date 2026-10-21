@@ -1998,6 +1998,48 @@ pub(crate) fn read_buffer(
     Ok(out.len())
 }
 
+pub(crate) fn call_native_scalar_f32_v1(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    code_buffer: BufferHandle,
+    code_bytes: usize,
+    a: u32,
+    b: u32,
+) -> Result<u32, i32> {
+    if code_bytes > super::native_xelp::MAX_CODE_BYTES || code_bytes < 160 {
+        return Err(-22);
+    }
+    let code = {
+        let mut broker = BROKER.lock();
+        let device =
+            lookup_device_mut(&mut broker, device_handle, principal).map_err(|e| e.errno())?;
+        ensure_live(device).map_err(|e| e.errno())?;
+        if !device.capabilities.contains(Capabilities::COMPUTE) {
+            return Err(-13);
+        }
+        let record = lookup_buffer_mut(device, code_buffer).map_err(|e| e.errno())?;
+        if record.usage & BUFFER_USAGE_MAP_READ == 0 || code_bytes > record.bytes {
+            return Err(-13);
+        }
+        let virt = match record.backing {
+            BufferBacking::Dma { virt, .. } => virt,
+            _ => return Err(-95),
+        };
+        crate::intel::dma_flush(virt, code_bytes);
+        let copy = unsafe { core::slice::from_raw_parts(virt, code_bytes) }.to_vec();
+        record.in_flight += 1;
+        copy
+    };
+    let result = crate::intel::gpgpu::native_scalar_f32(&code, a, b);
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal).map_err(|e| e.errno())?;
+    let record = lookup_buffer_mut(device, code_buffer).map_err(|e| e.errno())?;
+    // RCS stages its own immutable copy. Even a timed-out request retains no
+    // GPU reference to this tenant buffer; the RCS carrier keeps its backing.
+    record.in_flight -= 1;
+    result
+}
+
 pub(crate) fn destroy_buffer(
     principal: Principal,
     device_handle: DeviceHandle,

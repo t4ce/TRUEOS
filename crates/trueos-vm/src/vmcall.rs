@@ -655,3 +655,4 @@ pub const OP_BP_ASYNC_FS_METADATA_START_V1: u32 = 0x231;
 
 /// Metadata v2 additionally reports the committed record revision.
 pub const OP_BP_ASYNC_FS_METADATA_START_V2: u32 = 0x232;
+pub const OP_BP_VGPU_SCALAR_F32_V1: u32 = 0x234;

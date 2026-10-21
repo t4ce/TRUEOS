@@ -4,6 +4,7 @@
 //! handles, quotas, per-client GPUVMs, queues, and virtual timelines.
 
 pub(crate) mod executor;
+pub(crate) mod native_xelp;
 pub(crate) mod physical;
 pub(crate) mod resident;
 pub(crate) mod vgpu;

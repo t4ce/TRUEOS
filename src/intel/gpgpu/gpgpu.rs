@@ -25,6 +25,7 @@ include!("types/volume_resources.rs");
 include!("artifacts/metadata.rs");
 include!("artifacts/uploads.rs");
 include!("operations/primitives.rs");
+include!("operations/native_scalar.rs");
 include!("operations/svg_outline.rs");
 include!("operations/solid_rects.rs");
 include!("operations/sprite_quad_worklist.rs");

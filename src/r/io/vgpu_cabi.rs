@@ -27,6 +27,126 @@ fn direct_principal() -> Principal {
         .unwrap_or(Principal::HostRuntime)
 }
 
+pub(crate) fn broker_scalar_f32_v1(
+    principal: Principal,
+    device: u64,
+    code: u64,
+    bytes: usize,
+    a: u32,
+    b: u32,
+) -> Result<u32, i32> {
+    vgpu::call_native_scalar_f32_v1(
+        principal,
+        DeviceHandle::from_raw(device),
+        BufferHandle::from_raw(code),
+        bytes,
+        a,
+        b,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_scalar_f32_v1(
+    device: u64,
+    code: u64,
+    bytes: usize,
+    a: f32,
+    b: f32,
+    out: *mut f32,
+) -> i32 {
+    if out.is_null() || bytes > crate::gpu::native_xelp::MAX_CODE_BYTES {
+        return -22;
+    }
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut request = [0u8; 12];
+        request[..4].copy_from_slice(&(bytes as u32).to_le_bytes());
+        request[4..8].copy_from_slice(&a.to_bits().to_le_bytes());
+        request[8..].copy_from_slice(&b.to_bits().to_le_bytes());
+        let mut reply = [0u8; 4];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_VGPU_SCALAR_F32_V1,
+            device,
+            code,
+            &request,
+            &mut reply,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            Err(-5)
+        } else if rc as i64 != 0 {
+            Err(rc as i64 as i32)
+        } else {
+            Ok(u32::from_le_bytes(reply))
+        }
+    } else {
+        broker_scalar_f32_v1(direct_principal(), device, code, bytes, a.to_bits(), b.to_bits())
+    };
+    match result {
+        Ok(bits) => {
+            unsafe {
+                out.write(f32::from_bits(bits));
+            }
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_call_f32_v1(
+    code: *const u8,
+    bytes: usize,
+    a: f32,
+    b: f32,
+    out: *mut f32,
+) -> i32 {
+    if code.is_null()
+        || out.is_null()
+        || !(160..=crate::gpu::native_xelp::MAX_CODE_BYTES).contains(&bytes)
+    {
+        return -22;
+    }
+    let mut device = 0;
+    let rc = unsafe {
+        trueos_cabi_vgpu_open(
+            v::vgpu::Capabilities::BUFFER
+                .union(v::vgpu::Capabilities::COMPUTE)
+                .bits(),
+            &mut device,
+        )
+    };
+    if rc != 0 {
+        return rc;
+    }
+    let mut buffer = 0;
+    let mut result = unsafe {
+        trueos_cabi_vgpu_buffer_create(
+            device,
+            bytes,
+            v::vgpu::BUFFER_USAGE_MAP_READ | v::vgpu::BUFFER_USAGE_MAP_WRITE,
+            &mut buffer,
+        )
+    };
+    if result == 0 {
+        let written = unsafe { trueos_cabi_vgpu_buffer_write(device, buffer, 0, code, bytes) };
+        result = if written == bytes as isize {
+            unsafe { trueos_cabi_vgpu_scalar_f32_v1(device, buffer, bytes, a, b, out) }
+        } else if written < 0 {
+            written as i32
+        } else {
+            -5
+        };
+        let cleanup = trueos_cabi_vgpu_buffer_destroy(device, buffer);
+        if result == 0 {
+            result = cleanup;
+        }
+    }
+    let cleanup = trueos_cabi_vgpu_close(device);
+    if result == 0 {
+        result = cleanup;
+    }
+    result
+}
+
 pub(crate) fn broker_open(principal: Principal, requested: u64) -> Result<u64, i32> {
     vgpu::open(principal, Capabilities::from_bits(requested))
         .map(DeviceHandle::raw)
