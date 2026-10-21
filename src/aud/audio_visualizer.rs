@@ -299,4 +299,3 @@ pub(crate) fn snapshot() -> AudioVisualizerFrame {
     let mut analyzer = ANALYZER.lock();
     analyzer.get_or_insert_with(AudioAnalyzer::new).analyze()
 }
-

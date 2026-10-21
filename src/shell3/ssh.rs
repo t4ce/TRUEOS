@@ -1,7 +1,7 @@
 //! Kernel SSH transport: public-key login and RFC 4256 authenticator-code recovery.
 //! The BSP commits cry's replay counter; APs own the SSH runner and Shell3.
 use super::tty::Terminal;
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 use sunset::{ChanData, ChanHandle, Event, Runner, ServEvent, Server, SignKey};
 

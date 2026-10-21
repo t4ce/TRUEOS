@@ -1,3 +1,4 @@
+#[cfg(any(test, feature = "legacy_vm_checkpoint"))]
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::asm;

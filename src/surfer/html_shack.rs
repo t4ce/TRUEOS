@@ -1,6 +1,5 @@
 extern crate alloc;
 
-use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -17,9 +16,7 @@ use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet as api;
 
-use crate::net::tls::{TlsClientConfig, TlsRoots};
-use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
-use crate::r::net::{NetProfile, Queue, VNet};
+use crate::r::net::VNet;
 
 pub(crate) const HTML_FETCH_WORKERS: usize = 10;
 const HTML_FETCH_IDLE_MS: u64 = 250;
@@ -100,7 +97,7 @@ impl HtmlShack {
     }
 
 
-    
+
 
     fn push_byte_fetch(&mut self, request: ByteFetchRequest) -> usize {
         if crate::log_os::flags::HTML_SHACK_VERBOSE {
@@ -170,11 +167,11 @@ impl HtmlShack {
         }
     }
 
-    
 
-    
 
-    
+
+
+
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+#[cfg(feature = "trueos_lumen")]
 use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 

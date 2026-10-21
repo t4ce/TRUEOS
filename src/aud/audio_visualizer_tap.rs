@@ -108,4 +108,3 @@ pub(crate) fn snapshot_latest_i16_stereo_48k(out: &mut [i16]) -> AudioVisualizer
 
     last
 }
-

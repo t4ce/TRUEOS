@@ -625,7 +625,7 @@ impl fmt::Debug for SharedNetPayload {
 
 #[derive(Clone, Debug)]
 pub enum NetCommand {
-    
+
     OpenTun {
         ipv4: [u8; 4],
         ipv4_prefix_len: u8,
@@ -1011,7 +1011,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                             packet[l2_off + 27],
                         ];
                         if let Some(tci) = vlan_tci {
-                            crate::log_info!(target: "net"; 
+                            crate::log_info!(target: "net";
                                 "net: arp-rx dev={} vlan=0x{:04x} n={} op={} sha={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} spa={}.{}.{}.{} tha={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} tpa={}.{}.{}.{}\n",
                                 self.index,
                                 tci,
@@ -1039,7 +1039,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                                 tpa[3]
                             );
                         } else {
-                            crate::log_info!(target: "net"; 
+                            crate::log_info!(target: "net";
                                 "net: arp-rx dev={} n={} op={} sha={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} spa={}.{}.{}.{} tha={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} tpa={}.{}.{}.{}\n",
                                 self.index,
                                 arp_count,
@@ -1171,7 +1171,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                                     if crate::log_os::flags::NET_LOG_DHCP_VERBOSE
                                         && (chaddr_match != 0 || offer_count == 1)
                                     {
-                                        crate::log_info!(target: "net"; 
+                                        crate::log_info!(target: "net";
                                             "net: dhcp-offer-rx dev={} count={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} len={} op={} xid=0x{:08x} yiaddr={}.{}.{}.{} chaddr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} chaddr_match={} cookie_ok={} msg_type={}\n",
                                             self.index,
                                             offer_count,
@@ -1223,7 +1223,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                         .map(|m| m == [src[0], src[1], src[2], src[3], src[4], src[5]])
                         .unwrap_or(false);
 
-                    crate::log_info!(target: "net"; 
+                    crate::log_info!(target: "net";
                         "net: rx-tap dev={} len={} et=0x{:04x} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} self_src={}\n",
                         self.index,
                         packet.len(),

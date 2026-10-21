@@ -11,7 +11,6 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 #[cfg(feature = "gridpaper")]

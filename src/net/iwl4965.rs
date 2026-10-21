@@ -2421,7 +2421,7 @@ impl WifiDriver for Iwl4965 {
         self.connected_ssid.clone()
     }
 
-    
+
 
     fn signal_strength(&self) -> Option<i8> {
         if self.wifi_state == WifiState::Connected {
@@ -2487,13 +2487,3 @@ pub fn probe(pci_dev: &PciDevice) -> Option<Box<dyn WifiDriver>> {
 // ============================================================================
 // Live Debug API — no recompile needed, called from shell commands
 // ============================================================================
-
-
-
-
-
-
-
-
-
-

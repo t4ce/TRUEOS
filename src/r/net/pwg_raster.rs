@@ -2,7 +2,6 @@
 
 extern crate alloc;
 
-use alloc::{vec, vec::Vec};
 
 #[cfg(any(feature = "gridpaper", test))]
 const DPI: u32 = 300;

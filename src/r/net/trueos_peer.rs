@@ -2,9 +2,7 @@ use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use spin::Mutex;
-use trueos_time::{Duration, Instant, Timer};
 
-use super::VNet;
 
 const PEER_STALE_MS: u64 = 120_000;
 const PEER_ADVERTISE_INTERVAL_MS: u64 = 1000;

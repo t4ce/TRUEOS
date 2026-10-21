@@ -78,7 +78,7 @@ impl InteractionCadence {
 pub(crate) use color_picker::ui4_color_picker_service_task;
 pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use context_menu::{
-    ContextMenuCloseReason, ContextMenuEntry, ContextMenuError, ContextMenuRequest,
+    ContextMenuCloseReason, ContextMenuEntry,
     ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES, clear_window_menu as clear_window_context_menu,
     register_window_menu as register_window_context_menu,
 };
@@ -101,13 +101,8 @@ pub(crate) use frame_pool::{
     publish_gpgpu_video_frame_buffer, publish_resident_scene_frame_buffer, published_rgba_view,
     release_published_frame, retain_published_frame, writable_rgba_view,
 };
-pub(crate) use gpgpu_preview_consumer::{
-    GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewPreset,
-    gpgpu_preview_consumer_service_task,
-};
-pub(crate) use gpgpu_svg_probe_consumer::{
-    GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task,
-};
+pub(crate) use gpgpu_preview_consumer::gpgpu_preview_consumer_service_task;
+pub(crate) use gpgpu_svg_probe_consumer::gpgpu_svg_probe_consumer_service_task;
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
 #[cfg(feature = "trueos_h264_encode_stream")]
@@ -130,7 +125,7 @@ pub(crate) use slot4_service::{
 };
 pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_service_task};
 pub(crate) use video_frame::{
-    DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
+    DecodedNv12Source, DecodedVideoConversionReport,
     VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession, begin_decoded_nv12_conversion_batch,
     begin_texture_video_player, enqueue_decoded_nv12_stream_frame, open_shell_decoded_video_player,
     reserve_shell_decoded_video_player, ui4_video_conversion_service_task,
@@ -145,7 +140,7 @@ pub(crate) use window_broker::{
     application_windows_for_output_with_revision, begin_additional_window_session,
     begin_window_session, close_window, commit_window_frame_refresh,
     commit_window_frame_replacement, create_window, dock_window, finish_window_session,
-    finish_window_session_with_request, move_window, note_window_focused, publish_window_frame,
+    finish_window_session_with_request, move_window, publish_window_frame,
     replace_window_frame, restore_docked_window, retire_frame_when_released,
     set_window_escape_key_action, set_window_hit_testable, set_window_opacity,
     set_window_placement, set_window_position, set_window_state, set_window_title,
