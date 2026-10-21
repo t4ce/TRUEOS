@@ -5,7 +5,7 @@ from pathlib import Path
 from test_clip_position3_uv_texture import ROOT, item
 
 def main():
-    path = "src/ui4/blueprint_text.rs"
+    path = "src/ui4/blueprint_ui4.rs"
     finish = item(path, "finish_sprite_scene")
     # Publication must remain single-producer. The final matching overlay
     # receipt supersedes the already-retired render receipt, never before it.

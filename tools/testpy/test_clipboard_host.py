@@ -62,7 +62,7 @@ pub mod vmcall {
 }
 mod r { pub mod services { #[path = SERVICE_PATH] pub mod clipboard_service; } }
 mod ui4 {
-    pub mod blueprint_text {
+    pub mod blueprint_ui4 {
         use alloc::vec::Vec;
         use spin::Mutex;
         #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub enum WindowOwner { Vm(u8), Kernel }
@@ -81,7 +81,7 @@ mod ui4 {
 }
 #[cfg(test)] mod integration {
     use super::*;
-    use ui4::blueprint_text::{self as bp, clipboard_api as api, WindowOwner, WindowId};
+    use ui4::blueprint_ui4::{self as bp, clipboard_api as api, WindowOwner, WindowId};
     fn command(window: u32, action: u32, kind: u32, text: &[u8], output: &mut [u8]) -> i32 {
         unsafe { api::trueos_cabi_clipboard_command_v1(window, action, kind, text.as_ptr(), text.len(), output.as_mut_ptr(), output.len()) }
     }
@@ -155,7 +155,7 @@ zeroize = { version = "1", features = ["alloc"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 [workspace]
 ''')
-        source = HARNESS.replace('SERVICE_PATH', json.dumps(str(ROOT / 'src/r/services/clipboard_service.rs'))).replace('ADAPTER_PATH', json.dumps(str(ROOT / 'src/ui4/blueprint_text/clipboard_api.rs')))
+        source = HARNESS.replace('SERVICE_PATH', json.dumps(str(ROOT / 'src/r/services/clipboard_service.rs'))).replace('ADAPTER_PATH', json.dumps(str(ROOT / 'src/ui4/blueprint_ui4/clipboard_api.rs')))
         (root / 'src/lib.rs').write_text(source)
         subprocess.run(['cargo', '+nightly-2026-07-10', 'test', '--offline', '--quiet', '--', '--test-threads=1'], cwd=root, check=True)
 

@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 extract.ROOT = ROOT
 item = extract.item
 constant = extract.constant
-upload_source = (ROOT / 'src/ui4/blueprint_text.rs').read_text()
-collapse_api = (ROOT / 'src/ui4/blueprint_text/collapse_api.rs').read_text()
+upload_source = (ROOT / 'src/ui4/blueprint_ui4.rs').read_text()
+collapse_api = (ROOT / 'src/ui4/blueprint_ui4/collapse_api.rs').read_text()
 collapse = (ROOT / 'src/ui4/collapse.rs').read_text()
 implementation = collapse[collapse.index('impl Collapse {'):collapse.index('/// Per-cursor click')]
 harness = r'''
@@ -152,7 +152,7 @@ fn icon()->collapse::Collapse { collapse::Collapse {frame:FrameHandle(10),width:
 '''
 harness += re.search(r'^const TEXT_BACKBUFFER_SPRITE_ID:.*;$', upload_source, re.MULTILINE).group(0) + '\n'
 harness += re.search(r'^const UPLOAD_ID:.*;$', collapse_api, re.MULTILINE).group(0) + '\n'
-harness += item('src/ui4/blueprint_text.rs', 'sprite_rgba8_upload_id_valid')
+harness += item('src/ui4/blueprint_ui4.rs', 'sprite_rgba8_upload_id_valid')
 harness += r'''
 #[test] fn collapse_upload_is_admitted_without_opening_reserved_sprite_namespaces() {
     assert!(sprite_rgba8_upload_id_valid(UPLOAD_ID));

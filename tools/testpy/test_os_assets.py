@@ -9,7 +9,7 @@ API = ROOT.parent / 'TRUEOS-Blueprints/api/src'
 
 
 def main():
-    kernel = (ROOT/'src/ui4/blueprint_text.rs').read_text()
+    kernel = (ROOT/'src/ui4/blueprint_ui4.rs').read_text()
     start = kernel.index('#[repr(C)]\n#[derive(Clone, Copy, Debug, Default)]\npub(crate) struct BlueprintImageSourceInfo')
     end = kernel.index('/// Longest UTF-8 label', start)
     source = f'''#![allow(dead_code)]

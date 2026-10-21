@@ -48,13 +48,6 @@ use crate::intel::gpgpu::{
     queue_ui4_blueprint_sprite_scene, release_rgba8_surface_for_scanout,
     skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
 };
-use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba, MAX_DYNAMIC_TEXT_CHARS};
-use crate::r::services::font_kernel_service::{
-    FontGpuProducer, FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer,
-    FontStampRequest, FontStampedBuffer, PendingFontFrameStamp, PendingFontStamp,
-    PendingRetainScene, RetainSceneRequest, RetainedFontPositioning, RetainedFontRun,
-    register_ui4_gpu_font_producer, submit_frame_stamp, submit_retain_scene, submit_stamp,
-};
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
@@ -74,32 +67,14 @@ use super::{
 
 mod guest_transport;
 use guest_transport::{
-    guest_context_menu_event_take, guest_context_menu_register, guest_font_canvas,
-    guest_font_sizes, guest_font_sprite_request, guest_font_sprite_status, guest_image_source_info,
+    guest_context_menu_event_take, guest_context_menu_register, guest_image_source_info,
     guest_image_source_read, guest_input_routes, guest_keyboard_event_take, guest_keyboard_state,
     guest_pan_event_take, guest_pointer_event_take, guest_resize_event_take,
-    guest_shell2_font_scale_steps, guest_status, guest_text_scene,
-};
+    guest_status, };
 
 const MAX_SURFACES: usize = 32;
 const MAX_FRAME_WIDTH: u32 = 2_560;
 const MAX_FRAME_HEIGHT: u32 = 1_440;
-const MAX_TEXT_ROWS: usize = 64;
-const MAX_FONT_CANVAS_ROWS: usize = 256;
-const MAX_FONT_CANVAS_RUNS_PER_LAYER: usize = 64;
-const MAX_FONT_CANVAS_INTERNAL_LAYERS: usize = 64;
-const MAX_TEXT_ROW_BYTES: usize = 1_024;
-const MAX_NATIVE_FONT_SIZES: usize = 32;
-const SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE: usize = 5;
-/// Shell2's app-owned scale UI offers a bounded set of effective sizes. The source
-/// tiers are deliberately few so a future persistent sprite producer only
-/// needs to warm five native ppem variants; the residual is presentation
-/// scale, not a request to retessellate a new glyph source.
-const SHELL2_FONT_SCALE_STEP_COUNT: usize = 25;
-const SHELL2_MONO_ADVANCE_NUMERATOR: u32 = 3;
-const SHELL2_MONO_ADVANCE_DENOMINATOR: u32 = 5;
-const SHELL2_ROW_HEIGHT_NUMERATOR: u32 = 13;
-const SHELL2_ROW_HEIGHT_DENOMINATOR: u32 = 12;
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
@@ -109,7 +84,6 @@ const MAX_INPUT_ROUTES: usize = 32;
 const UI4_SOLID_FAST_RECT_LIMIT: usize = 256;
 const IMAGE_SOURCE_READ_CHUNK_BYTES: usize = 16 * 1024;
 const IMAGE_SOURCE_FORMAT_RGBA8: u32 = 2;
-const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
 const UI4_SCENE_SOURCE_GPU: u64 = 0x3000_0000;
 const UI4_SCENE_SOURCE_MAX_BYTES: usize = 128 * 1024 * 1024;
 const UI4_SCENE_SPRITE_GPU: u64 = UI4_SCENE_SOURCE_GPU + UI4_SCENE_SOURCE_MAX_BYTES as u64;
@@ -124,24 +98,7 @@ const SPRITE_QUAD_FLAG_SRC_OVER: u32 = 1 << 0;
 const SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR: u32 = 1 << 30;
 /// Explicitly request direct BCS0 copies of unscaled premultiplied RGBA pixels.
 const SPRITE_QUAD_FLAG_BCS0_COPY: u32 = 1 << 31;
-const MAX_BLUEPRINT_FONT_SPRITES: usize = 4_096;
-const FONT_SPRITE_STATUS_PENDING: u32 = 1;
-const FONT_SPRITE_STATUS_READY: u32 = 2;
-const FONT_SPRITE_STATUS_FAILED: u32 = 3;
 
-/// Blueprint-visible completion record for an asynchronously materialized
-/// glyph sprite. `ticket` is the caller's stable request handle; UI4 never
-/// derives a glyph key or performs cache lookup on its behalf.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosUi4FontSpriteStatusV1 {
-    pub state: u32,
-    pub sprite_id: u32,
-    pub width: u32,
-    pub height: u32,
-    pub origin_x: i32,
-    pub origin_y: i32,
-}
 const SPRITE_QUAD_VALID_FLAGS: u32 =
     SPRITE_QUAD_FLAG_SRC_OVER | SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR | SPRITE_QUAD_FLAG_BCS0_COPY;
 const _: () = {
@@ -268,82 +225,16 @@ pub(crate) const ERROR_INVALID: i32 = -1;
 const ERROR_CONTEXT: i32 = -2;
 const ERROR_NOT_FOUND: i32 = -3;
 const ERROR_STATE: i32 = -4;
-const ERROR_FONT: i32 = -5;
 const ERROR_UI4: i32 = -6;
 pub(crate) const ERROR_BUSY: i32 = -7;
 const ERROR_SHADER_PACKAGE_MISMATCH: i32 = -8;
-const TEXT_SCENE_FONT_ID_STAMP_ONCE: u32 = 1 << 31;
-const TEXT_SCENE_FONT_ID_BACKBUFFER: u32 = 1 << 30;
-const TEXT_SCENE_FONT_ID_FLAGS: u32 = TEXT_SCENE_FONT_ID_STAMP_ONCE | TEXT_SCENE_FONT_ID_BACKBUFFER;
-const TEXT_BACKBUFFER_SPRITE_ID: u32 = u32::MAX;
-const TEXT_BACKBUFFER_MAX_EXTENT: u32 = 4_096;
-const TEXT_BACKBUFFER_MAX_GLYPHS: usize = 4_096;
 const CLOSE_PERSIST_FINAL_FRAME: u32 = 1 << 0;
 const CLOSE_VALID_FLAGS: u32 = CLOSE_PERSIST_FINAL_FRAME;
 pub const UI4_VISUAL_SOFT_CAP_HZ: u32 = 60;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosUi4SolaraFontSize {
-    pub native_scale: u32,
-    pub target_pixels: u32,
-}
 
-/// One Shell2/UI4 font scale step.
-///
-/// `effective_pixels` is the exact user-visible size.  `native_tier_pixels`
-/// names the warmed source tier suitable for a cache-backed sprite path, and
-/// `residual_milli` is `effective/native * 1000`, rounded to the nearest
-/// milli-scale.  The current generic sprite request remains exact on a cache
-/// miss; callers must never infer that a reusable source was installed.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub struct TrueosUi4Shell2FontScaleStep {
-    pub effective_pixels: u32,
-    pub native_tier_pixels: u32,
-    pub residual_milli: u32,
-    /// Monospace columns at a 1280 pixel viewport using JuliaMono's 0.6em cell.
-    pub columns_at_1280: u32,
-    /// Text rows at a 720 pixel viewport using Shell's 13/12-em row height.
-    pub rows_at_720: u32,
-    /// One only when the size is a declared Shell2 scale step and therefore
-    /// structurally eligible for a future tiered sprite-cache lookup.
-    pub cache_eligible: u32,
-}
 
-const SHELL2_FONT_SCALE_EFFECTIVE_PIXELS: [u32; SHELL2_FONT_SCALE_STEP_COUNT] = [
-    12, 13, 14, 15, 16, 18, 20, 22, 24, 27, 30, 33, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96,
-    104, 108,
-];
-const SHELL2_FONT_SCALE_NATIVE_TIERS: [u32; 5] = [16, 24, 36, 54, 80];
 
-fn shell2_font_scale_step(effective_pixels: u32) -> Option<TrueosUi4Shell2FontScaleStep> {
-    if !SHELL2_FONT_SCALE_EFFECTIVE_PIXELS.contains(&effective_pixels) {
-        return None;
-    }
-    let native_tier_pixels = SHELL2_FONT_SCALE_NATIVE_TIERS
-        .iter()
-        .copied()
-        .min_by_key(|tier| tier.abs_diff(effective_pixels))?;
-    let residual_milli = effective_pixels
-        .saturating_mul(1_000)
-        .saturating_add(native_tier_pixels / 2)
-        / native_tier_pixels;
-    Some(TrueosUi4Shell2FontScaleStep {
-        effective_pixels,
-        native_tier_pixels,
-        residual_milli,
-        columns_at_1280: 1_280_u32.saturating_mul(SHELL2_MONO_ADVANCE_DENOMINATOR)
-            / effective_pixels
-                .saturating_mul(SHELL2_MONO_ADVANCE_NUMERATOR)
-                .max(1),
-        rows_at_720: 720_u32.saturating_mul(SHELL2_ROW_HEIGHT_DENOMINATOR)
-            / effective_pixels
-                .saturating_mul(SHELL2_ROW_HEIGHT_NUMERATOR)
-                .max(1),
-        cache_eligible: 1,
-    })
-}
 
 /// Legacy positioned-row ABI descriptor retained for portal compatibility.
 #[repr(C)]
@@ -365,21 +256,6 @@ pub struct TrueosUi4SolaraSceneTextRow {
     pub font_pixels: f32,
 }
 
-/// One colored row in a persistent, transparent RGBA8 font canvas.
-///
-/// The consumer submits all rows together. FontKernel may group equal colors
-/// internally, but the only externally visible result is one owned RGBA8
-/// surface retained with the UI4 window.
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct TrueosUi4FontCanvasRow {
-    pub text_ptr: *const u8,
-    pub text_len: usize,
-    pub x: f32,
-    pub y: f32,
-    pub font_pixels: f32,
-    pub color_rgba: u32,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -693,7 +569,7 @@ struct BlueprintSceneSurface {
     /// Request state only.  The Blueprint owns all glyph-key coalescing,
     /// fallback choice, and eviction policy; UI4 merely retains a scoped GPU
     /// source for every ticket it was explicitly asked to produce.
-    font_sprite_requests: Vec<BlueprintFontSpriteRequest>,
+
     sprite_upload: Option<Rgba8Upload>,
     solid_source: Option<OwnedRgba8Surface>,
     sprite_clear_rgba: Option<u32>,
@@ -707,24 +583,24 @@ struct BlueprintSceneSurface {
     pending_keyboard_burst: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     pending_physical_keyboard: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     pending_physical_burst: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
-    retained_text_layers: Vec<BlueprintRetainedTextLayer>,
-    retained_text_cursor: usize,
-    retained_text_rendered: bool,
-    retained_text_backbuffer_extent: Option<(u32, u32)>,
-    retained_text_backbuffer: Option<GpgpuOwnedRgba8Surface>,
-    font_canvas: Option<BlueprintFontCanvas>,
-    stamped_text_layers: Vec<BlueprintStampedTextLayer>,
-    stamped_text_cursor: usize,
-    stamped_text_pending: Option<PendingFontFrameStamp>,
-    stamped_text_pending_started_ns: u64,
-    stamped_text_pending_polls: u64,
+
+
+
+
+
+
+
+
+
+
+
     /// Up to five recent face/size/extent registrations stay warm. Distinct
     /// shells still claim distinct producer slots, while OceanCache seals
     /// equal face/size claims to the same R8 glyphs. Once residual presentation
     /// scaling lands, these five exact-size seals become the five native tiers.
-    stamped_text_producers: Vec<BlueprintStampedTextProducer>,
-    stamped_text_pending_ocean: bool,
-    stamped_text_rendered: bool,
+
+
+
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -818,44 +694,9 @@ struct BlueprintStampedTextProducer {
     producer: FontGpuProducer,
 }
 
-#[derive(Clone)]
-struct BlueprintFontCanvasRow {
-    text: String,
-    position: [f32; 2],
-    font_pixels: f32,
-    color_rgba: u32,
-}
 
-#[derive(Clone)]
-struct BlueprintFontCanvasDescription {
-    font: GpuFontFace,
-    width: u32,
-    height: u32,
-    rows: Vec<BlueprintFontCanvasRow>,
-}
 
-struct BlueprintFontCanvas {
-    description: BlueprintFontCanvasDescription,
-    pending: Option<PendingFontStamp>,
-    ready: Option<FontStampedBuffer>,
-    submitted_ms: u64,
-}
 
-impl BlueprintFontCanvasDescription {
-    fn same_canvas(&self, next: &Self) -> bool {
-        self.font == next.font
-            && self.width == next.width
-            && self.height == next.height
-            && self.rows.len() == next.rows.len()
-            && self.rows.iter().zip(next.rows.iter()).all(|(old, new)| {
-                old.text == new.text
-                    && old.position[0].to_bits() == new.position[0].to_bits()
-                    && old.position[1].to_bits() == new.position[1].to_bits()
-                    && old.font_pixels.to_bits() == new.font_pixels.to_bits()
-                    && old.color_rgba == new.color_rgba
-            })
-    }
-}
 
 impl BlueprintRetainedTextDescription {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -951,32 +792,31 @@ struct NonzeroAlphaRun {
 
 enum BlueprintSpriteSource {
     Uploaded(OwnedRgba8Surface),
-    Font(FontStampedBuffer),
 }
 
 impl BlueprintSpriteSource {
     const fn surface(&self) -> GpgpuRgba8Surface {
         match self {
             Self::Uploaded(source) => source.surface,
-            Self::Font(source) => source.surface(),
+
         }
     }
 
     const fn bytes(&self) -> usize {
         match self {
             Self::Uploaded(source) => source.bytes,
-            Self::Font(source) => source.surface().bytes,
+
         }
     }
 
     const fn is_premultiplied(&self) -> bool {
-        sprite_source_is_premultiplied(matches!(self, Self::Font(_)))
+        false
     }
 
     const fn has_validated_premultiplied_pixels(&self) -> bool {
         match self {
             Self::Uploaded(source) => source.premultiplied,
-            Self::Font(_) => true,
+
         }
     }
 }
@@ -985,48 +825,9 @@ const fn sprite_source_is_premultiplied(font_owned: bool) -> bool {
     font_owned
 }
 
-struct BlueprintFontSpriteRequest {
-    key: BlueprintFontSpriteKey,
-    ticket: u64,
-    sprite_id: u32,
-    state: BlueprintFontSpriteState,
-}
 
-/// Exact per-UI4-surface identity for the Shell2 sprite request ABI.
-///
-/// This is intentionally a request/ticket deduplicator, not a general glyph
-/// cache: it neither clones GPU sources nor extends their lifetime beyond the
-/// owning `BlueprintSceneSurface`.  Color stays in the key because v1 asks
-/// for a fully coloured sprite.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct BlueprintFontSpriteKey {
-    font: GpuFontFace,
-    scalar: char,
-    font_pixels_bits: u32,
-    color_rgba: u32,
-}
 
-enum BlueprintFontSpriteState {
-    Pending(PendingFontStamp),
-    Ready {
-        width: u32,
-        height: u32,
-        origin_px: [i32; 2],
-    },
-    Failed,
-}
 
-fn live_font_sprite_ticket(
-    requests: &[BlueprintFontSpriteRequest],
-    key: BlueprintFontSpriteKey,
-) -> Option<u64> {
-    requests
-        .iter()
-        .find(|request| {
-            request.key == key && !matches!(&request.state, BlueprintFontSpriteState::Failed)
-        })
-        .map(|request| request.ticket)
-}
 
 unsafe impl Send for OwnedRgba8Surface {}
 unsafe impl Sync for OwnedRgba8Surface {}
@@ -1073,7 +874,6 @@ fn release_display_color(owner: WindowOwner, window_id: Option<u32>) {
     }
 }
 
-static NEXT_BLUEPRINT_FONT_SPRITE_ID: AtomicU32 = AtomicU32::new(0x8000_0000);
 static RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 // An accepted GPU submission whose marker never retired may still reference
 // both its destination ring and retained source. Those allocations are never
@@ -1108,69 +908,7 @@ pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
     released
 }
 
-/// Enumerate the kernel font service's native render-target sizes.
-///
-/// A null output with zero capacity is a size query. The return value is the
-/// total number of supported entries, even when the provided output is short.
-pub unsafe extern "C" fn trueos_cabi_ui4_solara_font_sizes(
-    out: *mut TrueosUi4SolaraFontSize,
-    out_cap: usize,
-) -> isize {
-    if out.is_null() && out_cap != 0 {
-        return ERROR_INVALID as isize;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_font_sizes(out, out_cap) };
-    }
 
-    let count = crate::intel::render::font_native_scale_count() as usize;
-    for (slot, native_scale) in (1..=count as u32).take(out_cap.min(count)).enumerate() {
-        let Some(target_pixels) =
-            crate::intel::render::font_native_scale_target_pixels(native_scale)
-        else {
-            return ERROR_FONT as isize;
-        };
-        // SAFETY: the Blueprint caller supplied capacity for this slot.
-        unsafe {
-            out.add(slot).write(TrueosUi4SolaraFontSize {
-                native_scale,
-                target_pixels,
-            });
-        }
-    }
-    count as isize
-}
-
-/// Enumerate Shell2's fixed app-owned scale ladder.
-///
-/// This is intentionally separate from the older native render-target size
-/// enumeration: existing callers retain its native-scale semantics, while a
-/// Shell2 frontend can choose one of 25 effective sizes and know both its
-/// warmed tier/cache eligibility and its reduced terminal-cell density.
-pub unsafe extern "C" fn trueos_cabi_ui4_shell2_font_scale_steps_v1(
-    out: *mut TrueosUi4Shell2FontScaleStep,
-    out_cap: usize,
-) -> isize {
-    if out.is_null() && out_cap != 0 {
-        return ERROR_INVALID as isize;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_shell2_font_scale_steps(out, out_cap) };
-    }
-    for (slot, effective_pixels) in SHELL2_FONT_SCALE_EFFECTIVE_PIXELS
-        .iter()
-        .copied()
-        .take(out_cap.min(SHELL2_FONT_SCALE_STEP_COUNT))
-        .enumerate()
-    {
-        // SAFETY: `slot` is bounded by the caller supplied capacity.
-        unsafe {
-            out.add(slot)
-                .write(shell2_font_scale_step(effective_pixels).expect("declared scale step"));
-        }
-    }
-    SHELL2_FONT_SCALE_STEP_COUNT as isize
-}
 
 /// Create one dirty-cadence UI4 frame and broker window for the active VM.
 pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
@@ -1684,7 +1422,7 @@ fn open_blueprint_surface_with_cadence_scaled(
                 skybox_kernel_upload: None,
                 skybox_kernel_registered: false,
                 sprites: Vec::new(),
-                font_sprite_requests: Vec::new(),
+
                 sprite_upload: None,
                 solid_source: None,
                 sprite_clear_rgba: None,
@@ -1698,20 +1436,20 @@ fn open_blueprint_surface_with_cadence_scaled(
                 pending_keyboard_burst: VecDeque::new(),
                 pending_physical_keyboard: VecDeque::new(),
                 pending_physical_burst: VecDeque::new(),
-                retained_text_layers: Vec::new(),
-                retained_text_cursor: 0,
-                retained_text_rendered: false,
-                retained_text_backbuffer_extent: None,
-                retained_text_backbuffer: None,
-                font_canvas: None,
-                stamped_text_layers: Vec::new(),
-                stamped_text_cursor: 0,
-                stamped_text_pending: None,
-                stamped_text_pending_started_ns: 0,
-                stamped_text_pending_polls: 0,
-                stamped_text_producers: Vec::with_capacity(SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE),
-                stamped_text_pending_ocean: false,
-                stamped_text_rendered: false,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
             },
             BlueprintSurfaceRelease::Animated,
         );
@@ -1747,7 +1485,7 @@ fn open_blueprint_surface_with_cadence_scaled(
         skybox_kernel_upload: None,
         skybox_kernel_registered: false,
         sprites: Vec::new(),
-        font_sprite_requests: Vec::new(),
+
         sprite_upload: None,
         solid_source: None,
         sprite_clear_rgba: None,
@@ -1761,20 +1499,20 @@ fn open_blueprint_surface_with_cadence_scaled(
         pending_keyboard_burst: VecDeque::new(),
         pending_physical_keyboard: VecDeque::new(),
         pending_physical_burst: VecDeque::new(),
-        retained_text_layers: Vec::new(),
-        retained_text_cursor: 0,
-        retained_text_rendered: false,
-        retained_text_backbuffer_extent: None,
-        retained_text_backbuffer: None,
-        font_canvas: None,
-        stamped_text_layers: Vec::new(),
-        stamped_text_cursor: 0,
-        stamped_text_pending: None,
-        stamped_text_pending_started_ns: 0,
-        stamped_text_pending_polls: 0,
-        stamped_text_producers: Vec::with_capacity(SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE),
-        stamped_text_pending_ocean: false,
-        stamped_text_rendered: false,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     });
     let (cadence_name, buffer_count) = match frame_cadence {
         FrameCadence::Dirty => ("dirty", 2),
@@ -4071,8 +3809,8 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.retained_text_layers.clear();
         surface.retained_text_cursor = 0;
         surface.retained_text_rendered = false;
-        surface.retained_text_backbuffer_extent = None;
-        surface.retained_text_backbuffer = None;
+
+
         // FontCanvas owns a document-sized source allocation, not pixels in the
         // replaced UI4 frame. Keep it warm just like uploaded sprites; the next
         // frame merely selects a different crop/destination from the same
@@ -4211,72 +3949,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_sprite_upload_rgba8(
     finish_sprite_rgba8_upload(owner, window_id, sprite_id)
 }
 
-/// Submit one glyph producer request.  This versioned additive CABI carries
-/// no cache key table: it returns only an opaque ticket owned by the calling
-/// Blueprint window.  The guest must coalesce keys and choose fallback.
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_font_sprite_request_v1(
-    window_id: u32,
-    font_id: u32,
-    scalar: u32,
-    font_pixels: f32,
-    color_rgba: u32,
-    out_ticket: *mut u64,
-) -> i32 {
-    if out_ticket.is_null() {
-        return ERROR_INVALID;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_font_sprite_request(
-            window_id,
-            font_id,
-            scalar,
-            font_pixels,
-            color_rgba,
-            out_ticket,
-        );
-    }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT;
-    };
-    let mut ticket = 0;
-    let rc = request_font_sprite(
-        owner,
-        window_id,
-        font_id,
-        scalar,
-        font_pixels,
-        color_rgba,
-        &mut ticket,
-    );
-    if rc == 0 {
-        unsafe { out_ticket.write(ticket) };
-    }
-    rc
-}
 
-/// Poll a glyph producer without waiting. A pending or failed glyph never
-/// owns a frame lease; callers remain free to publish an empty/fallback slot.
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_font_sprite_status_v1(
-    window_id: u32,
-    ticket: u64,
-    out: *mut TrueosUi4FontSpriteStatusV1,
-) -> i32 {
-    if out.is_null() {
-        return ERROR_INVALID;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_font_sprite_status(window_id, ticket, out);
-    }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT;
-    };
-    let mut status = TrueosUi4FontSpriteStatusV1::default();
-    let rc = font_sprite_status(owner, window_id, ticket, &mut status);
-    if rc == 0 {
-        unsafe { out.write(status) };
-    }
-    rc
-}
 
 /// Submit one ordered sprite/solid scene into the active sprite-frame lease.
 /// Large scenes are transported in bounded chunks and rendered as consecutive
@@ -4944,443 +4617,11 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     }
 }
 
-/// Retired legacy CPU/readback text path retained as an inert C ABI symbol.
-///
-/// Existing portal symbols are immutable. New consumers must use
-/// `trueos_cabi_ui4_solara_text_scene`, which stays entirely on the retained
-/// GPU coverage path.
-pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_rows(
-    _window_id: u32,
-    _font_id: u32,
-    _native_scale: u32,
-    _dst_x: i32,
-    _dst_y: i32,
-    _rgba: u32,
-    _rows: *const TrueosUi4SolaraTextRow,
-    _row_count: usize,
-) -> i32 {
-    ERROR_INVALID
-}
 
-/// Render Solara paint records in the frame's fixed pixel coordinate space.
-pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
-    window_id: u32,
-    font_id: u32,
-    viewport_width: u32,
-    viewport_height: u32,
-    rgba: u32,
-    rows: *const TrueosUi4SolaraSceneTextRow,
-    row_count: usize,
-) -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe {
-            guest_text_scene(
-                window_id,
-                font_id,
-                viewport_width,
-                viewport_height,
-                rgba,
-                rows,
-                row_count,
-            )
-        };
-    }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT;
-    };
-    let stamp_once = font_id & TEXT_SCENE_FONT_ID_STAMP_ONCE != 0;
-    let backbuffer = font_id & TEXT_SCENE_FONT_ID_BACKBUFFER != 0;
-    if stamp_once && backbuffer {
-        return ERROR_INVALID;
-    }
-    let Some(font) = GpuFontFace::from_id(font_id & !TEXT_SCENE_FONT_ID_FLAGS) else {
-        return ERROR_FONT;
-    };
-    if rows.is_null() || row_count == 0 || row_count > MAX_TEXT_ROWS {
-        return ERROR_INVALID;
-    }
-    {
-        let mut surfaces = SURFACES.lock();
-        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-            return ERROR_NOT_FOUND;
-        };
-        let frame_target = surface.width == viewport_width && surface.height == viewport_height;
-        let valid_backbuffer = backbuffer
-            && viewport_width <= TEXT_BACKBUFFER_MAX_EXTENT
-            && viewport_height <= TEXT_BACKBUFFER_MAX_EXTENT;
-        if !frame_target && !valid_backbuffer {
-            return ERROR_INVALID;
-        }
-        if surface.write_lease.is_none() {
-            return ERROR_STATE;
-        }
-    }
 
-    let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
-    let mut runs = Vec::<RetainedFontRun>::with_capacity(row_count);
-    for row in input {
-        if row.text_ptr.is_null()
-            || row.text_len == 0
-            || row.text_len > MAX_TEXT_ROW_BYTES
-            || !row.x.is_finite()
-            || !row.y.is_finite()
-            || !row.font_pixels.is_finite()
-            || row.font_pixels <= 0.0
-            || row.font_pixels > 256.0
-        {
-            return ERROR_INVALID;
-        }
-        let bytes = unsafe { core::slice::from_raw_parts(row.text_ptr, row.text_len) };
-        let Ok(text) = core::str::from_utf8(bytes) else {
-            return ERROR_INVALID;
-        };
-        if text.chars().count() > MAX_DYNAMIC_TEXT_CHARS {
-            return ERROR_INVALID;
-        }
-        runs.push(RetainedFontRun {
-            text: String::from(text),
-            position: [row.x, row.y],
-            font_pixels: row.font_pixels,
-            slant: 0.0,
-        });
-    }
-    if crate::virtio_gpu_logo::output_dimensions().is_some() {
-        // Retained font scenes and font backbuffers still use the native backend.
-        if backbuffer || !stamp_once {
-            return ERROR_FONT;
-        }
-        let Some(paints) = super::emulator_paint::text(font, &runs, rgba) else {
-            return ERROR_FONT;
-        };
-        let mut surfaces = SURFACES.lock();
-        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-            return ERROR_NOT_FOUND;
-        };
-        let Some(lease) = surface.write_lease else {
-            return ERROR_STATE;
-        };
-        return if super::emulator_paint::append(lease, paints) {
-            0
-        } else {
-            ERROR_UI4
-        };
-    }
-    if stamp_once {
-        stamp_scene_entries_for_surface(
-            owner,
-            window_id,
-            font,
-            viewport_width,
-            viewport_height,
-            rgba,
-            runs,
-        )
-    } else {
-        retain_scene_entries_for_surface(
-            owner,
-            window_id,
-            font.resolve_optional(),
-            viewport_width,
-            viewport_height,
-            rgba,
-            runs,
-            backbuffer,
-        )
-    }
-}
 
-/// Build or replace one persistent transparent RGBA8 font canvas.
-///
-/// Unlike the legacy retained-text scene, this operation does not acquire a
-/// UI4 frame lease. FontKernel owns the asynchronous stamp until one complete
-/// RGBA8 allocation is ready, so a Blueprint can safely wait without wedging
-/// presentation. Equal-color rows are grouped only inside the kernel request;
-/// the retained consumer object is always one canvas.
-pub unsafe extern "C" fn trueos_cabi_ui4_font_canvas(
-    window_id: u32,
-    font_id: u32,
-    canvas_width: u32,
-    canvas_height: u32,
-    rows: *const TrueosUi4FontCanvasRow,
-    row_count: usize,
-) -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe {
-            guest_font_canvas(window_id, font_id, canvas_width, canvas_height, rows, row_count)
-        };
-    }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT;
-    };
-    let Some(font) = GpuFontFace::from_id(font_id) else {
-        return ERROR_FONT;
-    };
-    let font = font.resolve_optional();
-    if rows.is_null()
-        || row_count == 0
-        || row_count > MAX_FONT_CANVAS_ROWS
-        || canvas_width == 0
-        || canvas_height == 0
-        || canvas_width > TEXT_BACKBUFFER_MAX_EXTENT
-        || canvas_height > TEXT_BACKBUFFER_MAX_EXTENT
-    {
-        return ERROR_INVALID;
-    }
 
-    let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
-    let mut owned_rows = Vec::with_capacity(row_count);
-    let mut glyphs = 0usize;
-    for row in input {
-        if row.text_ptr.is_null()
-            || row.text_len == 0
-            || row.text_len > MAX_TEXT_ROW_BYTES
-            || !row.x.is_finite()
-            || !row.y.is_finite()
-            || !row.font_pixels.is_finite()
-            || row.font_pixels <= 0.0
-            || row.font_pixels > 256.0
-        {
-            return ERROR_INVALID;
-        }
-        let bytes = unsafe { core::slice::from_raw_parts(row.text_ptr, row.text_len) };
-        let Ok(text) = core::str::from_utf8(bytes) else {
-            return ERROR_INVALID;
-        };
-        glyphs = glyphs.saturating_add(text.chars().count());
-        if glyphs > TEXT_BACKBUFFER_MAX_GLYPHS {
-            return ERROR_INVALID;
-        }
-        owned_rows.push(BlueprintFontCanvasRow {
-            text: String::from(text),
-            position: [row.x, row.y],
-            font_pixels: row.font_pixels,
-            color_rgba: row.color_rgba,
-        });
-    }
-    let description = BlueprintFontCanvasDescription {
-        font,
-        width: canvas_width,
-        height: canvas_height,
-        rows: owned_rows,
-    };
-    if font_canvas_internal_layer_count(&description.rows) > MAX_FONT_CANVAS_INTERNAL_LAYERS {
-        return ERROR_INVALID;
-    }
-    retain_font_canvas_for_surface(owner, window_id, description)
-}
 
-fn font_canvas_internal_layer_count(rows: &[BlueprintFontCanvasRow]) -> usize {
-    let mut groups = Vec::<(u32, usize)>::new();
-    for row in rows {
-        if let Some((_, count)) = groups.iter_mut().find(|(color_rgba, count)| {
-            *color_rgba == row.color_rgba && *count < MAX_FONT_CANVAS_RUNS_PER_LAYER
-        }) {
-            *count += 1;
-        } else {
-            groups.push((row.color_rgba, 1));
-        }
-    }
-    groups.len()
-}
-
-fn font_canvas_request(description: &BlueprintFontCanvasDescription) -> FontStampRequest {
-    use trueos_helio_runtime::picasso_scene::{Color, FontFace, FontLookupRun, FontSlant, Rect};
-
-    let face = match description.font {
-        GpuFontFace::Default => FontFace::Default,
-        GpuFontFace::NotoSansSc => FontFace::NotoSansSc,
-        GpuFontFace::Inconsolata => FontFace::Inconsolata,
-        GpuFontFace::JuliaMono => FontFace::JuliaMono,
-    };
-    let lookup_rows = description
-        .rows
-        .iter()
-        .map(|row| {
-            let [red, green, blue, alpha] = row.color_rgba.to_le_bytes();
-            FontLookupRun {
-                rect: Rect::new(0.0, 0.0, description.width as f32, description.height as f32),
-                origin: row.position,
-                text: row.text.clone(),
-                face,
-                slant: FontSlant::Normal,
-                font_pixels: row.font_pixels,
-                color: Color::rgba(red, green, blue, alpha),
-            }
-        })
-        .collect::<Vec<_>>();
-    if let Ok(request) = crate::r::services::font_kernel_service::picasso_font_lookup_canvas_request(
-        lookup_rows.as_slice(),
-        description.width,
-        description.height,
-        description.width,
-        description.height,
-    ) {
-        return request;
-    }
-
-    // Compatibility safety net for an already-validated legacy description.
-    // Native Picasso lookup integration uses the typed path above; retaining
-    // this construction means an optional cache/grouping optimization can
-    // never turn a formerly valid visual canvas into a frame failure.
-    let mut groups = Vec::<(u32, Vec<RetainedFontRun>)>::new();
-    for row in &description.rows {
-        let group_index = match groups.iter_mut().position(|(color_rgba, runs)| {
-            *color_rgba == row.color_rgba && runs.len() < MAX_FONT_CANVAS_RUNS_PER_LAYER
-        }) {
-            Some(index) => index,
-            None => {
-                groups.push((row.color_rgba, Vec::new()));
-                groups.len() - 1
-            }
-        };
-        groups[group_index].1.push(RetainedFontRun {
-            text: row.text.clone(),
-            position: row.position,
-            font_pixels: row.font_pixels,
-            slant: 0.0,
-        });
-    }
-    let layers = groups
-        .into_iter()
-        .map(|(color_rgba, runs)| {
-            let [r, g, b, a] = color_rgba.to_le_bytes();
-            FontStampLayer {
-                scene: RetainSceneRequest {
-                    runs,
-                    font: description.font,
-                    viewport_width: description.width,
-                    viewport_height: description.height,
-                    raster_width: description.width,
-                    raster_height: description.height,
-                    positioning: RetainedFontPositioning::SceneOrigin,
-                },
-                foreground: GpuFontRgba::new(r, g, b, a),
-            }
-        })
-        .collect();
-    debug_assert!(
-        font_canvas_internal_layer_count(&description.rows) <= MAX_FONT_CANVAS_INTERNAL_LAYERS
-    );
-    FontStampRequest {
-        layers,
-        fit: FontStampFit::Canvas,
-    }
-}
-
-fn retain_font_canvas_for_surface(
-    owner: WindowOwner,
-    window_id: u32,
-    description: BlueprintFontCanvasDescription,
-) -> i32 {
-    let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        return ERROR_NOT_FOUND;
-    };
-    if surface.gpu_submission_unretired {
-        return ERROR_BUSY;
-    }
-
-    if let Some(canvas) = surface.font_canvas.as_mut() {
-        if !canvas.description.same_canvas(&description) {
-            if canvas.pending.is_some() {
-                return ERROR_BUSY;
-            }
-            let pending = match submit_stamp(font_canvas_request(&description)) {
-                Ok(pending) => pending,
-                Err(FontKernelError::QueueFull) => return ERROR_BUSY,
-                Err(error) => {
-                    log_font_kernel_error(
-                        "canvas-stamp",
-                        owner,
-                        window_id,
-                        description.font,
-                        description.rows.len(),
-                        error,
-                    );
-                    return ERROR_FONT;
-                }
-            };
-            *canvas = BlueprintFontCanvas {
-                description,
-                pending: Some(pending),
-                ready: None,
-                submitted_ms: Instant::now().as_millis(),
-            };
-        }
-    } else {
-        let pending = match submit_stamp(font_canvas_request(&description)) {
-            Ok(pending) => pending,
-            Err(FontKernelError::QueueFull) => return ERROR_BUSY,
-            Err(error) => {
-                log_font_kernel_error(
-                    "canvas-stamp",
-                    owner,
-                    window_id,
-                    description.font,
-                    description.rows.len(),
-                    error,
-                );
-                return ERROR_FONT;
-            }
-        };
-        surface.font_canvas = Some(BlueprintFontCanvas {
-            description,
-            pending: Some(pending),
-            ready: None,
-            submitted_ms: Instant::now().as_millis(),
-        });
-    }
-
-    let canvas = surface.font_canvas.as_mut().expect("font canvas installed");
-    if canvas.ready.is_some() {
-        return 0;
-    }
-    let completion = canvas.pending.as_mut().and_then(PendingFontStamp::try_take);
-    let Some(completion) = completion else {
-        return ERROR_BUSY;
-    };
-    canvas.pending = None;
-    match completion {
-        Ok(buffer) => {
-            let ticket = buffer.ticket().raw();
-            let extent = buffer.surface();
-            let glyphs = buffer.glyphs();
-            let submits = buffer.submits();
-            let walkers = buffer.active_walkers();
-            let build_ms = Instant::now()
-                .as_millis()
-                .saturating_sub(canvas.submitted_ms);
-            canvas.ready = Some(buffer);
-            crate::log_info!(
-                target: "ui4/font-canvas";
-                "FontKernel RGBA canvas ready owner={:?} window={} ticket={} rows={} internal_layers={} extent={}x{} glyphs={} submits={} walkers={} build_ms={} storage=gpu-vm-rgba8 alpha=premultiplied-coverage context=kernel-gpgpu-font path=outline->gpu-vm-r8->cpp-igc->guc-font-rcs->owned-rgba8 cpu_readback=0 cpu_frame_copy=0\n",
-                owner,
-                window_id,
-                ticket,
-                canvas.description.rows.len(),
-                font_canvas_internal_layer_count(&canvas.description.rows),
-                extent.width,
-                extent.height,
-                glyphs,
-                submits,
-                walkers,
-                build_ms,
-            );
-            0
-        }
-        Err(error) => {
-            log_font_kernel_error(
-                "canvas-stamp",
-                owner,
-                window_id,
-                canvas.description.font,
-                canvas.description.rows.len(),
-                error,
-            );
-            ERROR_FONT
-        }
-    }
-}
 
 fn stamp_scene_entries_for_surface(
     owner: WindowOwner,
@@ -5477,14 +4718,14 @@ fn retain_scene_entries_for_surface(
             return ERROR_INVALID;
         }
         if surface.retained_text_cursor == 0 {
-            surface.retained_text_backbuffer_extent = Some(extent);
-            surface.retained_text_backbuffer = None;
+
+
         } else if surface.retained_text_backbuffer_extent != Some(extent) {
             return ERROR_INVALID;
         }
     } else if surface.retained_text_cursor == 0 {
-        surface.retained_text_backbuffer_extent = None;
-        surface.retained_text_backbuffer = None;
+
+
     } else if surface.retained_text_backbuffer_extent.is_some() {
         return ERROR_STATE;
     }
@@ -5606,605 +4847,13 @@ fn retain_scene_entries_for_surface(
     0
 }
 
-fn log_font_kernel_error(
-    operation: &'static str,
-    owner: WindowOwner,
-    window_id: u32,
-    font: GpuFontFace,
-    runs: usize,
-    error: FontKernelError,
-) {
-    let (class, reason) = match error {
-        FontKernelError::QueueFull => ("queue-full", "font-kernel-queue"),
-        FontKernelError::InvalidRequest(reason) => ("invalid", reason),
-        FontKernelError::Unavailable(reason) => ("unavailable", reason),
-        FontKernelError::SubmittedIncomplete(reason) => ("submitted-incomplete", reason),
-    };
-    crate::log_warn!(
-        target: "ui4/solara-text";
-        "FontKernel {} failed owner={:?} window={} font={} runs={} class={} reason={}\n",
-        operation,
-        owner,
-        window_id,
-        font.registry_name(),
-        runs,
-        class,
-        reason,
-    );
-}
 
-fn font_error_is_no_coverage(error: FontKernelError) -> bool {
-    matches!(error, FontKernelError::Unavailable("font-coverage-empty"))
-}
 
-fn retained_text_scene(
-    state: &BlueprintRetainedTextState,
-) -> Result<Option<&FontKernelRetainedScene>, i32> {
-    match state {
-        BlueprintRetainedTextState::Pending(_) => Err(ERROR_BUSY),
-        BlueprintRetainedTextState::Ready(scene) => Ok(Some(scene)),
-        BlueprintRetainedTextState::NoCoverage => Ok(None),
-    }
-}
 
-fn render_retained_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
-    let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        return ERROR_NOT_FOUND;
-    };
-    if surface.retained_text_backbuffer_extent.is_some() {
-        return 0;
-    }
-    if surface.retained_text_rendered || surface.retained_text_cursor == 0 {
-        return 0;
-    }
-    if surface.gpu_submission_unretired {
-        return ERROR_BUSY;
-    }
-    let Some(lease) = surface.write_lease else {
-        return ERROR_STATE;
-    };
-    let destination = match gpgpu_rgba_surface(lease) {
-        Ok(destination) => destination,
-        Err(_) => return ERROR_UI4,
-    };
-    let mut masks = Vec::with_capacity(surface.retained_text_cursor);
-    for layer in surface
-        .retained_text_layers
-        .iter()
-        .take(surface.retained_text_cursor)
-    {
-        let scene = match retained_text_scene(&layer.state) {
-            Ok(Some(scene)) => scene,
-            Ok(None) => continue,
-            Err(error) => {
-                if mark_frame_buffer_cpu_authored(lease).is_err() {
-                    return ERROR_UI4;
-                }
-                return error;
-            }
-        };
-        for retained_mask in scene.masks() {
-            let Some((mask, origin)) = retained_mask else {
-                if mark_frame_buffer_cpu_authored(lease).is_err() {
-                    return ERROR_UI4;
-                }
-                return ERROR_FONT;
-            };
-            masks.push(GpgpuGlyphMaskLayer {
-                mask,
-                mask_rect: GpgpuRect::new(0, 0, mask.width, mask.height),
-                dst_xy: GpgpuPoint::new(
-                    origin[0].saturating_add(layer.translation_px[0]),
-                    origin[1].saturating_add(layer.translation_px[1]),
-                ),
-                color_rgba: layer.color_rgba,
-            });
-        }
-    }
 
-    let mut submitted = false;
-    let mut submits = 0usize;
-    let mut active_walkers = 0usize;
-    for chunk in masks.chunks(RETAINED_TEXT_MASK_BATCH_CAPACITY) {
-        let rendered = glyph_mask_layers_rgba8_2d_mode(chunk, destination, false);
-        submitted |= rendered.submitted;
-        submits = submits.saturating_add(rendered.submits);
-        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
-        if !rendered.ok {
-            if submitted {
-                surface.gpu_submission_unretired = true;
-                crate::log_error!(
-                    target: "ui4/solara-text";
-                    "FontKernel retained batch quarantined owner={:?} window={} frame={} buffer={} layers={} action=retain-frame+resident-masks\n",
-                    owner,
-                    window_id,
-                    lease.frame.raw(),
-                    lease.buffer_index,
-                    masks.len(),
-                );
-                return ERROR_BUSY;
-            }
-            if mark_frame_buffer_cpu_authored(lease).is_err() {
-                return ERROR_UI4;
-            }
-            return ERROR_FONT;
-        }
-    }
 
-    let finalizer = release_rgba8_surface_for_scanout(destination);
-    if !finalizer.ok {
-        if submitted || finalizer.submitted {
-            surface.gpu_submission_unretired = true;
-            crate::log_error!(
-                target: "ui4/solara-text";
-                "FontKernel retained release quarantined owner={:?} window={} frame={} buffer={} layers={} action=retain-frame+resident-masks\n",
-                owner,
-                window_id,
-                lease.frame.raw(),
-                lease.buffer_index,
-                masks.len(),
-            );
-            return ERROR_BUSY;
-        }
-        if mark_frame_buffer_cpu_authored(lease).is_err() {
-            return ERROR_UI4;
-        }
-        return ERROR_FONT;
-    }
-    let Some(release) = finalizer.release else {
-        surface.gpu_submission_unretired = true;
-        return ERROR_BUSY;
-    };
-    surface.pending_gpu_release = Some(release);
-    surface.retained_text_rendered = true;
-    crate::log_info!(
-        target: "ui4/solara-text";
-        "FontKernel retained scene stamped owner={:?} window={} layers={} batches={} walkers={} target={}x{} path=resident-r8-batch cpu_readback=0 cpu_frame_copy=0\n",
-        owner,
-        window_id,
-        masks.len(),
-        submits,
-        active_walkers,
-        surface.width,
-        surface.height,
-    );
-    0
-}
 
-/// Materialize the retained document masks once into a persistent RGBA8 source.
-///
-/// The resulting allocation belongs to the Blueprint frame rather than one
-/// UI4 back-buffer lease. Later pans therefore sample another source rectangle
-/// without re-entering FontKernel or rebuilding the DOM text scene.
-fn render_retained_text_backbuffer_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
-    let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        return ERROR_NOT_FOUND;
-    };
-    let Some((width, height)) = surface.retained_text_backbuffer_extent else {
-        return 0;
-    };
-    if surface.retained_text_backbuffer.is_some() {
-        return 0;
-    }
-    if surface.retained_text_cursor == 0 || surface.write_lease.is_none() {
-        return ERROR_STATE;
-    }
-    if surface.gpu_submission_unretired {
-        return ERROR_BUSY;
-    }
 
-    let mut masks = Vec::with_capacity(surface.retained_text_cursor);
-    for layer in surface
-        .retained_text_layers
-        .iter()
-        .take(surface.retained_text_cursor)
-    {
-        let scene = match retained_text_scene(&layer.state) {
-            Ok(Some(scene)) => scene,
-            Ok(None) => continue,
-            Err(error) => return error,
-        };
-        for retained_mask in scene.masks() {
-            let Some((mask, origin)) = retained_mask else {
-                return ERROR_FONT;
-            };
-            masks.push(GpgpuGlyphMaskLayer {
-                mask,
-                mask_rect: GpgpuRect::new(0, 0, mask.width, mask.height),
-                dst_xy: GpgpuPoint::new(origin[0], origin[1]),
-                color_rgba: layer.color_rgba,
-            });
-        }
-    }
-    let Some(clear_rgba) = surface.sprite_clear_rgba else {
-        return ERROR_STATE;
-    };
-    let [r, g, b, a] = clear_rgba.to_le_bytes();
-    let premultiplied_clear =
-        u32::from_le_bytes(PremultipliedRgba8::from_straight_rgba(r, g, b, a).to_native_bytes());
-    let Some(storage) =
-        allocate_font_instance_rgba8_surface_cleared(width, height, premultiplied_clear)
-    else {
-        return ERROR_UI4;
-    };
-    let destination = storage.surface();
-    surface.retained_text_backbuffer = Some(storage);
-
-    let mut submits = 0usize;
-    let mut active_walkers = 0usize;
-    for chunk in masks.chunks(RETAINED_TEXT_MASK_BATCH_CAPACITY) {
-        let rendered = glyph_mask_layers_rgba8_2d_mode(chunk, destination, false);
-        submits = submits.saturating_add(rendered.submits);
-        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
-        if !rendered.ok {
-            if rendered.submitted {
-                surface.gpu_submission_unretired = true;
-                crate::log_error!(
-                    target: "ui4/solara-text";
-                    "FontKernel document backbuffer quarantined owner={:?} window={} layers={} target={}x{} action=retain-rgba+resident-masks\n",
-                    owner,
-                    window_id,
-                    masks.len(),
-                    width,
-                    height,
-                );
-                return ERROR_UI4;
-            }
-            surface.retained_text_backbuffer = None;
-            return ERROR_FONT;
-        }
-    }
-
-    surface.retained_text_rendered = true;
-    crate::log_info!(
-        target: "ui4/solara-text";
-        "FontKernel document backbuffer ready owner={:?} window={} layers={} batches={} walkers={} target={}x{} storage=gpu-vm-rgba8 path=resident-r8-batch cpu_readback=0 cpu_frame_copy=0\n",
-        owner,
-        window_id,
-        masks.len(),
-        submits,
-        active_walkers,
-        width,
-        height,
-    );
-    surface.retained_text_layers.clear();
-    surface.retained_text_cursor = 0;
-    0
-}
-
-fn shell2_stamped_text_registration(
-    request: &FontStampRequest,
-) -> Option<crate::r::services::font_producer_service::FontProducerRegistration> {
-    let first_scene = &request.layers.first()?.scene;
-    if !matches!(first_scene.font, GpuFontFace::Inconsolata | GpuFontFace::JuliaMono)
-        || first_scene.positioning != RetainedFontPositioning::SceneOrigin
-        || first_scene.viewport_width != first_scene.raster_width
-        || first_scene.viewport_height != first_scene.raster_height
-    {
-        return None;
-    }
-    let first_pixels = first_scene.runs.first()?.font_pixels;
-    if !first_pixels.is_finite() || first_pixels <= 0.0 {
-        return None;
-    }
-    let font_pixels_milli = libm::roundf(first_pixels * 1_000.0) as u32;
-    let effective_pixels = font_pixels_milli.saturating_add(500) / 1_000;
-    let scale_step = shell2_font_scale_step(effective_pixels)?;
-    if font_pixels_milli != effective_pixels.saturating_mul(1_000) {
-        return None;
-    }
-    let mut glyphs = 0usize;
-    for layer in &request.layers {
-        let scene = &layer.scene;
-        if scene.font != first_scene.font
-            || scene.positioning != first_scene.positioning
-            || scene.viewport_width != first_scene.viewport_width
-            || scene.viewport_height != first_scene.viewport_height
-            || scene.raster_width != first_scene.raster_width
-            || scene.raster_height != first_scene.raster_height
-        {
-            return None;
-        }
-        for run in &scene.runs {
-            if libm::roundf(run.font_pixels * 1_000.0) as u32 != font_pixels_milli {
-                return None;
-            }
-            glyphs = glyphs.saturating_add(run.text.chars().count());
-        }
-    }
-    if glyphs == 0 || glyphs > TEXT_BACKBUFFER_MAX_GLYPHS {
-        return None;
-    }
-    Some(crate::r::services::font_producer_service::FontProducerRegistration {
-        face: first_scene.font.id() as u16,
-        tier: scale_step.native_tier_pixels as u16,
-        font_pixels_milli,
-        row_width_px: first_scene.raster_width,
-        row_height_px: first_scene.raster_height,
-        format: crate::r::services::font_producer_service::FontProducerFormat::Rgba8Premultiplied,
-        max_chars: TEXT_BACKBUFFER_MAX_GLYPHS,
-        row_ring_depth: 2,
-    })
-}
-
-fn submit_stamped_text_request(
-    surface: &mut BlueprintSceneSurface,
-    owner: WindowOwner,
-    window_id: u32,
-    request: FontStampRequest,
-    destination: GpgpuRgba8Surface,
-) -> Result<(PendingFontFrameStamp, bool), FontKernelError> {
-    let submit_started_ns = crate::chronos::monotonic_nanos();
-    let layer_count = request.layers.len();
-    let glyph_count =
-        request.layers.iter().fold(0usize, |total, layer| {
-            total.saturating_add(
-                layer.scene.runs.iter().fold(0usize, |run_total, run| {
-                    run_total.saturating_add(run.text.chars().count())
-                }),
-            )
-        });
-    let Some(registration) = shell2_stamped_text_registration(&request) else {
-        return submit_frame_stamp(request, destination).map(|pending| {
-            crate::log_shell2_render_trace!(
-                "stage=ui4-submit owner={:?} window={} ticket={} queued_ahead={} layers={} glyphs={} producer_reused=0 producer_seals={} path=request-outline submit_us={}\n",
-                owner,
-                window_id,
-                pending.ticket().raw(),
-                pending.queued_ahead(),
-                layer_count,
-                glyph_count,
-                surface.stamped_text_producers.len(),
-                crate::chronos::monotonic_nanos().saturating_sub(submit_started_ns) / 1_000,
-            );
-            (pending, false)
-        });
-    };
-    let (producer_index, producer_reused) = match surface
-        .stamped_text_producers
-        .iter()
-        .position(|entry| entry.registration == registration)
-    {
-        Some(index) => (index, true),
-        None => {
-            if surface.stamped_text_producers.len() >= SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE {
-                surface.stamped_text_producers.remove(0);
-            }
-            let producer = match register_ui4_gpu_font_producer(registration) {
-                Ok(producer) => producer,
-                Err(error) => {
-                    crate::log_warn!(target: "ui4/solara-text";
-                        "Shell2 OceanCache registration unavailable owner={:?} window={} face={} tier={} font_pixels_milli={} extent={}x{} error={:?} action=request-outline-fallback\n",
-                        owner,
-                        window_id,
-                        registration.face,
-                        registration.tier,
-                        registration.font_pixels_milli,
-                        registration.row_width_px,
-                        registration.row_height_px,
-                        error,
-                    );
-                    return submit_frame_stamp(request, destination)
-                        .map(|pending| (pending, false));
-                }
-            };
-            surface
-                .stamped_text_producers
-                .push(BlueprintStampedTextProducer {
-                    registration,
-                    producer,
-                });
-            (surface.stamped_text_producers.len() - 1, false)
-        }
-    };
-    let result = surface.stamped_text_producers[producer_index]
-        .producer
-        .submit_ui4_cached_frame(request, destination);
-    result.map(|pending| {
-        crate::log_shell2_render_trace!(
-            "stage=ui4-submit owner={:?} window={} ticket={} queued_ahead={} layers={} glyphs={} producer_reused={} producer_seals={} face={} font_pixels_milli={} path=producer-oceancache submit_us={}\n",
-            owner,
-            window_id,
-            pending.ticket().raw(),
-            pending.queued_ahead(),
-            layer_count,
-            glyph_count,
-            producer_reused as u8,
-            surface.stamped_text_producers.len(),
-            registration.face,
-            registration.font_pixels_milli,
-            crate::chronos::monotonic_nanos().saturating_sub(submit_started_ns) / 1_000,
-        );
-        (pending, true)
-    })
-}
-
-fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
-    let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        return ERROR_NOT_FOUND;
-    };
-    if surface.stamped_text_rendered || surface.stamped_text_cursor == 0 {
-        return 0;
-    }
-    if surface.gpu_submission_unretired {
-        return ERROR_BUSY;
-    }
-    let Some(lease) = surface.write_lease else {
-        return ERROR_STATE;
-    };
-    let destination = match gpgpu_rgba_surface(lease) {
-        Ok(destination) => destination,
-        Err(_) => return ERROR_UI4,
-    };
-    if surface.stamped_text_pending.is_none() {
-        let layers = surface
-            .stamped_text_layers
-            .iter()
-            .take(surface.stamped_text_cursor)
-            .map(|layer| {
-                let [r, g, b, a] = layer.color_rgba.to_le_bytes();
-                FontStampLayer {
-                    scene: RetainSceneRequest {
-                        runs: layer.description.runs.clone(),
-                        font: layer.description.font,
-                        viewport_width: layer.description.viewport_width,
-                        viewport_height: layer.description.viewport_height,
-                        raster_width: layer.description.viewport_width,
-                        raster_height: layer.description.viewport_height,
-                        positioning: RetainedFontPositioning::SceneOrigin,
-                    },
-                    foreground: GpuFontRgba::new(r, g, b, a),
-                }
-            })
-            .collect();
-        let request = FontStampRequest {
-            layers,
-            fit: FontStampFit::Canvas,
-        };
-        let pending_started_ns = crate::chronos::monotonic_nanos();
-        surface.stamped_text_pending = match submit_stamped_text_request(
-            surface,
-            owner,
-            window_id,
-            request,
-            destination,
-        ) {
-            Ok((pending, ocean)) => {
-                surface.stamped_text_pending_ocean = ocean;
-                surface.stamped_text_pending_started_ns = pending_started_ns;
-                surface.stamped_text_pending_polls = 0;
-                Some(pending)
-            }
-            Err(FontKernelError::QueueFull) => return ERROR_BUSY,
-            Err(error) if font_error_is_no_coverage(error) => {
-                surface.stamped_text_rendered = true;
-                crate::log_info!(
-                    target: "ui4/solara-text";
-                    "FontKernel frame stamp no-coverage owner={:?} window={} layers={} target={}x{} action=transparent-noop\n",
-                    owner,
-                    window_id,
-                    surface.stamped_text_cursor,
-                    surface.width,
-                    surface.height,
-                );
-                return 0;
-            }
-            Err(error) => {
-                log_font_kernel_error(
-                    "frame-stamp",
-                    owner,
-                    window_id,
-                    surface.stamped_text_layers[0].description.font,
-                    surface.stamped_text_cursor,
-                    error,
-                );
-                return ERROR_FONT;
-            }
-        };
-    }
-
-    let (pending_ticket, queued_ahead, completion) = {
-        let pending = surface
-            .stamped_text_pending
-            .as_mut()
-            .expect("stamped text pending exists after submission");
-        (pending.ticket().raw(), pending.queued_ahead(), pending.try_take())
-    };
-    let Some(completion) = completion else {
-        surface.stamped_text_pending_polls = surface.stamped_text_pending_polls.saturating_add(1);
-        return ERROR_BUSY;
-    };
-    let ocean = surface.stamped_text_pending_ocean;
-    let pending_wait_us = crate::chronos::monotonic_nanos()
-        .saturating_sub(surface.stamped_text_pending_started_ns)
-        / 1_000;
-    let pending_polls = surface.stamped_text_pending_polls;
-    surface.stamped_text_pending = None;
-    surface.stamped_text_pending_started_ns = 0;
-    surface.stamped_text_pending_polls = 0;
-    surface.stamped_text_pending_ocean = false;
-    let stamped = match completion {
-        Ok(stamped) => stamped,
-        Err(FontKernelError::SubmittedIncomplete(reason)) => {
-            surface.gpu_submission_unretired = true;
-            crate::log_error!(
-                target: "ui4/solara-text";
-                "FontKernel frame stamp quarantined owner={:?} window={} frame={} buffer={} layers={} reason={} action=retain-frame\n",
-                owner,
-                window_id,
-                lease.frame.raw(),
-                lease.buffer_index,
-                surface.stamped_text_cursor,
-                reason,
-            );
-            return ERROR_BUSY;
-        }
-        Err(error) if font_error_is_no_coverage(error) => {
-            surface.stamped_text_rendered = true;
-            crate::log_info!(
-                target: "ui4/solara-text";
-                "FontKernel frame stamp no-coverage owner={:?} window={} layers={} target={}x{} action=transparent-noop\n",
-                owner,
-                window_id,
-                surface.stamped_text_cursor,
-                surface.width,
-                surface.height,
-            );
-            return 0;
-        }
-        Err(error) => {
-            log_font_kernel_error(
-                "frame-stamp",
-                owner,
-                window_id,
-                surface.stamped_text_layers[0].description.font,
-                surface.stamped_text_cursor,
-                error,
-            );
-            return ERROR_FONT;
-        }
-    };
-    surface.pending_gpu_release = Some(stamped.release());
-    surface.stamped_text_rendered = true;
-    crate::log_shell2_render_trace!(
-        "stage=ui4-complete owner={:?} window={} ticket={} queued_ahead={} pending_polls={} pending_wait_us={} layers={} glyphs={} submits={} clear_submits={} walkers={} pre_service_ms={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} clear_ms={} instance_release_ms={} service_ms={} target={}x{} input={} cache={} cpu_readback=0 cpu_frame_copy=0 staging_rgba=0\n",
-        owner,
-        window_id,
-        pending_ticket,
-        queued_ahead,
-        pending_polls,
-        pending_wait_us,
-        surface.stamped_text_cursor,
-        stamped.glyphs(),
-        stamped.submits(),
-        stamped.clear_submits(),
-        stamped.active_walkers(),
-        stamped.pre_service_ms(),
-        stamped.prepare_coverage_ms(),
-        stamped.coverage_build_ms(),
-        stamped.coverage_audit_ms(),
-        stamped.coverage_submits(),
-        stamped.clear_ms(),
-        stamped.instance_release_ms(),
-        stamped.total_service_ms(),
-        surface.width,
-        surface.height,
-        if ocean {
-            "producer-oceancache"
-        } else {
-            "request-outline"
-        },
-        if ocean {
-            "shared-registration-seal"
-        } else {
-            "none"
-        },
-    );
-    0
-}
 
 /// Publish the completed dirty buffer and its window damage.
 pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
@@ -6301,14 +4950,6 @@ fn publish_blueprint_frame(
     };
     if damage_width == 0 || damage_height == 0 {
         return ERROR_INVALID;
-    }
-    let retained_text = render_retained_text_for_surface(owner, window_id);
-    if retained_text != 0 {
-        return retained_text;
-    }
-    let stamped_text = render_stamped_text_for_surface(owner, window_id);
-    if stamped_text != 0 {
-        return stamped_text;
     }
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -6466,18 +5107,6 @@ fn publish_blueprint_frame(
             crate::log_info!(target: "ui4/blueprint-frame"; "immutable refresh committed owner={:?} window={} old_frame={} frame={} extent={}x{} action=broker-swap-after-complete-publish old_release=surflive\n", owner, window_id, previous.raw(), replacement.raw(), surface.width, surface.height);
         }
     }
-    surface
-        .retained_text_layers
-        .truncate(surface.retained_text_cursor);
-    surface.retained_text_cursor = 0;
-    surface.retained_text_rendered = false;
-    surface.stamped_text_layers.clear();
-    surface.stamped_text_cursor = 0;
-    surface.stamped_text_pending = None;
-    surface.stamped_text_pending_started_ns = 0;
-    surface.stamped_text_pending_polls = 0;
-    surface.stamped_text_pending_ocean = false;
-    surface.stamped_text_rendered = false;
     let launch_selection = surface.launch_selection.take();
     let launched_window = surface.window;
     drop(surfaces);
@@ -6660,216 +5289,8 @@ fn expected_rgba8_len(width: u32, height: u32) -> Option<usize> {
         .checked_mul(core::mem::size_of::<u32>())
 }
 
-fn next_blueprint_font_sprite_id() -> u32 {
-    loop {
-        let id = NEXT_BLUEPRINT_FONT_SPRITE_ID.fetch_add(1, Ordering::Relaxed);
-        if id != 0 && id != TEXT_BACKBUFFER_SPRITE_ID {
-            return id;
-        }
-    }
-}
 
-pub(crate) fn request_font_sprite(
-    owner: WindowOwner,
-    window_id: u32,
-    font_id: u32,
-    scalar: u32,
-    font_pixels: f32,
-    color_rgba: u32,
-    out_ticket: &mut u64,
-) -> i32 {
-    let Some(font) = GpuFontFace::from_id(font_id) else {
-        return ERROR_INVALID;
-    };
-    let font = font.resolve_optional();
-    let Some(scalar) = char::from_u32(scalar) else {
-        return ERROR_INVALID;
-    };
-    if scalar.is_control()
-        || scalar.is_whitespace()
-        || !font_pixels.is_finite()
-        || !(4.0..=256.0).contains(&font_pixels)
-    {
-        return ERROR_INVALID;
-    }
-    let key = BlueprintFontSpriteKey {
-        font,
-        scalar,
-        font_pixels_bits: font_pixels.to_bits(),
-        color_rgba,
-    };
-    // A Shell2 scale frontend should first obtain an exact step from
-    // `trueos_cabi_ui4_shell2_font_scale_steps_v1`, request that step's
-    // `native_tier_pixels` here, and apply the published residual to its
-    // sprite quad. v1 deliberately does not quantize arbitrary caller sizes:
-    // a non-tier request remains an exact generic stamp fallback.
-    let scale_step = (font_pixels == libm::truncf(font_pixels))
-        .then(|| shell2_font_scale_step(font_pixels as u32))
-        .flatten();
-    {
-        let surfaces = SURFACES.lock();
-        let Some(surface) = surfaces
-            .iter()
-            .find(|surface| surface.owner == owner && surface.render_target == window_id)
-        else {
-            return ERROR_NOT_FOUND;
-        };
-        if let Some(ticket) = live_font_sprite_ticket(&surface.font_sprite_requests, key) {
-            // This is the safe cache-backed fast path currently available to
-            // v1: reuse the caller-owned ticket/source while its UI4 surface
-            // is alive.  No cross-surface source reuse or GPU lifetime change
-            // occurs here.
-            crate::log_trace!(target: "ui4/solara-text";
-                "ui4/font-sprite: request-hit ticket={} cache_eligible={} cache_scope=surface-exact path=retain-existing-ticket\n",
-                ticket, u32::from(scale_step.is_some()),
-            );
-            *out_ticket = ticket;
-            return 0;
-        }
-        if surface.font_sprite_requests.len() >= MAX_BLUEPRINT_FONT_SPRITES {
-            return ERROR_BUSY;
-        }
-    }
-    // A first exact request takes the generic stamp fallback.  Its per-surface
-    // ticket is retained above, so subsequent v1 requests can avoid another
-    // analytical coverage pass without widening font-core ownership.
-    if let Some(step) = scale_step {
-        crate::log_trace!(target: "ui4/solara-text";
-            "ui4/font-sprite: tiered-request effective_px={} native_tier_px={} residual_milli={} cache_eligible={} cache_hit=0 path=exact-generic-stamp\n",
-            step.effective_pixels, step.native_tier_pixels, step.residual_milli,
-            step.cache_eligible,
-        );
-    }
-    // One conservative pixel avoids needing a floating-point `ceil` runtime
-    // in the kernel while preserving the exact fractional em size below.
-    let extent = (font_pixels * 4.0 + 1.0).max(32.0) as u32;
-    let [r, g, b, a] = color_rgba.to_le_bytes();
-    let request = FontStampRequest {
-        layers: alloc::vec![FontStampLayer {
-            scene: RetainSceneRequest {
-                runs: alloc::vec![RetainedFontRun {
-                    text: scalar.into(),
-                    // X=0 and a baseline at one em make the tight output
-                    // origin a genuine cell-relative bearing. Shell2 can add
-                    // it directly to its fixed slot origin without inventing
-                    // a hidden canvas offset.
-                    position: [0.0, font_pixels],
-                    font_pixels,
-                    slant: 0.0,
-                }],
-                font,
-                viewport_width: extent,
-                viewport_height: extent,
-                raster_width: extent,
-                raster_height: extent,
-                positioning: RetainedFontPositioning::SceneOrigin,
-            },
-            foreground: GpuFontRgba::new(r, g, b, a),
-        }],
-        fit: FontStampFit::Tight,
-    };
-    let pending = match submit_stamp(request) {
-        Ok(pending) => pending,
-        Err(FontKernelError::QueueFull) => return ERROR_BUSY,
-        Err(_) => return ERROR_UI4,
-    };
-    let ticket = pending.ticket().raw();
-    let sprite_id = next_blueprint_font_sprite_id();
-    let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        // Dropping `pending` deliberately abandons only this caller-owned
-        // request handle; it cannot retain a UI4 frame because none was begun.
-        return ERROR_NOT_FOUND;
-    };
-    surface
-        .font_sprite_requests
-        .push(BlueprintFontSpriteRequest {
-            key,
-            ticket,
-            sprite_id,
-            state: BlueprintFontSpriteState::Pending(pending),
-        });
-    *out_ticket = ticket;
-    0
-}
 
-pub(crate) fn font_sprite_status(
-    owner: WindowOwner,
-    window_id: u32,
-    ticket: u64,
-    out: &mut TrueosUi4FontSpriteStatusV1,
-) -> i32 {
-    let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        return ERROR_NOT_FOUND;
-    };
-    let Some(index) = surface
-        .font_sprite_requests
-        .iter()
-        .position(|request| request.ticket == ticket)
-    else {
-        return ERROR_NOT_FOUND;
-    };
-    let request = &mut surface.font_sprite_requests[index];
-    if let BlueprintFontSpriteState::Pending(pending) = &mut request.state
-        && let Some(completion) = pending.try_take()
-    {
-        match completion {
-            Ok(source) => {
-                let descriptor = source.surface();
-                let origin_px = source.origin_px();
-                let sprite_id = request.sprite_id;
-                if let Some(slot) = surface
-                    .sprites
-                    .iter()
-                    .position(|(current_id, _)| *current_id == sprite_id)
-                {
-                    // IDs are private and monotonically allocated, so this is
-                    // defensive only; never overwrite a caller-uploaded ID.
-                    if !matches!(surface.sprites[slot].1, BlueprintSpriteSource::Font(_)) {
-                        request.state = BlueprintFontSpriteState::Failed;
-                    } else {
-                        surface.sprites[slot].1 = BlueprintSpriteSource::Font(source);
-                        request.state = BlueprintFontSpriteState::Ready {
-                            width: descriptor.width,
-                            height: descriptor.height,
-                            origin_px,
-                        };
-                    }
-                } else {
-                    surface
-                        .sprites
-                        .push((sprite_id, BlueprintSpriteSource::Font(source)));
-                    request.state = BlueprintFontSpriteState::Ready {
-                        width: descriptor.width,
-                        height: descriptor.height,
-                        origin_px,
-                    };
-                }
-            }
-            Err(_) => request.state = BlueprintFontSpriteState::Failed,
-        }
-    }
-    match request.state {
-        BlueprintFontSpriteState::Pending(_) => out.state = FONT_SPRITE_STATUS_PENDING,
-        BlueprintFontSpriteState::Ready {
-            width,
-            height,
-            origin_px,
-        } => {
-            *out = TrueosUi4FontSpriteStatusV1 {
-                state: FONT_SPRITE_STATUS_READY,
-                sprite_id: request.sprite_id,
-                width,
-                height,
-                origin_x: origin_px[0],
-                origin_y: origin_px[1],
-            };
-        }
-        BlueprintFontSpriteState::Failed => out.state = FONT_SPRITE_STATUS_FAILED,
-    }
-    0
-}
 
 fn sprite_rgba8_upload_id_valid(sprite_id: u32) -> bool {
     sprite_id != 0
@@ -7665,19 +6086,6 @@ fn alpha_rect_descriptor(
     })
 }
 
-fn retained_font_canvas_surface(surface: &BlueprintSceneSurface) -> Option<GpgpuRgba8Surface> {
-    surface
-        .font_canvas
-        .as_ref()
-        .and_then(|canvas| canvas.ready.as_ref())
-        .map(FontStampedBuffer::surface)
-        .or_else(|| {
-            surface
-                .retained_text_backbuffer
-                .as_ref()
-                .map(GpgpuOwnedRgba8Surface::surface)
-        })
-}
 
 const fn sprite_scene_needs_clear(render_overlay: bool, full_frame_copy: bool) -> bool {
     !render_overlay && !full_frame_copy
@@ -8138,23 +6546,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
     };
 
-    let full_frame_copy = match upload.quads.as_slice() {
-        [quad] if quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID => {
-            let Some(source) = retained_font_canvas_surface(surface) else {
-                cancel_blueprint_sprite_frame_without_live_gpu(surface);
-                return ERROR_NOT_FOUND;
-            };
-            matches!(
-                alpha_rect_descriptor(*quad, source, destination),
-                AlphaRectConversion::Exact(descriptor)
-                    if descriptor.dst_xy == 0
-                        && descriptor.size
-                            == surface.width | (surface.height << 16)
-                        && descriptor.flags == ALPHA_BLEND_WORKLIST_FLAG_COPY
-            )
-        }
-        _ => false,
-    };
+    let full_frame_copy = false;
     let clear = sprite_frame_clear_quad(
         clear_rgba,
         surface.sprite_repaint_region.unwrap_or(DamageRect {
@@ -8230,12 +6622,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
         let (source, mut premultiplied_source, validated_premultiplied) = if quad.sprite_id == 0 {
             (solid.surface, false, solid.premultiplied)
-        } else if quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID {
-            let Some(source) = retained_font_canvas_surface(surface) else {
-                cancel_blueprint_sprite_frame_without_live_gpu(surface);
-                return ERROR_NOT_FOUND;
-            };
-            (source, true, true)
         } else {
             let Some((_, source)) = surface
                 .sprites
@@ -9597,8 +7983,8 @@ fn stage_layered_resize(
         surface.height = (height / surface.scene_divisor).max(1);
         surface.placement = placement;
         surface.taken_resize_event = None;
-        surface.retained_text_backbuffer = None;
-        surface.retained_text_backbuffer_extent = None;
+
+
     }
     0
 }

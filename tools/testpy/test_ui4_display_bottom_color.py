@@ -6,7 +6,7 @@ import tempfile
 from test_clip_position3_uv_texture import item, constant
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = 'src/ui4/blueprint_text.rs'
+SOURCE = 'src/ui4/blueprint_ui4.rs'
 declarations = '\n'.join(constant(SOURCE, name) for name in
     ('ERROR_INVALID', 'ERROR_CONTEXT', 'ERROR_NOT_FOUND', 'ERROR_UI4'))
 declarations += '\n' + item(SOURCE, 'surface_mut')
@@ -61,7 +61,7 @@ fn blueprint_owner()->Option<u32> {TRACE.with_borrow(|t|t.owner)}
 #[derive(Debug,PartialEq)] enum DispatchOutcome {Resume,Unhandled}
 const STATUS_OK:u32 = 0;
 fn write_response(_:u8,_:u32,_:u32,data:u64,_:u64) {TRACE.with_borrow_mut(|t|t.responses.push(data));}
-mod ui4 {pub mod blueprint_text {pub use crate::trueos_cabi_ui4_scene_set_display_bottom_color;}}
+mod ui4 {pub mod blueprint_ui4 {pub use crate::trueos_cabi_ui4_scene_set_display_bottom_color;}}
 fn guest_status(op:u32,a:u64,b:u64,payload:&[u8])->i32 {
     assert!(payload.is_empty());TRACE.with_borrow_mut(|t|t.forwarded.push((op,a,b)));-77
 }

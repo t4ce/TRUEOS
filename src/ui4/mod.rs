@@ -3,7 +3,7 @@
 //! This module describes what a producer needs from the display path. It does
 //! not expose a guest/userspace ABI; the compositor service owns presentation.
 
-pub(crate) mod blueprint_text;
+pub(crate) mod blueprint_ui4;
 mod color_picker;
 mod collapse;
 pub(crate) use collapse::{enable_window_collapse, CollapseError, MAX_COLLAPSE_IMAGE_SIZE};
@@ -215,7 +215,7 @@ pub(crate) fn ui4_live_resource_usage() -> Ui4LiveResourceUsage {
 /// UI4 deliberately does not infer owner liveness. The application lifecycle
 /// calls this operation when an owner ceases to exist.
 pub(crate) fn release_owner_resources(owner: WindowOwner) -> OwnerReleaseSummary {
-    let surfaces = blueprint_text::release_owner_resources(owner);
+    let surfaces = blueprint_ui4::release_owner_resources(owner);
     let (input_routes, input_events) = input_broker::release_owner(owner);
     let context_menus = context_menu::release_owner(owner);
     cursor_frame_inout::owner_closed(owner);

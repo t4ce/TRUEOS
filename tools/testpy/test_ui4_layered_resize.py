@@ -7,7 +7,7 @@ import tempfile
 from test_clip_position3_uv_texture import item
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = "src/ui4/blueprint_text.rs"
+SOURCE = "src/ui4/blueprint_ui4.rs"
 
 HARNESS = r'''
 #![allow(dead_code)]

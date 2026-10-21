@@ -101,7 +101,7 @@ fn reset() {
 '''
     for name in ("trueos_cabi_ui4_scene_frame_was_presented_v1",
                  "trueos_cabi_ui4_scene_frame_publish_tracked_v1"):
-        harness += receipt_item("src/ui4/blueprint_text.rs", name)
+        harness += receipt_item("src/ui4/blueprint_ui4.rs", name)
     harness += r'''
 #[test] fn exact_serial_owner_generation_and_nonconsuming_query() {
     reset();

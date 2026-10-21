@@ -20,7 +20,7 @@ def function(source, name):
 
 
 def main():
-    blueprint = (ROOT / 'src/ui4/blueprint_text.rs').read_text()
+    blueprint = (ROOT / 'src/ui4/blueprint_ui4.rs').read_text()
     picker = (ROOT / 'src/ui4/color_picker.rs').read_text()
     start = blueprint.index('struct DisplayFadeState')
     end = blueprint.index('static NEXT_BLUEPRINT_FONT_SPRITE_ID', start)
@@ -70,7 +70,7 @@ mod color_picker {
         program_pipe_a_precision_gamma(&entries)
     }
 }
-mod blueprint_text {
+mod blueprint_ui4 {
     use super::*;
     const ERROR_INVALID: i32 = -1;
     const ERROR_CONTEXT: i32 = -2;
@@ -87,9 +87,9 @@ mod blueprint_text {
     pub fn close(owner: u32, window: Option<u32>) { release_display_color(owner, window); }
     pub fn reset() { *DISPLAY_GAMMA.lock() = None; *DISPLAY_FADE.lock() = None; }
 }
-use blueprint_text::{trueos_cabi_ui4_scene_set_display_gamma_ramp as gamma, trueos_cabi_ui4_scene_display_fade_v1 as fade};
+use blueprint_ui4::{trueos_cabi_ui4_scene_set_display_gamma_ramp as gamma, trueos_cabi_ui4_scene_display_fade_v1 as fade};
 fn reset() -> color_picker::PipeGammaSnapshot {
-    blueprint_text::reset(); OWNER.store(1, Ordering::Relaxed); FAIL.store(false, Ordering::Relaxed);
+    blueprint_ui4::reset(); OWNER.store(1, Ordering::Relaxed); FAIL.store(false, Ordering::Relaxed);
     let original = color_picker::PipeGammaSnapshot { mode: 0x40000001, precision_palette: [0x15555; 1024] };
     *color_picker::HW.lock() = original.clone(); original
 }
@@ -107,9 +107,9 @@ fn gamma_updates_compose_with_portal_fade_and_close_restores_original() {
     assert_eq!(color_picker::HW.lock().precision_palette, base);
     assert_eq!(fade(1, 65535), 0);
     assert_eq!(color_picker::HW.lock().precision_palette, [0x3fffffff; 1024]);
-    blueprint_text::close(1, Some(2));
+    blueprint_ui4::close(1, Some(2));
     assert_ne!(*color_picker::HW.lock(), original);
-    blueprint_text::close(1, Some(1));
+    blueprint_ui4::close(1, Some(1));
     assert_eq!(*color_picker::HW.lock(), original);
 }
 #[test]
@@ -117,7 +117,7 @@ fn fade_started_before_gamma_and_owner_teardown_restore_original() {
     let original = reset();
     assert_eq!(fade(1, 32768), 0);
     assert_eq!(gamma(1, ramp().as_ptr()), 0);
-    blueprint_text::close(1, None);
+    blueprint_ui4::close(1, None);
     assert_eq!(*color_picker::HW.lock(), original);
 }
 #[test]
@@ -128,7 +128,7 @@ fn other_windows_cannot_overwrite_a_transfer_or_its_fade() {
     assert_eq!(gamma(2, ramp().as_ptr()), -5);
     assert_eq!(fade(2, 100), -5);
     assert_eq!(fade(2, 0), -5);
-    blueprint_text::close(2, None);
+    blueprint_ui4::close(2, None);
     assert_eq!(*color_picker::HW.lock(), before);
 }
 #[test]
@@ -138,17 +138,17 @@ fn invalid_calls_do_not_acquire_ownership_and_programming_errors_retain_restorat
     assert_eq!(fade(1, 65536), -1);
     OWNER.store(2, Ordering::Relaxed);
     assert_eq!(gamma(2, ramp().as_ptr()), 0);
-    blueprint_text::close(2, None);
+    blueprint_ui4::close(2, None);
     assert_eq!(*color_picker::HW.lock(), original);
     reset(); FAIL.store(true, Ordering::Relaxed);
     assert_eq!(gamma(1, ramp().as_ptr()), -4);
     assert_eq!(fade(1, 100), -4);
     FAIL.store(false, Ordering::Relaxed); OWNER.store(2, Ordering::Relaxed);
     assert_eq!(gamma(2, ramp().as_ptr()), -5);
-    blueprint_text::close(1, None);
+    blueprint_ui4::close(1, None);
     assert_eq!(*color_picker::HW.lock(), original);
     assert_eq!(gamma(2, ramp().as_ptr()), 0);
-    blueprint_text::close(2, None);
+    blueprint_ui4::close(2, None);
     assert_eq!(*color_picker::HW.lock(), original);
 }
 

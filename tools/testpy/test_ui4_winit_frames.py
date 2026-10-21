@@ -11,7 +11,7 @@ import tempfile
 
 from test_clip_position3_uv_texture import item, ROOT
 
-SOURCE = "src/ui4/blueprint_text.rs"
+SOURCE = "src/ui4/blueprint_ui4.rs"
 HARNESS = r'''
 #![allow(dead_code)]
 use std::{cell::RefCell, sync::{Mutex, atomic::Ordering}};

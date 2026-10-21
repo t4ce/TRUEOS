@@ -1954,10 +1954,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let entry_bytes =
-                core::mem::size_of::<crate::ui4::blueprint_text::TrueosUi4SolaraFontSize>();
+                core::mem::size_of::<crate::ui4::blueprint_ui4::TrueosUi4SolaraFontSize>();
             let cap = (arg0 as usize).min(PAYLOAD_CAP / entry_bytes);
             let result = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_solara_font_sizes(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_solara_font_sizes(
                     (*page).payload.as_mut_ptr().cast(),
                     cap,
                 )
@@ -1976,10 +1976,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let entry_bytes =
-                core::mem::size_of::<crate::ui4::blueprint_text::TrueosUi4Shell2FontScaleStep>();
+                core::mem::size_of::<crate::ui4::blueprint_ui4::TrueosUi4Shell2FontScaleStep>();
             let cap = (arg0 as usize).min(PAYLOAD_CAP / entry_bytes);
             let result = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_shell2_font_scale_steps_v1(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_shell2_font_scale_steps_v1(
                     (*page).payload.as_mut_ptr().cast(),
                     cap,
                 )
@@ -1996,12 +1996,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let (x, y) = unpack_i32_pair(arg0);
             let (width, height) = unpack_u32_pair(arg1);
             let window =
-                crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_open(x, y, width, height);
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_solara_frame_open(x, y, width, height);
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SOLARA_FRAME_BEGIN => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_begin(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_solara_frame_begin(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -2062,7 +2062,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
                     return DispatchOutcome::Resume;
                 };
-                rows.push(crate::ui4::blueprint_text::TrueosUi4SolaraSceneTextRow {
+                rows.push(crate::ui4::blueprint_ui4::TrueosUi4SolaraSceneTextRow {
                     text_ptr: text.as_ptr(),
                     text_len,
                     x,
@@ -2076,7 +2076,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             }
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_solara_text_scene(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_solara_text_scene(
                     arg0 as u32,
                     arg1 as u32,
                     viewport_width,
@@ -2086,7 +2086,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     rows.len(),
                 )
             };
-            if rc == crate::ui4::blueprint_text::ERROR_BUSY {
+            if rc == crate::ui4::blueprint_ui4::ERROR_BUSY {
                 if sampled_text_scene_busy_log() {
                     crate::log_info!(target: "ui4/solara-text"; "scene vmcall pending vm={} window={} rows={} rc={} sample_every={}\n", vm_id, arg0 as u32, row_count, rc, BLUEPRINT_TEXT_SCENE_BUSY_LOG_SAMPLE_EVERY);
                 }
@@ -2155,7 +2155,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
                     return DispatchOutcome::Resume;
                 };
-                rows.push(crate::ui4::blueprint_text::TrueosUi4FontCanvasRow {
+                rows.push(crate::ui4::blueprint_ui4::TrueosUi4FontCanvasRow {
                     text_ptr: text.as_ptr(),
                     text_len,
                     x,
@@ -2170,7 +2170,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             }
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_font_canvas(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_font_canvas(
                     arg0 as u32,
                     arg1 as u32,
                     canvas_width,
@@ -2227,7 +2227,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
                     return DispatchOutcome::Resume;
                 };
-                entries.push(crate::ui4::blueprint_text::TrueosUi4ContextMenuEntry {
+                entries.push(crate::ui4::blueprint_ui4::TrueosUi4ContextMenuEntry {
                     label_ptr: label.as_ptr(),
                     label_len,
                     action_id,
@@ -2241,14 +2241,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             let rc = unsafe {
                 if arg0 >> 32 == 1 {
-                    crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_dynamic_v2(
+                    crate::ui4::blueprint_ui4::trueos_cabi_ui4_context_menu_dynamic_v2(
                         arg0 as u32,
                         arg1,
                         entries.as_ptr(),
                         entries.len(),
                     )
                 } else if arg0 >> 32 == 0 && arg1 == 0 {
-                    crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_register(
+                    crate::ui4::blueprint_ui4::trueos_cabi_ui4_context_menu_register(
                         arg0 as u32,
                         entries.as_ptr(),
                         entries.len(),
@@ -2262,9 +2262,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE => {
             if arg1 == 1 {
-                let mut event = crate::ui4::blueprint_text::TrueosUi4ContextMenuEventV2::default();
+                let mut event = crate::ui4::blueprint_ui4::TrueosUi4ContextMenuEventV2::default();
                 let rc = unsafe {
-                    crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_event_take_v2(
+                    crate::ui4::blueprint_ui4::trueos_cabi_ui4_context_menu_event_take_v2(
                         arg0 as u32,
                         &mut event,
                     )
@@ -2280,9 +2280,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
-            let mut event = crate::ui4::blueprint_text::TrueosUi4ContextMenuEvent::default();
+            let mut event = crate::ui4::blueprint_ui4::TrueosUi4ContextMenuEvent::default();
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_event_take(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_context_menu_event_take(
                     arg0 as u32,
                     &mut event,
                 )
@@ -2313,7 +2313,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             if arg0 & trueos_vm::vmcall::UI4_SCENE_TRACK_PUBLICATION_V1 != 0 {
                 let mut serial = 0;
                 let rc = unsafe {
-                    crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_publish_tracked_v1(
+                    crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_publish_tracked_v1(
                         arg0 as u32, x, y, width, height, &mut serial,
                     )
                 };
@@ -2324,7 +2324,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 }
                 return DispatchOutcome::Resume;
             }
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_publish(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_solara_frame_publish(
                 arg0 as u32,
                 x,
                 y,
@@ -2346,7 +2346,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let width = u32::from_le_bytes([extent[0], extent[1], extent[2], extent[3]]);
             let height = u32::from_le_bytes([extent[4], extent[5], extent[6], extent[7]]);
             let (x, y) = unpack_u32_pair(arg1);
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_compute_frame_publish(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_compute_frame_publish(
                 arg0 as u32,
                 x,
                 y,
@@ -2357,7 +2357,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SOLARA_FRAME_CLOSE => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_close_requested(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_solara_frame_close_requested(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -2366,7 +2366,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_UI4_SCENE_SKYBOX_UPLOAD_BEGIN => {
             let (width, height) = unpack_u32_pair(arg1);
-            let rc = crate::ui4::blueprint_text::begin_skybox_rgb565_upload(
+            let rc = crate::ui4::blueprint_ui4::begin_skybox_rgb565_upload(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 width,
@@ -2381,7 +2381,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_skybox_register_kernel(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_skybox_register_kernel(
                     arg0 as u32,
                     (arg0 >> 32) as u32,
                     arg1 as u32,
@@ -2397,7 +2397,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::ui4::blueprint_text::write_skybox_rgb565_upload_chunk(
+            let rc = crate::ui4::blueprint_ui4::write_skybox_rgb565_upload_chunk(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as usize,
@@ -2407,7 +2407,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SKYBOX_UPLOAD_FINISH => {
-            let rc = crate::ui4::blueprint_text::finish_skybox_rgb565_upload(
+            let rc = crate::ui4::blueprint_ui4::finish_skybox_rgb565_upload(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
             );
@@ -2427,7 +2427,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             for (word, bytes) in words.iter_mut().zip(payload.chunks_exact(4)) {
                 *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
             }
-            let params = crate::ui4::blueprint_text::TrueosUi4SkyboxRenderParams {
+            let params = crate::ui4::blueprint_ui4::TrueosUi4SkyboxRenderParams {
                 right_x: f32::from_bits(words[0]),
                 right_y: f32::from_bits(words[1]),
                 right_z: f32::from_bits(words[2]),
@@ -2445,7 +2445,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 rect_height: words[14],
             };
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_skybox_render_rgb565(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_skybox_render_rgb565(
                     arg0 as u32,
                     &params,
                 )
@@ -2466,7 +2466,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             for (word, bytes) in words.iter_mut().zip(payload.chunks_exact(4)) {
                 *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
             }
-            let params = crate::ui4::blueprint_text::TrueosUi4ParticleCraftParamsV1 {
+            let params = crate::ui4::blueprint_ui4::TrueosUi4ParticleCraftParamsV1 {
                 version: words[0],
                 flags: words[1],
                 seed: words[2],
@@ -2485,7 +2485,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 intensity: f32::from_bits(words[15]),
             };
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_particle_craft_render(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_particle_craft_render(
                     arg0 as u32,
                     &params,
                 )
@@ -2498,7 +2498,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::ui4::blueprint_text::write_shadertoy_package_chunk(
+            let rc = crate::ui4::blueprint_ui4::write_shadertoy_package_chunk(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as u32,
@@ -2522,7 +2522,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             for (word, bytes) in words.iter_mut().zip(payload.chunks_exact(4)) {
                 *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
             }
-            let params = crate::ui4::blueprint_text::TrueosUi4ShadertoyParamsV1 {
+            let params = crate::ui4::blueprint_ui4::TrueosUi4ShadertoyParamsV1 {
                 version: words[0],
                 shader_id: words[1],
                 frame: words[2],
@@ -2541,7 +2541,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 date_seconds: f32::from_bits(words[15]),
             };
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_shadertoy_render(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_shadertoy_render(
                     arg0 as u32,
                     &params,
                 )
@@ -2554,7 +2554,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::ui4::blueprint_text::write_opaque_rgba8_chunk(
+            let rc = crate::ui4::blueprint_ui4::write_opaque_rgba8_chunk(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as usize,
@@ -2568,13 +2568,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
-            let rc = crate::ui4::blueprint_text::collapse_api::finish(
+            let rc = crate::ui4::blueprint_ui4::collapse_api::finish(
                 crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_PRIMARY_ACTIVATION => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_primary_activation(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_primary_activation(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -2584,7 +2584,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_FRAME_GET_POSITION => {
             let mut xy = [0i32; 2];
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_get_position(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_get_position(
                     arg0 as u32,
                     xy.as_mut_ptr(),
                 )
@@ -2598,7 +2598,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_UI4_SCENE_FRAME_SET_POSITION => {
             let (x, y) = unpack_i32_pair(arg1);
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_position(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_set_position(
                 arg0 as u32,
                 x,
                 y,
@@ -2610,7 +2610,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let rc = if arg0 > u32::MAX as u64 || arg1 > 0x00ff_ffff {
                 -1 // Match the scene ABI's invalid-argument status; never truncate RGB.
             } else {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_display_bottom_color(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_set_display_bottom_color(
                     arg0 as u32,
                     arg1 as u32,
                 )
@@ -2627,7 +2627,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 for (word, bytes) in ramp.iter_mut().zip(payload.chunks_exact(2)) {
                     *word = u16::from_le_bytes([bytes[0], bytes[1]]);
                 }
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_display_gamma_ramp(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_set_display_gamma_ramp(
                     arg0 as u32,
                     ramp.as_ptr(),
                 )
@@ -2642,13 +2642,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let rc = if arg0 > u32::MAX as u64 || !(-65535..=65535).contains(&amount) || req_len != 0 {
                 -1
             } else {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_display_fade_v1(arg0 as u32, amount as i32)
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_display_fade_v1(arg0 as u32, amount as i32)
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_SET_OPACITY => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_opacity(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_set_opacity(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -2659,7 +2659,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let rc = if arg0 > u32::MAX as u64 || arg1 > u32::MAX as u64 {
                 -1
             } else {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_arc(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_set_arc(
                     arg0 as u32,
                     arg1 as u32,
                 )
@@ -2668,7 +2668,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_hit_testable(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_set_hit_testable(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -2676,7 +2676,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_escape_key_action(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_set_escape_key_action(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -2685,7 +2685,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_UI4_SCENE_FRAME_RESIZE => {
             let (width, height) = unpack_u32_pair(arg1);
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_resize(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_resize(
                 arg0 as u32,
                 width,
                 height,
@@ -2699,7 +2699,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let window = request_payload(vm_id, req_len)
                 .filter(|payload| payload.len() == 4)
                 .map(|payload| {
-                    crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_layered_v1(
+                    crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_open_layered_v1(
                         x,
                         y,
                         width,
@@ -2717,7 +2717,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let window = request_payload(vm_id, req_len)
                 .filter(|payload| payload.len() == 4)
                 .map(|payload| {
-                    crate::ui4::blueprint_text::trueos_cabi_ui4_winit_frame_open_v1(
+                    crate::ui4::blueprint_ui4::trueos_cabi_ui4_winit_frame_open_v1(
                         x,
                         y,
                         width,
@@ -2735,7 +2735,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let window = request_payload(vm_id, req_len)
                 .filter(|payload| payload.len() == 8)
                 .map(|payload| {
-                    crate::ui4::blueprint_text::trueos_cabi_ui4_winit_frame_open_scaled_v1(
+                    crate::ui4::blueprint_ui4::trueos_cabi_ui4_winit_frame_open_scaled_v1(
                         x,
                         y,
                         width,
@@ -2749,7 +2749,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_LAYER_V1 => {
-            let target = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_layer_v1(
+            let target = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_layer_v1(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -2759,7 +2759,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING => {
             let (x, y) = unpack_i32_pair(arg0);
             let (width, height) = unpack_u32_pair(arg1);
-            let window = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_streaming(
+            let window = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_open_streaming(
                 x, y, width, height,
             );
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
@@ -2777,7 +2777,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             }
             let target_hz = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-            let window = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_visual(
+            let window = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_open_visual(
                 x, y, width, height, target_hz,
             );
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
@@ -2786,7 +2786,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE => {
             let (x, y) = unpack_i32_pair(arg0);
             let (width, height) = unpack_u32_pair(arg1);
-            let window = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_immutable(
+            let window = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_open_immutable(
                 x, y, width, height,
             );
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
@@ -2803,7 +2803,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             let width = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
             let height = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
-            let rc = crate::ui4::blueprint_text::begin_sprite_rgba8_upload(
+            let rc = crate::ui4::blueprint_ui4::begin_sprite_rgba8_upload(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as u32,
@@ -2820,7 +2820,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let sprite_id = (arg1 >> 32) as u32;
             let offset = arg1 as u32 as usize;
-            let rc = crate::ui4::blueprint_text::write_sprite_rgba8_upload_chunk(
+            let rc = crate::ui4::blueprint_ui4::write_sprite_rgba8_upload_chunk(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 sprite_id,
@@ -2831,7 +2831,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SPRITE_UPLOAD_FINISH => {
-            let rc = crate::ui4::blueprint_text::finish_sprite_rgba8_upload(
+            let rc = crate::ui4::blueprint_ui4::finish_sprite_rgba8_upload(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as u32,
@@ -2852,7 +2852,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let font_pixels = f32::from_bits(u32::from_le_bytes(payload[4..8].try_into().unwrap()));
             let color_rgba = u32::from_le_bytes(payload[8..12].try_into().unwrap());
             let mut ticket = 0;
-            let rc = crate::ui4::blueprint_text::request_font_sprite(
+            let rc = crate::ui4::blueprint_ui4::request_font_sprite(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 font_id,
@@ -2876,8 +2876,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let pixels = f32::from_le_bytes(payload[..4].try_into().unwrap());
             let mut record =
-                crate::ui4::blueprint_text::font_api::TrueosUi4FontMetricsV1::default();
-            let rc = crate::ui4::blueprint_text::font_api::metrics(
+                crate::ui4::blueprint_ui4::font_api::TrueosUi4FontMetricsV1::default();
+            let rc = crate::ui4::blueprint_ui4::font_api::metrics(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as u32,
@@ -2892,8 +2892,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1 => {
-            let mut status = crate::ui4::blueprint_text::TrueosUi4FontSpriteStatusV1::default();
-            let rc = crate::ui4::blueprint_text::font_sprite_status(
+            let mut status = crate::ui4::blueprint_ui4::TrueosUi4FontSpriteStatusV1::default();
+            let rc = crate::ui4::blueprint_ui4::font_sprite_status(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1,
@@ -2911,7 +2911,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .filter(|payload| payload.len() == 16)
                 .map(|payload| {
                     let value = |i| u32::from_le_bytes(payload[i..i + 4].try_into().unwrap());
-                    crate::ui4::blueprint_text::begin_blueprint_sprite_region(
+                    crate::ui4::blueprint_ui4::begin_blueprint_sprite_region(
                         crate::ui4::WindowOwner::Vm(vm_id),
                         arg0 as u32,
                         crate::ui4::DamageRect {
@@ -2919,12 +2919,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         },
                     )
                 })
-                .unwrap_or(crate::ui4::blueprint_text::ERROR_INVALID);
+                .unwrap_or(crate::ui4::blueprint_ui4::ERROR_INVALID);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN => {
-            let rc = crate::ui4::blueprint_text::begin_blueprint_frame(
+            let rc = crate::ui4::blueprint_ui4::begin_blueprint_frame(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as u32,
@@ -2936,10 +2936,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN => {
             let owner = crate::ui4::WindowOwner::Vm(vm_id);
             let rc =
-                crate::ui4::blueprint_text::begin_blueprint_frame(owner, arg0 as u32, 0, false);
-            if rc == crate::ui4::blueprint_text::ERROR_BUSY
+                crate::ui4::blueprint_ui4::begin_blueprint_frame(owner, arg0 as u32, 0, false);
+            if rc == crate::ui4::blueprint_ui4::ERROR_BUSY
                 && let Some(wait_ms) =
-                    crate::ui4::blueprint_text::visual_frame_retry_ms(owner, arg0 as u32)
+                    crate::ui4::blueprint_ui4::visual_frame_retry_ms(owner, arg0 as u32)
             {
                 return DispatchOutcome::RetryAfterMs(wait_ms);
             }
@@ -2947,7 +2947,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SPRITE_DRAW_BEGIN => {
-            let rc = crate::ui4::blueprint_text::begin_sprite_scene(
+            let rc = crate::ui4::blueprint_ui4::begin_sprite_scene(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as usize,
@@ -2960,7 +2960,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::ui4::blueprint_text::append_sprite_scene_bytes(
+            let rc = crate::ui4::blueprint_ui4::append_sprite_scene_bytes(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as usize,
@@ -2970,7 +2970,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SPRITE_DRAW_FINISH => {
-            let rc = crate::ui4::blueprint_text::finish_sprite_scene(
+            let rc = crate::ui4::blueprint_ui4::finish_sprite_scene(
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
             );
@@ -2978,9 +2978,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_PAN_EVENT_TAKE => {
-            let mut event = crate::ui4::blueprint_text::TrueosUi4PanEvent::default();
+            let mut event = crate::ui4::blueprint_ui4::TrueosUi4PanEvent::default();
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_pan_event_take(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_pan_event_take(
                     arg0 as u32,
                     &mut event,
                 )
@@ -2993,9 +2993,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE => {
-            let mut event = crate::ui4::blueprint_text::TrueosUi4ResizeEvent::default();
+            let mut event = crate::ui4::blueprint_ui4::TrueosUi4ResizeEvent::default();
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_resize_event_take(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_resize_event_take(
                     arg0 as u32,
                     &mut event,
                 )
@@ -3010,11 +3010,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE => {
             let rc = match arg0 >> 32 {
                 0 if arg1 == 0 => {
-                    crate::ui4::blueprint_text::trueos_cabi_ui4_scene_first_presentation_take(
+                    crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_first_presentation_take(
                         arg0 as u32,
                     )
                 }
-                1 => crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_was_presented_v1(
+                1 => crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_was_presented_v1(
                     arg0 as u32, arg1,
                 ),
                 _ => {
@@ -3026,7 +3026,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS => {
-            let dimensions = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_output_dimensions();
+            let dimensions = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_output_dimensions();
             write_response(vm_id, seq, STATUS_OK, dimensions, 0);
             DispatchOutcome::Resume
         }
@@ -3034,19 +3034,19 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let payload = request_payload(vm_id, req_len).unwrap_or(&[]);
             let label_len = payload.get(..4).map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) as usize).unwrap_or(usize::MAX);
             let rc = if label_len <= 256 && payload.len() >= 4 + label_len {
-                unsafe { crate::ui4::blueprint_text::drag_drop_api::trueos_cabi_ui4_drag_begin_v1(arg0 as u32, arg1 as u32, payload[4..].as_ptr(), label_len, payload[4 + label_len..].as_ptr(), payload.len() - 4 - label_len) }
+                unsafe { crate::ui4::blueprint_ui4::drag_drop_api::trueos_cabi_ui4_drag_begin_v1(arg0 as u32, arg1 as u32, payload[4..].as_ptr(), label_len, payload[4 + label_len..].as_ptr(), payload.len() - 4 - label_len) }
             } else { -1 };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_DRAG_CANCEL_V1 => {
-            let rc = crate::ui4::blueprint_text::drag_drop_api::trueos_cabi_ui4_drag_cancel_v1(arg0 as i32);
+            let rc = crate::ui4::blueprint_ui4::drag_drop_api::trueos_cabi_ui4_drag_cancel_v1(arg0 as i32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_DRAG_TAKE_V1 => {
             let mut out = [0u8; 3088];
-            let rc = unsafe { crate::ui4::blueprint_text::drag_drop_api::trueos_cabi_ui4_drag_take_v1(arg0 as u32, out.as_mut_ptr(), (arg1 as usize).min(out.len())) };
+            let rc = unsafe { crate::ui4::blueprint_ui4::drag_drop_api::trueos_cabi_ui4_drag_take_v1(arg0 as u32, out.as_mut_ptr(), (arg1 as usize).min(out.len())) };
             let len = if rc > 0 { rc as usize } else { 0 };
             if let Some(page) = host_ptr(vm_id) { unsafe { (&mut (*page).payload)[..len].copy_from_slice(&out[..len]); } }
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len as u32);
@@ -3070,7 +3070,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 hotspot_y: word(16),
             };
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_register_cursor_image_v1(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_register_cursor_image_v1(
                     arg0 as u32,
                     &image,
                     payload[20..].as_ptr(),
@@ -3085,7 +3085,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_select_cursor_image_v1(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_select_cursor_image_v1(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -3093,7 +3093,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_custom_cursor(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_set_custom_cursor(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -3104,7 +3104,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let source = match req_len as usize {
                 0 => None,
                 len if len
-                    == core::mem::size_of::<crate::ui4::blueprint_text::TrueosUi4CursorSource>(
+                    == core::mem::size_of::<crate::ui4::blueprint_ui4::TrueosUi4CursorSource>(
                     ) =>
                 {
                     let Some(payload) = request_payload(vm_id, req_len) else {
@@ -3115,7 +3115,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         core::ptr::read_unaligned(
                             payload
                                 .as_ptr()
-                                .cast::<crate::ui4::blueprint_text::TrueosUi4CursorSource>(),
+                                .cast::<crate::ui4::blueprint_ui4::TrueosUi4CursorSource>(),
                         )
                     })
                 }
@@ -3125,7 +3125,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 }
             };
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_cursor_icon(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_set_cursor_icon(
                     arg0 as u32,
                     source
                         .as_ref()
@@ -3140,7 +3140,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let step = match req_len as usize {
                 0 => None,
                 len if len
-                    == core::mem::size_of::<crate::ui4::blueprint_text::TrueosUi4CursorStep>() =>
+                    == core::mem::size_of::<crate::ui4::blueprint_ui4::TrueosUi4CursorStep>() =>
                 {
                     let Some(payload) = request_payload(vm_id, req_len) else {
                         write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -3150,7 +3150,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         core::ptr::read_unaligned(
                             payload
                                 .as_ptr()
-                                .cast::<crate::ui4::blueprint_text::TrueosUi4CursorStep>(),
+                                .cast::<crate::ui4::blueprint_ui4::TrueosUi4CursorStep>(),
                         )
                     })
                 }
@@ -3160,7 +3160,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 }
             };
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_cursor_step(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_set_cursor_step(
                     arg0 as u32,
                     step.as_ref()
                         .map_or(core::ptr::null(), |step| step as *const _),
@@ -3174,7 +3174,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_center_snapped_mouse(
+            let rc = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_set_center_snapped_mouse(
                 arg0 as u32,
                 arg1 as u32,
             );
@@ -3182,9 +3182,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_POINTER_EVENT_TAKE => {
-            let mut event = crate::ui4::blueprint_text::TrueosUi4PointerEvent::default();
+            let mut event = crate::ui4::blueprint_ui4::TrueosUi4PointerEvent::default();
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_pointer_event_take(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_pointer_event_take(
                     arg0 as u32,
                     &mut event,
                 )
@@ -3199,7 +3199,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE => {
             let mut event = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_keyboard_event_take(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_keyboard_event_take(
                     arg0 as u32,
                     &mut event,
                 )
@@ -3212,7 +3212,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_WINDOW_STATE_V1 => {
-            use crate::ui4::blueprint_text::{
+            use crate::ui4::blueprint_ui4::{
                 TrueosUi4WindowStateV1, trueos_cabi_ui4_scene_window_state_get_v1,
                 trueos_cabi_ui4_scene_window_state_set_v1,
             };
@@ -3249,7 +3249,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         | OP_BP_UI4_DISPLAY_RETAIN_V1
         | OP_BP_UI4_DISPLAY_CLOSE_V1
         | OP_BP_UI4_DISPLAY_VALIDATE_WINDOW_V1 => {
-            use crate::ui4::blueprint_text::display_api::*;
+            use crate::ui4::blueprint_ui4::display_api::*;
             if req_len != 0
                 || (op == OP_BP_UI4_DISPLAY_OPEN_V1 && (arg0 != 0 || arg1 != 0))
                 || (op != OP_BP_UI4_DISPLAY_VALIDATE_WINDOW_V1 && arg1 != 0)
@@ -3270,7 +3270,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_WINDOW_TITLE_V1 => {
-            use crate::ui4::blueprint_text::{
+            use crate::ui4::blueprint_ui4::{
                 trueos_cabi_ui4_scene_window_title_get_v1,
                 trueos_cabi_ui4_scene_window_title_set_v1,
             };
@@ -3314,7 +3314,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE_V1 => {
             let mut event = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_keyboard_event_take_v1(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_keyboard_event_take_v1(
                     arg0 as u32,
                     &mut event,
                 )
@@ -3332,7 +3332,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let mut output = zeroize::Zeroizing::new([0u8; 512]);
-            let rc = unsafe { crate::ui4::blueprint_text::clipboard_api::trueos_cabi_clipboard_command_v1(
+            let rc = unsafe { crate::ui4::blueprint_ui4::clipboard_api::trueos_cabi_clipboard_command_v1(
                 arg0 as u32, arg1 as u32, (arg1 >> 32) as u32,
                 payload.as_ptr(), payload.len(), output.as_mut_ptr(), output.len()) };
             if rc > 0 {
@@ -3343,9 +3343,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_KEYBOARD_STATE => {
-            let mut state = crate::ui4::blueprint_text::TrueosUi4KeyboardState::default();
+            let mut state = crate::ui4::blueprint_ui4::TrueosUi4KeyboardState::default();
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_keyboard_state(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_keyboard_state(
                     arg0 as u32,
                     &mut state,
                 )
@@ -3361,9 +3361,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             const MAX_ROUTES: usize = 32;
             let cap = (arg1 as usize).min(MAX_ROUTES);
             let mut routes =
-                [crate::ui4::blueprint_text::TrueosUi4InputRouteState::default(); MAX_ROUTES];
+                [crate::ui4::blueprint_ui4::TrueosUi4InputRouteState::default(); MAX_ROUTES];
             let count = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_input_routes(
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_input_routes(
                     arg0 as u32,
                     routes.as_mut_ptr(),
                     cap as u32,
@@ -3386,7 +3386,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            match crate::ui4::blueprint_text::blueprint_image_source_info(name) {
+            match crate::ui4::blueprint_ui4::blueprint_image_source_info(name) {
                 Ok(info) => write_record_response(vm_id, seq, 0, &info),
                 Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }
@@ -3408,7 +3408,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             }
             let mut bytes = alloc::vec![0u8; capacity];
-            match crate::ui4::blueprint_text::copy_blueprint_image_source(
+            match crate::ui4::blueprint_ui4::copy_blueprint_image_source(
                 name,
                 arg0 as usize,
                 &mut bytes,

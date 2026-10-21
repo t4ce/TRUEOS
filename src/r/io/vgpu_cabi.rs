@@ -230,7 +230,7 @@ pub(crate) fn broker_ui4_surface_acquire(
     window_id: u32,
 ) -> Result<v::vgpu::SurfaceInfo, i32> {
     let owner = ui4_owner(principal)?;
-    let descriptor = match crate::ui4::blueprint_text::begin_vgpu_surface_import(owner, window_id) {
+    let descriptor = match crate::ui4::blueprint_ui4::begin_vgpu_surface_import(owner, window_id) {
         Ok(descriptor) => descriptor,
         Err(error) => {
             crate::log_rate_limited!(
@@ -270,18 +270,18 @@ pub(crate) fn broker_ui4_surface_acquire(
                 descriptor.height,
                 descriptor.pitch,
             );
-            crate::ui4::blueprint_text::abort_vgpu_surface_import(owner, window_id);
+            crate::ui4::blueprint_ui4::abort_vgpu_surface_import(owner, window_id);
             return Err(error.errno());
         }
     };
-    if let Err(error) = crate::ui4::blueprint_text::commit_vgpu_surface_import(
+    if let Err(error) = crate::ui4::blueprint_ui4::commit_vgpu_surface_import(
         owner,
         window_id,
         imported.handle.raw(),
     ) {
         let _ =
             vgpu::discard_ui4_surface(principal, DeviceHandle::from_raw(device), imported.handle);
-        crate::ui4::blueprint_text::abort_vgpu_surface_import(owner, window_id);
+        crate::ui4::blueprint_ui4::abort_vgpu_surface_import(owner, window_id);
         return Err(error);
     }
     Ok(v::vgpu::SurfaceInfo {
@@ -307,7 +307,7 @@ pub(crate) fn broker_ui4_surface_discard(principal: Principal, device: u64, surf
         Ok(released) => released,
         Err(error) => return error.errno(),
     };
-    crate::ui4::blueprint_text::complete_vgpu_surface_discard(
+    crate::ui4::blueprint_ui4::complete_vgpu_surface_discard(
         owner,
         window_id,
         released.handle.raw(),
@@ -332,7 +332,7 @@ pub(crate) fn broker_ui4_surface_clear_submit(
         rgba8_srgb,
     )
     .map_err(|error| error.errno())?;
-    crate::ui4::blueprint_text::complete_vgpu_surface_submission(
+    crate::ui4::blueprint_ui4::complete_vgpu_surface_submission(
         owner,
         completed.window_id,
         completed.surface.handle.raw(),
@@ -472,7 +472,7 @@ pub(crate) fn broker_ui4_indexed_submit(
         );
         error.errno()
     })?;
-    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+    crate::ui4::blueprint_ui4::complete_vgpu_resident_surface_submission(
         owner,
         completed.window_id,
         completed.surface.handle.raw(),
@@ -527,7 +527,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit(
         },
     )
     .map_err(|error| error.errno())?;
-    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+    crate::ui4::blueprint_ui4::complete_vgpu_resident_surface_submission(
         owner,
         completed.window_id,
         completed.surface.handle.raw(),
@@ -676,7 +676,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
         },
     )
     .map_err(|error| error.errno())?;
-    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+    crate::ui4::blueprint_ui4::complete_vgpu_resident_surface_submission(
         owner,
         completed.window_id,
         completed.surface.handle.raw(),
@@ -777,7 +777,7 @@ pub(crate) fn broker_ui4_prepared_raster_batch_v1(
         batch,
     )
     .map_err(|error| error.errno())?;
-    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+    crate::ui4::blueprint_ui4::complete_vgpu_resident_surface_submission(
         owner,
         completed.window_id,
         completed.surface.handle.raw(),
@@ -888,7 +888,7 @@ fn broker_retained_frame_submit_inner(
         None,
     )
     .map_err(|error| error.errno())?;
-    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+    crate::ui4::blueprint_ui4::complete_vgpu_resident_surface_submission(
         owner,
         completed.window_id,
         completed.surface.handle.raw(),
@@ -2004,7 +2004,7 @@ pub(crate) fn broker_retained_textured_frame_v1(
         Some(submit),
     )
     .map_err(|e| e.errno())?;
-    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+    crate::ui4::blueprint_ui4::complete_vgpu_resident_surface_submission(
         owner,
         completed.window_id,
         completed.surface.handle.raw(),
