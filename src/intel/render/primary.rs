@@ -282,7 +282,7 @@ pub(crate) fn submit_resident_font_mesh_once(
 
 pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) mesh: &'a ResidentTriangleMesh,
-    /// Per-draw WC3 depth/clear state; legacy scene callers use their frame state.
+    /// Per-draw depth/clear state; scene callers may use their frame state.
     pub(crate) depth_flags: Option<u32>,
     pub(crate) rgba: [u8; 4],
     pub(crate) sampled_texture: Option<&'a ResidentSampledTexture>,
@@ -379,7 +379,6 @@ pub(crate) enum ResidentSceneFragmentContract {
     VoxyFigure,
     VoxyFlatCloud,
     // scissor xyxy, cull enable, blend enable, then RGB/alpha source/dest factors.
-    FixedGl([u32; 10]),
 }
 
 fn resident_scene_shader_pipeline(
@@ -390,11 +389,15 @@ fn resident_scene_shader_pipeline(
 ) -> Result<&'static crate::intel::shader::TrianglePipeline, &'static str> {
     match (fragment_contract, has_texture) {
         (ResidentSceneFragmentContract::MicrofontMask(_), false)
-            if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 => {
+            if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 =>
+        {
             Ok(crate::intel::shader::microfont_mask_pipeline())
         }
-        (ResidentSceneFragmentContract::RoundedLineEnds(_) | ResidentSceneFragmentContract::MicrofontAa(_), false)
-            if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 => {
+        (
+            ResidentSceneFragmentContract::RoundedLineEnds(_)
+            | ResidentSceneFragmentContract::MicrofontAa(_),
+            false,
+        ) if vertex_format == TriangleVertexFormat::Float3 && vertex_stride == 12 => {
             Ok(crate::intel::shader::microfont_line_end_pipeline())
         }
         (ResidentSceneFragmentContract::ConstantRgba, false) => {
@@ -407,19 +410,25 @@ fn resident_scene_shader_pipeline(
         }
         (ResidentSceneFragmentContract::VoxyHeadless, false)
             if vertex_format == TriangleVertexFormat::VoxyHeadless && vertex_stride == 32 =>
-                Ok(crate::intel::shader::voxy_headless_pipeline()),
+        {
+            Ok(crate::intel::shader::voxy_headless_pipeline())
+        }
         (ResidentSceneFragmentContract::VoxyHeadlessTexture, true)
             if vertex_format == TriangleVertexFormat::VoxyHeadless && vertex_stride == 32 =>
-                Ok(crate::intel::shader::voxy_headless_texture_pipeline()),
+        {
+            Ok(crate::intel::shader::voxy_headless_texture_pipeline())
+        }
         (ResidentSceneFragmentContract::VoxyFlatCloud, true)
             if vertex_format == TriangleVertexFormat::PosUv && vertex_stride == 20 =>
-                crate::intel::shader::voxy_flat_cloud_pipeline(),
+        {
+            crate::intel::shader::voxy_flat_cloud_pipeline()
+        }
         (ResidentSceneFragmentContract::VoxyFigure, true)
             if vertex_format == TriangleVertexFormat::VoxyFigure && vertex_stride == 8 =>
-                crate::intel::shader::voxy_figure_pipeline(),
-        (ResidentSceneFragmentContract::FixedGl(_), true)
-            if vertex_format == TriangleVertexFormat::FixedGl && vertex_stride == 64 =>
-            Ok(crate::intel::shader::wc3_fixed_pipeline()),
+        {
+            crate::intel::shader::voxy_figure_pipeline()
+        }
+
         _ => Err("scene-fragment-contract-texture-mismatch"),
     }
 }
@@ -434,23 +443,48 @@ mod resident_scene_shader_pipeline_tests {
 
     #[test]
     fn voxy_headless_preserves_camera_and_authored_color_contract() {
-        let shader = resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::VoxyHeadless, 32).unwrap();
+        let shader =
+            resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::VoxyHeadless, 32)
+                .unwrap();
         assert_eq!(shader.vs.meta.kernel.push_constant_bytes, 96);
         assert_eq!(shader.vs.meta.urb_entry_output_length, 1);
         assert_eq!(shader.ps.meta.num_varying_inputs, 1);
         assert_eq!(shader.ps.meta.kernel.grf_start_register, 6);
         assert_eq!(shader.ps.meta.kernel.sampler_count, 0);
-        assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, true, Vertex::VoxyHeadless, 32).is_err());
-        assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::Float3, 32).is_err());
-        assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::VoxyHeadless, 12).is_err());
+        assert!(
+            resident_scene_shader_pipeline(Fragment::VoxyHeadless, true, Vertex::VoxyHeadless, 32)
+                .is_err()
+        );
+        assert!(
+            resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::Float3, 32)
+                .is_err()
+        );
+        assert!(
+            resident_scene_shader_pipeline(Fragment::VoxyHeadless, false, Vertex::VoxyHeadless, 12)
+                .is_err()
+        );
     }
 
     #[test]
     fn voxy_atlas_requires_the_existing_camera_vertex_contract_and_a_texture() {
-        let atlas = resident_scene_shader_pipeline(Fragment::VoxyHeadlessTexture, true, Vertex::VoxyHeadless, 32).unwrap();
+        let atlas = resident_scene_shader_pipeline(
+            Fragment::VoxyHeadlessTexture,
+            true,
+            Vertex::VoxyHeadless,
+            32,
+        )
+        .unwrap();
         assert!(core::ptr::eq(atlas, crate::intel::shader::voxy_headless_texture_pipeline()));
-        assert!(core::ptr::eq(atlas.vs.code, crate::intel::shader::voxy_headless_pipeline().vs.code));
-        assert!(core::ptr::eq(atlas.ps.code, crate::intel::shader::clip_position3_uv_texture_pipeline().ps.code));
+        assert!(core::ptr::eq(
+            atlas.vs.code,
+            crate::intel::shader::voxy_headless_pipeline().vs.code
+        ));
+        assert!(core::ptr::eq(
+            atlas.ps.code,
+            crate::intel::shader::clip_position3_uv_texture_pipeline()
+                .ps
+                .code
+        ));
         for (texture, vertex, stride) in [
             (false, Vertex::VoxyHeadless, 32),
             (true, Vertex::PosUv, 20),
@@ -458,21 +492,16 @@ mod resident_scene_shader_pipeline_tests {
             (true, Vertex::VoxyHeadless, 20),
             (true, Vertex::VoxyHeadless, 48),
         ] {
-            assert!(resident_scene_shader_pipeline(Fragment::VoxyHeadlessTexture, texture, vertex, stride).is_err());
+            assert!(
+                resident_scene_shader_pipeline(
+                    Fragment::VoxyHeadlessTexture,
+                    texture,
+                    vertex,
+                    stride
+                )
+                .is_err()
+            );
         }
-    }
-    #[test]
-    fn fixed_gl_pipeline_matches_compiler_payload_and_rejects_legacy_vertices() {
-        let contract = Fragment::FixedGl([0, 0, 640, 480, 1, 0, 1, 17, 1, 17]);
-        let shader = resident_scene_shader_pipeline(contract, true, Vertex::FixedGl, 64).unwrap();
-        assert_eq!(shader.vs.meta.kernel.grf_start_register, 2);
-        assert_eq!(shader.vs.meta.kernel.binding_table_entry_count, 2);
-        assert_eq!(shader.vs.meta.urb_entry_output_length, 2);
-        assert_eq!(shader.ps.meta.kernel.grf_start_register, 10);
-        assert_eq!(shader.ps.meta.kernel.binding_table_entry_count, 4);
-        assert_eq!(shader.ps.meta.num_varying_inputs, 3);
-        assert!(resident_scene_shader_pipeline(contract, true, Vertex::PosUv, 20).is_err());
-        assert!(resident_scene_shader_pipeline(contract, false, Vertex::FixedGl, 64).is_err());
     }
 
     #[test]
@@ -1499,7 +1528,7 @@ fn copy_resident_scene_output(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> crate::intel::gpgpu::GpgpuSubmissionOutcome {
     use crate::intel::gpgpu::GpgpuSubmissionOutcome as Outcome;
-    use crate::r::services::vcpy_service::{copy_rgba8_complete_for, RgbaCopyConsumer};
+    use crate::r::services::vcpy_service::{RgbaCopyConsumer, copy_rgba8_complete_for};
     match copy_rgba8_complete_for(source, destination, RgbaCopyConsumer::ResidentScene) {
         Outcome::Unavailable => {
             if crate::intel::gpgpu::copy_rect_rgba8_complete_mode(
@@ -1735,26 +1764,50 @@ fn stage_resident_scene_secondary(
         return Err("scene-point-width");
     }
     let line_width_raw = resident_line_width_raw(line_width_px).ok_or("scene-line-width")?;
-    if line_width_px != 0.0 && !matches!(topology,
-        ResidentScenePrimitiveTopology::LineList | ResidentScenePrimitiveTopology::LineListAdj
-        | ResidentScenePrimitiveTopology::LineLoop | ResidentScenePrimitiveTopology::LineStrip
-        | ResidentScenePrimitiveTopology::LineStripAdj)
-    { return Err("scene-line-width-topology"); }
-    if clip_adjacency && !matches!(topology,
-        ResidentScenePrimitiveTopology::LineListAdj | ResidentScenePrimitiveTopology::LineStripAdj)
-    { return Err("scene-clip-adjacency-topology"); }
+    if line_width_px != 0.0
+        && !matches!(
+            topology,
+            ResidentScenePrimitiveTopology::LineList
+                | ResidentScenePrimitiveTopology::LineListAdj
+                | ResidentScenePrimitiveTopology::LineLoop
+                | ResidentScenePrimitiveTopology::LineStrip
+                | ResidentScenePrimitiveTopology::LineStripAdj
+        )
+    {
+        return Err("scene-line-width-topology");
+    }
+    if clip_adjacency
+        && !matches!(
+            topology,
+            ResidentScenePrimitiveTopology::LineListAdj
+                | ResidentScenePrimitiveTopology::LineStripAdj
+        )
+    {
+        return Err("scene-clip-adjacency-topology");
+    }
     draw.state_gpu_addr = state_gpu;
     draw.voxy_figure = matches!(fragment_contract, ResidentSceneFragmentContract::VoxyFigure);
-    draw.voxy_headless = matches!(fragment_contract,
-        ResidentSceneFragmentContract::VoxyHeadless | ResidentSceneFragmentContract::VoxyHeadlessTexture);
+    draw.voxy_headless = matches!(
+        fragment_contract,
+        ResidentSceneFragmentContract::VoxyHeadless
+            | ResidentSceneFragmentContract::VoxyHeadlessTexture
+    );
     if matches!(fragment_contract, ResidentSceneFragmentContract::VoxyHeadlessTexture) {
-        if !crate::intel::voxy_headless_texture_target_active() { return Err("voxy-headless-texture-target"); }
+        if !crate::intel::voxy_headless_texture_target_active() {
+            return Err("voxy-headless-texture-target");
+        }
     } else if draw.voxy_headless && !crate::intel::voxy_headless_target_active() {
         return Err("voxy-headless-target");
     }
-    if let ResidentSceneFragmentContract::FixedGl(state) = fragment_contract { draw.fixed_gl = Some(state); }
-    draw.microfont_aa = matches!(fragment_contract, ResidentSceneFragmentContract::MicrofontAa(_) | ResidentSceneFragmentContract::MicrofontMask(_));
-    if draw.microfont_aa && depth_config.is_some() { return Err("microfont-aa-depth"); }
+
+    draw.microfont_aa = matches!(
+        fragment_contract,
+        ResidentSceneFragmentContract::MicrofontAa(_)
+            | ResidentSceneFragmentContract::MicrofontMask(_)
+    );
+    if draw.microfont_aa && depth_config.is_some() {
+        return Err("microfont-aa-depth");
+    }
     if draw.native.is_some() {
         return Err("scene-fragment-contract-native-mismatch");
     }
@@ -1774,11 +1827,20 @@ fn stage_resident_scene_secondary(
     let shader_layout = upload_triangle_shader_pipeline_at(
         state_warm,
         pipeline,
-        (sampled_texture.is_none() && !draw.voxy_headless && !draw.voxy_figure
-            && !matches!(fragment_contract, ResidentSceneFragmentContract::RoundedLineEnds(_) | ResidentSceneFragmentContract::MicrofontAa(_) | ResidentSceneFragmentContract::MicrofontMask(_))).then_some(rgba),
+        (sampled_texture.is_none()
+            && !draw.voxy_headless
+            && !draw.voxy_figure
+            && !matches!(
+                fragment_contract,
+                ResidentSceneFragmentContract::RoundedLineEnds(_)
+                    | ResidentSceneFragmentContract::MicrofontAa(_)
+                    | ResidentSceneFragmentContract::MicrofontMask(_)
+            ))
+        .then_some(rgba),
         state_gpu,
         false,
-    ).inspect_err(|reason| {
+    )
+    .inspect_err(|reason| {
         crate::log_warn!(target: "render";
             "resident-scene: phase=shader-upload-rejected secondary={} textured={} reason={}\n",
             secondary_index, sampled_texture.is_some(), reason,
@@ -1791,30 +1853,51 @@ fn stage_resident_scene_secondary(
         blend_mode,
         BackendProbeMode::MesaLike,
         viewport_translation_px,
-    ).inspect_err(|reason| {
+    )
+    .inspect_err(|reason| {
         crate::log_warn!(target: "render";
             "resident-scene: phase=state-write-rejected secondary={} textured={} reason={}\n",
             secondary_index, sampled_texture.is_some(), reason,
         );
     })?;
-    if let ResidentSceneFragmentContract::RoundedLineEnds(params) | ResidentSceneFragmentContract::MicrofontAa(params) = fragment_contract {
-        let line = matches!(topology, ResidentScenePrimitiveTopology::LineListAdj | ResidentScenePrimitiveTopology::LineStripAdj) && clip_adjacency;
-        let patch = draw.microfont_aa && topology == ResidentScenePrimitiveTopology::TriangleList && !clip_adjacency;
-        if !(line || patch) || !matches!(state_warm.device_id, 0x4680 | 0xa780)
-        { return Err("rounded-line-contract"); }
+    if let ResidentSceneFragmentContract::RoundedLineEnds(params)
+    | ResidentSceneFragmentContract::MicrofontAa(params) = fragment_contract
+    {
+        let line = matches!(
+            topology,
+            ResidentScenePrimitiveTopology::LineListAdj
+                | ResidentScenePrimitiveTopology::LineStripAdj
+        ) && clip_adjacency;
+        let patch = draw.microfont_aa
+            && topology == ResidentScenePrimitiveTopology::TriangleList
+            && !clip_adjacency;
+        if !(line || patch) || !matches!(state_warm.device_id, 0x4680 | 0xa780) {
+            return Err("rounded-line-contract");
+        }
         let offset = (probe_state.used_bytes as usize + 63) & !63;
-        if offset + 64 > state_warm.draw_state_len { return Err("rounded-line-constants-capacity"); }
-        unsafe { core::ptr::copy_nonoverlapping(params.as_ptr() as *const u8,
-            state_warm.draw_state_virt.add(offset), 64); }
+        if offset + 64 > state_warm.draw_state_len {
+            return Err("rounded-line-constants-capacity");
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                params.as_ptr() as *const u8,
+                state_warm.draw_state_virt.add(offset),
+                64,
+            );
+        }
         probe_state.push_constant_offset_bytes = offset as u32;
         probe_state.used_bytes = (offset + 64) as u32;
     }
-    if let ResidentSceneFragmentContract::MicrofontMask(address)=fragment_contract {
-        if address==0 || address&63!=0 || !matches!(state_warm.device_id,0x4680|0xa780)
-            || !(topology==ResidentScenePrimitiveTopology::TriangleList && !clip_adjacency
-                || topology==ResidentScenePrimitiveTopology::LineStripAdj && clip_adjacency)
-        { return Err("microfont-mask-constants-contract"); }
-        probe_state.push_constant_gpu_addr=address;
+    if let ResidentSceneFragmentContract::MicrofontMask(address) = fragment_contract {
+        if address == 0
+            || address & 63 != 0
+            || !matches!(state_warm.device_id, 0x4680 | 0xa780)
+            || !(topology == ResidentScenePrimitiveTopology::TriangleList && !clip_adjacency
+                || topology == ResidentScenePrimitiveTopology::LineStripAdj && clip_adjacency)
+        {
+            return Err("microfont-mask-constants-contract");
+        }
+        probe_state.push_constant_gpu_addr = address;
     }
     // Shader bytes and all fixed-function structures occupy one compact
     // prefix. Publish it once, after every CPU write, instead of three
@@ -1855,7 +1938,9 @@ fn stage_resident_scene_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
         match topology {
-            ResidentScenePrimitiveTopology::CubePatchList1 => return Err("cube-patch-requires-retained-contract"),
+            ResidentScenePrimitiveTopology::CubePatchList1 => {
+                return Err("cube-patch-requires-retained-contract");
+            }
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
             ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
@@ -1877,17 +1962,15 @@ fn stage_resident_scene_secondary(
         line_width_raw,
         clip_adjacency,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
-        if draw.fixed_gl.is_some() { TriangleFrontEndContract {
-            vs_urb_read_length: 2, sbe_read_length: 2,
-            ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
-        } } else { TRIANGLE_DEFAULT_FRONT_END_CONTRACT },
+        { TRIANGLE_DEFAULT_FRONT_END_CONTRACT },
         viewport_translation_px,
         BackendProbeMode::MesaLike,
         // All scene secondaries execute below one primary batch. They only
         // need command-stream ordering here; the primary emits the single
         // full render/depth/L3 release fence after the final secondary.
         PostDrawSyncVariant::LightCsNoPostSync,
-    ).inspect_err(|reason| {
+    )
+    .inspect_err(|reason| {
         crate::log_warn!(target: "render";
             "resident-scene: phase=batch-encode-rejected secondary={} textured={} reason={}\n",
             secondary_index, sampled_texture.is_some(), reason,
@@ -1912,7 +1995,7 @@ fn stage_resident_scene_secondary(
             pipeline.ps.meta.kernel.code_size_bytes,
             pipeline.ps.meta.kernel.grf_start_register,
             pipeline.ps.meta.num_varying_inputs,
-            if draw.fixed_gl.is_some() { 2 } else { 1 },
+            if false { 2 } else { 1 },
         );
     }
     Ok(bytes)
@@ -1933,8 +2016,8 @@ fn stage_resident_churn_forward_secondary(
     // The next-frame diagnostic removes the complete depth read/write path
     // only for PBR meshes; culling, geometry, and shader selection stay intact.
     let cube_patch = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1;
-    let draw_depth = (draw.pbr_material.is_none() || picasso_depth_test_enabled())
-        .then_some(depth_config);
+    let draw_depth =
+        (draw.pbr_material.is_none() || picasso_depth_test_enabled()).then_some(depth_config);
     // Caller selects opaque depth-write or sorted palette depth-read-only pass.
     let blend_mode = if cube_patch && !depth_config.write_enabled {
         TriangleBlendProbeMode::StraightAlpha
@@ -2083,7 +2166,12 @@ fn stage_resident_churn_transform_secondary(
     Ok(encoded.command_dwords * core::mem::size_of::<u32>())
 }
 
-fn picasso_vue_capture_capacity(indices: u32, rows: u32, pbr: bool, capacity: usize) -> Option<usize> {
+fn picasso_vue_capture_capacity(
+    indices: u32,
+    rows: u32,
+    pbr: bool,
+    capacity: usize,
+) -> Option<usize> {
     if indices == 0 || indices % 3 != 0 || rows == 0 {
         return None;
     }
@@ -2282,9 +2370,7 @@ fn log_picasso_vue_capture_after_retire(
     // PPGTT SRM may be subject to MMIO read privilege checks (GFX_MODE[1]).
     // Cross-check the engine-global selector through CPU MMIO; a zero SRM
     // alone does not establish that the boot-programmed selector was lost.
-    let selector = picasso_vue_selector_readback(
-        ff_slice_cs_chicken1, cpu_before[0], cpu_after[0],
-    );
+    let selector = picasso_vue_selector_readback(ff_slice_cs_chicken1, cpu_before[0], cpu_after[0]);
     let requested_3d_control = cs_chicken1 & 0x401 == 0x400;
     let args = &resident.indirect_args;
     if args.storage_virt.is_null() || args.storage_bytes < 20 {
@@ -2297,7 +2383,13 @@ fn log_picasso_vue_capture_after_retire(
         unsafe { core::ptr::read_volatile(args.storage_virt.cast::<u32>().add(1)) };
     let record_bytes = picasso_vue_record_dwords(pbr_varyings) * 4;
     let complete = picasso_vue_capture_complete(
-        index_count, instance_count, pbr_varyings, capacity, written, needed, offset,
+        index_count,
+        instance_count,
+        pbr_varyings,
+        capacity,
+        written,
+        needed,
+        offset,
     );
     crate::log_info!(target: "render";
         "picasso-vue-capture: retired=1 complete={} pipeline={} stride={} record_bytes={} pbr_varyings={} source={} indices={} instances={} records={} so_written={} so_needed={} overflow={} offset_bytes={} capacity_bytes={} cs_chicken1=0x{:08X} register_phase=end-of-capture/no-capture-lri proof=bounded-preclip-stream-not-raster-output\n",
@@ -2365,7 +2457,8 @@ mod picasso_vue_capture_tests {
         assert_eq!(lost.srm_matches_cpu_post, Some(true));
         assert_eq!(lost.observation, "cpu-selector-cleared-between-snapshots");
 
-        let unwritten = picasso_vue_selector_readback(PICASSO_VUE_SELECTOR_SRM_SENTINEL, 0x4000, 0x4000);
+        let unwritten =
+            picasso_vue_selector_readback(PICASSO_VUE_SELECTOR_SRM_SENTINEL, 0x4000, 0x4000);
         assert!(unwritten.srm_sentinel_unchanged);
         assert_eq!(unwritten.srm_matches_cpu_post, None);
         assert_eq!(unwritten.observation, "srm-unwritten-or-sentinel-returned");
@@ -2375,8 +2468,10 @@ mod picasso_vue_capture_tests {
             assert_eq!(agrees.srm_matches_cpu_post, Some(true));
             assert_eq!(agrees.observation, "cpu-post-srm-agree");
         }
-        assert_eq!(picasso_vue_selector_readback(0x4000, 0, 0x4000).observation,
-            "cpu-selector-set-between-snapshots");
+        assert_eq!(
+            picasso_vue_selector_readback(0x4000, 0, 0x4000).observation,
+            "cpu-selector-set-between-snapshots"
+        );
     }
 
     #[test]
@@ -2403,11 +2498,33 @@ mod picasso_vue_capture_tests {
                     cursor += (header & 0xFF) as usize + 2;
                 }
             }
-            assert_eq!(cursor, if pbr { 286 } else { 282 }, "packet lengths must consume the exact buffer");
+            assert_eq!(
+                cursor,
+                if pbr { 286 } else { 282 },
+                "packet lengths must consume the exact buffer"
+            );
             assert_eq!(noops, 250);
-            assert_eq!(packet_headers, [0x7A00_0004, 0x781E_0003, 0x7860_0006, if pbr { 0x7917_0009 } else { 0x7917_0005 }, 0x7A00_0004]);
+            assert_eq!(
+                packet_headers,
+                [
+                    0x7A00_0004,
+                    0x781E_0003,
+                    0x7860_0006,
+                    if pbr { 0x7917_0009 } else { 0x7917_0005 },
+                    0x7A00_0004
+                ]
+            );
             let setup = &words[256..];
-            assert_eq!(&setup[..5], &[0x781E_0003, 0x8200_0000, if pbr { 2 } else { 0 }, record_bytes as u32, 0]);
+            assert_eq!(
+                &setup[..5],
+                &[
+                    0x781E_0003,
+                    0x8200_0000,
+                    if pbr { 2 } else { 0 },
+                    record_bytes as u32,
+                    0
+                ]
+            );
             assert_eq!(setup[1] & (1 << 30), 0, "rendering must stay enabled");
             assert_eq!(
                 &setup[5..13],
@@ -2460,7 +2577,13 @@ mod picasso_vue_capture_tests {
         let gpu = 0x3_0084_0000;
         for (end, base, expected_registers) in [
             (false, 192, &[0x5200u32, 0x5204, 0x5240, 0x5244][..]),
-            (true, 196, &[0x5200u32, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0, 0xB134][..]),
+            (
+                true,
+                196,
+                &[
+                    0x5200u32, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0, 0xB134,
+                ][..],
+            ),
         ] {
             let (words, count) = picasso_vue_counter_packets(gpu, 816, end).unwrap();
             assert_eq!(&words[..6], &[0x7A00_0004, 0x0010_0002, 0, 0, 0, 0]);
@@ -2503,11 +2626,35 @@ mod picasso_vue_capture_tests {
         for pbr in [false, true] {
             let bytes = 185_424 * picasso_vue_record_dwords(pbr) * 4;
             assert!(picasso_vue_capture_complete(46_356, 4, pbr, bytes, 61_808, 61_808, bytes));
-            assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes - 1, 61_808, 61_808, bytes));
+            assert!(!picasso_vue_capture_complete(
+                46_356,
+                4,
+                pbr,
+                bytes - 1,
+                61_808,
+                61_808,
+                bytes
+            ));
             assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes, 61_807, 61_808, bytes));
             assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes, 61_807, 61_807, bytes));
-            assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes, 61_808, 61_808, bytes - 4));
-            assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes, u64::MAX, u64::MAX, bytes));
+            assert!(!picasso_vue_capture_complete(
+                46_356,
+                4,
+                pbr,
+                bytes,
+                61_808,
+                61_808,
+                bytes - 4
+            ));
+            assert!(!picasso_vue_capture_complete(
+                46_356,
+                4,
+                pbr,
+                bytes,
+                u64::MAX,
+                u64::MAX,
+                bytes
+            ));
             assert!(!picasso_vue_capture_complete(46_356, 4, !pbr, bytes, 61_808, 61_808, bytes));
             assert!(!picasso_vue_capture_complete(0, 4, pbr, bytes, 0, 0, 0));
             assert!(!picasso_vue_capture_complete(3, 0, pbr, bytes, 0, 0, 0));
@@ -2784,7 +2931,9 @@ fn encode_resident_scene_primary_commands(
         }
         if result_bytes < DISTA_GPU_TIMESTAMP_LIMIT_DWORD * 4
             || result_ppgtt_gpu & 7 != 0
-            || result_ppgtt_gpu.checked_add((DISTA_GPU_TIMESTAMP_LIMIT_DWORD * 4) as u64).is_none()
+            || result_ppgtt_gpu
+                .checked_add((DISTA_GPU_TIMESTAMP_LIMIT_DWORD * 4) as u64)
+                .is_none()
         {
             return Err("dista-timestamp-result-range");
         }
@@ -2921,9 +3070,17 @@ mod picasso_pipeline_stats_tests {
         let mut batch = [0u32; 512];
         let ppgtt = 0x2_0084_0000u64;
         let ggtt = 0x3_0094_0000u64;
-        let bytes =
-            encode_resident_scene_primary_commands(&mut batch, 4, ggtt, ppgtt, true, Some(2), None, 4096)
-                .unwrap();
+        let bytes = encode_resident_scene_primary_commands(
+            &mut batch,
+            4,
+            ggtt,
+            ppgtt,
+            true,
+            Some(2),
+            None,
+            4096,
+        )
+        .unwrap();
         let expected_registers = [0x2310, 0x2318, 0x2320, 0x2338, 0x2340, 0x2348];
         let mut cursor = 0;
         let mut secondaries = 0;
@@ -3089,8 +3246,16 @@ mod picasso_pipeline_stats_tests {
                 let mut batch = [0u32; 256];
                 let result = 0x2_0084_0000u64;
                 let bytes = encode_resident_scene_primary_commands(
-                    &mut batch, 3, 0x3_0094_0000, result, use_ppgtt, None, Some(first_draw), 848,
-                ).unwrap();
+                    &mut batch,
+                    3,
+                    0x3_0094_0000,
+                    result,
+                    use_ppgtt,
+                    None,
+                    Some(first_draw),
+                    848,
+                )
+                .unwrap();
                 let mut cursor = 0;
                 let mut secondaries = 0;
                 let mut timestamps = 0;
@@ -3114,7 +3279,10 @@ mod picasso_pipeline_stats_tests {
                             assert_eq!(secondaries, [0, first_draw, 3, 3][timestamps]);
                             assert_eq!(color_released, timestamps == 3);
                             assert!(!completion_written);
-                            assert_eq!(packet[1], PIPE_CONTROL_FLUSH_ENABLE | PIPE_CONTROL_CS_STALL | (3 << 14));
+                            assert_eq!(
+                                packet[1],
+                                PIPE_CONTROL_FLUSH_ENABLE | PIPE_CONTROL_CS_STALL | (3 << 14)
+                            );
                             assert_eq!(packet[1] & (1 << 24), 0); // Destination uses PPGTT.
                             let address = u64::from(packet[2]) | (u64::from(packet[3]) << 32);
                             assert_eq!(address, result + timestamp_dwords[timestamps] as u64 * 4);
@@ -3127,8 +3295,13 @@ mod picasso_pipeline_stats_tests {
                         } else if packet[1] == PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS {
                             assert_eq!(timestamps, 4);
                             assert!(color_released);
-                            assert_eq!(packet[4..6], [RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
-                                RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI]);
+                            assert_eq!(
+                                packet[4..6],
+                                [
+                                    RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+                                    RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI
+                                ]
+                            );
                             completion_written = true;
                         } else {
                             panic!("unexpected Dista PIPE_CONTROL");
@@ -3160,21 +3333,50 @@ mod picasso_pipeline_stats_tests {
             (1, u64::MAX - 7, 848),
         ] {
             let mut batch = [0xA5A5_A5A5; 256];
-            assert!(encode_resident_scene_primary_commands(
-                &mut batch, 3, 0x940000, result, true, None, Some(first), bytes,
-            ).is_err());
+            assert!(
+                encode_resident_scene_primary_commands(
+                    &mut batch,
+                    3,
+                    0x940000,
+                    result,
+                    true,
+                    None,
+                    Some(first),
+                    bytes,
+                )
+                .is_err()
+            );
             assert!(batch.iter().all(|word| *word == 0xA5A5_A5A5));
         }
     }
 
     #[test]
     fn dista_timestamp_duration_uses_hardware_frequency_and_36_bit_wrap() {
-        assert_eq!(dista_gpu_timestamp_interval(7, 1927, 19_200_000),
-            Some(ResidentSceneGpuTimestamp { ticks: 1920, hz: 19_200_000, ns: 100_000 }));
+        assert_eq!(
+            dista_gpu_timestamp_interval(7, 1927, 19_200_000),
+            Some(ResidentSceneGpuTimestamp {
+                ticks: 1920,
+                hz: 19_200_000,
+                ns: 100_000
+            })
+        );
         let epoch = 1u64 << DISTA_GPU_TIMESTAMP_BITS;
-        assert_eq!(dista_gpu_timestamp_interval(epoch - 7, 5, 24_000_000),
-            Some(ResidentSceneGpuTimestamp { ticks: 12, hz: 24_000_000, ns: 500 }));
-        for (start, end, hz) in [(0, 1, 1), (1, 0, 1), (1, 2, 0), (2, 2, 1), (9, 8, 1), (1, epoch / 2 + 1, 1)] {
+        assert_eq!(
+            dista_gpu_timestamp_interval(epoch - 7, 5, 24_000_000),
+            Some(ResidentSceneGpuTimestamp {
+                ticks: 12,
+                hz: 24_000_000,
+                ns: 500
+            })
+        );
+        for (start, end, hz) in [
+            (0, 1, 1),
+            (1, 0, 1),
+            (1, 2, 0),
+            (2, 2, 1),
+            (9, 8, 1),
+            (1, epoch / 2 + 1, 1),
+        ] {
             assert_eq!(dista_gpu_timestamp_interval(start, end, hz), None);
         }
     }
@@ -3227,17 +3429,27 @@ fn submit_resident_scene_geometry_batched(
         return Err("scene-frame-target-format");
     }
     if render_target_surface_format == SURFACE_FORMAT_R8_UNORM
-        && (draws.is_empty() || clear.is_some_and(|color| color != [0; 4]) || opaque_depth_enabled
-            || depth_config.is_some() || carrier.is_some() || drawable_depth.is_some()
-            || draws.iter().any(|draw| !resident_coverage_draw_is_valid(draw)))
-    { return Err("scene-frame-mask-contract"); }
+        && (draws.is_empty()
+            || clear.is_some_and(|color| color != [0; 4])
+            || opaque_depth_enabled
+            || depth_config.is_some()
+            || carrier.is_some()
+            || drawable_depth.is_some()
+            || draws
+                .iter()
+                .any(|draw| !resident_coverage_draw_is_valid(draw)))
+    {
+        return Err("scene-frame-mask-contract");
+    }
     // Legacy scene HiZ needs its initialization pass in the same submission.
     // Drawable-owned persistent depth uses plain D32 without shared HiZ data.
     if clear.is_none() && depth_config.is_some_and(|depth| depth.hiz.is_some()) {
         return Err("resident-scene-hiz-requires-depth-clear");
     }
     let depth_clear = drawable_depth.is_some_and(|d| d.clear);
-    let max_secondary_count = draws.len().saturating_add(usize::from(clear.is_some() || depth_clear));
+    let max_secondary_count = draws
+        .len()
+        .saturating_add(usize::from(clear.is_some() || depth_clear));
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             max_secondary_count
@@ -3255,14 +3467,17 @@ fn submit_resident_scene_geometry_batched(
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     let state = resident_scene_batch_state_for_carrier(warm, carrier)?;
 
-    let reverse_figure_depth = draws.iter().any(|draw|
-        matches!(draw.fragment_contract, ResidentSceneFragmentContract::VoxyFigure));
+    let reverse_figure_depth = draws
+        .iter()
+        .any(|draw| matches!(draw.fragment_contract, ResidentSceneFragmentContract::VoxyFigure));
     let mut secondary_count = 0usize;
     if clear.is_some() || depth_clear {
         let clear_color = clear.unwrap_or([0; 4]);
         let mut clear_depth = if drawable_depth.is_some() {
             drawable_depth.filter(|d| d.clear).and_then(|d| d.config)
-        } else { depth_config };
+        } else {
+            depth_config
+        };
         if let Some(depth) = clear_depth.as_mut() {
             depth.hiz_clear = depth.hiz.is_some();
             depth.write_enabled = !depth.hiz_clear; // HiZ fast clear replaces the D32 raster clear.
@@ -3278,7 +3493,9 @@ fn submit_resident_scene_geometry_batched(
             "resident-scene-fullscreen-clear",
             &if reverse_figure_depth {
                 [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]]
-            } else { CLEAR_TRIANGLE },
+            } else {
+                CLEAR_TRIANGLE
+            },
         )
         .ok_or("target-clear-resources")?
         .with_rt_surface_format(render_target_surface_format);
@@ -3287,7 +3504,11 @@ fn submit_resident_scene_geometry_batched(
             clear_warm,
             clear_state_gpu,
             clear_draw,
-            if clear.is_some() { TriangleBlendProbeMode::MesaZeroedState } else { TriangleBlendProbeMode::StraightAlpha },
+            if clear.is_some() {
+                TriangleBlendProbeMode::MesaZeroedState
+            } else {
+                TriangleBlendProbeMode::StraightAlpha
+            },
             clear_depth,
             clear_color,
             None,
@@ -3302,22 +3523,25 @@ fn submit_resident_scene_geometry_batched(
         )?;
         secondary_count = 1;
     }
-    let dista_first_secondary = (render_target_surface_format == SURFACE_FORMAT_R8_UNORM)
-        .then_some(secondary_count);
+    let dista_first_secondary =
+        (render_target_surface_format == SURFACE_FORMAT_R8_UNORM).then_some(secondary_count);
     for scene_draw in draws {
         if opaque_depth_enabled && scene_draw.rgba[3] == 0 {
             continue;
         }
         let draw_flags = scene_draw.depth_flags;
         let (blend_mode, draw_depth) = if let Some(depth) = drawable_depth {
-            let geometry_clear = draw_flags.is_some_and(|flags| flags & v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR != 0)
+            let geometry_clear = draw_flags
+                .is_some_and(|flags| flags & v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR != 0)
                 || (draw_flags.is_none() && depth.geometry_clear);
-            let preserve_color = draw_flags.is_some_and(|flags| flags & v::vgpu::INDEXED_DRAW_LOAD_COLOR != 0)
+            let preserve_color = draw_flags
+                .is_some_and(|flags| flags & v::vgpu::INDEXED_DRAW_LOAD_COLOR != 0)
                 || (draw_flags.is_none() && depth.preserve_color);
             let mut config = depth.config;
             if let Some(flags) = draw_flags {
                 if let Some(ref mut config) = config {
-                    config.write_enabled = geometry_clear && flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH != 0
+                    config.write_enabled = geometry_clear
+                        && flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH != 0
                         || flags & v::vgpu::INDEXED_DRAW_DEPTH_WRITE != 0;
                     config.compare_function = if geometry_clear {
                         COMPARE_FUNCTION_ALWAYS
@@ -3326,11 +3550,22 @@ fn submit_resident_scene_geometry_batched(
                     };
                 }
             }
-            (if geometry_clear && preserve_color {
-                TriangleBlendProbeMode::StraightAlpha
-            } else { TriangleBlendProbeMode::MesaZeroedState },
-            if draw_flags.is_some_and(|flags| flags & (v::vgpu::INDEXED_DRAW_DEPTH_TEST | v::vgpu::INDEXED_DRAW_CLEAR_DEPTH) != 0)
-                || (draw_flags.is_none() && depth.test) { config } else { None })
+            (
+                if geometry_clear && preserve_color {
+                    TriangleBlendProbeMode::StraightAlpha
+                } else {
+                    TriangleBlendProbeMode::MesaZeroedState
+                },
+                if draw_flags.is_some_and(|flags| {
+                    flags & (v::vgpu::INDEXED_DRAW_DEPTH_TEST | v::vgpu::INDEXED_DRAW_CLEAR_DEPTH)
+                        != 0
+                }) || (draw_flags.is_none() && depth.test)
+                {
+                    config
+                } else {
+                    None
+                },
+            )
         } else if opaque_depth_enabled {
             let write_enabled = scene_draw.rgba[3] == u8::MAX;
             let mut depth = depth_config.ok_or("scene-frame-depth")?;
@@ -3346,23 +3581,17 @@ fn submit_resident_scene_geometry_batched(
         } else {
             (TriangleBlendProbeMode::StraightAlpha, None)
         };
-        let preserve_depth_clear_color = draw_flags.is_some_and(|flags|
+        let preserve_depth_clear_color = draw_flags.is_some_and(|flags| {
             flags & (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR)
-                == (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR));
+                == (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR)
+        });
         let blend_mode = match scene_draw.fragment_contract {
             ResidentSceneFragmentContract::VoxyFigure => TriangleBlendProbeMode::MesaZeroedState,
-            ResidentSceneFragmentContract::MicrofontAa(_) | ResidentSceneFragmentContract::MicrofontMask(_) => TriangleBlendProbeMode::StraightAlpha,
-            ResidentSceneFragmentContract::FixedGl(_) if preserve_depth_clear_color =>
-                TriangleBlendProbeMode::StraightAlpha,
-            ResidentSceneFragmentContract::FixedGl(state) if state[5] != 0 => {
-                TriangleBlendProbeMode::FixedFunction {
-                    source_color: state[6] as u8,
-                    destination_color: state[7] as u8,
-                    source_alpha: state[8] as u8,
-                    destination_alpha: state[9] as u8,
-                }
+            ResidentSceneFragmentContract::MicrofontAa(_)
+            | ResidentSceneFragmentContract::MicrofontMask(_) => {
+                TriangleBlendProbeMode::StraightAlpha
             }
-            ResidentSceneFragmentContract::FixedGl(_) => TriangleBlendProbeMode::MesaZeroedState,
+
             _ => blend_mode,
         };
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_count)?;
@@ -3458,7 +3687,9 @@ fn submit_resident_scene_geometry_batched(
             warm,
             u64::from(crate::intel::gpgpu::direct_rcs_timestamp_frequency_hz(dev)),
         )
-    } else { (None, None, None, None) };
+    } else {
+        (None, None, None, None)
+    };
     Ok(ResidentSceneGeometryResult {
         completed,
         prepare_us,
@@ -3512,10 +3743,12 @@ fn submit_resident_churn_forward_geometry_batched(
             || !(1..=2).contains(&cube.draw_group_count())
             || cube_dispatch.map(|dispatch| RetainedGraphicsHandoff::from(dispatch.output))
                 != Some(RetainedGraphicsHandoff::NativeMatrices)
-        { return Err("retained-companion-cube-contract"); }
+        {
+            return Err("retained-companion-cube-contract");
+        }
     }
-    let transform_secondary_count = usize::from(transform_dispatch.is_some())
-        + usize::from(cube_dispatch.is_some());
+    let transform_secondary_count =
+        usize::from(transform_dispatch.is_some()) + usize::from(cube_dispatch.is_some());
     let resident_draw_count = resident.draw_group_count();
     let cube_two_pass = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
         && resident_draw_count == 2;
@@ -3526,10 +3759,18 @@ fn submit_resident_churn_forward_geometry_batched(
     let vue_capture_bytes = if capture_vue {
         let bytes = transform_dispatch
             .filter(|_| transform_handoff == Some(RetainedGraphicsHandoff::NativeMatrices))
-            .and_then(|dispatch| picasso_vue_capture_capacity(
-                resident.index_count, dispatch.row_count, vue_pbr_varyings, warm.streamout_len,
-            ));
-        if bytes.is_none() || warm.streamout_virt.is_null() || warm.result_len < PICASSO_VUE_RESULT_LIMIT_DWORD * 4 {
+            .and_then(|dispatch| {
+                picasso_vue_capture_capacity(
+                    resident.index_count,
+                    dispatch.row_count,
+                    vue_pbr_varyings,
+                    warm.streamout_len,
+                )
+            });
+        if bytes.is_none()
+            || warm.streamout_virt.is_null()
+            || warm.result_len < PICASSO_VUE_RESULT_LIMIT_DWORD * 4
+        {
             crate::log_warn!(target: "render"; "picasso-vue-capture: rejected=1 reason=capacity-or-native-transform\n");
             None
         } else {
@@ -3568,11 +3809,15 @@ fn submit_resident_churn_forward_geometry_batched(
         // Neither poison overlaps completion cookies or pipeline counters.
         unsafe {
             core::ptr::write_volatile(
-                warm.result_virt.cast::<u32>().add(PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD),
+                warm.result_virt
+                    .cast::<u32>()
+                    .add(PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD),
                 PICASSO_VUE_SELECTOR_SRM_SENTINEL,
             );
             core::ptr::write_volatile(
-                warm.result_virt.cast::<u32>().add(PICASSO_VUE_L3ALLOC_DWORD),
+                warm.result_virt
+                    .cast::<u32>()
+                    .add(PICASSO_VUE_L3ALLOC_DWORD),
                 PICASSO_VUE_L3ALLOC_SRM_SENTINEL,
             );
         }
@@ -3591,8 +3836,13 @@ fn submit_resident_churn_forward_geometry_batched(
     }
 
     if let (Some(cube), Some(dispatch)) = (cube_companion, cube_dispatch) {
-        stage_resident_churn_transform_secondary(warm, cube,
-            usize::from(transform_dispatch.is_some()), dispatch, result_ggtt_gpu)?;
+        stage_resident_churn_transform_secondary(
+            warm,
+            cube,
+            usize::from(transform_dispatch.is_some()),
+            dispatch,
+            result_ggtt_gpu,
+        )?;
     }
 
     let clear_secondary_index = transform_secondary_count;
@@ -3636,10 +3886,18 @@ fn submit_resident_churn_forward_geometry_batched(
     draw_depth.write_enabled = true;
     draw_depth.compare_function = COMPARE_FUNCTION_LESS;
     for group in 0..resident_draw_count {
-        let secondary_index = group + 1 + transform_secondary_count
-            + if cube_two_pass && group == 1 { static_draws.len() } else { 0 };
+        let secondary_index = group
+            + 1
+            + transform_secondary_count
+            + if cube_two_pass && group == 1 {
+                static_draws.len()
+            } else {
+                0
+            };
         let mut group_depth = draw_depth;
-        if cube_two_pass && group == 1 { group_depth.write_enabled = false; }
+        if cube_two_pass && group == 1 {
+            group_depth.write_enabled = false;
+        }
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         match transform_handoff {
             Some(RetainedGraphicsHandoff::NativeMatrices) | None => {
@@ -3745,15 +4003,29 @@ fn submit_resident_churn_forward_geometry_batched(
             let secondary_index = secondary_count - cube.draw_group_count() + group;
             let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
             let draw = prepare_resident_churn_forward_draw(
-                state_warm, cube, None, group, render_target_gpu, render_target_pitch,
-                target_width, target_height,
-            ).ok_or("retained-companion-draw-resources")?
-                .with_rt_surface_format(render_target_surface_format);
+                state_warm,
+                cube,
+                None,
+                group,
+                render_target_gpu,
+                render_target_pitch,
+                target_width,
+                target_height,
+            )
+            .ok_or("retained-companion-draw-resources")?
+            .with_rt_surface_format(render_target_surface_format);
             let mut depth = draw_depth;
             depth.write_enabled = group == 0;
             stage_resident_churn_forward_secondary(
-                warm, state_warm, state_gpu, draw, depth, cube, uv_pipeline,
-                secondary_index, result_ggtt_gpu,
+                warm,
+                state_warm,
+                state_gpu,
+                draw,
+                depth,
+                cube,
+                uv_pipeline,
+                secondary_index,
+                result_ggtt_gpu,
             )?;
         }
     }
@@ -3821,11 +4093,13 @@ fn submit_resident_churn_forward_geometry_batched(
             material.base_color.pitch,
         );
     }
-    let vue_cpu_before = vue_capture_bytes.map(|_| [
-        crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1),
-        crate::intel::mmio_read(dev, GFX_MODE),
-        crate::intel::mmio_read(dev, GEN12_L3ALLOC),
-    ]);
+    let vue_cpu_before = vue_capture_bytes.map(|_| {
+        [
+            crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1),
+            crate::intel::mmio_read(dev, GFX_MODE),
+            crate::intel::mmio_read(dev, GEN12_L3ALLOC),
+        ]
+    });
     let (completed, gpu_poll_us, gpu_poll_iters) = match carrier {
         Some(lease) => match submit_picasso_render1_batch(
             lease,
@@ -3849,11 +4123,13 @@ fn submit_resident_churn_forward_geometry_batched(
             (completed, gpu_poll_us, gpu_poll_iters)
         }
     };
-    let vue_cpu_after = vue_capture_bytes.filter(|_| completed).map(|_| [
-        crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1),
-        crate::intel::mmio_read(dev, GFX_MODE),
-        crate::intel::mmio_read(dev, GEN12_L3ALLOC),
-    ]);
+    let vue_cpu_after = vue_capture_bytes.filter(|_| completed).map(|_| {
+        [
+            crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1),
+            crate::intel::mmio_read(dev, GFX_MODE),
+            crate::intel::mmio_read(dev, GEN12_L3ALLOC),
+        ]
+    });
     if completed
         && let Some(material) = sampled_material
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
@@ -3880,7 +4156,12 @@ fn submit_resident_churn_forward_geometry_batched(
         (vue_capture_bytes, vue_cpu_before, vue_cpu_after)
     {
         log_picasso_vue_capture_after_retire(
-            warm, resident, bytes, vue_pbr_varyings, cpu_before, cpu_after,
+            warm,
+            resident,
+            bytes,
+            vue_pbr_varyings,
+            cpu_before,
+            cpu_after,
         );
     } else if vue_capture_bytes.is_some() && !completed {
         crate::log_warn!(target: "render"; "picasso-vue-capture: retired=0 readback=skipped\n");
@@ -3979,8 +4260,8 @@ fn submit_resident_scene_capture_inner_for_carrier(
     cube_companion: Option<&ResidentChurnForward>,
     drawable_depth: Option<DrawableDepthSubmission>,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    let geometry_draw_count =
-        native_churn.map_or(draws.len(), |resident| resident.draw_group_count() + draws.len())
+    let geometry_draw_count = native_churn
+        .map_or(draws.len(), |resident| resident.draw_group_count() + draws.len())
         + cube_companion.map_or(0, |resident| resident.draw_group_count());
     if target_width == 0
         || target_height == 0
@@ -4249,13 +4530,22 @@ fn submit_resident_scene_capture_inner_for_carrier(
             .fetch_add(1, Ordering::AcqRel)
             .saturating_add(1);
         let capture_perf = perf_sequence == 1 || perf_sequence.is_multiple_of(256);
-        let capture_vue = cube_companion.is_none() && carrier.is_some()
-            && native_churn.is_some_and(|resident| resident.pbr_material()
-                && resident.draw_group_count() == 1
-                && resident.topology() == ResidentScenePrimitiveTopology::TriangleList)
+        let capture_vue = cube_companion.is_none()
+            && carrier.is_some()
+            && native_churn.is_some_and(|resident| {
+                resident.pbr_material()
+                    && resident.draw_group_count() == 1
+                    && resident.topology() == ResidentScenePrimitiveTopology::TriangleList
+            })
             && draws.is_empty()
-            && direct_output.is_some_and(|target| picasso_vue_target_disjoint(
-                warm.streamout_phys, warm.streamout_len, target.phys, target.bytes))
+            && direct_output.is_some_and(|target| {
+                picasso_vue_target_disjoint(
+                    warm.streamout_phys,
+                    warm.streamout_len,
+                    target.phys,
+                    target.bytes,
+                )
+            })
             && take_picasso_vue_capture();
         let geometry = if let Some(resident) = native_churn {
             submit_resident_churn_forward_geometry_batched(
@@ -4385,8 +4675,10 @@ fn submit_resident_scene_capture_inner_for_carrier(
             // uncertain copy, set quarantine before this reservation drops.
             let _copy_storage = match carrier {
                 Some(_) => None, // The carrier frame reservation spans this copy.
-                None => Some(reserve_warm_render_storage("resident-scene-copy")
-                    .ok_or("render-storage-busy")?),
+                None => Some(
+                    reserve_warm_render_storage("resident-scene-copy")
+                        .ok_or("render-storage-busy")?,
+                ),
             };
             // Geometry's RT/tile/HDC/L3 release and any coverage epilogue
             // have retired before BCS reads the scratch allocation.
@@ -4395,7 +4687,9 @@ fn submit_resident_scene_capture_inner_for_carrier(
             if outcome == crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete {
                 retain_scratch = true;
                 match carrier {
-                    Some(lease) => quarantine_picasso_render1(lease, "present-copy-retirement-uncertain"),
+                    Some(lease) => {
+                        quarantine_picasso_render1(lease, "present-copy-retirement-uncertain")
+                    }
                     None => RESIDENT_SCENE_COPY_QUARANTINED.store(true, Ordering::Release),
                 }
                 crate::log_error!(target: "render";
@@ -4561,7 +4855,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
     match carrier {
         Some(lease) => finish_picasso_render1_frame(lease),
         None if !retain_scratch => PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release),
-        None => {},
+        None => {}
     }
     result
 }

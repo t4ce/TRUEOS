@@ -1,15 +1,21 @@
 pub mod app_crash;
 pub mod blueprint;
-pub(crate) mod launcher;
-pub(crate) mod matrix;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
 pub mod control_kick;
 mod cooperative_stop;
 mod depthchecker_debug;
+pub(crate) mod launcher;
 mod lifecycle;
+pub(crate) mod matrix;
 mod teardown_diagnostics;
 use teardown_diagnostics::Stage as TeardownStage;
+#[cfg(feature = "legacy_vm_checkpoint")]
+#[path = "checkpoint_legacy.rs"]
+mod checkpoint;
+#[cfg(not(feature = "legacy_vm_checkpoint"))]
+#[path = "checkpoint_disabled.rs"]
+mod checkpoint;
 pub(crate) mod execution_policy;
 pub mod guest_run;
 pub mod guest_work;
@@ -21,20 +27,12 @@ pub mod security;
 pub mod snapshot;
 #[cfg(feature = "legacy_vm_checkpoint")]
 pub mod store;
-#[cfg(feature = "legacy_vm_checkpoint")]
-#[path = "checkpoint_legacy.rs"]
-mod checkpoint;
-#[cfg(not(feature = "legacy_vm_checkpoint"))]
-#[path = "checkpoint_disabled.rs"]
-mod checkpoint;
 pub use checkpoint::*;
 pub mod sync;
 pub mod vmcall;
 pub mod vmx;
 pub mod vnet;
 pub mod vpid;
-#[cfg(feature = "wc3")]
-mod wc3;
 
 use crate::hv::vmx::*;
 
@@ -68,7 +66,7 @@ const MIB: usize = 1024 * 1024;
 const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
 pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
-#[cfg(not(feature = "wc3"))]
+
 const GUEST_FS_BASE_RESET: u64 = 0;
 const BLUEPRINT_PREPARE_PAUSE_TIMEOUT_MS: u64 = 15_000;
 const STOP_CLEANUP_TIMEOUT_MS: u64 = 2_000;
@@ -105,7 +103,10 @@ pub const fn cross_principal_snapshot_restore_supported() -> bool {
 static VM_CONTROL_WAITS: [crate::wait::WaitQueue; TRUEOS_VM_ID_LIMIT] =
     [const { crate::wait::WaitQueue::new() }; TRUEOS_VM_ID_LIMIT];
 
-async fn await_vm_control_boundary<F: core::future::Future>(vm_id: u8, future: F) -> Option<F::Output> {
+async fn await_vm_control_boundary<F: core::future::Future>(
+    vm_id: u8,
+    future: F,
+) -> Option<F::Output> {
     let queue = &VM_CONTROL_WAITS[vm_id as usize];
     let mut future = core::pin::pin!(future);
     loop {
@@ -119,13 +120,17 @@ async fn await_vm_control_boundary<F: core::future::Future>(vm_id: u8, future: F
             return None;
         }
         let mut control = core::pin::pin!(queue.wait_after(observed));
-        let deadline_ms = vm_slot(vm_id).filter(|vm| vm.execution_pause.requested())
+        let deadline_ms = vm_slot(vm_id)
+            .filter(|vm| vm.execution_pause.requested())
             .map(|vm| vm.execution_pause_deadline_ms.load(Ordering::Acquire));
         let mut deadline = core::pin::pin!(async {
             match deadline_ms {
-                Some(deadline) => Timer::after(EmbassyDuration::from_millis(
-                    deadline.saturating_sub(lifecycle_now_ms()).max(1),
-                )).await,
+                Some(deadline) => {
+                    Timer::after(EmbassyDuration::from_millis(
+                        deadline.saturating_sub(lifecycle_now_ms()).max(1),
+                    ))
+                    .await
+                }
                 None => core::future::pending::<()>().await,
             }
         });
@@ -139,7 +144,8 @@ async fn await_vm_control_boundary<F: core::future::Future>(vm_id: u8, future: F
                 return core::task::Poll::Ready(None);
             }
             future.as_mut().poll(cx).map(Some)
-        }).await;
+        })
+        .await;
         if let Some(result) = result {
             return Some(result);
         }
@@ -216,9 +222,7 @@ static CURRENT_GUEST_BROKER_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static GUEST_KERNEL_GS_BASE_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
     [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
-// The Hull establishes the EPT trust boundary.  Transient execution contexts
-// owned by that Blueprint reuse this pointer; they never manufacture a second
-// application memory universe.
+// The Hull establishes the per-Blueprint EPT trust boundary.
 static ACTIVE_EPTP_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
     [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
 static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
@@ -598,13 +602,10 @@ pub enum StartError {
 pub enum VmBootMode {
     Hull,
     Full,
-    #[cfg(feature = "wc3")]
-    Wc3Probe,
 }
 
 #[derive(Copy, Clone)]
 enum BlueprintMemoryClass {
-    X86Session,
     RamAssets,
     TokioRuntime,
     AudioPlayer,
@@ -618,7 +619,6 @@ enum BlueprintMemoryClass {
 impl BlueprintMemoryClass {
     const fn label(self) -> &'static str {
         match self {
-            Self::X86Session => "x86-session",
             Self::RamAssets => "ram-assets",
             Self::TokioRuntime => "tokio-runtime",
             Self::AudioPlayer => "audio-player",
@@ -910,11 +910,11 @@ impl BlueprintTerminalCleanup {
 
     const fn complete(self) -> bool {
         !self.backend_release_expected || self.backend_released
-}
+    }
 
     const fn matrix_unbind_marker(self) -> &'static str {
         "not-needed"
-}
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1180,28 +1180,46 @@ pub(crate) struct BlueprintChildProcessLaunch {
 }
 
 pub(crate) fn blueprint_child_spawn_program(parent_vm_id: u8, payload: &[u8]) -> Result<u64, i32> {
-    let mut request: BlueprintChildProcessLaunch = serde_json::from_slice(payload)
-        .map_err(|_| BLUEPRINT_CHILD_ERR_INVALID)?;
-    if request.program.is_empty() || request.program.contains('\0')
+    let mut request: BlueprintChildProcessLaunch =
+        serde_json::from_slice(payload).map_err(|_| BLUEPRINT_CHILD_ERR_INVALID)?;
+    if request.program.is_empty()
+        || request.program.contains('\0')
         || request.args.iter().any(|arg| arg.contains('\0'))
-        || request.env.iter().any(|(key, value)| key.is_empty() || key.contains(['=', '\0']) || value.contains('\0'))
+        || request
+            .env
+            .iter()
+            .any(|(key, value)| key.is_empty() || key.contains(['=', '\0']) || value.contains('\0'))
     {
         return Err(BLUEPRINT_CHILD_ERR_INVALID);
     }
     crate::hv::with_guest_broker_context(parent_vm_id, || {
         if let Some(cwd) = request.cwd.as_ref() {
-            request.cwd = Some(crate::r::io::env::resolve_fs_path(cwd, true).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?);
+            request.cwd = Some(
+                crate::r::io::env::resolve_fs_path(cwd, true).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?,
+            );
         }
-        let name = request.program.rsplit('/').next().ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
-        let archive = if name.ends_with(".bp") { AllocString::from(name) } else { alloc::format!("{name}.bp") };
+        let name = request
+            .program
+            .rsplit('/')
+            .next()
+            .ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+        let archive = if name.ends_with(".bp") {
+            AllocString::from(name)
+        } else {
+            alloc::format!("{name}.bp")
+        };
         let bytes = if request.program.contains('/') {
             let path = crate::r::io::env::resolve_fs_path(&request.program, false)
                 .ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
-            let len = crate::r::io::kfs::read_file_len(&path).map_err(|_| BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
-            if len > 512 * 1024 * 1024 { return Err(BLUEPRINT_CHILD_ERR_INVALID); }
+            let len = crate::r::io::kfs::read_file_len(&path)
+                .map_err(|_| BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+            if len > 512 * 1024 * 1024 {
+                return Err(BLUEPRINT_CHILD_ERR_INVALID);
+            }
             crate::r::io::kfs::read_file(&path).map_err(|_| BLUEPRINT_CHILD_ERR_NOT_FOUND)?
         } else {
-            crate::app_db::get(&archive).map_err(|_| BLUEPRINT_CHILD_ERR_NOT_FOUND)?
+            crate::app_db::get(&archive)
+                .map_err(|_| BLUEPRINT_CHILD_ERR_NOT_FOUND)?
                 .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?
         };
         blueprint_child_spawn_archive(parent_vm_id, archive, bytes, &[], Some(request))
@@ -1224,7 +1242,13 @@ pub(crate) fn blueprint_child_spawn(parent_vm_id: u8, initial_message: &[u8]) ->
     }
     let template = blueprint_child_template(parent_vm_id, parent_generation)
         .ok_or(BLUEPRINT_CHILD_ERR_UNAVAILABLE)?;
-    blueprint_child_spawn_archive(parent_vm_id, template.archive, template.module_bytes, initial_message, None)
+    blueprint_child_spawn_archive(
+        parent_vm_id,
+        template.archive,
+        template.module_bytes,
+        initial_message,
+        None,
+    )
 }
 
 fn blueprint_child_spawn_archive(
@@ -1239,7 +1263,9 @@ fn blueprint_child_spawn_archive(
     if !parent.running.load(Ordering::Acquire) || parent.stop_req.load(Ordering::Acquire) {
         return Err(BLUEPRINT_CHILD_ERR_UNAVAILABLE);
     }
-    let app_args = process_launch.as_ref().map(|request| request.args.clone())
+    let app_args = process_launch
+        .as_ref()
+        .map(|request| request.args.clone())
         .unwrap_or_else(|| alloc::vec![AllocString::from(BLUEPRINT_CHILD_WORKER_ARG)]);
     // Claim the VM's existing `starting` bit before publishing a relationship.
     // `first_free_vm_id` is only an observation; a concurrent Shell2 launch
@@ -1394,17 +1420,32 @@ pub(crate) fn blueprint_child_receive(
     Ok(message.len())
 }
 
-pub(crate) fn blueprint_child_receive_stream(actor_vm_id: u8, handle: u64, out: &mut [u8]) -> Result<usize, i32> {
+pub(crate) fn blueprint_child_receive_stream(
+    actor_vm_id: u8,
+    handle: u64,
+    out: &mut [u8],
+) -> Result<usize, i32> {
     let generation = vm_run_generation(actor_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
-    let (child_vm_id, parent_side) = blueprint_child_find_link_for_actor(actor_vm_id, generation, handle)
-        .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    let (child_vm_id, parent_side) =
+        blueprint_child_find_link_for_actor(actor_vm_id, generation, handle)
+            .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
     let mut guard = BLUEPRINT_CHILD_LINKS[child_vm_id as usize].lock();
     let link = guard.as_mut().ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
-    let queue = if parent_side { &mut link.child_to_parent } else { &mut link.parent_to_child };
-    let Some(message) = queue.front_mut() else { return Ok(0); };
+    let queue = if parent_side {
+        &mut link.child_to_parent
+    } else {
+        &mut link.parent_to_child
+    };
+    let Some(message) = queue.front_mut() else {
+        return Ok(0);
+    };
     let len = out.len().min(message.len());
     out[..len].copy_from_slice(&message[..len]);
-    if len == message.len() { queue.pop_front(); } else { message.drain(..len); }
+    if len == message.len() {
+        queue.pop_front();
+    } else {
+        message.drain(..len);
+    }
     Ok(len)
 }
 
@@ -1501,41 +1542,12 @@ fn boot_mode_for_vm(vm_id: u8) -> VmBootMode {
         .unwrap_or(VmBootMode::Hull)
 }
 
-fn guest_entry_for_boot_mode(boot_mode: VmBootMode) -> u64 {
-    let normal = guest_launch_rip();
-    #[cfg(feature = "wc3")]
-    {
-        wc3::entry_for_mode(boot_mode, normal)
-    }
-    #[cfg(not(feature = "wc3"))]
-    {
-        let _ = boot_mode;
-        normal
-    }
+fn guest_entry_for_boot_mode(_boot_mode: VmBootMode) -> u64 {
+    guest_launch_rip()
 }
 
-fn guest_fs_base_for_boot_mode(boot_mode: VmBootMode) -> u64 {
-    #[cfg(feature = "wc3")]
-    {
-        wc3::fs_base_for_mode(boot_mode)
-    }
-    #[cfg(not(feature = "wc3"))]
-    {
-        let _ = boot_mode;
-        GUEST_FS_BASE_RESET
-    }
-}
-
-fn boot_mode_is_wc3_guest(boot_mode: VmBootMode) -> bool {
-    #[cfg(feature = "wc3")]
-    {
-        matches!(boot_mode, VmBootMode::Wc3Probe)
-    }
-    #[cfg(not(feature = "wc3"))]
-    {
-        let _ = boot_mode;
-        false
-    }
+fn guest_fs_base_for_boot_mode(_boot_mode: VmBootMode) -> u64 {
+    GUEST_FS_BASE_RESET
 }
 
 fn vm_activity_snapshot() -> (usize, usize, [Option<u8>; TRUEOS_VM_ID_LIMIT]) {
@@ -1972,8 +1984,10 @@ fn hvlog_console_enabled(level: log_os_core::LogLevel) -> bool {
 pub fn status() -> HvStatus {
     let (vendor_intel, has_msr, has_vmx, fc_locked, fc_vmx_outside_smx) = vmx_caps();
     let (running_count, starting_count, active_vm_ids) = vm_activity_snapshot();
-    let paused_count = trueos_vm_ids.iter().filter(|vm| vm.running.load(Ordering::Acquire)
-        && vm.execution_pause.paused()).count();
+    let paused_count = trueos_vm_ids
+        .iter()
+        .filter(|vm| vm.running.load(Ordering::Acquire) && vm.execution_pause.paused())
+        .count();
     let vm_heap = crate::allocators::hv_guest_heap_stats_total();
     HvStatus {
         vendor_intel,
@@ -1999,12 +2013,18 @@ pub fn status() -> HvStatus {
 }
 
 pub(crate) fn shutdown_diagnostic_lines(vm_id: u8) -> alloc::vec::Vec<AllocString> {
-    let Some(vm) = vm_slot(vm_id) else { return alloc::vec::Vec::new(); };
+    let Some(vm) = vm_slot(vm_id) else {
+        return alloc::vec::Vec::new();
+    };
     let (stage, age_ms) = teardown_diagnostics::describe(vm_id);
     let mut lines = alloc::vec![alloc::format!(
         "apps: vm{} shutdown forced={} cleanup_owner={} guest_ack={} stage={} age_ms={} native_jobs={}",
-        vm_id, vm.cooperative_stop.forced() as u8, vm.cooperative_stop.registered() as u8,
-        vm.clean_exit.load(Ordering::Acquire) as u8, stage, age_ms,
+        vm_id,
+        vm.cooperative_stop.forced() as u8,
+        vm.cooperative_stop.registered() as u8,
+        vm.clean_exit.load(Ordering::Acquire) as u8,
+        stage,
+        age_ms,
         crate::r::blocking::guest_jobs_in_flight(vm_id),
     )];
     lines.extend(crate::r::blocking::diagnostics::lines(vm_id));
@@ -2020,21 +2040,6 @@ fn report_shutdown_diagnostics(vm_id: u8) {
 pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<(), StartError> {
     let _ = spawner;
     start_with_mode(vm_id, VmBootMode::Hull, stack_mb, None, false)
-}
-
-/// Run the private WC3 Gate-0 compatibility-mode probe.
-///
-/// This deliberately does not map `Warcraft III.exe`: the launcher plan makes
-/// successful 32-bit execution, FS-relative memory and VMCALL resume a hard
-/// prerequisite for all PE/Win32 work.
-#[cfg(feature = "wc3")]
-#[allow(
-    dead_code,
-    reason = "private hardware test entry; invoked only by WC3 bring-up images"
-)]
-pub fn start_wc3_probe(vm_id: u8, spawner: &Spawner) -> Result<(), StartError> {
-    let _ = spawner;
-    start_with_mode(vm_id, VmBootMode::Wc3Probe, None, None, false)
 }
 
 pub fn start_blueprint_app_vm(
@@ -2132,14 +2137,22 @@ fn start_with_mode(
             }
         }
         if pending_blueprint.is_some() && vm.pause_latched.load(Ordering::Acquire) {
-            hvwarnf(format_args!("hv: vm{} lifecycle: fresh blueprint start rejected while pause is retained", vm_id));
+            hvwarnf(format_args!(
+                "hv: vm{} lifecycle: fresh blueprint start rejected while pause is retained",
+                vm_id
+            ));
             return Err(StartError::AlreadyRunning);
         }
         if let Some(pending) = pending_blueprint.as_mut() {
             // Identity is established under lifecycle admission, before the VM
             // worker can execute. Child and replica launches enter here too.
-            let target = matrix::bind(vm_id, &pending.archive, &pending.module_bytes, pending.console_target.take())
-                .map_err(|_| StartError::ConsoleUnsupported)?;
+            let target = matrix::bind(
+                vm_id,
+                &pending.archive,
+                &pending.module_bytes,
+                pending.console_target.take(),
+            )
+            .map_err(|_| StartError::ConsoleUnsupported)?;
             matrix_admission.bound(&target);
             pending.console_target = Some(target);
         }
@@ -2190,12 +2203,6 @@ fn start_with_mode(
     if boot_mode == VmBootMode::Full && crate::limine::guest_kernel_bytes().is_none() {
         vm.starting.store(false, Ordering::Release);
         return Err(StartError::MissingGuestModule);
-    }
-
-    #[cfg(feature = "wc3")]
-    if boot_mode == VmBootMode::Wc3Probe && wc3::prepare_gate0(vm_id).is_err() {
-        vm.starting.store(false, Ordering::Release);
-        return Err(StartError::GuestMemoryUnavailable);
     }
 
     let is_blueprint_start = pending_blueprint.is_some();
@@ -2383,14 +2390,24 @@ pub fn pause(vm_id: u8) -> Result<bool, StopError> {
     pause_matching_owner(vm_id, None)
 }
 
-pub(crate) fn pause_for_matrix_slot(vm_id: u8, owner: &crate::shell3::MatrixSlotLease) -> Result<bool, StopError> {
+pub(crate) fn pause_for_matrix_slot(
+    vm_id: u8,
+    owner: &crate::shell3::MatrixSlotLease,
+) -> Result<bool, StopError> {
     pause_matching_owner(vm_id, Some(owner))
 }
 
-fn pause_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease>) -> Result<bool, StopError> {
-    let Some(vm) = vm_slot(vm_id) else { return Err(StopError::UnsupportedVmId); };
+fn pause_matching_owner(
+    vm_id: u8,
+    owner: Option<&crate::shell3::MatrixSlotLease>,
+) -> Result<bool, StopError> {
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(StopError::UnsupportedVmId);
+    };
     let _control = vm.lifecycle_control.lock();
-    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) { return Ok(false); }
+    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) {
+        return Ok(false);
+    }
     if !vm.running.load(Ordering::Acquire)
         || vm.starting.load(Ordering::Acquire)
         || vm.stop_req.load(Ordering::Acquire)
@@ -2400,12 +2417,17 @@ fn pause_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease
         return Ok(false);
     }
     crate::r::blocking::pause_guest_jobs(vm_id);
-    vm.execution_pause_deadline_ms.store(lifecycle_now_ms().saturating_add(PAUSE_CHECKPOINT_TIMEOUT_MS), Ordering::Release);
-    vm.execution_pause_io_wait_logged.store(false, Ordering::Release);
+    vm.execution_pause_deadline_ms
+        .store(lifecycle_now_ms().saturating_add(PAUSE_CHECKPOINT_TIMEOUT_MS), Ordering::Release);
+    vm.execution_pause_io_wait_logged
+        .store(false, Ordering::Release);
     VM_CONTROL_WAITS[vm_id as usize].notify_all();
     crate::r::threads::wake_guest_control(vm_id);
     nudge_vm_control(vm_id, control_kick::LifecycleKickAction::Nudge, "pause");
-    hvimportantf(format_args!("hv: vm{} lifecycle: pause requested contract=finish-or-abort-streamed-writes checkpoint=vm-exit-and-filesystem timeout_ms={} slot=retained", vm_id, PAUSE_CHECKPOINT_TIMEOUT_MS));
+    hvimportantf(format_args!(
+        "hv: vm{} lifecycle: pause requested contract=finish-or-abort-streamed-writes checkpoint=vm-exit-and-filesystem timeout_ms={} slot=retained",
+        vm_id, PAUSE_CHECKPOINT_TIMEOUT_MS
+    ));
     Ok(true)
 }
 
@@ -2415,21 +2437,34 @@ pub fn resume(vm_id: u8) -> Result<bool, StopError> {
     resume_matching_owner(vm_id, None)
 }
 
-pub(crate) fn resume_for_matrix_slot(vm_id: u8, owner: &crate::shell3::MatrixSlotLease) -> Result<bool, StopError> {
+pub(crate) fn resume_for_matrix_slot(
+    vm_id: u8,
+    owner: &crate::shell3::MatrixSlotLease,
+) -> Result<bool, StopError> {
     resume_matching_owner(vm_id, Some(owner))
 }
 
-fn resume_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease>) -> Result<bool, StopError> {
-    let Some(vm) = vm_slot(vm_id) else { return Err(StopError::UnsupportedVmId); };
+fn resume_matching_owner(
+    vm_id: u8,
+    owner: Option<&crate::shell3::MatrixSlotLease>,
+) -> Result<bool, StopError> {
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(StopError::UnsupportedVmId);
+    };
     let _control = vm.lifecycle_control.lock();
-    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) { return Ok(false); }
+    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) {
+        return Ok(false);
+    }
     if !vm.running.load(Ordering::Acquire)
         || vm.stop_req.load(Ordering::Acquire)
         || !vm.execution_pause.requested()
     {
         return Ok(false);
     }
-    assert!(crate::r::blocking::resume_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
+    assert!(crate::r::blocking::resume_guest_jobs(
+        vm_id,
+        vm.run_generation.load(Ordering::Acquire)
+    ));
     vm.execution_pause.resume();
     crate::r::threads::wake_guest_control(vm_id);
     VM_CONTROL_WAITS[vm_id as usize].notify_all();
@@ -2442,23 +2477,33 @@ pub(crate) fn guest_pause_requested(vm_id: u8) -> bool {
 }
 
 pub(crate) fn guest_native_pause_requested(vm_id: u8) -> bool {
-    if vm_slot(vm_id).is_some_and(|vm| vm.execution_pause.paused()) { return true; }
+    if vm_slot(vm_id).is_some_and(|vm| vm.execution_pause.paused()) {
+        return true;
+    }
     guest_pause_requested(vm_id)
         && crate::r::fs::request_broker::pending_for_vm(vm_id) == 0
         && crate::r::fs::request_broker::open_writes_for_vm(vm_id) == 0
 }
 
 async fn park_vm_execution(vm_id: u8) -> bool {
-    let Some(vm) = vm_slot(vm_id) else { return false; };
+    let Some(vm) = vm_slot(vm_id) else {
+        return false;
+    };
     loop {
         let queue = &VM_CONTROL_WAITS[vm_id as usize];
         let observed = queue.observe();
-        if immediate_stop_requested(vm) { return false; }
-        if !vm.execution_pause.requested() { return true; }
+        if immediate_stop_requested(vm) {
+            return false;
+        }
+        if !vm.execution_pause.requested() {
+            return true;
+        }
         if !vm.execution_pause.paused() {
             crate::r::threads::wake_guest_control(vm_id);
             let _control = vm.lifecycle_control.lock();
-            if !vm.execution_pause.requested() { continue; }
+            if !vm.execution_pause.requested() {
+                continue;
+            }
             let fs_pending = crate::r::fs::request_broker::pending_for_vm(vm_id);
             let fs_writes = crate::r::fs::request_broker::open_writes_for_vm(vm_id);
             let async_pending = crate::r::io::async_fs_cabi::pending_for_owner(
@@ -2466,18 +2511,32 @@ async fn park_vm_execution(vm_id: u8) -> bool {
             );
             if lifecycle_now_ms() >= vm.execution_pause_deadline_ms.load(Ordering::Acquire) {
                 if !vm.stop_req.load(Ordering::Acquire) {
-                    assert!(crate::r::blocking::resume_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
+                    assert!(crate::r::blocking::resume_guest_jobs(
+                        vm_id,
+                        vm.run_generation.load(Ordering::Acquire)
+                    ));
                     vm.execution_pause.resume();
                     crate::r::threads::wake_guest_control(vm_id);
-                    hvimportantf(format_args!("hv: vm{} lifecycle: pause cancelled reason=checkpoint-timeout native_jobs={} fs_pending={} fs_streams={} async_fs_pending={} state=running contract=finish-or-abort-before-pause",
-                        vm_id, crate::r::blocking::guest_jobs_in_flight(vm_id), fs_pending, fs_writes, async_pending));
+                    hvimportantf(format_args!(
+                        "hv: vm{} lifecycle: pause cancelled reason=checkpoint-timeout native_jobs={} fs_pending={} fs_streams={} async_fs_pending={} state=running contract=finish-or-abort-before-pause",
+                        vm_id,
+                        crate::r::blocking::guest_jobs_in_flight(vm_id),
+                        fs_pending,
+                        fs_writes,
+                        async_pending
+                    ));
                 }
                 return true;
             }
             if fs_pending != 0 || fs_writes != 0 || async_pending != 0 {
-                if !vm.execution_pause_io_wait_logged.swap(true, Ordering::AcqRel) {
-                    hvimportantf(format_args!("hv: vm{} lifecycle: pause checkpoint waiting reason=filesystem fs_pending={} fs_streams={} async_fs_pending={} contract=stream-must-finish-or-abort guest=continues slot=retained",
-                        vm_id, fs_pending, fs_writes, async_pending));
+                if !vm
+                    .execution_pause_io_wait_logged
+                    .swap(true, Ordering::AcqRel)
+                {
+                    hvimportantf(format_args!(
+                        "hv: vm{} lifecycle: pause checkpoint waiting reason=filesystem fs_pending={} fs_streams={} async_fs_pending={} contract=stream-must-finish-or-abort guest=continues slot=retained",
+                        vm_id, fs_pending, fs_writes, async_pending
+                    ));
                 }
                 // A streamed write may belong to the Hull itself. It must
                 // execute its remaining write/finish/abort calls; parking it
@@ -2487,9 +2546,15 @@ async fn park_vm_execution(vm_id: u8) -> bool {
             if crate::r::blocking::guest_jobs_quiescent(vm_id) {
                 if vm.execution_pause.acknowledge() {
                     if vm.execution_pause_io_wait_logged.load(Ordering::Acquire) {
-                        hvimportantf(format_args!("hv: vm{} lifecycle: pause filesystem checkpoint cleared fs_pending=0 fs_streams=0 async_fs_pending=0", vm_id));
+                        hvimportantf(format_args!(
+                            "hv: vm{} lifecycle: pause filesystem checkpoint cleared fs_pending=0 fs_streams=0 async_fs_pending=0",
+                            vm_id
+                        ));
                     }
-                    hvimportantf(format_args!("hv: vm{} lifecycle: paused ram=retained carrier=retained vmcs=retained filesystem=quiescent", vm_id));
+                    hvimportantf(format_args!(
+                        "hv: vm{} lifecycle: paused ram=retained carrier=retained vmcs=retained filesystem=quiescent",
+                        vm_id
+                    ));
                 }
             }
         }
@@ -2506,13 +2571,18 @@ async fn park_vm_execution(vm_id: u8) -> bool {
 #[task(pool_size = 64)]
 async fn stop_cleanup_deadline(vm_id: u8, generation: u64) {
     Timer::after(EmbassyDuration::from_millis(STOP_CLEANUP_TIMEOUT_MS)).await;
-    let Some(vm) = vm_slot(vm_id) else { return; };
+    let Some(vm) = vm_slot(vm_id) else {
+        return;
+    };
     let _control = vm.lifecycle_control.lock();
     if vm.lifecycle_generation.load(Ordering::Acquire) == generation
         && vm.stop_req.load(Ordering::Acquire)
         && (vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire))
     {
-        hvwarnf(format_args!("hv: vm{} lifecycle: stop cleanup deadline reached; forcing discard", vm_id));
+        hvwarnf(format_args!(
+            "hv: vm{} lifecycle: stop cleanup deadline reached; forcing discard",
+            vm_id
+        ));
         force_stop(vm_id, vm);
     }
 }
@@ -2529,7 +2599,10 @@ fn force_stop(vm_id: u8, vm: &TrueosVmId) {
     crate::r::blocking::close_guest_jobs(vm_id);
     let streams = crate::r::fs::request_broker::request_release_vm(vm_id);
     if streams != 0 {
-        hvimportantf(format_args!("hv: vm{} lifecycle: discard filesystem rollback requested fs_streams={} owner=bsp slot=retained-until-abort", vm_id, streams));
+        hvimportantf(format_args!(
+            "hv: vm{} lifecycle: discard filesystem rollback requested fs_streams={} owner=bsp slot=retained-until-abort",
+            vm_id, streams
+        ));
     }
     crate::r::threads::wake_guest_control(vm_id);
     VM_CONTROL_WAITS[vm_id as usize].notify_all();
@@ -2540,17 +2613,26 @@ fn stop_matching_generation(vm_id: u8, generation: Option<u64>) -> Result<bool, 
     stop_matching_control(vm_id, generation, None)
 }
 
-pub(crate) fn stop_for_matrix_slot(vm_id: u8, owner: &crate::shell3::MatrixSlotLease) -> Result<bool, StopError> {
+pub(crate) fn stop_for_matrix_slot(
+    vm_id: u8,
+    owner: &crate::shell3::MatrixSlotLease,
+) -> Result<bool, StopError> {
     stop_matching_control(vm_id, None, Some(owner))
 }
 
-fn stop_matching_control(vm_id: u8, generation: Option<u64>, owner: Option<&crate::shell3::MatrixSlotLease>) -> Result<bool, StopError> {
+fn stop_matching_control(
+    vm_id: u8,
+    generation: Option<u64>,
+    owner: Option<&crate::shell3::MatrixSlotLease>,
+) -> Result<bool, StopError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StopError::UnsupportedVmId);
     };
 
     let _control = vm.lifecycle_control.lock();
-    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) { return Ok(false); }
+    if owner.is_some_and(|owner| vm.matrix_owner.lock().as_ref() != Some(owner)) {
+        return Ok(false);
+    }
     if generation.is_some_and(|run| vm.lifecycle_generation.load(Ordering::Acquire) != run) {
         return Ok(false);
     }
@@ -2558,13 +2640,18 @@ fn stop_matching_control(vm_id: u8, generation: Option<u64>, owner: Option<&crat
         let cooperative = vm.cooperative_stop.request();
         let first = !vm.stop_req.swap(true, Ordering::AcqRel);
         if cooperative && vm.execution_pause.requested() {
-            assert!(crate::r::blocking::resume_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
+            assert!(crate::r::blocking::resume_guest_jobs(
+                vm_id,
+                vm.run_generation.load(Ordering::Acquire)
+            ));
             vm.execution_pause.resume();
             crate::r::threads::wake_guest_control(vm_id);
         }
         if cooperative && first {
-            let deadline = stop_cleanup_deadline(vm_id, vm.lifecycle_generation.load(Ordering::Acquire));
-            if let (Some(worker), Ok(task)) = (crate::workers::pick_background_spawner(), deadline) {
+            let deadline =
+                stop_cleanup_deadline(vm_id, vm.lifecycle_generation.load(Ordering::Acquire));
+            if let (Some(worker), Ok(task)) = (crate::workers::pick_background_spawner(), deadline)
+            {
                 worker.spawn(task);
             } else {
                 force_stop(vm_id, vm);
@@ -2575,7 +2662,9 @@ fn stop_matching_control(vm_id: u8, generation: Option<u64>, owner: Option<&crat
         VM_CONTROL_WAITS[vm_id as usize].notify_all();
         crate::log_os::blueprint_important_line(format_args!(
             "hv: vm{} lifecycle: stop requested cooperative={} native_jobs={} cleanup=guest-before-drain\n",
-            vm_id, cooperative as u8, crate::r::blocking::guest_jobs_in_flight(vm_id)
+            vm_id,
+            cooperative as u8,
+            crate::r::blocking::guest_jobs_in_flight(vm_id)
         ));
         nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Stop, "stop");
         report_shutdown_diagnostics(vm_id);
@@ -2594,11 +2683,17 @@ pub fn kill(vm_id: u8) -> Result<bool, EjectError> {
     kill_matching_owner(vm_id, None)
 }
 
-pub(crate) fn kill_for_matrix_slot(vm_id: u8, owner: &crate::shell3::MatrixSlotLease) -> Result<bool, EjectError> {
+pub(crate) fn kill_for_matrix_slot(
+    vm_id: u8,
+    owner: &crate::shell3::MatrixSlotLease,
+) -> Result<bool, EjectError> {
     kill_matching_owner(vm_id, Some(owner))
 }
 
-fn kill_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease>) -> Result<bool, EjectError> {
+fn kill_matching_owner(
+    vm_id: u8,
+    owner: Option<&crate::shell3::MatrixSlotLease>,
+) -> Result<bool, EjectError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(EjectError::UnsupportedVmId);
     };
@@ -2614,7 +2709,8 @@ fn kill_matching_owner(vm_id: u8, owner: Option<&crate::shell3::MatrixSlotLease>
     force_stop(vm_id, vm);
     crate::log_os::blueprint_important_line(format_args!(
         "hv: vm{} lifecycle: kill requested cleanup=skipped checkpoint=none native_jobs={}\n",
-        vm_id, crate::r::blocking::guest_jobs_in_flight(vm_id)
+        vm_id,
+        crate::r::blocking::guest_jobs_in_flight(vm_id)
     ));
     nudge_vm_control(vm_id, crate::hv::control_kick::LifecycleKickAction::Stop, "kill");
     report_shutdown_diagnostics(vm_id);
@@ -2627,10 +2723,20 @@ pub(crate) fn guest_kill_requested(vm_id: u8) -> bool {
 
 /// Control registration/polling is scoped to the current VM incarnation.
 pub(crate) fn blueprint_stop_control(vm_id: u8, operation: u32) -> i32 {
-    let Some(vm) = vm_slot(vm_id) else { return -1; };
-    if !vm.running.load(Ordering::Acquire) { return -1; }
+    let Some(vm) = vm_slot(vm_id) else {
+        return -1;
+    };
+    if !vm.running.load(Ordering::Acquire) {
+        return -1;
+    }
     match operation {
-        0 => if vm.cooperative_stop.register() { 0 } else { -1 },
+        0 => {
+            if vm.cooperative_stop.register() {
+                0
+            } else {
+                -1
+            }
+        }
         1 => vm.cooperative_stop.requested() as i32,
         _ => -1,
     }
@@ -2671,9 +2777,7 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
         ));
         return Err(EjectError::VgpuQuarantined);
     }
-    let had_state = vm.pause_latched.load(Ordering::Acquire)
-        || blueprint_launch_active(vm_id)
-        ;
+    let had_state = vm.pause_latched.load(Ordering::Acquire) || blueprint_launch_active(vm_id);
     #[cfg(feature = "legacy_vm_checkpoint")]
     let had_state = had_state || crate::hv::store::has_committed_vm(vm_id);
     clear_blueprint_pending_launch(vm_id);
@@ -2713,7 +2817,9 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     vm.resume_prepared.store(false, Ordering::Release);
     vm.pause_store_seq.store(0, Ordering::Release);
     reset_prepare_pause(vm);
-    if !allow_starting { matrix::retire_vm(vm_id); }
+    if !allow_starting {
+        matrix::retire_vm(vm_id);
+    }
     Ok(had_state)
 }
 
@@ -2748,13 +2854,6 @@ fn classify_blueprint_memory(
     stats: crate::hv::blueprint::ElfAllocStats,
     imports: &[crate::hv::blueprint::ElfImport<'_>],
 ) -> BlueprintMemoryClass {
-    // An x86-session Blueprint owns immutable resident assets in its own heap,
-    // in addition to the small emulator/loader image. Do this before generic
-    // Tokio, graphics and network classification; image size misses the MPQ.
-    if import_name_has(imports, "trueos_cabi_x86_address_space_create_v1") {
-        return BlueprintMemoryClass::X86Session;
-    }
-
     // RAM asset ingestion retains a decoded TAR while redb builds its database.
     // The codec import identifies that peak independently of executable size or
     // incidental listener symbols pulled in by the networking runtime.
@@ -2850,7 +2949,7 @@ fn estimate_blueprint_memory_profile(
             // Admit the 1 GiB whole-file read ceiling plus runtime/loader
             // headroom. Refuse a smaller arena instead of failing mid-preload.
             // This is Blueprint backing RAM, not XP process virtual memory.
-            BlueprintMemoryClass::X86Session => (2048, 2048, 2048, 16, 32, 128),
+
             // Voxygen's ~190 MiB image, ~424 MiB staging TAR, and redb's old
             // and new backing buffers overlap during growth. Reserve room for
             // the full import; do not accept the former 1 GiB server budget.
@@ -3053,7 +3152,10 @@ fn prepare_blueprint_launch_on_lane(
         ));
     }
     if crate::hv::blueprint::uses_volatile_codex_files(pending.archive.as_str()) {
-        log(format_args!("apps: vm{} preparing boot-local Codex files from {}", vm_id, app_fs_root));
+        log(format_args!(
+            "apps: vm{} preparing boot-local Codex files from {}",
+            vm_id, app_fs_root
+        ));
         crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str())
             .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
     }
@@ -3201,20 +3303,39 @@ pub fn stage_blueprint_launch(
         control_shell_line: AllocVec::new(),
         exit_reason: None,
     };
-    if let Some(link) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize).and_then(|slot| { let guard = slot.lock(); guard.as_ref().filter(|link| link.child_generation == generation).and_then(|link| link.process_launch.clone()) }) {
+    if let Some(link) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize).and_then(|slot| {
+        let guard = slot.lock();
+        guard
+            .as_ref()
+            .filter(|link| link.child_generation == generation)
+            .and_then(|link| link.process_launch.clone())
+    }) {
         // Platform identity, access scope and channel selection are kernel-owned.
         for (key, value) in link.env {
-            if !key.starts_with("TRUEOS_") { process_context.vars.insert(key, value); }
+            if !key.starts_with("TRUEOS_") {
+                process_context.vars.insert(key, value);
+            }
         }
         if let Some(cwd) = link.cwd {
-            process_context.vars.insert(AllocString::from("TRUEOS_APP_FS_ROOT"), cwd);
+            process_context
+                .vars
+                .insert(AllocString::from("TRUEOS_APP_FS_ROOT"), cwd);
         }
-        process_context.vars.insert(AllocString::from("TRUEOS_MCP_STDIO"), AllocString::from("1"));
+        process_context
+            .vars
+            .insert(AllocString::from("TRUEOS_MCP_STDIO"), AllocString::from("1"));
     }
     // Materialize the C environment while host-owned launch map nodes are
     // readable, before any guest loader or CABI can request getenv/environ.
-    if crate::std_abi_shim::initialize_blueprint_environment(vm_id,
-        process_context.vars.iter().map(|(key,value)|(key.as_bytes(),value.as_bytes()))).is_err() {
+    if crate::std_abi_shim::initialize_blueprint_environment(
+        vm_id,
+        process_context
+            .vars
+            .iter()
+            .map(|(key, value)| (key.as_bytes(), value.as_bytes())),
+    )
+    .is_err()
+    {
         clear_blueprint_child_template(vm_id);
         return Err(StartError::GuestMemoryUnavailable);
     }
@@ -3307,8 +3428,13 @@ pub(crate) fn blueprint_process_arg(vm_id: u8, index: usize) -> Option<AllocStri
 }
 
 pub(crate) fn blueprint_console_is_terminal(vm_id: u8) -> bool {
-    BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)
-        .is_some_and(|slot| slot.lock().as_ref().is_some_and(|context| context.console_surface.is_terminal()))
+    BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .is_some_and(|slot| {
+            slot.lock()
+                .as_ref()
+                .is_some_and(|context| context.console_surface.is_terminal())
+        })
 }
 
 pub(crate) fn blueprint_console_target(vm_id: u8) -> Option<crate::shell3::MatrixTarget> {
@@ -3320,7 +3446,9 @@ pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocStr
     if key.starts_with("TRUEOS_") {
         // Authorization consumes the kernel-owned launch map, never mutable
         // getenv/environ buffers. Hull code cannot walk host map nodes.
-        if current_hull_guest_context_vm_id().is_some() { return None; }
+        if current_hull_guest_context_vm_id().is_some() {
+            return None;
+        }
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
         return context.as_ref()?.vars.get(key).cloned();
     }
@@ -3332,7 +3460,9 @@ pub(crate) fn blueprint_process_env_text(vm_id: u8) -> Option<AllocString> {
     let pairs = crate::std_abi_shim::environment_pairs(vm_id)?;
     let mut out = AllocString::new();
     for (key, value) in pairs.iter() {
-        let (Ok(key),Ok(value))=(core::str::from_utf8(key),core::str::from_utf8(value)) else {continue;};
+        let (Ok(key), Ok(value)) = (core::str::from_utf8(key), core::str::from_utf8(value)) else {
+            continue;
+        };
         let _ = writeln!(out, "{}={}", key, value);
     }
     Some(out)
@@ -3345,7 +3475,7 @@ fn blueprint_context_path(vm_id: u8, requested: &str) -> Option<AllocString> {
     };
     // Release the launch-context lock before lazy environment initialization
     // takes its initial snapshot from that same context.
-    let home = blueprint_process_env_var(vm_id,"HOME").unwrap_or_else(|| AllocString::from("/"));
+    let home = blueprint_process_env_var(vm_id, "HOME").unwrap_or_else(|| AllocString::from("/"));
 
     let logical = if requested.trim().is_empty() {
         home.as_str()
@@ -3520,17 +3650,24 @@ fn blueprint_console_hunt_log(vm_id: u8, data: &[u8]) -> bool {
 
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     blueprint_console_text_lines(vm_id, None, data);
-    let Some(target) = blueprint_console_target(vm_id) else { return data.len(); };
+    let Some(target) = blueprint_console_target(vm_id) else {
+        return data.len();
+    };
     crate::shell3::tui::write_stdout(&target, vm_id, data)
 }
 
 pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
-    let Some(target) = blueprint_console_target(vm_id) else { return 0; };
+    let Some(target) = blueprint_console_target(vm_id) else {
+        return 0;
+    };
     crate::shell3::tui::write(&target, vm_id, data).unwrap_or(0)
 }
 
 pub(crate) fn blueprint_console_konsole_size(vm_id: u8) -> (u32, u32) {
-    blueprint_console_target(vm_id).and_then(|target| crate::shell3::tui::surface(&target)).map(|s| (s.cols, s.rows)).unwrap_or((0, 0))
+    blueprint_console_target(vm_id)
+        .and_then(|target| crate::shell3::tui::surface(&target))
+        .map(|s| (s.cols, s.rows))
+        .unwrap_or((0, 0))
 }
 
 pub(crate) fn blueprint_console_konsole_begin_frame(
@@ -3586,23 +3723,49 @@ pub(crate) fn blueprint_terminal_lease_current(
     vm_id: u8,
     ready_epoch: u64,
 ) -> Result<u64, BlueprintTerminalLeaseError> {
-    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?.lock();
-    let slot = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?;
+    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS
+        .get(vm_id as usize)
+        .ok_or(BlueprintTerminalLeaseError::Unsupported)?
+        .lock();
+    let slot = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .ok_or(BlueprintTerminalLeaseError::Unsupported)?;
     let (target, epoch) = {
-        let guard = slot.lock(); let c = guard.as_ref().ok_or(BlueprintTerminalLeaseError::Detached)?;
-        if !c.console_attached { return Err(BlueprintTerminalLeaseError::Detached); }
+        let guard = slot.lock();
+        let c = guard
+            .as_ref()
+            .ok_or(BlueprintTerminalLeaseError::Detached)?;
+        if !c.console_attached {
+            return Err(BlueprintTerminalLeaseError::Detached);
+        }
         match c.terminal_lease {
             BlueprintTerminalLeaseState::Active { epoch, .. } => {
-                if ready_epoch != 0 && ready_epoch != epoch { return Err(BlueprintTerminalLeaseError::Stale); }
+                if ready_epoch != 0 && ready_epoch != epoch {
+                    return Err(BlueprintTerminalLeaseError::Stale);
+                }
                 return Ok(epoch);
             }
-            BlueprintTerminalLeaseState::Reserved if ready_epoch == 0 => (c.console_target.clone().ok_or(BlueprintTerminalLeaseError::Unsupported)?, 1),
+            BlueprintTerminalLeaseState::Reserved if ready_epoch == 0 => (
+                c.console_target
+                    .clone()
+                    .ok_or(BlueprintTerminalLeaseError::Unsupported)?,
+                1,
+            ),
             _ => return Err(BlueprintTerminalLeaseError::NotActive),
         }
     };
-    if crate::shell3::tui::claim(&target, vm_id) != Some(true) { return Err(BlueprintTerminalLeaseError::Busy); }
-    let mut guard = slot.lock(); let c = guard.as_mut().ok_or(BlueprintTerminalLeaseError::Detached)?;
-    c.terminal_lease = BlueprintTerminalLeaseState::Active { epoch, observed: true, ready: true };
+    if crate::shell3::tui::claim(&target, vm_id) != Some(true) {
+        return Err(BlueprintTerminalLeaseError::Busy);
+    }
+    let mut guard = slot.lock();
+    let c = guard
+        .as_mut()
+        .ok_or(BlueprintTerminalLeaseError::Detached)?;
+    c.terminal_lease = BlueprintTerminalLeaseState::Active {
+        epoch,
+        observed: true,
+        ready: true,
+    };
     crate::log_os::blueprint_important_line(format_args!(
         "terminal-lifecycle: vm={} phase=lease-claim state=active epoch={}\n",
         vm_id, epoch,
@@ -3621,10 +3784,16 @@ pub(crate) fn blueprint_terminal_surface_snapshot(
             // request, using the same ticket/epoch validation as typed apps.
             // A merely parked app must never reclaim the shell's input.
             let ticket = {
-                let slot = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?;
+                let slot = BLUEPRINT_PROCESS_CONTEXTS
+                    .get(vm_id as usize)
+                    .ok_or(BlueprintTerminalLeaseError::Unsupported)?;
                 let guard = slot.lock();
-                let c = guard.as_ref().ok_or(BlueprintTerminalLeaseError::Detached)?;
-                if !c.console_attached { return Err(BlueprintTerminalLeaseError::Detached); }
+                let c = guard
+                    .as_ref()
+                    .ok_or(BlueprintTerminalLeaseError::Detached)?;
+                if !c.console_attached {
+                    return Err(BlueprintTerminalLeaseError::Detached);
+                }
                 match c.terminal_lease {
                     BlueprintTerminalLeaseState::ReentryRequested { ticket, .. } => ticket,
                     _ => return Err(BlueprintTerminalLeaseError::NotActive),
@@ -3632,7 +3801,9 @@ pub(crate) fn blueprint_terminal_surface_snapshot(
             };
             match blueprint_terminal_lease_poll_reentry(vm_id, ticket)? {
                 BlueprintTerminalReentryPoll::Ready(_) => {}
-                BlueprintTerminalReentryPoll::Pending => return Err(BlueprintTerminalLeaseError::Busy),
+                BlueprintTerminalReentryPoll::Pending => {
+                    return Err(BlueprintTerminalLeaseError::Busy);
+                }
             }
         }
         Err(error) => return Err(error),
@@ -3645,16 +3816,37 @@ pub(crate) fn blueprint_terminal_lease_release(
     vm_id: u8,
     expected_epoch: u64,
 ) -> Result<u64, BlueprintTerminalLeaseError> {
-    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?.lock();
-    let slot = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?;
+    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS
+        .get(vm_id as usize)
+        .ok_or(BlueprintTerminalLeaseError::Unsupported)?
+        .lock();
+    let slot = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .ok_or(BlueprintTerminalLeaseError::Unsupported)?;
     let (target, epoch) = {
-        let guard = slot.lock(); let c = guard.as_ref().ok_or(BlueprintTerminalLeaseError::Detached)?;
-        let BlueprintTerminalLeaseState::Active { epoch, .. } = c.terminal_lease else { return Err(BlueprintTerminalLeaseError::NotActive); };
-        if expected_epoch != 0 && expected_epoch != epoch { return Err(BlueprintTerminalLeaseError::Stale); }
-        (c.console_target.clone().ok_or(BlueprintTerminalLeaseError::Unsupported)?, epoch)
+        let guard = slot.lock();
+        let c = guard
+            .as_ref()
+            .ok_or(BlueprintTerminalLeaseError::Detached)?;
+        let BlueprintTerminalLeaseState::Active { epoch, .. } = c.terminal_lease else {
+            return Err(BlueprintTerminalLeaseError::NotActive);
+        };
+        if expected_epoch != 0 && expected_epoch != epoch {
+            return Err(BlueprintTerminalLeaseError::Stale);
+        }
+        (
+            c.console_target
+                .clone()
+                .ok_or(BlueprintTerminalLeaseError::Unsupported)?,
+            epoch,
+        )
     };
-    if crate::shell3::tui::release(&target, vm_id) != Some(true) { return Err(BlueprintTerminalLeaseError::Busy); }
-    if let Some(c) = slot.lock().as_mut() { c.terminal_lease = BlueprintTerminalLeaseState::Parked { ticket: epoch }; }
+    if crate::shell3::tui::release(&target, vm_id) != Some(true) {
+        return Err(BlueprintTerminalLeaseError::Busy);
+    }
+    if let Some(c) = slot.lock().as_mut() {
+        c.terminal_lease = BlueprintTerminalLeaseState::Parked { ticket: epoch };
+    }
     Ok(epoch)
 }
 
@@ -3671,10 +3863,12 @@ pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
                     BlueprintTerminalLeaseState::ReentryRequested { epoch, .. } => {
                         // Navigation cancels an unacknowledged `tui`; a late
                         // guest poll must not reacquire the shell's input.
-                        context.terminal_lease = BlueprintTerminalLeaseState::Parked { ticket: epoch };
+                        context.terminal_lease =
+                            BlueprintTerminalLeaseState::Parked { ticket: epoch };
                         Some(true)
                     }
-                    BlueprintTerminalLeaseState::Reserved | BlueprintTerminalLeaseState::Parked { .. } => Some(true),
+                    BlueprintTerminalLeaseState::Reserved
+                    | BlueprintTerminalLeaseState::Parked { .. } => Some(true),
                     _ => Some(false),
                 }
             })
@@ -3733,11 +3927,17 @@ fn blueprint_console_request_tui(vm_id: u8) -> BlueprintTerminalReentryRequest {
 }
 
 pub(crate) fn blueprint_terminal_reentry_requested(vm_id: u8) -> bool {
-    BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)
-        .is_some_and(|slot| slot.lock().as_ref().is_some_and(|context| {
-            context.console_attached
-                && matches!(context.terminal_lease, BlueprintTerminalLeaseState::ReentryRequested { .. })
-        }))
+    BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .is_some_and(|slot| {
+            slot.lock().as_ref().is_some_and(|context| {
+                context.console_attached
+                    && matches!(
+                        context.terminal_lease,
+                        BlueprintTerminalLeaseState::ReentryRequested { .. }
+                    )
+            })
+        })
 }
 
 /// Request the same epoch/ticket handshake used by vmx_tui, without CLI routing.
@@ -3762,19 +3962,49 @@ pub(crate) fn blueprint_terminal_lease_poll_reentry(
     vm_id: u8,
     ticket: u64,
 ) -> Result<BlueprintTerminalReentryPoll, BlueprintTerminalLeaseError> {
-    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?.lock();
-    let slot = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).ok_or(BlueprintTerminalLeaseError::Unsupported)?;
+    let _gate = BLUEPRINT_TERMINAL_TRANSITIONS
+        .get(vm_id as usize)
+        .ok_or(BlueprintTerminalLeaseError::Unsupported)?
+        .lock();
+    let slot = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .ok_or(BlueprintTerminalLeaseError::Unsupported)?;
     let (target, epoch) = {
-        let guard = slot.lock(); let c = guard.as_ref().ok_or(BlueprintTerminalLeaseError::Detached)?;
+        let guard = slot.lock();
+        let c = guard
+            .as_ref()
+            .ok_or(BlueprintTerminalLeaseError::Detached)?;
         match c.terminal_lease {
-            BlueprintTerminalLeaseState::Parked { ticket: current } if current == ticket => return Ok(BlueprintTerminalReentryPoll::Pending),
-            BlueprintTerminalLeaseState::ReentryRequested { ticket: current, epoch } if current == ticket => (c.console_target.clone().ok_or(BlueprintTerminalLeaseError::Unsupported)?, epoch),
-            BlueprintTerminalLeaseState::Active { epoch, .. } if epoch == ticket.wrapping_add(1).max(1) => return Ok(BlueprintTerminalReentryPoll::Ready(epoch)),
+            BlueprintTerminalLeaseState::Parked { ticket: current } if current == ticket => {
+                return Ok(BlueprintTerminalReentryPoll::Pending);
+            }
+            BlueprintTerminalLeaseState::ReentryRequested {
+                ticket: current,
+                epoch,
+            } if current == ticket => (
+                c.console_target
+                    .clone()
+                    .ok_or(BlueprintTerminalLeaseError::Unsupported)?,
+                epoch,
+            ),
+            BlueprintTerminalLeaseState::Active { epoch, .. }
+                if epoch == ticket.wrapping_add(1).max(1) =>
+            {
+                return Ok(BlueprintTerminalReentryPoll::Ready(epoch));
+            }
             _ => return Err(BlueprintTerminalLeaseError::Stale),
         }
     };
-    if crate::shell3::tui::claim(&target, vm_id) != Some(true) { return Ok(BlueprintTerminalReentryPoll::Pending); }
-    if let Some(c) = slot.lock().as_mut() { c.terminal_lease = BlueprintTerminalLeaseState::Active { epoch, observed: true, ready: true }; }
+    if crate::shell3::tui::claim(&target, vm_id) != Some(true) {
+        return Ok(BlueprintTerminalReentryPoll::Pending);
+    }
+    if let Some(c) = slot.lock().as_mut() {
+        c.terminal_lease = BlueprintTerminalLeaseState::Active {
+            epoch,
+            observed: true,
+            ready: true,
+        };
+    }
     Ok(BlueprintTerminalReentryPoll::Ready(epoch))
 }
 
@@ -3805,27 +4035,15 @@ fn blueprint_control_shell_write_text(vm_id: u8, text: &str) {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 fn blueprint_app_command_passthrough_enabled(vm_id: u8) -> bool {
     BLUEPRINT_PROCESS_CONTEXTS
         .get(vm_id as usize)
         .and_then(|slot| {
             slot.lock().as_ref().map(|context| {
                 context.console_attached
-                    && context.terminal_lease.accepts_console_input(context.app_command_passthrough)
+                    && context
+                        .terminal_lease
+                        .accepts_console_input(context.app_command_passthrough)
                     && context.app_command_passthrough
             })
         })
@@ -3843,7 +4061,9 @@ fn blueprint_forward_app_command(vm_id: u8, raw: &str) -> bool {
         return false;
     };
     if !context.console_attached
-        || !context.terminal_lease.accepts_console_input(context.app_command_passthrough)
+        || !context
+            .terminal_lease
+            .accepts_console_input(context.app_command_passthrough)
         || !context.app_command_passthrough
     {
         return false;
@@ -3967,19 +4187,33 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
             ),
         },
         "pause" => match pause(vm_id) {
-            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: pause requested; RAM and slot retained"),
-            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: pause unavailable in current state"),
-            Err(err) => blueprint_control_shell_line(vm_id, alloc::format!("vmx-shell: pause failed: {:?}", err).as_str()),
+            Ok(true) => blueprint_control_shell_line(
+                vm_id,
+                "vmx-shell: pause requested; RAM and slot retained",
+            ),
+            Ok(false) => {
+                blueprint_control_shell_line(vm_id, "vmx-shell: pause unavailable in current state")
+            }
+            Err(err) => blueprint_control_shell_line(
+                vm_id,
+                alloc::format!("vmx-shell: pause failed: {:?}", err).as_str(),
+            ),
         },
         "resume" => match resume(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: resume requested"),
             Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: VM is not paused"),
-            Err(err) => blueprint_control_shell_line(vm_id, alloc::format!("vmx-shell: resume failed: {:?}", err).as_str()),
+            Err(err) => blueprint_control_shell_line(
+                vm_id,
+                alloc::format!("vmx-shell: resume failed: {:?}", err).as_str(),
+            ),
         },
         "kill" => match kill(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: kill requested"),
             Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: VM is stopped"),
-            Err(err) => blueprint_control_shell_line(vm_id, alloc::format!("vmx-shell: kill failed: {:?}", err).as_str()),
+            Err(err) => blueprint_control_shell_line(
+                vm_id,
+                alloc::format!("vmx-shell: kill failed: {:?}", err).as_str(),
+            ),
         },
         _ => blueprint_control_shell_line(vm_id, "unknown vmx command"),
     }
@@ -4029,17 +4263,39 @@ pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
     blueprint_console_submit_stdin_inner(vm_id, data, None)
 }
 
-pub(crate) fn blueprint_console_submit_stdin_for_target(vm_id: u8, target: &MatrixTarget, run: u64, data: &[u8]) -> usize {
-    blueprint_console_submit_stdin_for_lease(vm_id, &crate::shell3::matrix_target_slot_lease(target), run, data)
+pub(crate) fn blueprint_console_submit_stdin_for_target(
+    vm_id: u8,
+    target: &MatrixTarget,
+    run: u64,
+    data: &[u8],
+) -> usize {
+    blueprint_console_submit_stdin_for_lease(
+        vm_id,
+        &crate::shell3::matrix_target_slot_lease(target),
+        run,
+        data,
+    )
 }
 
-pub(crate) fn blueprint_console_submit_stdin_for_lease(vm_id: u8, lease: &crate::shell3::MatrixSlotLease, run: u64, data: &[u8]) -> usize {
+pub(crate) fn blueprint_console_submit_stdin_for_lease(
+    vm_id: u8,
+    lease: &crate::shell3::MatrixSlotLease,
+    run: u64,
+    data: &[u8],
+) -> usize {
     blueprint_console_submit_stdin_inner(vm_id, data, Some((lease, run)))
 }
 
-fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option<(&crate::shell3::MatrixSlotLease, u64)>) -> usize {
+fn blueprint_console_submit_stdin_inner(
+    vm_id: u8,
+    data: &[u8],
+    expected: Option<(&crate::shell3::MatrixSlotLease, u64)>,
+) -> usize {
     const MAX_CONSOLE_INPUT: usize = 64 * 1024;
-    if data.is_empty() || expected.is_some_and(|(lease, _)| !crate::shell3::matrix_target::matrix_slot_is_live(lease)) {
+    if data.is_empty()
+        || expected
+            .is_some_and(|(lease, _)| !crate::shell3::matrix_target::matrix_slot_is_live(lease))
+    {
         return 0;
     }
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
@@ -4049,13 +4305,24 @@ fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option
     let Some(context) = guard.as_mut() else {
         return 0;
     };
-    if !context.console_attached || !context.terminal_lease.accepts_console_input(context.app_command_passthrough) {
+    if !context.console_attached
+        || !context
+            .terminal_lease
+            .accepts_console_input(context.app_command_passthrough)
+    {
         return 0;
     }
     if let Some((lease, run)) = expected {
         if vm_run_generation(vm_id) != Some(run)
-            || context.console_target.as_ref().map(crate::shell3::matrix_target_slot_lease).as_ref() != Some(lease)
-        { return 0; }
+            || context
+                .console_target
+                .as_ref()
+                .map(crate::shell3::matrix_target_slot_lease)
+                .as_ref()
+                != Some(lease)
+        {
+            return 0;
+        }
     }
     if context.console_input.is_empty() {
         context.console_input_since_ms = Some(crate::r::input_timing::now_ms());
@@ -4103,26 +4370,55 @@ pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
 }
 
 pub(crate) fn blueprint_console_read(vm_id: u8, out: &mut [u8]) -> usize {
-    static AGE: crate::r::input_timing::Site = crate::r::input_timing::Site::new("app-stdin-queue-age");
-    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else { return 0; };
+    static AGE: crate::r::input_timing::Site =
+        crate::r::input_timing::Site::new("app-stdin-queue-age");
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return 0;
+    };
     let mut guard = slot.lock();
-    let Some(context) = guard.as_mut() else { return 0; };
-    if !context.console_attached || !context.terminal_lease.accepts_console_input(context.app_command_passthrough) { return 0; }
+    let Some(context) = guard.as_mut() else {
+        return 0;
+    };
+    if !context.console_attached
+        || !context
+            .terminal_lease
+            .accepts_console_input(context.app_command_passthrough)
+    {
+        return 0;
+    }
     let count = out.len().min(context.console_input.len());
     let since = context.console_input_since_ms;
-    for byte in &mut out[..count] { *byte = context.console_input.pop_front().unwrap(); }
-    if context.console_input.is_empty() { context.console_input_since_ms = None; }
+    for byte in &mut out[..count] {
+        *byte = context.console_input.pop_front().unwrap();
+    }
+    if context.console_input.is_empty() {
+        context.console_input_since_ms = None;
+    }
     drop(guard);
     if count != 0 {
-        if let Some(since) = since { AGE.record(crate::r::input_timing::now_ms().saturating_sub(since)); }
+        if let Some(since) = since {
+            AGE.record(crate::r::input_timing::now_ms().saturating_sub(since));
+        }
     }
     count
 }
 
 pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
-    BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize).and_then(|slot| {
-        slot.lock().as_ref().map(|c| if c.console_attached && c.terminal_lease.accepts_console_input(c.app_command_passthrough) { c.console_input.len() } else { 0 })
-    }).unwrap_or(0)
+    BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| {
+            slot.lock().as_ref().map(|c| {
+                if c.console_attached
+                    && c.terminal_lease
+                        .accepts_console_input(c.app_command_passthrough)
+                {
+                    c.console_input.len()
+                } else {
+                    0
+                }
+            })
+        })
+        .unwrap_or(0)
 }
 
 pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
@@ -4140,27 +4436,34 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
 }
 
 fn clear_blueprint_process_context(vm_id: u8) -> BlueprintTerminalCleanup {
-    if let Some(target) = blueprint_console_target(vm_id) { let _ = crate::shell3::tui::release(&target, vm_id); }
+    if let Some(target) = blueprint_console_target(vm_id) {
+        let _ = crate::shell3::tui::release(&target, vm_id);
+    }
     let mut cleanup = BlueprintTerminalCleanup::empty();
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         cleanup.context_present = slot.lock().take().is_some();
     }
-    #[cfg(feature = "wc3")]
-    crate::hv::wc3::purge_one_shot_state(vm_id);
+
     crate::std_abi_shim::reset_blueprint_process_state(vm_id);
-    if let Some(slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) { let _ = slot.lock().take(); }
+    if let Some(slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
+        let _ = slot.lock().take();
+    }
     cleanup
 }
 
 fn suspend_blueprint_process_context(vm_id: u8) {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
-        if let Some(context) = slot.lock().as_mut() { context.console_attached = false; }
+        if let Some(context) = slot.lock().as_mut() {
+            context.console_attached = false;
+        }
     }
 }
 
 fn resume_blueprint_process_context(vm_id: u8) {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
-        if let Some(context) = slot.lock().as_mut() { context.console_attached = false; }
+        if let Some(context) = slot.lock().as_mut() {
+            context.console_attached = false;
+        }
     }
 }
 
@@ -4273,16 +4576,6 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 memory::active_guest_stack_mb_for_vm(vm_id)
             ));
         }
-        #[cfg(feature = "wc3")]
-        VmBootMode::Wc3Probe => {
-            crate::log_important!(target: "hv";
-                "wc3: gate-0 VMX launch vm={} entry=0x{:08X} stack_top=0x{:08X} fs_base=0x{:08X}",
-                vm_id,
-                guest_entry_for_boot_mode(boot_mode),
-                guest_stack_top_for_vm(vm_id),
-                guest_fs_base_for_boot_mode(boot_mode)
-            );
-        }
     }
     if let Some(pending) = pending_blueprint
         && let Err(err) = prepare_blueprint_launch_on_lane(vm_id, pending)
@@ -4374,7 +4667,10 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
     );
     if fs_pending != 0 || fs_writes != 0 || async_pending != 0 {
-        hvimportantf(format_args!("hv: vm{} lifecycle: stop filesystem checkpoint waiting fs_pending={} fs_streams={} async_fs_pending={} owner=bsp slot=retained-until-complete", vm_id, fs_pending, fs_writes, async_pending));
+        hvimportantf(format_args!(
+            "hv: vm{} lifecycle: stop filesystem checkpoint waiting fs_pending={} fs_streams={} async_fs_pending={} owner=bsp slot=retained-until-complete",
+            vm_id, fs_pending, fs_writes, async_pending
+        ));
     }
     while crate::r::fs::request_broker::pending_for_vm(vm_id) != 0
         || crate::r::fs::request_broker::open_writes_for_vm(vm_id) != 0
@@ -4385,9 +4681,12 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }
     if !vm.pause_latched.load(Ordering::Acquire) {
-        assert!(crate::r::io::async_fs_cabi::release_owner(
-            crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
-        ).is_ok());
+        assert!(
+            crate::r::io::async_fs_cabi::release_owner(crate::r::io::async_fs_cabi::owner_for_vm(
+                vm_id
+            ),)
+            .is_ok()
+        );
     }
     if vm.cooperative_stop.forced() {
         vm.pause_latched.store(false, Ordering::Release);
@@ -4465,11 +4764,13 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
 
     if !vm.pause_latched.load(Ordering::Acquire) {
         teardown_diagnostics::set(vm_id, TeardownStage::Archive);
-        let archive_released = crate::r::codec::release_owner(
-            crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
-        );
+        let archive_released =
+            crate::r::codec::release_owner(crate::r::io::async_fs_cabi::owner_for_vm(vm_id));
         if archive_released != 0 {
-            hvlogf(format_args!("hv: vm{} lifecycle: archive cleanup released_operations={}", vm_id, archive_released));
+            hvlogf(format_args!(
+                "hv: vm{} lifecycle: archive cleanup released_operations={}",
+                vm_id, archive_released
+            ));
         }
         teardown_diagnostics::set(vm_id, TeardownStage::Gridpaper);
         let gridpaper_released =
@@ -4598,13 +4899,12 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         ));
     }
     teardown_diagnostics::set(vm_id, TeardownStage::WaitQueues);
-    let wait_queues_retired = if !vm.pause_latched.load(Ordering::Acquire)
-        && !vm.preserve_exit.load(Ordering::Acquire)
-    {
-        crate::wait::retire_platform_vm_waits(vm_id)
-    } else {
-        0
-    };
+    let wait_queues_retired =
+        if !vm.pause_latched.load(Ordering::Acquire) && !vm.preserve_exit.load(Ordering::Acquire) {
+            crate::wait::retire_platform_vm_waits(vm_id)
+        } else {
+            0
+        };
     vm.starting.store(false, Ordering::Release);
     vm.stop_req.store(false, Ordering::Release);
     vm.preserve_req.store(false, Ordering::Release);
@@ -4638,7 +4938,8 @@ fn publish_vm_offline(vm_id: u8, vm: &TrueosVmId) {
     if vm.cooperative_stop.forced() || !vm.pause_latched.load(Ordering::Acquire) {
         if let Err(error) = eject_offline_vm(vm_id, false) {
             hvwarnf(format_args!(
-                "hv: vm{} lifecycle: resource release retained reason={:?}", vm_id, error
+                "hv: vm{} lifecycle: resource release retained reason={:?}",
+                vm_id, error
             ));
         }
     }
@@ -4753,7 +5054,6 @@ async fn vmx_launch_once_with_ept_vpid(
         eptp,
         lineage_record,
         boot_mode_for_vm(vm_id),
-        None,
     )?;
     let preemption_timer_ticks = preemption_timer_enabled.then(|| {
         let (ticks, rate_shift) =
@@ -4787,12 +5087,11 @@ async fn vmx_launch_once_with_ept_vpid(
             clear_current_vm_id();
             let keep_running = park_vm_execution(vm_id).await;
             set_current_vm_id(vm_id);
-            if !keep_running { break; }
+            if !keep_running {
+                break;
+            }
         }
-        if vm
-            .map(immediate_stop_requested)
-            .unwrap_or(false)
-        {
+        if vm.map(immediate_stop_requested).unwrap_or(false) {
             hvlogf(format_args!(
                 "hv: vm{} reporting: host stop request consumed before guest entry/resume",
                 vm_id
@@ -4996,12 +5295,7 @@ async fn vmx_launch_once_with_ept_vpid(
             VMEXIT_REASON_VMCALL => {
                 let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len")?;
                 vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
-                #[cfg(feature = "wc3")]
-                let mut outcome = match boot_mode_for_vm(vm_id) {
-                    VmBootMode::Wc3Probe => wc3::handle_vmcall(vm_id),
-                    _ => crate::hv::vmcall::dispatch(vm_id),
-                };
-                #[cfg(not(feature = "wc3"))]
+
                 let mut outcome = crate::hv::vmcall::dispatch(vm_id);
                 'vmcall: loop {
                     match outcome {
@@ -5032,7 +5326,11 @@ async fn vmx_launch_once_with_ept_vpid(
                             if ms == 0 {
                                 execution_policy::yield_executor_turn().await;
                             } else {
-                                await_vm_control_boundary(vm_id, Timer::after(EmbassyDuration::from_millis(ms))).await;
+                                await_vm_control_boundary(
+                                    vm_id,
+                                    Timer::after(EmbassyDuration::from_millis(ms)),
+                                )
+                                .await;
                             }
                             set_current_vm_id(vm_id);
                             break 'vmcall;
@@ -5042,8 +5340,12 @@ async fn vmx_launch_once_with_ept_vpid(
                             timeout_ms,
                         } => {
                             clear_current_vm_id();
-                            let woke = await_vm_control_boundary(vm_id,
-                                wait_blueprint_console_input(vm_id, timeout_ms)).await.unwrap_or(false);
+                            let woke = await_vm_control_boundary(
+                                vm_id,
+                                wait_blueprint_console_input(vm_id, timeout_ms),
+                            )
+                            .await
+                            .unwrap_or(false);
                             set_current_vm_id(vm_id);
                             crate::hv::vmcall::complete_console_input_wait(vm_id, seq, woke);
                             break 'vmcall;
@@ -5055,16 +5357,17 @@ async fn vmx_launch_once_with_ept_vpid(
                             timeout_ms,
                         } => {
                             clear_current_vm_id();
-                            let notified = await_vm_control_boundary(vm_id,
+                            let notified = await_vm_control_boundary(
+                                vm_id,
                                 crate::wait::platform_wait_after_for_vm_async(
                                     vm_id, key, observed, timeout_ms,
-                                )).await.unwrap_or(false);
+                                ),
+                            )
+                            .await
+                            .unwrap_or(false);
                             set_current_vm_id(vm_id);
                             crate::smp::poll();
-                            if vm
-                                .map(immediate_stop_requested)
-                                .unwrap_or(false)
-                            {
+                            if vm.map(immediate_stop_requested).unwrap_or(false) {
                                 hvlogf(format_args!(
                                     "hv: vm{} reporting: host stop request consumed during platform wait",
                                     vm_id
@@ -5076,14 +5379,14 @@ async fn vmx_launch_once_with_ept_vpid(
                         }
                         crate::hv::vmcall::DispatchOutcome::RetryAfterMs(ms) => {
                             clear_current_vm_id();
-                            await_vm_control_boundary(vm_id,
-                                Timer::after(EmbassyDuration::from_millis(ms.max(1)))).await;
+                            await_vm_control_boundary(
+                                vm_id,
+                                Timer::after(EmbassyDuration::from_millis(ms.max(1))),
+                            )
+                            .await;
                             set_current_vm_id(vm_id);
                             crate::smp::poll();
-                            if vm
-                                .map(immediate_stop_requested)
-                                .unwrap_or(false)
-                            {
+                            if vm.map(immediate_stop_requested).unwrap_or(false) {
                                 hvlogf(format_args!(
                                     "hv: vm{} reporting: host stop request consumed during pending vmcall",
                                     vm_id
@@ -5204,10 +5507,7 @@ async fn vmx_launch_once_with_ept_vpid(
             ));
             break;
         }
-        if vm
-            .map(immediate_stop_requested)
-            .unwrap_or(false)
-        {
+        if vm.map(immediate_stop_requested).unwrap_or(false) {
             hvlogf(format_args!(
                 "hv: vm{} reporting: host stop request consumed at rip=0x{:016X}",
                 vm_id, lr.guest_rip
@@ -5338,26 +5638,13 @@ fn handle_guest_wrmsr(vm_id: u8, guest_rip: u64) -> Result<bool, &'static str> {
     Ok(true)
 }
 
-#[derive(Copy, Clone)]
-struct Protected32GuestInput {
-    cr3: u64,
-    eip: u32,
-    esp: u32,
-    eflags: u32,
-    fs_base: u32,
-    debug_registers: v::bp_abi::TrueosX86DebugRegistersV1,
-}
-
-/// Populate the complete host state and legal controls.  Hull guest state is
-/// selected only when `protected32` is absent; transient contexts return via
-/// `setup_vmcs_protected32_guest` before any Hull state is read or rebuilt.
+/// Populate the complete host state, legal controls, and Hull guest state.
 fn setup_vmcs_host_and_controls(
     vm_id: u8,
     vpid: Option<u16>,
     eptp: u64,
     lineage_record: LineageRecord,
     boot_mode: VmBootMode,
-    protected32: Option<Protected32GuestInput>,
 ) -> Result<bool, &'static str> {
     if vpid == Some(0) {
         return Err("zero VPID is forbidden");
@@ -5443,17 +5730,9 @@ fn setup_vmcs_host_and_controls(
             | PROC_BASED_ACTIVATE_SECONDARY
             | PROC_BASED_USE_TSC_OFFSETTING,
     );
-    // A transient protected-32 carrier supplies a legacy PAE root, not a
-    // four-level IA-32e root.  Leaving IA32E_MODE_GUEST set makes the CPU
-    // reinterpret that PDPT as a PML4 and fault on the first instruction
-    // fetch even though the intended PAE leaf is present.
-    let requested_entry = if protected32.is_some() {
-        0
-    } else {
-        ENTRY_CTL_IA32E_MODE_GUEST
-    };
+    let requested_entry = { ENTRY_CTL_IA32E_MODE_GUEST };
     let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, requested_entry);
-    if protected32.is_none() {
+    {
         hvlogf(format_args!(
             "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X} vpid={} pause_exit={} timer={}",
             current_vm_id_for_log(),
@@ -5515,7 +5794,7 @@ fn setup_vmcs_host_and_controls(
         return Err("vpid unsupported");
     }
     if vpid.is_none() && (proc2 & PROC2_BASED_ENABLE_VPID) != 0 {
-        return Err("transient VPID cannot be disabled");
+        return Err("unexpected VPID control");
     }
 
     vmwrite(VMCS_CTRL_PIN_BASED, pin)?;
@@ -5659,7 +5938,7 @@ fn setup_vmcs_host_and_controls(
                 ));
                 return Err("host bases");
             }
-            if protected32.is_none() {
+            {
                 hvlogf(format_args!(
                     "hv: vm{}-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
                     current_vm_id_for_log(),
@@ -5692,26 +5971,6 @@ fn setup_vmcs_host_and_controls(
             vmwrite(VMCS_HOST_IA32_PAT, pat)?;
             vmwrite(VMCS_HOST_IA32_EFER, efer)?;
             vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
-
-            if let Some(input) = protected32 {
-                setup_vmcs_protected32_guest(
-                    input,
-                    host_cr0,
-                    host_cr4,
-                    tr_sel,
-                    tr_base,
-                    gdtr.base.as_u64(),
-                    gdtr.limit,
-                    idtr.base.as_u64(),
-                    idtr.limit,
-                    gs_base,
-                    sysenter_cs,
-                    sysenter_esp,
-                    sysenter_eip,
-                    pat,
-                )?;
-                return Ok(preemption_timer_enabled);
-            }
 
             let restored = active_restore_meta(vm_id);
             let guest_rip = restored
@@ -5757,13 +6016,12 @@ fn setup_vmcs_host_and_controls(
             vmwrite(VMCS_GUEST_PENDING_DBG, 0)?;
             vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, 0)?;
 
-            let wc3_guest = boot_mode_is_wc3_guest(boot_mode);
-            let cs = if wc3_guest { 0x08 } else { host_cs };
-            let ss = if wc3_guest { 0x10 } else { host_ss };
-            let ds = if wc3_guest { 0x10 } else { host_ds };
-            let es = if wc3_guest { 0x10 } else { host_es };
-            let fs = if wc3_guest { 0x18 } else { host_fs };
-            let gs = if wc3_guest { 0 } else { host_gs };
+            let cs = { host_cs };
+            let ss = { host_ss };
+            let ds = { host_ds };
+            let es = { host_es };
+            let fs = { host_fs };
+            let gs = { host_gs };
             let tr = tr_sel as u64;
             vmwrite(VMCS_GUEST_CS_SELECTOR, cs)?;
             vmwrite(VMCS_GUEST_SS_SELECTOR, ss)?;
@@ -5796,11 +6054,11 @@ fn setup_vmcs_host_and_controls(
             vmwrite(VMCS_GUEST_GDTR_BASE, gdtr.base.as_u64())?;
             vmwrite(VMCS_GUEST_IDTR_BASE, idtr.base.as_u64())?;
 
-            vmwrite(VMCS_GUEST_CS_AR, if wc3_guest { 0xC09B } else { 0xA09B })?;
+            vmwrite(VMCS_GUEST_CS_AR, { 0xA09B })?;
             vmwrite(VMCS_GUEST_SS_AR, 0xC093)?;
             vmwrite(VMCS_GUEST_DS_AR, 0xC093)?;
             vmwrite(VMCS_GUEST_ES_AR, 0xC093)?;
-            vmwrite(VMCS_GUEST_FS_AR, if wc3_guest { 0xC093 } else { 0x10000 })?;
+            vmwrite(VMCS_GUEST_FS_AR, { 0x10000 })?;
             vmwrite(VMCS_GUEST_GS_AR, 0x10000)?;
             vmwrite(VMCS_GUEST_TR_AR, 0x008B)?;
             vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
@@ -5881,7 +6139,7 @@ fn setup_vmcs_host_and_controls(
         ));
         return Err("host bases");
     }
-    if protected32.is_none() {
+    {
         hvlogf(format_args!(
             "hv: vm{}-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
             current_vm_id_for_log(),
@@ -5915,26 +6173,6 @@ fn setup_vmcs_host_and_controls(
     vmwrite(VMCS_HOST_IA32_PAT, pat)?;
     vmwrite(VMCS_HOST_IA32_EFER, efer)?;
     vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
-
-    if let Some(input) = protected32 {
-        setup_vmcs_protected32_guest(
-            input,
-            host_cr0,
-            host_cr4,
-            tr_sel,
-            tr_base,
-            gdtr.base.as_u64(),
-            gdtr.limit,
-            idtr.base.as_u64(),
-            idtr.limit,
-            gs_base,
-            sysenter_cs,
-            sysenter_esp,
-            sysenter_eip,
-            pat,
-        )?;
-        return Ok(preemption_timer_enabled);
-    }
 
     let restored = active_restore_meta(vm_id);
     let guest_rip = restored
@@ -5979,33 +6217,12 @@ fn setup_vmcs_host_and_controls(
     vmwrite(VMCS_GUEST_PENDING_DBG, 0)?;
     vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, 0)?;
 
-    let wc3_guest = boot_mode_is_wc3_guest(boot_mode);
-    let cs = if wc3_guest {
-        0x08
-    } else {
-        CS::get_reg().0 as u64
-    };
-    let ss = if wc3_guest {
-        0x10
-    } else {
-        SS::get_reg().0 as u64
-    };
-    let ds = if wc3_guest {
-        0x10
-    } else {
-        DS::get_reg().0 as u64
-    };
-    let es = if wc3_guest {
-        0x10
-    } else {
-        ES::get_reg().0 as u64
-    };
-    let fs = if wc3_guest {
-        0x18
-    } else {
-        FS::get_reg().0 as u64
-    };
-    let gs = if wc3_guest { 0 } else { GS::get_reg().0 as u64 };
+    let cs = { CS::get_reg().0 as u64 };
+    let ss = { SS::get_reg().0 as u64 };
+    let ds = { DS::get_reg().0 as u64 };
+    let es = { ES::get_reg().0 as u64 };
+    let fs = { FS::get_reg().0 as u64 };
+    let gs = { GS::get_reg().0 as u64 };
     let tr = tr_sel as u64;
     vmwrite(VMCS_GUEST_CS_SELECTOR, cs)?;
     vmwrite(VMCS_GUEST_SS_SELECTOR, ss)?;
@@ -6038,7 +6255,7 @@ fn setup_vmcs_host_and_controls(
     vmwrite(VMCS_GUEST_GDTR_BASE, gdtr.base.as_u64())?;
     vmwrite(VMCS_GUEST_IDTR_BASE, idtr.base.as_u64())?;
 
-    vmwrite(VMCS_GUEST_CS_AR, if wc3_guest { 0xC09B } else { 0xA09B })?;
+    vmwrite(VMCS_GUEST_CS_AR, { 0xA09B })?;
     vmwrite(VMCS_GUEST_SS_AR, if ss == 0 { 0x10000 } else { 0xC093 })?;
     vmwrite(VMCS_GUEST_DS_AR, if ds == 0 { 0x10000 } else { 0xC093 })?;
     vmwrite(VMCS_GUEST_ES_AR, if es == 0 { 0x10000 } else { 0xC093 })?;
@@ -6048,407 +6265,6 @@ fn setup_vmcs_host_and_controls(
     vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
 
     Ok(preemption_timer_enabled)
-}
-
-/// Complete Gate-0-compatible 32-bit protected guest state.  This deliberately
-/// accepts the x86 context's CR3 and registers, never Hull mappings or state.
-fn setup_vmcs_protected32_guest(
-    input: Protected32GuestInput,
-    host_cr0: u64,
-    host_cr4: u64,
-    tr_sel: u16,
-    tr_base: u64,
-    gdtr_base: u64,
-    gdtr_limit: u16,
-    idtr_base: u64,
-    idtr_limit: u16,
-    gs_base: u64,
-    sysenter_cs: u64,
-    sysenter_esp: u64,
-    sysenter_eip: u64,
-    pat: u64,
-) -> Result<(), &'static str> {
-    const CR4_PAE: u64 = 1 << 5;
-    const CR4_LA57: u64 = 1 << 12;
-    const CR4_PCIDE: u64 = 1 << 17;
-    let guest_cr4 = (host_cr4 | CR4_PAE) & !(CR4_LA57 | CR4_PCIDE);
-
-    vmwrite(VMCS_GUEST_CR0, host_cr0)?;
-    vmwrite(VMCS_GUEST_CR3, input.cr3)?;
-    vmwrite(VMCS_GUEST_CR4, guest_cr4)?;
-    vmwrite(VMCS_GUEST_RFLAGS, (input.eflags as u64 | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
-    vmwrite(VMCS_GUEST_RIP, input.eip as u64)?;
-    vmwrite(VMCS_GUEST_RSP, input.esp as u64)?;
-    // DR7 bit 10 is architecturally fixed to one. Keep that VMX-boundary
-    // normalization here; the logical x86 context retains its supplied value.
-    vmwrite(VMCS_GUEST_DR7, u64::from(input.debug_registers.dr7 | 0x400))?;
-    vmwrite(VMCS_GUEST_IA32_DEBUGCTL, 0)?;
-    vmwrite(VMCS_GUEST_SYSENTER_CS, sysenter_cs)?;
-    vmwrite(VMCS_GUEST_SYSENTER_ESP, sysenter_esp)?;
-    vmwrite(VMCS_GUEST_SYSENTER_EIP, sysenter_eip)?;
-    vmwrite(VMCS_GUEST_IA32_PAT, pat)?;
-    vmwrite(VMCS_GUEST_IA32_EFER, 0)?;
-    vmwrite(VMCS_GUEST_IA32_PERF_GLOBAL_CTRL, 0)?;
-    vmwrite(VMCS_GUEST_ACTIVITY_STATE, 0)?;
-    vmwrite(VMCS_GUEST_INTERRUPTIBILITY, 0)?;
-    vmwrite(VMCS_GUEST_PENDING_DBG, 0)?;
-    vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, 0)?;
-    for field in [
-        VMCS_GUEST_CS_LIMIT,
-        VMCS_GUEST_SS_LIMIT,
-        VMCS_GUEST_DS_LIMIT,
-        VMCS_GUEST_ES_LIMIT,
-        VMCS_GUEST_FS_LIMIT,
-        VMCS_GUEST_GS_LIMIT,
-    ] {
-        vmwrite(field, 0xffff_ffff)?;
-    }
-    vmwrite(VMCS_GUEST_TR_LIMIT, 0xffff)?;
-    vmwrite(VMCS_GUEST_LDTR_LIMIT, 0)?;
-    vmwrite(VMCS_GUEST_GDTR_LIMIT, gdtr_limit as u64)?;
-    vmwrite(VMCS_GUEST_IDTR_LIMIT, idtr_limit as u64)?;
-    vmwrite(VMCS_GUEST_CS_SELECTOR, 0x08)?;
-    for field in [
-        VMCS_GUEST_SS_SELECTOR,
-        VMCS_GUEST_DS_SELECTOR,
-        VMCS_GUEST_ES_SELECTOR,
-    ] {
-        vmwrite(field, 0x10)?;
-    }
-    vmwrite(VMCS_GUEST_FS_SELECTOR, 0x18)?;
-    vmwrite(VMCS_GUEST_GS_SELECTOR, 0)?;
-    vmwrite(VMCS_GUEST_TR_SELECTOR, tr_sel as u64)?;
-    vmwrite(VMCS_GUEST_LDTR_SELECTOR, 0)?;
-    for field in [
-        VMCS_GUEST_CS_BASE,
-        VMCS_GUEST_SS_BASE,
-        VMCS_GUEST_DS_BASE,
-        VMCS_GUEST_ES_BASE,
-        VMCS_GUEST_LDTR_BASE,
-    ] {
-        vmwrite(field, 0)?;
-    }
-    vmwrite(VMCS_GUEST_FS_BASE, input.fs_base as u64)?;
-    vmwrite(VMCS_GUEST_GS_BASE, gs_base)?;
-    vmwrite(VMCS_GUEST_TR_BASE, tr_base)?;
-    vmwrite(VMCS_GUEST_GDTR_BASE, gdtr_base)?;
-    vmwrite(VMCS_GUEST_IDTR_BASE, idtr_base)?;
-    vmwrite(VMCS_GUEST_CS_AR, 0xC09B)?;
-    for field in [
-        VMCS_GUEST_SS_AR,
-        VMCS_GUEST_DS_AR,
-        VMCS_GUEST_ES_AR,
-        VMCS_GUEST_FS_AR,
-    ] {
-        vmwrite(field, 0xC093)?;
-    }
-    vmwrite(VMCS_GUEST_GS_AR, 0x10000)?;
-    vmwrite(VMCS_GUEST_TR_AR, 0x008B)?;
-    vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
-    Ok(())
-}
-
-/// Result captured from a fresh, lane-local VMCS.  A logical x86 context owns
-/// this state rather than borrowing the Hull's VMCS affinity.
-#[cfg(feature = "wc3")]
-pub(crate) struct TransientProtected32Exit {
-    pub launch: LaunchResult,
-    pub instruction_len: u64,
-    pub registers: crate::hv::vmx::GuestRegisters,
-    pub rsp: u64,
-    pub rflags: u64,
-    pub fs_base: u64,
-    pub debug_registers: v::bp_abi::TrueosX86DebugRegistersV1,
-    pub cr3: u64,
-    pub guest_physical: u64,
-    pub guest_linear: u64,
-    pub interruption_info: u64,
-    pub interruption_error_code: u64,
-    /// Captured by the VM-exit wrapper before the scratch VMCS is reused.
-    pub guest_cr2: u64,
-}
-
-/// The host's live DR0–DR3/DR6 state is not virtualized by VMCS guest-state
-/// fields. Keep it in a small carrier snapshot while a logical x86 context is
-/// transiently running, so it cannot leak across Tokio carrier migration.
-#[cfg(feature = "wc3")]
-struct CarrierDebugRegisters;
-
-#[cfg(feature = "wc3")]
-impl CarrierDebugRegisters {
-    fn capture() -> v::bp_abi::TrueosX86DebugRegistersV1 {
-        let (dr0, dr1, dr2, dr3, dr6, dr7): (u64, u64, u64, u64, u64, u64);
-        unsafe {
-            core::arch::asm!(
-                "mov {dr0}, dr0",
-                "mov {dr1}, dr1",
-                "mov {dr2}, dr2",
-                "mov {dr3}, dr3",
-                "mov {dr6}, dr6",
-                "mov {dr7}, dr7",
-                dr0 = out(reg) dr0,
-                dr1 = out(reg) dr1,
-                dr2 = out(reg) dr2,
-                dr3 = out(reg) dr3,
-                dr6 = out(reg) dr6,
-                dr7 = out(reg) dr7,
-                options(nostack, preserves_flags),
-            );
-        }
-        v::bp_abi::TrueosX86DebugRegistersV1 {
-            dr0: dr0 as u32,
-            dr1: dr1 as u32,
-            dr2: dr2 as u32,
-            dr3: dr3 as u32,
-            dr6: dr6 as u32,
-            dr7: dr7 as u32,
-        }
-    }
-
-    fn install(registers: v::bp_abi::TrueosX86DebugRegistersV1) {
-        // Disable data/instruction breakpoints until all address/status state
-        // is coherent, then restore the intended DR7 as the final write.
-        unsafe {
-            core::arch::asm!(
-                "mov dr7, {disabled}",
-                "mov dr0, {dr0}",
-                "mov dr1, {dr1}",
-                "mov dr2, {dr2}",
-                "mov dr3, {dr3}",
-                "mov dr6, {dr6}",
-                "mov dr7, {dr7}",
-                disabled = in(reg) 0x400u64,
-                dr0 = in(reg) u64::from(registers.dr0),
-                dr1 = in(reg) u64::from(registers.dr1),
-                dr2 = in(reg) u64::from(registers.dr2),
-                dr3 = in(reg) u64::from(registers.dr3),
-                dr6 = in(reg) u64::from(registers.dr6),
-                dr7 = in(reg) u64::from(registers.dr7 | 0x400),
-                options(nostack, preserves_flags),
-            );
-        }
-    }
-}
-
-/// Install the already-proven host/control and protected-32 guest VMCS state
-/// on this lane's scratch VMCS, then launch one logical x86 execution slice.
-/// A resume of the logical context deliberately creates another VMCS and uses
-/// VMLAUNCH: Tokio service lanes have no stable current-VMCS affinity.
-#[cfg(feature = "wc3")]
-pub(crate) fn run_transient_protected32(
-    owner: u8,
-    cr3: u64,
-    eip: u32,
-    esp: u32,
-    eflags: u32,
-    fs_base: u32,
-    debug_registers: v::bp_abi::TrueosX86DebugRegistersV1,
-    registers: crate::hv::vmx::GuestRegisters,
-    extended_state: &mut crate::hv::vmx::VmxExtendedState,
-) -> Result<TransientProtected32Exit, &'static str> {
-    let timing_start = wc3::exec_timing::cycles();
-    if !current_vmx_root_active()? {
-        return Err("vmx core contract inactive");
-    }
-    let eptp = active_eptp_for_vm(owner)?;
-    // With EPT enabled, VM entry loads a PAE guest's cached PDPTE registers
-    // from the VMCS guest-state fields rather than walking them from CR3.
-    // Every transient slice uses a fresh VMCS, so publish all four roots on
-    // every entry.
-    let pdpt_phys = cr3 & !0x1f;
-    if pdpt_phys >= (1u64 << 32) {
-        return Err("protected32 pdpt above 4g");
-    }
-    let pdpt = crate::phys::phys_to_virt(pdpt_phys as usize) as *const u64;
-    let pdptes = unsafe {
-        [
-            pdpt.read_volatile(),
-            pdpt.add(1).read_volatile(),
-            pdpt.add(2).read_volatile(),
-            pdpt.add(3).read_volatile(),
-        ]
-    };
-    let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
-    let revision = (basic & 0x7fff_ffff) as u32;
-    let vmcs_va = current_vmcs_page()?;
-    unsafe {
-        core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);
-        *(vmcs_va as *mut u32) = revision;
-    }
-    let vmcs_pa = kernel_va_to_pa(vmcs_va as u64).ok_or("vmcs pa")?;
-    if !crate::hv::vmx::vmclear(vmcs_pa) {
-        return Err("vmclear");
-    }
-    if !crate::hv::vmx::vmptrld(vmcs_pa) {
-        return Err("vmptrld");
-    }
-
-    // Reuse the Hull's complete host/control setup and Gate-0's known-good
-    // 32-bit protected guest descriptor state.  VPID is intentionally absent
-    // because this VMCS is discarded after every slice.
-    let preemption_timer_enabled = match setup_vmcs_host_and_controls(
-        owner,
-        None,
-        eptp,
-        LineageRecord::new(),
-        VmBootMode::Wc3Probe,
-        Some(Protected32GuestInput {
-            cr3,
-            eip,
-            esp,
-            eflags,
-            fs_base,
-            debug_registers,
-        }),
-    ) {
-        Ok(enabled) => enabled,
-        Err(error) => {
-            let _ = crate::hv::vmx::vmclear(vmcs_pa);
-            return Err(error);
-        }
-    };
-    for (field, value) in [
-        VMCS_GUEST_PDPTE0,
-        VMCS_GUEST_PDPTE1,
-        VMCS_GUEST_PDPTE2,
-        VMCS_GUEST_PDPTE3,
-    ]
-    .into_iter()
-    .zip(pdptes)
-    {
-        vmwrite(field, value)?;
-    }
-    if preemption_timer_enabled {
-        let (ticks, _) =
-            vmx_preemption_timer_ticks(crate::allcaps::hv::VMX_WC3_TRANSIENT_PREEMPTION_QUANTUM_MS);
-        vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, ticks as u64)?;
-    }
-    // The Hull needs external-interrupt exits for lifecycle control.  A
-    // transient x86 slice does not: an already-pending host interrupt would
-    // otherwise exit before its first instruction.  Its preemption timer is
-    // the bounded, carrier-local return path.
-    let pin = vmread(VMCS_CTRL_PIN_BASED).ok_or("transient pin controls")?;
-    vmwrite(VMCS_CTRL_PIN_BASED, pin & !PIN_BASED_EXTERNAL_INTERRUPT_EXITING)?;
-    let exit_controls = vmread(VMCS_CTRL_EXIT).ok_or("transient exit controls")?;
-    vmwrite(VMCS_CTRL_EXIT, exit_controls & !EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT)?;
-    crate::hv::vmx::set_guest_registers(registers);
-    // VMX saves/restores only DR7 through the VMCS. DR0–DR3 and DR6 are live
-    // carrier state, so make the transient context own them explicitly.
-    let carrier_debug_registers = CarrierDebugRegisters::capture();
-    CarrierDebugRegisters::install(debug_registers);
-
-    let mut launch = LaunchResult::default();
-    let timing_enter = wc3::exec_timing::cycles();
-    crate::hv::vmx::vmlaunch_once_wrapper_with_extended_state(&mut launch, extended_state);
-    let timing_leave = wc3::exec_timing::cycles();
-    let mut captured_debug_registers = CarrierDebugRegisters::capture();
-    captured_debug_registers.dr7 = vmread(VMCS_GUEST_DR7)
-        .map(|value| value as u32)
-        .unwrap_or(debug_registers.dr7);
-    CarrierDebugRegisters::install(carrier_debug_registers);
-    let (interruption_info, interruption_error_code, guest_cr2) =
-        transient_exception_capture(&launch);
-    merge_transient_debug_exception(&mut captured_debug_registers, &launch);
-    let exit = TransientProtected32Exit {
-        launch,
-        instruction_len: vmread(VMCS_VMEXIT_INSTRUCTION_LEN).unwrap_or(0),
-        registers: crate::hv::vmx::guest_registers(),
-        rsp: vmread(VMCS_GUEST_RSP).unwrap_or(esp as u64),
-        rflags: vmread(VMCS_GUEST_RFLAGS).unwrap_or(eflags as u64),
-        fs_base: vmread(VMCS_GUEST_FS_BASE).unwrap_or(fs_base as u64),
-        debug_registers: captured_debug_registers,
-        cr3: vmread(VMCS_GUEST_CR3).unwrap_or(cr3),
-        guest_physical: vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0),
-        guest_linear: vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0),
-        interruption_info,
-        interruption_error_code,
-        guest_cr2,
-    };
-    if !crate::hv::vmx::vmclear(vmcs_pa) {
-        return Err("transient vmclear");
-    }
-    wc3::exec_timing::record(
-        owner,
-        timing_start,
-        timing_enter,
-        timing_leave,
-        wc3::exec_timing::cycles(),
-        exit.launch.exit_reason as u64,
-        exit.launch.guest_rip,
-    );
-    Ok(exit)
-}
-
-/// The transient exit consumes wrapper-captured exception facts rather than
-/// rereading a scratch VMCS after it may have been disturbed or recycled.
-#[cfg(feature = "wc3")]
-fn transient_exception_capture(launch: &LaunchResult) -> (u64, u64, u64) {
-    (launch.interruption_info, launch.interruption_error_code, launch.guest_cr2)
-}
-
-/// A debug exception intercepted by VMX has not been delivered to the guest,
-/// so the carrier's live DR6 does not contain the condition bits yet.  The
-/// exit qualification supplies the architectural B0-B3/BD/BS/BT result that
-/// the logical context must observe when its exception is dispatched.
-#[cfg(feature = "wc3")]
-fn merge_transient_debug_exception(
-    debug_registers: &mut v::bp_abi::TrueosX86DebugRegistersV1,
-    launch: &LaunchResult,
-) {
-    const DR6_DEBUG_CONDITION_MASK: u32 = 0x0000_e00f;
-    let interruption_info = launch.interruption_info;
-    let valid = interruption_info & (1 << 31) != 0;
-    let vector = interruption_info & 0xff;
-    if valid && vector == 1 {
-        debug_registers.dr6 |= (launch.exit_qualification as u32) & DR6_DEBUG_CONDITION_MASK;
-    }
-}
-
-#[cfg(all(test, feature = "wc3"))]
-mod transient_exception_capture_tests {
-    use super::{merge_transient_debug_exception, transient_exception_capture};
-    use crate::hv::vmx::LaunchResult;
-    use crate::v::bp_abi::TrueosX86DebugRegistersV1;
-
-    #[test]
-    fn transient_exception_uses_wrapper_captured_launch_fields() {
-        let launch = LaunchResult {
-            interruption_info: (1 << 31) | (3 << 8) | (1 << 11) | 14,
-            interruption_error_code: 2,
-            guest_cr2: 1,
-            ..LaunchResult::default()
-        };
-        assert_eq!(transient_exception_capture(&launch), (launch.interruption_info, 2, 1));
-    }
-
-    #[test]
-    fn intercepted_debug_exception_merges_b0_into_context_dr6() {
-        let launch = LaunchResult {
-            interruption_info: (1 << 31) | (3 << 8) | 1,
-            exit_qualification: 1,
-            ..LaunchResult::default()
-        };
-        let mut debug_registers = TrueosX86DebugRegistersV1 {
-            dr0: 0x0010_0300,
-            dr6: 0xffff_0ff0,
-            dr7: 0x401,
-            ..TrueosX86DebugRegistersV1::default()
-        };
-        merge_transient_debug_exception(&mut debug_registers, &launch);
-        assert_eq!(debug_registers.dr6, 0xffff_0ff1);
-    }
-
-    #[test]
-    fn intercepted_single_step_merges_bs_into_context_dr6() {
-        let launch = LaunchResult {
-            interruption_info: (1 << 31) | (3 << 8) | 1,
-            exit_qualification: 0x4000,
-            ..LaunchResult::default()
-        };
-        let mut debug_registers = TrueosX86DebugRegistersV1::default();
-        merge_transient_debug_exception(&mut debug_registers, &launch);
-        assert_eq!(debug_registers.dr6, 0x4000);
-    }
 }
 
 fn vmx_preemption_timer_ticks(quantum_ms: u64) -> (u32, u8) {

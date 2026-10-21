@@ -3,7 +3,6 @@ pub mod archive_cabi;
 mod archive_limits;
 pub mod blocking;
 pub mod codec;
-pub(crate) mod compute_budget;
 pub mod cursor;
 pub mod disc;
 pub mod fs;

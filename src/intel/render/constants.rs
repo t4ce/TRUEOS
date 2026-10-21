@@ -169,7 +169,7 @@ pub(crate) const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
 // Reserve twelve pages including the page-aligned descriptors.
 // Collection's continuous-alpha cube shader crosses the previous code page;
 // retain a separate descriptor page after the complete VS/PS/GS/HS/DS bundle.
-// WC3's computed-depth PS plus both relocated adjacency kernels reaches the
+// The computed-depth PS plus both relocated adjacency kernels reaches the
 // eleventh page; the descriptor region must have its own following page.
 const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 12 * 4096;
 const RESIDENT_SCENE_STATE_BYTES: usize =

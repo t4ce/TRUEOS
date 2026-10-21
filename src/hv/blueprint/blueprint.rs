@@ -1359,16 +1359,10 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         | "_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed" => {
             Some(portal_rust_alloc_zeroed as *const () as usize)
         }
-        _ => {
-            #[cfg(feature = "wc3")]
-            if let Some(address) = crate::hv::wc3::wc3_x86_cabi_resolve(name) {
-                return Some(address);
-            }
-            resolve_ring_runtime_import(name)
-                .or_else(|| resolve_runtime_abi_import(name))
-                .or_else(|| resolve_cabi_import(name))
-                .or_else(|| crate::unix_compat::resolve_import(name))
-        }
+        _ => resolve_ring_runtime_import(name)
+            .or_else(|| resolve_runtime_abi_import(name))
+            .or_else(|| resolve_cabi_import(name))
+            .or_else(|| crate::unix_compat::resolve_import(name)),
     }
 }
 
@@ -1463,12 +1457,6 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         }
         "trueos_service_lane_submit_job" => {
             Some(crate::r::blocking::trueos_service_lane_submit_job as *const () as usize)
-        }
-        "trueos_guest_compute_submit_job" => {
-            Some(crate::r::blocking::trueos_guest_compute_submit_job as *const () as usize)
-        }
-        "trueos_guest_compute_capacity" => {
-            Some(crate::r::blocking::trueos_guest_compute_capacity as *const () as usize)
         }
         "trueos_service_lane_available_capacity" => {
             Some(crate::r::blocking::trueos_service_lane_available_capacity as *const () as usize)
@@ -1795,7 +1783,10 @@ pub(crate) fn build_process_env(
             ("XDG_DATA_HOME", ".local/share"),
             ("XDG_STATE_HOME", ".local/state"),
         ] {
-            vars.insert(String::from(key), alloc::format!("{}/{leaf}", app_home.trim_end_matches('/')));
+            vars.insert(
+                String::from(key),
+                alloc::format!("{}/{leaf}", app_home.trim_end_matches('/')),
+            );
         }
     }
     if archive_stem == "voxy" {

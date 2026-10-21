@@ -11,6 +11,4 @@ unsafe extern "Rust" {
     pub fn trueos_service_lane_submit_job(job: Box<dyn FnOnce() + Send + 'static>) -> i32;
     pub fn trueos_service_lane_available_capacity() -> usize;
     pub fn trueos_service_lane_cancellation_requested() -> bool;
-    pub fn trueos_guest_compute_submit_job(job: Box<dyn FnMut() -> bool + Send + 'static>) -> i32;
-    pub fn trueos_guest_compute_capacity() -> usize;
 }

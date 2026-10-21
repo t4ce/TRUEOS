@@ -90,7 +90,7 @@ enum TriangleVertexFormat {
     Float3,
     /// One Float32x3 clip-space position and one Float32x2 texture coordinate.
     PosUv,
-    FixedGl,
+
     /// Two float4 attributes: homogeneous position and authored RGBA.
     VoxyHeadless,
     /// Two packed Uint32 attributes of the original Voxy figure mesh.
@@ -165,7 +165,7 @@ struct TrianglePbrMaterial {
 struct TriangleDrawPrep {
     /// Internal one-shot pre-clip VUE observation; never part of the client ABI.
     vue_capture: bool,
-    fixed_gl: Option<[u32; 10]>,
+
     voxy_headless: bool,
     voxy_figure: bool,
     microfont_aa: bool,
@@ -2446,10 +2446,7 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
     }
     if matches!(
         submit_name,
-        "font-tessel-3d-once"
-            | "font-outline-gpu-mesh-3d"
-            | "font-resident-3d"
-            | "resident-scene"
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d" | "resident-scene"
     ) || is_vs_draw_frontier_scratch_submit_name(submit_name)
         || is_font_vf_vue_ps_replay_submit_name(submit_name)
     {

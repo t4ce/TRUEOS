@@ -10,7 +10,7 @@ import argparse
 from pathlib import Path
 import re
 
-SYMBOLS = ("trueos_service_lane_submit_job", "trueos_service_lane_available_capacity", "trueos_service_lane_cancellation_requested", "trueos_guest_compute_submit_job", "trueos_guest_compute_capacity")
+SYMBOLS = ("trueos_service_lane_submit_job", "trueos_service_lane_available_capacity", "trueos_service_lane_cancellation_requested")
 
 
 def signature(source: str, symbol: str, definition: bool) -> str:
@@ -61,8 +61,6 @@ def check(kernel: Path, sdk: Path) -> None:
     for operation in (
         "OP_BP_SERVICE_LANE_CAPACITY",
         "OP_BP_SERVICE_LANE_CANCELLED",
-        "OP_BP_GUEST_COMPUTE_SUBMIT",
-        "OP_BP_GUEST_COMPUTE_CAPACITY",
     ):
         code = int(constants[operation], 16)
         collisions = [name for name, value in constants.items() if int(value, 16) == code]

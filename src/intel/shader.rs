@@ -294,11 +294,6 @@ pub(crate) fn triangle_pipeline_push_color_note() -> &'static str {
     generated_triangle::TRIANGLE_PIPELINE_PUSH_COLOR_NOTE
 }
 
-#[path = "../../crates/trueos-shader/generated_wc3_fixed.rs"]
-mod generated_wc3_fixed;
-pub(crate) fn wc3_fixed_pipeline() -> &'static TrianglePipeline {
-    generated_wc3_fixed::wc3_fixed_pipeline()
-}
 
 #[path = "../../crates/trueos-shader/generated_voxy_headless_tgl.rs"]
 mod voxy_headless_tgl;

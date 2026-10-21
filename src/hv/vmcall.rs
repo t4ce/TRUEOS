@@ -172,7 +172,6 @@ pub const OP_BP_VID_OPEN_V2: u32 = 0x183; // disc-qualified TRUEOSFS video path 
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141; // arg0 device,arg1 queue,payload IndexedDrawBatch -> TimelinePoint
 pub const OP_BP_VGPU_OFFSCREEN_INDEXED_BATCH_V1: u32 = 0x190;
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2: u32 = 0x14C; // arg0 device,arg1 queue,payload IndexedDrawBatchV2 -> TimelinePoint
-pub const OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1: u32 = 0x218; // arg0 device,arg1 queue,payload PreparedRasterBatchV1 -> TimelinePoint
 pub const OP_BP_VGPU_RETAINED_MESH_CREATE: u32 = 0x14D; // arg0 device,payload RetainedMeshDescriptor -> handle
 pub const OP_BP_VGPU_RETAINED_MESH_DESTROY: u32 = 0x14E; // arg0 device,arg1 mesh -> rc
 pub const OP_BP_VGPU_RETAINED_FRAME_SUBMIT: u32 = 0x14F; // arg0 device,arg1 queue,payload RetainedFrameSubmit -> TimelinePoint
@@ -187,7 +186,7 @@ const _: () = {
     assert!(OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V2 == 0x179);
     assert!(OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V3 == 0x17A);
     assert!(core::mem::size_of::<v::vgpu::IndexedDrawBatchV2>() <= PAYLOAD_CAP);
-    assert!(core::mem::size_of::<v::vgpu::PreparedRasterBatchV1>() <= PAYLOAD_CAP);
+
     assert!(core::mem::size_of::<v::vgpu::RetainedMeshDescriptor>() <= PAYLOAD_CAP);
     assert!(core::mem::size_of::<v::vgpu::RetainedFrameSubmit>() <= PAYLOAD_CAP);
     assert!(core::mem::size_of::<v::vgpu::RetainedFrameSubmitV2>() <= PAYLOAD_CAP);
@@ -336,8 +335,6 @@ pub const OP_BP_THREAD_SUBMIT: u32 = 0x217; // raw closure + payload stack bytes
 pub const OP_BP_STOP_CONTROL_V1: u32 = 0x21A; // arg0 register(0)/poll(1) -> rc/requested
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204; // no args -> advisory available native workers
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207; // no args -> closed native-job admission
-pub const OP_BP_GUEST_COMPUTE_SUBMIT: u32 = 0x215; // arg0/arg1 boxed strict-P compute job raw parts
-pub const OP_BP_GUEST_COMPUTE_CAPACITY: u32 = 0x216; // no args -> strict-P pool capacity
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
 pub const OP_BP_PLATFORM_WAKE_ONE: u32 = 0x63; // arg0 VM-local wait key -> woke bool
@@ -1228,10 +1225,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
-        
-        
-        
-        
+
+
+
+
         OP_PING => {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
             DispatchOutcome::Resume
@@ -1645,28 +1642,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 });
             let result = batch.ok_or(-22).and_then(|batch| {
                 crate::r::io::vgpu_cabi::broker_ui4_indexed_batch_submit_v2(
-                    principal, arg0, arg1, batch,
-                )
-            });
-            match result {
-                Ok(point) => write_record_response(vm_id, seq, 0, &point),
-                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
-            }
-            DispatchOutcome::Resume
-        }
-        OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1 => {
-            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
-            let batch = request_payload(vm_id, req_len)
-                .filter(|payload| {
-                    payload.len() == core::mem::size_of::<v::vgpu::PreparedRasterBatchV1>()
-                })
-                .map(|payload| unsafe {
-                    core::ptr::read_unaligned(
-                        payload.as_ptr().cast::<v::vgpu::PreparedRasterBatchV1>(),
-                    )
-                });
-            let result = batch.ok_or(-22).and_then(|batch| {
-                crate::r::io::vgpu_cabi::broker_ui4_prepared_raster_batch_v1(
                     principal, arg0, arg1, batch,
                 )
             });
@@ -3385,8 +3360,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (i64::from(rc)) as u64, 0);
             DispatchOutcome::Resume
         }
-        
-        
+
+
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -3562,31 +3537,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 _ => 22,
             };
             write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_GUEST_COMPUTE_SUBMIT => {
-            let rc = unsafe {
-                crate::r::blocking::submit_guest_compute_job_from_raw(
-                    vm_id,
-                    arg0 as usize,
-                    arg1 as usize,
-                )
-            };
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_GUEST_COMPUTE_CAPACITY => {
-            if arg0 != 0 || arg1 != 0 || req_len != 0 {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-            } else {
-                write_response(
-                    vm_id,
-                    seq,
-                    STATUS_OK,
-                    crate::r::blocking::guest_compute_capacity() as u64,
-                    0,
-                );
-            }
             DispatchOutcome::Resume
         }
         OP_BP_MIO_SOCKET_POLL_READY => {

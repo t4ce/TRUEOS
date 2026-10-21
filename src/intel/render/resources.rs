@@ -51,17 +51,19 @@ fn upload_triangle_shader_pipeline_at(
         .max(stage_end(ps.code_offset_bytes, ps.code_size_bytes).ok_or("shader-code-overflow")?);
     if let Some(host) = host_simd16 {
         graphics_end = graphics_end.max(
-            stage_end(host.code_offset_bytes, host.code_size_bytes).ok_or("shader-code-overflow")?,
+            stage_end(host.code_offset_bytes, host.code_size_bytes)
+                .ok_or("shader-code-overflow")?,
         );
     }
     if graphics_end > line_gs.code_offset_bytes.min(triangle_gs.code_offset_bytes) {
-        line_gs.code_offset_bytes = crate::intel::align_up(graphics_end, 64)
-            .ok_or("shader-code-overflow")?;
+        line_gs.code_offset_bytes =
+            crate::intel::align_up(graphics_end, 64).ok_or("shader-code-overflow")?;
         triangle_gs.code_offset_bytes = crate::intel::align_up(
             stage_end(line_gs.code_offset_bytes, line_gs.code_size_bytes)
                 .ok_or("shader-code-overflow")?,
             64,
-        ).ok_or("shader-code-overflow")?;
+        )
+        .ok_or("shader-code-overflow")?;
     }
 
     if pipeline.vs.meta.kernel.grf_used == 0 {
@@ -146,27 +148,37 @@ fn upload_triangle_shader_pipeline_at(
         if !matches!(warm.device_id, 0xa780 | 0x4680) {
             return Err("cube-tessellation-device");
         }
-        let (offsets, tess_end) = crate::intel::shader::patch_cube_upload_layout(
-            used_end, warm.draw_state_len)?;
+        let (offsets, tess_end) =
+            crate::intel::shader::patch_cube_upload_layout(used_end, warm.draw_state_len)?;
         let mut stages = [TriangleShaderStageLayout {
-            code_offset_bytes: 0, code_gpu_addr: 0, ksp_offset_bytes: 0,
-            ksp_gpu_addr: 0, code_size_bytes: 0,
+            code_offset_bytes: 0,
+            code_gpu_addr: 0,
+            ksp_offset_bytes: 0,
+            ksp_gpu_addr: 0,
+            code_size_bytes: 0,
         }; 2];
         for (index, code) in [
             &crate::intel::shader::patch_cube::TESS_CONTROL[..],
             &crate::intel::shader::patch_cube::TESS_EVAL[..],
-        ].into_iter().enumerate() {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let offset = offsets[index];
             upload_stage_code(warm.draw_state_virt, offset, code)?;
             stages[index] = TriangleShaderStageLayout {
-                code_offset_bytes: offset as u32, code_gpu_addr: bo_gpu_base + offset as u64,
-                ksp_offset_bytes: 0, ksp_gpu_addr: bo_gpu_base + offset as u64,
+                code_offset_bytes: offset as u32,
+                code_gpu_addr: bo_gpu_base + offset as u64,
+                ksp_offset_bytes: 0,
+                ksp_gpu_addr: bo_gpu_base + offset as u64,
                 code_size_bytes: (code.len() * 4) as u32,
             };
         }
         used_end = tess_end;
         Some(stages)
-    } else { None };
+    } else {
+        None
+    };
     if used_end > warm.draw_state_len {
         return Err("shader-code-exceeds-state-bo");
     }
@@ -616,7 +628,7 @@ fn prepare_triangle_draw_resources_for_geometry(
 
     Some(TriangleDrawPrep {
         vue_capture: false,
-        fixed_gl: None,
+
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
@@ -741,7 +753,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
 
     Some(TriangleDrawPrep {
         vue_capture: false,
-        fixed_gl: None,
+
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
@@ -829,7 +841,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
 
     Some(TriangleDrawPrep {
         vue_capture: false,
-        fixed_gl: None,
+
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
@@ -951,7 +963,10 @@ pub(crate) fn create_resident_indexed_mesh(
 
 /// Upload the authenticated WGPU position+UV vertex contract without
 /// discarding the second attribute at the broker boundary.
-#[expect(dead_code, reason = "triangle-only convenience entry point retained for kernel callers")]
+#[expect(
+    dead_code,
+    reason = "triangle-only convenience entry point retained for kernel callers"
+)]
 pub(crate) fn create_resident_textured_triangle_mesh(
     draw_vertices: &[[f32; 5]],
     draw_indices: &[u32],
@@ -1001,7 +1016,9 @@ pub(crate) fn create_resident_textured_indexed_mesh(
 
 #[cfg(test)]
 mod resident_textured_mesh_shape_tests {
-    use super::{ResidentScenePrimitiveTopology as Topology, validate_resident_textured_mesh_shape};
+    use super::{
+        ResidentScenePrimitiveTopology as Topology, validate_resident_textured_mesh_shape,
+    };
 
     const VERTICES: [[f32; 5]; 4] = [
         [-0.9, -0.9, 0.0, 0.0, 1.0],
@@ -1012,10 +1029,30 @@ mod resident_textured_mesh_shape_tests {
 
     #[test]
     fn four_index_quad_and_six_index_triangles_share_uv_vertices() {
-        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3], Topology::QuadList).is_ok());
-        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3, 0, 2], Topology::TriangleList).is_ok());
-        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3], Topology::TriangleList).is_err());
-        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3, 0, 2], Topology::QuadList).is_err());
+        assert!(
+            validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3], Topology::QuadList)
+                .is_ok()
+        );
+        assert!(
+            validate_resident_textured_mesh_shape(
+                &VERTICES,
+                &[0, 1, 2, 3, 0, 2],
+                Topology::TriangleList
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3], Topology::TriangleList)
+                .is_err()
+        );
+        assert!(
+            validate_resident_textured_mesh_shape(
+                &VERTICES,
+                &[0, 1, 2, 3, 0, 2],
+                Topology::QuadList
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1023,10 +1060,18 @@ mod resident_textured_mesh_shape_tests {
         for component in 0..5 {
             let mut vertices = VERTICES;
             vertices[3][component] = f32::NAN;
-            assert!(validate_resident_textured_mesh_shape(&vertices, &[0, 1, 2, 3], Topology::QuadList).is_err());
+            assert!(
+                validate_resident_textured_mesh_shape(&vertices, &[0, 1, 2, 3], Topology::QuadList)
+                    .is_err()
+            );
         }
-        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 4], Topology::QuadList).is_err());
-        assert!(validate_resident_textured_mesh_shape(&[], &[0, 1, 2, 3], Topology::QuadList).is_err());
+        assert!(
+            validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 4], Topology::QuadList)
+                .is_err()
+        );
+        assert!(
+            validate_resident_textured_mesh_shape(&[], &[0, 1, 2, 3], Topology::QuadList).is_err()
+        );
         assert!(validate_resident_textured_mesh_shape(&VERTICES, &[], Topology::QuadList).is_err());
     }
 }
@@ -1389,8 +1434,10 @@ const fn picasso_retained_uv_simd8_words() -> [u32; 24] {
     while index < words.len() {
         let offset = index * 4;
         words[index] = u32::from_le_bytes([
-            PICASSO_RETAINED_TEXTURED_PS8[offset], PICASSO_RETAINED_TEXTURED_PS8[offset + 1],
-            PICASSO_RETAINED_TEXTURED_PS8[offset + 2], PICASSO_RETAINED_TEXTURED_PS8[offset + 3],
+            PICASSO_RETAINED_TEXTURED_PS8[offset],
+            PICASSO_RETAINED_TEXTURED_PS8[offset + 1],
+            PICASSO_RETAINED_TEXTURED_PS8[offset + 2],
+            PICASSO_RETAINED_TEXTURED_PS8[offset + 3],
         ]);
         index += 1;
     }
@@ -1647,12 +1694,20 @@ mod picasso_uv_simd8_tests {
         assert_eq!(changed.ps.meta.kernel.sampler_count, 1);
         assert_eq!(changed.ps.meta.num_varying_inputs, 1);
         assert!(changed.ps.meta.uses_vmask);
-        let bytes: Vec<u8> = changed.ps.code.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let bytes: Vec<u8> = changed
+            .ps
+            .code
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
         assert_eq!(bytes, PICASSO_RETAINED_TEXTURED_PS8);
         // The cached ordinary UV mode remains the original SIMD16 pipeline.
         let ordinary = picasso_retained_textured_pipeline().unwrap();
         assert_eq!(ordinary.ps.code, original.ps.code);
-        assert_eq!(ordinary.ps.meta.kernel.dispatch_mode, crate::intel::shader::DispatchMode::Simd16);
+        assert_eq!(
+            ordinary.ps.meta.kernel.dispatch_mode,
+            crate::intel::shader::DispatchMode::Simd16
+        );
         assert_eq!(ordinary.ps.meta.kernel.grf_start_register, 6);
     }
 }
@@ -2233,6 +2288,7 @@ fn create_resident_churn_forward_with_admission(
         .map_err(|_| "churn-native-program")?;
     let fetch = program.vertex_fetch();
     let fixed = program.fixed_function();
+
     let sgvs = program.sgvs();
     let synthetic = program.synthetic_instance_id_element();
     let instancing = program.vf_instancing();
@@ -2622,9 +2678,13 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         return Err("maxpix-pointlist-contract");
     }
     let cube_patch = topology == ResidentScenePrimitiveTopology::CubePatchList1;
-    if cube_patch && (vertex_stride != 12 || vertices.len() != 12
-        || indices.len() != 44 || indices.iter().any(|&i| i != 0)
-        || vertices.iter().any(|&b| b != 0)) {
+    if cube_patch
+        && (vertex_stride != 12
+            || vertices.len() != 12
+            || indices.len() != 44
+            || indices.iter().any(|&i| i != 0)
+            || vertices.iter().any(|&b| b != 0))
+    {
         return Err("cube-patch-seed-contract");
     }
     if !matches!(vertex_stride, 24 | 32 | 48) && !(cube_patch && vertex_stride == 12) {
@@ -2668,9 +2728,13 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         resident.vertex_stride = 12;
         resident.vertex_format = TriangleVertexFormat::Float3;
         resident.front_end_contract = TriangleFrontEndContract {
-            label: "cube-patchlist1-hs3-tri-ds-room-palette-v7", vs_urb_output_length_override: Some(1),
-            vs_urb_read_length: 1, sbe_read_offset: 1, sbe_read_length: 1,
-            force_sbe_read_offset: true, force_sbe_read_length: true,
+            label: "cube-patchlist1-hs3-tri-ds-room-palette-v7",
+            vs_urb_output_length_override: Some(1),
+            vs_urb_read_length: 1,
+            sbe_read_offset: 1,
+            sbe_read_length: 1,
+            force_sbe_read_offset: true,
+            force_sbe_read_length: true,
             force_vs_with_vf_synthesized_vue: false,
         };
     }
@@ -2855,12 +2919,24 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     // complete 44-patch range so primitive IDs retain their baked meaning.
     if resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
         && (seeds.is_empty()
-            || draw_ranges.is_some_and(|ranges| ranges.is_empty() || ranges.len() > 2
-                || ranges.iter().any(|r| r.first_index != 0 || r.index_count != 44))
-            || seeds.iter().any(|seed| seed.scale[0] != seed.scale[1] || seed.scale[1] != seed.scale[2]
-                || seed.scale[0] <= 0.0 || seed.draw_group > 1
-                || (if seed.flags & 32768 != 0 { seed.draw_group != 0 }
-                    else { (seed.flags & 512 != 0) != (seed.draw_group == 1) })))
+            || draw_ranges.is_some_and(|ranges| {
+                ranges.is_empty()
+                    || ranges.len() > 2
+                    || ranges
+                        .iter()
+                        .any(|r| r.first_index != 0 || r.index_count != 44)
+            })
+            || seeds.iter().any(|seed| {
+                seed.scale[0] != seed.scale[1]
+                    || seed.scale[1] != seed.scale[2]
+                    || seed.scale[0] <= 0.0
+                    || seed.draw_group > 1
+                    || (if seed.flags & 32768 != 0 {
+                        seed.draw_group != 0
+                    } else {
+                        (seed.flags & 512 != 0) != (seed.draw_group == 1)
+                    })
+            }))
     {
         return Err("cube-patch-uniform-instance-contract");
     }
@@ -2921,12 +2997,18 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
             .unwrap_or("picasso-retained-transform-unavailable"),
     )?;
     let camera_bytes = encode_camera(camera)?;
-    let maxpix = core::ptr::eq(resident.pipeline.vs.code.as_ptr(),
-        crate::intel::shader::maxpix_tornado::pipeline().vs.code.as_ptr());
+    let maxpix = core::ptr::eq(
+        resident.pipeline.vs.code.as_ptr(),
+        crate::intel::shader::maxpix_tornado::pipeline()
+            .vs
+            .code
+            .as_ptr(),
+    );
     let point_width_raw = if maxpix {
-        maxpix_point_width_raw(camera.jitter_frame[3])
-            .ok_or("maxpix-point-width-range")?
-    } else { 0 };
+        maxpix_point_width_raw(camera.jitter_frame[3]).ok_or("maxpix-point-width-range")?
+    } else {
+        0
+    };
     let default_draw = [v::vgpu::RetainedDrawRange {
         first_index: 0,
         index_count: resident.index_count,
@@ -2975,7 +3057,9 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     resident
         .draw_group_count
         .store(ranges.len() as u32, Ordering::Release);
-    let previous_width = resident.point_width_raw.swap(point_width_raw, Ordering::AcqRel);
+    let previous_width = resident
+        .point_width_raw
+        .swap(point_width_raw, Ordering::AcqRel);
     if maxpix && previous_width != point_width_raw {
         crate::log_important!(target: "render";
             "maxpix-native: input-contract=pointer-v1 slots=4 point-width-u8.3={} point-width-px={}.{:03} pointer0-active={} pointer0-x={} pointer0-y={}\n",
@@ -3140,12 +3224,14 @@ fn prepare_resident_churn_forward_draw(
         return None;
     }
     let sampled_material = sampled_material.map(|mut material| {
-        if let Some(textures) = material.group_base_colors { material.base_color = textures[group]; }
+        if let Some(textures) = material.group_base_colors {
+            material.base_color = textures[group];
+        }
         material
     });
     Some(TriangleDrawPrep {
         vue_capture: false,
-        fixed_gl: None,
+
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
@@ -3185,14 +3271,21 @@ fn prepare_resident_churn_forward_draw(
         pbr_material: sampled_material
             .filter(|_| resident.vertex_format == TriangleVertexFormat::PosNormalUvTangent)
             .map(|material| TrianglePbrMaterial {
-                textures: [material.metallic_roughness, material.emissive, material.occlusion, material.normal]
-                    .map(|texture| texture.map(|texture| TriangleSampledTextureBinding {
+                textures: [
+                    material.metallic_roughness,
+                    material.emissive,
+                    material.occlusion,
+                    material.normal,
+                ]
+                .map(|texture| {
+                    texture.map(|texture| TriangleSampledTextureBinding {
                         gpu_addr: texture.storage.gpu_base(),
                         width: texture.width,
                         height: texture.height,
                         pitch: texture.pitch,
                         sampler_flags: texture.sampler_flags,
-                    })),
+                    })
+                }),
                 parameters: material.parameters,
             }),
         emissive_factor: [0.0; 3],
@@ -3228,7 +3321,7 @@ fn prepare_resident_churn_expanded_draw(
     }
     Some(TriangleDrawPrep {
         vue_capture: false,
-        fixed_gl: None,
+
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
@@ -3614,14 +3707,24 @@ fn reserve_persistent_render_gpu_va(bytes: usize) -> Option<u64> {
             return Some(start);
         }
     }
-    reserve_render_gpu_va_range(&PERSISTENT_RESOURCE_GPU_VA_CURSOR,
-        GPU_VA_PERSISTENT_RESOURCE_LIMIT, bytes)
-        .or_else(|| reserve_render_gpu_va_range(&PERSISTENT_RESOURCE_GPU_VA_SPILL_CURSOR,
-            GPU_VA_PERSISTENT_SPILL_LIMIT, bytes))
+    reserve_render_gpu_va_range(
+        &PERSISTENT_RESOURCE_GPU_VA_CURSOR,
+        GPU_VA_PERSISTENT_RESOURCE_LIMIT,
+        bytes,
+    )
+    .or_else(|| {
+        reserve_render_gpu_va_range(
+            &PERSISTENT_RESOURCE_GPU_VA_SPILL_CURSOR,
+            GPU_VA_PERSISTENT_SPILL_LIMIT,
+            bytes,
+        )
+    })
 }
 
 fn reserve_render_gpu_va_range(cursor: &AtomicU64, limit: u64, bytes: u64) -> Option<u64> {
-    if bytes == 0 { return None; }
+    if bytes == 0 {
+        return None;
+    }
     loop {
         let current = cursor.load(Ordering::Acquire);
         let aligned = (current.checked_add(4095)?) & !4095;
@@ -3724,7 +3827,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
     }
     Some(TriangleDrawPrep {
         vue_capture: false,
-        fixed_gl: None,
+
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
@@ -3785,7 +3888,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
 
     Some(TriangleDrawPrep {
         vue_capture: false,
-        fixed_gl: None,
+
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
@@ -4217,7 +4320,7 @@ fn prepare_vf_streamout_proof_resources(
 
     Some(TriangleDrawPrep {
         vue_capture: false,
-        fixed_gl: None,
+
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
@@ -4326,37 +4429,44 @@ fn submit_triangle_to_surface(
     )
 }
 
-/// State is appended to the resident vertex allocation and shares its fence/lifetime.
-pub(crate) fn create_resident_fixed_gl_mesh(
-    vertices: &[[f32; 16]], indices: &[u32], state: &[f32; 384],
-) -> Result<ResidentTriangleMesh, &'static str> {
-    if vertices.is_empty() || indices.is_empty() || indices.len() % 3 != 0
-        || vertices.iter().flatten().chain(state.iter()).any(|v| !v.is_finite())
-        || indices.iter().any(|i| *i as usize >= vertices.len()) { return Err("fixed-gl-mesh-shape"); }
-    let mut upload = vertices.to_vec();
-    for row in state.chunks_exact(16) { upload.push(row.try_into().unwrap()); }
-    let mut mesh = create_resident_triangle_mesh_typed(&upload, indices, TriangleVertexFormat::FixedGl, None)?;
-    mesh.vertex_count = vertices.len() as u32;
-    // The allocation also contains state, but VF and the state binding need
-    // the authored vertex extent. Otherwise BTI1/BTI2 point past the state.
-    mesh.vertex_bytes -= core::mem::size_of_val(state) as u32;
-    Ok(mesh)
-}
-
 /// Append the compiler's 96-byte constant range, with the last 16 bytes zero.
 pub(crate) fn create_resident_voxy_headless_mesh(
-    vertices: &[[f32; 16]], indices: &[u32], camera: &[f32; 20],
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    if !crate::intel::voxy_headless_target_active() { return Err("voxy-headless-target"); }
-    if vertices.is_empty() || indices.is_empty() || indices.len() % 3 != 0
-        || vertices.iter().flatten().chain(camera.iter()).any(|v| !v.is_finite())
-        || indices.iter().any(|i| *i as usize >= vertices.len()) { return Err("voxy-headless-shape"); }
-    let mut upload: Vec<[f32; 8]> = vertices.iter().map(|v| v[..8].try_into().unwrap()).collect();
+    if !crate::intel::voxy_headless_target_active() {
+        return Err("voxy-headless-target");
+    }
+    if vertices.is_empty()
+        || indices.is_empty()
+        || indices.len() % 3 != 0
+        || vertices
+            .iter()
+            .flatten()
+            .chain(camera.iter())
+            .any(|v| !v.is_finite())
+        || indices.iter().any(|i| *i as usize >= vertices.len())
+    {
+        return Err("voxy-headless-shape");
+    }
+    let mut upload: Vec<[f32; 8]> = vertices
+        .iter()
+        .map(|v| v[..8].try_into().unwrap())
+        .collect();
     let vertex_bytes = (upload.len() * 32) as u32;
     // Vertex stride 32 keeps the appended constant range 32-byte aligned.
-    let mut padded = [0.0; 24]; padded[..20].copy_from_slice(camera);
-    for row in padded.chunks_exact(8) { upload.push(row.try_into().unwrap()); }
-    let mut mesh = create_resident_triangle_mesh_typed(&upload, indices, TriangleVertexFormat::VoxyHeadless, None)?;
+    let mut padded = [0.0; 24];
+    padded[..20].copy_from_slice(camera);
+    for row in padded.chunks_exact(8) {
+        upload.push(row.try_into().unwrap());
+    }
+    let mut mesh = create_resident_triangle_mesh_typed(
+        &upload,
+        indices,
+        TriangleVertexFormat::VoxyHeadless,
+        None,
+    )?;
     mesh.vertex_count = vertices.len() as u32;
     mesh.vertex_bytes = vertex_bytes;
     Ok(mesh)
@@ -4382,15 +4492,14 @@ fn voxy_headless_stream_layout(capacity: usize) -> Option<(usize, usize, usize, 
         return None;
     }
     let camera_offset = capacity.checked_mul(VOXY_HEADLESS_VERTEX_STRIDE)?;
-    let index_offset = crate::intel::align_up(
-        camera_offset.checked_add(VOXY_HEADLESS_CAMERA_BYTES)?, 64,
-    )?;
+    let index_offset =
+        crate::intel::align_up(camera_offset.checked_add(VOXY_HEADLESS_CAMERA_BYTES)?, 64)?;
     let indirect_offset = crate::intel::align_up(
-        index_offset.checked_add(capacity.checked_mul(core::mem::size_of::<u32>())?)?, 64,
+        index_offset.checked_add(capacity.checked_mul(core::mem::size_of::<u32>())?)?,
+        64,
     )?;
-    let storage_bytes = crate::intel::align_up(
-        indirect_offset.checked_add(DRAW_INDEXED_INDIRECT_BYTES)?, 4096,
-    )?;
+    let storage_bytes =
+        crate::intel::align_up(indirect_offset.checked_add(DRAW_INDEXED_INDIRECT_BYTES)?, 4096)?;
     Some((camera_offset, index_offset, indirect_offset, storage_bytes))
 }
 
@@ -4400,14 +4509,26 @@ pub(crate) fn voxy_headless_stream_storage_bytes(capacity: usize) -> Option<usiz
 }
 
 fn validate_voxy_headless_stream_shape(
-    capacity: usize, vertices: &[[f32; 16]], indices: &[u32], camera: &[f32; 20],
+    capacity: usize,
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
 ) -> Result<(), &'static str> {
     if voxy_headless_stream_layout(capacity).is_none()
-        || vertices.is_empty() || indices.is_empty() || indices.len() % 3 != 0
-        || vertices.len() > capacity || indices.len() > capacity
-        || vertices.iter().flatten().chain(camera.iter()).any(|v| !v.is_finite())
+        || vertices.is_empty()
+        || indices.is_empty()
+        || indices.len() % 3 != 0
+        || vertices.len() > capacity
+        || indices.len() > capacity
+        || vertices
+            .iter()
+            .flatten()
+            .chain(camera.iter())
+            .any(|v| !v.is_finite())
         || indices.iter().any(|i| *i as usize >= vertices.len())
-        || camera[16] <= 0.0 || camera[17] <= 0.0 || camera[18] <= 0.0
+        || camera[16] <= 0.0
+        || camera[17] <= 0.0
+        || camera[18] <= 0.0
         || camera[19] <= camera[18]
     {
         return Err("voxy-headless-stream-shape");
@@ -4418,14 +4539,19 @@ fn validate_voxy_headless_stream_shape(
 /// Retain capacity descriptors and fixed camera/index/indirect addresses.
 /// Only the indexed-indirect record carries the current live draw count.
 pub(crate) fn create_resident_voxy_headless_streaming_mesh(
-    capacity: usize, vertices: &[[f32; 16]], indices: &[u32], camera: &[f32; 20],
+    capacity: usize,
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
 ) -> Result<ResidentTriangleMesh, &'static str> {
     if !crate::intel::voxy_headless_target_active() {
         return Err("voxy-headless-target");
     }
     validate_voxy_headless_stream_shape(capacity, vertices, indices, camera)?;
     let mesh = allocate_resident_voxy_headless_streaming_mesh(capacity)?;
-    if let Err(error) = update_resident_voxy_headless_streaming_mesh(&mesh, vertices, indices, camera) {
+    if let Err(error) =
+        update_resident_voxy_headless_streaming_mesh(&mesh, vertices, indices, camera)
+    {
         let _ = release_resident_triangle_mesh(&mesh);
         return Err(error);
     }
@@ -4437,13 +4563,20 @@ fn allocate_resident_voxy_headless_streaming_mesh(
 ) -> Result<ResidentTriangleMesh, &'static str> {
     voxy_headless_stream_layout(capacity).ok_or("voxy-headless-stream-layout")?;
     let mut upload = Vec::new();
-    upload.try_reserve_exact(capacity + 3).map_err(|_| "voxy-headless-stream-alloc")?;
+    upload
+        .try_reserve_exact(capacity + 3)
+        .map_err(|_| "voxy-headless-stream-alloc")?;
     upload.resize(capacity + 3, [0.0f32; 8]);
     let mut index_storage = Vec::new();
-    index_storage.try_reserve_exact(capacity).map_err(|_| "voxy-headless-stream-alloc")?;
+    index_storage
+        .try_reserve_exact(capacity)
+        .map_err(|_| "voxy-headless-stream-alloc")?;
     index_storage.resize(capacity, 0u32);
     let mut mesh = create_resident_triangle_mesh_typed(
-        &upload, &index_storage, TriangleVertexFormat::VoxyHeadless, None,
+        &upload,
+        &index_storage,
+        TriangleVertexFormat::VoxyHeadless,
+        None,
     )?;
     drop(upload);
     drop(index_storage);
@@ -4465,14 +4598,18 @@ fn validate_voxy_headless_stream_mesh_layout(
         || mesh.vertex_bytes as usize != camera_offset
         || mesh.index_count as usize != capacity
         || mesh.index_bytes as usize != capacity * core::mem::size_of::<u32>()
-        || mesh.storage_virt.is_null() || mesh.storage_bytes < storage_bytes
-        || mesh.gpu_base == 0 || mesh.gpu_base & 31 != 0
+        || mesh.storage_virt.is_null()
+        || mesh.storage_bytes < storage_bytes
+        || mesh.gpu_base == 0
+        || mesh.gpu_base & 31 != 0
         || mesh.vertex_gpu_addr != mesh.gpu_base
         || mesh.gpu_base.checked_add(index_offset as u64) != Some(mesh.index_gpu_addr)
         || mesh.gpu_base.checked_add(indirect_offset as u64) != Some(mesh.indirect_args_gpu_addr)
         || mesh.indirect_args_offset != indirect_offset
         || mesh.gpu_base.checked_add(storage_bytes as u64).is_none()
-        || (mesh.storage_virt as usize).checked_add(storage_bytes).is_none()
+        || (mesh.storage_virt as usize)
+            .checked_add(storage_bytes)
+            .is_none()
     {
         return Err("voxy-headless-stream-layout");
     }
@@ -4483,7 +4620,10 @@ fn validate_voxy_headless_stream_mesh_layout(
 /// hold an exclusive broker operation lease through the following submission;
 /// this function neither admits GPU work nor establishes GPU retirement.
 pub(crate) fn update_resident_voxy_headless_streaming_mesh(
-    mesh: &ResidentTriangleMesh, vertices: &[[f32; 16]], indices: &[u32], camera: &[f32; 20],
+    mesh: &ResidentTriangleMesh,
+    vertices: &[[f32; 16]],
+    indices: &[u32],
+    camera: &[f32; 20],
 ) -> Result<(), &'static str> {
     validate_voxy_headless_stream_shape(mesh.vertex_count as usize, vertices, indices, camera)?;
     let (camera_offset, index_offset, _, _) = validate_voxy_headless_stream_mesh_layout(mesh)?;
@@ -4498,16 +4638,21 @@ pub(crate) fn update_resident_voxy_headless_streaming_mesh(
             );
         }
         core::ptr::copy_nonoverlapping(
-            padded.as_ptr().cast::<u8>(), mesh.storage_virt.add(camera_offset),
+            padded.as_ptr().cast::<u8>(),
+            mesh.storage_virt.add(camera_offset),
             VOXY_HEADLESS_CAMERA_BYTES,
         );
         core::ptr::copy_nonoverlapping(
-            indices.as_ptr().cast::<u8>(), mesh.storage_virt.add(index_offset),
+            indices.as_ptr().cast::<u8>(),
+            mesh.storage_virt.add(index_offset),
             core::mem::size_of_val(indices),
         );
         crate::intel::dma_flush(mesh.storage_virt, vertices.len() * VOXY_HEADLESS_VERTEX_STRIDE);
         crate::intel::dma_flush(mesh.storage_virt.add(camera_offset), VOXY_HEADLESS_CAMERA_BYTES);
-        crate::intel::dma_flush(mesh.storage_virt.add(index_offset), core::mem::size_of_val(indices));
+        crate::intel::dma_flush(
+            mesh.storage_virt.add(index_offset),
+            core::mem::size_of_val(indices),
+        );
     }
     // Publish the live count only after the addressed payload is coherent.
     update_resident_triangle_draw_indexed_indirect(mesh, indices.len() as u32, 1, 0, 0, 0)
@@ -4523,10 +4668,13 @@ fn validate_voxy_headless_raw_stream_shape(
     let (vertex_bytes, _, _, _) =
         voxy_headless_stream_layout(capacity).ok_or("voxy-headless-stream-layout")?;
     let index_bytes = capacity * core::mem::size_of::<u32>();
-    if live_index_count == 0 || live_index_count % 3 != 0
+    if live_index_count == 0
+        || live_index_count % 3 != 0
         || live_index_count as usize > capacity
         || camera.iter().any(|value| !value.is_finite())
-        || camera[16] <= 0.0 || camera[17] <= 0.0 || camera[18] <= 0.0
+        || camera[16] <= 0.0
+        || camera[17] <= 0.0
+        || camera[18] <= 0.0
         || camera[19] <= camera[18]
     {
         return Err("voxy-headless-stream-shape");
@@ -4536,7 +4684,9 @@ fn validate_voxy_headless_raw_stream_shape(
         if offset % VOXY_HEADLESS_VERTEX_STRIDE != 0
             || bytes.len() % VOXY_HEADLESS_VERTEX_STRIDE != 0
             || *offset < vertex_end
-            || offset.checked_add(bytes.len()).is_none_or(|end| end > vertex_bytes)
+            || offset
+                .checked_add(bytes.len())
+                .is_none_or(|end| end > vertex_bytes)
         {
             return Err("voxy-headless-stream-vertex-range");
         }
@@ -4547,10 +4697,12 @@ fn validate_voxy_headless_raw_stream_shape(
         if offset % core::mem::size_of::<u32>() != 0
             || bytes.len() % core::mem::size_of::<u32>() != 0
             || *offset < index_end
-            || offset.checked_add(bytes.len()).is_none_or(|end| end > index_bytes)
-            || bytes.chunks_exact(4).any(|word| {
-                u32::from_le_bytes(word.try_into().unwrap()) as usize >= capacity
-            })
+            || offset
+                .checked_add(bytes.len())
+                .is_none_or(|end| end > index_bytes)
+            || bytes
+                .chunks_exact(4)
+                .any(|word| u32::from_le_bytes(word.try_into().unwrap()) as usize >= capacity)
         {
             return Err("voxy-headless-stream-index-range");
         }
@@ -4573,11 +4725,19 @@ pub(crate) fn create_resident_voxy_headless_streaming_mesh_raw(
         return Err("voxy-headless-target");
     }
     validate_voxy_headless_raw_stream_shape(
-        capacity, vertex_updates, index_updates, camera, live_index_count,
+        capacity,
+        vertex_updates,
+        index_updates,
+        camera,
+        live_index_count,
     )?;
     let mesh = allocate_resident_voxy_headless_streaming_mesh(capacity)?;
     if let Err(error) = update_resident_voxy_headless_streaming_mesh_raw(
-        &mesh, vertex_updates, index_updates, camera, live_index_count,
+        &mesh,
+        vertex_updates,
+        index_updates,
+        camera,
+        live_index_count,
     ) {
         let _ = release_resident_triangle_mesh(&mesh);
         return Err(error);
@@ -4589,9 +4749,13 @@ pub(crate) fn create_resident_voxy_headless_streaming_mesh_raw(
 // exclusive operation lease. Comparing just the supplied range avoids a flush
 // for unchanged camera/indirect data without scanning the retained mesh.
 fn write_voxy_headless_stream_bytes_if_changed(
-    mesh: &ResidentTriangleMesh, offset: usize, bytes: &[u8],
+    mesh: &ResidentTriangleMesh,
+    offset: usize,
+    bytes: &[u8],
 ) {
-    if bytes.is_empty() { return; }
+    if bytes.is_empty() {
+        return;
+    }
     unsafe {
         let target = mesh.storage_virt.add(offset);
         if core::slice::from_raw_parts(target, bytes.len()) != bytes {
@@ -4621,7 +4785,11 @@ pub(crate) fn update_resident_voxy_headless_streaming_mesh_raw(
         validate_voxy_headless_stream_mesh_layout(mesh)?;
     // Check the whole transaction before touching even its first valid range.
     validate_voxy_headless_raw_stream_shape(
-        mesh.vertex_count as usize, vertex_updates, index_updates, camera, live_index_count,
+        mesh.vertex_count as usize,
+        vertex_updates,
+        index_updates,
+        camera,
+        live_index_count,
     )?;
     for (offset, bytes) in vertex_updates {
         write_voxy_headless_stream_bytes_if_changed(mesh, *offset, bytes);
@@ -4634,7 +4802,10 @@ pub(crate) fn update_resident_voxy_headless_streaming_mesh_raw(
     };
     write_voxy_headless_stream_bytes_if_changed(mesh, camera_offset, camera_bytes);
     let mut indirect = [0u8; DRAW_INDEXED_INDIRECT_BYTES];
-    for (word, value) in indirect.chunks_exact_mut(4).zip([live_index_count, 1, 0, 0, 0]) {
+    for (word, value) in indirect
+        .chunks_exact_mut(4)
+        .zip([live_index_count, 1, 0, 0, 0])
+    {
         word.copy_from_slice(&value.to_le_bytes());
     }
     // Publish the live count only after every addressed dirty range is coherent.
@@ -4656,11 +4827,13 @@ mod voxy_headless_streaming_tests {
     }
 
     fn vertices(count: usize) -> Vec<[f32; 16]> {
-        (0..count).map(|index| {
-            let mut vertex = [999.0; 16];
-            vertex[..8].copy_from_slice(&[index as f32, 2.0, 3.0, 1.0, 0.9, 0.55, 0.25, 1.0]);
-            vertex
-        }).collect()
+        (0..count)
+            .map(|index| {
+                let mut vertex = [999.0; 16];
+                vertex[..8].copy_from_slice(&[index as f32, 2.0, 3.0, 1.0, 0.9, 0.55, 0.25, 1.0]);
+                vertex
+            })
+            .collect()
     }
 
     fn fixture(capacity: usize, storage: &mut [u8]) -> ResidentTriangleMesh {
@@ -4668,13 +4841,21 @@ mod voxy_headless_streaming_tests {
         assert!(storage.len() >= bytes);
         let gpu = 0x2000_0000;
         ResidentTriangleMesh {
-            storage_phys: 0x1_0010_0000, storage_virt: storage.as_mut_ptr(), storage_bytes: bytes,
-            gpu_base: gpu, vertex_gpu_addr: gpu, vertex_count: capacity as u32,
-            vertex_bytes: camera as u32, vertex_stride: 32,
+            storage_phys: 0x1_0010_0000,
+            storage_virt: storage.as_mut_ptr(),
+            storage_bytes: bytes,
+            gpu_base: gpu,
+            vertex_gpu_addr: gpu,
+            vertex_count: capacity as u32,
+            vertex_bytes: camera as u32,
+            vertex_stride: 32,
             vertex_format: TriangleVertexFormat::VoxyHeadless,
-            index_gpu_addr: gpu + index as u64, index_count: capacity as u32,
-            index_bytes: (capacity * 4) as u32, indirect_args_gpu_addr: gpu + indirect as u64,
-            indirect_args_offset: indirect, carrier: None,
+            index_gpu_addr: gpu + index as u64,
+            index_count: capacity as u32,
+            index_bytes: (capacity * 4) as u32,
+            indirect_args_gpu_addr: gpu + indirect as u64,
+            indirect_args_offset: indirect,
+            carrier: None,
         }
     }
 
@@ -4690,8 +4871,10 @@ mod voxy_headless_streaming_tests {
         for count in [0, VOXY_HEADLESS_MAX_STREAM_CAPACITY + 1, usize::MAX] {
             assert_eq!(voxy_headless_stream_capacity(count, count), None);
         }
-        assert_eq!(voxy_headless_stream_layout(780_000),
-            Some((24_960_000, 24_960_128, 28_080_128, 28_082_176)));
+        assert_eq!(
+            voxy_headless_stream_layout(780_000),
+            Some((24_960_000, 24_960_128, 28_080_128, 28_082_176))
+        );
         assert_eq!(voxy_headless_stream_storage_bytes(780_000), Some(28_082_176));
         for capacity in [0, 4, VOXY_HEADLESS_MAX_STREAM_CAPACITY + 3, usize::MAX] {
             assert!(voxy_headless_stream_storage_bytes(capacity).is_none());
@@ -4710,7 +4893,8 @@ mod voxy_headless_streaming_tests {
             let indices: Vec<u32> = (0..count as u32).collect();
             let mut camera = camera();
             camera[0] = count as f32;
-            update_resident_voxy_headless_streaming_mesh(&mesh, &vertices, &indices, &camera).unwrap();
+            update_resident_voxy_headless_streaming_mesh(&mesh, &vertices, &indices, &camera)
+                .unwrap();
             assert_eq!(mesh.vertex_count, capacity as u32);
             assert_eq!(mesh.index_count, capacity as u32);
             assert_eq!(mesh.vertex_bytes as usize, capacity * 32);
@@ -4724,11 +4908,21 @@ mod voxy_headless_streaming_tests {
                 assert_eq!(&storage[at..at + 4], &expected.to_le_bytes());
             }
             assert_eq!(&storage[camera_offset + 80..camera_offset + 96], &[0; 16]);
-            assert_eq!(&storage[index_offset..index_offset + count * 4],
-                &indices.iter().flat_map(|i| i.to_le_bytes()).collect::<Vec<_>>());
+            assert_eq!(
+                &storage[index_offset..index_offset + count * 4],
+                &indices
+                    .iter()
+                    .flat_map(|i| i.to_le_bytes())
+                    .collect::<Vec<_>>()
+            );
             let words = [count as u32, 1, 0, 0, 0];
-            assert_eq!(&storage[indirect_offset..indirect_offset + 20],
-                &words.iter().flat_map(|i| i.to_le_bytes()).collect::<Vec<_>>());
+            assert_eq!(
+                &storage[indirect_offset..indirect_offset + 20],
+                &words
+                    .iter()
+                    .flat_map(|i| i.to_le_bytes())
+                    .collect::<Vec<_>>()
+            );
         }
         // Unused capacity is neither uploaded nor included in the live draw.
         assert!(storage[576 * 32..camera_offset].iter().all(|b| *b == 0xAD));
@@ -4742,30 +4936,51 @@ mod voxy_headless_streaming_tests {
         let valid = vertices(3);
         let camera = camera();
         for bad_indices in [&[0, 1, 3][..], &[0, 1][..], &[][..], &[0; 9][..]] {
-            assert!(update_resident_voxy_headless_streaming_mesh(&mesh, &valid, bad_indices, &camera).is_err());
+            assert!(
+                update_resident_voxy_headless_streaming_mesh(&mesh, &valid, bad_indices, &camera)
+                    .is_err()
+            );
             assert_eq!(storage, original);
         }
         for component in [0, 7, 15] {
             let mut bad = valid.clone();
             bad[0][component] = f32::NAN;
-            assert!(update_resident_voxy_headless_streaming_mesh(&mesh, &bad, &[0, 1, 2], &camera).is_err());
+            assert!(
+                update_resident_voxy_headless_streaming_mesh(&mesh, &bad, &[0, 1, 2], &camera)
+                    .is_err()
+            );
             assert_eq!(storage, original);
         }
-        assert!(update_resident_voxy_headless_streaming_mesh(&mesh, &vertices(7), &[0, 1, 2], &camera).is_err());
+        assert!(
+            update_resident_voxy_headless_streaming_mesh(&mesh, &vertices(7), &[0, 1, 2], &camera)
+                .is_err()
+        );
         for component in [0, 19] {
             let mut bad = camera;
             bad[component] = f32::INFINITY;
-            assert!(update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &bad).is_err());
+            assert!(
+                update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &bad)
+                    .is_err()
+            );
             assert_eq!(storage, original);
         }
         mesh.vertex_stride = 64;
-        assert!(update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &camera).is_err());
+        assert!(
+            update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &camera)
+                .is_err()
+        );
         mesh.vertex_stride = 32;
         mesh.index_gpu_addr += 64;
-        assert!(update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &camera).is_err());
+        assert!(
+            update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &camera)
+                .is_err()
+        );
         mesh.index_gpu_addr -= 64;
         mesh.indirect_args_offset += 64;
-        assert!(update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &camera).is_err());
+        assert!(
+            update_resident_voxy_headless_streaming_mesh(&mesh, &valid, &[0, 1, 2], &camera)
+                .is_err()
+        );
         assert_eq!(storage, original);
     }
 }
@@ -4773,19 +4988,34 @@ mod voxy_headless_streaming_tests {
 /// Append the original uniform blocks to the packed mesh. One resident
 /// allocation pins geometry and pose through the exact Render0 completion.
 pub(crate) fn create_resident_voxy_figure_mesh(
-    vertices: &[[u32; 2]], indices: &[u32], state: &[u8; v::vgpu::VOXY_FIGURE_STATE_BYTES],
+    vertices: &[[u32; 2]],
+    indices: &[u32],
+    state: &[u8; v::vgpu::VOXY_FIGURE_STATE_BYTES],
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    if !crate::intel::voxy_figure_target_active() { return Err("voxy-figure-target"); }
-    if vertices.is_empty() || vertices.len() % 4 != 0 || indices.is_empty()
-        || indices.len() % 3 != 0 || indices.iter().any(|i| *i as usize >= vertices.len()) {
+    if !crate::intel::voxy_figure_target_active() {
+        return Err("voxy-figure-target");
+    }
+    if vertices.is_empty()
+        || vertices.len() % 4 != 0
+        || indices.is_empty()
+        || indices.len() % 3 != 0
+        || indices.iter().any(|i| *i as usize >= vertices.len())
+    {
         return Err("voxy-figure-mesh-shape");
     }
     let mut upload = vertices.to_vec();
     for raw in state.chunks_exact(8) {
-        upload.push([u32::from_le_bytes(raw[..4].try_into().unwrap()),
-                     u32::from_le_bytes(raw[4..].try_into().unwrap())]);
+        upload.push([
+            u32::from_le_bytes(raw[..4].try_into().unwrap()),
+            u32::from_le_bytes(raw[4..].try_into().unwrap()),
+        ]);
     }
-    let mut mesh = create_resident_triangle_mesh_typed(&upload, indices, TriangleVertexFormat::VoxyFigure, None)?;
+    let mut mesh = create_resident_triangle_mesh_typed(
+        &upload,
+        indices,
+        TriangleVertexFormat::VoxyFigure,
+        None,
+    )?;
     mesh.vertex_count = vertices.len() as u32;
     mesh.vertex_bytes = (vertices.len() * 8) as u32;
     Ok(mesh)

@@ -12,7 +12,7 @@ GENERATED=ROOT/'crates/trueos-shader/generated_microfont_line_ends.rs'
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 def fingerprint():
-    return hashlib.sha256(b''.join(p.read_bytes() for p in [Path(__file__),FRAG,VERT,DUMPER,ROOT/'tools/helio-intel-bake/bake.py',ROOT/'tools/wc3-fixed-bake/bake.py'])).hexdigest()
+    return hashlib.sha256(b''.join(p.read_bytes() for p in [Path(__file__),FRAG,VERT,DUMPER,ROOT/'tools/helio-intel-bake/bake.py',HERE/'pipeline_emitter.py'])).hexdigest()
 def main():
     global FRAG, VERT, OUT, GENERATED
     parser=argparse.ArgumentParser();parser.add_argument('--ensure-current',action='store_true');parser.add_argument('--mesa-build',type=Path,default=ROOT/'bld/toolchains/microfont-dista-mesa');parser.add_argument('--mask',action='store_true');args=parser.parse_args()
@@ -29,7 +29,7 @@ def main():
             print('microfont-line-ends: native shader current');return
     work=ROOT/('bld/microfont-mask-bake' if args.mask else 'bld/microfont-line-end-bake');work.mkdir(parents=True,exist_ok=True);OUT.mkdir(parents=True,exist_ok=True)
     baker=module('helio_baker',ROOT/'tools/helio-intel-bake/bake.py')
-    emitter=module('fixed_baker',ROOT/'tools/wc3-fixed-bake/bake.py')
+    emitter=module('pipeline_emitter',HERE/'pipeline_emitter.py')
     stages=[]
     for stage,path in [('vert',VERT),('frag',FRAG)]:
         target=work/f'{stem}.{stage}.spv';subprocess.run(['glslc','--target-env=vulkan1.1',str(path),'-o',str(target)],check=True);stages.append(target)
@@ -65,7 +65,7 @@ def main():
         if 'illegal' in result.stdout.lower():raise SystemExit('Invalid native shader')
         (OUT/f'{stem}.{stage}.iga.txt').write_text('\n'.join(l.rstrip() for l in result.stdout.splitlines())+'\n')
     emitter.GENERATED=GENERATED;emitter.emit_rust(vs,ps,v,p)
-    generated=GENERATED.read_text().replace('tools/wc3-fixed-bake/bake.py','tools/microfont-line-end-bake/bake.py').replace('WC3_FIXED','MICROFONT_LINE_END').replace('wc3_fixed_pipeline','microfont_line_end_pipeline')
+    generated=GENERATED.read_text()
     # The emitter's reusable VS/PS declarations default to zero pushed bytes.
     at=generated.index('    ps: TrianglePixelShader')
     generated=generated[:at]+generated[at:].replace('push_constant_bytes: 0,','push_constant_bytes: 64,',1)

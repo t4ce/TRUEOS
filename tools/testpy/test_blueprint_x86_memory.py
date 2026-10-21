@@ -42,25 +42,6 @@ for signature in [
     harness += item(signature) + "\n"
 harness += r'''
 #[test]
-fn x86_session_reserves_asset_memory_before_generic_classification() {
-    use hv::blueprint::*;
-    let imports = [
-        ElfImport { name: "trueos_cabi_x86_address_space_create_v1" },
-        ElfImport { name: "trueos_tokio_spawn" },
-        ElfImport { name: "pthread_create" },
-    ];
-    // Capability detection also works for renamed archives and tiny launchers.
-    for archive in ["wc3.bp", "renamed.bp"] {
-        let module = BlueprintModule { raw_payload_len: 1024, _data: &[] };
-        let p = estimate_blueprint_memory_profile(archive, &module, &[], &imports);
-        assert_eq!(p.class.label(), "x86-session");
-        assert_eq!(p.heap_lower_mib, 2048);
-        assert_eq!(p.heap_recommended_mib, 2048);
-        assert_eq!(p.heap_upper_mib, 2048);
-        assert!(p.heap_lower_mib * MIB > 1024 * MIB + 128 * MIB);
-    }
-}
-#[test]
 fn ram_asset_ingestion_takes_priority_over_incidental_server_imports() {
     use hv::blueprint::*;
     let imports = [

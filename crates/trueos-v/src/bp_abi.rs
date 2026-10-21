@@ -44,83 +44,6 @@ pub struct TrueosLifecycleIdentity {
     pub reserved: u32,
 }
 
-/// WC3-private generic 32-bit execution context register state.
-///
-/// The symbols using this layout are only resolved from the `wc3` kernel
-/// feature boundary; this declaration is kept byte-for-byte compatible with
-/// the Blueprint SDK so the pack guard can reject drift.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub struct TrueosX86RegistersV1 {
-    pub eax: u32,
-    pub ebx: u32,
-    pub ecx: u32,
-    pub edx: u32,
-    pub esi: u32,
-    pub edi: u32,
-    pub ebp: u32,
-    pub esp: u32,
-    pub eip: u32,
-    pub eflags: u32,
-    pub fs_base: u32,
-}
-
-/// Context-owned architectural debug-register state for a generic x86 guest.
-///
-/// This deliberately remains separate from `TrueosX86RegistersV1`: the latter
-/// is an existing C ABI layout and must stay byte-for-byte stable.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct TrueosX86DebugRegistersV1 {
-    pub dr0: u32,
-    pub dr1: u32,
-    pub dr2: u32,
-    pub dr3: u32,
-    pub dr6: u32,
-    pub dr7: u32,
-}
-
-impl Default for TrueosX86DebugRegistersV1 {
-    fn default() -> Self {
-        Self {
-            dr0: 0,
-            dr1: 0,
-            dr2: 0,
-            dr3: 0,
-            dr6: 0,
-            dr7: 0x400,
-        }
-    }
-}
-
-/// Complete context-owned x87/SSE/AVX state for a generic x86 guest.
-pub const TRUEOS_X86_EXTENDED_STATE_BYTES: usize = 832;
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct TrueosX86ExtendedStateV1 {
-    pub mask: u64,
-    pub bytes: [u8; TRUEOS_X86_EXTENDED_STATE_BYTES],
-}
-
-impl Default for TrueosX86ExtendedStateV1 {
-    fn default() -> Self {
-        Self {
-            mask: 0,
-            bytes: [0; TRUEOS_X86_EXTENDED_STATE_BYTES],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub struct TrueosX86ExitV1 {
-    pub kind: u32,
-    pub detail: u32,
-    pub qualification: u64,
-    pub registers: TrueosX86RegistersV1,
-}
-
 pub const LUMEN_PHASE_IDLE: u32 = 0;
 pub const LUMEN_PHASE_OPENING: u32 = 1;
 pub const LUMEN_PHASE_READY: u32 = 2;
@@ -798,10 +721,8 @@ unsafe extern "C" {
         out: *mut TrueosUi4ResizeEvent,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_first_presentation_take(window_id: u32) -> i32;
-    pub fn trueos_cabi_ui4_scene_frame_was_presented_v1(
-        window_id: u32,
-        publish_serial: u64,
-    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_frame_was_presented_v1(window_id: u32, publish_serial: u64)
+    -> i32;
     pub fn trueos_cabi_ui4_scene_output_dimensions() -> u64;
     pub fn trueos_cabi_clipboard_command_v1(
         window_id: u32,
@@ -863,7 +784,14 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_escape_key_action(window_id: u32, action: u32) -> i32;
     // Cursor-scoped drag buffers. Window zero is the caller's Shell3 lease.
-    pub fn trueos_cabi_ui4_drag_begin_v1(window_id: u32, kind: u32, label: *const u8, label_len: usize, payload: *const u8, payload_len: usize) -> i32;
+    pub fn trueos_cabi_ui4_drag_begin_v1(
+        window_id: u32,
+        kind: u32,
+        label: *const u8,
+        label_len: usize,
+        payload: *const u8,
+        payload_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_ui4_drag_cancel_v1(token: i32) -> i32;
     pub fn trueos_cabi_ui4_drag_take_v1(window_id: u32, out: *mut u8, cap: usize) -> i32;
     pub fn trueos_cabi_ui4_scene_enable_collapse_v1(
@@ -1170,7 +1098,12 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_archive_lz4_decode_start_v1(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_archive_result_len_v1(id: u32) -> isize;
-    pub fn trueos_cabi_archive_result_read_v1(id: u32, offset: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_archive_result_read_v1(
+        id: u32,
+        offset: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
     pub fn trueos_cabi_archive_status(id: u32) -> i32;
     pub fn trueos_cabi_archive_report(id: u32, out: *mut TrueosArchiveReport) -> i32;
     pub fn trueos_cabi_archive_discard(id: u32) -> i32;
@@ -1183,7 +1116,10 @@ unsafe extern "C" {
     ) -> u32;
     pub fn trueos_cabi_net_prewarm_url_start(url_ptr: *const u8, url_len: usize) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_start(url_ptr: *const u8, url_len: usize) -> u32;
-    pub fn trueos_cabi_net_fetch_bytes_start_happy_eyeballs(url_ptr: *const u8, url_len: usize) -> u32;
+    pub fn trueos_cabi_net_fetch_bytes_start_happy_eyeballs(
+        url_ptr: *const u8,
+        url_len: usize,
+    ) -> u32;
     pub fn trueos_cabi_net_fetch_post_json_start(
         url_ptr: *const u8,
         url_len: usize,
@@ -1378,8 +1314,21 @@ unsafe extern "C" {
     pub fn trueos_cabi_audio_native_sample_remove_v1(handle: u32, sample_id: u64) -> i32;
 
     pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
-    pub fn trueos_cabi_vgpu_scalar_f32_v1(device: u64, code: u64, bytes: usize, a: f32, b: f32, out: *mut f32) -> i32;
-    pub fn trueos_cabi_vgpu_call_f32_v1(code: *const u8, bytes: usize, a: f32, b: f32, out: *mut f32) -> i32;
+    pub fn trueos_cabi_vgpu_scalar_f32_v1(
+        device: u64,
+        code: u64,
+        bytes: usize,
+        a: f32,
+        b: f32,
+        out: *mut f32,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_call_f32_v1(
+        code: *const u8,
+        bytes: usize,
+        a: f32,
+        b: f32,
+        out: *mut f32,
+    ) -> i32;
     pub fn trueos_cabi_vgpu_close(device: u64) -> i32;
     pub fn trueos_cabi_vgpu_device_info(device: u64, out_info: *mut crate::vgpu::DeviceInfo)
     -> i32;
@@ -1462,12 +1411,6 @@ unsafe extern "C" {
         device: u64,
         queue: u64,
         batch: *const crate::vgpu::IndexedDrawBatchV2,
-        out_point: *mut crate::vgpu::TimelinePoint,
-    ) -> i32;
-    pub fn trueos_cabi_vgpu_ui4_prepared_raster_batch_v1(
-        device: u64,
-        queue: u64,
-        batch: *const crate::vgpu::PreparedRasterBatchV1,
         out_point: *mut crate::vgpu::TimelinePoint,
     ) -> i32;
     pub fn trueos_cabi_vgpu_retained_mesh_create(
@@ -1734,16 +1677,34 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_shell2_frontend_detach_v1() -> i32;
 
-
-
-
-
-    pub fn trueos_cabi_shell3_session_open_v1(script_ptr: *const u8, script_len: usize, cols: u32, rows: u32, stdin_open: u32) -> i64;
-    pub fn trueos_cabi_shell3_session_read_v1(session: u64, out_ptr: *mut u8, out_cap: usize) -> isize;
-    pub fn trueos_cabi_shell3_session_write_v1(session: u64, bytes_ptr: *const u8, bytes_len: usize) -> isize;
-    pub fn trueos_cabi_shell3_session_control_v1(session: u64, operation: u32, cols: u32, rows: u32) -> i32;
+    pub fn trueos_cabi_shell3_session_open_v1(
+        script_ptr: *const u8,
+        script_len: usize,
+        cols: u32,
+        rows: u32,
+        stdin_open: u32,
+    ) -> i64;
+    pub fn trueos_cabi_shell3_session_read_v1(
+        session: u64,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_shell3_session_write_v1(
+        session: u64,
+        bytes_ptr: *const u8,
+        bytes_len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_shell3_session_control_v1(
+        session: u64,
+        operation: u32,
+        cols: u32,
+        rows: u32,
+    ) -> i32;
     pub fn trueos_cabi_shell3_window_v1(x: i32, y: i32, width: u32, height: u32) -> i64;
-    pub fn trueos_cabi_blueprint_launch_script_v1(payload_ptr: *const u8, payload_len: usize) -> i32;
+    pub fn trueos_cabi_blueprint_launch_script_v1(
+        payload_ptr: *const u8,
+        payload_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len: usize) -> i32;
     pub fn trueos_cabi_vid_open_v1(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_vid_open_v2(path_ptr: *const u8, path_len: usize) -> i32;
@@ -1752,7 +1713,11 @@ unsafe extern "C" {
         initial_len: usize,
         out_handle: *mut u64,
     ) -> i32;
-    pub fn trueos_cabi_blueprint_child_spawn_program_v1(request: *const u8, len: usize, out_handle: *mut u64) -> i32;
+    pub fn trueos_cabi_blueprint_child_spawn_program_v1(
+        request: *const u8,
+        len: usize,
+        out_handle: *mut u64,
+    ) -> i32;
     pub fn trueos_cabi_blueprint_child_read_v1(handle: u64, out: *mut u8, cap: usize) -> isize;
     pub fn trueos_cabi_blueprint_child_send_v1(
         handle: u64,
@@ -1766,65 +1731,6 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_blueprint_child_status_v1(handle: u64) -> i32;
     pub fn trueos_cabi_blueprint_child_terminate_v1(handle: u64) -> i32;
-    pub fn trueos_cabi_x86_address_space_create_v1(out: *mut u64) -> i32;
-    pub fn trueos_cabi_x86_address_space_destroy_v1(address_space: u64) -> i32;
-    pub fn trueos_cabi_x86_address_space_map_v1(
-        address_space: u64,
-        guest_va: u32,
-        len: u32,
-        permissions: u32,
-    ) -> i32;
-    pub fn trueos_cabi_x86_address_space_unmap_v1(
-        address_space: u64,
-        guest_va: u32,
-        len: u32,
-    ) -> i32;
-    pub fn trueos_cabi_x86_address_space_read_v1(
-        address_space: u64,
-        guest_va: u32,
-        out: *mut u8,
-        len: usize,
-    ) -> isize;
-    pub fn trueos_cabi_x86_address_space_write_v1(
-        address_space: u64,
-        guest_va: u32,
-        data: *const u8,
-        len: usize,
-    ) -> isize;
-    pub fn trueos_cabi_x86_context_create_v1(
-        address_space: u64,
-        registers: *const TrueosX86RegistersV1,
-        out: *mut u64,
-    ) -> i32;
-    pub fn trueos_cabi_x86_context_destroy_v1(context: u64) -> i32;
-    pub fn trueos_cabi_x86_context_registers_get_v1(
-        context: u64,
-        out: *mut TrueosX86RegistersV1,
-    ) -> i32;
-    pub fn trueos_cabi_x86_context_registers_set_v1(
-        context: u64,
-        registers: *const TrueosX86RegistersV1,
-    ) -> i32;
-    pub fn trueos_cabi_x86_context_debug_registers_get_v1(
-        context: u64,
-        out: *mut TrueosX86DebugRegistersV1,
-    ) -> i32;
-    pub fn trueos_cabi_x86_context_debug_registers_set_v1(
-        context: u64,
-        registers: *const TrueosX86DebugRegistersV1,
-    ) -> i32;
-    pub fn trueos_cabi_x86_context_extended_state_get_v1(
-        context: u64,
-        out: *mut TrueosX86ExtendedStateV1,
-    ) -> i32;
-    pub fn trueos_cabi_x86_context_extended_state_set_v1(
-        context: u64,
-        state: *const TrueosX86ExtendedStateV1,
-    ) -> i32;
-    pub fn trueos_cabi_x86_context_run_v1(context: u64, out: *mut TrueosX86ExitV1) -> i32;
-    pub fn trueos_cabi_x86_context_resume_v1(context: u64, out: *mut TrueosX86ExitV1) -> i32;
-    pub fn trueos_cabi_x86_context_park_v1(context: u64) -> i32;
-    pub fn trueos_cabi_x86_context_cancel_v1(context: u64) -> i32;
     pub fn trueos_cabi_blueprint_exit_reason(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_shutdown(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_return_to_cli() -> i32;
@@ -2158,5 +2064,4 @@ pub struct TrueosUi4WindowStateV1 {
     pub opacity: u32,
     pub focused: u32,
     pub reserved: [u32; 3],
-
 }

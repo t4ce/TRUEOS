@@ -62,33 +62,73 @@ mod render_pipe_control_tests {
 
     #[test]
     fn gen12_vf_invalidation_also_invalidates_geometry_in_l3() {
-        assert_eq!(render_pipe_control_packet(true, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0),
-            [0x7A00_0404, 0x0014_0C1C, 0, 0, 0, 0]);
-        assert_eq!(render_pipe_control_packet(true, PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
-            PIPE_CONTROL_INVALIDATE_BITS, 0, 0),
-            [0x7A00_0604, 0x0014_0C1C, 0, 0, 0, 0]);
+        assert_eq!(
+            render_pipe_control_packet(true, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0),
+            [0x7A00_0404, 0x0014_0C1C, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            render_pipe_control_packet(
+                true,
+                PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
+                PIPE_CONTROL_INVALIDATE_BITS,
+                0,
+                0
+            ),
+            [0x7A00_0604, 0x0014_0C1C, 0, 0, 0, 0]
+        );
     }
 
     #[test]
     fn older_vf_invalidation_keeps_its_existing_packet() {
-        assert_eq!(render_pipe_control_packet(false, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0),
-            [0x7A00_0004, 0x0014_0C1C, 0, 0, 0, 0]);
+        assert_eq!(
+            render_pipe_control_packet(false, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0),
+            [0x7A00_0004, 0x0014_0C1C, 0, 0, 0, 0]
+        );
     }
 
     #[test]
     fn gen12_post_sync_vf_invalidation_preserves_its_payload() {
         let flags = PIPE_CONTROL_VF_CACHE_INVALIDATE
-            | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_CS_STALL;
-        assert_eq!(render_pipe_control_packet(true, PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
-            flags, 0x1_0084_0060, 0xC0DE_7742_C0DE_7741),
-            [0x7A00_0604, 0x0010_4010, 0x0084_0060, 1, 0xC0DE_7741, 0xC0DE_7742]);
+            | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE
+            | PIPE_CONTROL_CS_STALL;
+        assert_eq!(
+            render_pipe_control_packet(
+                true,
+                PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
+                flags,
+                0x1_0084_0060,
+                0xC0DE_7742_C0DE_7741
+            ),
+            [
+                0x7A00_0604,
+                0x0010_4010,
+                0x0084_0060,
+                1,
+                0xC0DE_7741,
+                0xC0DE_7742
+            ]
+        );
     }
 
     #[test]
     fn gen12_release_marker_preserves_address_data_and_header() {
-        assert_eq!(render_pipe_control_packet(true, 0, PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS,
-            0x1_0084_0060, 0xC0DE_7742_C0DE_7741),
-            [0x7A00_0004, 0x0010_4080, 0x0084_0060, 1, 0xC0DE_7741, 0xC0DE_7742]);
+        assert_eq!(
+            render_pipe_control_packet(
+                true,
+                0,
+                PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS,
+                0x1_0084_0060,
+                0xC0DE_7742_C0DE_7741
+            ),
+            [
+                0x7A00_0004,
+                0x0010_4080,
+                0x0084_0060,
+                1,
+                0xC0DE_7741,
+                0xC0DE_7742
+            ]
+        );
     }
 }
 
@@ -101,7 +141,11 @@ fn render_batch_lri_packet(reg: usize, value: u32) -> Result<[u32; 3], &'static 
     // 0x2000 again (L3ALLOC 0xB134 becomes 0xD134). Gen12 PRM Vol2a p1003
     // explicitly distinguishes batch addressing from context restore, where
     // only the low offset bits are used. Keep the restore-image helper intact.
-    Ok([MI_LOAD_REGISTER_IMM | MI_LRI_FORCE_POSTED | 1, reg as u32, value])
+    Ok([
+        MI_LOAD_REGISTER_IMM | MI_LRI_FORCE_POSTED | 1,
+        reg as u32,
+        value,
+    ])
 }
 
 #[cfg(test)]
@@ -110,7 +154,12 @@ mod render_batch_lri_tests {
 
     fn rcs_destination(packet: [u32; 3]) -> u32 {
         // Gen12 batch LRI DW0[19]: add RCS base to the full DW1[22:2].
-        (packet[1] & 0x7F_FFFC) + if packet[0] & (1 << 19) != 0 { 0x2000 } else { 0 }
+        (packet[1] & 0x7F_FFFC)
+            + if packet[0] & (1 << 19) != 0 {
+                0x2000
+            } else {
+                0
+            }
     }
 
     #[test]
@@ -125,7 +174,9 @@ mod render_batch_lri_tests {
 
     #[test]
     fn absolute_batch_registers_keep_their_address_across_engine_ranges() {
-        for reg in [0x1FFC, 0x2000, 0x2360, 0x3FFC, 0x4000, 0xB134, 0xDA00, 0x7F_FFFC] {
+        for reg in [
+            0x1FFC, 0x2000, 0x2360, 0x3FFC, 0x4000, 0xB134, 0xDA00, 0x7F_FFFC,
+        ] {
             let packet = render_batch_lri_packet(reg, 0x1234_ABCD).unwrap();
             assert_eq!(packet[0] & 0xFF, 1, "one register occupies three DWORDs");
             assert_eq!(packet[0] & (1 << 19), 0);
@@ -248,7 +299,9 @@ fn picasso_vue_counter_packets(
     // CS_CHICKEN1 supplies the requested control, while the engine-global
     // FF_SLICE_CS_CHICKEN1[14] selects whether that per-context control applies.
     // Observe both without changing either register for this capture.
-    let registers = [0x5200, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0, 0xB134];
+    let registers = [
+        0x5200, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0, 0xB134,
+    ];
     let count = if end { 8 } else { 4 };
     for (index, register) in registers[..count].iter().enumerate() {
         let destination = result_gpu + ((base + index) * 4) as u64;
@@ -267,16 +320,19 @@ const _: () = {
     assert!(RESULT_SLOT_DEPTH_STATE_WA_DWORD + 2 <= RESULT_OA_BEGIN_DWORD);
 };
 
-fn ps_source_depth_w_bits(probe_coefficients: bool, fixed_gl_depth: bool) -> u32 {
-    // WC3's captured Mesa payload has uses_src_depth=1, uses_src_w=1,
-    // uses_depth_w_coefficients=0. Coefficients are a separate shader input
-    // contract; writing gl_FragDepth does not request them.
-    let source = if probe_coefficients || fixed_gl_depth {
+fn ps_source_depth_w_bits(probe_coefficients: bool, shader_source_depth: bool) -> u32 {
+    // Depth-plane coefficients are separate from source depth/W inputs.
+    let source = if probe_coefficients || shader_source_depth {
         PS_EXTRA_USES_SOURCE_W | PS_EXTRA_USES_SOURCE_DEPTH
     } else {
         0
     };
-    source | if probe_coefficients { PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE } else { 0 }
+    source
+        | if probe_coefficients {
+            PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE
+        } else {
+            0
+        }
 }
 
 fn adls_depth_state_post_sync_packet(
@@ -380,15 +436,21 @@ fn write_pbr_sampler_cache_line(samplers: &mut [u32], nearest: bool) {
     // gfx12 SAMPLER_STATE: linear min/mag, normalized repeat, LOD0,
     // sRGB decode enabled, and address rounding for linear filters.
     for sampler in samplers.chunks_exact_mut(4) {
-        sampler.copy_from_slice(&if nearest { [0; 4] } else { [(1 << 14) | (1 << 17), 0, 0, 0x3F << 13] });
+        sampler.copy_from_slice(&if nearest {
+            [0; 4]
+        } else {
+            [(1 << 14) | (1 << 17), 0, 0, 0x3F << 13]
+        });
     }
 }
 
 const fn ordinary_vf_vertex_element_count(vertex_format: TriangleVertexFormat) -> usize {
     match vertex_format {
         TriangleVertexFormat::Float2 | TriangleVertexFormat::Float3 => 1,
-        TriangleVertexFormat::PosUv | TriangleVertexFormat::VoxyHeadless | TriangleVertexFormat::VoxyFigure => 2,
-        TriangleVertexFormat::FixedGl => 4,
+        TriangleVertexFormat::PosUv
+        | TriangleVertexFormat::VoxyHeadless
+        | TriangleVertexFormat::VoxyFigure => 2,
+
         TriangleVertexFormat::PosNormal | TriangleVertexFormat::PosNormalUv => 3,
         TriangleVertexFormat::PosNormalUvTangent => 5,
     }
@@ -404,10 +466,11 @@ fn cmd_3dstate_vertex_elements(count: usize) -> Result<u32, &'static str> {
 }
 
 const fn mesa_vf_component_packing(vertex_format: TriangleVertexFormat) -> [u32; 4] {
-    if matches!(vertex_format, TriangleVertexFormat::VoxyFigure) { [0x11, 0, 0, 0] }
-    else if matches!(vertex_format, TriangleVertexFormat::VoxyHeadless) { [0xff, 0, 0, 0] }
-    else if matches!(vertex_format, TriangleVertexFormat::FixedGl) { [0xffff, 0, 0, 0] }
-    else if matches!(vertex_format, TriangleVertexFormat::PosUv) {
+    if matches!(vertex_format, TriangleVertexFormat::VoxyFigure) {
+        [0x11, 0, 0, 0]
+    } else if matches!(vertex_format, TriangleVertexFormat::VoxyHeadless) {
+        [0xff, 0, 0, 0]
+    } else if matches!(vertex_format, TriangleVertexFormat::PosUv) {
         // SIMD8 VS payload: xyz from element 0, then uv from element 1.
         [0x0000_0037, 0, 0, 0]
     } else {
@@ -422,14 +485,6 @@ mod ordinary_pos_uv_state_tests {
         mesa_vf_component_packing, ordinary_vf_vertex_element_count,
         write_nearest_repeat_sampler_cache_line,
     };
-
-    #[test]
-    fn fixed_gl_fetches_all_sixteen_components_without_sgvs() {
-        assert_eq!(ordinary_vf_vertex_element_count(TriangleVertexFormat::FixedGl), 4);
-        assert_eq!(mesa_vf_component_packing(TriangleVertexFormat::FixedGl), [0xffff, 0, 0, 0]);
-        assert_eq!(cmd_3dstate_vertex_elements(4).unwrap() & 0xff, 7);
-        assert_eq!(super::sbe_swiz_payload(true, 3), [0x10000, 2]);
-    }
 
     #[test]
     fn vertex_element_packet_covers_uv_before_next_command() {
@@ -545,8 +600,7 @@ const fn sbe_swiz_payload(artifact_native_fixed_function: bool, varying_inputs: 
     // into the normal, UV and tangent interpolation coefficients.
     [
         if varying_inputs >= 2 { 0x0001_0000 } else { 0 },
-        (if varying_inputs >= 3 { 2 } else { 0 })
-            | (if varying_inputs >= 4 { 3 << 16 } else { 0 }),
+        (if varying_inputs >= 3 { 2 } else { 0 }) | (if varying_inputs >= 4 { 3 << 16 } else { 0 }),
     ]
 }
 
@@ -600,7 +654,9 @@ fn resident_line_width_raw(width_px: f32) -> Option<u32> {
     if !width_px.is_finite() || width_px < 0.0 || width_px > 262143.0 / 128.0 {
         return None;
     }
-    if width_px == 0.0 { return Some(3 << 7); }
+    if width_px == 0.0 {
+        return Some(3 << 7);
+    }
     let raw = (width_px * 128.0 + 0.5) as u32;
     if raw == 0 { None } else { Some(raw) }
 }
@@ -608,20 +664,29 @@ fn resident_line_width_raw(width_px: f32) -> Option<u32> {
 /// TGL PRM vol 2d: AA only applies to legacy single-sample line rasterization.
 /// Clear API/MSAA overrides, retaining unrelated cull/clip/scissor state.
 const fn microfont_line_aa_raster(base: u32, enabled: bool) -> u32 {
-    if enabled { (base & !((3 << 22) | (1 << 14) | (1 << 12) | (3 << 10))) | (1 << 2) }
-    else { base }
+    if enabled {
+        (base & !((3 << 22) | (1 << 14) | (1 << 12) | (3 << 10))) | (1 << 2)
+    } else {
+        base
+    }
 }
 const fn microfont_line_aa_wm(base: u32, enabled: bool) -> u32 {
     // WM line AA region=2 px => a 1 px inward side-coverage ramp.
     // End cap=0.5 px must agree with SF.DW2[17:16]=0.
-    if enabled { (base & !((3 << 6) | (3 << 8))) | (2 << 6) } else { base }
+    if enabled {
+        (base & !((3 << 6) | (3 << 8))) | (2 << 6)
+    } else {
+        base
+    }
 }
 
 const fn resident_line_width_sf_dw1(base: u32, line_raster: bool, raw: u32) -> u32 {
     const WIDTH_MASK: u32 = 0x3ffff << 12;
     if line_raster {
         (base & !WIDTH_MASK) | ((if raw == 0 { 3 << 7 } else { raw }) << 12)
-    } else { base }
+    } else {
+        base
+    }
 }
 
 /// Zero is the legacy Maxpix default (1px). Explicit widths use the complete
@@ -707,8 +772,7 @@ mod point_raster_state_tests {
         MESA_CLIP_DW2, MESA_POINT_CLIP_DW2, MESA_POINT_SAMPLE_MASK_DW,
         MESA_POINT_WM_DEPTH_STENCIL_DW1, MESA_SF_DW3, RESIDENT_POINT_WIDTH_U8_3,
         SF_POINT_WIDTH_MASK, mesa_clip_dw2, mesa_sample_mask_dw, mesa_sf_dw3,
-        mesa_wm_depth_stencil_dw1, resident_point_width_raw,
-        uses_host_point_tail_index_buffer,
+        mesa_wm_depth_stencil_dw1, resident_point_width_raw, uses_host_point_tail_index_buffer,
     };
 
     #[test]
@@ -1093,10 +1157,10 @@ mod retained_viewport_tests {
     fn textured_and_cube_positions_agree_under_camera_pitch() {
         // Different camera-space heights/depths, including points above/below
         // the eye. The lowered textured VS negates the camera's final Y row.
-        for (y,w) in [(2.,5.),(-3.,7.),(0.25,0.5),(-9.,20.)] {
-            let cube = y/w*retained_viewport_y_scale(441,false)+220.5;
-            let image = -y/w*retained_viewport_y_scale(441,true)+220.5;
-            assert_eq!(cube,image);
+        for (y, w) in [(2., 5.), (-3., 7.), (0.25, 0.5), (-9., 20.)] {
+            let cube = y / w * retained_viewport_y_scale(441, false) + 220.5;
+            let image = -y / w * retained_viewport_y_scale(441, true) + 220.5;
+            assert_eq!(cube, image);
         }
     }
 
@@ -1149,11 +1213,13 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-viewport-translation");
     }
-    let fixed_gl = draw.fixed_gl.is_some();
+
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
     let native_pbr = native_sampled && draw.pbr_material.is_some();
     let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
-    let binding_table_entries = if draw.voxy_figure { 5usize } else if fixed_gl { 2usize } else if draw.voxy_headless {
+    let binding_table_entries = if draw.voxy_figure {
+        5usize
+    } else if draw.voxy_headless {
         voxy_headless_shared_binding_table_entries(draw.sampled_texture.is_some())
     } else if draw.native.is_some() {
         4usize
@@ -1162,7 +1228,7 @@ fn write_triangle_probe_state_with_flush(
     } else {
         1usize
     };
-    let ps_binding_table_entries = if fixed_gl { 4usize } else if native_pbr {
+    let ps_binding_table_entries = if native_pbr {
         9usize
     } else if native_metallic_roughness {
         4usize
@@ -1171,7 +1237,7 @@ fn write_triangle_probe_state_with_flush(
     } else {
         0usize
     };
-    let surface_state_count = if fixed_gl { 3usize } else if native_pbr {
+    let surface_state_count = if native_pbr {
         10usize
     } else if native_metallic_roughness {
         6usize
@@ -1182,7 +1248,7 @@ fn write_triangle_probe_state_with_flush(
     };
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
-    let ps_binding_table_offset = if native_sampled || fixed_gl {
+    let ps_binding_table_offset = if native_sampled {
         crate::intel::align_up(
             binding_table_offset
                 .checked_add(binding_table_entries * core::mem::size_of::<u32>())
@@ -1197,7 +1263,7 @@ fn write_triangle_probe_state_with_flush(
         ps_binding_table_offset
             .checked_add(
                 ps_binding_table_entries
-                    .max(if native_sampled || fixed_gl {
+                    .max(if native_sampled {
                         0
                     } else {
                         binding_table_entries
@@ -1311,31 +1377,26 @@ fn write_triangle_probe_state_with_flush(
         null[0] = SURFTYPE_NULL << 29;
         for (entry, offset, bytes) in [(2, 0, 512), (4, 672, 2048)] {
             let start = surface_state_offset / 4 + entry * 16;
-            write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16],
-                TriangleStorageBufferBinding { gpu_addr: uniforms + offset, byte_len: bytes })?;
+            write_triangle_raw_buffer_surface_state(
+                &mut dwords[start..start + 16],
+                TriangleStorageBufferBinding {
+                    gpu_addr: uniforms + offset,
+                    byte_len: bytes,
+                },
+            )?;
         }
     }
     if draw.voxy_headless {
         let start = surface_state_offset / 4 + 16;
-        write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16], TriangleStorageBufferBinding {
-            gpu_addr: (draw.vertex_gpu_addr + u64::from(draw.vertex_buffer_bytes) + 31) & !31,
-            byte_len: 96,
-        })?;
+        write_triangle_raw_buffer_surface_state(
+            &mut dwords[start..start + 16],
+            TriangleStorageBufferBinding {
+                gpu_addr: (draw.vertex_gpu_addr + u64::from(draw.vertex_buffer_bytes) + 31) & !31,
+                byte_len: 96,
+            },
+        )?;
     }
-    if fixed_gl {
-        for (entry, surface_index) in fixed_gl_ps_surface_indices().into_iter().enumerate() {
-            dwords[ps_binding_table_offset / 4 + entry] =
-                (surface_state_offset + surface_index * 64 - binding_table_entry_base_offset) as u32;
-        }
-        let start = surface_state_offset / 4 + 16;
-        write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16], TriangleStorageBufferBinding {
-            // Indexed resident draws carry the index count in `vertex_count`
-            // for the 3DPRIMITIVE contract.  The fixed GL state begins after
-            // the authored vertex bytes, independent of index reuse.
-            gpu_addr: fixed_gl_state_gpu_addr(draw.vertex_gpu_addr, draw.vertex_buffer_bytes),
-            byte_len: v::vgpu::WC3_FIXED_STATE_BYTES as u32,
-        })?;
-    }
+
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
     surface.fill(0);
     let resident_msaa4 = draw.uses_resident_scene_msaa4();
@@ -1349,8 +1410,11 @@ fn write_triangle_probe_state_with_flush(
     };
     surface.copy_from_slice(&triangle_render_target_surface_state(
         TriangleRenderTargetSurface {
-            format: draw.rt_surface_format, pitch: draw.rt_pitch,
-            width: draw.target_w, height: draw.target_h, gpu: draw.rt_gpu_addr,
+            format: draw.rt_surface_format,
+            pitch: draw.rt_pitch,
+            width: draw.target_w,
+            height: draw.target_h,
+            gpu: draw.rt_gpu_addr,
             msaa4: resident_msaa4,
         },
         warm.device_id,
@@ -1421,13 +1485,17 @@ fn write_triangle_probe_state_with_flush(
                 // Missing optional maps still get valid descriptors. The
                 // shader uses the admitted presence mask for glTF defaults.
                 let texture = texture.unwrap_or(base);
-                if texture.sampler_flags != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
-                    | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT) {
+                if texture.sampler_flags
+                    != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
+                        | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT)
+                {
                     return Err("probe-pbr-sampler-mode");
                 }
                 let start = surface_state_offset / 4 + (5 + role) * 16;
                 write_triangle_sampled_surface_state(
-                    &mut dwords[start..start + 16], texture, role == 1,
+                    &mut dwords[start..start + 16],
+                    texture,
+                    role == 1,
                 )?;
             }
             dwords[material_parameters_offset / 4..material_parameters_offset / 4 + 16]
@@ -1457,11 +1525,17 @@ fn write_triangle_probe_state_with_flush(
         write_nearest_clamp_sampler_cache_line(samplers);
     }
     if native_pbr {
-        write_pbr_sampler_cache_line(samplers, draw.pbr_material.is_some_and(|m|
-            m.parameters[12] & v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST != 0));
+        write_pbr_sampler_cache_line(
+            samplers,
+            draw.pbr_material
+                .is_some_and(|m| m.parameters[12] & v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST != 0),
+        );
     }
     if let Some(texture) = draw.sampled_texture
-        && !resident_scene_sampler_flags_valid(draw.voxy_headless || draw.voxy_figure, texture.sampler_flags)
+        && !resident_scene_sampler_flags_valid(
+            draw.voxy_headless || draw.voxy_figure,
+            texture.sampler_flags,
+        )
     {
         return Err("probe-sampler-mode");
     }
@@ -1594,9 +1668,7 @@ fn write_triangle_probe_state_with_flush(
     );
 
     let scissor_rect = &mut dwords[scissor_rect_offset / 4..scissor_rect_offset / 4 + 2];
-    let bounds = draw.fixed_gl.unwrap_or([
-        0, 0, draw.target_w, draw.target_h, 0, 0, 1, 17, 1, 17,
-    ]);
+    let bounds = [0, 0, draw.target_w, draw.target_h, 0, 0, 1, 17, 1, 17];
     scissor_rect[0] = bounds[0] | (bounds[1] << 16);
     scissor_rect[1] = (bounds[2] - 1) | ((bounds[3] - 1) << 16);
 
@@ -1642,13 +1714,6 @@ fn write_triangle_probe_state_with_flush(
 
 // Captured EU messages: sampler loads use BTI2; state block reads use BTI3.
 // Surface records are RT0, raw GL state, sampled RGBA texture.
-const fn fixed_gl_ps_surface_indices() -> [usize; 4] {
-    [0, 0, 2, 1]
-}
-
-const fn fixed_gl_state_gpu_addr(vertex_gpu_addr: u64, vertex_buffer_bytes: u32) -> u64 {
-    vertex_gpu_addr + vertex_buffer_bytes as u64
-}
 
 #[derive(Copy, Clone)]
 struct TriangleRenderTargetSurface {
@@ -1667,24 +1732,40 @@ fn triangle_render_target_surface_state(
     device_id: u16,
     surface_halign: u32,
 ) -> Result<[u32; 16], &'static str> {
-    if target.msaa4 && !device_is_gfx125(device_id) { return Err("probe-msaa4-device"); }
+    if target.msaa4 && !device_is_gfx125(device_id) {
+        return Err("probe-msaa4-device");
+    }
     let mut surface = [0; 16];
-    surface[0] = (SURFTYPE_2D << 29) | (target.format << 18)
-        | (surface_halign << 14) | (SURFACE_VALIGN_4 << 16)
-        | if target.msaa4 { (1 << 12) | (1 << 28) } else { 0 };
+    surface[0] = (SURFTYPE_2D << 29)
+        | (target.format << 18)
+        | (surface_halign << 14)
+        | (SURFACE_VALIGN_4 << 16)
+        | if target.msaa4 {
+            (1 << 12) | (1 << 28)
+        } else {
+            0
+        };
     // Gen11..12.0 require EnableUnormPathInColorPipe for normalized targets.
     surface[1] = (RENDER_MOCS << 24)
-        | if device_is_gfx12(device_id) && !device_is_gfx125(device_id) { 1 << 31 } else { 0 }
+        | if device_is_gfx12(device_id) && !device_is_gfx125(device_id) {
+            1 << 31
+        } else {
+            0
+        }
         | if target.msaa4 {
-            let aligned_height = crate::intel::align_up(target.height as usize, 64)
-                .ok_or("probe-msaa4-shape")?;
+            let aligned_height =
+                crate::intel::align_up(target.height as usize, 64).ok_or("probe-msaa4-shape")?;
             u32::try_from(aligned_height / 4).map_err(|_| "probe-msaa4-shape")?
-        } else { 0 };
+        } else {
+            0
+        };
     surface[2] = target.width.saturating_sub(1) | (target.height.saturating_sub(1) << 16);
     surface[3] = target.pitch.saturating_sub(1);
     surface[4] = if target.msaa4 { 2 << 3 } else { 0 };
-    surface[7] = (SHADER_CHANNEL_ALPHA << 16) | (SHADER_CHANNEL_BLUE << 19)
-        | (SHADER_CHANNEL_GREEN << 22) | (SHADER_CHANNEL_RED << 25);
+    surface[7] = (SHADER_CHANNEL_ALPHA << 16)
+        | (SHADER_CHANNEL_BLUE << 19)
+        | (SHADER_CHANNEL_GREEN << 22)
+        | (SHADER_CHANNEL_RED << 25);
     surface[8] = target.gpu as u32;
     surface[9] = (target.gpu >> 32) as u32;
     Ok(surface)
@@ -1747,7 +1828,11 @@ fn write_triangle_sampled_surface_state(
     }
     surface.fill(0);
     surface[0] = (SURFTYPE_2D << 29)
-        | (if srgb { SURFACE_FORMAT_R8G8B8A8_UNORM_SRGB } else { SURFACE_FORMAT_R8G8B8A8_UNORM } << 18)
+        | (if srgb {
+            SURFACE_FORMAT_R8G8B8A8_UNORM_SRGB
+        } else {
+            SURFACE_FORMAT_R8G8B8A8_UNORM
+        } << 18)
         | (SURFACE_HALIGN_4 << 14)
         | (SURFACE_VALIGN_4 << 16);
     surface[1] = (RENDER_MOCS << 24)
@@ -1869,8 +1954,11 @@ mod picasso_pbr_state_tests {
     #[test]
     fn color_views_decode_srgb_without_changing_texture_storage() {
         let texture = TriangleSampledTextureBinding {
-            gpu_addr: 0x1234_5678_9000, width: 2048, height: 1024,
-            pitch: 8192, sampler_flags: 3,
+            gpu_addr: 0x1234_5678_9000,
+            width: 2048,
+            height: 1024,
+            pitch: 8192,
+            sampler_flags: 3,
         };
         let mut data_view = [0; 16];
         let mut color_view = [0; 16];
@@ -1997,14 +2085,7 @@ mod draw_indexed_indirect_encoder_tests {
             assert_eq!(packet[2], address as u32);
             assert_eq!(packet[3], (address >> 32) as u32);
         }
-        assert_eq!(
-            &batch[24..],
-            &[
-                0x1108_0001,
-                RCS_3DPRIM_XP_DRAW_ID - RCS_RING_BASE as u32,
-                0,
-            ]
-        );
+        assert_eq!(&batch[24..], &[0x1108_0001, RCS_3DPRIM_XP_DRAW_ID - RCS_RING_BASE as u32, 0,]);
     }
 
     #[test]
@@ -2065,10 +2146,14 @@ fn validate_triangle_native_draw_contract(
         },
     ];
     let cube_seed = draw.vertex_format == TriangleVertexFormat::Float3
-        && draw.vertex_stride == 12 && draw.vertex_buffer_bytes == 12
-        && draw.sampled_texture.is_none() && draw.pbr_material.is_none()
-        && native.vertex_element_count == 2 && native.vf_sgvs_dw1 == 0xE001_4001
-        && native.vf_sgvs_2_dw1 == 0xB001_0001 && native.vf_sgvs_2_dw2 == 2
+        && draw.vertex_stride == 12
+        && draw.vertex_buffer_bytes == 12
+        && draw.sampled_texture.is_none()
+        && draw.pbr_material.is_none()
+        && native.vertex_element_count == 2
+        && native.vf_sgvs_dw1 == 0xE001_4001
+        && native.vf_sgvs_2_dw1 == 0xB001_0001
+        && native.vf_sgvs_2_dw2 == 2
         && native.vf_component_packing == [0xa7, 0, 0, 0];
     let pos_normal = draw.vertex_format == TriangleVertexFormat::PosNormal
         && draw.vertex_stride == trueos_helio_artifact::churn_forward::VERTEX_STRIDE
@@ -2190,10 +2275,10 @@ mod retained_native_matrix_draw_contract_tests {
     fn native_draw(native: TriangleNativeDrawContract) -> TriangleDrawPrep {
         TriangleDrawPrep {
             vue_capture: false,
-        fixed_gl: None,
-        voxy_headless: false,
-        voxy_figure: false,
-        microfont_aa: false,
+
+            voxy_headless: false,
+            voxy_figure: false,
+            microfont_aa: false,
             vertex_count: 108,
             vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
             vertex_buffer_bytes: 108 * trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
@@ -2314,10 +2399,15 @@ mod retained_native_matrix_draw_contract_tests {
         draw.vertex_stride = 48;
         draw.vertex_buffer_bytes = draw.vertex_count * 48;
         draw.sampled_texture = Some(TriangleSampledTextureBinding {
-            gpu_addr: 0x2800_0000, width: 16, height: 16, pitch: 64, sampler_flags: 3,
+            gpu_addr: 0x2800_0000,
+            width: 16,
+            height: 16,
+            pitch: 64,
+            sampler_flags: 3,
         });
         draw.pbr_material = Some(super::TrianglePbrMaterial {
-            textures: [None; 4], parameters: [0; 16],
+            textures: [None; 4],
+            parameters: [0; 16],
         });
         let original = draw;
         let front_end = super::configure_picasso_retained_uv_diagnostic(&mut draw, true).unwrap();
@@ -2327,12 +2417,16 @@ mod retained_native_matrix_draw_contract_tests {
         assert_eq!(draw.vertex_count, original.vertex_count);
         let index = draw.index_buffer.unwrap();
         let old_index = original.index_buffer.unwrap();
-        assert_eq!((index.gpu_addr, index.byte_len, index.index_count),
-            (old_index.gpu_addr, old_index.byte_len, old_index.index_count));
+        assert_eq!(
+            (index.gpu_addr, index.byte_len, index.index_count),
+            (old_index.gpu_addr, old_index.byte_len, old_index.index_count)
+        );
         assert_eq!(draw.indirect_args_gpu_addr, original.indirect_args_gpu_addr);
         assert_eq!(draw.sampled_texture, original.sampled_texture);
-        assert_eq!((draw.rt_gpu_addr, draw.rt_pitch, draw.target_w, draw.target_h),
-            (original.rt_gpu_addr, original.rt_pitch, original.target_w, original.target_h));
+        assert_eq!(
+            (draw.rt_gpu_addr, draw.rt_pitch, draw.target_w, draw.target_h),
+            (original.rt_gpu_addr, original.rt_pitch, original.target_w, original.target_h)
+        );
         let changed = draw.native.unwrap();
         assert_eq!(changed.vs_storage_bindings, native.vs_storage_bindings);
         assert_eq!(changed.vf_instancing, native.vf_instancing);
@@ -2340,15 +2434,17 @@ mod retained_native_matrix_draw_contract_tests {
         assert_eq!(changed.front_face_clockwise, native.front_face_clockwise);
         assert_eq!(changed.double_sided, native.double_sided);
         assert!(draw.pbr_material.is_none());
-        assert_eq!((front_end.vs_urb_read_length, front_end.sbe_read_offset,
-            front_end.sbe_read_length), (1, 1, 1));
+        assert_eq!(
+            (front_end.vs_urb_read_length, front_end.sbe_read_offset, front_end.sbe_read_length),
+            (1, 1, 1)
+        );
         assert_eq!(validate_triangle_native_draw_contract(draw, changed), Ok(()));
 
         // These are the actual byte offsets used by the PosNormalUv packet.
         // Reading vertex 1 must skip all twelve floats of vertex 0.
         let vertices: [f32; 24] = [
-            1., 2., 3., 90., 91., 92., 0.25, 1.25, 80., 81., 82., 83.,
-            4., 5., 6., 93., 94., 95., 0.75, 1.75, 84., 85., 86., 87.,
+            1., 2., 3., 90., 91., 92., 0.25, 1.25, 80., 81., 82., 83., 4., 5., 6., 93., 94., 95.,
+            0.75, 1.75, 84., 85., 86., 87.,
         ];
         let start = draw.vertex_stride as usize / 4;
         let position = start + super::RETAINED_UV_POSITION_BYTE_OFFSET as usize / 4;
@@ -2401,16 +2497,19 @@ fn encode_triangle_probe_batch(
     let cube_patch = crate::intel::shader::patch_cube::matches(pipeline);
     if cube_patch != matches!(batch_mode, TriangleBatchMode::CubePatchDraw)
         || cube_patch != shader_layout.tessellation.is_some()
-        || (cube_patch && (!matches!(warm.device_id, 0xa780 | 0x4680)
-            || draw.native.is_none() || draw.vue_capture))
+        || (cube_patch
+            && (!matches!(warm.device_id, 0xa780 | 0x4680)
+                || draw.native.is_none()
+                || draw.vue_capture))
     {
         return Err("cube-patch-pipeline-contract");
     }
-    if draw.vue_capture && (draw.native.is_none()
-        || draw.indirect_args_gpu_addr.is_none()
-        || !matches!(batch_mode, TriangleBatchMode::Draw)
-        || !matches!(backend_probe_mode, BackendProbeMode::MesaLike)
-        || mesa_clip_dw2(false) & ((1 << 31) | (1 << 30)) != ((1 << 31) | (1 << 30)))
+    if draw.vue_capture
+        && (draw.native.is_none()
+            || draw.indirect_args_gpu_addr.is_none()
+            || !matches!(batch_mode, TriangleBatchMode::Draw)
+            || !matches!(backend_probe_mode, BackendProbeMode::MesaLike)
+            || mesa_clip_dw2(false) & ((1 << 31) | (1 << 30)) != ((1 << 31) | (1 << 30)))
     {
         return Err("picasso-vue-requires-native-trilist-d3d-clip");
     }
@@ -2428,14 +2527,26 @@ fn encode_triangle_probe_batch(
     if resident_msaa4 && !device_is_gfx125(warm.device_id) {
         return Err("probe-msaa4-device");
     }
-    if clip_adjacency && !matches!(batch_mode,
-        TriangleBatchMode::LineAdjDraw | TriangleBatchMode::LineStripAdjDraw)
-    { return Err("clip-adjacency-topology"); }
+    if clip_adjacency
+        && !matches!(
+            batch_mode,
+            TriangleBatchMode::LineAdjDraw | TriangleBatchMode::LineStripAdjDraw
+        )
+    {
+        return Err("clip-adjacency-topology");
+    }
     let native_line_aa = draw.microfont_aa && batch_mode.line_raster();
-    if native_line_aa && resident_msaa4 { return Err("microfont-aa-msaa"); }
+    if native_line_aa && resident_msaa4 {
+        return Err("microfont-aa-msaa");
+    }
     let microfont_mask = core::ptr::eq(pipeline, crate::intel::shader::microfont_mask_pipeline());
-    let rounded_line_ends = microfont_mask || core::ptr::eq(pipeline, crate::intel::shader::microfont_line_end_pipeline());
-    let adjacency_gs = if clip_adjacency { None } else { batch_mode.adjacency_geometry_shader() };
+    let rounded_line_ends = microfont_mask
+        || core::ptr::eq(pipeline, crate::intel::shader::microfont_line_end_pipeline());
+    let adjacency_gs = if clip_adjacency {
+        None
+    } else {
+        batch_mode.adjacency_geometry_shader()
+    };
     if adjacency_gs.is_some()
         && !device_supports_adjacency_geometry_shader(warm.device_id, warm.revision_id)
     {
@@ -2474,9 +2585,13 @@ fn encode_triangle_probe_batch(
             return Err("hiz-clear-without-aux");
         }
         if let Some(aux) = depth.hiz {
-            if resident_msaa4 || depth.gpu_addr != GPU_VA_RESIDENT_SCENE_DEPTH_BASE
-                || hiz::layout(warm.device_id, depth.width as usize, depth.height as usize) != Some(aux)
-            { return Err("hiz-depth-contract"); }
+            if resident_msaa4
+                || depth.gpu_addr != GPU_VA_RESIDENT_SCENE_DEPTH_BASE
+                || hiz::layout(warm.device_id, depth.width as usize, depth.height as usize)
+                    != Some(aux)
+            {
+                return Err("hiz-depth-contract");
+            }
         }
     }
     let force_vs_with_vf_synthesized_vue =
@@ -2548,9 +2663,9 @@ fn encode_triangle_probe_batch(
         flags_dw0: u32,
         flags_dw1: u32,
     ) -> Result<(), &'static str> {
-        for word in render_pipe_control_packet(
-            device_is_gfx12(device_id), flags_dw0, flags_dw1, 0, 0,
-        ) {
+        for word in
+            render_pipe_control_packet(device_is_gfx12(device_id), flags_dw0, flags_dw1, 0, 0)
+        {
             push(batch_dwords, cursor, word)?;
         }
         Ok(())
@@ -2566,7 +2681,11 @@ fn encode_triangle_probe_batch(
         value: u32,
     ) -> Result<(), &'static str> {
         for word in render_pipe_control_packet(
-            device_is_gfx12(device_id), flags_dw0, flags_dw1, address, u64::from(value),
+            device_is_gfx12(device_id),
+            flags_dw0,
+            flags_dw1,
+            address,
+            u64::from(value),
         ) {
             push(batch_dwords, cursor, word)?;
         }
@@ -2876,7 +2995,10 @@ fn encode_triangle_probe_batch(
     // id (source attribute 1).  Xe-LP's enabled SBE swizzle packet must spell
     // that identity routing out; an all-zero payload aliases both inputs to
     // attribute 0.
-    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function || draw.fixed_gl.is_some() || draw.voxy_headless || draw.voxy_figure, pipeline.ps.meta.num_varying_inputs);
+    let sbe_swiz = sbe_swiz_payload(
+        artifact_native_fixed_function || draw.voxy_headless || draw.voxy_figure,
+        pipeline.ps.meta.num_varying_inputs,
+    );
     let sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (u32::from(sbe_attr_swizzle_enable) << 21)
         | ((sbe_num_sf_attrs as u32) << 22)
@@ -2904,9 +3026,8 @@ fn encode_triangle_probe_batch(
             || viewport_translation_px
                 .iter()
                 .any(|component| *component != 0.0));
-    let diagnostic_cull_off = draw.native.is_some()
-        && draw.sampled_texture.is_some()
-        && !picasso_cull_enabled();
+    let diagnostic_cull_off =
+        draw.native.is_some() && draw.sampled_texture.is_some() && !picasso_cull_enabled();
     let mut clip_dw1 = if viewport_or_rectlist_clip_bypass {
         0
     } else if mesa_host_fixed_function {
@@ -3037,12 +3158,9 @@ fn encode_triangle_probe_batch(
     let raster_dw1 = if draw.voxy_figure {
         // The negative framebuffer Y scale maps authored CCW to screen CW.
         native_raster_dw1(false, true)
-    } else if let Some(state) = draw.fixed_gl {
-        native_raster_dw1(state[4] == 0, true) | (1 << 1)
     } else if artifact_native_fixed_function {
         native_raster_dw1(
-            draw.native.is_some_and(|native| native.double_sided)
-                || diagnostic_cull_off,
+            draw.native.is_some_and(|native| native.double_sided) || diagnostic_cull_off,
             draw.native
                 .is_some_and(|native| native.front_face_clockwise)
                 ^ (draw.native.is_some() && draw.sampled_texture.is_some()),
@@ -3178,7 +3296,11 @@ fn encode_triangle_probe_batch(
     };
     static MICROFONT_AA_LINE_LOGGED: AtomicBool = AtomicBool::new(false);
     static MICROFONT_AA_PATCH_LOGGED: AtomicBool = AtomicBool::new(false);
-    let aa_logged = if native_line_aa { &MICROFONT_AA_LINE_LOGGED } else { &MICROFONT_AA_PATCH_LOGGED };
+    let aa_logged = if native_line_aa {
+        &MICROFONT_AA_LINE_LOGGED
+    } else {
+        &MICROFONT_AA_PATCH_LOGGED
+    };
     if draw.microfont_aa && !aa_logged.swap(true, Ordering::AcqRel) {
         crate::log_important!(target: "render";
             "microfont-aa: line={} raster_dw1=0x{:08X} wm_dw1=0x{:08X} sf_dw2=0x{:08X} ps_blend=0x{:08X} samples=1 rt_write=simd16-bypass-aa depth_test=off\n",
@@ -3406,17 +3528,12 @@ fn encode_triangle_probe_batch(
             * PS_EXTRA_SIMPLE_PS_HINT)
         | (u32::from(backend_probe_mode.force_ps_dependency_on_cpsize_change())
             * PS_EXTRA_ENABLE_PS_DEPENDENCY_ON_CPSIZE_CHANGE)
-        | ps_source_depth_w_bits(
-            backend_probe_mode.force_ps_source_depth_w(),
-            (draw.fixed_gl.is_some() && pipeline.ps.meta.computed_depth_mode != 0) || rounded_line_ends,
-        )
+        | ps_source_depth_w_bits(backend_probe_mode.force_ps_source_depth_w(), rounded_line_ends)
         | (u32::from(backend_probe_mode.force_ps_bary_planes())
             * (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE
                 | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))
         | ((pipeline.ps.meta.computed_depth_mode as u32) << 26)
-        // The fixed GL fragment program contains conditional alpha discard.
-        // Advertise kills even on draws where the alpha-test branch is off.
-        | (u32::from(draw.fixed_gl.is_some() || rounded_line_ends) << 28)
+        | (u32::from(rounded_line_ends) << 28)
         | PS_EXTRA_PIXEL_SHADER_VALID;
     let ps_extra_dw1 = if backend_probe_mode.disable_ps_contract() {
         ps_extra_dw1 & !PS_EXTRA_PIXEL_SHADER_VALID
@@ -3606,7 +3723,15 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_DS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_DS)?;
-    push(batch_dwords, &mut cursor, if cube_patch { binding_table_pointer_offset } else { 0 })?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        if cube_patch {
+            binding_table_pointer_offset
+        } else {
+            0
+        },
+    )?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_GS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_GS)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -3633,12 +3758,23 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_PS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_PS)?;
-        push(batch_dwords, &mut cursor, if cube_patch { (24 << 16) | 8 } else { (16 << 16) | 16 })?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            if cube_patch {
+                (24 << 16) | 8
+            } else {
+                (16 << 16) | 16
+            },
+        )?;
         intel_render_focus_log!(
             "probe-push-constant-urb-partition total_kb=32 tessellation={} vs_kb={} hs_kb={} ds_kb={} gs_kb=0 ps_kb={} following_urb_start_8kb={} source=mesa-adl-gfx12\n",
-            cube_patch as u8, if cube_patch { 8 } else { 16 },
-            if cube_patch { 8 } else { 0 }, if cube_patch { 8 } else { 0 },
-            if cube_patch { 8 } else { 16 }, TRIANGLE_VS_URB_START,
+            cube_patch as u8,
+            if cube_patch { 8 } else { 16 },
+            if cube_patch { 8 } else { 0 },
+            if cube_patch { 8 } else { 0 },
+            if cube_patch { 8 } else { 16 },
+            TRIANGLE_VS_URB_START,
         );
 
         log_batch_offset(cursor, "3DSTATE_CONSTANT_ALL empty-all-stages pre-ps");
@@ -3647,7 +3783,9 @@ fn encode_triangle_probe_batch(
     }
 
     if draw.voxy_headless {
-        for word in voxy_headless_constant_vs_packet(draw.vertex_gpu_addr, draw.vertex_buffer_bytes)? {
+        for word in
+            voxy_headless_constant_vs_packet(draw.vertex_gpu_addr, draw.vertex_buffer_bytes)?
+        {
             push(batch_dwords, &mut cursor, word)?;
         }
     }
@@ -3836,44 +3974,63 @@ fn encode_triangle_probe_batch(
                 VFCOMP_STORE_0,
                 VFCOMP_STORE_1_FP,
             )?,
-            TriangleVertexFormat::Float3 => { push_vertex_element_state(
-                batch_dwords,
-                &mut cursor,
-                0,
-                0,
-                SURFACE_FORMAT_R32G32B32_FLOAT,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_SRC,
-                VFCOMP_STORE_1_FP,
-            )?;
+            TriangleVertexFormat::Float3 => {
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    0,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
+                )?;
                 if cube_patch {
-                    push_vertex_element_state(batch_dwords, &mut cursor, 31, 0,
-                        SURFACE_FORMAT_R32G32_UINT, VFCOMP_STORE_0, VFCOMP_STORE_0,
-                        VFCOMP_STORE_0, VFCOMP_STORE_0)?;
+                    push_vertex_element_state(
+                        batch_dwords,
+                        &mut cursor,
+                        31,
+                        0,
+                        SURFACE_FORMAT_R32G32_UINT,
+                        VFCOMP_STORE_0,
+                        VFCOMP_STORE_0,
+                        VFCOMP_STORE_0,
+                        VFCOMP_STORE_0,
+                    )?;
                 }
-            },
+            }
             TriangleVertexFormat::VoxyFigure => {
                 for offset in [0, 4] {
-                    push_vertex_element_state(batch_dwords, &mut cursor, 0, offset,
-                        SURFACE_FORMAT_R32_UINT, VFCOMP_STORE_SRC, VFCOMP_STORE_0,
-                        VFCOMP_STORE_0, VFCOMP_STORE_0)?;
+                    push_vertex_element_state(
+                        batch_dwords,
+                        &mut cursor,
+                        0,
+                        offset,
+                        SURFACE_FORMAT_R32_UINT,
+                        VFCOMP_STORE_SRC,
+                        VFCOMP_STORE_0,
+                        VFCOMP_STORE_0,
+                        VFCOMP_STORE_0,
+                    )?;
                 }
             }
             TriangleVertexFormat::VoxyHeadless => {
                 for offset in [0, 16] {
-                    push_vertex_element_state(batch_dwords, &mut cursor, 0, offset,
-                        SURFACE_FORMAT_R32G32B32A32_FLOAT, VFCOMP_STORE_SRC, VFCOMP_STORE_SRC,
-                        VFCOMP_STORE_SRC, VFCOMP_STORE_SRC)?;
+                    push_vertex_element_state(
+                        batch_dwords,
+                        &mut cursor,
+                        0,
+                        offset,
+                        SURFACE_FORMAT_R32G32B32A32_FLOAT,
+                        VFCOMP_STORE_SRC,
+                        VFCOMP_STORE_SRC,
+                        VFCOMP_STORE_SRC,
+                        VFCOMP_STORE_SRC,
+                    )?;
                 }
             }
-            TriangleVertexFormat::FixedGl => {
-                for offset in [0, 16, 32, 48] {
-                    push_vertex_element_state(batch_dwords, &mut cursor, 0, offset,
-                        SURFACE_FORMAT_R32G32B32A32_FLOAT, VFCOMP_STORE_SRC, VFCOMP_STORE_SRC,
-                        VFCOMP_STORE_SRC, VFCOMP_STORE_SRC)?;
-                }
-            }
+
             TriangleVertexFormat::PosUv => {
                 push_vertex_element_state(
                     batch_dwords,
@@ -3983,16 +4140,36 @@ fn encode_triangle_probe_batch(
                     (32, SURFACE_FORMAT_R32G32B32A32_FLOAT, 4),
                 ] {
                     push_vertex_element_state(
-                        batch_dwords, &mut cursor, 0, offset, format,
-                        VFCOMP_STORE_SRC, VFCOMP_STORE_SRC,
-                        if components >= 3 { VFCOMP_STORE_SRC } else { VFCOMP_STORE_0 },
-                        if components == 4 { VFCOMP_STORE_SRC } else { VFCOMP_STORE_1_FP },
+                        batch_dwords,
+                        &mut cursor,
+                        0,
+                        offset,
+                        format,
+                        VFCOMP_STORE_SRC,
+                        VFCOMP_STORE_SRC,
+                        if components >= 3 {
+                            VFCOMP_STORE_SRC
+                        } else {
+                            VFCOMP_STORE_0
+                        },
+                        if components == 4 {
+                            VFCOMP_STORE_SRC
+                        } else {
+                            VFCOMP_STORE_1_FP
+                        },
                     )?;
                 }
                 // Fifth element carries the compiler-selected instance IDs.
                 push_vertex_element_state(
-                    batch_dwords, &mut cursor, 31, 0, SURFACE_FORMAT_R32G32_UINT,
-                    VFCOMP_STORE_0, VFCOMP_STORE_0, VFCOMP_STORE_0, VFCOMP_STORE_0,
+                    batch_dwords,
+                    &mut cursor,
+                    31,
+                    0,
+                    SURFACE_FORMAT_R32G32_UINT,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
                 )?;
             }
         }
@@ -4029,22 +4206,12 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        CMD_3DSTATE_VF
-            | vf_geometry_distribution_enable
-            | vf_component_packing_enable,
+        CMD_3DSTATE_VF | vf_geometry_distribution_enable | vf_component_packing_enable,
     )?;
     // Keep the disabled cut-index value identical to the verified gfx12 Mesa
     // draw.  It is architecturally ignored for this non-indexed triangle list,
     // but is part of the exact SVL state accompanying component packing.
-    push(
-        batch_dwords,
-        &mut cursor,
-        if mesa_host_fixed_function {
-            0xFFFF
-        } else {
-            0
-        },
-    )?;
+    push(batch_dwords, &mut cursor, if mesa_host_fixed_function { 0xFFFF } else { 0 })?;
     let host_point_tail_index_buffer = uses_host_point_tail_index_buffer(
         mesa_host_fixed_function,
         artifact_native_fixed_function,
@@ -4082,7 +4249,12 @@ fn encode_triangle_probe_batch(
     // insert system values into the sampled shader's fetched attributes.
     let ordinary_pos_uv = draw.native.is_none()
         && !vf_synthesized_vue
-        && matches!(draw.vertex_format, TriangleVertexFormat::PosUv | TriangleVertexFormat::FixedGl | TriangleVertexFormat::VoxyHeadless | TriangleVertexFormat::VoxyFigure);
+        && matches!(
+            draw.vertex_format,
+            TriangleVertexFormat::PosUv
+                | TriangleVertexFormat::VoxyHeadless
+                | TriangleVertexFormat::VoxyFigure
+        );
     let vf_sgvs_dw1 = if let Some(native) = draw.native {
         native.vf_sgvs_dw1
     } else if ordinary_pos_uv {
@@ -4164,9 +4336,15 @@ fn encode_triangle_probe_batch(
         .unwrap_or(baked_vs_urb_output_length);
 
     if cube_patch {
-        for (command, (size, start, entries)) in [CMD_3DSTATE_URB_ALLOC_VS,
-            CMD_3DSTATE_URB_ALLOC_HS, CMD_3DSTATE_URB_ALLOC_DS, CMD_3DSTATE_URB_ALLOC_GS]
-            .into_iter().zip(crate::intel::shader::patch_cube::URB) {
+        for (command, (size, start, entries)) in [
+            CMD_3DSTATE_URB_ALLOC_VS,
+            CMD_3DSTATE_URB_ALLOC_HS,
+            CMD_3DSTATE_URB_ALLOC_DS,
+            CMD_3DSTATE_URB_ALLOC_GS,
+        ]
+        .into_iter()
+        .zip(crate::intel::shader::patch_cube::URB)
+        {
             push(batch_dwords, &mut cursor, command)?;
             push(batch_dwords, &mut cursor, (size - 1) | (start << 10) | (start << 21))?;
             push(batch_dwords, &mut cursor, entries | (entries << 16))?;
@@ -4211,7 +4389,7 @@ fn encode_triangle_probe_batch(
             push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
             push(batch_dwords, &mut cursor, 0)?;
         }
-        }
+    }
     intel_render_verbose_log!(
         "probe-urb-config order=vs-hs-ds-gs vs_start={} vs_entries={} vs_entry_64b={} disabled_stage_start={} sf_deref={} source=mesa-adl-gt1\n",
         TRIANGLE_VS_URB_START,
@@ -4256,8 +4434,8 @@ fn encode_triangle_probe_batch(
             | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
         let applied_vs_grf_start =
             triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register);
-        let vs_dw6 = (u32::from(front_end_contract.vs_urb_read_length) << 11)
-            | (applied_vs_grf_start << 20);
+        let vs_dw6 =
+            (u32::from(front_end_contract.vs_urb_read_length) << 11) | (applied_vs_grf_start << 20);
         let vs_dw7 = 1
             | (1 << 2)
             | (1 << 10)
@@ -4313,19 +4491,27 @@ fn encode_triangle_probe_batch(
         RCS_EXEC_RESULT_DRAW_POST_VS,
     )?;
 
-    let tessellation_ksp = shader_layout.tessellation
+    let tessellation_ksp = shader_layout
+        .tessellation
         .map(|[hs, ds]| [hs.code_offset_bytes, ds.code_offset_bytes]);
     log_batch_offset(cursor, "3DSTATE_HS/TE/DS");
     for word in crate::intel::shader::tessellation_stage_packets(tessellation_ksp)? {
         push(batch_dwords, &mut cursor, word)?;
     }
     if let Some([hs, ds]) = shader_layout.tessellation {
-        intel_render_focus_log!("cube-tessellation enabled=1 topology=patchlist1 patches=44 hs_control_points=3 domain=tri factors=1 ds_camera_bti=1 hs_ksp=0x{:X} ds_ksp=0x{:X} source={}\n",
-            hs.code_offset_bytes, ds.code_offset_bytes, crate::intel::shader::patch_cube::SOURCE_SHA256);
+        intel_render_focus_log!(
+            "cube-tessellation enabled=1 topology=patchlist1 patches=44 hs_control_points=3 domain=tri factors=1 ds_camera_bti=1 hs_ksp=0x{:X} ds_ksp=0x{:X} source={}\n",
+            hs.code_offset_bytes,
+            ds.code_offset_bytes,
+            crate::intel::shader::patch_cube::SOURCE_SHA256
+        );
     }
     if draw.vue_capture {
         let (words, count) = picasso_vue_streamout_packets(
-            GPU_VA_STREAMOUT_BASE, warm.streamout_len, RENDER_MOCS, draw.pbr_material.is_some(),
+            GPU_VA_STREAMOUT_BASE,
+            warm.streamout_len,
+            RENDER_MOCS,
+            draw.pbr_material.is_some(),
         )?;
         for word in &words[..count] {
             push(batch_dwords, &mut cursor, *word)?;
@@ -4494,7 +4680,12 @@ fn encode_triangle_probe_batch(
         // Required ordering before changing depth/aux bindings, including a
         // new extent reusing the same carrier-owned auxiliary allocation.
         push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
-        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_CACHE_FLUSH)?;
+        push_pipe_control(
+            warm.device_id,
+            batch_dwords,
+            &mut cursor,
+            PIPE_CONTROL_DEPTH_CACHE_FLUSH,
+        )?;
         push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
     }
     // Bind a real tiled D32 surface only for the Resident-scene visibility contract.
@@ -4572,14 +4763,20 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_HIER_DEPTH_BUFFER");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_HIER_DEPTH_BUFFER)?;
     push(batch_dwords, &mut cursor, (RENDER_MOCS << 25) | hiz_layout.map_or(0, |h| h.pitch - 1))?;
-    push_addr(batch_dwords, &mut cursor, if hiz_layout.is_some() { GPU_VA_RESIDENT_SCENE_HIZ_BASE } else { 0 })?;
+    push_addr(
+        batch_dwords,
+        &mut cursor,
+        if hiz_layout.is_some() {
+            GPU_VA_RESIDENT_SCENE_HIZ_BASE
+        } else {
+            0
+        },
+    )?;
     push(batch_dwords, &mut cursor, hiz_layout.map_or(0, |h| h.qpitch))?;
 
-    if let Some(packet) = adls_depth_state_post_sync_packet(
-        warm.device_id,
-        GPU_VA_RESULT_BASE,
-        warm.result_len,
-    )? {
+    if let Some(packet) =
+        adls_depth_state_post_sync_packet(warm.device_id, GPU_VA_RESULT_BASE, warm.result_len)?
+    {
         log_batch_offset(cursor, "PIPE_CONTROL depth-state workaround");
         for dword in packet {
             push(batch_dwords, &mut cursor, dword)?;
@@ -4595,20 +4792,37 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
-        for _ in 0..11 { push(batch_dwords, &mut cursor, 0)?; }
+        for _ in 0..11 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, CMD_3DSTATE_WM)?;
         push(batch_dwords, &mut cursor, 0)?;
-        for word in hiz::clear_packet(aux) { push(batch_dwords, &mut cursor, word)?; }
+        for word in hiz::clear_packet(aux) {
+            push(batch_dwords, &mut cursor, word)?;
+        }
         let offset = RESULT_SLOT_DEPTH_STATE_WA_DWORD * 4;
-        if offset + 8 > warm.result_len { return Err("hiz-clear-scratch-range"); }
-        push_pipe_control_post_sync_imm(warm.device_id, batch_dwords, &mut cursor, 0,
+        if offset + 8 > warm.result_len {
+            return Err("hiz-clear-scratch-range");
+        }
+        push_pipe_control_post_sync_imm(
+            warm.device_id,
+            batch_dwords,
+            &mut cursor,
+            0,
             PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE,
-            GPU_VA_RESULT_BASE + offset as u64, 0)?;
+            GPU_VA_RESULT_BASE + offset as u64,
+            0,
+        )?;
         push_wm_hz_op(batch_dwords, &mut cursor, warm.device_id, 0, 0, 0, 0)?;
         push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
-        push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_CACHE_FLUSH)?;
+        push_pipe_control(
+            warm.device_id,
+            batch_dwords,
+            &mut cursor,
+            PIPE_CONTROL_DEPTH_CACHE_FLUSH,
+        )?;
         push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
     }
 
@@ -5066,16 +5280,8 @@ fn encode_triangle_probe_batch(
         push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
 
         log_batch_offset(cursor, "3DSTATE_VF verified-host-tail");
-        push(
-            batch_dwords,
-            &mut cursor,
-            CMD_3DSTATE_VF | (1 << 9),
-        )?;
-        push(
-            batch_dwords,
-            &mut cursor,
-            0xFFFF,
-        )?;
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_VF | (1 << 9))?;
+        push(batch_dwords, &mut cursor, 0xFFFF)?;
 
         log_batch_offset(cursor, "3DSTATE_PRIMITIVE_REPLICATION verified-host-tail");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PRIMITIVE_REPLICATION)?;
@@ -5112,7 +5318,11 @@ fn encode_triangle_probe_batch(
         // This late verified-host packet supersedes the earlier WM state.
         // Preserve the shader-derived barycentric mode instead of silently
         // reverting VF-fed sampled shaders to a no-varying payload.
-        push(batch_dwords, &mut cursor, microfont_line_aa_wm(0x8000_0040 | wm_barycentric_mode, native_line_aa))?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            microfont_line_aa_wm(0x8000_0040 | wm_barycentric_mode, native_line_aa),
+        )?;
         log_batch_offset(cursor, "3DSTATE_PS_BLEND verified-host-tail");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
         // The last PS_BLEND packet is authoritative. Preserve the draw's
@@ -5136,7 +5346,8 @@ fn encode_triangle_probe_batch(
         // Voxy's compiled VF payload starts after its 96-byte camera range:
         // re-arm that range, then its binding table, after the final reset.
         let (vs_tail, vs_tail_len) = host_final_vs_state_packets(
-            draw.voxy_headless.then_some((draw.vertex_gpu_addr, draw.vertex_buffer_bytes)),
+            draw.voxy_headless
+                .then_some((draw.vertex_gpu_addr, draw.vertex_buffer_bytes)),
             binding_table_pointer_offset,
         )?;
         for word in &vs_tail[..vs_tail_len] {
@@ -5144,7 +5355,9 @@ fn encode_triangle_probe_batch(
         }
         if draw.voxy_figure {
             for packet in figure_constant_packets(draw.vertex_gpu_addr, draw.vertex_buffer_bytes)? {
-                for word in packet { push(batch_dwords, &mut cursor, word)?; }
+                for word in packet {
+                    push(batch_dwords, &mut cursor, word)?;
+                }
             }
         }
         push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
@@ -5171,23 +5384,33 @@ fn encode_triangle_probe_batch(
             return Err("rounded-line-constants-contract");
         }
         let address = if microfont_mask {
-            if probe_state.push_constant_gpu_addr==0 { return Err("microfont-mask-constants-contract"); }
+            if probe_state.push_constant_gpu_addr == 0 {
+                return Err("microfont-mask-constants-contract");
+            }
             probe_state.push_constant_gpu_addr
         } else {
-            if probe_state.push_constant_offset_bytes==0 { return Err("rounded-line-constants-contract"); }
-            draw.state_gpu_addr.checked_add(u64::from(probe_state.push_constant_offset_bytes))
+            if probe_state.push_constant_offset_bytes == 0 {
+                return Err("rounded-line-constants-contract");
+            }
+            draw.state_gpu_addr
+                .checked_add(u64::from(probe_state.push_constant_offset_bytes))
                 .ok_or("rounded-line-constants-address")?
         };
         if microfont_mask {
             for packet in microfont_mask_constant_packets(address)? {
-                for word in packet { push(batch_dwords, &mut cursor, word)?; }
+                for word in packet {
+                    push(batch_dwords, &mut cursor, word)?;
+                }
             }
         } else {
-            for word in rounded_line_constant_ps_packet(address)? { push(batch_dwords, &mut cursor, word)?; }
+            for word in rounded_line_constant_ps_packet(address)? {
+                push(batch_dwords, &mut cursor, word)?;
+            }
         }
     }
     if draw.vue_capture {
-        let (words, count) = picasso_vue_counter_packets(GPU_VA_RESULT_BASE, warm.result_len, false)?;
+        let (words, count) =
+            picasso_vue_counter_packets(GPU_VA_RESULT_BASE, warm.result_len, false)?;
         for word in &words[..count] {
             push(batch_dwords, &mut cursor, *word)?;
         }
@@ -5260,7 +5483,8 @@ fn encode_triangle_probe_batch(
     }
 
     if draw.vue_capture {
-        let (words, count) = picasso_vue_counter_packets(GPU_VA_RESULT_BASE, warm.result_len, true)?;
+        let (words, count) =
+            picasso_vue_counter_packets(GPU_VA_RESULT_BASE, warm.result_len, true)?;
         for word in &words[..count] {
             push(batch_dwords, &mut cursor, *word)?;
         }
@@ -5364,9 +5588,16 @@ fn encode_triangle_probe_batch(
         // removing its push/pull bindings: the next submission's opening
         // flush must not encounter pointers into an already unmapped pose.
         log_batch_offset(cursor, "PIPE_CONTROL figure-before-unbind");
-        push_pipe_control_full(warm.device_id, batch_dwords, &mut cursor,
-            PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS, PIPE_CONTROL_BIG_PRE_DRAW_BITS)?;
-        for word in figure_unbind_packets() { push(batch_dwords, &mut cursor, word)?; }
+        push_pipe_control_full(
+            warm.device_id,
+            batch_dwords,
+            &mut cursor,
+            PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS,
+            PIPE_CONTROL_BIG_PRE_DRAW_BITS,
+        )?;
+        for word in figure_unbind_packets() {
+            push(batch_dwords, &mut cursor, word)?;
+        }
     }
 
     log_batch_offset(cursor, "MI_STORE_DATA_IMM final");
@@ -5965,7 +6196,11 @@ fn encode_minimal_streamout_proof_batch(
         value: u32,
     ) -> Result<(), &'static str> {
         for word in render_pipe_control_packet(
-            device_is_gfx12(device_id), 0, flags, address, u64::from(value),
+            device_is_gfx12(device_id),
+            0,
+            flags,
+            address,
+            u64::from(value),
         ) {
             push(batch_dwords, cursor, word)?;
         }
@@ -6758,9 +6993,9 @@ fn encode_3d_no_draw_probe_batch(
         flags_dw0: u32,
         flags_dw1: u32,
     ) -> Result<(), &'static str> {
-        for word in render_pipe_control_packet(
-            device_is_gfx12(device_id), flags_dw0, flags_dw1, 0, 0,
-        ) {
+        for word in
+            render_pipe_control_packet(device_is_gfx12(device_id), flags_dw0, flags_dw1, 0, 0)
+        {
             push(batch_dwords, cursor, word)?;
         }
         Ok(())
@@ -6791,7 +7026,13 @@ fn encode_3d_no_draw_probe_batch(
 
     batch_dwords.fill(0);
     push_pipe_control_full(warm.device_id, batch_dwords, &mut cursor, 0, PIPE_CONTROL_FLUSH_BITS)?;
-    push_pipe_control_full(warm.device_id, batch_dwords, &mut cursor, 0, PIPE_CONTROL_INVALIDATE_BITS)?;
+    push_pipe_control_full(
+        warm.device_id,
+        batch_dwords,
+        &mut cursor,
+        0,
+        PIPE_CONTROL_INVALIDATE_BITS,
+    )?;
     push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
@@ -6818,19 +7059,30 @@ fn encode_3d_no_draw_probe_batch(
 
 /// Compiler push map: 64 bytes at PS slot 3, after source depth/W payload.
 fn rounded_line_constant_ps_packet(address: u64) -> Result<[u32; 11], &'static str> {
-    if address == 0 || address & 31 != 0 { return Err("rounded-line-constants-alignment"); }
+    if address == 0 || address & 31 != 0 {
+        return Err("rounded-line-constants-alignment");
+    }
     let mut words = [0; 11];
     words[0] = 0x7817_0009 | (RENDER_MOCS << 8);
     words[2] = 2 << 16;
-    words[9] = address as u32; words[10] = (address >> 32) as u32;
+    words[9] = address as u32;
+    words[10] = (address >> 32) as u32;
     Ok(words)
 }
 
 /// Gen12 ANV places its single 96B UBO push range in the final constant slot.
-fn voxy_headless_constant_vs_packet(vertex_gpu: u64, vertex_bytes: u32) -> Result<[u32; 11], &'static str> {
-    let camera = vertex_gpu.checked_add(u64::from(vertex_bytes)).and_then(|v| v.checked_add(31))
-        .ok_or("voxy-headless-camera-address")? & !31;
-    if vertex_gpu == 0 || vertex_gpu & 31 != 0 { return Err("voxy-headless-vertex-address"); }
+fn voxy_headless_constant_vs_packet(
+    vertex_gpu: u64,
+    vertex_bytes: u32,
+) -> Result<[u32; 11], &'static str> {
+    let camera = vertex_gpu
+        .checked_add(u64::from(vertex_bytes))
+        .and_then(|v| v.checked_add(31))
+        .ok_or("voxy-headless-camera-address")?
+        & !31;
+    if vertex_gpu == 0 || vertex_gpu & 31 != 0 {
+        return Err("voxy-headless-vertex-address");
+    }
     let mut words = [0u32; 11];
     words[0] = 0x7815_0009 | (RENDER_MOCS << 8);
     words[2] = 3 << 16;
@@ -6841,14 +7093,15 @@ fn voxy_headless_constant_vs_packet(vertex_gpu: u64, vertex_bytes: u32) -> Resul
 
 /// Both stages read the same immutable per-dispatch 64-byte parameter block.
 /// Emit at the final draw frontier, after CONSTANT_ALL has reset earlier state.
-fn microfont_mask_constant_packets(address:u64) -> Result<[[u32;11];2],&'static str> {
-    let ps=rounded_line_constant_ps_packet(address)?;
-    let vs_address=address.checked_add(u64::from(crate::intel::shader::MICROFONT_MASK_VS_PUSH_START_BYTES))
+fn microfont_mask_constant_packets(address: u64) -> Result<[[u32; 11]; 2], &'static str> {
+    let ps = rounded_line_constant_ps_packet(address)?;
+    let vs_address = address
+        .checked_add(u64::from(crate::intel::shader::MICROFONT_MASK_VS_PUSH_START_BYTES))
         .ok_or("microfont-mask-constant-address")?;
-    let mut vs=rounded_line_constant_ps_packet(vs_address)?;
-    vs[0]=0x7815_0009 | (RENDER_MOCS<<8);
-    vs[2]=crate::intel::shader::MICROFONT_MASK_VS_PUSH_GRFS<<16;
-    Ok([ps,vs])
+    let mut vs = rounded_line_constant_ps_packet(vs_address)?;
+    vs[0] = 0x7815_0009 | (RENDER_MOCS << 8);
+    vs[2] = crate::intel::shader::MICROFONT_MASK_VS_PUSH_GRFS << 16;
+    Ok([ps, vs])
 }
 
 /// Final host-style VS state, including the reset that supersedes early state.
@@ -6867,7 +7120,11 @@ fn host_final_vs_state_packets(
         2
     };
     words[binding_at] = CMD_3DSTATE_BINDING_TABLE_POINTERS_VS;
-    words[binding_at + 1] = if voxy_camera.is_some() { binding_table_pointer } else { 0 };
+    words[binding_at + 1] = if voxy_camera.is_some() {
+        binding_table_pointer
+    } else {
+        0
+    };
     Ok((words, binding_at + 2))
 }
 
@@ -6881,10 +7138,26 @@ mod host_final_vs_state_tests {
         assert_eq!(len, 15);
         // Reset VS/PS, restore VS slot3=96B at vertex_end, then commit the
         // real VS table. The reset must precede both surviving state writes.
-        assert_eq!(words, [
-            0x786d_1100, 4, 0x7815_0409, 0, 0x0003_0000,
-            0, 0, 0, 0, 0, 0, 96, 1, 0x7826_0000, 0x800,
-        ]);
+        assert_eq!(
+            words,
+            [
+                0x786d_1100,
+                4,
+                0x7815_0409,
+                0,
+                0x0003_0000,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                96,
+                1,
+                0x7826_0000,
+                0x800,
+            ]
+        );
     }
 
     #[test]
@@ -6908,9 +7181,10 @@ mod voxy_headless_constant_tests {
     fn camera_uses_the_compiler_range_in_final_constant_slot() {
         // Gen12 ANV: 96 bytes, three 32-byte units in slot 3. The packet
         // carries MOCS in its header and leaves the address bits untouched.
-        assert_eq!(voxy_headless_constant_vs_packet(0x1_0000_0000, 96).unwrap(), [
-            0x7815_0409, 0, 0x0003_0000, 0, 0, 0, 0, 0, 0, 96, 1,
-        ]);
+        assert_eq!(
+            voxy_headless_constant_vs_packet(0x1_0000_0000, 96).unwrap(),
+            [0x7815_0409, 0, 0x0003_0000, 0, 0, 0, 0, 0, 0, 96, 1,]
+        );
         assert_eq!(voxy_headless_constant_vs_packet(0x1_0000_0000, 128).unwrap()[9], 128);
     }
 
@@ -6926,31 +7200,50 @@ fn figure_uniform_gpu_base(vertex_gpu: u64, vertex_bytes: u32) -> Result<u64, &'
     if vertex_gpu == 0 || vertex_gpu & 31 != 0 || vertex_bytes == 0 || vertex_bytes % 32 != 0 {
         return Err("voxy-figure-uniform-alignment");
     }
-    vertex_gpu.checked_add(u64::from(vertex_bytes)).ok_or("voxy-figure-uniform-address")
+    vertex_gpu
+        .checked_add(u64::from(vertex_bytes))
+        .ok_or("voxy-figure-uniform-address")
 }
 
 /// Captured original ranges, packed into ANV's highest constant buffer slots.
-fn figure_constant_packets(vertex_gpu: u64, vertex_bytes: u32) -> Result<[[u32; 11]; 2], &'static str> {
+fn figure_constant_packets(
+    vertex_gpu: u64,
+    vertex_bytes: u32,
+) -> Result<[[u32; 11]; 2], &'static str> {
     let base = figure_uniform_gpu_base(vertex_gpu, vertex_bytes)?;
-    let globals_vs = base.checked_add(128).ok_or("voxy-figure-constant-address")?;
-    let locals_vs = base.checked_add(512 + 128).ok_or("voxy-figure-constant-address")?;
-    let globals_ps = base.checked_add(224).ok_or("voxy-figure-constant-address")?;
+    let globals_vs = base
+        .checked_add(128)
+        .ok_or("voxy-figure-constant-address")?;
+    let locals_vs = base
+        .checked_add(512 + 128)
+        .ok_or("voxy-figure-constant-address")?;
+    let globals_ps = base
+        .checked_add(224)
+        .ok_or("voxy-figure-constant-address")?;
     let mut vs = [0u32; 11];
     vs[0] = 0x7815_0009 | (RENDER_MOCS << 8);
     vs[2] = 3 | (1 << 16);
-    vs[7] = globals_vs as u32; vs[8] = (globals_vs >> 32) as u32;
-    vs[9] = locals_vs as u32; vs[10] = (locals_vs >> 32) as u32;
+    vs[7] = globals_vs as u32;
+    vs[8] = (globals_vs >> 32) as u32;
+    vs[9] = locals_vs as u32;
+    vs[10] = (locals_vs >> 32) as u32;
     let mut ps = [0u32; 11];
     ps[0] = 0x7817_0009 | (RENDER_MOCS << 8);
     ps[2] = 2 << 16;
-    ps[9] = globals_ps as u32; ps[10] = (globals_ps >> 32) as u32;
+    ps[9] = globals_ps as u32;
+    ps[10] = (globals_ps >> 32) as u32;
     Ok([vs, ps])
 }
 
 /// Gen12 CONSTANT_ALL is used only with zero addresses (Wa_16011448509).
 /// Clear both the pushed ranges and the pull-constant binding tables.
 fn figure_unbind_packets() -> [u32; 6] {
-    [CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS, RENDER_MOCS,
-     CMD_3DSTATE_BINDING_TABLE_POINTERS_VS, 0,
-     CMD_3DSTATE_BINDING_TABLE_POINTERS_PS, 0]
+    [
+        CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS,
+        RENDER_MOCS,
+        CMD_3DSTATE_BINDING_TABLE_POINTERS_VS,
+        0,
+        CMD_3DSTATE_BINDING_TABLE_POINTERS_PS,
+        0,
+    ]
 }

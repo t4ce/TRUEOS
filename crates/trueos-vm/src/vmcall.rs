@@ -103,8 +103,6 @@ pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204;
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207;
 pub const OP_BP_THREAD_SUBMIT: u32 = 0x217;
 pub const OP_BP_STOP_CONTROL_V1: u32 = 0x21A; // arg0 register(0)/poll(1) -> rc/requested
-pub const OP_BP_GUEST_COMPUTE_SUBMIT: u32 = 0x215;
-pub const OP_BP_GUEST_COMPUTE_CAPACITY: u32 = 0x216;
 /// `arg0=owned frame`, `arg1=0xRRGGBB`; primary display's shared opaque backdrop.
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 = 0x208;
 /// `arg0=owned frame`, payload=`red[256] + green[256] + blue[256]` u16 LE.
@@ -153,7 +151,6 @@ pub const OP_BP_VID_OPEN_V1: u32 = 0x182;
 pub const OP_BP_VID_OPEN_V2: u32 = 0x183;
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141;
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2: u32 = 0x14C;
-pub const OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1: u32 = 0x218;
 pub const OP_BP_VGPU_RETAINED_MESH_CREATE: u32 = 0x14D;
 pub const OP_BP_VGPU_RETAINED_MESH_DESTROY: u32 = 0x14E;
 pub const OP_BP_VGPU_RETAINED_FRAME_SUBMIT: u32 = 0x14F;

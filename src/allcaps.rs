@@ -53,16 +53,6 @@ pub mod cpu_task_pool {
     /// 30-thread i9/H-class topology after BSP and UI/service reservations
     /// without making the kernel reserve 256 task frames for one service.
     pub const TASK_STORAGE_SLOTS: usize = 32;
-
-    /// XPAPP's software raster workers are admitted as normal work on a
-    /// performance AP, but deliberately leave time for the executor's other
-    /// services.  Accounting uses measured elapsed carrier time, not number
-    /// of submitted row bands.
-    pub const GUEST_COMPUTE_DUTY_PERCENT: u64 = 66;
-    /// Accumulate small raster bands into a useful burst before sleeping.  The
-    /// band code itself is bounded, so this is slack for throughput rather
-    /// than permission for an unbounded executor poll.
-    pub const GUEST_COMPUTE_BURST_TICKS: u64 = 4;
 }
 
 pub mod probes {
@@ -149,10 +139,6 @@ pub mod hv {
     // Passive cross-carrier progress/interrupt probes. No forced interrupts,
     // preemption, timeout recovery or scheduler policy changes.
     pub const CODEX_PROGRESS_PROBES_ENABLED: bool = true;
-    // Transient WC3 x86 contexts rebuild their VMCS after every timer exit.
-    // Give the guest a longer carrier slice without delaying Hull lifecycle
-    // stop checks, which retain the separate 125 ms quantum above.
-    pub const VMX_WC3_TRANSIENT_PREEMPTION_QUANTUM_MS: u64 = 500;
 
     pub const GUEST_STACK_MIN_MIB: usize = 8;
     pub const GUEST_STACK_DEFAULT_MIB: usize = 64;

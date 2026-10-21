@@ -12,7 +12,6 @@ const LANE_FREE: u8 = 0;
 const LANE_VM_HULL: u8 = 1;
 const LANE_TOKIO_BLOCKING: u8 = 2;
 const LANE_WORKER: u8 = 3;
-const LANE_GUEST_COMPUTE: u8 = 4;
 const LANE_QUARANTINED: u8 = u8::MAX;
 
 static LANE_OWNER: [AtomicU8; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
@@ -26,7 +25,6 @@ pub enum LaneRole {
     VmHull,
     TokioBlocking,
     Worker,
-    GuestCompute,
 }
 
 impl LaneRole {
@@ -35,7 +33,6 @@ impl LaneRole {
             Self::VmHull => LANE_VM_HULL,
             Self::TokioBlocking => LANE_TOKIO_BLOCKING,
             Self::Worker => LANE_WORKER,
-            Self::GuestCompute => LANE_GUEST_COMPUTE,
         }
     }
 
@@ -44,7 +41,6 @@ impl LaneRole {
             Self::VmHull => "hull",
             Self::TokioBlocking => "tokio-blocking-lane",
             Self::Worker => "TRUEOS-executor-lane",
-            Self::GuestCompute => "guest-compute-lane",
         }
     }
 }
@@ -216,18 +212,6 @@ pub fn try_lease_tokio_blocking_lane_for_slot(slot: u32) -> Option<LaneLease> {
     try_lease(slot, LaneRole::TokioBlocking)
 }
 
-/// Lease a carrier for a bounded guest compute task.  The lease is held only
-/// while a compute task runs or yields for its duty cooldown; ordinary
-/// executor services continue to share the AP.  It prevents a Hull or native
-/// carrier from being admitted to the same worker mid-band.
-pub fn try_lease_guest_compute_lane_for_slot(slot: u32) -> Option<LaneLease> {
-    if !crate::workers::is_general_background_worker_slot(slot) {
-        return None;
-    }
-    crate::workers::spawner_for_slot(slot)?;
-    try_lease(slot, LaneRole::GuestCompute)
-}
-
 fn collect_candidates(profile: LaneProfile) -> Vec<LaneCandidate> {
     match profile.placement {
         SpawnPlacement::Worker | SpawnPlacement::ReservedVmLane => collect_ap2_candidates(),
@@ -303,7 +287,7 @@ pub fn role_for_slot(slot: usize) -> Option<LaneRole> {
         LANE_VM_HULL => Some(LaneRole::VmHull),
         LANE_TOKIO_BLOCKING => Some(LaneRole::TokioBlocking),
         LANE_WORKER => Some(LaneRole::Worker),
-        LANE_GUEST_COMPUTE => Some(LaneRole::GuestCompute),
+
         _ => None,
     }
 }
