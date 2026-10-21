@@ -2,7 +2,7 @@
 
 pub(crate) const MAX_CODE_BYTES: usize = 24 * 1024;
 pub(crate) const PREFIX: [u32; 4] = [0x80000166, 0x80018220, 0x01008000, 0x04c004c0];
-pub(crate) const SUFFIX: [[u32; 4]; 8] = [
+pub(crate) const SUFFIX: [[u32; 4]; 9] = [
     [0x00000101, 0x00010000, 0, 0],
     [0x00034031, 0, 0xcc00030c, 0x009a040c],
     [0x00003001, 0x00010000, 0, 0],
@@ -10,6 +10,7 @@ pub(crate) const SUFFIX: [[u32; 4]; 8] = [
     [0x80002101, 0x00010000, 0, 0],
     [0x80030161, 0x7f050220, 0x00460005, 0],
     [0x80040061, 0x20014aa0, 0, 0],
+    [0x00000101, 0x00010000, 0, 0],
     [0x80034131, 0x00000004, 0x70207f0c, 0],
 ];
 
@@ -18,7 +19,7 @@ fn words(bytes: &[u8]) -> [u32; 4] {
 }
 
 pub(crate) fn validate(code: &[u8]) -> bool {
-    if !(160..=MAX_CODE_BYTES).contains(&code.len()) || code.len() % 16 != 0 {
+    if !(176..=MAX_CODE_BYTES).contains(&code.len()) || code.len() % 16 != 0 {
         return false;
     }
     let tail = code.len() - SUFFIX.len() * 16;
@@ -98,7 +99,7 @@ mod tests {
             corrupt[offset] = value;
             assert!(!validate(&corrupt), "offset {offset}");
         }
-        for i in 0..original.len() - 16 {
+        for i in 0..original.len() {
             if (16..32).contains(&i) {
                 continue;
             }

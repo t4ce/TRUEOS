@@ -2006,7 +2006,7 @@ pub(crate) fn call_native_scalar_f32_v1(
     a: u32,
     b: u32,
 ) -> Result<u32, i32> {
-    if code_bytes > super::native_xelp::MAX_CODE_BYTES || code_bytes < 160 {
+    if code_bytes > super::native_xelp::MAX_CODE_BYTES || code_bytes < 176 {
         return Err(-22);
     }
     let code = {
@@ -2027,7 +2027,7 @@ pub(crate) fn call_native_scalar_f32_v1(
         };
         crate::intel::dma_flush(virt, code_bytes);
         let copy = unsafe { core::slice::from_raw_parts(virt, code_bytes) }.to_vec();
-        record.in_flight += 1;
+        record.in_flight = record.in_flight.checked_add(1).ok_or(-16)?;
         copy
     };
     let result = crate::intel::gpgpu::native_scalar_f32(&code, a, b);

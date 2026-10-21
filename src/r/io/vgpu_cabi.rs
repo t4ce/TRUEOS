@@ -101,7 +101,7 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_call_f32_v1(
 ) -> i32 {
     if code.is_null()
         || out.is_null()
-        || !(160..=crate::gpu::native_xelp::MAX_CODE_BYTES).contains(&bytes)
+        || !(176..=crate::gpu::native_xelp::MAX_CODE_BYTES).contains(&bytes)
     {
         return -22;
     }
