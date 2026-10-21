@@ -1,3 +1,5 @@
+# Intentional retirement of the eight legacy UI4 font/text imports with the removed font backend.
+# All surviving signatures are unchanged; old font/text Blueprint imports are no longer supported.
 # Additive bounded native Xe-LP scalar-call v1; all previous signatures verified unchanged.
 # Additive checked native file write v1; all previous signatures reviewed unchanged.
 # Additive kernel-owned UI4 collapse registration v1; existing signatures unchanged.
@@ -22,4 +24,4 @@
 # Additive Shell3 pixel-geometry spawn/presentation polling v1. Existing signatures unchanged.
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
-560da1e1e0c77b1a06f35e2353e4c81847b83ef8133ee0d417d40ba08126dc21
+6938db29c96679a2bbaab9d39771ed988b6295ecece7c7cdb72d07bbbc60d6d5

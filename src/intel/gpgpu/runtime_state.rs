@@ -21,11 +21,9 @@ static SHADERTOY_COSMIC_STRANDS_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = 
 static SHADERTOY_PROTEAN_CLOUDS_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static PARTICLE_CRAFT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static FONT_INSTANCE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LFM25_Q8_PROJECT_PACKED_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static KOKORO_QGEMM_U8_I8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static KOKORO_CONV1D_U8_U8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static FONT_OUTLINE_COVERAGE_R8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static HELIO_RETAINED_TRANSFORM_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LAB256_MULTIPHASE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -104,9 +102,7 @@ static SKYBOX_SAMPLE_RGB565_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static COPY_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-static FONT_OUTLINE_COVERAGE_R8_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static GLYPH_MASK_BATCH_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
-static FONT_INSTANCE_BATCH_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static SPRITE_QUAD_WORKLIST_RAN: AtomicBool = AtomicBool::new(false);
 static SPRITE_QUAD_WORKLIST_OK: AtomicBool = AtomicBool::new(false);

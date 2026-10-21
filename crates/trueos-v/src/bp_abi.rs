@@ -692,14 +692,6 @@ unsafe extern "C" {
     pub fn trueos_cabi_gridpaper_print_request_take() -> u64;
     pub fn trueos_cabi_gridpaper_print_request_take_instance(instance_id: u32) -> u64;
 
-    pub fn trueos_cabi_ui4_solara_font_sizes(
-        out: *mut TrueosUi4SolaraFontSize,
-        out_cap: usize,
-    ) -> isize;
-    pub fn trueos_cabi_ui4_shell2_font_scale_steps_v1(
-        out: *mut TrueosUi4Shell2FontScaleStep,
-        out_cap: usize,
-    ) -> isize;
     pub fn trueos_cabi_ui4_solara_frame_open(x: i32, y: i32, width: u32, height: u32) -> u32;
     pub fn trueos_cabi_ui4_scene_frame_open_immutable(
         x: i32,
@@ -830,33 +822,6 @@ unsafe extern "C" {
         out: *mut TrueosUi4InputRouteState,
         out_cap: u32,
     ) -> isize;
-    pub fn trueos_cabi_ui4_solara_text_rows(
-        window_id: u32,
-        font_id: u32,
-        native_scale: u32,
-        dst_x: i32,
-        dst_y: i32,
-        rgba: u32,
-        rows: *const TrueosUi4SolaraTextRow,
-        row_count: usize,
-    ) -> i32;
-    pub fn trueos_cabi_ui4_solara_text_scene(
-        window_id: u32,
-        font_id: u32,
-        viewport_width: u32,
-        viewport_height: u32,
-        rgba: u32,
-        rows: *const TrueosUi4SolaraSceneTextRow,
-        row_count: usize,
-    ) -> i32;
-    pub fn trueos_cabi_ui4_font_canvas(
-        window_id: u32,
-        font_id: u32,
-        canvas_width: u32,
-        canvas_height: u32,
-        rows: *const TrueosUi4FontCanvasRow,
-        row_count: usize,
-    ) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_publish(
         window_id: u32,
         damage_x: u32,
@@ -996,26 +961,6 @@ unsafe extern "C" {
         height: u32,
         data_ptr: *const u8,
         data_len: usize,
-    ) -> i32;
-    /// Metrics from the resolved registered face; flags bit 0 means monospace.
-    pub fn trueos_cabi_ui4_scene_font_metrics_v1(
-        window: u32,
-        font: u32,
-        pixels: f32,
-        out: *mut TrueosUi4FontMetricsV1,
-    ) -> i32;
-    pub fn trueos_cabi_ui4_scene_font_sprite_request_v1(
-        window_id: u32,
-        font_id: u32,
-        scalar: u32,
-        font_pixels: f32,
-        color_rgba: u32,
-        out_ticket: *mut u64,
-    ) -> i32;
-    pub fn trueos_cabi_ui4_scene_font_sprite_status_v1(
-        window_id: u32,
-        ticket: u64,
-        out: *mut TrueosUi4FontSpriteStatusV1,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_sprite_frame_begin_region_v1(

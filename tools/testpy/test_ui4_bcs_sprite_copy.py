@@ -76,7 +76,6 @@ items = [
     ('src/ui4/blueprint_ui4.rs','valid_sprite_quad'),
     ('src/ui4/blueprint_ui4.rs','sprite_scene_uses_bcs0_clear'),
     ('src/ui4/blueprint_ui4.rs','sprite_scene_needs_clear'),
-    ('src/ui4/blueprint_ui4.rs','sprite_source_is_premultiplied'),
     ('src/ui4/blueprint_ui4.rs','gpgpu_sprite_quad_descriptor'),
     ('src/ui4/blueprint_ui4.rs','sprite_overlay_tests'),
 ]

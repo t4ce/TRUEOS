@@ -10,7 +10,7 @@ import tempfile
 
 def main():
     source = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "src/ui4/blueprint_ui4/display_registry.rs"
     )
     with tempfile.TemporaryDirectory(prefix="trueos-display-tests-") as directory:

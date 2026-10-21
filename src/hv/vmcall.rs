@@ -93,13 +93,10 @@ pub const OP_BP_ASYNC_FS_RECORD_KEY_START: u32 = 0x12C; // payload resolved file
 // arg0 window,arg1 x/y,payload w/h -> rc. The active BlueprintScene producer
 // is identified by its release proof, not by a UI toolkit or render engine.
 pub const OP_BP_UI4_SCENE_COMPUTE_FRAME_PUBLISH: u32 = 0x12D;
-pub const OP_BP_UI4_SHELL2_FONT_SCALE_STEPS_V1: u32 = 0x12E; // arg0 cap -> Shell2FontScaleStep payload
-pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2; // arg0 cap -> count + FontSize payload
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
 pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 mode:window,arg1 x/y,payload w/h -> rc [+ mode1 serial]
 pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window,arg1 close flags -> rc
-pub const OP_BP_UI4_SOLARA_TEXT_SCENE: u32 = 0xB8; // arg0 window,arg1 font,payload viewport/rows -> rc
 pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 instance:scale,payload fixed page -> rc
 pub const OP_BP_GRIDPAPER_CLOSE: u32 = 0xBA; // arg0 instance, detach calling VM's producer -> rc
 pub const OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT: u32 = 0xBB; // arg0 instance,payload CSS-like text color programs -> rc
@@ -239,7 +236,6 @@ pub const OP_BP_ARCHIVE_UNPACK_START: u32 = 0xFB; // arg0 archive len,payload ar
 pub const OP_BP_ARCHIVE_STATUS: u32 = 0xFC; // arg0 operation id -> pending/ready/rc
 pub const OP_BP_ARCHIVE_REPORT: u32 = 0xFD; // arg0 operation id -> completion report payload/rc
 pub const OP_BP_ARCHIVE_DISCARD: u32 = 0xFE; // arg0 operation id -> rc
-pub const OP_BP_UI4_FONT_CANVAS: u32 = 0xFF; // arg0 window,arg1 font,payload colored rows -> rc
 pub const OP_BP_LUMEN_TEMPLATE_OPEN: u32 = 0x100;
 pub const OP_BP_LUMEN_PROMPT_SUBMIT: u32 = 0x101;
 pub const OP_BP_LUMEN_STATUS: u32 = 0x102;
@@ -288,9 +284,6 @@ pub const OP_BP_UI4_SCENE_FRAME_SET_OPACITY: u32 = 0x15D; // arg0 window,arg1 op
 pub const OP_BP_UI4_SCENE_FRAME_SET_ARC: u32 = trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_ARC; // arg0 window,arg1 arc-per-mille -> rc
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 =
     trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR;
-pub const OP_BP_UI4_SCENE_FONT_METRICS_V1: u32 = 0x219;
-pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E; // arg0 window,arg1 scalar,payload font/px/color -> ticket
-pub const OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1: u32 = 0x15F; // arg0 window,arg1 ticket -> FontSpriteStatusV1
 pub const OP_BP_VMEDIA_IMAGE_DECODE_BEGIN: u32 = 0x142; // arg0 format,arg1 encoded bytes -> operation id/rc
 pub const OP_BP_VMEDIA_IMAGE_DECODE_WRITE: u32 = 0x143; // arg0 operation,arg1 offset,payload encoded chunk -> rc
 pub const OP_BP_VMEDIA_IMAGE_DECODE_COMMIT: u32 = 0x144; // arg0 operation -> rc
@@ -1948,50 +1941,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
-        OP_BP_UI4_SOLARA_FONT_SIZES => {
-            let Some(page) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let entry_bytes =
-                core::mem::size_of::<crate::ui4::blueprint_ui4::TrueosUi4SolaraFontSize>();
-            let cap = (arg0 as usize).min(PAYLOAD_CAP / entry_bytes);
-            let result = unsafe {
-                crate::ui4::blueprint_ui4::trueos_cabi_ui4_solara_font_sizes(
-                    (*page).payload.as_mut_ptr().cast(),
-                    cap,
-                )
-            };
-            let response_len = if result > 0 {
-                (result as usize).min(cap).saturating_mul(entry_bytes)
-            } else {
-                0
-            };
-            write_response(vm_id, seq, STATUS_OK, (result as i64) as u64, response_len as u32);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI4_SHELL2_FONT_SCALE_STEPS_V1 => {
-            let Some(page) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let entry_bytes =
-                core::mem::size_of::<crate::ui4::blueprint_ui4::TrueosUi4Shell2FontScaleStep>();
-            let cap = (arg0 as usize).min(PAYLOAD_CAP / entry_bytes);
-            let result = unsafe {
-                crate::ui4::blueprint_ui4::trueos_cabi_ui4_shell2_font_scale_steps_v1(
-                    (*page).payload.as_mut_ptr().cast(),
-                    cap,
-                )
-            };
-            let response_len = if result > 0 {
-                (result as usize).min(cap).saturating_mul(entry_bytes)
-            } else {
-                0
-            };
-            write_response(vm_id, seq, STATUS_OK, (result as i64) as u64, response_len as u32);
-            DispatchOutcome::Resume
-        }
         OP_BP_UI4_SOLARA_FRAME_OPEN => {
             let (x, y) = unpack_i32_pair(arg0);
             let (width, height) = unpack_u32_pair(arg1);
@@ -2005,180 +1954,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg0 as u32,
                 arg1 as u32,
             );
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI4_SOLARA_TEXT_SCENE => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let Some(header) = payload.get(..16) else {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            };
-            let viewport_width = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-            let viewport_height = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-            let rgba = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
-            let row_count =
-                u32::from_le_bytes([header[12], header[13], header[14], header[15]]) as usize;
-            if row_count == 0 || row_count > 64 {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let mut offset = 16usize;
-            let mut rows = alloc::vec::Vec::with_capacity(row_count);
-            for _ in 0..row_count {
-                let Some(row_header) = payload.get(offset..offset.saturating_add(16)) else {
-                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                    return DispatchOutcome::Resume;
-                };
-                let x = f32::from_bits(u32::from_le_bytes([
-                    row_header[0],
-                    row_header[1],
-                    row_header[2],
-                    row_header[3],
-                ]));
-                let y = f32::from_bits(u32::from_le_bytes([
-                    row_header[4],
-                    row_header[5],
-                    row_header[6],
-                    row_header[7],
-                ]));
-                let font_pixels = f32::from_bits(u32::from_le_bytes([
-                    row_header[8],
-                    row_header[9],
-                    row_header[10],
-                    row_header[11],
-                ]));
-                let text_len = u32::from_le_bytes([
-                    row_header[12],
-                    row_header[13],
-                    row_header[14],
-                    row_header[15],
-                ]) as usize;
-                offset = offset.saturating_add(16);
-                let Some(text) = payload.get(offset..offset.saturating_add(text_len)) else {
-                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                    return DispatchOutcome::Resume;
-                };
-                rows.push(crate::ui4::blueprint_ui4::TrueosUi4SolaraSceneTextRow {
-                    text_ptr: text.as_ptr(),
-                    text_len,
-                    x,
-                    y,
-                    font_pixels,
-                });
-                offset = offset.saturating_add(text_len);
-            }
-            if offset != payload.len() {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let rc = unsafe {
-                crate::ui4::blueprint_ui4::trueos_cabi_ui4_solara_text_scene(
-                    arg0 as u32,
-                    arg1 as u32,
-                    viewport_width,
-                    viewport_height,
-                    rgba,
-                    rows.as_ptr(),
-                    rows.len(),
-                )
-            };
-            if rc == crate::ui4::blueprint_ui4::ERROR_BUSY {
-                if sampled_text_scene_busy_log() {
-                    crate::log_info!(target: "ui4/solara-text"; "scene vmcall pending vm={} window={} rows={} rc={} sample_every={}\n", vm_id, arg0 as u32, row_count, rc, BLUEPRINT_TEXT_SCENE_BUSY_LOG_SAMPLE_EVERY);
-                }
-            } else if rc != 0 {
-                crate::log_warn!(target: "ui4/solara-text"; "scene vmcall failed vm={} window={} rows={} rc={}\n", vm_id, arg0 as u32, row_count, rc);
-            }
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI4_FONT_CANVAS => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let Some(header) = payload.get(..12) else {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            };
-            let canvas_width = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-            let canvas_height = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-            let row_count =
-                u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
-            if row_count == 0 || row_count > 256 {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let mut offset = 12usize;
-            let mut rows = alloc::vec::Vec::with_capacity(row_count);
-            for _ in 0..row_count {
-                let Some(row_header) = payload.get(offset..offset.saturating_add(20)) else {
-                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                    return DispatchOutcome::Resume;
-                };
-                let x = f32::from_bits(u32::from_le_bytes([
-                    row_header[0],
-                    row_header[1],
-                    row_header[2],
-                    row_header[3],
-                ]));
-                let y = f32::from_bits(u32::from_le_bytes([
-                    row_header[4],
-                    row_header[5],
-                    row_header[6],
-                    row_header[7],
-                ]));
-                let font_pixels = f32::from_bits(u32::from_le_bytes([
-                    row_header[8],
-                    row_header[9],
-                    row_header[10],
-                    row_header[11],
-                ]));
-                let color_rgba = u32::from_le_bytes([
-                    row_header[12],
-                    row_header[13],
-                    row_header[14],
-                    row_header[15],
-                ]);
-                let text_len = u32::from_le_bytes([
-                    row_header[16],
-                    row_header[17],
-                    row_header[18],
-                    row_header[19],
-                ]) as usize;
-                offset = offset.saturating_add(20);
-                let Some(text) = payload.get(offset..offset.saturating_add(text_len)) else {
-                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                    return DispatchOutcome::Resume;
-                };
-                rows.push(crate::ui4::blueprint_ui4::TrueosUi4FontCanvasRow {
-                    text_ptr: text.as_ptr(),
-                    text_len,
-                    x,
-                    y,
-                    font_pixels,
-                    color_rgba,
-                });
-                offset = offset.saturating_add(text_len);
-            }
-            if offset != payload.len() {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let rc = unsafe {
-                crate::ui4::blueprint_ui4::trueos_cabi_ui4_font_canvas(
-                    arg0 as u32,
-                    arg1 as u32,
-                    canvas_width,
-                    canvas_height,
-                    rows.as_ptr(),
-                    rows.len(),
-                )
-            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -2837,73 +2612,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1 as u32,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1 => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            if payload.len() != 12 {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let font_id = u32::from_le_bytes(payload[..4].try_into().unwrap());
-            let font_pixels = f32::from_bits(u32::from_le_bytes(payload[4..8].try_into().unwrap()));
-            let color_rgba = u32::from_le_bytes(payload[8..12].try_into().unwrap());
-            let mut ticket = 0;
-            let rc = crate::ui4::blueprint_ui4::request_font_sprite(
-                crate::ui4::WindowOwner::Vm(vm_id),
-                arg0 as u32,
-                font_id,
-                arg1 as u32,
-                font_pixels,
-                color_rgba,
-                &mut ticket,
-            );
-            let data = if rc == 0 { ticket } else { (rc as i64) as u64 };
-            write_response(vm_id, seq, STATUS_OK, data, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI4_SCENE_FONT_METRICS_V1 => {
-            if req_len != 4 || arg0 > u32::MAX as u64 || arg1 > u32::MAX as u64 {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            }
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let pixels = f32::from_le_bytes(payload[..4].try_into().unwrap());
-            let mut record =
-                crate::ui4::blueprint_ui4::font_api::TrueosUi4FontMetricsV1::default();
-            let rc = crate::ui4::blueprint_ui4::font_api::metrics(
-                crate::ui4::WindowOwner::Vm(vm_id),
-                arg0 as u32,
-                arg1 as u32,
-                pixels,
-                &mut record,
-            );
-            if rc == 0 {
-                write_record_response(vm_id, seq, 0, &record);
-            } else {
-                write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0);
-            }
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1 => {
-            let mut status = crate::ui4::blueprint_ui4::TrueosUi4FontSpriteStatusV1::default();
-            let rc = crate::ui4::blueprint_ui4::font_sprite_status(
-                crate::ui4::WindowOwner::Vm(vm_id),
-                arg0 as u32,
-                arg1,
-                &mut status,
-            );
-            if rc == 0 {
-                write_record_response(vm_id, seq, 0, &status);
-            } else {
-                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN_REGION_V1 => {

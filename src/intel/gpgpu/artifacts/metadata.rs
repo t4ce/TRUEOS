@@ -104,7 +104,6 @@ pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_ARTIFACT: GpgpuKernelArtifact
         &SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT,
     );
 
-
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
@@ -245,15 +244,6 @@ pub(crate) const PARTICLE_CRAFT_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernel
     None,
 );
 
-pub(crate) const FONT_INSTANCE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
-    FONT_INSTANCE_RGBA8_KERNEL_NAME,
-    FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.target,
-    FONT_INSTANCE_RGBA8_ADLS_BIN,
-    FONT_INSTANCE_RGBA8_ADLS_SPV,
-    FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256,
-    Some(&FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT),
-);
-
 pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::new(
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
@@ -281,14 +271,6 @@ pub(crate) const KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuK
     KOKORO_CONV1D_U8_U8_ADLS_BIN_SHA256,
     Some(&KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT),
 );
-
-pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
-        FONT_OUTLINE_COVERAGE_R8_ADLS_BIN,
-        FONT_OUTLINE_COVERAGE_R8_ADLS_SPV,
-        &FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT,
-    );
 
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(

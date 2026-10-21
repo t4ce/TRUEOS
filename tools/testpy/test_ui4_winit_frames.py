@@ -33,7 +33,7 @@ impl FrameHandle { fn raw(self)->u32 {self.0} }
     frame:FrameHandle,width:u32,height:u32,cadence:FrameCadence,placement:WindowPlacement,winit_dormant_background:bool,scene_divisor:u32,
     write_lease:Option<()>,gpu_submission_unretired:bool,vgpu_surface:Option<()>,
     pending_resize:Option<BlueprintPendingResize>,pending_resize_ready:bool,
-    taken_resize_event:Option<()>,retained_text_backbuffer:Option<()>,retained_text_backbuffer_extent:Option<(u32,u32)>,
+    taken_resize_event:Option<()>,
 }
 #[derive(Clone,Copy,Debug)] struct OutputId;
 impl OutputId { fn from_slot(_:u32)->Option<Self> {Some(Self)} }
@@ -91,7 +91,7 @@ fn destroy_frame(frame:FrameHandle)->Result<(),()> {DESTROYED.with(|s|s.borrow_m
 fn retire_frame_when_released(frame:FrameHandle) {RETIRED.with(|s|s.borrow_mut().push(frame));}
 fn surface(cadence:FrameCadence,background:bool)->BlueprintSceneSurface {
     BlueprintSceneSurface {owner:1,window:WindowId(1),session:2,render_target:if background {0x8001}else{1},frame:FrameHandle(if background {11}else{10}),width:100,height:100,cadence,
-    placement:WindowPlacement{x:5,y:6,width:100,height:100},winit_dormant_background:false,scene_divisor:1,write_lease:None,gpu_submission_unretired:false,vgpu_surface:None,pending_resize:None,pending_resize_ready:false,taken_resize_event:Some(()),retained_text_backbuffer:Some(()),retained_text_backbuffer_extent:Some((100,100))}
+    placement:WindowPlacement{x:5,y:6,width:100,height:100},winit_dormant_background:false,scene_divisor:1,write_lease:None,gpu_submission_unretired:false,vgpu_surface:None,pending_resize:None,pending_resize_ready:false,taken_resize_event:Some(())}
 }
 mod producer {
     use super::*;
@@ -146,7 +146,7 @@ fn reset() {PUBLISHED.with(|s|s.borrow_mut().clear());CANCELED.with(|s|s.borrow_
         let mut pair=SURFACES.lock().clone();assert_eq!(producer::resize(&mut pair),0);
         SPECS.with(|s| {let s=s.borrow();let expected=if legacy {[(FrameCadence::Streaming,FrameBuffering::Triple),(FrameCadence::Dirty,FrameBuffering::Double)]}else{[(FrameCadence::Dirty,FrameBuffering::Double),(FrameCadence::Streaming,FrameBuffering::Triple)]};
             assert_eq!(s.iter().map(|s|(s.cadence,s.buffering)).collect::<Vec<_>>(),expected);assert!(s.iter().all(|s|s.width==200&&s.height==150));});
-        for (i,s) in pair.iter().enumerate() {let pending=s.pending_resize.unwrap();assert_eq!(pending.previous_frame,FrameHandle(10+i as u32));assert_eq!(pending.resize_epoch,9);assert_eq!((s.width,s.height),(200,150));assert_eq!(s.pending_resize_ready,s.winit_dormant_background);assert!(s.taken_resize_event.is_none()&&s.retained_text_backbuffer.is_none());}
+        for (i,s) in pair.iter().enumerate() {let pending=s.pending_resize.unwrap();assert_eq!(pending.previous_frame,FrameHandle(10+i as u32));assert_eq!(pending.resize_epoch,9);assert_eq!((s.width,s.height),(200,150));assert_eq!(s.pending_resize_ready,s.winit_dormant_background);assert!(s.taken_resize_event.is_none());}
     }
 }
 #[test] fn dormant_background_resize_commits_after_only_ui_publication() {

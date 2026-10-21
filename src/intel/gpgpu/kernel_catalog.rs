@@ -63,11 +63,6 @@ pub(crate) const PARTICLE_CRAFT_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp");
 pub(crate) const PARTICLE_CRAFT_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp";
-pub(crate) const FONT_INSTANCE_RGBA8_KERNEL_NAME: &str = "font_instance_rgba8";
-pub(crate) const FONT_INSTANCE_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/font_instance_rgba8.clcpp");
-pub(crate) const FONT_INSTANCE_RGBA8_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/font_instance_rgba8.clcpp";
 pub(crate) const LFM25_Q8_PROJECT_PACKED_KERNEL_NAME: &str = "lfm25_q8_project_packed";
 pub(crate) const LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/lfm25_q8_project_packed.clcpp");
@@ -83,9 +78,6 @@ pub(crate) const KOKORO_CONV1D_U8_U8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/kokoro_conv1d_u8_u8.clcpp");
 pub(crate) const KOKORO_CONV1D_U8_U8_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/kokoro_conv1d_u8_u8.clcpp";
-pub(crate) const FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME: &str = "font_outline_coverage_r8";
-pub(crate) const FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE: &str =
-    include_str!("kernels/font_outline_coverage_r8.clcpp");
 pub(crate) const HELIO_RETAINED_TRANSFORM_KERNEL_NAME: &str = "helio_retained_transform";
 pub(crate) const HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE: &str =
     include_str!("kernels/helio_retained_transform.clcpp");
@@ -128,11 +120,11 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
         | PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME
         | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_OPENCL_SOURCE),
-        FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_OPENCL_SOURCE),
+
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE),
         KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(KOKORO_QGEMM_U8_I8_OPENCL_SOURCE),
         KOKORO_CONV1D_U8_U8_KERNEL_NAME => Some(KOKORO_CONV1D_U8_U8_OPENCL_SOURCE),
-        FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE),
+
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE),
         LAB256_MULTIPHASE_KERNEL_NAME => Some(LAB256_MULTIPHASE_OPENCL_SOURCE),
         SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_BACKGROUND_RGBA8_OPENCL_SOURCE),
@@ -176,13 +168,11 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
         | PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME
         | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_SOURCE_PATH),
-        FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(FONT_INSTANCE_RGBA8_SOURCE_PATH),
+
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_SOURCE_PATH),
         KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(KOKORO_QGEMM_U8_I8_SOURCE_PATH),
         KOKORO_CONV1D_U8_U8_KERNEL_NAME => Some(KOKORO_CONV1D_U8_U8_SOURCE_PATH),
-        FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/font_outline_coverage_r8.clcpp")
-        }
+
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_SOURCE_PATH),
         LAB256_MULTIPHASE_KERNEL_NAME => {
             Some("crates/trueos-shader/gpgpu/kernels/lab256_multiphase.clcpp")
@@ -196,7 +186,6 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
 include!("kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.contract.rs");
 include!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.contract.rs");
 include!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/gradient_rect_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/helio_retained_transform.contract.rs");
@@ -397,7 +386,12 @@ const _: () = {
     assert!(SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
     assert!(SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT.bindings.len() == 3);
     assert!(SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
-    assert!(SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
+    assert!(
+        SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT
+            .bindings
+            .len()
+            == 1
+    );
 };
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_audio_visualizer_rgba8.contract.rs"
@@ -496,49 +490,6 @@ const _: () = {
     assert!(render.payload_args[1].offset_bytes == 56);
     assert!(render.payload_args[2].offset_bytes == 64);
     assert!(render.payload_args[3].offset_bytes == 72);
-};
-include!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.contract.rs"
-);
-pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.bin"
-);
-pub(crate) const FONT_INSTANCE_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.spv"
-);
-pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(FONT_INSTANCE_RGBA8_ADLS_BIN.len() == 72_896);
-const _: () = {
-    let contract = FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT;
-    assert!(contract.target.pci_device_ids.len() == 1);
-    assert!(contract.target.pci_device_ids[0] == 0x4680);
-    assert!(contract.target.revision_min == 0x0C);
-    assert!(contract.target.revision_max == 0x0C);
-    assert!(contract.entry_offset == 64);
-    assert!(contract.simd_width == 16);
-    assert!(contract.grf_count == 128);
-    assert!(contract.scratch_bytes == 0);
-    assert!(contract.slm_bytes == 0);
-    assert!(contract.cross_thread_data_bytes == 128);
-    assert!(contract.per_thread_data_bytes == 96);
-    assert!(contract.bindings.len() == 3);
-    assert!(contract.bindings[0].arg_index == 0 && contract.bindings[0].bti == 0);
-    assert!(contract.bindings[1].arg_index == 1 && contract.bindings[1].bti == 1);
-    assert!(contract.bindings[2].arg_index == 2 && contract.bindings[2].bti == 2);
-    assert!(contract.payload_args.len() == 11);
-    assert!(contract.payload_args[0].offset_bytes == 48);
-    assert!(contract.payload_args[1].offset_bytes == 56);
-    assert!(contract.payload_args[2].offset_bytes == 64);
-    let mut scalar = 3;
-    while scalar < contract.payload_args.len() {
-        assert!(contract.payload_args[scalar].arg_index as usize == scalar);
-        assert!(contract.payload_args[scalar].offset_bytes == 60 + scalar as u32 * 4);
-        assert!(contract.payload_args[scalar].size_bytes == 4);
-        assert!(matches!(contract.payload_args[scalar].kind, GpgpuArtifactArgKind::ByValue));
-        scalar += 1;
-    }
 };
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lfm25_q8_project_packed.contract.rs"
@@ -672,10 +623,6 @@ const _: () = {
         scalar += 1;
     }
 };
-pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.bin");
-pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.spv");
 // Keep the native retained-transform Zebin in release images even while the
 // ADL-S compatibility policy parks its submission path.  `.gpgpu_artifacts`
 // is retained by the linker script specifically for dormant, explicitly
@@ -764,8 +711,6 @@ pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     UI4_COMPOSE_LAYERS_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256: [u8; 32] =
     SKYBOX_SAMPLE_RGB565_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256: [u8; 32] =
-    FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256: [u8; 32] =
     HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = {

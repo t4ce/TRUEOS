@@ -67,7 +67,9 @@ pub(crate) fn release_compute_writes_for_copy() -> GpgpuSubmissionOutcome {
     }
     if submission.can_poll()
         && direct_rcs_poll_result_slot_timeout_ms(
-            state, RGBA8_SCANOUT_RELEASE_MARKER_SLOT, RGBA8_SCANOUT_RELEASE_MARKER,
+            state,
+            RGBA8_SCANOUT_RELEASE_MARKER_SLOT,
+            RGBA8_SCANOUT_RELEASE_MARKER,
             UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
         ) == RGBA8_SCANOUT_RELEASE_MARKER
     {
@@ -263,7 +265,12 @@ pub(crate) fn allocate_font_instance_rgba8_surface_cleared(
         recycle_font_coverage_gpu_va(gpu, bytes);
         return None;
     };
-    Some(GpgpuOwnedRgba8Surface { surface, virt, system_service: false, quarantined: AtomicBool::new(false) })
+    Some(GpgpuOwnedRgba8Surface {
+        surface,
+        virt,
+        system_service: false,
+        quarantined: AtomicBool::new(false),
+    })
 }
 
 pub(crate) fn allocate_font_instance_state(capacity: usize) -> Option<GpgpuOwnedFontInstanceState> {
@@ -310,138 +317,6 @@ pub(crate) struct GpgpuFontOutlineCoverageRun<'a> {
     pub(crate) rect: GpgpuRect,
     pub(crate) subdivisions: u32,
     pub(crate) optical_bias_px: f32,
-}
-
-/// Add one positioned vector outline stream into a persistent R8 mask.
-/// Existing coverage is retained with `max`, allowing bold duplicate runs and
-/// multiple glyphs to share one color-layer mask without CPU mask blending.
-pub(crate) fn font_outline_coverage_r8(
-    mask: &GpgpuOwnedMask8Surface,
-    outline_ops: &[[u32; 8]],
-    rect: GpgpuRect,
-    subdivisions: u32,
-    optical_bias_px: f32,
-) -> GpgpuDispatchRetirement {
-    font_outline_coverage_runs_r8(
-        mask,
-        core::slice::from_ref(&GpgpuFontOutlineCoverageRun {
-            outline_ops,
-            rect,
-            subdivisions,
-            optical_bias_px,
-        }),
-    )
-}
-
-/// Submit several independent outline walkers as one GuC-owned RCS batch.
-///
-/// Each stateful ops binding receives a page-aligned slice of one combined DMA
-/// allocation. The allocation stays live until the batch's single final
-/// cache-draining completion marker retires.
-pub(crate) fn font_outline_coverage_runs_r8(
-    mask: &GpgpuOwnedMask8Surface,
-    runs: &[GpgpuFontOutlineCoverageRun<'_>],
-) -> GpgpuDispatchRetirement {
-    let surface = mask.surface();
-    crate::log_font_warm_diag!("phase=coverage-input runs={} mask={}x{} pitch={} gpu=0x{:X} bytes={}\n",
-        runs.len(), surface.width, surface.height, surface.pitch_bytes, surface.gpu, surface.bytes);
-    if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS {
-        crate::log_font_warm_diag!("phase=coverage-input reject=run-count\n");
-        return GpgpuDispatchRetirement::NotSubmitted;
-    }
-
-    let mut batch_runs = Vec::with_capacity(runs.len());
-    let mut mapped_bytes = 0usize;
-    for run in runs {
-        if run.outline_ops.is_empty()
-            || run.outline_ops.len() > u32::MAX as usize
-            || run.rect.x < 0
-            || run.rect.y < 0
-            || !rect_is_inside_mask(surface, run.rect)
-            || !(1..=16).contains(&run.subdivisions)
-            || !run.optical_bias_px.is_finite()
-            || !(0.0..=0.35).contains(&run.optical_bias_px)
-        {
-            crate::log_font_warm_diag!("phase=coverage-input reject=outline-or-rectangle-contract\n");
-            return GpgpuDispatchRetirement::NotSubmitted;
-        }
-        let Some(input_bytes) = run
-            .outline_ops
-            .len()
-            .checked_mul(core::mem::size_of::<[u32; 8]>())
-        else {
-            crate::log_font_warm_diag!("phase=coverage-input reject=ops-size-overflow\n");
-            return GpgpuDispatchRetirement::NotSubmitted;
-        };
-        let Some(slice_bytes) = align_up(input_bytes, super::WARM_ALIGN) else {
-            crate::log_font_warm_diag!("phase=coverage-input reject=ops-alignment-overflow\n");
-            return GpgpuDispatchRetirement::NotSubmitted;
-        };
-        let Some(next_mapped_bytes) = mapped_bytes.checked_add(slice_bytes) else {
-            crate::log_font_warm_diag!("phase=coverage-input reject=packed-size-overflow\n");
-            return GpgpuDispatchRetirement::NotSubmitted;
-        };
-        if next_mapped_bytes > DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES {
-            crate::log_font_warm_diag!("phase=coverage-input reject=ops-window-capacity\n");
-            return GpgpuDispatchRetirement::NotSubmitted;
-        }
-        batch_runs.push(FontOutlineCoverageR8BatchRun {
-            params: FontOutlineCoverageR8Params {
-                ops_gpu: DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE + mapped_bytes as u64,
-                mask_gpu: surface.gpu,
-                op_count: run.outline_ops.len() as u32,
-                subdivisions: run.subdivisions,
-                mask_pitch_bytes: surface.pitch_bytes,
-                mask_width: surface.width,
-                mask_height: surface.height,
-                rect_x: run.rect.x as u32,
-                rect_y: run.rect.y as u32,
-                rect_width: run.rect.width,
-                rect_height: run.rect.height,
-                optical_bias_px: run.optical_bias_px,
-            },
-            ops_bytes: slice_bytes,
-        });
-        mapped_bytes = next_mapped_bytes;
-    }
-
-    let Some((ops_phys, ops_virt)) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN) else {
-        crate::log_font_warm_diag!("phase=coverage-input reject=ops-dma-allocation\n");
-        return GpgpuDispatchRetirement::NotSubmitted;
-    };
-    unsafe {
-        core::ptr::write_bytes(ops_virt, 0, mapped_bytes);
-        for (run, batch_run) in runs.iter().zip(batch_runs.iter()) {
-            let offset =
-                (batch_run.params.ops_gpu - DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE) as usize;
-            let input_bytes = run.outline_ops.len() * core::mem::size_of::<[u32; 8]>();
-            core::ptr::copy_nonoverlapping(
-                run.outline_ops.as_ptr().cast::<u8>(),
-                ops_virt.add(offset),
-                input_bytes,
-            );
-        }
-    }
-    super::dma_flush(ops_virt, mapped_bytes);
-    let retirement = submit_font_outline_coverage_runs_r8_2d(
-        ops_phys,
-        mapped_bytes,
-        surface,
-        batch_runs.as_slice(),
-    );
-    if retirement == GpgpuDispatchRetirement::SubmittedIncomplete {
-        mask.quarantine_backing();
-        crate::log_error!(
-            target: "gpgpu";
-            "intel/gpgpu: font-outline batch input quarantined phys=0x{:X} bytes={} runs={} reason=retirement-uncertain action=no-unmap-no-free\n",
-            ops_phys,
-            mapped_bytes,
-            runs.len(),
-        );
-    } else {
-        crate::dma::dealloc(ops_virt, mapped_bytes);
-    }
-    retirement
 }
 
 /// Composite one R8 glyph layer in a single native two-dimensional dispatch.
@@ -541,46 +416,4 @@ fn lower_font_instance_layer(
         return Some(GpgpuRect::default());
     }
     Some(GpgpuRect::new(left as i32, top as i32, (right - left) as u32, (bottom - top) as u32))
-}
-
-/// Composite persistent glyph R8 layers through the C++ font-instance
-/// engine. Descriptor storage remains resident across frames; this call
-/// changes only scene centers and monotonic animation time.
-pub(crate) fn font_instance_layers_rgba8_2d_mode(
-    layers: &[GpgpuFontInstanceLayer],
-    state: &GpgpuOwnedFontInstanceState,
-    dst: GpgpuRgba8Surface,
-    direct_scanout: bool,
-    time_seconds: f32,
-) -> GpgpuFontInstanceBatchResult {
-    let mut result = GpgpuFontInstanceBatchResult {
-        requested_layers: layers.len(),
-        ..GpgpuFontInstanceBatchResult::default()
-    };
-    if !dst.is_valid()
-        || layers.len() > FONT_INSTANCE_BATCH_MAX_LAYERS
-        || state.capacity() < layers.len()
-        || !time_seconds.is_finite()
-    {
-        return result;
-    }
-    for &layer in layers {
-        let Some(rect) = lower_font_instance_layer(layer, state, dst) else {
-            return result;
-        };
-        if rect.width != 0 && rect.height != 0 {
-            result.active_walkers += 1;
-        }
-    }
-    if result.active_walkers == 0 {
-        result.ok = true;
-        return result;
-    }
-    let (submitted, completed) =
-        submit_font_instance_layers_2d(layers, state, dst, direct_scanout, time_seconds);
-    result.submitted = submitted;
-    result.ok = completed;
-    result.submits = usize::from(submitted);
-    result.release = (completed && direct_scanout).then(|| gpgpu_rgba8_release(dst));
-    result
 }

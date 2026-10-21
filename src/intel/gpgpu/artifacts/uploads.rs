@@ -42,10 +42,6 @@ pub(crate) fn particle_craft_upload_status() -> Option<UploadedKernelArtifact> {
     *PARTICLE_CRAFT_UPLOAD.lock()
 }
 
-pub(crate) fn font_instance_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *FONT_INSTANCE_RGBA8_UPLOAD.lock()
-}
-
 pub(crate) fn lfm25_q8_project_packed_upload_status() -> Option<UploadedKernelArtifact> {
     *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock()
 }
@@ -64,10 +60,6 @@ pub(crate) fn spirit_vfx_background_rgba8_upload_status() -> Option<UploadedKern
 
 pub(crate) fn spirit_vfx_sprite_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *SPIRIT_VFX_SPRITE_RGBA8_UPLOAD.lock()
-}
-
-pub(crate) fn font_outline_coverage_r8_upload_status() -> Option<UploadedKernelArtifact> {
-    *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock()
 }
 
 pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> {
@@ -161,25 +153,6 @@ pub(crate) fn upload_glyph_mask_rgba8_kernel() -> Option<UploadedKernelArtifact>
 
     let upload = upload_artifact(dev, GLYPH_MASK_RGBA8_ADLS_ARTIFACT, GLYPH_MASK_RGBA8_ADLS_GPU)?;
     *GLYPH_MASK_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_font_instance_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *FONT_INSTANCE_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: font-instance-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload =
-        upload_artifact(dev, FONT_INSTANCE_RGBA8_ADLS_ARTIFACT, FONT_INSTANCE_RGBA8_ADLS_GPU)?;
-    *FONT_INSTANCE_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -302,9 +275,11 @@ fn shadertoy_artifact_slot(
         SHADERTOY_SHADER_NGUYEN => {
             (SHADERTOY_NGUYEN_ADLS_ARTIFACT, SHADERTOY_NGUYEN_ADLS_GPU, &SHADERTOY_NGUYEN_UPLOAD)
         }
-        SHADERTOY_SHADER_MANDELBOX => {
-            (SHADERTOY_MANDELBOX_ADLS_ARTIFACT, SHADERTOY_MANDELBOX_ADLS_GPU, &SHADERTOY_MANDELBOX_UPLOAD)
-        }
+        SHADERTOY_SHADER_MANDELBOX => (
+            SHADERTOY_MANDELBOX_ADLS_ARTIFACT,
+            SHADERTOY_MANDELBOX_ADLS_GPU,
+            &SHADERTOY_MANDELBOX_UPLOAD,
+        ),
         SHADERTOY_SHADER_PALETTE_GRID => (
             SHADERTOY_PALETTE_GRID_ADLS_ARTIFACT,
             SHADERTOY_PALETTE_GRID_ADLS_GPU,
@@ -320,8 +295,11 @@ fn shadertoy_artifact_slot(
             SHADERTOY_PROTEAN_CLOUDS_ADLS_GPU,
             &SHADERTOY_PROTEAN_CLOUDS_UPLOAD,
         ),
-        7 => (CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT, CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU,
-              &CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD),
+        7 => (
+            CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,
+            CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU,
+            &CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD,
+        ),
         8 => (CPP_DEMO_RGBA8_ADLS_ARTIFACT, CPP_DEMO_RGBA8_ADLS_GPU, &CPP_DEMO_RGBA8_UPLOAD),
         15 => (PARTICLE_CRAFT_ADLS_ARTIFACT, PARTICLE_CRAFT_ADLS_GPU, &PARTICLE_CRAFT_UPLOAD),
         _ => return None,
@@ -353,13 +331,20 @@ pub(crate) fn register_shadertoy_package(shader_id: u32, package: &[u8]) -> bool
     if shader_id == 15 {
         // ParticleCraft has three entry points in one ELF. Its legacy upload
         // descriptor has no single ABI; check every generated entry explicitly.
-        for abi in [&PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT,
-                    &PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT,
-                    &PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT] {
+        for abi in [
+            &PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT,
+            &PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT,
+            &PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT,
+        ] {
             if admit_kernel_artifact_payloads(
                 GpgpuKernelArtifact::contracted(abi.kernel_name, &[], &[], abi),
-                dev.device_id, dev.revision_id, bin, spv,
-            ).is_err() {
+                dev.device_id,
+                dev.revision_id,
+                bin,
+                spv,
+            )
+            .is_err()
+            {
                 return false;
             }
         }
@@ -483,28 +468,6 @@ pub(crate) fn upload_kokoro_conv1d_u8_u8_kernel() -> Option<UploadedKernelArtifa
     Some(upload)
 }
 
-pub(crate) fn upload_font_outline_coverage_r8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: font-outline-coverage-r8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT,
-        FONT_OUTLINE_COVERAGE_R8_ADLS_GPU,
-    )?;
-    *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
 pub(crate) fn upload_helio_retained_transform_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *HELIO_RETAINED_TRANSFORM_UPLOAD.lock() {
         return Some(upload);
@@ -607,12 +570,10 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     SHADERTOY_PALETTE_GRID_KERNEL_NAME,
     SHADERTOY_COSMIC_STRANDS_KERNEL_NAME,
     PARTICLE_CRAFT_KERNEL_NAME,
-    FONT_INSTANCE_RGBA8_KERNEL_NAME,
     LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
     KOKORO_QGEMM_U8_I8_KERNEL_NAME,
     KOKORO_CONV1D_U8_U8_KERNEL_NAME,
     SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME,
-    FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     HELIO_RETAINED_TRANSFORM_KERNEL_NAME,
     LAB256_MULTIPHASE_KERNEL_NAME,
     SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME,
@@ -675,7 +636,6 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         COPY_RECT_RGBA8_KERNEL_NAME
         | ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME
         | GLYPH_MASK_RGBA8_KERNEL_NAME
-        | FONT_INSTANCE_RGBA8_KERNEL_NAME
         | UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME
         | SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME
         | UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME
@@ -693,7 +653,6 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         | KOKORO_QGEMM_U8_I8_KERNEL_NAME
         | KOKORO_CONV1D_U8_U8_KERNEL_NAME
         | SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME
-        | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
         | HELIO_RETAINED_TRANSFORM_KERNEL_NAME
         | LAB256_MULTIPHASE_KERNEL_NAME
         | SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME
@@ -736,11 +695,7 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             gpu: GLYPH_MASK_RGBA8_ADLS_GPU,
             upload: &GLYPH_MASK_RGBA8_UPLOAD,
         }),
-        FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: FONT_INSTANCE_RGBA8_ADLS_ARTIFACT,
-            gpu: FONT_INSTANCE_RGBA8_ADLS_GPU,
-            upload: &FONT_INSTANCE_RGBA8_UPLOAD,
-        }),
+
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT,
             gpu: HELIO_RETAINED_TRANSFORM_ADLS_GPU,
@@ -811,11 +766,7 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             gpu: SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU,
             upload: &SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD,
         }),
-        FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT,
-            gpu: FONT_OUTLINE_COVERAGE_R8_ADLS_GPU,
-            upload: &FONT_OUTLINE_COVERAGE_R8_UPLOAD,
-        }),
+
         _ => None,
     }
 }

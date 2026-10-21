@@ -2,9 +2,7 @@
 //!
 //! The kernel derives window ownership from the active Blueprint VM. Callers
 //! provide scene operations and placement only; frame handles, writable
-//! surfaces, and GPU addresses never cross the ABI boundary. Solara's text
-//! producer was the first consumer; shaded scene producers share the same
-//! coherent UI4 frame lifecycle.
+//! surfaces, and GPU addresses never cross the ABI boundary.
 
 pub(crate) mod clipboard_api;
 pub(crate) mod collapse_api;
@@ -34,19 +32,19 @@ use trueos_time::Instant;
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
     ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
-    GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState,
+    GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState,
     GpgpuOwnedRgba8Surface, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence,
     GpgpuRgba8Surface, GpgpuSolidRect, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
     GpgpuSubmissionOutcome, ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION,
     SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams,
     ShaderToyRuntimeState, SkyboxSampleRgb565Params, Ui4CompositorCompletion,
     Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
-    allocate_font_instance_rgba8_surface_cleared, alpha_blend_worklist_max_descs,
-    fill_solid_rects_rgba8_scanout_result, glyph_mask_layers_rgba8_2d_mode,
-    particle_craft_rgba8_frame, poll_ui4_bcs0_sprite_copy, poll_ui4_blueprint_sprite_scene,
-    poll_ui4_compositor_submission, queue_ui4_blueprint_alpha_rects,
-    queue_ui4_blueprint_sprite_scene, release_rgba8_surface_for_scanout,
-    skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
+    alpha_blend_worklist_max_descs, fill_solid_rects_rgba8_scanout_result,
+    particle_craft_rgba8_frame, poll_ui4_bcs0_sprite_copy,
+    poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
+    queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
+    release_rgba8_surface_for_scanout, skybox_sample_rgb565_to_rgba8,
+    sprite_quad_worklist_max_descs,
 };
 
 use super::{
@@ -69,8 +67,8 @@ mod guest_transport;
 use guest_transport::{
     guest_context_menu_event_take, guest_context_menu_register, guest_image_source_info,
     guest_image_source_read, guest_input_routes, guest_keyboard_event_take, guest_keyboard_state,
-    guest_pan_event_take, guest_pointer_event_take, guest_resize_event_take,
-    guest_status, };
+    guest_pan_event_take, guest_pointer_event_take, guest_resize_event_take, guest_status,
+};
 
 const MAX_SURFACES: usize = 32;
 const MAX_FRAME_WIDTH: u32 = 2_560;
@@ -119,11 +117,12 @@ pub(crate) struct BlueprintImageSourceInfo {
     pub byte_len: u32,
 }
 
-
 pub(crate) fn blueprint_image_source_info(name: &str) -> Result<BlueprintImageSourceInfo, i32> {
     if let Some(image) = crate::os_assets::image(name) {
         return Ok(BlueprintImageSourceInfo {
-            format: image.format, width: image.width, height: image.height,
+            format: image.format,
+            width: image.width,
+            height: image.height,
             byte_len: image.bytes.len() as u32,
         });
     }
@@ -231,31 +230,6 @@ const ERROR_SHADER_PACKAGE_MISMATCH: i32 = -8;
 const CLOSE_PERSIST_FINAL_FRAME: u32 = 1 << 0;
 const CLOSE_VALID_FLAGS: u32 = CLOSE_PERSIST_FINAL_FRAME;
 pub const UI4_VISUAL_SOFT_CAP_HZ: u32 = 60;
-
-
-
-
-
-/// Legacy positioned-row ABI descriptor retained for portal compatibility.
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct TrueosUi4SolaraTextRow {
-    pub text_ptr: *const u8,
-    pub text_len: usize,
-    pub x: f32,
-    pub y: f32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct TrueosUi4SolaraSceneTextRow {
-    pub text_ptr: *const u8,
-    pub text_len: usize,
-    pub x: f32,
-    pub y: f32,
-    pub font_pixels: f32,
-}
-
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -566,10 +540,6 @@ struct BlueprintSceneSurface {
     skybox_kernel_upload: Option<ShaderToyPackageUpload>,
     skybox_kernel_registered: bool,
     sprites: Vec<(u32, BlueprintSpriteSource)>,
-    /// Request state only.  The Blueprint owns all glyph-key coalescing,
-    /// fallback choice, and eviction policy; UI4 merely retains a scoped GPU
-    /// source for every ticket it was explicitly asked to produce.
-
     sprite_upload: Option<Rgba8Upload>,
     solid_source: Option<OwnedRgba8Surface>,
     sprite_clear_rgba: Option<u32>,
@@ -583,24 +553,6 @@ struct BlueprintSceneSurface {
     pending_keyboard_burst: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     pending_physical_keyboard: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     pending_physical_burst: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
-
-
-
-
-
-
-
-
-
-
-
-    /// Up to five recent face/size/extent registrations stay warm. Distinct
-    /// shells still claim distinct producer slots, while OceanCache seals
-    /// equal face/size claims to the same R8 glyphs. Once residual presentation
-    /// scaling lands, these five exact-size seals become the five native tiers.
-
-
-
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -662,93 +614,6 @@ impl BlueprintVisualCadence {
     }
 }
 
-struct BlueprintRetainedTextLayer {
-    description: BlueprintRetainedTextDescription,
-    color_rgba: u32,
-    translation_px: [i32; 2],
-    state: BlueprintRetainedTextState,
-}
-
-struct BlueprintRetainedTextDescription {
-    font: GpuFontFace,
-    viewport_width: u32,
-    viewport_height: u32,
-    runs: Vec<RetainedFontRun>,
-}
-
-enum BlueprintRetainedTextState {
-    Pending(PendingRetainScene),
-    Ready(FontKernelRetainedScene),
-    /// The face was available, but none of the row's scalars had an outline.
-    /// Keep the logical layer so later rows retain stable cursor indexes.
-    NoCoverage,
-}
-
-struct BlueprintStampedTextLayer {
-    description: BlueprintRetainedTextDescription,
-    color_rgba: u32,
-}
-
-struct BlueprintStampedTextProducer {
-    registration: crate::r::services::font_producer_service::FontProducerRegistration,
-    producer: FontGpuProducer,
-}
-
-
-
-
-
-impl BlueprintRetainedTextDescription {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    fn same_scene(&self, next: &Self) -> bool {
-        self.font == next.font
-            && self.viewport_width == next.viewport_width
-            && self.viewport_height == next.viewport_height
-            && self.runs.len() == next.runs.len()
-            && self.runs.iter().zip(next.runs.iter()).all(|(old, new)| {
-                old.text == new.text
-                    && old.position[0].to_bits() == new.position[0].to_bits()
-                    && old.position[1].to_bits() == new.position[1].to_bits()
-                    && old.font_pixels.to_bits() == new.font_pixels.to_bits()
-                    && old.slant.to_bits() == new.slant.to_bits()
-            })
-    }
-
-    /// Return the integral draw-time translation when `next` is the same
-    /// retained glyph scene moved as one unit.
-    fn translation_to(&self, next: &Self) -> Option<[i32; 2]> {
-        if self.font != next.font
-            || self.viewport_width != next.viewport_width
-            || self.viewport_height != next.viewport_height
-            || self.runs.len() != next.runs.len()
-        {
-            return None;
-        }
-        let (base, moved) = self.runs.first().zip(next.runs.first())?;
-        let delta = [
-            moved.position[0] - base.position[0],
-            moved.position[1] - base.position[1],
-        ];
-        if !delta.iter().all(|value| value.is_finite()) {
-            return None;
-        }
-        let integral = [libm::roundf(delta[0]) as i32, libm::roundf(delta[1]) as i32];
-        if (delta[0] - integral[0] as f32).abs() > 0.01
-            || (delta[1] - integral[1] as f32).abs() > 0.01
-        {
-            return None;
-        }
-        let same_scene = self.runs.iter().zip(next.runs.iter()).all(|(old, new)| {
-            old.text == new.text
-                && old.font_pixels.to_bits() == new.font_pixels.to_bits()
-                && old.slant.to_bits() == new.slant.to_bits()
-                && ((new.position[0] - old.position[0]) - delta[0]).abs() <= 0.01
-                && ((new.position[1] - old.position[1]) - delta[1]).abs() <= 0.01
-        });
-        same_scene.then_some(integral)
-    }
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum BlueprintSurfaceRelease {
     Animated,
@@ -798,14 +663,12 @@ impl BlueprintSpriteSource {
     const fn surface(&self) -> GpgpuRgba8Surface {
         match self {
             Self::Uploaded(source) => source.surface,
-
         }
     }
 
     const fn bytes(&self) -> usize {
         match self {
             Self::Uploaded(source) => source.bytes,
-
         }
     }
 
@@ -816,18 +679,9 @@ impl BlueprintSpriteSource {
     const fn has_validated_premultiplied_pixels(&self) -> bool {
         match self {
             Self::Uploaded(source) => source.premultiplied,
-
         }
     }
 }
-
-const fn sprite_source_is_premultiplied(font_owned: bool) -> bool {
-    font_owned
-}
-
-
-
-
 
 unsafe impl Send for OwnedRgba8Surface {}
 unsafe impl Sync for OwnedRgba8Surface {}
@@ -907,8 +761,6 @@ pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
     }
     released
 }
-
-
 
 /// Create one dirty-cadence UI4 frame and broker window for the active VM.
 pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
@@ -1051,7 +903,11 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_layered_v1(
 /// Released foreground allocations can be scanned directly and are writable
 /// only after the display retires their read leases.
 pub extern "C" fn trueos_cabi_ui4_winit_frame_open_v1(
-    x: i32, y: i32, width: u32, height: u32, background_hz: u32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    background_hz: u32,
 ) -> u32 {
     trueos_cabi_ui4_winit_frame_open_scaled_v1(x, y, width, height, background_hz, 1)
 }
@@ -1108,7 +964,8 @@ pub extern "C" fn trueos_cabi_ui4_winit_frame_open_scaled_v1(
         Some(background_hz),
         Some(parent),
         scene_divisor,
-    ) == 0 {
+    ) == 0
+    {
         let _ = trueos_cabi_ui4_solara_frame_close(window_id);
         return 0;
     }
@@ -1248,7 +1105,13 @@ fn open_blueprint_surface(
         cadence
     };
     open_blueprint_surface_with_cadence(
-        x, y, width, height, frame_cadence, visual_target_hz, parent,
+        x,
+        y,
+        width,
+        height,
+        frame_cadence,
+        visual_target_hz,
+        parent,
     )
 }
 
@@ -1269,8 +1132,16 @@ fn open_blueprint_surface_with_cadence(
     visual_target_hz: Option<u32>,
     parent: Option<(WindowId, WindowSessionId)>,
 ) -> u32 {
-    open_blueprint_surface_with_cadence_scaled(x, y, width, height, frame_cadence,
-        visual_target_hz, parent, 1)
+    open_blueprint_surface_with_cadence_scaled(
+        x,
+        y,
+        width,
+        height,
+        frame_cadence,
+        visual_target_hz,
+        parent,
+        1,
+    )
 }
 
 fn open_blueprint_surface_with_cadence_scaled(
@@ -1372,7 +1243,14 @@ fn open_blueprint_surface_with_cadence_scaled(
     };
 
     let render_target = if parent.is_some() {
-        if super::window_broker::attach_window_background_scaled(owner, window, frame, scene_divisor).is_err() {
+        if super::window_broker::attach_window_background_scaled(
+            owner,
+            window,
+            frame,
+            scene_divisor,
+        )
+        .is_err()
+        {
             let _ = destroy_frame(frame);
             return 0;
         }
@@ -1436,20 +1314,6 @@ fn open_blueprint_surface_with_cadence_scaled(
                 pending_keyboard_burst: VecDeque::new(),
                 pending_physical_keyboard: VecDeque::new(),
                 pending_physical_burst: VecDeque::new(),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             },
             BlueprintSurfaceRelease::Animated,
         );
@@ -1499,20 +1363,6 @@ fn open_blueprint_surface_with_cadence_scaled(
         pending_keyboard_burst: VecDeque::new(),
         pending_physical_keyboard: VecDeque::new(),
         pending_physical_burst: VecDeque::new(),
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     });
     let (cadence_name, buffer_count) = match frame_cadence {
         FrameCadence::Dirty => ("dirty", 2),
@@ -2014,14 +1864,7 @@ fn begin_blueprint_frame_with_region(
     surface.sprite_clear_rgba = (!cpu_clear).then_some(clear_rgba);
     surface.sprite_repaint_region = repaint_region;
     surface.sprite_scene_upload = None;
-    surface.retained_text_cursor = 0;
-    surface.retained_text_rendered = false;
-    surface.stamped_text_cursor = 0;
-    surface.stamped_text_pending = None;
-    surface.stamped_text_pending_started_ns = 0;
-    surface.stamped_text_pending_polls = 0;
-    surface.stamped_text_pending_ocean = false;
-    surface.stamped_text_rendered = false;
+
     surface.write_lease = Some(lease);
     surface.winit_dormant_background = false;
     if let Some(cadence) = surface.visual_cadence.as_mut() {
@@ -3806,23 +3649,6 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
             resize_epoch,
         });
         surface.taken_resize_event = None;
-        surface.retained_text_layers.clear();
-        surface.retained_text_cursor = 0;
-        surface.retained_text_rendered = false;
-
-
-        // FontCanvas owns a document-sized source allocation, not pixels in the
-        // replaced UI4 frame. Keep it warm just like uploaded sprites; the next
-        // frame merely selects a different crop/destination from the same
-        // source. Dropping it here made maximize synchronously restamp every
-        // glyph before the replacement frame could publish.
-        surface.stamped_text_layers.clear();
-        surface.stamped_text_cursor = 0;
-        surface.stamped_text_pending = None;
-        surface.stamped_text_pending_started_ns = 0;
-        surface.stamped_text_pending_polls = 0;
-        surface.stamped_text_pending_ocean = false;
-        surface.stamped_text_rendered = false;
     }
     crate::log_info!(
         target: "ui4/blueprint-frame";
@@ -3949,8 +3775,6 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_sprite_upload_rgba8(
     finish_sprite_rgba8_upload(owner, window_id, sprite_id)
 }
 
-
-
 /// Submit one ordered sprite/solid scene into the active sprite-frame lease.
 /// Large scenes are transported in bounded chunks and rendered as consecutive
 /// hardware worklists without exposing GPU addresses to the Blueprint. GuC
@@ -4056,7 +3880,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_register_kernel(
         if surface.visual_cadence.is_none() {
             return ERROR_INVALID;
         }
-        if !(32..=crate::intel::gpgpu::shadertoy_package::MAX_PACKAGE_BYTES).contains(&(package_len as usize)) {
+        if !(32..=crate::intel::gpgpu::shadertoy_package::MAX_PACKAGE_BYTES)
+            .contains(&(package_len as usize))
+        {
             if let Some(contract) = crate::intel::gpgpu::shadertoy_package::contract(17) {
                 contract.report_mismatch(package_len as usize, "package-size-limit");
             }
@@ -4082,7 +3908,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_register_kernel(
         surface.skybox_kernel_upload.take().unwrap()
     };
     if package.contract.payloads(&package.bytes).is_none() {
-        package.contract.report_mismatch(package.bytes.len(), "sha256-or-layout");
+        package
+            .contract
+            .report_mismatch(package.bytes.len(), "sha256-or-layout");
         return ERROR_SHADER_PACKAGE_MISMATCH;
     }
     if !crate::intel::gpgpu::register_skybox_package(&package.bytes) {
@@ -4488,7 +4316,9 @@ pub(crate) fn write_shadertoy_package_chunk(
     // The guest can no longer modify this allocation while it is authenticated
     // and copied into DMA pages. Staging is freed on both success and failure.
     if package.contract.payloads(&package.bytes).is_none() {
-        package.contract.report_mismatch(package.bytes.len(), "sha256-or-layout");
+        package
+            .contract
+            .report_mismatch(package.bytes.len(), "sha256-or-layout");
         return ERROR_SHADER_PACKAGE_MISMATCH;
     }
     if !crate::intel::gpgpu::register_shadertoy_package(shader_id, &package.bytes) {
@@ -4616,244 +4446,6 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
         ERROR_UI4
     }
 }
-
-
-
-
-
-
-
-fn stamp_scene_entries_for_surface(
-    owner: WindowOwner,
-    window_id: u32,
-    font: GpuFontFace,
-    viewport_width: u32,
-    viewport_height: u32,
-    rgba: u32,
-    runs: Vec<RetainedFontRun>,
-) -> i32 {
-    let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        return ERROR_NOT_FOUND;
-    };
-    if surface.write_lease.is_none() {
-        return ERROR_STATE;
-    }
-    if surface.gpu_submission_unretired {
-        return ERROR_BUSY;
-    }
-    if surface.stamped_text_pending.is_some() {
-        return ERROR_STATE;
-    }
-
-    // A Shell2 frame can arrive as several color-layer calls. If JuliaMono is
-    // published between two calls, finish the current frame with the face it
-    // began with and switch only at the next frame boundary.
-    let font = if font == GpuFontFace::JuliaMono && surface.stamped_text_cursor != 0 {
-        surface
-            .stamped_text_layers
-            .first()
-            .map(|layer| layer.description.font)
-            .unwrap_or_else(|| font.resolve_optional())
-    } else {
-        font.resolve_optional()
-    };
-    let description = BlueprintRetainedTextDescription {
-        font,
-        viewport_width,
-        viewport_height,
-        runs,
-    };
-
-    let layer_index = surface.stamped_text_cursor;
-    let replacement = BlueprintStampedTextLayer {
-        description,
-        color_rgba: rgba,
-    };
-    if layer_index < surface.stamped_text_layers.len() {
-        surface.stamped_text_layers[layer_index] = replacement;
-    } else {
-        surface.stamped_text_layers.push(replacement);
-    }
-    surface.stamped_text_cursor = surface.stamped_text_cursor.saturating_add(1);
-    0
-}
-
-fn retain_scene_entries_for_surface(
-    owner: WindowOwner,
-    window_id: u32,
-    font: GpuFontFace,
-    viewport_width: u32,
-    viewport_height: u32,
-    rgba: u32,
-    runs: Vec<RetainedFontRun>,
-    backbuffer: bool,
-) -> i32 {
-    let description = BlueprintRetainedTextDescription {
-        font,
-        viewport_width,
-        viewport_height,
-        runs,
-    };
-    let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        return ERROR_NOT_FOUND;
-    };
-    if surface.write_lease.is_none() {
-        return ERROR_STATE;
-    }
-    if surface.gpu_submission_unretired {
-        return ERROR_BUSY;
-    }
-    if backbuffer {
-        let extent = (viewport_width, viewport_height);
-        let glyphs = surface
-            .retained_text_layers
-            .iter()
-            .take(surface.retained_text_cursor)
-            .flat_map(|layer| layer.description.runs.iter())
-            .chain(description.runs.iter())
-            .fold(0usize, |total, run| total.saturating_add(run.text.chars().count()));
-        if glyphs > TEXT_BACKBUFFER_MAX_GLYPHS {
-            return ERROR_INVALID;
-        }
-        if surface.retained_text_cursor == 0 {
-
-
-        } else if surface.retained_text_backbuffer_extent != Some(extent) {
-            return ERROR_INVALID;
-        }
-    } else if surface.retained_text_cursor == 0 {
-
-
-    } else if surface.retained_text_backbuffer_extent.is_some() {
-        return ERROR_STATE;
-    }
-
-    let layer_index = surface.retained_text_cursor;
-    let translation = surface
-        .retained_text_layers
-        .get(layer_index)
-        .and_then(|layer| layer.description.translation_to(&description));
-
-    if translation.is_none() {
-        let request = RetainSceneRequest {
-            runs: description.runs.clone(),
-            font,
-            viewport_width,
-            viewport_height,
-            raster_width: viewport_width,
-            raster_height: viewport_height,
-            positioning: RetainedFontPositioning::SceneOrigin,
-        };
-        let pending = match submit_retain_scene(request) {
-            Ok(pending) => pending,
-            Err(FontKernelError::QueueFull) => return ERROR_BUSY,
-            Err(error) => {
-                log_font_kernel_error(
-                    "retain",
-                    owner,
-                    window_id,
-                    font,
-                    description.runs.len(),
-                    error,
-                );
-                return ERROR_FONT;
-            }
-        };
-        let replacement = BlueprintRetainedTextLayer {
-            description,
-            color_rgba: rgba,
-            translation_px: [0, 0],
-            state: BlueprintRetainedTextState::Pending(pending),
-        };
-        if layer_index < surface.retained_text_layers.len() {
-            surface.retained_text_layers[layer_index] = replacement;
-        } else {
-            surface.retained_text_layers.push(replacement);
-        }
-    } else if let Some(layer) = surface.retained_text_layers.get_mut(layer_index) {
-        layer.color_rgba = rgba;
-        layer.translation_px = translation.unwrap_or([0, 0]);
-    }
-
-    let layer = &mut surface.retained_text_layers[layer_index];
-    let completion = match &mut layer.state {
-        BlueprintRetainedTextState::Pending(pending) => pending.try_take(),
-        BlueprintRetainedTextState::Ready(_) | BlueprintRetainedTextState::NoCoverage => None,
-    };
-    if let Some(completion) = completion {
-        match completion {
-            Ok(scene) => {
-                let ticket = match &layer.state {
-                    BlueprintRetainedTextState::Pending(pending) => pending.ticket().raw(),
-                    BlueprintRetainedTextState::Ready(_)
-                    | BlueprintRetainedTextState::NoCoverage => 0,
-                };
-                let mask_count = scene.mask_count();
-                layer.state = BlueprintRetainedTextState::Ready(scene);
-                crate::log_info!(
-                    target: "ui4/solara-text";
-                    "FontKernel retained owner={:?} window={} layer={} ticket={} font={} runs={} masks={} target={}x{} storage=gpu-vm-r8-layers\n",
-                    owner,
-                    window_id,
-                    layer_index,
-                    ticket,
-                    font.registry_name(),
-                    layer.description.runs.len(),
-                    mask_count,
-                    viewport_width,
-                    viewport_height,
-                );
-            }
-            Err(error) if font_error_is_no_coverage(error) => {
-                let ticket = match &layer.state {
-                    BlueprintRetainedTextState::Pending(pending) => pending.ticket().raw(),
-                    BlueprintRetainedTextState::Ready(_)
-                    | BlueprintRetainedTextState::NoCoverage => 0,
-                };
-                layer.state = BlueprintRetainedTextState::NoCoverage;
-                crate::log_info!(
-                    target: "ui4/solara-text";
-                    "FontKernel retained no-coverage owner={:?} window={} layer={} ticket={} font={} runs={} target={}x{} action=transparent-noop\n",
-                    owner,
-                    window_id,
-                    layer_index,
-                    ticket,
-                    font.registry_name(),
-                    layer.description.runs.len(),
-                    viewport_width,
-                    viewport_height,
-                );
-            }
-            Err(error) => {
-                log_font_kernel_error(
-                    "retain",
-                    owner,
-                    window_id,
-                    font,
-                    layer.description.runs.len(),
-                    error,
-                );
-                surface.retained_text_layers.remove(layer_index);
-                return ERROR_FONT;
-            }
-        }
-    }
-    if matches!(&layer.state, BlueprintRetainedTextState::Pending(_)) {
-        return ERROR_BUSY;
-    }
-    surface.retained_text_cursor = surface.retained_text_cursor.saturating_add(1);
-    0
-}
-
-
-
-
-
-
-
-
 
 /// Publish the completed dirty buffer and its window damage.
 pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
@@ -5289,13 +4881,8 @@ fn expected_rgba8_len(width: u32, height: u32) -> Option<usize> {
         .checked_mul(core::mem::size_of::<u32>())
 }
 
-
-
-
 fn sprite_rgba8_upload_id_valid(sprite_id: u32) -> bool {
-    sprite_id != 0
-        && sprite_id != TEXT_BACKBUFFER_SPRITE_ID
-        && sprite_id & 0x8000_0000 == 0
+    sprite_id != 0 && sprite_id & 0x8000_0000 == 0
 }
 
 pub(crate) fn begin_sprite_rgba8_upload(
@@ -5308,9 +4895,7 @@ pub(crate) fn begin_sprite_rgba8_upload(
     let Some(packed_len) = expected_rgba8_len(width, height) else {
         return ERROR_INVALID;
     };
-    // The high-bit namespace is reserved for opaque FontKernel products. A
-    // Blueprint can only receive those IDs from a successful font-ticket poll;
-    // normal RGBA uploads cannot replace or shadow them.
+    // Keep the existing upload ID range stable for Blueprint clients.
     if !sprite_rgba8_upload_id_valid(sprite_id) || packed_len == 0 {
         return ERROR_INVALID;
     }
@@ -6086,7 +5671,6 @@ fn alpha_rect_descriptor(
     })
 }
 
-
 const fn sprite_scene_needs_clear(render_overlay: bool, full_frame_copy: bool) -> bool {
     !render_overlay && !full_frame_copy
 }
@@ -6097,7 +5681,7 @@ mod sprite_overlay_tests {
         NonzeroAlphaRun, SPRITE_QUAD_FLAG_BCS0_COPY, SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR,
         TrueosUi4SpriteQuad, bcs0_solid_rect, bcs0_sprite_copies, cache_premultiplied_alpha_runs,
         gpgpu_sprite_quad_descriptor, rgba8_is_premultiplied, sprite_scene_needs_clear,
-        sprite_scene_uses_bcs0_clear, sprite_source_is_premultiplied, valid_sprite_quad,
+        sprite_scene_uses_bcs0_clear, valid_sprite_quad,
     };
     use crate::intel::gpgpu::GpgpuRgba8Surface;
     #[test]
@@ -6247,11 +5831,6 @@ mod sprite_overlay_tests {
         assert!(!sprite_scene_uses_bcs0_clear(&[TrueosUi4SpriteQuad::default()]));
     }
 
-    #[test]
-    fn upload_validation_does_not_change_default_uploaded_sprite_alpha_mode() {
-        assert!(!sprite_source_is_premultiplied(false));
-        assert!(sprite_source_is_premultiplied(true));
-    }
 }
 
 pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
@@ -6322,11 +5901,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
     }
 
-    let backbuffer = render_retained_text_backbuffer_for_surface(owner, window_id);
-    if backbuffer != 0 {
-        return backbuffer;
-    }
-
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
@@ -6347,8 +5921,17 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         return ERROR_STATE;
     };
     if let Some(region) = surface.sprite_repaint_region
-        && region != (DamageRect { x: 0, y: 0, width: surface.width, height: surface.height })
-        && upload.quads.iter().any(|quad| !sprite_region_contains_quad(region, *quad))
+        && region
+            != (DamageRect {
+                x: 0,
+                y: 0,
+                width: surface.width,
+                height: surface.height,
+            })
+        && upload
+            .quads
+            .iter()
+            .any(|quad| !sprite_region_contains_quad(region, *quad))
     {
         cancel_blueprint_sprite_frame_without_live_gpu(surface);
         return ERROR_INVALID;
@@ -6550,14 +6133,17 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     let clear = sprite_frame_clear_quad(
         clear_rgba,
         surface.sprite_repaint_region.unwrap_or(DamageRect {
-            x: 0, y: 0, width: surface.width, height: surface.height,
+            x: 0,
+            y: 0,
+            width: surface.width,
+            height: surface.height,
         }),
     );
     let mut prepared = Vec::with_capacity(upload.quads.len().saturating_add(1));
     let mut bcs0_command_count = 0usize;
     if sprite_scene_needs_clear(render_overlay, full_frame_copy) {
-        let explicit_bcs_scene = surface.sprite_repaint_region.is_some()
-            || sprite_scene_uses_bcs0_clear(&upload.quads);
+        let explicit_bcs_scene =
+            surface.sprite_repaint_region.is_some() || sprite_scene_uses_bcs0_clear(&upload.quads);
         if explicit_bcs_scene {
             let clear_fill = TrueosUi4SpriteQuad {
                 flags: SPRITE_QUAD_FLAG_BCS0_COPY,
@@ -7146,7 +6732,7 @@ fn finish_emulator_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                     return ERROR_NOT_FOUND;
                 };
                 let BlueprintSpriteSource::Uploaded(owned) = source else {
-                    return ERROR_FONT;
+                    return ERROR_UI4;
                 };
                 let view = source.surface();
                 let mut pixels = Vec::with_capacity(view.width as usize * view.height as usize * 4);
@@ -7983,8 +7569,6 @@ fn stage_layered_resize(
         surface.height = (height / surface.scene_divisor).max(1);
         surface.placement = placement;
         surface.taken_resize_event = None;
-
-
     }
     0
 }
@@ -8149,9 +7733,8 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
         destroy_rgba8_surface(upload.owned);
     }
     for (_, sprite) in surface.sprites.drain(..) {
-        if let BlueprintSpriteSource::Uploaded(sprite) = sprite {
-            destroy_rgba8_surface(sprite);
-        }
+        let BlueprintSpriteSource::Uploaded(sprite) = sprite;
+        destroy_rgba8_surface(sprite);
     }
     if let Some(solid) = surface.solid_source.take() {
         destroy_rgba8_surface(solid);
@@ -8199,140 +7782,6 @@ fn reap_retired_frames() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shell2_font_scale_ladder_has_25_effective_sizes_and_five_warmed_tiers() {
-        assert_eq!(SHELL2_FONT_SCALE_EFFECTIVE_PIXELS.len(), 25);
-        assert_eq!(SHELL2_FONT_SCALE_NATIVE_TIERS.len(), 5);
-        assert!(
-            SHELL2_FONT_SCALE_EFFECTIVE_PIXELS
-                .windows(2)
-                .all(|pair| pair[0] < pair[1])
-        );
-        assert!(SHELL2_FONT_SCALE_EFFECTIVE_PIXELS.iter().all(|pixels| {
-            shell2_font_scale_step(*pixels).is_some_and(|step| {
-                SHELL2_FONT_SCALE_NATIVE_TIERS.contains(&step.native_tier_pixels)
-                    && step.cache_eligible == 1
-            })
-        }));
-    }
-
-    #[test]
-    fn shell2_font_scale_ladder_reports_residual_and_reduced_cell_density() {
-        assert_eq!(
-            shell2_font_scale_step(12),
-            Some(TrueosUi4Shell2FontScaleStep {
-                effective_pixels: 12,
-                native_tier_pixels: 16,
-                residual_milli: 750,
-                columns_at_1280: 177,
-                rows_at_720: 55,
-                cache_eligible: 1,
-            })
-        );
-        let native = shell2_font_scale_step(54).expect("declared native tier");
-        assert_eq!((native.native_tier_pixels, native.residual_milli), (54, 1_000));
-        assert_eq!(
-            shell2_font_scale_step(13)
-                .expect("declared odd scale")
-                .columns_at_1280,
-            164
-        );
-        let large = shell2_font_scale_step(108).expect("declared large scale");
-        assert_eq!((large.native_tier_pixels, large.residual_milli), (80, 1_350));
-        assert!(large.columns_at_1280 < native.columns_at_1280);
-        assert!(large.rows_at_720 < native.rows_at_720);
-        assert_eq!(shell2_font_scale_step(17), None);
-    }
-
-    fn stamped_shell_request(font: GpuFontFace, font_pixels: f32) -> FontStampRequest {
-        FontStampRequest {
-            layers: alloc::vec![FontStampLayer {
-                scene: RetainSceneRequest {
-                    runs: alloc::vec![RetainedFontRun {
-                        text: String::from("shell prompt"),
-                        position: [12.0, 24.0],
-                        font_pixels,
-                        slant: 0.0,
-                    }],
-                    font,
-                    viewport_width: 1_280,
-                    viewport_height: 720,
-                    raster_width: 1_280,
-                    raster_height: 720,
-                    positioning: RetainedFontPositioning::SceneOrigin,
-                },
-                foreground: GpuFontRgba::new(255, 255, 255, 255),
-            }],
-            fit: FontStampFit::Canvas,
-        }
-    }
-
-    #[test]
-    fn shell2_stamp_registration_seals_terminal_face_size_and_extent() {
-        let registration =
-            shell2_stamped_text_registration(&stamped_shell_request(GpuFontFace::JuliaMono, 24.0))
-                .expect("Shell2's default tier should be OceanCache eligible");
-
-        assert_eq!(registration.face, GpuFontFace::JuliaMono.id() as u16);
-        assert_eq!(registration.tier, 24);
-        assert_eq!(registration.font_pixels_milli, 24_000);
-        assert_eq!((registration.row_width_px, registration.row_height_px), (1_280, 720));
-        assert_eq!(registration.row_ring_depth, 2);
-
-        assert!(
-            shell2_stamped_text_registration(&stamped_shell_request(
-                GpuFontFace::Inconsolata,
-                24.0,
-            ))
-            .is_some()
-        );
-
-        assert!(
-            shell2_stamped_text_registration(&stamped_shell_request(GpuFontFace::Default, 24.0,))
-                .is_none()
-        );
-        assert!(
-            shell2_stamped_text_registration(&stamped_shell_request(
-                GpuFontFace::Inconsolata,
-                17.0,
-            ))
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn font_sprite_fast_path_deduplicates_only_live_exact_surface_requests() {
-        let key = BlueprintFontSpriteKey {
-            font: GpuFontFace::Inconsolata,
-            scalar: 'A',
-            font_pixels_bits: 36.0_f32.to_bits(),
-            color_rgba: 0xFFFF_FFFF,
-        };
-        let requests = alloc::vec![
-            BlueprintFontSpriteRequest {
-                key,
-                ticket: 41,
-                sprite_id: 1,
-                state: BlueprintFontSpriteState::Ready {
-                    width: 16,
-                    height: 24,
-                    origin_px: [0, 0],
-                },
-            },
-            BlueprintFontSpriteRequest {
-                key: BlueprintFontSpriteKey { scalar: 'B', ..key },
-                ticket: 42,
-                sprite_id: 2,
-                state: BlueprintFontSpriteState::Failed,
-            },
-        ];
-        assert_eq!(live_font_sprite_ticket(&requests, key), Some(41));
-        assert_eq!(
-            live_font_sprite_ticket(&requests, BlueprintFontSpriteKey { scalar: 'B', ..key }),
-            None
-        );
-    }
 
     fn keyboard_event(
         seq: u32,
@@ -8393,45 +7842,6 @@ mod tests {
         assert!(burst.is_empty());
     }
 
-    fn retained_description(y: f32) -> BlueprintRetainedTextDescription {
-        BlueprintRetainedTextDescription {
-            font: GpuFontFace::Inconsolata,
-            viewport_width: 960,
-            viewport_height: 720,
-            runs: alloc::vec![
-                RetainedFontRun {
-                    text: String::from("first"),
-                    position: [12.0, y],
-                    font_pixels: 14.0,
-                    slant: 0.0,
-                },
-                RetainedFontRun {
-                    text: String::from("second"),
-                    position: [12.0, y + 18.0],
-                    font_pixels: 14.0,
-                    slant: 0.0,
-                },
-            ],
-        }
-    }
-
-    #[test]
-    fn retained_text_treats_only_empty_coverage_as_a_transparent_noop() {
-        assert!(font_error_is_no_coverage(FontKernelError::Unavailable("font-coverage-empty")));
-        assert!(!font_error_is_no_coverage(FontKernelError::Unavailable("font-coverage-workload")));
-        assert!(!font_error_is_no_coverage(FontKernelError::SubmittedIncomplete(
-            "font-coverage-submit-incomplete"
-        )));
-
-        let layer = BlueprintRetainedTextLayer {
-            description: retained_description(40.0),
-            color_rgba: u32::MAX,
-            translation_px: [12, 18],
-            state: BlueprintRetainedTextState::NoCoverage,
-        };
-        assert!(matches!(retained_text_scene(&layer.state), Ok(None)));
-    }
-
     #[test]
     fn blueprint_surface_close_uses_direct_plane_scaling_and_preserves_capture() {
         assert_eq!(
@@ -8443,104 +7853,6 @@ mod tests {
             WindowSessionCloseRequest::default()
                 .persist_final_frame()
                 .direct_plane_animate_and_retire_frames(),
-        );
-    }
-
-    #[test]
-    fn retained_text_reuses_integral_scene_translation() {
-        assert_eq!(
-            retained_description(40.0).translation_to(&retained_description(-24.0)),
-            Some([0, -64]),
-        );
-    }
-
-    #[test]
-    fn retained_text_rejects_content_and_subpixel_changes() {
-        let base = retained_description(40.0);
-        let mut changed = retained_description(40.0);
-        changed.runs[1].text = String::from("different");
-        assert_eq!(base.translation_to(&changed), None);
-        assert_eq!(base.translation_to(&retained_description(40.5)), None,);
-    }
-
-    #[test]
-    fn font_canvas_hides_color_layers_behind_one_stamp_request() {
-        let description = BlueprintFontCanvasDescription {
-            font: GpuFontFace::Inconsolata,
-            width: 960,
-            height: 720,
-            rows: alloc::vec![
-                BlueprintFontCanvasRow {
-                    text: String::from("title"),
-                    position: [24.0, 24.0],
-                    font_pixels: 28.0,
-                    color_rgba: u32::from_le_bytes([255, 255, 255, 255]),
-                },
-                BlueprintFontCanvasRow {
-                    text: String::from("detail"),
-                    position: [24.0, 64.0],
-                    font_pixels: 18.0,
-                    color_rgba: u32::from_le_bytes([128, 160, 192, 255]),
-                },
-                BlueprintFontCanvasRow {
-                    text: String::from("same title color"),
-                    position: [24.0, 96.0],
-                    font_pixels: 18.0,
-                    color_rgba: u32::from_le_bytes([255, 255, 255, 255]),
-                },
-            ],
-        };
-
-        let request = font_canvas_request(&description);
-
-        assert_eq!(request.fit, FontStampFit::Canvas);
-        assert_eq!(request.layers.len(), 2);
-        assert_eq!(request.layers[0].scene.runs.len(), 2);
-        assert_eq!(request.layers[1].scene.runs.len(), 1);
-        assert!(request.layers.iter().all(|layer| {
-            layer.scene.raster_width == 960
-                && layer.scene.raster_height == 720
-                && layer.scene.positioning == RetainedFontPositioning::SceneOrigin
-        }));
-    }
-
-    #[test]
-    fn font_canvas_splits_large_same_color_run_sets_only_inside_stamp() {
-        let rows = (0..65)
-            .map(|index| BlueprintFontCanvasRow {
-                text: alloc::format!("row {index}"),
-                position: [12.0, index as f32 * 16.0],
-                font_pixels: 14.0,
-                color_rgba: u32::from_le_bytes([255, 255, 255, 255]),
-            })
-            .collect::<Vec<_>>();
-        let description = BlueprintFontCanvasDescription {
-            font: GpuFontFace::Inconsolata,
-            width: 960,
-            height: 1_200,
-            rows,
-        };
-
-        let request = font_canvas_request(&description);
-
-        assert_eq!(font_canvas_internal_layer_count(&description.rows), 2);
-        assert_eq!(request.layers.len(), 2);
-        assert_eq!(request.layers[0].scene.runs.len(), 64);
-        assert_eq!(request.layers[1].scene.runs.len(), 1);
-    }
-
-    #[test]
-    fn font_canvas_quad_keeps_premultiplied_source_over_math() {
-        let quad = TrueosUi4SpriteQuad {
-            flags: SPRITE_QUAD_FLAG_SRC_OVER,
-            ..TrueosUi4SpriteQuad::default()
-        };
-
-        let descriptor = gpgpu_sprite_quad_descriptor(quad, true);
-
-        assert_eq!(
-            descriptor.flags,
-            SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER | SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
         );
     }
 
@@ -8627,11 +7939,5 @@ mod tests {
         blended.flags = SPRITE_QUAD_FLAG_SRC_OVER;
 
         assert!(solid_scene_fast_rects(0, &[blended], destination).is_none());
-    }
-
-    #[test]
-    fn font_kernel_sprite_sources_are_premultiplied() {
-        assert!(sprite_source_is_premultiplied(true));
-        assert!(!sprite_source_is_premultiplied(false));
     }
 }
