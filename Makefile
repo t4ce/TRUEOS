@@ -136,11 +136,7 @@ TRUEOS_TTSTT_TARGET_DIR ?= tools/trueos-ttstt/target
 INTEL_GPU_BAKERY_DIR := tools/intel-gpu-bakery
 INTEL_GPU_CPP_ARTIFACT_DIR := crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
 INTEL_GPU_CPP_COPY_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/copy_rect_rgba8.bin
-# Font-instance affine rendering is dormant (GridPaper transforms are disabled
-# and the Shell2 demo was retired). Keep auditing its offline bake, but allow
-# the linker to discard it instead of requiring unused bytes in every image.
-INTEL_GPU_CPP_DORMANT_BINS := $(INTEL_GPU_CPP_ARTIFACT_DIR)/font_instance_rgba8.bin
-INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_COPY_BIN) $(INTEL_GPU_CPP_DORMANT_BINS),$(wildcard $(INTEL_GPU_CPP_ARTIFACT_DIR)/*.bin))
+INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_COPY_BIN),$(wildcard $(INTEL_GPU_CPP_ARTIFACT_DIR)/*.bin))
 INTEL_GPU_BAKERY_PYTHON ?= python3
 INTEL_GPU_LINKED_ELF ?= $(KERNEL_BIN)
 INTEL_GPU_CPP_PROBE_LOG ?=
@@ -157,7 +153,7 @@ CARGO_EFFECTIVE_FLAGS = $(strip $(CARGO_BUILD_FLAGS))
 
 IMG_SIZE ?= 25G
 
-.PHONY: intel-gpu-bake-lz4-cpp images empty-libs buildins kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-subset-sum-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: intel-gpu-bake-lz4-cpp images empty-libs buildins kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-subset-sum-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -222,9 +218,6 @@ intel-gpu-bake-particle-craft-cpp:
 intel-gpu-bake-shadertoy-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_shadertoy.sh"
 
-intel-gpu-bake-font-instance-cpp:
-	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_font_instance.sh"
-
 intel-gpu-bake-lfm25-q8-packed-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_lfm25_q8_packed.sh"
 
@@ -251,7 +244,6 @@ intel-gpu-bake-cpp-artifacts:
 	$(MAKE) --no-print-directory intel-gpu-bake-audio-visualizer-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-particle-craft-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-shadertoy-cpp
-	$(MAKE) --no-print-directory intel-gpu-bake-font-instance-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-lfm25-q8-packed-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-kokoro-conv1d-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-kokoro-qgemm-cpp
