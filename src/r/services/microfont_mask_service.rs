@@ -28,15 +28,17 @@ const fn extra_count() -> usize {
     }
     count
 }
-pub(crate) const SLOT_COUNT: usize = EXTRA_START + extra_count();
+pub(crate) const BRAILLE_START: usize = EXTRA_START + extra_count();
+pub(crate) const SLOT_COUNT: usize = BRAILLE_START + 256;
 pub(crate) const ATLAS_ROWS: u32 = SLOT_COUNT.div_ceil(ATLAS_COLUMNS as usize) as u32;
+// Only line slots use packed joins; Braille quads follow them in the atlas.
 // Join recipes use seven bits of X and eight bits of Y. Reject overflow
 // explicitly rather than silently changing the shape of a future glyph.
-const _: () = assert!(ATLAS_COLUMNS * 6 <= 128 && ATLAS_ROWS * 11 <= 256);
+const _: () = assert!(ATLAS_COLUMNS * 6 <= 128 && (BRAILLE_START as u32).div_ceil(ATLAS_COLUMNS) * 11 <= 256);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AtlasConfig {
-    /// Uniform source-cell scale: 16 gives a 96x176 glyph.
+    /// Uniform source-cell scale; the default fits the atlas within 4096 pixels.
     pub(crate) glyph_scale: u32,
     /// Optional native-pixel height of the eleven-row em cell.
     pub(crate) glyph_height_px: Option<u32>,
@@ -46,7 +48,8 @@ pub(crate) struct AtlasConfig {
 impl Default for AtlasConfig {
     fn default() -> Self {
         Self {
-            glyph_scale: 16,
+            // Keep a multiple of four for the 4x quad specimen.
+            glyph_scale: (16.min(4096 / (ATLAS_ROWS * 11)) / 4 * 4).max(4),
             glyph_height_px: None,
             line_width_px: 8.0,
         }
@@ -92,6 +95,7 @@ pub(crate) fn glyph_slot(ch: char) -> Option<usize> {
         ' '..='~' => Some(ch as usize - 0x20),
         '\u{2500}'..='\u{257f}' => Some(BOX_START + ch as usize - 0x2500),
         '\u{2580}'..='\u{259f}' => Some(BLOCK_START + ch as usize - 0x2580),
+        '\u{2800}'..='\u{28ff}' => Some(BRAILLE_START + ch as usize - 0x2800),
         _ => microfont::raster_line::GLYPH_CHARACTERS.iter()
             .copied().filter(|&candidate| is_extra_line(candidate))
             .position(|candidate| candidate == ch).map(|index| EXTRA_START + index),
@@ -327,6 +331,15 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
             }
         }
     }
+    for code in 0x2800..=0x28ff {
+        let ch = char::from_u32(code).unwrap();
+        for quad in microfont::raster_quad::braille_quad_slice(ch).unwrap() {
+            let [l, t] = quad.top_left.map(f32::from);
+            let [r, b] = quad.bottom_right.map(f32::from);
+            append_quad(&mut vertices, &mut indices, BRAILLE_START + (code - 0x2800) as usize,
+                [[l, t], [r, t], [r, b], [l, b]]);
+        }
+    }
     upload(&mut resident, &vertices, &indices, Topology::TriangleList, [0; 16])?;
     for ch in (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter()
         .copied().filter(|&ch| is_extra_line(ch))) {
@@ -558,9 +571,10 @@ pub(crate) struct OwnedAlphaAtlas {
 impl OwnedAlphaAtlas {
     pub(crate) fn glyph(&self, ch: char) -> Option<&[u8]> {
         // Unminted line slots stay blank for the demo, but are absent to font
-        // consumers so they can retain their existing bitmap fallback.
+        // consumers so they can apply their missing-glyph policy.
         if ch != ' ' && microfont::raster_line::glyph_strips(ch).is_none()
-            && !('\u{2500}'..='\u{259f}').contains(&ch) {
+            && !('\u{2500}'..='\u{259f}').contains(&ch)
+            && !('\u{2800}'..='\u{28ff}').contains(&ch) {
             return None;
         }
         let slot = glyph_slot(ch)?;
@@ -568,7 +582,7 @@ impl OwnedAlphaAtlas {
         self.pixels.get(slot * bytes..(slot + 1) * bytes)
     }
     pub(crate) fn glyphs(&self) -> impl Iterator<Item = (char, &[u8])> + '_ {
-        (' '..='~').chain('\u{2500}'..='\u{259f}')
+        (' '..='~').chain('\u{2500}'..='\u{259f}').chain('\u{2800}'..='\u{28ff}')
             .chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
                 .filter(|&ch| is_extra_line(ch)))
             .filter_map(|ch| self.glyph(ch).map(|pixels| (ch, pixels)))
@@ -682,8 +696,8 @@ pub(crate) fn stamp_preview_colored_with_header(
             let header_width = view.width.saturating_sub(8) as usize / 2;
             let header_mask = header.map(|text| {
                 let mut pixels = alloc::vec![0u8; header_width * microfont::FHEIGHT];
-                microfont::stamp_text(&mut pixels, header_width, microfont::FHEIGHT,
-                    0, 0, text, 255u8).map_err(|_| "microfont-header-text")?;
+                microfont::stamp_bytes(&mut pixels, header_width, microfont::FHEIGHT,
+                    0, 0, text.as_bytes(), 255u8).map_err(|_| "microfont-header-text")?;
                 Ok::<_, &'static str>(pixels)
             }).transpose()?;
             let source = crate::phys::phys_to_virt(mask.phys as usize) as *mut u8;

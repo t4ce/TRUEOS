@@ -28,8 +28,8 @@ mod ui4 {
     pub struct View {pub width:u32,pub height:u32,pub pitch:u32,pub virt:*mut u8}
     pub fn acquire_frame_buffer(_:FrameHandle)->Result<(),()> {Ok(())}
     pub fn writable_rgba_view(_:())->Result<View,()> {
-        let mut s=crate::STATE.lock().unwrap();s.dest.resize(192*176*4,0);
-        Ok(View {width:192,height:176,pitch:192*4,virt:s.dest.as_mut_ptr()})
+        let mut s=crate::STATE.lock().unwrap();s.dest.resize(96*88*4,0);
+        Ok(View {width:96,height:88,pitch:96*4,virt:s.dest.as_mut_ptr()})
     }
     pub fn mark_frame_buffer_cpu_authored(_:())->Result<(),()> {Ok(())}
     pub fn mark_frame_buffer_fully_opaque(_:())->Result<(),()> {Ok(())}
@@ -143,8 +143,10 @@ fn expected_lines()->usize {
     let extras:Vec<_>=microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
         .filter(|ch| !(' '..='~').contains(ch) && !('\u{2500}'..='\u{259f}').contains(ch))
         .map(|ch|glyph_slot(ch).unwrap()).collect();
-    assert_eq!(extras,(255..SLOT_COUNT).collect::<Vec<_>>());
+    assert_eq!(extras,(255..BRAILLE_START).collect::<Vec<_>>());
     assert!(glyph_slot('§').unwrap()>=255);
+    assert_eq!(glyph_slot('\u{2800}'),Some(BRAILLE_START));
+    assert_eq!(glyph_slot('\u{28ff}'),Some(SLOT_COUNT-1));
     assert_eq!(ATLAS_ROWS,SLOT_COUNT.div_ceil(16) as u32);
 }
 #[test] fn endpoint_recipes_identify_indices_without_changing_seed_positions() {
@@ -171,14 +173,14 @@ fn expected_lines()->usize {
 #[test] fn width_changes_only_constants_and_mask_no_geometry_or_allocation() {
     reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
     let (uploads,vertices)={let s=STATE.lock().unwrap();(s.uploads,s.vertices.clone())};
-    for width in [7.0,9.0,8.0] {with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|_|Ok(())).unwrap();}
+    for width in [7.0,6.0,8.0] {with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|_|Ok(())).unwrap();}
     let s=STATE.lock().unwrap();assert_eq!(s.uploads,uploads);assert_eq!(s.vertices,vertices);
     assert_eq!((s.renders,s.allocations,s.releases),(4,1,0));
 }
 #[test] fn fixed_endpoint_metadata_is_never_uploaded_again() {
     reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
     let (written,before)={let s=STATE.lock().unwrap();(s.constant_writes.len(),s.params.clone())};
-    with_warmed_atlas(AtlasConfig {line_width_px:9.0,..AtlasConfig::default()},|_|Ok(())).unwrap();
+    with_warmed_atlas(AtlasConfig {line_width_px:7.0,..AtlasConfig::default()},|_|Ok(())).unwrap();
     let s=STATE.lock().unwrap();assert_eq!(s.constant_allocations,1);
     assert!(s.constant_writes[written..].iter().all(|&(offset,len)|len==4 && matches!(offset%64,32|36|48|52|56|60)));
     for (old,new) in before.iter().zip(&s.params) {
@@ -188,7 +190,7 @@ fn expected_lines()->usize {
 #[test] fn size_replaces_mask_but_keeps_every_geometry_buffer() {
     reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
     let uploads=STATE.lock().unwrap().uploads;
-    with_warmed_atlas(AtlasConfig {glyph_scale:8,line_width_px:4.0,..AtlasConfig::default()},|a| {assert_eq!((a.surface().width,a.surface().height),(768,ATLAS_ROWS*88));Ok(())}).unwrap();
+    with_warmed_atlas(AtlasConfig {glyph_scale:4,line_width_px:4.0,..AtlasConfig::default()},|a| {assert_eq!((a.surface().width,a.surface().height),(384,ATLAS_ROWS*44));Ok(())}).unwrap();
     let s=STATE.lock().unwrap();assert_eq!(s.uploads,uploads);assert_eq!((s.renders,s.allocations,s.mask_releases),(2,2,1));
 }
 #[test] fn physical_cell_pitch_rounds_up_to_match_shader_packing() {
@@ -204,7 +206,7 @@ fn expected_lines()->usize {
 #[test] fn physical_sizes_reuse_source_geometry_and_keep_native_width() {
     reset(0);
     let mut uploads = 0;
-    for height in [19,38,57,76,94,113,132,151,19] {
+    for height in [19,38,57,76,85,19] {
         let config = AtlasConfig { glyph_height_px:Some(height), ..AtlasConfig::default() };
         with_warmed_atlas(config,|atlas| {
             assert_eq!(atlas.config().line_width_px,8.0);
@@ -233,6 +235,10 @@ fn expected_lines()->usize {
     assert!(a.iter().all(|&coverage|coverage==128));
     assert_eq!(fixed.glyph('§').unwrap().len(),23*31);
     assert_eq!(fixed.glyph('█').unwrap().len(),23*31);
+    for code in 0x2800..=0x28ff {
+        assert_eq!(fixed.glyph(char::from_u32(code).unwrap()).unwrap().len(),23*31);
+    }
+    assert!(fixed.glyph('\u{2800}').unwrap().iter().all(|&coverage|coverage==0));
     assert!(fixed.glyph('漢').is_none());
     assert!(fixed.glyph(' ').unwrap().iter().all(|&coverage|coverage==0));
     let uploads=STATE.lock().unwrap().uploads;
@@ -248,6 +254,22 @@ fn expected_lines()->usize {
     assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,3.5);
     let state=STATE.lock().unwrap();assert_eq!(state.uploads,uploads);assert_eq!(state.renders,2);
     assert!(fixed.glyphs().any(|(ch,_)|ch=='§'));
+}
+#[test] fn all_braille_patterns_upload_their_precomputed_dot_quads() {
+    reset(0);with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
+    let state=STATE.lock().unwrap();
+    for code in 0x2800..=0x28ff {
+        let ch=char::from_u32(code).unwrap();let slot=glyph_slot(ch).unwrap();
+        let actual=state.vertices[0].chunks_exact(4)
+            .filter(|v|(-v[0][2]-1.0) as usize==slot).collect::<Vec<_>>();
+        let expected=microfont::raster_quad::braille_quad_slice(ch).unwrap();
+        assert_eq!(actual.len(),(code-0x2800).count_ones() as usize);
+        for (vertices,quad) in actual.iter().zip(expected) {
+            let origin=[(slot%16) as f32*6.0,(slot/16) as f32*11.0];
+            assert_eq!([vertices[0][0]-origin[0],vertices[0][1]-origin[1]],quad.top_left.map(f32::from));
+            assert_eq!([vertices[2][0]-origin[0],vertices[2][1]-origin[1]],quad.bottom_right.map(f32::from));
+        }
+    }
 }
 #[test] fn quad_vertices_keep_explicit_owning_cell_at_exact_boundaries() {
     reset(0);with_warmed_atlas(AtlasConfig {glyph_height_px:Some(19),
@@ -297,7 +319,7 @@ fn expected_lines()->usize {
         assert!(with_warmed_atlas(AtlasConfig {glyph_scale:scale,line_width_px:width,..AtlasConfig::default()},|_|Ok(())).is_err());
     }
     assert_eq!(STATE.lock().unwrap().uploads,0);
-    for width in [8.0,8.001] {with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|_|Ok(())).unwrap();}
+    for width in [7.0,7.001] {with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|_|Ok(())).unwrap();}
     assert_eq!(STATE.lock().unwrap().renders,1);
     for width in [0.25,0.5,0.75] {
         with_warmed_atlas(AtlasConfig {line_width_px:width,..AtlasConfig::default()},|a| {
@@ -307,19 +329,19 @@ fn expected_lines()->usize {
 }
 #[test] fn colored_transparent_stamp_premultiplies_each_ink_once() {
     reset(0);let cfg=AtlasConfig::default();
-    stamp_preview_colored(ui4::FrameHandle,cfg,&['A','A'],2,16,&[[255,0,0,255],[0,0,255,128]],[0;4]).unwrap();
+    stamp_preview_colored(ui4::FrameHandle,cfg,&['A','A'],2,8,&[[255,0,0,255],[0,0,255,128]],[0;4]).unwrap();
     let s=STATE.lock().unwrap();
     assert_eq!(&s.dest[..4],&[128,0,0,128]);
-    assert_eq!(&s.dest[96*4..96*4+4],&[0,0,64,64]);
+    assert_eq!(&s.dest[48*4..48*4+4],&[0,0,64,64]);
     assert_eq!((s.renders,s.published),(1,1));
     assert!(s.dest.chunks_exact(4).all(|p|p[0]<=p[3]&&p[1]<=p[3]&&p[2]<=p[3]));
 }
 #[test] fn real_stamp_applies_color_opacity_and_blank_cells_without_redrawing() {
     reset(0);let cfg=AtlasConfig::default();
-    stamp_preview(ui4::FrameHandle,cfg,&['A',' '],2,16,[200,100,50,128],[0;4]).unwrap();
-    {let s=STATE.lock().unwrap();assert_eq!(&s.dest[..4],&[50,25,13,64]);assert_eq!(&s.dest[96*4..96*4+4],&[0;4]);}
+    stamp_preview(ui4::FrameHandle,cfg,&['A',' '],2,8,[200,100,50,128],[0;4]).unwrap();
+    {let s=STATE.lock().unwrap();assert_eq!(&s.dest[..4],&[50,25,13,64]);assert_eq!(&s.dest[48*4..48*4+4],&[0;4]);}
     let uploads=STATE.lock().unwrap().uploads;
-    stamp_preview(ui4::FrameHandle,cfg,&['A',' '],2,16,[0,255,0,255],[0;4]).unwrap();
+    stamp_preview(ui4::FrameHandle,cfg,&['A',' '],2,8,[0,255,0,255],[0;4]).unwrap();
     let s=STATE.lock().unwrap();assert_eq!(&s.dest[..4],&[0,128,0,128]);assert_eq!((s.renders,s.published,s.uploads),(1,2,uploads));
 }
 #[test] fn connected_loops_get_one_closing_join_only() {
@@ -394,7 +416,7 @@ def main():
     helpers=preview[preview.index('fn glyph_height_pixels('):preview.index('type PaintResult')]
     helper_tests=r'''
 const COLUMNS:usize=16;
-const ROWS:usize=9;
+const ROWS:usize=10;
 #[test] fn tab_cycles_all_seven_sizes_and_wraps() {
     let mut step=2;
     for expected in [3,4,5,6,7,8,2] {step=size_after_tabs(step,1);assert_eq!(step,expected);}
@@ -406,7 +428,7 @@ const ROWS:usize=9;
         let expected=(1440*u32::from(step)*5+340)/680;
         assert_eq!(glyph_height_pixels(step),Ok(expected));
         let base=frame_extent(expected,8.0);
-        assert_eq!(base,(16*((expected*6+10)/11+12),9*(expected+12)+super::microfont_mask_service::PREVIEW_HEADER_HEIGHT));
+        assert_eq!(base,(16*((expected*6+10)/11+12),10*(expected+12)+super::microfont_mask_service::PREVIEW_HEADER_HEIGHT));
         for width in [7.0,7.25,8.0,8.25,9.0] {assert_eq!(frame_extent(expected,width),base);}
     }
 }

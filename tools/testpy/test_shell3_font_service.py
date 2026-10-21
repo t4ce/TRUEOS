@@ -82,10 +82,10 @@ mod r {
     pub mod services {
         pub mod microfont_mask_service {
             pub struct OwnedAlphaAtlas {pub em_height_px:u32,pub line_width_px:f32,
-                pub glyph_width:u32,pub glyph_height:u32,pub gutter_px:u32,zero:Vec<u8>,half:Vec<u8>,full:Vec<u8>}
+                pub glyph_width:u32,pub glyph_height:u32,pub gutter_px:u32,zero:Vec<u8>,half:Vec<u8>,full:Vec<u8>,horizontal:Vec<u8>,left_heavy:Vec<u8>,junction:Vec<u8>,question:Vec<u8>}
             impl OwnedAlphaAtlas {
                 pub fn glyph(&self,ch:char)->Option<&[u8]> {
-                    match ch {' '=>Some(&self.zero),'A'=>Some(&self.half),'─'|'█'=>Some(&self.full),_=>None}
+                    match ch {' '|'\u{2800}'=>Some(&self.zero),'A'=>Some(&self.half),'?'=>Some(&self.question),'─'=>Some(&self.horizontal),'╾'=>Some(&self.left_heavy),'┤'=>Some(&self.junction),'█'|'⣿'=>Some(&self.full),_=>None}
                 }
                 pub fn glyphs(&self)->impl Iterator<Item=(char,&[u8])> {
                     [' ','A','─','█'].into_iter().map(|ch|(ch,self.glyph(ch).unwrap()))
@@ -94,8 +94,18 @@ mod r {
             pub fn build_shell3_alpha_atlas(height:u32)->Result<OwnedAlphaAtlas,&'static str> {
                 assert_eq!(height,21);crate::BUILDS.fetch_add(1,crate::Ordering::SeqCst);
                 let glyph_width=24;let glyph_height=33;let len=glyph_width*glyph_height;
+                let raster = |ch| {
+                    let bits=microfont::glyph_cell_pixels(ch);
+                    (0..len).map(|i| {
+                        let x=i%24;let y=i/24;
+                        if x<6||y<6 {return 0;}
+                        let sx=((2*(x-6)+1)*11)/(2*height as usize);
+                        let sy=((2*(y-6)+1)*11)/(2*height as usize);
+                        if sx<6&&sy<11&&bits&(1u128<<(65-sy*6-sx))!=0 {255}else{0}
+                    }).collect::<Vec<u8>>()
+                };
                 Ok(OwnedAlphaAtlas {em_height_px:height,line_width_px:3.5,glyph_width:glyph_width as u32,
-                    glyph_height:glyph_height as u32,gutter_px:6,zero:vec![0;len],half:vec![128;len],full:vec![255;len]})
+                    glyph_height:glyph_height as u32,gutter_px:6,zero:vec![0;len],half:vec![128;len],full:vec![255;len],horizontal:raster('─'),left_heavy:raster('╾'),junction:raster('┤'),question:(0..len).map(|i|if i%24<12 {255}else{0}).collect()})
             }
         }
         #[path="__ROOT__/src/r/services/shell3_font_service.rs"]pub mod shell3_font_service;
@@ -142,24 +152,39 @@ fn pixels(copy:intel::GucBcs0RgbaCopy)->Vec<[u8;4]> {
     assert!(pixels(translucent_background).iter().all(|&p|p==[50,25,10,128]));
 }
 #[test]fn quad_cells_fill_both_edges_so_neighbour_cells_meet() {
-    ready();for ch in ['─','█'] {
+    ready();for ch in ['█','⣿'] {
         let copy=glyph(ch,12,22,[30,60,90,255],[0;4],false).unwrap();
         assert!(pixels(copy).iter().all(|&p|p==[30,60,90,255]));
         assert_eq!((copy.width,copy.height),(12,22));
     }
 }
-#[test]fn missing_native_glyphs_retain_bitmap_mapping_including_q_bias() {
-    ready();for (width,height) in [(6,11),(12,22)] {for ch in ['q','§','é','漢','⣿','\u{e000}'] {
-        let copy=glyph(ch,width,height,[255;4],[0,0,0,255],false).unwrap();
-        let actual=pixels(copy);let bits=microfont::glyph_cell_pixels(ch);
-        let bias=usize::from(microfont::glyph_byte(ch)==b'q');
-        for y in 0..height {for x in 0..width {
-            let sx=x as usize*6/width as usize;let sy=y as usize*11/height as usize;
-            let index=sy*6+sx.saturating_sub(bias);
-            let expected=if sx>=bias&&index<66&&bits&(1u128<<(65-index))!=0 {[255;4]}else{[0,0,0,255]};
-            assert_eq!(actual[(y*width+x)as usize],expected,"{ch} at{x},{y} size{width}x{height}");
-        }}
-    }}
+#[test]fn all_horizontal_box_connections_fill_the_cell_without_character_exceptions() {
+    ready();for (width,height) in [(6,11),(12,22),(18,33)] {
+        let ink=[255;4];let bg=[0,0,0,255];
+        let rule=pixels(glyph('─',width,height,ink,bg,false).unwrap());
+        let heavy=pixels(glyph('╾',width,height,ink,bg,false).unwrap());
+        let junction=pixels(glyph('┤',width,height,ink,bg,false).unwrap());
+        let row=(height/2*width) as usize;
+        assert!(rule[row..row+width as usize].iter().all(|p|*p==ink));
+        assert!(heavy[row..row+width as usize].iter().all(|p|*p==ink));
+        assert_eq!(junction[row],ink,"junction must touch the preceding cell");
+        assert_eq!(junction[row+width as usize-1],bg,"do not extend the junction through its blank half");
+        assert_eq!(heavy[row+width as usize-1],junction[row]);
+    }
+}
+#[test]fn missing_native_glyphs_use_the_native_question_mark_in_red() {
+    ready();for (width,height) in [(6,11),(12,22)] {
+        let reference=pixels(glyph('?',width,height,[255,0,0,255],[10,20,30,255],false).unwrap());
+        assert!(reference.iter().any(|p|*p==[255,0,0,255]));
+        assert!(reference.iter().any(|p|*p==[10,20,30,255]));
+        for ch in ['q','§','é','漢','\u{e000}'] {
+            let actual=pixels(glyph(ch,width,height,[0,255,0,255],[10,20,30,255],false).unwrap());
+            assert_eq!(actual,reference,"missing {ch} must use red native ?");
+        }
+        let translucent=pixels(glyph('漢',width,height,[0,255,0,128],[0;4],false).unwrap());
+        let expected=pixels(glyph('?',width,height,[255,0,0,128],[0;4],false).unwrap());
+        assert_eq!(translucent,expected);
+    }
 }
 #[test]fn cache_keys_keep_style_and_dimensions_without_modifying_old_cells() {
     ready();let base=glyph('A',12,22,[255;4],[0;4],false).unwrap();let old=pixels(base);

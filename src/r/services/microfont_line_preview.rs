@@ -17,7 +17,7 @@ const END_CORNER_FRACTION: f32 = 0.5;
 const fn cp850_preview_character(ch: char) -> bool {
     ch as u32 > 0x7f && !(ch >= '\u{2500}' && ch <= '\u{259f}')
 }
-const GLYPH_COUNT: usize = {
+const CP850_GLYPH_COUNT: usize = {
     let mut count = 0;
     let mut byte = 0;
     while byte < microfont::CP850_SYMBOLS.len() {
@@ -26,8 +26,9 @@ const GLYPH_COUNT: usize = {
     }
     count
 };
-const GLYPHS: [char; GLYPH_COUNT] = {
-    let mut glyphs = ['\0'; GLYPH_COUNT];
+const CP850_PADDED: usize = CP850_GLYPH_COUNT.div_ceil(COLUMNS) * COLUMNS;
+const GLYPHS: [char; CP850_PADDED + microfont::seven_segment::SYMBOLS.len()] = {
+    let mut glyphs = ['\0'; CP850_PADDED + microfont::seven_segment::SYMBOLS.len()];
     let mut byte = 0;
     let mut slot = 0;
     while byte < microfont::CP850_SYMBOLS.len() {
@@ -37,6 +38,11 @@ const GLYPHS: [char; GLYPH_COUNT] = {
             slot += 1;
         }
         byte += 1;
+    }
+    let mut digit = 0;
+    while digit < microfont::seven_segment::SYMBOLS.len() {
+        glyphs[CP850_PADDED + digit] = microfont::seven_segment::SYMBOLS[digit].0;
+        digit += 1;
     }
     glyphs
 };
@@ -147,7 +153,7 @@ async fn show_once() -> Result<(), &'static str> {
         .filter(|&tag| tag == microfont::raster_line::Boundary::End)
         .count();
     crate::log_important!(target: "microfont-line-preview";
-        "microfont-line-preview: presented window={} frame={} size={}x{} em_height_px={} cells={} slots={} present={} source=line-binary-v1 layout=cp850-minus-basic-box-block rows={} columns=16 ink_pixels={} size_mm=5 sizing=eleven-row-em tab=5..20mm-step2.5 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 scroll_min_px={} lean_px={} meso_px={} storage=none escape=close\n",
+        "microfont-line-preview: presented window={} frame={} size={}x{} em_height_px={} cells={} slots={} present={} source=line-binary-v1 layout=cp850-minus-basic-box-block+7seg rows={} columns=16 ink_pixels={} size_mm=5 sizing=eleven-row-em tab=5..20mm-step2.5 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 scroll_min_px={} lean_px={} meso_px={} storage=none escape=close\n",
         window.raw(), frame.raw(), width, height, glyph_height, GLYPHS.len(), GLYPHS.len(), present, ROWS, lines, strips.len(), real_vertices, 2 * strips.len(), ends, 2 * strips.len() - ends, LINE_WIDTH_PX, join_triangles, END_CORNER_FRACTION, LINE_WIDTH_PX * END_CORNER_FRACTION, MIN_LINE_WIDTH_PX, microfont::FontShape::Lean.line_width_px(), microfont::FontShape::Meso.line_width_px());
     while !ui4::window_is_closed(OWNER, window) {
         let mut wheel = 0i32;
@@ -287,14 +293,14 @@ fn paint_once(frame: FrameHandle, width_px: f32, glyph_height: u32, size_step: u
 
 /// Rainbow varies across all named glyphs; each row independently fades alpha.
 fn preview_inks() -> Vec<[u8; 4]> {
-    let count = GLYPHS.iter().filter(|&&ch| !ch.is_whitespace()).count();
+    let count = GLYPHS.iter().filter(|&&ch| !ch.is_whitespace() && !ch.is_control()).count();
     let mut ordinal = 0;
     let mut inks = Vec::with_capacity(GLYPHS.len());
     for row in GLYPHS.chunks(COLUMNS) {
-        let letters = row.iter().filter(|&&ch| !ch.is_whitespace()).count();
+        let letters = row.iter().filter(|&&ch| !ch.is_whitespace() && !ch.is_control()).count();
         let mut column = 0;
         for &ch in row {
-            if ch.is_whitespace() { inks.push([0; 4]); continue; }
+            if ch.is_whitespace() || ch.is_control() { inks.push([0; 4]); continue; }
             let [r, g, b] = rainbow_rgb(ordinal, count);
             let alpha = if letters <= 1 { 255 } else {
                 let intervals = letters - 1;

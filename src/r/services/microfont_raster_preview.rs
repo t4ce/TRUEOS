@@ -1,4 +1,4 @@
-//! One boot-time frame: Box Drawing above Block Elements at their original scale.
+//! One boot-time frame: Box Drawing, Block Elements and Braille at their original scale.
 use alloc::{boxed::Box, sync::Arc};
 use embassy_sync::signal::Signal;
 use trueos_time::{Duration, Timer};
@@ -9,7 +9,7 @@ const OWNER: WindowOwner = WindowOwner::MICROFONT_RASTER_PREVIEW;
 const SCALE: u32 = 4;
 const WIDTH: u32 = (16 * 2 - 1) * microfont::FWIDTH as u32 * SCALE;
 const BOX_HEIGHT: u32 = 8 * microfont::FHEIGHT as u32 * SCALE;
-const HEIGHT: u32 = BOX_HEIGHT + 2 * microfont::FHEIGHT as u32 * SCALE;
+const HEIGHT: u32 = BOX_HEIGHT + 18 * microfont::FHEIGHT as u32 * SCALE;
 type PaintResult = Result<usize, &'static str>;
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, PaintResult>;
 
@@ -101,7 +101,7 @@ async fn show_once() -> Result<(), &'static str> {
         return Err("window-publish");
     }
     crate::log_important!(target: "microfont-raster-preview";
-        "microfont-raster-preview: presented window={} frame={} size={}x{} scale={} glyphs=156 ink_pixels={} source=shared-r8-atlas rows=8+2 rounded-corners=blank renders=1 storage=none escape=close\n",
+        "microfont-raster-preview: presented window={} frame={} size={}x{} scale={} glyphs=416 ink_pixels={} source=shared-r8-atlas rows=8+2+16 rounded-corners=blank renders=1 storage=none escape=close\n",
         window.raw(), frame.raw(), WIDTH, HEIGHT, SCALE, quads);
     while !ui4::window_is_closed(OWNER, window) {
         Timer::after(Duration::from_millis(50)).await;
@@ -116,12 +116,16 @@ fn paint_once(frame: FrameHandle) -> PaintResult {
     // Preserve the existing spaced quad specimen; pixels come from the same
     // warmed atlas as the line specimen, sampled at its original 4x size.
     let columns = 31;
-    let mut glyphs = alloc::vec!['\0';columns*10];
+    let mut glyphs = alloc::vec!['\0';columns*26];
     for (index, &(ch, _)) in microfont::BOX_DRAW_SYMBOLS.iter().enumerate() {
         glyphs[(index / 16) * columns + (index % 16) * 2] = ch;
     }
     for (index, &(ch, _)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
         glyphs[(8 + index / 16) * columns + (index % 16) * 2] = ch;
+    }
+    for index in 0..256 {
+        glyphs[(10 + index / 16) * columns + (index % 16) * 2] =
+            char::from_u32(0x2800 + index as u32).unwrap();
     }
     masks::stamp_preview(
         frame,

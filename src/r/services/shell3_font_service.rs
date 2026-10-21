@@ -79,11 +79,12 @@ fn prepare_once() -> Result<(), &'static str> {
     let (_, height) = crate::intel::physical_extent_pixels(5, 5)
         .ok_or("shell3-font-physical-size-unavailable")?;
     let alpha = build_shell3_alpha_atlas(height)?;
+    alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?;
     let glyphs = alpha.glyphs().count();
     let line_width_px = alpha.line_width_px;
     FONT.call_once(|| Font { alpha, cache: spin::Mutex::new(CellCache::default()) });
     crate::log_important!(target: "microfont-mask";
-        "shell3-font: ready format=r8 em_mm=5 em_height_px={} width_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=unchanged bitmap_fallback=missing-only\n",
+        "shell3-font: ready format=r8 em_mm=5 em_height_px={} width_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=unchanged missing_glyph=red-question-mark\n",
         height, line_width_px, glyphs);
     Ok(())
 }
@@ -120,19 +121,20 @@ pub(crate) fn glyph(
     let top = (page.used / PAGE_COLUMNS) * cell_height;
     let s = page.backing.surface();
     let destination = crate::phys::phys_to_virt(s.phys as usize) as *mut u8;
-    let native = font.alpha.glyph(character);
-    // Preserve non-line characters (Braille, Han, private-use UI cells, and
-    // not-yet-minted symbols). This expansion is cached, never per-frame work.
-    let fallback = native.is_none().then(|| microfont::glyph_cell_pixels(character));
+    let (mask, foreground) = match font.alpha.glyph(character) {
+        Some(mask) => (mask, foreground),
+        None => (
+            font.alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?,
+            [255, 0, 0, foreground[3]],
+        ),
+    };
     let mut first_pixel = None;
     let mut uniform = true;
     for y in 0..cell_height {
         for x in 0..cell_width {
-            let mut coverage = if let Some(mask) = native {
-                sample_native(&font.alpha, mask, character, x, y, cell_width, cell_height)
-            } else {
-                sample_bitmap(fallback.unwrap(), character, x, y, cell_width, cell_height)
-            };
+            let mut coverage = sample_native(
+                &font.alpha, mask, x, y, cell_width, cell_height,
+            );
             if underline && y * microfont::FHEIGHT as u32 / cell_height == microfont::FHEIGHT as u32 - 1 {
                 coverage = 255;
             }
@@ -174,29 +176,18 @@ pub(crate) fn solid_color(copy: &GucBcs0RgbaCopy) -> Option<u32> {
         .copied().flatten()
 }
 
-fn sample_native(atlas: &OwnedAlphaAtlas, mask: &[u8], character: char,
+fn sample_native(atlas: &OwnedAlphaAtlas, mask: &[u8],
     x: u32, y: u32, width: u32, height: u32) -> u8 {
-    let quad = ('\u{2500}'..='\u{259f}').contains(&character);
-    let content_width = (atlas.em_height_px * microfont::FWIDTH as u32).div_ceil(microfont::FHEIGHT as u32);
-    // The quad cell fills the old cell completely so adjacent box/block cells
-    // meet. Lines retain one native overhang pixel before their seed grid;
-    // demo gutters are never mistaken for text advance or line spacing.
-    let (origin, content_height) = if quad {
-        (atlas.gutter_px, atlas.em_height_px)
-    } else { (atlas.gutter_px.saturating_sub(1), atlas.em_height_px + 1) };
-    let sx = origin + ((2 * x + 1) * content_width / (2 * width)).min(content_width - 1);
-    let sy = origin + ((2 * y + 1) * content_height / (2 * height)).min(content_height - 1);
+    // Every glyph uses the same 6x11 cell. Gutters are atlas storage, not
+    // character advance. Round the rasterized width to its covered columns;
+    // ceil would include an unpainted column at fractional cell widths.
+    let content_width = ((atlas.em_height_px * microfont::FWIDTH as u32
+        + microfont::FHEIGHT as u32 / 2) / microfont::FHEIGHT as u32).max(1);
+    let sx = atlas.gutter_px
+        + ((2 * x + 1) * content_width / (2 * width)).min(content_width - 1);
+    let sy = atlas.gutter_px
+        + ((2 * y + 1) * atlas.em_height_px / (2 * height)).min(atlas.em_height_px - 1);
     mask[(sy.min(atlas.glyph_height - 1) * atlas.glyph_width + sx.min(atlas.glyph_width - 1)) as usize]
-}
-
-fn sample_bitmap(bits: u128, character: char, x: u32, y: u32, width: u32, height: u32) -> u8 {
-    let sx = x as usize * microfont::FWIDTH / width as usize;
-    let sy = y as usize * microfont::FHEIGHT / height as usize;
-    let bias = usize::from(microfont::glyph_byte(character) == b'q');
-    if sx < bias { return 0; }
-    let bit = sy * microfont::FWIDTH + sx - bias;
-    let count = microfont::FWIDTH * microfont::FHEIGHT;
-    if bit < count && bits & (1 << (count - 1 - bit)) != 0 { 255 } else { 0 }
 }
 
 fn tint(coverage: u8, foreground: [u8; 4], background: [u8; 4]) -> [u8; 4] {

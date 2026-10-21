@@ -19,6 +19,7 @@ class GlyphIndex(unittest.TestCase):
                 root=Path(tmp);data=root/'data';data.mkdir();src=root/'src';src.mkdir()
                 output=src/'generated_line_glyphs.rs'
                 (src/'raster_line.rs').write_text((ROOT/'vendor/microfont/src/raster_line.rs').read_text())
+                (src/'7seg.rs').write_text((ROOT/'vendor/microfont/src/7seg.rs').read_text())
                 check=root/'check.rs'
                 # Probe missing letters first, then add Z, change its strip count,
                 # then remove it. The production decoder and generated lookup run.
@@ -29,17 +30,19 @@ class GlyphIndex(unittest.TestCase):
                         z.unlink(missing_ok=True)
                     else:
                         z.write_bytes(contents)
-                    self.assertEqual(index.generate(data,output),int(expected>0))
+                    self.assertEqual(index.generate(data,output),10+int(expected>0))
                     check.write_text(f'#[path="src/raster_line.rs"] mod raster_line;\n'
+                        '#[path="src/7seg.rs"] mod seven_segment;\n'
                         f'fn main() {{ assert_eq!(raster_line::glyph_strips(\'{character}\').map_or(0, |s|s.len()),{expected});'
                         'assert!(raster_line::glyph_strips(\'D\').is_none()); }\n')
-                    subprocess.run(['rustc','--edition=2024','-A','dead_code',str(check),'-o',str(root/'check')],check=True)
+                    subprocess.run(['rustc','--edition=2024','--cfg','feature="raster"','-A','dead_code',str(check),'-o',str(root/'check')],check=True)
                     subprocess.run([str(root/'check')],check=True)
 
     def test_flipped_aliases_share_bytes_and_apply_to_all_strips(self):
         with tempfile.TemporaryDirectory(prefix='line-alias-') as tmp:
             root=Path(tmp);data=root/'data';data.mkdir();src=root/'src';src.mkdir()
             (src/'raster_line.rs').write_text((ROOT/'vendor/microfont/src/raster_line.rs').read_text())
+            (src/'7seg.rs').write_text((ROOT/'vendor/microfont/src/7seg.rs').read_text())
             (data/'u0036.bin').write_bytes(bytes.fromhex('C0 00 44'))
             (data/'u0062.bin').write_bytes(bytes.fromhex('40 11 34 80 00 44'))
             (data/'u0070.bin').write_bytes(bytes.fromhex('C1 21 51 3C'))
@@ -49,11 +52,13 @@ class GlyphIndex(unittest.TestCase):
                 '0028':'C2 04 0B 3B 44', '003C':'C1 04 20 44',
                 '005B':'C2 04 00 40 44', '007B':'C1 04 22 44',
                 '002F':'C1 04 22 40', '003F':'C1 00 24 42',
+                '2192':'C1 1B 2D 3B C0 28 2D', '25B2':'02 30 34 12 30',
             }.items():
                 (data/f'u{name}.bin').write_bytes(bytes.fromhex(payload))
-            self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),22)
+            self.assertEqual(index.generate(data,src/'generated_line_glyphs.rs'),40)
             check=root/'check.rs'
             check.write_text(r'''#[path="src/raster_line.rs"] mod raster_line;
+#[path="src/7seg.rs"] mod seven_segment;
 use raster_line::{glyph_strips,Boundary::{End,Junction}};
 fn main() {
     let six=glyph_strips('6').unwrap();let nine=glyph_strips('9').unwrap();
@@ -109,10 +114,45 @@ fn main() {
         }
     }
     assert_eq!(glyph_strips('/').unwrap()[0].points.len(),3); // bin overrides old slash
+    let right=glyph_strips('→').unwrap();
+    for ch in ['←','↑','↓'] {
+        let alias=glyph_strips(ch).unwrap();
+        for (a,b) in right.iter().zip(alias) {
+            assert_eq!(a.points.as_ptr(),b.points.as_ptr());
+            assert_eq!((a.start,a.end),(b.start,b.end));
+        }
+    }
+    for (ch,head,stem) in [
+        ('←',[(2,3),(0,5),(2,7)],[(5,5),(0,5)]),
+        ('↑',[(0,4),(2,2),(4,4)],[(2,7),(2,2)]),
+        ('↓',[(4,5),(2,7),(0,5)],[(2,2),(2,7)]),
+    ] {
+        let glyph=glyph_strips(ch).unwrap();
+        assert_eq!(glyph[0].iter_points().map(|p|(p.x(),p.y())).collect::<Vec<_>>(),head);
+        assert_eq!(glyph[1].iter_points().map(|p|(p.x(),p.y())).collect::<Vec<_>>(),stem);
+        assert_eq!(glyph[1].adjacency_vertex(1).unwrap(),[stem[0].0 as f32,stem[0].1 as f32,0.5]);
+    }
+    let up=glyph_strips('▲').unwrap();
+    for (ch,expected) in [
+        ('►',[(0,2),(0,6),(4,4),(0,2)]),
+        ('◄',[(4,6),(4,2),(0,4),(4,6)]),
+        ('▼',[(4,2),(0,2),(2,6),(4,2)]),
+    ] {
+        let alias=glyph_strips(ch).unwrap();
+        assert_eq!(up[0].points.as_ptr(),alias[0].points.as_ptr());
+        assert_eq!((alias[0].start,alias[0].end),(Junction,Junction));
+        let points:Vec<_>=alias[0].iter_points().map(|p|(p.x(),p.y())).collect();
+        assert_eq!(points,expected);
+        assert_eq!(points.first(),points.last());
+        assert_eq!(points.iter().map(|p|p.0).min(),Some(0));
+        assert_eq!(points.iter().map(|p|p.0).max(),Some(4));
+        assert_eq!(points.iter().map(|p|p.1).min(),Some(2));
+        assert_eq!(points.iter().map(|p|p.1).max(),Some(6));
+    }
     assert_eq!(core::mem::size_of::<raster_line::Strip>(),24);
 }
 ''')
-            subprocess.run(['rustc','--edition=2024','-A','dead_code',str(check),'-o',str(root/'check')],check=True)
+            subprocess.run(['rustc','--edition=2024','--cfg','feature="raster"','-A','dead_code',str(check),'-o',str(root/'check')],check=True)
             subprocess.run([str(root/'check')],check=True)
 
     def test_only_canonical_codepoint_filenames_are_accepted(self):
