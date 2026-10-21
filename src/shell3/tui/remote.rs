@@ -22,27 +22,18 @@ pub(crate) struct Drain {
 
 impl Output {
     pub const fn new() -> Self {
-        Self {
-            bytes: VecDeque::new(),
-            repaint: false,
-            failed: false,
-            queued_since_ms: None,
-        }
+        Self { bytes: VecDeque::new(), repaint: false, failed: false, queued_since_ms: None }
     }
 
     pub fn begin(&mut self) -> bool {
         // Always reserve the release reset, including for an abandoned app.
-        if self.failed || self.bytes.len() + RESET.len() * 2 > LIMIT {
-            return false;
-        }
+        if self.failed || self.bytes.len() + RESET.len() * 2 > LIMIT { return false; }
         self.bytes.extend(RESET.iter().copied());
         true
     }
 
     pub fn write(&mut self, bytes: &[u8]) -> usize {
-        if self.failed {
-            return 0;
-        }
+        if self.failed { return 0; }
         if bytes.len() > LIMIT.saturating_sub(RESET.len() + self.bytes.len()) {
             self.failed = true;
             self.end();
@@ -54,22 +45,16 @@ impl Output {
 
     pub fn write_at(&mut self, bytes: &[u8], now_ms: u64) -> usize {
         let written = self.write(bytes);
-        if written != 0 && self.queued_since_ms.is_none() {
-            self.queued_since_ms = Some(now_ms);
-        }
+        if written != 0 && self.queued_since_ms.is_none() { self.queued_since_ms = Some(now_ms); }
         written
     }
 
-    pub fn queued_since_ms(&self) -> Option<u64> {
-        self.queued_since_ms
-    }
+    pub fn queued_since_ms(&self) -> Option<u64> { self.queued_since_ms }
 
     pub fn end(&mut self) {
         if self.bytes.len() + RESET.len() <= LIMIT {
             self.bytes.extend(RESET.iter().copied());
-        } else {
-            self.failed = true;
-        }
+        } else { self.failed = true; }
         self.repaint = true;
     }
 
@@ -77,18 +62,10 @@ impl Output {
         let count = available.min(self.bytes.len());
         let bytes = self.bytes.drain(..count).collect();
         let pending = !self.bytes.is_empty();
-        if !pending {
-            self.queued_since_ms = None;
-        }
+        if !pending { self.queued_since_ms = None; }
         // Shell3 must not paint until all app bytes and its release reset drain.
         let repaint = !pending && core::mem::take(&mut self.repaint);
-        Drain {
-            bytes,
-            pending,
-            repaint,
-            failed: self.failed,
-            active,
-        }
+        Drain {bytes, pending, repaint, failed: self.failed, active}
     }
 }
 
@@ -115,12 +92,7 @@ mod tests {
         let mut output = Output::new();
         assert!(output.begin());
         assert_eq!(output.take(LIMIT, true).bytes, RESET);
-        for part in [
-            b"\x1b[38;5;8m".as_slice(),
-            "🗺 §".as_bytes(),
-            b"\x1b[18",
-            b"t\x1b[6n",
-        ] {
+        for part in [b"\x1b[38;5;8m".as_slice(), "🗺 §".as_bytes(), b"\x1b[18", b"t\x1b[6n"] {
             assert_eq!(output.write(part), part.len());
         }
         assert_eq!(output.take(LIMIT, true).bytes, "\x1b[38;5;8m🗺 §\x1b[18t\x1b[6n".as_bytes());
@@ -136,8 +108,7 @@ mod tests {
         assert!(first.pending && !first.repaint);
         let final_part = output.take(LIMIT, false);
         assert!(final_part.repaint && !final_part.pending);
-        let mut all = first.bytes;
-        all.extend(final_part.bytes);
+        let mut all = first.bytes; all.extend(final_part.bytes);
         assert_eq!(all, [RESET, b"last app frame", RESET].concat());
         assert!(!output.take(LIMIT, false).repaint);
     }

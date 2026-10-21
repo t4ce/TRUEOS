@@ -23,7 +23,7 @@ pub use self::heal_protocol::{
 pub use self::heal_service::{
     HealPortReport, HealProtocolReport, HealServiceReport, HealServiceStage, HealTransportProof,
     HealXhciSeed, IntelXhciProfile, QemuXhciProfile, XhciBackendSelection,
-    latest_report as xhci_heal_report, latest_selection as xhci_backend_selection,
+    latest_report as xhci_heal_report,
 };
 pub use self::hid::midi;
 pub use self::lib::*;

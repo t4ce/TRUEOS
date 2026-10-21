@@ -674,26 +674,16 @@ fn program_pipe_a_precision_gamma_locked(entries: &[u32; PRECISION_PALETTE_ENTRI
 pub(crate) fn fade_pipe_a_gamma(snapshot: &PipeGammaSnapshot, amount: i32) -> bool {
     if amount == 0 {
         let _guard = PIPE_GAMMA.lock();
-        let Some(dev) = crate::intel::claimed_device() else {
-            return false;
-        };
-        if !program_pipe_a_precision_gamma_locked(&snapshot.precision_palette) {
-            return false;
-        }
+        let Some(dev) = crate::intel::claimed_device() else { return false; };
+        if !program_pipe_a_precision_gamma_locked(&snapshot.precision_palette) { return false; }
         crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, snapshot.mode);
         return crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE) == snapshot.mode;
     }
     // When precision gamma is disabled, its saved palette is not the transfer
     // function currently on screen. Use identity for the fade, restore mode at end.
     if snapshot.mode & POST_CSC_GAMMA_ENABLE != 0
-        && snapshot.mode & GAMMA_MODE_MASK != GAMMA_MODE_10_BIT
-    {
-        return false;
-    }
-    let entries = display_fade_curve::palette(
-        &snapshot.precision_palette,
-        amount,
-        snapshot.mode & POST_CSC_GAMMA_ENABLE != 0,
-    );
+        && snapshot.mode & GAMMA_MODE_MASK != GAMMA_MODE_10_BIT { return false; }
+    let entries = display_fade_curve::palette(&snapshot.precision_palette, amount,
+        snapshot.mode & POST_CSC_GAMMA_ENABLE != 0);
     program_pipe_a_precision_gamma(&entries)
 }

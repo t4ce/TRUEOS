@@ -215,9 +215,7 @@ impl HealServiceReport {
     }
 }
 
-pub fn latest_selection() -> Option<XhciBackendSelection> {
-    *LATEST_SELECTION.lock()
-}
+
 
 pub fn latest_report() -> Option<HealServiceReport> {
     LATEST_REPORT.lock().clone()

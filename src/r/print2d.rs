@@ -8,10 +8,13 @@ extern crate alloc;
 
 use alloc::{
     collections::VecDeque,
-    string::{String, ToString},
-    vec::Vec,
+    string::String,
 };
 use spin::Mutex;
+#[cfg(feature = "gridpaper")]
+use alloc::{string::ToString, vec::Vec};
+#[cfg(feature = "gridpaper")]
+use core::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(feature = "gridpaper")]
 pub const DOCUMENT_GRIDPAPER_A4: u32 = 1;

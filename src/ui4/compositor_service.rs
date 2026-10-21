@@ -839,14 +839,10 @@ fn queue_async_plane(
             pending.broker_revision, target_plane_slot(plan.target), selected.len(), plan.damage,
         );
         for (z, (window, view)) in selected.iter().enumerate() {
-            let buffer = pending
-                .windows
-                .iter()
+            let buffer = pending.windows.iter()
                 .position(|candidate| candidate.id == window.id && candidate.layer == window.layer)
                 .map(|index| pending.leases[index].buffer_index);
-            let frame_plan = frame_snapshot(window.frame)
-                .ok()
-                .map(|snapshot| snapshot.plan);
+            let frame_plan = frame_snapshot(window.frame).ok().map(|snapshot| snapshot.plan);
             crate::log_trace!(target: "ui4";
                 "ui4/plane-source revision={} slot={} z={} window={} layer={} frame={} buffer={:?} publish={} gpu_authored={} release={} phys=0x{:X} source={}x{} pitch={} destination={}x{}@{},{} opacity={} fully_opaque={} scanout_cache={} arc={} plan={:?}\n",
                 pending.broker_revision, target_plane_slot(plan.target), z,
@@ -1377,11 +1373,12 @@ const fn resident_release_direct_contract(
             FrameContent::RenderScene3d | FrameContent::BlueprintScene,
             super::FrameCadence::Streaming,
             super::FrameBuffering::Triple,
-        ) | (
-            FrameContent::BlueprintScene,
-            super::FrameCadence::Immutable,
-            super::FrameBuffering::Single,
         )
+            | (
+                FrameContent::BlueprintScene,
+                super::FrameCadence::Immutable,
+                super::FrameBuffering::Single,
+            )
     )
 }
 

@@ -7,14 +7,10 @@ fn sources(payload: &[u8]) -> Result<Vec<String>, i32> {
     }
     let mut paths = Vec::new();
     for path in payload.split(|byte| *byte == 0) {
-        if paths.len() == 32 {
-            return Err(-1);
-        }
+        if paths.len() == 32 { return Err(-1); }
         let path = core::str::from_utf8(path).map_err(|_| -1)?;
         crate::r::path::FsPath::parse(path, false).map_err(|_| -1)?;
-        if !crate::r::io::env::trueosfs_scope_granted() {
-            return Err(-13);
-        }
+        if !crate::r::io::env::trueosfs_scope_granted() { return Err(-13); }
         let path = crate::r::io::env::resolve_fs_path(path, false).ok_or(-1)?;
         paths.push(path);
     }
@@ -26,15 +22,10 @@ pub(crate) fn enqueue(vm: u8, payload: &[u8]) -> i32 {
         Ok(paths) => paths,
         Err(code) => return code,
     };
-    let Some(worker) = crate::workers::pick_background_spawner() else {
-        return -3;
-    };
+    let Some(worker) = crate::workers::pick_background_spawner() else { return -3; };
     let target = crate::hv::blueprint_console_target(vm);
     match launch_task(paths, target) {
-        Ok(task) => {
-            worker.spawn(task);
-            0
-        }
+        Ok(task) => { worker.spawn(task); 0 }
         Err(_) => -16,
     }
 }
@@ -52,10 +43,7 @@ async fn launch_task(paths: Vec<String>, target: Option<crate::shell3::MatrixTar
     if let Err(error) = result {
         crate::log_os::blueprint_important_line(format_args!("img: {error}\n"));
         if let Some(target) = target {
-            crate::shell3::matrix_target_print_line(
-                &target,
-                &alloc::format!("SHOW FAILED · {error}"),
-            );
+            crate::shell3::matrix_target_print_line(&target, &alloc::format!("SHOW FAILED · {error}"));
         }
     }
 }

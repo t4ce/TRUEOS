@@ -82,6 +82,8 @@ pub(crate) use context_menu::{
     ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES, clear_window_menu as clear_window_context_menu,
     register_window_menu as register_window_context_menu,
 };
+#[cfg(feature = "gridpaper")]
+pub(crate) use context_menu::{ContextMenuError, ContextMenuRequest};
 pub(crate) use cursor_frame_inout::{
     CursorFrameError, CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId,
     Ui4CursorIcon, Ui4CursorImage, Ui4CursorSource, Ui4CursorStep, center_snapped_frame_for_source,

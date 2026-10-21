@@ -21,9 +21,7 @@ const CP850_GLYPH_COUNT: usize = {
     let mut count = 0;
     let mut byte = 0;
     while byte < microfont::CP850_SYMBOLS.len() {
-        if cp850_preview_character(microfont::CP850_SYMBOLS[byte].0) {
-            count += 1;
-        }
+        if cp850_preview_character(microfont::CP850_SYMBOLS[byte].0) { count += 1; }
         byte += 1;
     }
     count
@@ -62,15 +60,10 @@ fn size_after_tabs(step: u8, tabs: u32) -> u8 {
 }
 fn frame_extent(height: u32, line_width_px: f32) -> (u32, u32) {
     let (width, height) = super::microfont_mask_service::AtlasConfig {
-        glyph_height_px: Some(height),
-        line_width_px,
+        glyph_height_px: Some(height), line_width_px,
         ..super::microfont_mask_service::AtlasConfig::default()
-    }
-    .cell_extent();
-    (
-        COLUMNS as u32 * width,
-        ROWS as u32 * height + super::microfont_mask_service::PREVIEW_HEADER_HEIGHT,
-    )
+    }.cell_extent();
+    (COLUMNS as u32 * width, ROWS as u32 * height + super::microfont_mask_service::PREVIEW_HEADER_HEIGHT)
 }
 type PaintResult = Result<usize, &'static str>;
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, PaintResult>;
@@ -176,50 +169,27 @@ async fn show_once() -> Result<(), &'static str> {
                         && event.event.key_code == KEYBOARD_KEY_TAB
                         && event.event.flags & KEYBOARD_OUTPUT_FLAG_PRESS != 0
                         && event.event.flags & KEYBOARD_OUTPUT_FLAG_REPEAT == 0
-                    {
-                        tabs += 1;
-                    }
+                    { tabs += 1; }
                 }
                 _ => {}
             }
         }
         let next_width = width_after_scroll(width_px, wheel);
         let next_step = size_after_tabs(size_step, tabs);
-        let next_height = if next_step == size_step {
-            glyph_height
-        } else {
-            glyph_height_pixels(next_step)?
-        };
+        let next_height = if next_step == size_step { glyph_height } else { glyph_height_pixels(next_step)? };
         if next_width != width_px || next_step != size_step {
             // Replace the immutable front only when the new native-size render is ready.
             if let Ok(next_frame) = create_preview_frame(output, next_height, next_width) {
                 match render_frame(next_frame, next_width, next_height, next_step).await {
                     Ok(_) => {
-                        let committed = if next_step != size_step
-                            || frame_extent(next_height, next_width)
-                                != frame_extent(glyph_height, width_px)
-                        {
-                            ui4::window_resize_state(OWNER, window).and_then(
-                                |(mut placement, epoch)| {
-                                    (placement.width, placement.height) =
-                                        frame_extent(next_height, next_width);
-                                    ui4::commit_window_frame_replacement(
-                                        OWNER,
-                                        window,
-                                        next_frame,
-                                        placement,
-                                        epoch,
-                                        ui4::DamageRect::FULL,
-                                    )
-                                },
-                            )
+                        let committed = if next_step != size_step || frame_extent(next_height, next_width) != frame_extent(glyph_height, width_px) {
+                            ui4::window_resize_state(OWNER, window).and_then(|(mut placement, epoch)| {
+                                (placement.width, placement.height) = frame_extent(next_height, next_width);
+                                ui4::commit_window_frame_replacement(
+                                    OWNER, window, next_frame, placement, epoch, ui4::DamageRect::FULL)
+                            })
                         } else {
-                            ui4::commit_window_frame_refresh(
-                                OWNER,
-                                window,
-                                next_frame,
-                                ui4::DamageRect::FULL,
-                            )
+                            ui4::commit_window_frame_refresh(OWNER, window, next_frame, ui4::DamageRect::FULL)
                         };
                         if committed.is_ok() {
                             ui4::retire_frame_when_released(frame);
@@ -251,11 +221,7 @@ async fn show_once() -> Result<(), &'static str> {
     Ok(())
 }
 
-fn create_preview_frame(
-    output: ui4::OutputId,
-    glyph_height: u32,
-    width_px: f32,
-) -> Result<FrameHandle, &'static str> {
+fn create_preview_frame(output: ui4::OutputId, glyph_height: u32, width_px: f32) -> Result<FrameHandle, &'static str> {
     let (width, height) = frame_extent(glyph_height, width_px);
     ui4::create_frame(ui4::FrameSpec {
         output,
@@ -270,19 +236,12 @@ fn create_preview_frame(
     .map_err(|_| "frame-create")
 }
 
-async fn render_frame(
-    frame: FrameHandle,
-    width_px: f32,
-    glyph_height: u32,
-    size_step: u8,
-) -> PaintResult {
+async fn render_frame(frame: FrameHandle, width_px: f32, glyph_height: u32, size_step: u8) -> PaintResult {
     let reply = Arc::new(Reply::new());
     loop {
         loop {
             let response = Arc::clone(&reply);
-            let job = Box::new(move || {
-                response.signal(paint_once(frame, width_px, glyph_height, size_step))
-            });
+            let job = Box::new(move || response.signal(paint_once(frame, width_px, glyph_height, size_step)));
             match crate::r::blocking::try_spawn_blocking_job_with_purpose(
                 job,
                 "microfont-line-preview",
@@ -305,20 +264,17 @@ async fn render_frame(
 
 /// Positive wheel steps thicken the stroke; permit 1px through Meso.
 fn width_after_scroll(width_px: f32, wheel: i32) -> f32 {
-    (width_px + wheel as f32 * WIDTH_STEP_PX)
-        .clamp(MIN_LINE_WIDTH_PX, microfont::FontShape::Meso.line_width_px())
+    (width_px + wheel as f32 * WIDTH_STEP_PX).clamp(
+        MIN_LINE_WIDTH_PX,
+        microfont::FontShape::Meso.line_width_px(),
+    )
 }
 
 fn paint_once(frame: FrameHandle, width_px: f32, glyph_height: u32, size_step: u8) -> PaintResult {
     use super::microfont_mask_service::{self as masks, AtlasConfig};
     let glyphs = GLYPHS.to_vec();
     let inks = preview_inks();
-    let label = alloc::format!(
-        "{:.2} px   {},{:02} cm (Tab)",
-        width_px,
-        size_step / 4,
-        (size_step % 4) * 25
-    );
+    let label = alloc::format!("{:.2} px   {},{:02} cm (Tab)", width_px, size_step / 4, (size_step % 4) * 25);
     masks::stamp_preview_colored_with_header(
         frame,
         AtlasConfig {
@@ -337,27 +293,16 @@ fn paint_once(frame: FrameHandle, width_px: f32, glyph_height: u32, size_step: u
 
 /// Rainbow varies across all named glyphs; each row independently fades alpha.
 fn preview_inks() -> Vec<[u8; 4]> {
-    let count = GLYPHS
-        .iter()
-        .filter(|&&ch| !ch.is_whitespace() && !ch.is_control())
-        .count();
+    let count = GLYPHS.iter().filter(|&&ch| !ch.is_whitespace() && !ch.is_control()).count();
     let mut ordinal = 0;
     let mut inks = Vec::with_capacity(GLYPHS.len());
     for row in GLYPHS.chunks(COLUMNS) {
-        let letters = row
-            .iter()
-            .filter(|&&ch| !ch.is_whitespace() && !ch.is_control())
-            .count();
+        let letters = row.iter().filter(|&&ch| !ch.is_whitespace() && !ch.is_control()).count();
         let mut column = 0;
         for &ch in row {
-            if ch.is_whitespace() || ch.is_control() {
-                inks.push([0; 4]);
-                continue;
-            }
+            if ch.is_whitespace() || ch.is_control() { inks.push([0; 4]); continue; }
             let [r, g, b] = rainbow_rgb(ordinal, count);
-            let alpha = if letters <= 1 {
-                255
-            } else {
+            let alpha = if letters <= 1 { 255 } else {
                 let intervals = letters - 1;
                 ((255 * (intervals - column) + 128 * column + intervals / 2) / intervals) as u8
             };

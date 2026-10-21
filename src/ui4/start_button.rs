@@ -130,9 +130,7 @@ pub(crate) async fn ui4_start_button_service_task() {
     }
 }
 
-fn initialize_start_button(
-    glyph: &'static OwnedGlyphMask,
-) -> Result<ActiveStartButton, &'static str> {
+fn initialize_start_button(glyph: &'static OwnedGlyphMask) -> Result<ActiveStartButton, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-unavailable")?;
     let (screen_width, screen_height) =
         crate::ui4::output_dimensions().ok_or("scanout-unavailable")?;
@@ -359,7 +357,13 @@ fn start_button_extent(width: u32, height: u32, padding: u32) -> Option<(u32, u3
     Some((width.checked_add(padding)?, height.checked_add(padding)?))
 }
 
-fn start_button_glyph_alpha(glyph: &OwnedGlyphMask, width: u32, height: u32, x: u32, y: u32) -> u8 {
+fn start_button_glyph_alpha(
+    glyph: &OwnedGlyphMask,
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+) -> u8 {
     let Some(glyph_x) = x.checked_sub(width.saturating_sub(glyph.width) / 2) else {
         return 0;
     };

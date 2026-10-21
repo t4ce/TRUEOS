@@ -1,13 +1,11 @@
 //! Host controller for the OS Blueprint; selection stays in the guest.
-use crate::shell3::{MatrixTarget, matrix_target_print_line as print_matrix_target_line};
 use alloc::{string::String, vec::Vec};
 use trueos_executor::Spawner;
+use crate::shell3::{MatrixTarget, matrix_target_print_line as print_matrix_target_line};
 
 pub(super) fn arguments() -> Vec<String> {
     let mut args: Vec<String> = super::table::collect_top_level_disk_choices()
-        .iter()
-        .map(disk_argument)
-        .collect();
+        .iter().map(disk_argument).collect();
     args.extend(non_replicatable_vm_arguments());
     args
 }
@@ -148,16 +146,8 @@ fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str)
     };
 
     match source {
-        "local" => crate::disc::install::controller::submit_install_to_target(
-            spawner,
-            target.clone(),
-            disk,
-        ),
-        "online" => crate::disc::install::controller::submit_online_install_to_target(
-            spawner,
-            target.clone(),
-            disk,
-        ),
+        "local" => crate::disc::install::controller::submit_install_to_target(spawner, target.clone(), disk),
+        "online" => crate::disc::install::controller::submit_online_install_to_target(spawner, target.clone(), disk),
         "pxeproc-local" => crate::disc::install::controller::submit_install_mode_to_target(
             spawner,
             target.clone(),

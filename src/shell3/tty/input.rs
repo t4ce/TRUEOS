@@ -17,18 +17,12 @@ pub(super) struct InputDecoder {
 
 impl Terminal {
     pub(super) fn remember(&mut self, line: &str) {
-        if self.view.lines.is_some() {
-            self.history.remember(line);
-        }
+        if self.view.lines.is_some() { self.history.remember(line); }
     }
 
     pub(super) fn recall(&mut self, up: bool) {
-        if self.view.lines.is_none() {
-            return;
-        }
-        let Some(line) = self.history.recall(up, &self.line) else {
-            return;
-        };
+        if self.view.lines.is_none() { return; }
+        let Some(line) = self.history.recall(up, &self.line) else { return; };
         self.line.zeroize();
         self.line = line;
         self.line_overflow = false;
@@ -37,9 +31,7 @@ impl Terminal {
         self.shell.set_cursor(self.line.chars().count());
     }
 
-    pub(super) fn end_recall(&mut self) {
-        self.history.end_recall();
-    }
+    pub(super) fn end_recall(&mut self) { self.history.end_recall(); }
 
     // SSH and UI4 share immediate recognition; nc alone defers until Enter.
     pub(super) fn keyboard(&mut self, key: Option<u16>, ch: char) {
@@ -71,15 +63,11 @@ impl Terminal {
             });
         if latched {
             if key == Some(KEYBOARD_KEY_TAB) {
-                let end = completed
-                    .char_indices()
+                let end = completed.char_indices()
                     .map(|(index, ch)| index + ch.len_utf8())
                     .find(|&end| self.shell.parse_name(&completed[..end]));
-                if let Some(end) = end {
-                    completed.truncate(end);
-                } else {
-                    completed.zeroize();
-                }
+                if let Some(end) = end { completed.truncate(end); }
+                else { completed.zeroize(); }
             }
             self.remember(&completed);
         }
@@ -101,25 +89,13 @@ impl Terminal {
         }
         self.remember(&line);
         match command {
-            "clear" => {
-                self.clear_screen();
-                if let Some(lines) = self.view.lines.as_mut() {
-                    lines.clear();
-                } else {
-                    self.prompt();
-                }
-            }
+            "clear" => { self.clear_screen(); if let Some(lines) = self.view.lines.as_mut() { lines.clear(); } else { self.prompt(); } },
             "tab" => {
-                if self.view.lines.is_some() {
-                    self.keyboard(Some(crate::r::keyboard::KEYBOARD_KEY_TAB), '\0');
-                } else {
-                    self.shell.set_mode(self.shell.get_mode() % 3 + 1);
-                }
+                if self.view.lines.is_some() { self.keyboard(Some(crate::r::keyboard::KEYBOARD_KEY_TAB), '\0'); }
+                else { self.shell.set_mode(self.shell.get_mode() % 3 + 1); }
             }
             "exit" => {
-                if self.view.lines.is_some() {
-                    self.write(b"\x1b[r\x1b[0 q\x1b[?25h");
-                }
+                if self.view.lines.is_some() { self.write(b"\x1b[r\x1b[0 q\x1b[?25h"); }
                 self.write(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
                 self.closing = true;
             }
@@ -127,9 +103,7 @@ impl Terminal {
                 self.keyboard(Some(crate::r::keyboard::KEYBOARD_KEY_ENTER), '\0');
                 return;
             }
-            _ => {
-                self.shell.replay_terminal_line(&line);
-            }
+            _ => { self.shell.replay_terminal_line(&line); }
         }
         // Enter consumes this submission, including any unmatched prefix.
         self.shell.set_prompt("");
@@ -157,16 +131,8 @@ impl Terminal {
     // Scroll only Shell3's transcript. Leased apps receive their raw keys
     // earlier in input(), and plain TCP retains its line-oriented behavior.
     fn matrix_scroll_key(&mut self, final_byte: u8) {
-        if self.view.lines.is_none() || self.decoder.csi_overflow {
-            return;
-        }
-        let page = self
-            .shell
-            .get_size()
-            .1
-            .saturating_sub(3)
-            .max(1)
-            .min(i32::MAX as usize) as i32;
+        if self.view.lines.is_none() || self.decoder.csi_overflow { return; }
+        let page = self.shell.get_size().1.saturating_sub(3).max(1).min(i32::MAX as usize) as i32;
         let rows = match (final_byte, self.decoder.csi.as_slice()) {
             (b'~', b"5") => -page,
             (b'~', b"6") => page,
@@ -179,48 +145,18 @@ impl Terminal {
 
     // SGR mouse coordinates are terminal cells, unlike UI4's pixel coordinates.
     fn matrix_mouse(&mut self, final_byte: u8) {
-        if self.view.lines.is_none()
-            || self.decoder.csi_overflow
-            || !matches!(final_byte, b'M' | b'm')
-        {
-            return;
-        }
-        let Some(parameters) = self.decoder.csi.strip_prefix(b"<") else {
-            return;
-        };
-        let Ok(parameters) = core::str::from_utf8(parameters) else {
-            return;
-        };
+        if self.view.lines.is_none() || self.decoder.csi_overflow || !matches!(final_byte, b'M' | b'm') { return; }
+        let Some(parameters) = self.decoder.csi.strip_prefix(b"<") else { return; };
+        let Ok(parameters) = core::str::from_utf8(parameters) else { return; };
         let mut fields = parameters.split(';');
-        let Some(button) = fields.next().and_then(|v| v.parse::<u32>().ok()) else {
-            return;
-        };
-        let Some(x) = fields
-            .next()
-            .and_then(|v| v.parse::<i32>().ok())
-            .filter(|v| *v > 0)
-        else {
-            return;
-        };
-        let Some(y) = fields
-            .next()
-            .and_then(|v| v.parse::<i32>().ok())
-            .filter(|v| *v > 0)
-        else {
-            return;
-        };
-        if fields.next().is_some() || button & 64 != 0 || button & 3 != 1 {
-            return;
-        }
+        let Some(button) = fields.next().and_then(|v| v.parse::<u32>().ok()) else { return; };
+        let Some(x) = fields.next().and_then(|v| v.parse::<i32>().ok()).filter(|v| *v > 0) else { return; };
+        let Some(y) = fields.next().and_then(|v| v.parse::<i32>().ok()).filter(|v| *v > 0) else { return; };
+        if fields.next().is_some() || button & 64 != 0 || button & 3 != 1 { return; }
         let (columns, rows) = self.shell.get_size();
         let inside = x as usize <= columns && (4..=rows).contains(&(y as usize));
-        self.shell.drag_matrix(
-            (x - 1, y - 1),
-            final_byte == b'M' && button & 32 == 0,
-            final_byte == b'M',
-            inside,
-            (1, 1),
-        );
+        self.shell.drag_matrix((x - 1, y - 1), final_byte == b'M' && button & 32 == 0,
+            final_byte == b'M', inside, (1, 1));
     }
 
     pub fn input(&mut self, mut bytes: &[u8]) {
@@ -229,11 +165,7 @@ impl Terminal {
         if self.decoder.utf8_len == 0
             && !(self.shell.active_vmx_app().is_some() && bytes.contains(&b'\t'))
             && tui::remote_active(self.shell.tui_frontend)
-            && tui::input(
-                self.shell.tui_frontend,
-                self.shell.active_matrix_slot_name().as_deref(),
-                bytes,
-            )
+            && tui::input(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref(), bytes)
         {
             self.shell.drag_matrix((0, 0), false, false, false, (1, 1));
             self.refresh_controls();
@@ -249,21 +181,13 @@ impl Terminal {
             // waking the app for ESC alone can turn a mouse report into Esc.
             // Batches containing VMX Tab use shared keyboard dispatch for
             // UTF-8 text; the active app still owns those text characters.
-            let ascii_len = if (self.view.lines.is_some()
-                || tui::remote_active(self.shell.tui_frontend))
-                && self.decoder.utf8_len == 0
-                && byte.is_ascii()
-            {
-                bytes
-                    .iter()
-                    .take_while(|byte| {
-                        byte.is_ascii()
-                            && !(self.shell.active_vmx_app().is_some() && **byte == b'\t')
-                    })
-                    .count()
-            } else {
-                0
-            };
+            let ascii_len =
+                if (self.view.lines.is_some() || tui::remote_active(self.shell.tui_frontend)) && self.decoder.utf8_len == 0 && byte.is_ascii() {
+                    bytes.iter().take_while(|byte| byte.is_ascii()
+                        && !(self.shell.active_vmx_app().is_some() && **byte == b'\t')).count()
+                } else {
+                    0
+                };
             if ascii_len > 0
                 && tui::input(
                     self.shell.tui_frontend,
@@ -298,24 +222,14 @@ impl Terminal {
                     self.matrix_mouse(byte);
                     self.matrix_scroll_key(byte);
                     let arrow_parameters = matches!(self.decoder.csi.as_slice(), b"" | b"0" | b"1")
-                        || self
-                            .decoder
-                            .csi
-                            .strip_prefix(b"1;")
-                            .is_some_and(|modifier| {
-                                matches!(modifier, b"2" | b"3" | b"4" | b"5" | b"6" | b"7" | b"8")
-                            });
-                    if !self.decoder.csi_overflow && arrow_parameters && matches!(byte, b'A' | b'B')
-                    {
+                        || self.decoder.csi.strip_prefix(b"1;").is_some_and(|modifier| matches!(modifier, b"2" | b"3" | b"4" | b"5" | b"6" | b"7" | b"8"));
+                    if !self.decoder.csi_overflow && arrow_parameters && matches!(byte, b'A' | b'B') {
                         self.recall(byte == b'A');
                     }
                     self.decoder.escape = 0;
                 } else if byte >= 0x20 {
-                    if self.decoder.csi.len() < 48 {
-                        self.decoder.csi.push(byte);
-                    } else {
-                        self.decoder.csi_overflow = true;
-                    }
+                    if self.decoder.csi.len() < 48 { self.decoder.csi.push(byte); }
+                    else { self.decoder.csi_overflow = true; }
                     self.decoder.escape = 3;
                     continue;
                 } else {

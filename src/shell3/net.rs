@@ -40,12 +40,7 @@ impl Connection {
             handle,
             terminal: None,
             ssh: None,
-            pending: Some(PendingTerminal {
-                slot,
-                peer_port,
-                until: now + Duration::from_millis(PROTOCOL_PROBE_MS),
-                prefix: Vec::new(),
-            }),
+            pending: Some(PendingTerminal {slot, peer_port, until: now + Duration::from_millis(PROTOCOL_PROBE_MS), prefix: Vec::new()}),
             rejected: false,
             greeting: false,
             greeting_sent: false,
@@ -64,9 +59,7 @@ impl Connection {
     }
 
     fn input(&mut self, bytes: &[u8]) {
-        if self.rejected || self.greeting {
-            return;
-        }
+        if self.rejected || self.greeting { return; }
         if let Some(ssh) = self.ssh.as_mut() {
             ssh.input(bytes);
             return;
@@ -97,36 +90,21 @@ impl Connection {
 
     /// False means an immediate close was admitted and the model can be freed.
     fn flush(&mut self, commands: &NetQueue<NetCommand>, now: Instant) -> bool {
-        if !self.rejected
-            && self.ssh.is_none()
-            && self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| now >= pending.until)
-        {
+        if !self.rejected && self.ssh.is_none() && self.pending.as_ref().is_some_and(|pending| now >= pending.until) {
             self.greeting = true;
         }
         if let Some(ssh) = self.ssh.as_mut() {
             ssh.pump(self.terminal.as_mut());
             if self.terminal.is_none() && ssh.wants_shell() {
                 let pending = self.pending.take().unwrap();
-                let (columns, rows) = ssh
-                    .size()
-                    .expect("SSH shell requires accepted PTY dimensions");
-                self.terminal =
-                    Some(Terminal::new_ssh(super::Shell3::new_terminal_sized_reserved(
-                        pending.slot,
-                        pending.peer_port,
-                        columns,
-                        rows,
-                    )));
+                let (columns, rows) = ssh.size().expect("SSH shell requires accepted PTY dimensions");
+                self.terminal = Some(Terminal::new_ssh(super::Shell3::new_terminal_sized_reserved(pending.slot, pending.peer_port, columns, rows)));
                 crate::log_info!(target: "service";
                     "shell3-tcp: protocol=ssh handle={:?} action=shell-authenticated plaintext=0\n", self.handle,
                 );
             }
         }
-        let force_close = self.rejected
-            || self.terminal.as_ref().is_some_and(|tty| tty.overflow)
+        let force_close = self.rejected || self.terminal.as_ref().is_some_and(|tty| tty.overflow)
             || self.ssh.as_ref().is_some_and(|ssh| ssh.closed)
             || self.deadline.is_some_and(|deadline| now >= deadline);
         if force_close {
@@ -144,24 +122,13 @@ impl Connection {
             if !bytes.is_empty() {
                 let data = bytes.to_vec();
                 let len = data.len();
-                if commands
-                    .push(NetCommand::SendTcp {
-                        handle: self.handle,
-                        data,
-                    })
-                    .is_ok()
-                {
+                if commands.push(NetCommand::SendTcp { handle: self.handle, data }).is_ok() {
                     ssh.consume_output(len);
                     self.in_flight = len;
                     self.deadline = Some(now + Duration::from_millis(WRITE_TIMEOUT_MS));
                 }
             } else if ssh.finished
-                && commands
-                    .push(NetCommand::FinishTcp {
-                        handle: self.handle,
-                    })
-                    .is_ok()
-            {
+                && commands.push(NetCommand::FinishTcp { handle: self.handle }).is_ok() {
                 self.finishing = true;
                 self.deadline = Some(now + Duration::from_millis(5_000));
             }
@@ -169,23 +136,12 @@ impl Connection {
         }
         if self.greeting {
             if !self.greeting_sent {
-                if commands
-                    .push(NetCommand::SendTcp {
-                        handle: self.handle,
-                        data: GREETING.to_vec(),
-                    })
-                    .is_ok()
-                {
+                if commands.push(NetCommand::SendTcp { handle: self.handle, data: GREETING.to_vec() }).is_ok() {
                     self.greeting_sent = true;
                     self.in_flight = GREETING.len();
                     self.deadline = Some(now + Duration::from_millis(WRITE_TIMEOUT_MS));
                 }
-            } else if commands
-                .push(NetCommand::FinishTcp {
-                    handle: self.handle,
-                })
-                .is_ok()
-            {
+            } else if commands.push(NetCommand::FinishTcp { handle: self.handle }).is_ok() {
                 self.finishing = true;
                 self.deadline = Some(now + Duration::from_millis(5_000));
             }
@@ -252,12 +208,7 @@ impl WorkerTerminals {
         for event in self.events.drain(64) {
             match event {
                 WorkerEvent::Accepted(handle, peer_port) => {
-                    self.connections.push(Connection::new(
-                        handle,
-                        self.slot,
-                        peer_port,
-                        Instant::now(),
-                    ));
+                    self.connections.push(Connection::new(handle, self.slot, peer_port, Instant::now()));
                 }
                 WorkerEvent::Socket(NetEvent::TcpData { handle, data }) => {
                     if let Some(connection) =
@@ -301,9 +252,7 @@ pub async fn terminal_task() {
     let spawner = unsafe { trueos_executor::Spawner::for_current_executor().await };
     match super::ssh::auth_task() {
         Ok(task) => spawner.spawn(task),
-        Err(_) => {
-            crate::log_warn!(target: "service"; "shell3-ssh: authentication worker unavailable\n")
-        }
+        Err(_) => crate::log_warn!(target: "service"; "shell3-ssh: authentication worker unavailable\n"),
     }
     let commands = NetQueue::new_leaked("shell3-tcp-cmd", 128);
     let events = NetQueue::new_leaked("shell3-tcp-evt", 256);
@@ -318,10 +267,8 @@ pub async fn terminal_task() {
     let mut rejected = None;
     let mut errors = 0u64;
 
-    static PASS: crate::r::input_timing::Site =
-        crate::r::input_timing::Site::new("ssh-routing-pass");
-    static OVERRUN: crate::r::input_timing::Site =
-        crate::r::input_timing::Site::new("ssh-routing-sleep-overrun");
+    static PASS: crate::r::input_timing::Site = crate::r::input_timing::Site::new("ssh-routing-pass");
+    static OVERRUN: crate::r::input_timing::Site = crate::r::input_timing::Site::new("ssh-routing-sleep-overrun");
 
     loop {
         let pass_started = crate::r::input_timing::now_ms();
@@ -363,8 +310,7 @@ pub async fn terminal_task() {
                     listener = None;
                     let peer_port = match &event {
                         NetEvent::TcpEstablished { peer, peer6, .. } => peer
-                            .as_ref()
-                            .map(|endpoint| endpoint.port)
+                            .as_ref().map(|endpoint| endpoint.port)
                             .or_else(|| peer6.as_ref().map(|endpoint| endpoint.port)),
                         _ => None,
                     };
@@ -439,10 +385,6 @@ pub async fn terminal_task() {
         PASS.record(crate::r::input_timing::now_ms().saturating_sub(pass_started));
         let sleeping = crate::r::input_timing::now_ms();
         Timer::after(Duration::from_millis(10)).await;
-        OVERRUN.record(
-            crate::r::input_timing::now_ms()
-                .saturating_sub(sleeping)
-                .saturating_sub(10),
-        );
+        OVERRUN.record(crate::r::input_timing::now_ms().saturating_sub(sleeping).saturating_sub(10));
     }
 }

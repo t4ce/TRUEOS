@@ -89,9 +89,9 @@ pub(crate) enum GpgpuArtifactArgKind {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuArtifactArgAccess {
-    None,
-    ReadOnly,
-    ReadWrite,
+    None = 0,
+    ReadOnly = 1,
+    ReadWrite = 3,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

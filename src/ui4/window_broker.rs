@@ -331,6 +331,16 @@ impl<'a> WindowSessionCloseRequest<'a> {
         self
     }
 
+    /// Slightly enlarge and fade a direct plane while its producer retains the
+    /// frame ring for a later presentation session.
+    #[cfg(feature = "gridpaper")]
+    pub(crate) const fn direct_plane_animate(mut self) -> Self {
+        self.animate = true;
+        self.puff = true;
+        self.direct_plane_scaling = true;
+        self
+    }
+
     pub(crate) const fn transfers_frame_ownership(self) -> bool {
         self.retire_frames
     }

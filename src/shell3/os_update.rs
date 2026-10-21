@@ -4,8 +4,8 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 pub(crate) const REMOTE_ISO_URL: &str = "https://trueos.eu/TrueOS.lz4";
 pub(crate) const LAN_ISO_URL: &str = "http://192.168.178.111:8080/trueos.iso";
 
-use crate::shell3::matrix_target_interrupted;
 use crate::shell3::{MatrixTarget, matrix_target_print_line as print_matrix_target_line};
+use crate::shell3::matrix_target_interrupted;
 
 pub(crate) fn submit_live_update_to_target(spawner: &Spawner, target: MatrixTarget) {
     submit_live_update_from_url_to_target(spawner, target, REMOTE_ISO_URL);
@@ -24,6 +24,7 @@ pub(crate) fn submit_live_update_from_url_to_target(
     match live_update_command_task(target.clone(), url) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
+
             print_matrix_target_line(&target, "update live: spawn failed");
         }
     }
@@ -134,9 +135,7 @@ async fn live_update_swap_task(kernel: alloc::vec::Vec<u8>, target: MatrixTarget
         spawner,
         target.clone(),
         crate::live_update::NonReplicatableVmPolicy::DiscardAtCommit,
-    )
-    .await
-    {
+    ).await {
         Ok(never) => match never {},
         Err(error) => {
             let line = alloc::format!("update live: failed ({})", error);
