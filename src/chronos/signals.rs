@@ -17,24 +17,8 @@ pub struct Every {
 
 impl Every {
     pub const MINUTE: Self = Self::new(60);
-    pub const HOUR: Self = Self::new(3600);
-    pub const THREE_HOURS: Self = Self::new(3 * 3600);
-    pub const SIX_HOURS: Self = Self::new(6 * 3600);
-    pub const TWELVE_HOURS: Self = Self::new(12 * 3600);
 
     const fn new(seconds: u64) -> Self { Self { seconds, offset: 0, local: true } }
-    pub fn seconds(seconds: u64) -> Option<Self> {
-        (seconds != 0).then(|| Self::new(seconds))
-    }
-    pub fn minutes(minutes: u64) -> Option<Self> { Self::seconds(minutes.checked_mul(60)?) }
-    pub fn hours(hours: u64) -> Option<Self> { Self::seconds(hours.checked_mul(3600)?) }
-    /// Shift each boundary, e.g. minute signals at :30 instead of :00.
-    pub fn offset_seconds(mut self, offset: u64) -> Option<Self> {
-        if offset >= self.seconds { return None; }
-        self.offset = offset;
-        Some(self)
-    }
-    pub const fn utc(mut self) -> Self { self.local = false; self }
     fn bucket(self, utc: u64, local: u64) -> u64 {
         (if self.local { local } else { utc }).saturating_sub(self.offset) / self.seconds
     }
@@ -62,14 +46,6 @@ pub struct Subscription { signal: Arc<Signal> }
 impl Subscription {
     /// Consume the latest notification without blocking.
     pub fn take(&mut self) -> Option<Tick> { self.signal.pending.lock().take() }
-    /// Cancellation-safe asynchronous notification for consumers without a pump.
-    pub async fn wait(&mut self) -> Tick {
-        loop {
-            let observed = self.signal.changed.observe();
-            if let Some(tick) = self.take() { return tick; }
-            self.signal.changed.wait_after(observed).await;
-        }
-    }
 }
 
 fn current() -> Tick {

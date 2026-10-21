@@ -123,10 +123,6 @@ pub const VMCS_GUEST_IA32_EFER: u64 = 0x2806;
 pub const VMCS_GUEST_IA32_DEBUGCTL: u64 = 0x2802;
 pub const VMCS_GUEST_IA32_PAT: u64 = 0x2804;
 pub const VMCS_GUEST_IA32_PERF_GLOBAL_CTRL: u64 = 0x2808;
-pub const VMCS_GUEST_PDPTE0: u64 = 0x280A;
-pub const VMCS_GUEST_PDPTE1: u64 = 0x280C;
-pub const VMCS_GUEST_PDPTE2: u64 = 0x280E;
-pub const VMCS_GUEST_PDPTE3: u64 = 0x2810;
 
 pub const VMCS_HOST_IA32_PAT: u64 = 0x2C00;
 pub const VMCS_HOST_IA32_EFER: u64 = 0x2C02;
@@ -827,12 +823,6 @@ pub fn vmlaunch_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
     unsafe { vmlaunch_once_wrapper_impl(out, guest_state) }
 }
 
-pub(crate) fn vmlaunch_once_wrapper_with_extended_state(
-    out: &mut LaunchResult,
-    guest_state: &mut VmxExtendedState,
-) {
-    unsafe { vmlaunch_once_wrapper_impl(out, guest_state) }
-}
 
 unsafe fn vmlaunch_once_wrapper_impl(
     out: &mut LaunchResult,

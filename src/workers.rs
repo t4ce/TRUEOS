@@ -301,10 +301,6 @@ pub fn is_last_ap_service_slot(cpu_slot: u32) -> bool {
     last_ap_service_slot() == Some(cpu_slot)
 }
 
-pub fn last_ap_service_worker() -> Option<(u32, u8, WorkerSpawner)> {
-    let slot = last_ap_service_slot()?;
-    Some((slot, core_kind_for_slot(slot), spawner_for_slot(slot)?))
-}
 
 pub fn is_general_background_worker_slot(cpu_slot: u32) -> bool {
     is_background_worker_slot(cpu_slot) && !is_last_ap_service_slot(cpu_slot)
@@ -331,15 +327,6 @@ pub fn background_worker_slots() -> Vec<u32> {
         .collect()
 }
 
-/// Report whether a strict AP2+ performance-core worker is registered without
-/// advancing the round-robin selector used by actual task placement.
-pub fn has_perf_background_worker_slot() -> bool {
-    registered_background_slot_range().any(|slot| {
-        is_slot_registered(slot)
-            && is_general_background_worker_slot(slot)
-            && core_kind_for_slot(slot) == CORE_KIND_PERF
-    })
-}
 
 pub fn registered_core_spawner_count() -> usize {
     REGISTERED_SLOTS
@@ -464,27 +451,6 @@ pub fn try_claim_compute_worker(policy: ComputeWorkerPolicy) -> Option<ComputeWo
     None
 }
 
-/// Claim one already-selected compute worker.  A client-owned pool uses this
-/// to keep a stable physical placement across work submissions instead of
-/// re-running the round-robin picker for every small shard.
-pub fn try_claim_compute_worker_on_slot(
-    cpu_slot: u32,
-    policy: ComputeWorkerPolicy,
-) -> Option<ComputeWorkerLease> {
-    if !is_compute_eligible_slot(cpu_slot, policy) {
-        return None;
-    }
-    let spawner = spawner_for_slot(cpu_slot)?;
-    let claimed = COMPUTE_CLAIMED_BY_SLOT.get(cpu_slot as usize)?;
-    claimed
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .ok()?;
-    Some(ComputeWorkerLease {
-        cpu_slot,
-        core_kind: core_kind_for_slot(cpu_slot),
-        spawner,
-    })
-}
 
 #[inline]
 fn is_compute_eligible_slot(slot: u32, policy: ComputeWorkerPolicy) -> bool {
@@ -538,9 +504,6 @@ pub fn pick_background_spawners_with_slots(limit: usize) -> Vec<(u32, u8, Worker
     selected
 }
 
-pub fn pick_perf_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawner)> {
-    pick_background_spawner_with_filter(|slot| core_kind_for_slot(slot) == CORE_KIND_PERF)
-}
 
 /// Pick an AP2+ efficiency-core worker.
 ///

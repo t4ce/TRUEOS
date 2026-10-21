@@ -19,7 +19,6 @@ mod checkpoint;
 pub(crate) mod execution_policy;
 pub mod guest_run;
 pub mod guest_work;
-pub mod hv_remote_restore_service;
 pub mod lane;
 pub mod memory;
 pub mod security;
@@ -68,13 +67,11 @@ pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 
 const GUEST_FS_BASE_RESET: u64 = 0;
-const BLUEPRINT_PREPARE_PAUSE_TIMEOUT_MS: u64 = 15_000;
 const STOP_CLEANUP_TIMEOUT_MS: u64 = 2_000;
 const PAUSE_CHECKPOINT_TIMEOUT_MS: u64 = 15_000;
 const BLUEPRINT_LIFECYCLE_PHASE_RUNNING: u8 = 0;
 const BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE: u8 = 1;
 const BLUEPRINT_LIFECYCLE_PHASE_READY: u8 = 2;
-const BLUEPRINT_LIFECYCLE_PHASE_ARMING: u8 = 3;
 static BLUEPRINT_LIFECYCLE_OPERATION_SEQ: AtomicU64 = AtomicU64::new(1);
 /// A child Hull deliberately has no presentation or terminal authority.  The
 /// Blueprint chooses this argv marker as its internal worker entry mode.
@@ -89,14 +86,7 @@ const BLUEPRINT_CHILD_ERR_INVALID: i32 = -1;
 const BLUEPRINT_CHILD_ERR_NOT_FOUND: i32 = -2;
 const BLUEPRINT_CHILD_ERR_QUEUE_FULL: i32 = -3;
 const BLUEPRINT_CHILD_ERR_UNAVAILABLE: i32 = -4;
-const BLUEPRINT_REPLICATION_CHECKPOINT_MAX_BYTES: usize = trueos_vm::vmcall::PAYLOAD_CAP;
 
-/// A raw snapshot still contains source-principal guest-heap pointers and page
-/// mappings. Keep cross-slot/cross-host restore unavailable until the v-layer
-/// can relocate every guest-writable backing.
-pub const fn cross_principal_snapshot_restore_supported() -> bool {
-    false
-}
 
 // VMX tasks can be parked in host waits rather than executing VMRESUME. An IPI
 // alone cannot finish those futures; stop/kill also wakes this host wait path.
@@ -172,7 +162,6 @@ struct TrueosVmId {
     lifecycle_phase: AtomicU8,
     lifecycle_operation: AtomicU64,
     lifecycle_deadline_ms: AtomicU64,
-    lifecycle_reason: AtomicU8,
     lifecycle_checkpoint_version: AtomicU64,
     run_generation: AtomicU64,
     restore_inflight: AtomicBool,
@@ -202,7 +191,6 @@ impl TrueosVmId {
             lifecycle_phase: AtomicU8::new(BLUEPRINT_LIFECYCLE_PHASE_RUNNING),
             lifecycle_operation: AtomicU64::new(0),
             lifecycle_deadline_ms: AtomicU64::new(0),
-            lifecycle_reason: AtomicU8::new(BlueprintPauseReason::Pause as u8),
             lifecycle_checkpoint_version: AtomicU64::new(0),
             run_generation: AtomicU64::new(0),
             restore_inflight: AtomicBool::new(false),
@@ -327,17 +315,6 @@ fn current_vmx_root_active() -> Result<bool, &'static str> {
     Ok(VMX_ROOT_ACTIVE_BY_CPU[slot].load(Ordering::Acquire))
 }
 
-pub(crate) fn active_eptp_for_vm(vm_id: u8) -> Result<u64, &'static str> {
-    let eptp = ACTIVE_EPTP_BY_VM
-        .get(vm_id as usize)
-        .ok_or("active eptp vm id")?
-        .load(Ordering::Acquire);
-    if eptp == 0 {
-        Err("active eptp unavailable")
-    } else {
-        Ok(eptp)
-    }
-}
 
 fn clear_active_eptp_for_vm(vm_id: u8) {
     if let Some(eptp) = ACTIVE_EPTP_BY_VM.get(vm_id as usize) {
@@ -588,7 +565,6 @@ fn handle_external_interrupt_vmexit(vm_id: u8) -> Result<(), &'static str> {
 pub enum StartError {
     UnsupportedVmId,
     AlreadyRunning,
-    ConsoleBusy,
     ConsoleUnsupported,
     VmxUnsupported,
     MissingGuestModule,
@@ -762,20 +738,12 @@ enum BlueprintTerminalLeaseState {
         observed: bool,
         ready: bool,
     },
-    Releasing {
-        epoch: u64,
-    },
     Parked {
         ticket: u64,
     },
     ReentryRequested {
         ticket: u64,
         epoch: u64,
-    },
-    Claiming {
-        ticket: u64,
-        epoch: u64,
-        direct: bool,
     },
 }
 
@@ -801,10 +769,8 @@ impl BlueprintTerminalLeaseState {
         matches!(
             self,
             Self::Reserved
-                | Self::Releasing { .. }
                 | Self::Parked { .. }
                 | Self::ReentryRequested { .. }
-                | Self::Claiming { .. }
         )
     }
 }
@@ -876,17 +842,11 @@ pub(crate) struct BlueprintProcessContext {
     args: AllocVec<AllocString>,
     vars: BTreeMap<AllocString, AllocString>,
     console_target: Option<MatrixTarget>,
-    console_surface: BlueprintConsoleSurface,
-    console_route: BlueprintConsoleRoute,
     console_attached: bool,
-    console_attach_generation: u64,
-    console_attach_inflight: bool,
     app_command_passthrough: bool,
     terminal_lease: BlueprintTerminalLeaseState,
-    terminal_surface_generation: u64,
     console_input: VecDeque<u8>,
     console_input_since_ms: Option<u64>,
-    control_shell_line: AllocVec<u8>,
     exit_reason: Option<AllocString>,
 }
 
@@ -961,16 +921,6 @@ pub(crate) enum BlueprintReadyDisposition {
     Snapshot,
 }
 
-impl BlueprintPauseReason {
-    const fn from_raw(raw: u8) -> Self {
-        match raw {
-            2 => Self::Replicate,
-            3 => Self::Migrate,
-            _ => Self::Pause,
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct BlueprintPreparePause {
     pub operation: u64,
@@ -1003,12 +953,10 @@ pub struct HvStatus {
     pub feature_control_locked: bool,
     pub feature_control_vmx_outside_smx: bool,
     pub guest_module_present: bool,
-    pub stored_vm_count: usize,
     pub vm_id_limit: usize,
     pub running_count: usize,
     pub paused_count: usize,
     pub starting_count: usize,
-    pub active_vm_ids: [Option<u8>; TRUEOS_VM_ID_LIMIT],
     pub vm_shared_heap_total_bytes: usize,
     pub vm_shared_heap_free_bytes: usize,
     pub vm_shared_stack_bytes: usize,
@@ -1030,8 +978,6 @@ pub struct HvVmState {
     pub replicatable: bool,
     pub pause_latched: bool,
     pub pause_snapshot_ready: bool,
-    pub prepare_pause_pending: bool,
-    pub lifecycle_ready: bool,
     pub restore_inflight: bool,
 }
 
@@ -1052,10 +998,6 @@ pub(crate) fn vm_run_generation(vm_id: u8) -> Option<u64> {
     vm_slot(vm_id).map(|vm| vm.run_generation.load(Ordering::Acquire))
 }
 
-/// Identity of a start reservation, including the period before run setup.
-pub(crate) fn vm_lifecycle_generation(vm_id: u8) -> Option<u64> {
-    vm_slot(vm_id).map(|vm| vm.lifecycle_generation.load(Ordering::Acquire))
-}
 
 fn lifecycle_now_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
@@ -1550,17 +1492,13 @@ fn guest_fs_base_for_boot_mode(_boot_mode: VmBootMode) -> u64 {
     GUEST_FS_BASE_RESET
 }
 
-fn vm_activity_snapshot() -> (usize, usize, [Option<u8>; TRUEOS_VM_ID_LIMIT]) {
-    let mut active_vm_ids = [None; TRUEOS_VM_ID_LIMIT];
+fn vm_activity_snapshot() -> (usize, usize) {
     let mut running_count = 0usize;
     let mut starting_count = 0usize;
 
-    for (idx, slot) in trueos_vm_ids.iter().enumerate() {
+    for slot in trueos_vm_ids.iter() {
         let running = slot.running.load(Ordering::Acquire);
         let starting = slot.starting.load(Ordering::Acquire);
-        if running || starting {
-            active_vm_ids[idx] = Some(idx as u8);
-        }
         if running && !slot.execution_pause.paused() {
             running_count = running_count.saturating_add(1);
         }
@@ -1569,7 +1507,7 @@ fn vm_activity_snapshot() -> (usize, usize, [Option<u8>; TRUEOS_VM_ID_LIMIT]) {
         }
     }
 
-    (running_count, starting_count, active_vm_ids)
+    (running_count, starting_count)
 }
 
 pub fn vm_state(vm_id: u8) -> HvVmState {
@@ -1587,8 +1525,6 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
             replicatable: false,
             pause_latched: false,
             pause_snapshot_ready: false,
-            prepare_pause_pending: false,
-            lifecycle_ready: false,
             restore_inflight: false,
         };
     };
@@ -1613,10 +1549,6 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
         replicatable: vm.replicatable.load(Ordering::Acquire),
         pause_latched,
         pause_snapshot_ready,
-        prepare_pause_pending: vm.lifecycle_phase.load(Ordering::Acquire)
-            == BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE,
-        lifecycle_ready: vm.lifecycle_phase.load(Ordering::Acquire)
-            == BLUEPRINT_LIFECYCLE_PHASE_READY,
         restore_inflight: vm.restore_inflight.load(Ordering::Acquire),
     }
 }
@@ -1652,108 +1584,8 @@ pub fn app_vm_display_label(vm_id: u8) -> Option<AllocString> {
     }
 }
 
-pub fn default_app_instance_vm(archive: &str) -> Option<u8> {
-    for vm_id in 0..TRUEOS_VM_ID_LIMIT {
-        let vm_id = vm_id as u8;
-        let vm = vm_slot(vm_id)?;
-        if !vm.running.load(Ordering::Acquire)
-            && !vm.starting.load(Ordering::Acquire)
-            && !vm.pause_latched.load(Ordering::Acquire)
-        {
-            continue;
-        }
-        let running_default = BLUEPRINT_LAUNCH_STATES
-            .get(vm_id as usize)
-            .is_some_and(|slot| {
-                let state = slot.lock();
-                state.as_ref().is_some_and(|state| {
-                    state.archive.eq_ignore_ascii_case(archive)
-                        && state.identity.name.is_none()
-                        && state.identity.peer.is_none()
-                })
-            });
-        let pending_default = BLUEPRINT_PENDING_LAUNCH_STATES
-            .get(vm_id as usize)
-            .is_some_and(|slot| {
-                let pending = slot.lock();
-                pending.as_ref().is_some_and(|pending| {
-                    pending.archive.eq_ignore_ascii_case(archive) && pending.instance.is_default()
-                })
-            });
-        if running_default || pending_default {
-            return Some(vm_id);
-        }
-    }
-    None
-}
 
-/// Live named instances of `archive`, as `(vm_id, label)` pairs. The default
-/// instance is excluded: it is the one this archive can only hold once, so the
-/// caller is listing the alternatives that already exist beside it.
-pub fn named_app_instance_vms(archive: &str) -> AllocVec<(u8, AllocString)> {
-    let mut out = AllocVec::new();
-    for vm_id in 0..TRUEOS_VM_ID_LIMIT {
-        let vm_id = vm_id as u8;
-        let Some(vm) = vm_slot(vm_id) else {
-            continue;
-        };
-        if !vm.running.load(Ordering::Acquire)
-            && !vm.starting.load(Ordering::Acquire)
-            && !vm.pause_latched.load(Ordering::Acquire)
-        {
-            continue;
-        }
-        let running_name = BLUEPRINT_LAUNCH_STATES
-            .get(vm_id as usize)
-            .and_then(|slot| {
-                let state = slot.lock();
-                state.as_ref().and_then(|state| {
-                    state
-                        .archive
-                        .eq_ignore_ascii_case(archive)
-                        .then(|| {
-                            named_instance_label(
-                                state.identity.name.as_deref(),
-                                state.identity.peer.as_deref(),
-                            )
-                        })
-                        .flatten()
-                })
-            });
-        let label = running_name.or_else(|| {
-            BLUEPRINT_PENDING_LAUNCH_STATES
-                .get(vm_id as usize)
-                .and_then(|slot| {
-                    let pending = slot.lock();
-                    pending.as_ref().and_then(|pending| {
-                        pending
-                            .archive
-                            .eq_ignore_ascii_case(archive)
-                            .then(|| {
-                                named_instance_label(
-                                    pending.instance.name.as_deref(),
-                                    pending.instance.peer.as_deref(),
-                                )
-                            })
-                            .flatten()
-                    })
-                })
-        });
-        if let Some(label) = label {
-            out.push((vm_id, label));
-        }
-    }
-    out
-}
 
-fn named_instance_label(name: Option<&str>, peer: Option<&str>) -> Option<AllocString> {
-    match (peer, name) {
-        (Some(peer), Some(name)) => Some(alloc::format!("peer:{} / {}", peer, name)),
-        (Some(peer), None) => Some(alloc::format!("peer:{} / unnamed", peer)),
-        (None, Some(name)) => Some(AllocString::from(name)),
-        (None, None) => None,
-    }
-}
 
 fn set_blueprint_lifecycle_capability(vm_id: u8, archive: &str, replicatable: bool) {
     let Some(vm) = vm_slot(vm_id) else {
@@ -1983,7 +1815,7 @@ fn hvlog_console_enabled(level: log_os_core::LogLevel) -> bool {
 
 pub fn status() -> HvStatus {
     let (vendor_intel, has_msr, has_vmx, fc_locked, fc_vmx_outside_smx) = vmx_caps();
-    let (running_count, starting_count, active_vm_ids) = vm_activity_snapshot();
+    let (running_count, starting_count) = vm_activity_snapshot();
     let paused_count = trueos_vm_ids
         .iter()
         .filter(|vm| vm.running.load(Ordering::Acquire) && vm.execution_pause.paused())
@@ -1996,15 +1828,10 @@ pub fn status() -> HvStatus {
         feature_control_locked: fc_locked,
         feature_control_vmx_outside_smx: fc_vmx_outside_smx,
         guest_module_present: crate::limine::guest_kernel_bytes().is_some(),
-        #[cfg(feature = "legacy_vm_checkpoint")]
-        stored_vm_count: crate::hv::store::committed_vm_count(),
-        #[cfg(not(feature = "legacy_vm_checkpoint"))]
-        stored_vm_count: 0,
         vm_id_limit: TRUEOS_VM_ID_LIMIT,
         running_count,
         paused_count,
         starting_count,
-        active_vm_ids,
         vm_shared_heap_total_bytes: vm_heap.usable_total,
         vm_shared_heap_free_bytes: vm_heap.free_bytes,
         vm_shared_stack_bytes: memory::active_guest_stack_bytes_total(),
@@ -2037,10 +1864,6 @@ fn report_shutdown_diagnostics(vm_id: u8) {
     }
 }
 
-pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<(), StartError> {
-    let _ = spawner;
-    start_with_mode(vm_id, VmBootMode::Hull, stack_mb, None, false)
-}
 
 pub fn start_blueprint_app_vm(
     vm_id: u8,
@@ -2379,10 +2202,6 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
     stop_matching_generation(vm_id, None)
 }
 
-/// A displayed slot must not stop a different incarnation after vmid reuse.
-pub(crate) fn stop_for_generation(vm_id: u8, generation: u64) -> Result<bool, StopError> {
-    stop_matching_generation(vm_id, Some(generation))
-}
 
 /// Park the live Hull at a VM-exit boundary. The task, VMCS, VPID, EPT,
 /// native stacks and carrier lease remain owned by the same incarnation.
@@ -2675,13 +2494,6 @@ fn stop_matching_control(
     }
 }
 
-/// Discard a Hull without requesting guest cleanup or a checkpoint. Native
-/// continuations are abandoned only back on their host scheduler stacks; guest
-/// drops/TLS destructors are deliberately skipped. A native call that never
-/// returns/yields cannot be interrupted safely by the current carrier design.
-pub fn kill(vm_id: u8) -> Result<bool, EjectError> {
-    kill_matching_owner(vm_id, None)
-}
 
 pub(crate) fn kill_for_matrix_slot(
     vm_id: u8,
@@ -3291,17 +3103,11 @@ pub fn stage_blueprint_launch(
             trueosfs_scope,
         ),
         console_target,
-        console_surface,
-        console_route,
         console_attached: true,
-        console_attach_generation: 0,
-        console_attach_inflight: false,
         app_command_passthrough,
         terminal_lease: BlueprintTerminalLeaseState::for_surface(console_surface),
-        terminal_surface_generation: 1,
         console_input: VecDeque::new(),
         console_input_since_ms: None,
-        control_shell_line: AllocVec::new(),
         exit_reason: None,
     };
     if let Some(link) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize).and_then(|slot| {
@@ -3428,15 +3234,6 @@ pub(crate) fn blueprint_process_arg(vm_id: u8, index: usize) -> Option<AllocStri
     context.as_ref()?.args.get(index).cloned()
 }
 
-pub(crate) fn blueprint_console_is_terminal(vm_id: u8) -> bool {
-    BLUEPRINT_PROCESS_CONTEXTS
-        .get(vm_id as usize)
-        .is_some_and(|slot| {
-            slot.lock()
-                .as_ref()
-                .is_some_and(|context| context.console_surface.is_terminal())
-        })
-}
 
 pub(crate) fn blueprint_console_target(vm_id: u8) -> Option<crate::shell3::MatrixTarget> {
     let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
@@ -3616,38 +3413,6 @@ pub(crate) fn blueprint_process_file_tree_text(vm_id: u8, requested: &str) -> Op
     ))
 }
 
-fn blueprint_console_hunt_log(vm_id: u8, data: &[u8]) -> bool {
-    const CROSSTERM_HEADER: &str = "[crossterm-resize-probe:INFO] ";
-    const REBELS_NEW_GAME_HEADER: &str = "[rebels-new-game-probe:INFO] ";
-    const REBELS_MULTI_RT_HEADER: &str = "[rebels-multi-rt-probe:INFO] ";
-
-    let Ok(text) = core::str::from_utf8(data) else {
-        return false;
-    };
-    let (purpose, message) = if let Some(message) = text.strip_prefix(CROSSTERM_HEADER) {
-        ("crossterm-resize-probe", message)
-    } else if let Some(message) = text.strip_prefix(REBELS_NEW_GAME_HEADER) {
-        ("rebels-new-game-probe", message)
-    } else if let Some(message) = text.strip_prefix(REBELS_MULTI_RT_HEADER) {
-        ("rebels-multi-rt-probe", message)
-    } else {
-        return false;
-    };
-    let message = message.trim_end_matches(&['\r', '\n'][..]);
-    if purpose == "crossterm-resize-probe" && message == "typed surface change -> resize event" {
-        crate::log_os::blueprint_important_line(format_args!(
-            "terminal-lifecycle: vm={} phase=surface-change state=resize-delivered\n",
-            vm_id
-        ));
-    }
-    crate::log_os::log_with_area_purpose(
-        crate::log_os::flags::LogArea::Blueprint,
-        log_os_core::LogLevel::Info,
-        Some(purpose),
-        format_args!("vm{}: {}\n", vm_id, message),
-    );
-    true
-}
 
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     blueprint_console_text_lines(vm_id, None, data);
@@ -3905,11 +3670,7 @@ fn blueprint_console_request_tui(vm_id: u8) -> BlueprintTerminalReentryRequest {
                 BlueprintTerminalReentryRequest::AlreadyRequested
             }
             BlueprintTerminalLeaseState::Reserved => BlueprintTerminalReentryRequest::NotParked,
-            BlueprintTerminalLeaseState::Claiming { .. } => {
-                BlueprintTerminalReentryRequest::AlreadyRequested
-            }
-            BlueprintTerminalLeaseState::Active { .. }
-            | BlueprintTerminalLeaseState::Releasing { .. } => {
+            BlueprintTerminalLeaseState::Active { .. } => {
                 BlueprintTerminalReentryRequest::NotParked
             }
             BlueprintTerminalLeaseState::Unsupported => {
@@ -3952,12 +3713,6 @@ pub(crate) fn blueprint_terminal_request_reentry(vm_id: u8) -> Result<(), &'stat
     }
 }
 
-fn log_blueprint_terminal_reentry_failed(vm_id: u8, ticket: u64, epoch: u64, reason: &str) {
-    crate::log_os::blueprint_important_line(format_args!(
-        "terminal-lifecycle: vm={} phase=reentry-failed state=terminal ticket={} epoch={} reason={}\n",
-        vm_id, ticket, epoch, reason
-    ));
-}
 
 pub(crate) fn blueprint_terminal_lease_poll_reentry(
     vm_id: u8,
@@ -4009,236 +3764,17 @@ pub(crate) fn blueprint_terminal_lease_poll_reentry(
     Ok(BlueprintTerminalReentryPoll::Ready(epoch))
 }
 
-fn blueprint_console_write_raw_to_target(
-    vm_id: u8,
-    target: Option<&MatrixTarget>,
-    data: &[u8],
-) -> usize {
-    0
-}
 
 fn blueprint_console_text_lines(vm_id: u8, target: Option<&MatrixTarget>, data: &[u8]) {
     crate::log!("blueprint vm{}: {}\n", vm_id, AllocString::from_utf8_lossy(data));
 }
 
-pub(crate) fn blueprint_control_shell_line(vm_id: u8, line: &str) {
-    blueprint_console_print_line(vm_id, line);
-}
 
-fn blueprint_control_shell_write_text(vm_id: u8, text: &str) {
-    let mut wrote = false;
-    for line in text.lines() {
-        blueprint_console_print_line(vm_id, line);
-        wrote = true;
-    }
-    if !wrote {
-        blueprint_console_print_line(vm_id, "");
-    }
-}
 
-fn blueprint_app_command_passthrough_enabled(vm_id: u8) -> bool {
-    BLUEPRINT_PROCESS_CONTEXTS
-        .get(vm_id as usize)
-        .and_then(|slot| {
-            slot.lock().as_ref().map(|context| {
-                context.console_attached
-                    && context
-                        .terminal_lease
-                        .accepts_console_input(context.app_command_passthrough)
-                    && context.app_command_passthrough
-            })
-        })
-        .unwrap_or(false)
-}
 
-fn blueprint_forward_app_command(vm_id: u8, raw: &str) -> bool {
-    const MAX_CONSOLE_INPUT: usize = 64 * 1024;
 
-    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
-        return false;
-    };
-    let mut guard = slot.lock();
-    let Some(context) = guard.as_mut() else {
-        return false;
-    };
-    if !context.console_attached
-        || !context
-            .terminal_lease
-            .accepts_console_input(context.app_command_passthrough)
-        || !context.app_command_passthrough
-    {
-        return false;
-    }
-    for byte in raw.bytes().chain(core::iter::once(b'\n')) {
-        if context.console_input.len() >= MAX_CONSOLE_INPUT {
-            let _ = context.console_input.pop_front();
-        }
-        context.console_input.push_back(byte);
-    }
-    drop(guard);
-    notify_blueprint_console_input(vm_id);
-    true
-}
 
-fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
-    let trimmed = raw.trim();
-    let vmx_command = trimmed.strip_prefix("vmx_");
-    if blueprint_app_command_passthrough_enabled(vm_id) {
-        if let Some(command) = vmx_command {
-            blueprint_control_shell_vmx_command(vm_id, command);
-        } else if !trimmed.is_empty() && !blueprint_forward_app_command(vm_id, trimmed) {
-            blueprint_control_shell_line(vm_id, "vmx-shell: Blueprint command channel unavailable");
-        }
-        return;
-    }
-    let Some(command) = vmx_command else {
-        blueprint_control_shell_line(vm_id, "VMX controls require the `vmx_` prefix");
-        return;
-    };
-    blueprint_control_shell_vmx_command(vm_id, command);
-}
 
-fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
-    let trimmed = raw.trim();
-    let mut words = trimmed.split_whitespace();
-    let cmd = words.next().unwrap_or("");
-    let argument = words.next();
-    let has_extra_arguments = words.next().is_some();
-    match cmd {
-        "" => {}
-        "env" => match blueprint_process_env_text(vm_id) {
-            Some(text) if !text.is_empty() => {
-                blueprint_control_shell_write_text(vm_id, text.as_str())
-            }
-            _ => blueprint_control_shell_line(vm_id, "env: unavailable"),
-        },
-        "smp" => {
-            let state = vm_state(vm_id);
-            blueprint_control_shell_line(
-                vm_id,
-                alloc::format!(
-                    "smp: vm={} running={} starting={} async_jobs=not-wired",
-                    vm_id,
-                    state.running as u8,
-                    state.starting as u8,
-                )
-                .as_str(),
-            );
-        }
-        "help" | "?" => {
-            let text = "VM controls: vmx_tui vmx_env vmx_smp vmx_leave vmx_stop vmx_pause vmx_resume vmx_kill\n\
-                        pause: park execution in RAM; keep the VMX slot\n\
-                        resume: continue the same execution\n\
-                        stop: request cleanup; force discard after the deadline\n\
-                        kill: discard without guest cleanup or a checkpoint";
-            blueprint_control_shell_write_text(vm_id, text);
-        }
-        "tui" => {
-            if blueprint_app_command_passthrough_enabled(vm_id) {
-                blueprint_control_shell_line(
-                    vm_id,
-                    "vmx-shell: terminal TUI disabled for this launch; use Blueprint commands directly",
-                );
-            } else if argument.is_some() {
-                blueprint_control_shell_line(vm_id, "usage: vmx_tui");
-            } else {
-                match blueprint_console_request_tui(vm_id) {
-                    BlueprintTerminalReentryRequest::Requested { epoch, .. } => {
-                        blueprint_control_shell_line(
-                            vm_id,
-                            alloc::format!(
-                                "vmx-shell: terminal reentry requested epoch={epoch}; waiting for Blueprint acknowledgement"
-                            )
-                            .as_str(),
-                        );
-                    }
-                    BlueprintTerminalReentryRequest::AlreadyRequested => {
-                        blueprint_control_shell_line(
-                            vm_id,
-                            "vmx-shell: terminal reentry is already awaiting Blueprint acknowledgement",
-                        );
-                    }
-                    BlueprintTerminalReentryRequest::NotParked => {
-                        blueprint_control_shell_line(
-                            vm_id,
-                            "vmx-shell: the Blueprint terminal UI is already active",
-                        );
-                    }
-                    BlueprintTerminalReentryRequest::Detached => {
-                        blueprint_control_shell_line(
-                            vm_id,
-                            "vmx-shell: the Blueprint console is detached",
-                        );
-                    }
-                    BlueprintTerminalReentryRequest::Unsupported => {
-                        blueprint_control_shell_line(
-                            vm_id,
-                            "vmx-shell: this Blueprint has not implemented the TUI capability; run \"tui demo\" for the built-in terminal UI preview",
-                        );
-                    }
-                }
-            }
-        }
-        "stop" => match stop(vm_id) {
-            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: stop requested"),
-            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
-            Err(err) => blueprint_control_shell_line(
-                vm_id,
-                alloc::format!("vmx-shell: stop failed: {:?}", err).as_str(),
-            ),
-        },
-        "pause" => match pause(vm_id) {
-            Ok(true) => blueprint_control_shell_line(
-                vm_id,
-                "vmx-shell: pause requested; RAM and slot retained",
-            ),
-            Ok(false) => {
-                blueprint_control_shell_line(vm_id, "vmx-shell: pause unavailable in current state")
-            }
-            Err(err) => blueprint_control_shell_line(
-                vm_id,
-                alloc::format!("vmx-shell: pause failed: {:?}", err).as_str(),
-            ),
-        },
-        "resume" => match resume(vm_id) {
-            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: resume requested"),
-            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: VM is not paused"),
-            Err(err) => blueprint_control_shell_line(
-                vm_id,
-                alloc::format!("vmx-shell: resume failed: {:?}", err).as_str(),
-            ),
-        },
-        "kill" => match kill(vm_id) {
-            Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: kill requested"),
-            Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: VM is stopped"),
-            Err(err) => blueprint_control_shell_line(
-                vm_id,
-                alloc::format!("vmx-shell: kill failed: {:?}", err).as_str(),
-            ),
-        },
-        _ => blueprint_control_shell_line(vm_id, "unknown vmx command"),
-    }
-}
-
-pub(crate) fn blueprint_console_submit_control_line(vm_id: u8, line: &str) -> bool {
-    if BLUEPRINT_PROCESS_CONTEXTS
-        .get(vm_id as usize)
-        .and_then(|slot| {
-            slot.lock()
-                .as_ref()
-                // VMX controls must remain callable while a terminal lease is
-                // parked in Shell2. Ordinary Blueprint command passthrough is
-                // still gated by `blueprint_app_command_passthrough_enabled`.
-                .filter(|context| context.console_attached)
-                .map(|_| ())
-        })
-        .is_none()
-    {
-        return false;
-    }
-    blueprint_control_shell_command(vm_id, line);
-    true
-}
 
 pub(crate) fn notify_blueprint_console_input(vm_id: u8) {
     if let Some(signal) = BLUEPRINT_CONSOLE_INPUT_READY.get(vm_id as usize) {
@@ -4260,9 +3796,6 @@ pub(crate) async fn wait_blueprint_console_input(vm_id: u8, timeout_ms: u64) -> 
         .is_ok()
 }
 
-pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
-    blueprint_console_submit_stdin_inner(vm_id, data, None)
-}
 
 pub(crate) fn blueprint_console_submit_stdin_for_target(
     vm_id: u8,
@@ -4339,31 +3872,6 @@ fn blueprint_console_submit_stdin_inner(
     data.len()
 }
 
-pub(crate) fn blueprint_console_submit_text_app_line(vm_id: u8, line: &str) -> bool {
-    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
-        return false;
-    };
-    let mut guard = slot.lock();
-    let Some(context) = guard.as_mut() else {
-        return false;
-    };
-    if !context.console_attached
-        || context.console_surface != BlueprintConsoleSurface::Text
-        || !context.app_command_passthrough
-    {
-        return false;
-    }
-    const MAX_CONSOLE_INPUT: usize = 64 * 1024;
-    for byte in line.bytes().chain(core::iter::once(b'\n')) {
-        if context.console_input.len() >= MAX_CONSOLE_INPUT {
-            let _ = context.console_input.pop_front();
-        }
-        context.console_input.push_back(byte);
-    }
-    drop(guard);
-    notify_blueprint_console_input(vm_id);
-    true
-}
 
 pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
     let mut byte = [0u8; 1];
@@ -4460,13 +3968,6 @@ fn suspend_blueprint_process_context(vm_id: u8) {
     }
 }
 
-fn resume_blueprint_process_context(vm_id: u8) {
-    if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
-        if let Some(context) = slot.lock().as_mut() {
-            context.console_attached = false;
-        }
-    }
-}
 
 pub(crate) fn blueprint_launch_states_span() -> (u64, usize) {
     (

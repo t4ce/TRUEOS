@@ -82,12 +82,7 @@ static AVC_NORESET_LITE_ENABLED: AtomicBool = AtomicBool::new(false);
 static AVC_NORESET_LITE_RESET_DONE: AtomicBool = AtomicBool::new(false);
 static AVC_NORESET_LITE_STATIC_CLEAR_DONE: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn set_avc_noreset_lite_enabled(enabled: bool) -> bool {
-    let old = AVC_NORESET_LITE_ENABLED.swap(enabled, Ordering::AcqRel);
-    AVC_NORESET_LITE_RESET_DONE.store(false, Ordering::Release);
-    AVC_NORESET_LITE_STATIC_CLEAR_DONE.store(false, Ordering::Release);
-    old
-}
+
 
 fn avc_noreset_lite_enabled() -> bool {
     AVC_NORESET_LITE_ENABLED.load(Ordering::Acquire)

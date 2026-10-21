@@ -447,19 +447,7 @@ impl GpgpuArtifactAdmissionError {
     }
 }
 
-/// Pure admission check used immediately before DMA allocation.
-///
-/// A filesystem override deliberately has no weaker policy than an embedded
-/// artifact: until signed external manifests exist, its bytes must match the
-/// build-generated allowlist exactly.
-pub(crate) fn admit_kernel_artifact_bytes(
-    artifact: GpgpuKernelArtifact,
-    device_id: u16,
-    revision_id: u8,
-    bin: &[u8],
-) -> Result<[u8; 32], GpgpuArtifactAdmissionError> {
-    admit_kernel_artifact_payloads(artifact, device_id, revision_id, bin, artifact.spv)
-}
+
 
 /// Apply the same target, hash, ABI and ELF checks to externally supplied payloads.
 fn admit_kernel_artifact_payloads(

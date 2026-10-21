@@ -1,12 +1,5 @@
 
-fn direct_rcs_write_sprite_quad_worklist_interface_descriptor(state: DirectRcsState) -> bool {
-    direct_rcs_write_rect_worklist_interface_descriptor(
-        state,
-        SPRITE_QUAD_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
-        3,
-        SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS,
-    )
-}
+
 
 fn direct_rcs_write_sprite_quad_worklist_interface_descriptor_at(
     state: DirectRcsState,
@@ -23,21 +16,7 @@ fn direct_rcs_write_sprite_quad_worklist_interface_descriptor_at(
     )
 }
 
-fn direct_rcs_write_rect_worklist_interface_descriptor(
-    state: DirectRcsState,
-    text_offset_bytes: u64,
-    binding_table_entries: u32,
-    cross_thread_grfs: u32,
-) -> bool {
-    direct_rcs_write_rect_worklist_interface_descriptor_at(
-        state,
-        RECT_WORKLIST_IDD_OFFSET_BYTES,
-        RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES,
-        text_offset_bytes,
-        binding_table_entries,
-        cross_thread_grfs,
-    )
-}
+
 
 fn direct_rcs_write_rect_worklist_interface_descriptor_at(
     state: DirectRcsState,
@@ -67,47 +46,7 @@ fn direct_rcs_write_rect_worklist_interface_descriptor_at(
     true
 }
 
-fn direct_rcs_write_destination_worklist_surface_states(
-    state: DirectRcsState,
-    dst_gpu: u64,
-    dst_bytes: usize,
-    desc_gpu: u64,
-    desc_bytes: usize,
-) -> bool {
-    let binding_end = RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES + 2 * core::mem::size_of::<u32>();
-    let surface_bytes = COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();
-    let dst_surface_end = RECT_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
-    let desc_surface_end = RECT_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES + surface_bytes;
-    if binding_end > DIRECT_RCS_BATCH_BYTES
-        || dst_surface_end > DIRECT_RCS_BATCH_BYTES
-        || desc_surface_end > DIRECT_RCS_BATCH_BYTES
-    {
-        return false;
-    }
 
-    unsafe {
-        let binding = state
-            .batch_virt
-            .add(RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
-        core::ptr::write_volatile(binding, RECT_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES as u32);
-        core::ptr::write_volatile(
-            binding.add(1),
-            RECT_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES as u32,
-        );
-    }
-
-    direct_rcs_write_buffer_surface_state(
-        state,
-        RECT_WORKLIST_DST_SURFACE_STATE_OFFSET_BYTES,
-        dst_gpu,
-        dst_bytes,
-    ) && direct_rcs_write_buffer_surface_state(
-        state,
-        RECT_WORKLIST_DESC_SURFACE_STATE_OFFSET_BYTES,
-        desc_gpu,
-        desc_bytes,
-    )
-}
 
 fn direct_rcs_write_alpha_blend_worklist_surface_states(
     state: DirectRcsState,

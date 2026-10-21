@@ -1,6 +1,6 @@
 extern crate alloc;
 
-include!("../cabi_codes.rs");
+pub use crate::r::cabi_codes::*;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;

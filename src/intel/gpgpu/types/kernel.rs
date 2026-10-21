@@ -25,6 +25,46 @@ pub(crate) struct GpgpuActivitySnapshot {
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct CopyRectRgba8Params {
     pub(crate) src_gpu: u64,
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct ChartSineRgba8Params {
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct PixelPlasmaRgba8Params {
+    pub(crate) dst_gpu: u64,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_width: u32,
+    pub(crate) dst_height: u32,
+    pub(crate) rect_x: u32,
+    pub(crate) rect_y: u32,
+    pub(crate) rect_width: u32,
+    pub(crate) rect_height: u32,
+    pub(crate) time: f32,
+    pub(crate) spatial_scale: f32,
+    pub(crate) intensity: f32,
+    pub(crate) low_rgba: u32,
+    pub(crate) mid_rgba: u32,
+    pub(crate) high_rgba: u32,
+    pub(crate) flags: u32,
+}
+    pub(crate) dst_gpu: u64,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_width: u32,
+    pub(crate) dst_height: u32,
+    pub(crate) rect_x: u32,
+    pub(crate) rect_y: u32,
+    pub(crate) rect_width: u32,
+    pub(crate) rect_height: u32,
+    pub(crate) phase: f32,
+    pub(crate) cycles: f32,
+    pub(crate) amplitude: f32,
+    pub(crate) line_width_px: f32,
+    pub(crate) background_rgba: u32,
+    pub(crate) minor_grid_rgba: u32,
+    pub(crate) major_grid_rgba: u32,
+    pub(crate) axis_rgba: u32,
+    pub(crate) line_rgba: u32,
+    pub(crate) glow_rgba: u32,
+    pub(crate) flags: u32,
+}
     pub(crate) dst_gpu: u64,
     pub(crate) src_pitch_bytes: u32,
     pub(crate) dst_pitch_bytes: u32,
@@ -58,24 +98,9 @@ pub(crate) struct Ui4Nv12Tile64ToRgba8FrameParams {
     pub(crate) colorimetry: u32,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Mandel64WorklistRgba8Desc {
-    pub(crate) src_xy: u32,
-    pub(crate) dst_xy: u32,
-    pub(crate) flags: u32,
-    pub(crate) color_rgba: u32,
-}
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Mandel64WorklistRgba8Params {
-    pub(crate) dst_gpu: u64,
-    pub(crate) desc_gpu: u64,
-    pub(crate) dst_pitch_bytes: u32,
-    pub(crate) desc_base: u32,
-    pub(crate) desc_count: u32,
-}
+
+
 
 /// One axis-aligned premultiplied RGBA source in the stable UI4 compositor
 /// contract.  Unlike the exploratory sprite worklist, every layer in a frame
@@ -129,7 +154,6 @@ struct Ui4ComposeLayersParams {
 }
 
 pub(crate) const UI4_COMPOSE_FLAG_BASE_XRGB: u32 = 1 << 0;
-pub(crate) const UI4_COMPOSE_FLAG_DEST_XRGB: u32 = 1 << 1;
 /// Slot0 owns rectangular window visibility, not source-alpha blending between
 /// windows.  The compositor chooses the topmost covering frame and writes its
 /// already-authored RGBA pixel once; transparent pixels then belong to the
@@ -163,94 +187,16 @@ pub(crate) struct SkyboxSampleRgb565Params {
     pub(crate) tan_half_fov_y: f32,
 }
 
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct ChartSineRgba8Params {
-    pub(crate) dst_gpu: u64,
-    pub(crate) dst_pitch_bytes: u32,
-    pub(crate) dst_width: u32,
-    pub(crate) dst_height: u32,
-    pub(crate) rect_x: u32,
-    pub(crate) rect_y: u32,
-    pub(crate) rect_width: u32,
-    pub(crate) rect_height: u32,
-    pub(crate) phase: f32,
-    pub(crate) cycles: f32,
-    pub(crate) amplitude: f32,
-    pub(crate) line_width_px: f32,
-    pub(crate) background_rgba: u32,
-    pub(crate) minor_grid_rgba: u32,
-    pub(crate) major_grid_rgba: u32,
-    pub(crate) axis_rgba: u32,
-    pub(crate) line_rgba: u32,
-    pub(crate) glow_rgba: u32,
-    pub(crate) flags: u32,
-}
+
 
 impl ChartSineRgba8Params {
-    pub(crate) const fn scope_defaults(phase: f32, flags: u32) -> Self {
-        Self {
-            dst_gpu: 0,
-            dst_pitch_bytes: 0,
-            dst_width: 0,
-            dst_height: 0,
-            rect_x: 0,
-            rect_y: 0,
-            rect_width: 0,
-            rect_height: 0,
-            phase,
-            cycles: 3.0,
-            amplitude: 0.34,
-            line_width_px: 2.25,
-            background_rgba: 0xFF1F_1107,
-            minor_grid_rgba: 0xFF3C_2610,
-            major_grid_rgba: 0xFF63_451E,
-            axis_rgba: 0xFF98_7D62,
-            line_rgba: 0xFFE3_FF86,
-            glow_rgba: 0xFFE8_D718,
-            flags,
-        }
-    }
+    
 }
 
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct PixelPlasmaRgba8Params {
-    pub(crate) dst_gpu: u64,
-    pub(crate) dst_pitch_bytes: u32,
-    pub(crate) dst_width: u32,
-    pub(crate) dst_height: u32,
-    pub(crate) rect_x: u32,
-    pub(crate) rect_y: u32,
-    pub(crate) rect_width: u32,
-    pub(crate) rect_height: u32,
-    pub(crate) time: f32,
-    pub(crate) spatial_scale: f32,
-    pub(crate) intensity: f32,
-    pub(crate) low_rgba: u32,
-    pub(crate) mid_rgba: u32,
-    pub(crate) high_rgba: u32,
-    pub(crate) flags: u32,
-}
+
 
 impl PixelPlasmaRgba8Params {
-    pub(crate) const fn demo_defaults(time: f32, flags: u32) -> Self {
-        Self {
-            dst_gpu: 0,
-            dst_pitch_bytes: 0,
-            dst_width: 0,
-            dst_height: 0,
-            rect_x: 0,
-            rect_y: 0,
-            rect_width: 0,
-            rect_height: 0,
-            time,
-            spatial_scale: 1.0,
-            intensity: 1.0,
-            low_rgba: 0xFF24_0A08,
-            mid_rgba: 0xFFE6_D214,
-            high_rgba: 0xFF2D_55FF,
-            flags,
-        }
-    }
+    
 }
 
 pub(crate) const CPP_DEMO_MODE_GALLERY: u32 = 0;
@@ -315,27 +261,9 @@ struct CppAudioVisualizerRgba8Params {
     flags: u32,
 }
 
-#[derive(Copy, Clone, Debug)]
-struct FontOutlineCoverageR8Params {
-    ops_gpu: u64,
-    mask_gpu: u64,
-    op_count: u32,
-    subdivisions: u32,
-    mask_pitch_bytes: u32,
-    mask_width: u32,
-    mask_height: u32,
-    rect_x: u32,
-    rect_y: u32,
-    rect_width: u32,
-    rect_height: u32,
-    optical_bias_px: f32,
-}
 
-#[derive(Copy, Clone, Debug)]
-struct FontOutlineCoverageR8BatchRun {
-    params: FontOutlineCoverageR8Params,
-    ops_bytes: usize,
-}
+
+
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct FillRect2dDispatch {

@@ -7,7 +7,6 @@
 pub(crate) const GPGPU_KERNEL_ABI_SCHEMA_VERSION: u16 = 2;
 
 pub(crate) const GPGPU_ADLS_4680_PCI_DEVICE_IDS: &[u16] = &[0x4680];
-
 pub(crate) const GPGPU_ADLS_4680_TARGET: GpgpuKernelTarget = GpgpuKernelTarget {
     label: "adls",
     pci_device_ids: GPGPU_ADLS_4680_PCI_DEVICE_IDS,

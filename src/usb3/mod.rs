@@ -297,15 +297,7 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
 }
 
 #[allow(non_snake_case)]
-async fn USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(host: &mut crabusb::USBHost) {
-    let started = trueos_time::Instant::now();
-    let budget =
-        trueos_time::Duration::from_millis(crate::allcaps::usb::CONTROLLER_MAINTENANCE_BUDGET_MS);
-    while lab::service_one(host).await {
-        if trueos_time::Instant::now().duration_since(started) >= budget {
-            break;
-        }
-    }
+async fn USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(_host: &mut crabusb::USBHost) {
     trueos_time::Timer::after(trueos_time::Duration::from_millis(
         crate::allcaps::usb::CONTROLLER_MAINTENANCE_CADENCE_MS,
     ))

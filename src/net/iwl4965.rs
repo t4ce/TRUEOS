@@ -99,26 +99,18 @@ const CSR_RESET: u32 = 0x020;
 const CSR_GP_CNTRL: u32 = 0x024;
 const CSR_HW_REV: u32 = 0x028;
 const CSR_EEPROM_REG: u32 = 0x02C;
-const CSR_EEPROM_GP: u32 = 0x030;
 const CSR_UCODE_DRV_GP1: u32 = 0x054;
-const CSR_UCODE_DRV_GP1_SET: u32 = 0x058;
 const CSR_UCODE_DRV_GP1_CLR: u32 = 0x05C;
-const CSR_UCODE_DRV_GP2: u32 = 0x060;
-const CSR_GIO_REG: u32 = 0x03C;
 const CSR_GP_UCODE: u32 = 0x048;
-const CSR_GP_DRIVER: u32 = 0x050;
 
 // GP_CNTRL bits
 const CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY: u32 = 1 << 0;
 const CSR_GP_CNTRL_REG_FLAG_INIT_DONE: u32 = 1 << 2;
 const CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ: u32 = 1 << 3;
-const CSR_GP_CNTRL_REG_FLAG_GOING_TO_SLEEP: u32 = 1 << 4;
 const CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN: u32 = 1 << 0; // Same as MAC_CLOCK_READY per Linux iwlegacy
-const CSR_GP_CNTRL_REG_FLAG_XTAL_ON: u32 = 1 << 10;
 
 // RESET bits
 const CSR_RESET_REG_FLAG_NEVO_RESET: u32 = 1 << 0;
-const CSR_RESET_REG_FLAG_FORCE_NMI: u32 = 1 << 1;
 const CSR_RESET_REG_FLAG_SW_RESET: u32 = 1 << 7;
 const CSR_RESET_REG_FLAG_MASTER_DISABLED: u32 = 1 << 8;
 const CSR_RESET_REG_FLAG_STOP_MASTER: u32 = 1 << 9;
@@ -126,15 +118,9 @@ const CSR_RESET_REG_FLAG_STOP_MASTER: u32 = 1 << 9;
 // EEPROM access
 const CSR_EEPROM_REG_READ_VALID_MSK: u32 = 1 << 0;
 const CSR_EEPROM_REG_BIT_CMD: u32 = 1 << 1;
-const CSR_EEPROM_REG_MSK_ADDR: u32 = 0x0000FFFC;
 
 // HW revision
 const CSR_HW_REV_TYPE_MSK: u32 = 0x000FFF0;
-const CSR_HW_REV_TYPE_4965: u32 = 0x0000000;
-const CSR_HW_REV_TYPE_5300: u32 = 0x0000020;
-const CSR_HW_REV_TYPE_5100: u32 = 0x0000050;
-const CSR_HW_REV_TYPE_5150: u32 = 0x0000040;
-const CSR_HW_REV_TYPE_6000: u32 = 0x0000070;
 
 // ============================================================================
 // BSM (Bootstrap State Machine) Registers — firmware loading
@@ -157,25 +143,10 @@ const BSM_WR_CTRL_START_EN: u32 = 1 << 30;
 // FH (Frame Handler) Registers — DMA TX/RX
 // ============================================================================
 
-/// Base of TX channel configuration registers
-const FH_TCSR_BASE: u32 = 0x1D00;
-const FH_TCSR_CHNL_OFFSET: u32 = 0x20;
-/// Service channel (firmware loading)
-const FH_SRVC_CHNL: u32 = 9;
-/// TX config register flags
-const FH_TCSR_TX_CONFIG_REG_VAL_DMA_CHNL_ENABLE: u32 = 0x80000000;
 
-/// RX configuration
-const FH_MEM_RCSR_CHNL0: u32 = 0x1F40;
-/// RX status
-const FH_RSSR_STATUS: u32 = 0x1C44;
-/// RX write pointer
-const FH_RSCSR_CHNL0_WPTR: u32 = 0x1BC0;
 
 /// Number of RX buffers
 const RX_QUEUE_SIZE: usize = 256;
-/// Number of TX descriptors
-const TX_QUEUE_SIZE: usize = 256;
 /// RX buffer size
 const RX_BUF_SIZE: usize = 4096;
 
@@ -187,11 +158,9 @@ const REPLY_ALIVE: u8 = 0x01;
 const REPLY_ERROR: u8 = 0x02;
 const REPLY_RXON: u8 = 0x10;
 const REPLY_RXON_ASSOC: u8 = 0x11;
-const REPLY_QOS_PARAM: u8 = 0x13;
 const REPLY_SCAN_CMD: u8 = 0x80;
 const REPLY_SCAN_COMPLETE: u8 = 0x84;
 const REPLY_TX: u8 = 0x1C;
-const REPLY_ADD_STA: u8 = 0x18;
 
 /// Firmware notification: scan results
 const SCAN_RESULTS_NOTIFICATION: u8 = 0x83;
@@ -213,7 +182,6 @@ struct IwlUcodeHeader {
 
 /// Parsed firmware sections
 struct IwlFirmware {
-    version: u32,
     /// Runtime instruction code (loaded after init completes)
     inst: Vec<u8>,
     /// Runtime data
@@ -229,11 +197,6 @@ struct IwlFirmware {
 /// Global WiFi firmware data (set from Limine module or RamFS)
 static WIFI_FIRMWARE: spin::Mutex<Option<Vec<u8>>> = spin::Mutex::new(None);
 
-/// Store WiFi firmware data for later loading by the driver
-pub fn set_firmware_data(data: &[u8]) {
-    crate::log!("iwl4965: Firmware data available: {} bytes", data.len());
-    *WIFI_FIRMWARE.lock() = Some(data.to_vec());
-}
 
 /// Check if firmware data is available
 pub fn has_firmware() -> bool {
@@ -283,8 +246,6 @@ const FH_RCSR_RX_CONFIG_RBDCB_SIZE_POS: u32 = 20; // position of log2(queue_size
 
 /// HBUS target memory access (for direct SRAM writes)
 const HBUS_TARG_MEM_RADDR: u32 = 0x40C;
-const HBUS_TARG_MEM_WADDR: u32 = 0x410;
-const HBUS_TARG_MEM_WDAT: u32 = 0x418;
 const HBUS_TARG_MEM_RDAT: u32 = 0x41C;
 
 /// HBUS peripheral register access (indirect to PRPH bus)
@@ -300,10 +261,7 @@ const HBUS_TARG_WRPTR: u32 = 0x460;
 // APMG (Advanced Power Management) — PRPH bus registers
 // ============================================================================
 
-const APMG_CLK_CTRL_REG: u32 = 0x3000;
 const APMG_CLK_EN_REG: u32 = 0x3004;
-const APMG_CLK_DIS_REG: u32 = 0x3008;
-const APMG_PS_CTRL_REG: u32 = 0x300C;
 const APMG_PCIDEV_STT_REG: u32 = 0x3010;
 
 const APMG_CLK_VAL_DMA_CLK_RQT: u32 = 0x0000_0200;
@@ -320,8 +278,6 @@ const CSR_HW_IF_CONFIG_REG_BIT_NIC_READY: u32 = 0x0040_0000;
 // BSM SRAM lower bound (target address for bootstrap code in NIC SRAM)
 const BSM_SRAM_LOWER_BOUND: u32 = 0x3800;
 
-/// Scheduler SRAM registers (PRPH bus)
-const SCD_SRAM_BASE_ADDR: u32 = 0x2E00;
 const SCD_TXFACT: u32 = 0x2D00;
 
 /// Transfer Buffer — describes one fragment of a DMA transfer
@@ -360,12 +316,6 @@ impl IwlTfd {
         }
     }
 
-    fn num_tbs(&self) -> usize {
-        // TBS count is stored in the reserved area for 4965
-        let ptr = self.__reserved.as_ptr() as *const u32;
-        let val = unsafe { core::ptr::read_unaligned(ptr) };
-        (val & 0x1F) as usize
-    }
 
     fn set_num_tbs(&mut self, count: usize) {
         let ptr = self.__reserved.as_mut_ptr() as *mut u32;
@@ -395,8 +345,6 @@ struct TxQueue {
     cmd_buffers: Vec<Vec<u8>>,
     /// Write pointer (next TFD to fill)
     write_ptr: usize,
-    /// Read pointer (next TFD the device will process)
-    read_ptr: usize,
 }
 
 impl TxQueue {
@@ -414,7 +362,6 @@ impl TxQueue {
             tfds,
             cmd_buffers,
             write_ptr: 0,
-            read_ptr: 0,
         }
     }
 
@@ -433,8 +380,6 @@ struct RxQueue {
     /// Shared status area — device writes the current write pointer here via DMA
     /// We read rb_stts[0] (u32, little-endian) to see which RX buffers are filled
     rb_stts: Vec<u8>,
-    /// Write pointer (driver advances after allocating new buffers)
-    write_ptr: usize,
     /// Read pointer (driver reads processed buffers here)
     read_ptr: usize,
 }
@@ -460,7 +405,6 @@ impl RxQueue {
             bd,
             buffers,
             rb_stts,
-            write_ptr: 0,
             read_ptr: 0,
         }
     }
@@ -477,20 +421,16 @@ impl RxQueue {
 
 const EEPROM_MAC_ADDRESS: u16 = 0x0015;
 const EEPROM_SKU_CAP: u16 = 0x0045;
-const EEPROM_CHANNELS_2G: u16 = 0x0062; // 2.4 GHz channel data start
-const EEPROM_CHANNELS_5G: u16 = 0x0080; // 5 GHz channel data start
+ // 2.4 GHz channel data start
+ // 5 GHz channel data start
 
 // ============================================================================
 // 802.11 Frame Types for Scanning
 // ============================================================================
 
-const IEEE80211_FTYPE_MGMT: u16 = 0x0000;
-const IEEE80211_STYPE_BEACON: u16 = 0x0080;
-const IEEE80211_STYPE_PROBE_RESP: u16 = 0x0050;
 
 // Information Element IDs
 const WLAN_EID_SSID: u8 = 0;
-const WLAN_EID_DS_PARAMS: u8 = 3;
 const WLAN_EID_RSN: u8 = 48; // WPA2
 const WLAN_EID_VENDOR: u8 = 221; // WPA (via Microsoft OUI)
 
@@ -649,16 +589,6 @@ impl Iwl4965 {
         val
     }
 
-    /// Write to NIC SRAM via HBUS target memory access
-    fn write_targ_mem(&self, addr: u32, val: u32) {
-        if !self.grab_nic_access() {
-            crate::log!("iwl4965: write_targ_mem FAILED: no NIC access for {:#X}", addr);
-            return;
-        }
-        self.write_reg(HBUS_TARG_MEM_WADDR, addr);
-        self.write_reg(HBUS_TARG_MEM_WDAT, val);
-        self.release_nic_access();
-    }
 
     // ── Hardware Init ────────────────────────────────────────────
 
@@ -942,7 +872,6 @@ impl Iwl4965 {
         let boot = data[off..off + boot_size].to_vec();
 
         Ok(IwlFirmware {
-            version: ver,
             inst,
             data: data_sec,
             init_inst,
@@ -1387,7 +1316,6 @@ impl Iwl4965 {
     /// Wait for firmware ALIVE notification
     fn wait_alive(&mut self) -> Result<(), &'static str> {
         const CSR_INT_BIT_ALIVE: u32 = 1 << 0;
-        const CSR_INT_BIT_RF_KILL: u32 = 1 << 7;
         const CSR_INT_BIT_FH_RX: u32 = 1 << 26;
         const CSR_INT_BIT_HW_ERR: u32 = 1 << 29;
 
@@ -2493,13 +2421,7 @@ impl WifiDriver for Iwl4965 {
         self.connected_ssid.clone()
     }
 
-    fn current_channel(&self) -> Option<u8> {
-        if self.current_channel > 0 {
-            Some(self.current_channel)
-        } else {
-            None
-        }
-    }
+    
 
     fn signal_strength(&self) -> Option<i8> {
         if self.wifi_state == WifiState::Connected {
@@ -2559,352 +2481,19 @@ pub fn probe(pci_dev: &PciDevice) -> Option<Box<dyn WifiDriver>> {
     }
 }
 
-/// Live debug: dump CSR registers and driver state from the active WiFi driver.
-/// Called via `wifi debug` or `drv test wifi` — no recompile needed to read HW state.
-pub fn debug_dump() {
-    use super::wifi::WIFI_DRIVER;
-    let guard = WIFI_DRIVER.lock();
-    if let Some(ref driver) = *guard {
-        // Downcast to Iwl4965 — we know it's the only WiFi driver
-        let info = driver.info();
-        crate::log!("  Driver:     {}\n", info.name);
-        crate::log!("  Status:     {:?}\n", driver.status());
-        crate::log!("  WiFi state: {:?}\n", driver.wifi_state());
-        if let Some(ssid) = driver.connected_ssid() {
-            crate::log!("  SSID:       {}\n", ssid);
-        }
-        if let Some(ch) = driver.current_channel() {
-            crate::log!("  Channel:    {}\n", ch);
-        }
-        if let Some(dbm) = driver.signal_strength() {
-            crate::log!("  Signal:     {} dBm\n", dbm);
-        }
-    } else {
-        crate::log!("  No WiFi driver loaded\n");
-    }
 
-    crate::log!(
-        "  Firmware:   {}\n",
-        if has_firmware() {
-            "available"
-        } else {
-            "NOT loaded"
-        }
-    );
-    if let Some(ref fw) = *WIFI_FIRMWARE.lock() {
-        crate::log!("  FW size:    {} bytes\n", fw.len());
-    }
-}
 
-/// Live debug: read a CSR register — works even without an active driver.
-/// Scans PCI for Intel WiFi, maps BAR0, reads the register.
-pub fn debug_read_csr(offset: u32) -> Option<u32> {
-    // Safety: limit offset to 8KB (IWL4965 MMIO region)
-    if offset >= 0x2000 {
-        return None;
-    }
-    // Find the WiFi device on PCI bus
-    let found = crate::pci::with_devices(|devices| {
-        devices
-            .iter()
-            .copied()
-            .find(|dev| dev.vendor_id == INTEL_VENDOR && IWL_SUPPORTED_IDS.contains(&dev.device_id))
-    });
-    if let Some(dev) = found {
-        if dev.vendor_id == INTEL_VENDOR && IWL_SUPPORTED_IDS.contains(&dev.device_id) {
-            let (bar_lo, _) = crate::pci::read_bar_raw(dev.bus, dev.slot, dev.function, 0);
-            if bar_lo == 0 || (bar_lo & 0x1) != 0 {
-                return None;
-            }
-            let phys = dev.bar_address(0)?;
-            if phys == 0 {
-                return None;
-            }
-            // Map MMIO region via HHDM page tables before access
-            let virt = match map_mmio(phys, 0x2000) {
-                Ok(v) => v,
-                Err(_) => return None,
-            };
-            unsafe {
-                let ptr = (virt + offset as usize) as *const u32;
-                return Some(core::ptr::read_volatile(ptr));
-            }
-        }
-    }
-    None
-}
-
-/// Live debug: dump key CSR registers of the Intel WiFi card
-pub fn debug_dump_csrs() {
-    let regs: &[(&str, u32)] = &[
-        ("HW_IF_CONFIG", CSR_HW_IF_CONFIG),
-        ("INT", CSR_INT),
-        ("INT_MASK", CSR_INT_MASK),
-        ("FH_INT_STATUS", CSR_FH_INT_STATUS),
-        ("GPIO_IN", CSR_GPIO_IN),
-        ("RESET", CSR_RESET),
-        ("GP_CNTRL", CSR_GP_CNTRL),
-        ("HW_REV", CSR_HW_REV),
-        ("EEPROM_REG", CSR_EEPROM_REG),
-        ("EEPROM_GP", CSR_EEPROM_GP),
-        ("UCODE_DRV_GP1", CSR_UCODE_DRV_GP1),
-        ("UCODE_DRV_GP2", CSR_UCODE_DRV_GP2),
-        ("GIO_REG", CSR_GIO_REG),
-        ("GP_UCODE", CSR_GP_UCODE),
-        ("GP_DRIVER", CSR_GP_DRIVER),
-    ];
-
-    for (name, offset) in regs {
-        match debug_read_csr(*offset) {
-            Some(val) => crate::log!("  CSR {:<16} [0x{:03X}] = 0x{:08X}\n", name, offset, val),
-            None => crate::log!("  CSR {:<16} [0x{:03X}] = <unavailable>\n", name, offset),
-        }
-    }
-}
 
 // ============================================================================
 // Live Debug API — no recompile needed, called from shell commands
 // ============================================================================
 
-/// Get MMIO virtual base for the WiFi NIC (maps if needed)
-fn debug_get_mmio() -> Option<usize> {
-    let found = crate::pci::with_devices(|devices| {
-        devices
-            .iter()
-            .copied()
-            .find(|dev| dev.vendor_id == INTEL_VENDOR && IWL_SUPPORTED_IDS.contains(&dev.device_id))
-    });
-    if let Some(dev) = found {
-        if dev.vendor_id == INTEL_VENDOR && IWL_SUPPORTED_IDS.contains(&dev.device_id) {
-            let (bar_lo, _) = crate::pci::read_bar_raw(dev.bus, dev.slot, dev.function, 0);
-            if bar_lo == 0 || (bar_lo & 0x1) != 0 {
-                return None;
-            }
-            let phys = dev.bar_address(0)?;
-            if phys == 0 {
-                return None;
-            }
-            return map_mmio(phys, 0x2000).ok();
-        }
-    }
-    None
-}
 
-fn debug_reg_read(base: usize, offset: u32) -> u32 {
-    unsafe { core::ptr::read_volatile((base + offset as usize) as *const u32) }
-}
 
-fn debug_reg_write(base: usize, offset: u32, val: u32) {
-    unsafe {
-        core::ptr::write_volatile((base + offset as usize) as *mut u32, val);
-    }
-}
 
-/// Write a CSR register live (no driver needed)
-pub fn debug_write_csr(offset: u32, val: u32) -> bool {
-    if offset >= 0x2000 {
-        return false;
-    }
-    if let Some(base) = debug_get_mmio() {
-        debug_reg_write(base, offset, val);
-        true
-    } else {
-        false
-    }
-}
 
-/// Read a peripheral (PRPH) register via HBUS (no driver needed)
-pub fn debug_read_prph(addr: u32) -> Option<u32> {
-    let base = debug_get_mmio()?;
-    debug_reg_write(base, HBUS_TARG_PRPH_RADDR, (addr & 0x000F_FFFF) | (3 << 24));
-    Some(debug_reg_read(base, HBUS_TARG_PRPH_RDAT))
-}
 
-/// Write a peripheral (PRPH) register via HBUS (no driver needed)
-pub fn debug_write_prph(addr: u32, val: u32) -> bool {
-    if let Some(base) = debug_get_mmio() {
-        debug_reg_write(base, HBUS_TARG_PRPH_WADDR, (addr & 0x000F_FFFF) | (3 << 24));
-        debug_reg_write(base, HBUS_TARG_PRPH_WDAT, val);
-        true
-    } else {
-        false
-    }
-}
 
-/// Live APM init — can be called from shell without recompile
-pub fn debug_apm_init() -> Result<(), &'static str> {
-    let base = debug_get_mmio().ok_or("No MMIO")?;
 
-    crate::log!("  [1] Setting NIC_READY...\n");
-    let hic = debug_reg_read(base, CSR_HW_IF_CONFIG);
-    debug_reg_write(base, CSR_HW_IF_CONFIG, hic | CSR_HW_IF_CONFIG_REG_BIT_NIC_READY);
-    for _ in 0..5000u32 {
-        if debug_reg_read(base, CSR_HW_IF_CONFIG) & CSR_HW_IF_CONFIG_REG_BIT_NIC_READY != 0 {
-            break;
-        }
-        for _ in 0..1000 {
-            core::hint::spin_loop();
-        }
-    }
-    let nic_ready =
-        debug_reg_read(base, CSR_HW_IF_CONFIG) & CSR_HW_IF_CONFIG_REG_BIT_NIC_READY != 0;
-    crate::log!("      NIC_READY = {}\n", if nic_ready { "YES" } else { "NO" });
 
-    crate::log!("  [2] GIO chicken bits (disable L0s timer)...\n");
-    let gio = debug_reg_read(base, CSR_GIO_CHICKEN_BITS);
-    debug_reg_write(
-        base,
-        CSR_GIO_CHICKEN_BITS,
-        gio | CSR_GIO_CHICKEN_BITS_REG_BIT_DIS_L0S_EXIT_TIMER,
-    );
 
-    crate::log!("  [3] Setting INIT_DONE...\n");
-    let gp = debug_reg_read(base, CSR_GP_CNTRL);
-    debug_reg_write(base, CSR_GP_CNTRL, gp | CSR_GP_CNTRL_REG_FLAG_INIT_DONE);
-
-    crate::log!("  [4] Polling MAC clock...\n");
-    for i in 0..25000u32 {
-        let val = debug_reg_read(base, CSR_GP_CNTRL);
-        if val & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
-            crate::log!("      MAC clock READY after {} iters (GP={:#010X})\n", i, val);
-
-            crate::log!("  [5] Enabling APMG DMA+BSM clocks...\n");
-            // write_prph(APMG_CLK_EN_REG, DMA|BSM)
-            debug_reg_write(
-                base,
-                HBUS_TARG_PRPH_WADDR,
-                (APMG_CLK_EN_REG & 0x000F_FFFF) | (3 << 24),
-            );
-            debug_reg_write(
-                base,
-                HBUS_TARG_PRPH_WDAT,
-                APMG_CLK_VAL_DMA_CLK_RQT | APMG_CLK_VAL_BSM_CLK_RQT,
-            );
-            for _ in 0..20_000 {
-                core::hint::spin_loop();
-            }
-
-            crate::log!("  [6] Disabling L1-Active...\n");
-            debug_reg_write(
-                base,
-                HBUS_TARG_PRPH_RADDR,
-                (APMG_PCIDEV_STT_REG & 0x000F_FFFF) | (3 << 24),
-            );
-            let stt = debug_reg_read(base, HBUS_TARG_PRPH_RDAT);
-            debug_reg_write(
-                base,
-                HBUS_TARG_PRPH_WADDR,
-                (APMG_PCIDEV_STT_REG & 0x000F_FFFF) | (3 << 24),
-            );
-            debug_reg_write(base, HBUS_TARG_PRPH_WDAT, stt | APMG_PCIDEV_STT_VAL_L1_LOOKUP_DIS);
-
-            crate::log!("  APM init DONE!\n");
-            return Ok(());
-        }
-        for _ in 0..1000 {
-            core::hint::spin_loop();
-        }
-        if i % 5000 == 4999 {
-            crate::log!(".");
-        }
-    }
-
-    let final_gp = debug_reg_read(base, CSR_GP_CNTRL);
-    crate::log!("iwl4965 debug: mac clock timeout gp={:#010X}", final_gp);
-    Err("MAC clock not ready")
-}
-
-/// Live firmware load — step by step with visible output
-pub fn debug_load_firmware() -> Result<(), &'static str> {
-    use super::wifi::WIFI_DRIVER;
-
-    // Check driver exists
-    let mut guard = WIFI_DRIVER.lock();
-    let driver = guard
-        .as_mut()
-        .ok_or("No WiFi driver — run 'drv reprobe wifi' first")?;
-
-    crate::log!("  Driver found: {:?}\n", driver.status());
-
-    // Need to start the driver which does hw_init + firmware
-    crate::log!("  Calling driver.start()...\n");
-    crate::log!("    This does: hw_init -> apm_init -> firmware load -> DMA queues\n");
-    crate::log!("    Watch for step-by-step output below:\n");
-    crate::log!("\n");
-
-    match driver.start() {
-        Ok(()) => {
-            crate::log!("\n");
-            let gp = debug_read_csr(CSR_GP_CNTRL).unwrap_or(0);
-            let gp1 = debug_read_csr(CSR_UCODE_DRV_GP1).unwrap_or(0);
-            let ucode = debug_read_csr(CSR_GP_UCODE).unwrap_or(0);
-            crate::log!("  Result: OK!\n");
-            crate::log!("    GP_CNTRL={:#010X} GP1={:#010X} UCODE={:#010X}\n", gp, gp1, ucode);
-            crate::log!(
-                "    MAC_CLK={}\n",
-                if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
-                    "ready"
-                } else {
-                    "DEAD"
-                }
-            );
-            Ok(())
-        }
-        Err(e) => {
-            crate::log!("\n");
-            let gp = debug_read_csr(CSR_GP_CNTRL).unwrap_or(0);
-            crate::log!("iwl4965 debug: result failed: {}", e);
-            crate::log!("    GP_CNTRL={:#010X}\n", gp);
-            crate::log!(
-                "    MAC_CLK={}\n",
-                if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
-                    "ready"
-                } else {
-                    "DEAD"
-                }
-            );
-            Err(e)
-        }
-    }
-}
-
-/// Dump BSM (Bootstrap State Machine) registers
-pub fn debug_dump_bsm() {
-    let bsm_regs: &[(&str, u32)] = &[
-        ("BSM_WR_CTRL", BSM_WR_CTRL_REG),
-        ("BSM_WR_MEM_SRC", BSM_WR_MEM_SRC_REG),
-        ("BSM_WR_MEM_DST", BSM_WR_MEM_DST_REG),
-        ("BSM_WR_DWCOUNT", BSM_WR_DWCOUNT_REG),
-        ("BSM_DRAM_INST_PTR", BSM_DRAM_INST_PTR_REG),
-        ("BSM_DRAM_INST_SIZE", BSM_DRAM_INST_BYTECOUNT_REG),
-        ("BSM_DRAM_DATA_PTR", BSM_DRAM_DATA_PTR_REG),
-        ("BSM_DRAM_DATA_SIZE", BSM_DRAM_DATA_BYTECOUNT_REG),
-    ];
-
-    crate::log!("  BSM Registers (via PRPH bus):\n");
-    for (name, addr) in bsm_regs {
-        match debug_read_prph(*addr) {
-            Some(val) => crate::log!("    {:<20} [0x{:04X}] = 0x{:08X}\n", name, addr, val),
-            None => crate::log!("    {:<20} [0x{:04X}] = <unavailable>\n", name, addr),
-        }
-    }
-}
-
-/// Dump APMG (Advanced Power Management) registers
-pub fn debug_dump_apmg() {
-    let apmg_regs: &[(&str, u32)] = &[
-        ("APMG_CLK_CTRL", APMG_CLK_CTRL_REG),
-        ("APMG_CLK_EN", APMG_CLK_EN_REG),
-        ("APMG_CLK_DIS", APMG_CLK_DIS_REG),
-        ("APMG_PS_CTRL", APMG_PS_CTRL_REG),
-        ("APMG_PCIDEV_STT", APMG_PCIDEV_STT_REG),
-    ];
-
-    crate::log!("  APMG Registers (via PRPH bus):\n");
-    for (name, addr) in apmg_regs {
-        match debug_read_prph(*addr) {
-            Some(val) => crate::log!("    {:<20} [0x{:04X}] = 0x{:08X}\n", name, addr, val),
-            None => crate::log!("    {:<20} [0x{:04X}] = <unavailable>\n", name, addr),
-        }
-    }
-}

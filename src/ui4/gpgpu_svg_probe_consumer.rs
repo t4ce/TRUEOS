@@ -47,15 +47,6 @@ pub(crate) enum GpgpuSvgProbePhase {
 }
 
 impl GpgpuSvgProbePhase {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Offline => "offline",
-            Self::Idle => "idle",
-            Self::Starting => "starting",
-            Self::Presented => "presented",
-            Self::Faulted => "faulted",
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -144,39 +135,8 @@ struct ActiveSvgProbe {
     metrics: GpgpuSvgProbeMetrics,
 }
 
-pub(crate) fn request_gpgpu_svg_probe_start(
-    config: GpgpuSvgProbeConfig,
-) -> Result<u64, &'static str> {
-    let mut control = SVG_PROBE_CONTROL.lock();
-    if !control.status.online {
-        return Err("svg-probe-service-offline");
-    }
-    let serial = next_serial(control.desired.serial);
-    control.desired = DesiredSvgProbe {
-        serial,
-        running: true,
-        config,
-    };
-    control.status.desired_running = true;
-    control.status.request_serial = serial;
-    control.status.config = config;
-    control.status.last_error = "none";
-    Ok(serial)
-}
 
-pub(crate) fn request_gpgpu_svg_probe_stop() -> u64 {
-    let mut control = SVG_PROBE_CONTROL.lock();
-    let serial = next_serial(control.desired.serial);
-    control.desired.serial = serial;
-    control.desired.running = false;
-    control.status.desired_running = false;
-    control.status.request_serial = serial;
-    serial
-}
 
-pub(crate) fn gpgpu_svg_probe_status() -> GpgpuSvgProbeStatus {
-    SVG_PROBE_CONTROL.lock().status
-}
 
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn gpgpu_svg_probe_consumer_service_task(worker_slot: u32) {
@@ -541,9 +501,4 @@ fn mark_idle(serial: u64, reason: &'static str) {
     control.status.frame = None;
     control.status.window = None;
     control.status.last_error = reason;
-}
-
-const fn next_serial(serial: u64) -> u64 {
-    let next = serial.wrapping_add(1);
-    if next == 0 { 1 } else { next }
 }

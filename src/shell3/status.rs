@@ -59,16 +59,6 @@ pub(super) fn alias_runs(aliases: &[String]) -> Vec<MetaFmtStr> {
         .collect()
 }
 
-pub(super) fn runs(
-    ids: &[String],
-    active: Option<&str>,
-    aliases: &[String],
-    hover: Option<&Target>,
-    working: &[String],
-) -> RowStrips {
-    runs_with_activity(ids, active, aliases, hover, working, &[])
-}
-
 pub(super) fn runs_with_activity(
     ids: &[String], active: Option<&str>, aliases: &[String], hover: Option<&Target>,
     working: &[String], background_active: &[String],
@@ -90,21 +80,6 @@ pub(super) fn runs_with_activity(
         left: style(left),
         right: style(right),
     }
-}
-
-pub(super) fn hit(
-    ids: &[String],
-    aliases: &[String],
-    columns: usize,
-    column: usize,
-    working: &[String],
-) -> Option<Target> {
-    hit_with_activity(ids, aliases, columns, column, working, &[])
-}
-
-pub(super) fn hit_with_activity(ids: &[String], aliases: &[String], columns: usize, column: usize,
-    working: &[String], background_active: &[String]) -> Option<Target> {
-    hit_with_width(ids, aliases, columns, column, working, background_active, None)
 }
 
 fn hit_with_width(ids: &[String], aliases: &[String], columns: usize, column: usize,

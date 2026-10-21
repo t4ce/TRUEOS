@@ -109,13 +109,3 @@ pub(crate) fn snapshot_latest_i16_stereo_48k(out: &mut [i16]) -> AudioVisualizer
     last
 }
 
-pub(crate) fn status() -> AudioVisualizerTapSnapshot {
-    let end = WRITE_FRAME_SEQUENCE.load(Ordering::Acquire);
-    AudioVisualizerTapSnapshot {
-        enabled: enabled(),
-        consistent: true,
-        generation: GENERATION.load(Ordering::Acquire),
-        frames: end.min(AUDIO_VISUALIZER_TAP_FRAMES as u64) as usize,
-        end_frame_sequence: end,
-    }
-}

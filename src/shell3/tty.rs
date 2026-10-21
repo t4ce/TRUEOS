@@ -27,9 +27,6 @@ pub(super) struct Terminal {
 }
 
 impl Terminal {
-    pub fn new(shell: Shell3) -> Self {
-        Self::start(shell, false)
-    }
 
     pub fn new_ssh(shell: Shell3) -> Self {
         Self::start(shell, true)

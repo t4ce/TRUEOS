@@ -35,12 +35,6 @@ pub enum Backend {
     File,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Frontend {
-    #[default]
-    Ui4,
-    Headless,
-}
 
 struct Ui4Surface {
     frame: FrameHandle,
@@ -131,9 +125,6 @@ impl Show {
         Ok(extent)
     }
 
-    pub const fn backend(&self) -> Backend {
-        self.backend
-    }
 
     pub fn set_backend(&mut self, backend: Backend) {
         self.backend = backend;

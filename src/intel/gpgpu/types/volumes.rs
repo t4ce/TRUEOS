@@ -1,31 +1,9 @@
 /// Bytes occupied by one RGBA16F voxel: four IEEE-754 binary16 channels.
+
 pub(crate) const GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL: usize = 8;
 
-/// Linear, page-backed 3D RGBA16F storage admitted to the direct-RCS PPGTT.
-///
-/// This is the workload-neutral memory-layout half of the contract. Executable
-/// state and render-engine policy are supplied separately; buffer
-/// reinterpretation and software-filtering fallbacks remain forbidden.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GpgpuVolumePhysicalBacking {
-    /// One physically contiguous DMA allocation.
-    Contiguous { phys: u64 },
-    /// A broker-validated list of 4 KiB pages already installed into the
-    /// volume's contiguous GPU-VA window in the owning PPGTT.
-    ExactPpgttPages,
-}
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GpgpuRgba16FloatVolume3d {
-    pub(crate) backing: GpgpuVolumePhysicalBacking,
-    pub(crate) gpu: u64,
-    pub(crate) bytes: usize,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) depth: u32,
-    pub(crate) row_pitch_bytes: u32,
-    pub(crate) slice_pitch_bytes: u32,
-}
+
 
 impl GpgpuRgba16FloatVolume3d {
     pub(crate) fn new(

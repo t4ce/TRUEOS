@@ -8,10 +8,6 @@ use super::VNet;
 
 const PEER_STALE_MS: u64 = 120_000;
 const PEER_ADVERTISE_INTERVAL_MS: u64 = 1000;
-const PEER_QUERY_TIMEOUT_MS: u64 = 3000;
-const PEER_FETCH_TIMEOUT_MS: u64 = 10_000;
-const PEER_FETCH_MAX_BYTES: usize = 256 * 1024 * 1024;
-const QUIET_LIST_WINDOW_MS: u64 = 120;
 const PEER_ADVERTISE_UNICAST_TARGETS: &[[u8; 4]] = &[[192, 168, 178, 94]];
 const PEER_ADVERTISEMENT_MAGIC: &str = "C0DEC0DE";
 
@@ -40,10 +36,6 @@ pub(crate) struct PeerSnapshot {
     pub last_seen_ms: u64,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct PeerVmOffer {
-    pub vm_id: u8,
-}
 
 pub(crate) struct PeerAdvertisement {
     pub remote: v::vnet::EndpointV4,
@@ -58,16 +50,6 @@ pub(crate) struct PeerHostAdvertisement {
     pub caps: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PeerStoreError {
-    NoNetwork,
-    SubmitFailed,
-    Timeout,
-    Closed,
-    MissingVm,
-    TooLarge,
-    Protocol,
-}
 
 fn monotonic_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
@@ -323,190 +305,10 @@ pub(crate) fn peer_snapshots() -> Vec<PeerSnapshot> {
     peers.clone()
 }
 
-async fn connect_peer(
-    peer: &PeerSnapshot,
-    timeout_ms: u64,
-) -> Result<(VNet, v::vnet::NetHandle), PeerStoreError> {
-    let Some(vnet) = VNet::open_primary() else {
-        return Err(PeerStoreError::NoNetwork);
-    };
-    vnet.submit(v::vnet::Command::OpenTcpConnect {
-        remote: v::vnet::EndpointV4::new(peer.addr, peer.port),
-    })
-    .map_err(|_| PeerStoreError::SubmitFailed)?;
 
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        while let Some(ev) = vnet.pop_event() {
-            match ev {
-                v::vnet::Event::TcpEstablished { handle, .. } => return Ok((vnet, handle)),
-                v::vnet::Event::Closed { .. } => return Err(PeerStoreError::Closed),
-                v::vnet::Event::Error { .. } => return Err(PeerStoreError::SubmitFailed),
-                v::vnet::Event::Opened { .. }
-                | v::vnet::Event::UdpPacket { .. }
-                | v::vnet::Event::UdpPacketV6 { .. }
-                | v::vnet::Event::TcpData { .. }
-                | v::vnet::Event::TcpSent { .. }
-                | v::vnet::Event::IpPacket { .. }
-                | v::vnet::Event::IcmpReply { .. }
-                | v::vnet::Event::IcmpReplyV6 { .. }
-                | v::vnet::Event::TcpReadClosed { .. } => {}
-            }
-        }
 
-        if Instant::now() >= deadline {
-            return Err(PeerStoreError::Timeout);
-        }
-        Timer::after(Duration::from_millis(10)).await;
-    }
-}
 
-fn parse_vm_list(bytes: &[u8]) -> Result<Vec<PeerVmOffer>, PeerStoreError> {
-    let text = core::str::from_utf8(bytes).map_err(|_| PeerStoreError::Protocol)?;
-    let mut saw_listing = false;
-    let mut offers = Vec::new();
-    for line in text.lines() {
-        let mut parts = line.split_ascii_whitespace();
-        if parts.next() != Some("VMS") {
-            continue;
-        }
-        saw_listing = true;
-        if let Some(id) = parts.next().and_then(|token| token.parse::<u8>().ok()) {
-            offers.push(PeerVmOffer { vm_id: id });
-        }
-    }
 
-    if saw_listing {
-        Ok(offers)
-    } else {
-        Err(PeerStoreError::Protocol)
-    }
-}
-
-pub(crate) async fn list_peer_vms(peer: &PeerSnapshot) -> Result<Vec<PeerVmOffer>, PeerStoreError> {
-    let (vnet, handle) = connect_peer(peer, PEER_QUERY_TIMEOUT_MS).await?;
-    vnet.send_tcp_all(handle, b"VM\n")
-        .map_err(|_| PeerStoreError::SubmitFailed)?;
-
-    let deadline = Instant::now() + Duration::from_millis(PEER_QUERY_TIMEOUT_MS);
-    let mut quiet_deadline: Option<Instant> = None;
-    let mut rx = Vec::new();
-    loop {
-        while let Some(ev) = vnet.pop_event() {
-            match ev {
-                v::vnet::Event::TcpData { handle: h, data } if h == handle => {
-                    rx.extend_from_slice(data.as_slice());
-                    quiet_deadline =
-                        Some(Instant::now() + Duration::from_millis(QUIET_LIST_WINDOW_MS));
-                }
-                v::vnet::Event::Closed { handle: h } if h == handle => {
-                    if rx.is_empty() {
-                        return Err(PeerStoreError::Closed);
-                    }
-                    return parse_vm_list(rx.as_slice());
-                }
-                v::vnet::Event::Error { .. } => return Err(PeerStoreError::SubmitFailed),
-                _ => {}
-            }
-        }
-
-        if let Some(quiet) = quiet_deadline
-            && Instant::now() >= quiet
-        {
-            let _ = vnet.submit(v::vnet::Command::Close { handle });
-            return parse_vm_list(rx.as_slice());
-        }
-        if Instant::now() >= deadline {
-            let _ = vnet.submit(v::vnet::Command::Close { handle });
-            return Err(PeerStoreError::Timeout);
-        }
-        Timer::after(Duration::from_millis(10)).await;
-    }
-}
-
-fn parse_vm_header(line: &[u8], requested_vm_id: u8) -> Result<usize, PeerStoreError> {
-    let text = core::str::from_utf8(line)
-        .map_err(|_| PeerStoreError::Protocol)?
-        .trim();
-    if text == "NO" {
-        return Err(PeerStoreError::MissingVm);
-    }
-
-    let mut parts = text.split_ascii_whitespace();
-    if parts.next() != Some("VM") {
-        return Err(PeerStoreError::Protocol);
-    }
-    let Some(vm_id) = parts.next().and_then(|token| token.parse::<u8>().ok()) else {
-        return Err(PeerStoreError::Protocol);
-    };
-    if vm_id != requested_vm_id {
-        return Err(PeerStoreError::Protocol);
-    }
-    let _seq = parts
-        .next()
-        .and_then(|token| token.parse::<u64>().ok())
-        .ok_or(PeerStoreError::Protocol)?;
-    let len = parts
-        .next()
-        .and_then(|token| token.parse::<usize>().ok())
-        .ok_or(PeerStoreError::Protocol)?;
-    if len > PEER_FETCH_MAX_BYTES {
-        return Err(PeerStoreError::TooLarge);
-    }
-    Ok(len)
-}
-
-pub(crate) async fn fetch_peer_vm(
-    peer: &PeerSnapshot,
-    vm_id: u8,
-) -> Result<Vec<u8>, PeerStoreError> {
-    let (vnet, handle) = connect_peer(peer, PEER_FETCH_TIMEOUT_MS).await?;
-    let request = format!("VM {}\n", vm_id);
-    vnet.send_tcp_all(handle, request.as_bytes())
-        .map_err(|_| PeerStoreError::SubmitFailed)?;
-
-    let deadline = Instant::now() + Duration::from_millis(PEER_FETCH_TIMEOUT_MS);
-    let mut rx = Vec::new();
-    let mut body_start = None;
-    let mut body_len = 0usize;
-
-    loop {
-        while let Some(ev) = vnet.pop_event() {
-            match ev {
-                v::vnet::Event::TcpData { handle: h, data } if h == handle => {
-                    rx.extend_from_slice(data.as_slice());
-                    if body_start.is_none()
-                        && let Some(pos) = rx.iter().position(|&b| b == b'\n')
-                    {
-                        body_len = parse_vm_header(&rx[..pos], vm_id)?;
-                        body_start = Some(pos + 1);
-                    }
-                    if let Some(start) = body_start {
-                        let end = start.saturating_add(body_len);
-                        if rx.len() >= end {
-                            let bytes = rx[start..end].to_vec();
-                            let ack = format!("VM {} OK\n", vm_id);
-                            let _ = vnet.send_tcp_all(handle, ack.as_bytes());
-                            let _ = vnet.submit(v::vnet::Command::Close { handle });
-                            return Ok(bytes);
-                        }
-                    }
-                }
-                v::vnet::Event::Closed { handle: h } if h == handle => {
-                    return Err(PeerStoreError::Closed);
-                }
-                v::vnet::Event::Error { .. } => return Err(PeerStoreError::SubmitFailed),
-                _ => {}
-            }
-        }
-
-        if Instant::now() >= deadline {
-            let _ = vnet.submit(v::vnet::Command::Close { handle });
-            return Err(PeerStoreError::Timeout);
-        }
-        Timer::after(Duration::from_millis(10)).await;
-    }
-}
 
 pub(crate) fn peer_addr_text(peer: &PeerSnapshot) -> String {
     format!("{}.{}.{}.{}", peer.addr[0], peer.addr[1], peer.addr[2], peer.addr[3])

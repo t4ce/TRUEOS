@@ -157,71 +157,9 @@ fn direct_rcs_encode_copy_rect_2d_batch(
     )
 }
 
-fn gpgpu_rects_overlap(
-    left: FontOutlineCoverageR8Params,
-    right: FontOutlineCoverageR8Params,
-) -> bool {
-    let left_right = u64::from(left.rect_x) + u64::from(left.rect_width);
-    let left_bottom = u64::from(left.rect_y) + u64::from(left.rect_height);
-    let right_right = u64::from(right.rect_x) + u64::from(right.rect_width);
-    let right_bottom = u64::from(right.rect_y) + u64::from(right.rect_height);
-    u64::from(left.rect_x) < right_right
-        && u64::from(right.rect_x) < left_right
-        && u64::from(left.rect_y) < right_bottom
-        && u64::from(right.rect_y) < left_bottom
-}
 
-fn direct_rcs_encode_glyph_mask_2d_batch(
-    state: DirectRcsState,
-    upload: UploadedKernelArtifact,
-    params: CopyRectRgba8Params,
-    color_rgba: u32,
-    mask_bytes: usize,
-    dst_bytes: usize,
-) -> bool {
-    if params.width == 0
-        || params.height == 0
-        || COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + GLYPH_MASK_INDIRECT_BYTES
-            > DIRECT_RCS_BATCH_BYTES
-    {
-        return false;
-    }
-    unsafe {
-        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
-    }
-    if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
-        state,
-        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
-        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
-        GLYPH_MASK_RGBA8_TEXT_OFFSET_BYTES,
-        4,
-    ) || !direct_rcs_write_copy_rect_surface_states_at(
-        state,
-        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
-        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
-        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
-        params.src_gpu,
-        mask_bytes,
-        params.dst_gpu,
-        dst_bytes,
-    ) || !direct_rcs_write_glyph_mask_payload_at(
-        state,
-        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
-        params,
-        color_rgba,
-    ) {
-        return false;
-    }
-    direct_rcs_finish_two_buffer_2d_batch(
-        state,
-        upload,
-        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
-        GLYPH_MASK_INDIRECT_BYTES,
-        params.width,
-        params.height,
-    )
-}
+
+
 
 fn direct_rcs_encode_glyph_mask_layers_2d_batch(
     state: DirectRcsState,
@@ -380,25 +318,7 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
     true
 }
 
-fn direct_rcs_finish_two_buffer_2d_batch(
-    state: DirectRcsState,
-    upload: UploadedKernelArtifact,
-    payload_offset: usize,
-    indirect_bytes: usize,
-    width: u32,
-    height: u32,
-) -> bool {
-    let Some(dispatch) = fill_rect_2d_dispatch(width, height) else {
-        return false;
-    };
-    direct_rcs_finish_two_buffer_dispatch_batch(
-        state,
-        upload,
-        payload_offset,
-        indirect_bytes,
-        dispatch,
-    )
-}
+
 
 fn direct_rcs_finish_two_buffer_dispatch_batch(
     state: DirectRcsState,

@@ -115,12 +115,6 @@ impl Environment {
     pub(crate) fn set(&mut self, key: &[u8], value: &[u8], overwrite: bool) -> Result<(), i32> {
         self.set_impl(key, value, overwrite, true)
     }
-    pub(crate) fn refresh_reserved(&mut self, key: &[u8], value: &[u8]) -> Result<(), i32> {
-        if !key.starts_with(b"TRUEOS_") {
-            return Err(EPERM);
-        }
-        self.set_impl(key, value, true, false)
-    }
     fn set_impl(
         &mut self,
         key: &[u8],

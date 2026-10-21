@@ -22,17 +22,6 @@ pub(crate) fn poll_rgba_copies(
     crate::intel::poll_guc_bcs0_rgba_copies(submission)
 }
 
-/// Copy an already released, linear RGBA8 source into a destination at (0,0).
-/// The caller owns both allocations for this entire synchronous operation.
-/// SubmittedIncomplete requires retaining both allocations until reboot; only
-/// Unavailable permits the caller to use its reference compute implementation.
-/// This path is independent of the MicroFont worker and its 250 ms cadence.
-pub(crate) fn copy_rgba8_complete(
-    source: crate::intel::gpgpu::GpgpuRgba8Surface,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-) -> crate::intel::gpgpu::GpgpuSubmissionOutcome {
-    copy_rgba8_complete_for(source, destination, RgbaCopyConsumer::Gridpaper)
-}
 
 #[derive(Clone, Copy)]
 pub(crate) enum RgbaCopyConsumer {

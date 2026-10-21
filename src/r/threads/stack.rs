@@ -39,13 +39,6 @@ pub(super) struct Stack {
 unsafe impl Send for Stack {}
 
 impl Stack {
-    pub(super) fn new(bytes: usize) -> Option<Self> {
-        let len = usable_bytes(bytes)?;
-        Some(Self {
-            backing: backing::Mapping::new(len)?,
-            len,
-        })
-    }
 
     pub(super) fn new_for_vm(bytes: usize, vm_id: Option<u8>) -> Option<Self> {
         #[cfg(target_os = "linux")]

@@ -3,7 +3,7 @@ extern crate alloc;
 #[path = "happy_eyeballs.rs"]
 mod happy_eyeballs;
 
-include!("../cabi_codes.rs");
+use crate::r::cabi_codes::*;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;

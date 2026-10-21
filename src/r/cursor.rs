@@ -5,40 +5,7 @@ const MAX_CURSOR_SNAPSHOTS: usize = 32;
 pub const HID_KIND_VIRTUAL_CURSOR: u8 = 0;
 pub const HID_KIND_MOUSE: u8 = 2;
 pub const HID_KIND_TABLET: u8 = 3;
-pub const HID_KIND_EYETRACKER: u8 = 4;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum PhysicalCursorSourceKind {
-    Tablet,
-    Mouse,
-    VirtualService,
-    EyeTracker,
-}
-
-impl PhysicalCursorSourceKind {
-    pub const fn from_hid_kind(hid_kind: u8) -> Option<Self> {
-        match hid_kind {
-            HID_KIND_TABLET => Some(Self::Tablet),
-            HID_KIND_MOUSE => Some(Self::Mouse),
-            HID_KIND_VIRTUAL_CURSOR => Some(Self::VirtualService),
-            HID_KIND_EYETRACKER => Some(Self::EyeTracker),
-            _ => None,
-        }
-    }
-
-    pub const fn physical_cursor_priority(self) -> u8 {
-        // Contract for selecting one physical pointing source:
-        // Virtual app cursors are composed by UI4's software-cursor plane;
-        // physical pointing devices retain the dedicated hardware cursor,
-        // and eyetracker is reserved as the final/highest-priority source.
-        match self {
-            Self::VirtualService => 0,
-            Self::Tablet => 2,
-            Self::Mouse => 3,
-            Self::EyeTracker => 4,
-        }
-    }
-}
 
 #[derive(Copy, Clone, Debug)]
 struct CursorSnapshot {
@@ -87,12 +54,6 @@ fn snapshot_source_match(
         && snapshot.hid_kind == hid_kind
 }
 
-#[inline]
-fn snapshot_physical_cursor_priority(snapshot: &CursorSnapshot) -> u8 {
-    PhysicalCursorSourceKind::from_hid_kind(snapshot.hid_kind)
-        .map(|kind| kind.physical_cursor_priority())
-        .unwrap_or(0)
-}
 
 pub fn upsert_snapshot(
     controller_id: u32,
@@ -253,37 +214,6 @@ pub fn ordered_cursor_snapshot_with_slot_buttons() -> Vec<(u32, f64, f64, u32), 
     out
 }
 
-pub fn preferred_physical_cursor_snapshot_with_slot_buttons() -> Option<(u32, f64, f64, u32)> {
-    let guard = CURSOR_SNAPSHOTS.lock();
-
-    // A real mouse is the reference source for the dual-cursor checkpoint.
-    // Snapshot insertion order is stable, so this deliberately selects the
-    // first registered mouse even if a later tablet or eyetracker is present.
-    if let Some(snapshot) = guard
-        .iter()
-        .find(|snapshot| snapshot.hid_kind == HID_KIND_MOUSE)
-    {
-        return Some((snapshot.slot_id, snapshot.x, snapshot.y, snapshot.buttons_down));
-    }
-
-    let mut best: Option<(u8, usize, &CursorSnapshot)> = None;
-
-    for (idx, snapshot) in guard.iter().enumerate() {
-        let priority = snapshot_physical_cursor_priority(snapshot);
-        if priority == 0 {
-            continue;
-        }
-        match best {
-            Some((best_priority, best_idx, _))
-                if priority < best_priority || (priority == best_priority && idx >= best_idx) => {}
-            _ => {
-                best = Some((priority, idx, snapshot));
-            }
-        }
-    }
-
-    best.map(|(_, _, snapshot)| (snapshot.slot_id, snapshot.x, snapshot.y, snapshot.buttons_down))
-}
 
 pub fn cursor_pos(cursor_id: u32) -> Option<(f64, f64)> {
     if cursor_id == 0 {

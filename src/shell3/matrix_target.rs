@@ -39,10 +39,6 @@ pub(crate) fn matrix_target_slot_lease(target: &MatrixTarget) -> MatrixSlotLease
     target.lease.clone()
 }
 
-/// Release only the VM owner accepted by Shell3's frontend routing table.
-pub(crate) fn release_matrix_target_terminal_handoff(target: &MatrixTarget, vm_id: u8) -> bool {
-    super::tui::release(target, vm_id).unwrap_or(false)
-}
 
 /// A resource retired when its exact slot lifetime disappears.
 pub(crate) trait MatrixSlotAttachment: Send + Sync {

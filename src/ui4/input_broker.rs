@@ -49,7 +49,6 @@ pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_TEXT_FORWARDS: AtomicU32 = AtomicU32::new(0);
-static DESKTOP_SHELL_LAUNCH_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static FAT_SOFTWARE_CURSORS: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2032,36 +2031,6 @@ pub(super) fn claim_drag_gesture(source: Ui4CursorSource) {
     }
 }
 
-pub(crate) fn show_context_menu(
-    source: Ui4CursorSource,
-    owner: WindowOwner,
-    window: WindowId,
-    request: super::ContextMenuRequest,
-) -> Result<(), super::ContextMenuError> {
-    super::context_menu::validate_request(&request)?;
-    let (anchor, color) = {
-        let mut broker = INPUT_BROKER.lock();
-        let Some(route) = broker
-            .cursors
-            .iter_mut()
-            .find(|route| route.source == source)
-        else {
-            return Err(super::ContextMenuError::NotFocused);
-        };
-        let selected = super::selected_frame_for_source(source);
-        if selected != Some(super::CursorFrameKey::new(owner, window))
-            || window_snapshot_for_target(WindowTarget { owner, window }).is_none()
-        {
-            return Err(super::ContextMenuError::NotFocused);
-        }
-        route.context_menu = None;
-        route.context_menu_owns_gesture = false;
-        route.context_menu_pressed_action = None;
-        route.suppress_context_menu_open = false;
-        ((route.x, route.y), route.color)
-    };
-    super::context_menu::open(source, owner, window, anchor, color, request)
-}
 
 pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
     let routes = INPUT_BROKER.lock().release_owner(owner);

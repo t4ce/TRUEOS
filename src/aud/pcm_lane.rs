@@ -50,27 +50,7 @@ pub fn submit_i16_stereo_48k(
     }
 }
 
-/// Atomically admit PCM only while the stop generation still matches.
-///
-/// Generation validation and insertion share the same queue lock as
-/// [`request_stop`]. A successful return therefore guarantees that no stop
-/// linearized between the caller's generation check and this queue insertion.
-pub fn submit_i16_stereo_48k_if_generation(
-    label: &'static str,
-    samples: Vec<i16>,
-    expected_generation: u32,
-) -> Result<usize, GuardedPcmLaneError> {
-    submit_i16_stereo_48k_inner(label, samples, Some(expected_generation), false)
-}
 
-/// Admit voice PCM whose real mixer lifetime drives Lilly's talk animation.
-pub fn submit_spirit_talk_i16_stereo_48k_if_generation(
-    label: &'static str,
-    samples: Vec<i16>,
-    expected_generation: u32,
-) -> Result<usize, GuardedPcmLaneError> {
-    submit_i16_stereo_48k_inner(label, samples, Some(expected_generation), true)
-}
 
 fn submit_i16_stereo_48k_inner(
     label: &'static str,

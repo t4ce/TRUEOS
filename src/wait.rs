@@ -176,14 +176,6 @@ impl WaitQueue {
 
     // Compatibility for a manually polled completion cell. Its completion
     // broadcasts to all registrations; asynchronous joins use owned waits.
-    fn register_poll_waker(&self, waker: &Waker) {
-        let mut wakers = self.wakers.lock();
-        if !wakers.iter().any(|entry| entry.waiter == 0 && entry.waker.will_wake(waker)) {
-            crate::allocators::with_host_alloc_domain_strong(|| {
-                wakers.push(QueuedWaker { waiter: 0, waker: waker.clone() });
-            });
-        }
-    }
 
     /// Observe the current notification generation before checking the state
     /// protected by this wait queue.
@@ -344,11 +336,6 @@ impl WaitQueue {
         }
     }
 
-    #[inline]
-    pub fn wait_for_event_blocking_parked(&self, timeout_ms: u64) -> bool {
-        let observed = self.seq.load(Ordering::Acquire);
-        self.wait_for_event_after_blocking_parked(observed, timeout_ms)
-    }
 
     #[inline]
     pub fn wait_for_event_after_blocking_parked(&self, observed: u32, timeout_ms: u64) -> bool {
@@ -419,21 +406,7 @@ impl<T> CompletionCell<T> {
         self.value.lock().take()
     }
 
-    pub fn poll_take(&self, cx: &mut Context<'_>) -> Poll<T> {
-        if let Some(value) = self.try_take() {
-            return Poll::Ready(value);
-        }
 
-        {
-            self.wait.register_poll_waker(cx.waker());
-        }
-
-        if let Some(value) = self.try_take() {
-            return Poll::Ready(value);
-        }
-
-        Poll::Pending
-    }
 
     pub async fn join(&self) -> T {
         loop {

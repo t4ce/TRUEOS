@@ -166,17 +166,6 @@ static KEYBOARD_OUTPUT_POP_SEQ: Mutex<u64> = Mutex::new(0);
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static NEXT_KEYBOARD_TEXT_BURST_ID: AtomicU32 = AtomicU32::new(1);
 
-pub fn upsert_snapshot(
-    controller_id: u32,
-    slot_id: u32,
-    ep_target: u32,
-    modifiers: u8,
-    keys: [u8; 6],
-    ascii: [u8; 6],
-) {
-    let mut guard = KEYBOARD_SNAPSHOTS.lock();
-    upsert_snapshot_locked(&mut guard, controller_id, slot_id, ep_target, modifiers, keys, ascii);
-}
 
 fn upsert_snapshot_locked(
     guard: &mut Vec<KeyboardSnapshot, MAX_KEYBOARD_SNAPSHOTS>,
@@ -322,10 +311,6 @@ fn key_is_down(keys: &[u8; 6], key: u8) -> bool {
     key != 0 && keys.iter().copied().any(|candidate| candidate == key)
 }
 
-#[inline]
-fn ascii_was_emitted(emitted: &[u8; 6], ascii: u8) -> bool {
-    ascii != 0 && emitted.iter().copied().any(|candidate| candidate == ascii)
-}
 
 #[inline]
 fn key_code_was_emitted(emitted: &[u16; 6], key_code: u16) -> bool {

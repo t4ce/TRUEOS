@@ -46,7 +46,6 @@ struct Tga {
     bar_is_64: bool,
     bar_assignment: TgaBarAssignment,
     mmio_base: usize,
-    led_reg: usize,
     magic_reg: usize,
     work_package_reg: usize,
     doorbell_reg: usize,
@@ -111,17 +110,6 @@ pub(crate) enum OffloadTransportError {
     },
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Status {
-    pub online: bool,
-    pub protocol_alive: bool,
-    pub generation: u32,
-    pub bdf: Option<(u8, u8, u8)>,
-    pub bar_phys: Option<u64>,
-    pub bar_size: Option<u64>,
-    pub msi_ready: bool,
-    pub interrupts: u64,
-}
 
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
@@ -377,21 +365,8 @@ fn candidate_protocol_ready(tga: &Tga) -> bool {
     }
 }
 
-pub fn tga_led_write(value: u32) {
-    if let Some(tga) = TGA.lock().as_ref() {
-        Tga::write_reg(tga.led_reg, value);
-    }
-}
 
-pub fn tga_led_set(on: bool) {
-    tga_led_write(u32::from(on));
-}
 
-pub fn protocol_alive() -> bool {
-    TGA.lock()
-        .as_ref()
-        .is_some_and(|tga| tga.protocol_magic() == TGA_MAGIC_EXPECTED)
-}
 
 pub fn is_online() -> bool {
     TGA.lock().is_some()
@@ -401,29 +376,6 @@ pub(crate) fn connection_generation() -> u32 {
     TGA_CONNECTION_GENERATION.load(Ordering::Acquire)
 }
 
-pub(crate) fn status() -> Status {
-    let guard = TGA.lock();
-    let (online, protocol_alive, bdf, bar_phys, bar_size) = match guard.as_ref() {
-        Some(tga) => (
-            true,
-            tga.protocol_magic() == TGA_MAGIC_EXPECTED,
-            Some((tga.bus, tga.slot, tga.function)),
-            Some(tga.bar_phys),
-            Some(tga.bar_size),
-        ),
-        None => (false, false, None, None, None),
-    };
-    Status {
-        online,
-        protocol_alive,
-        generation: connection_generation(),
-        bdf,
-        bar_phys,
-        bar_size,
-        msi_ready: completion_interrupt_configured(),
-        interrupts: completion_interrupt_count(),
-    }
-}
 
 pub(crate) fn submit_offload_work_package(
     package: &WorkPackage,
@@ -623,7 +575,6 @@ fn bring_online(device: &PciDevice) -> Option<Tga> {
         bar_is_64,
         bar_assignment: assignment,
         mmio_base: base,
-        led_reg: base + protocol::BAR0_LED_OFFSET,
         magic_reg: base + protocol::BAR0_LIVENESS_MAGIC_OFFSET,
         work_package_reg: base + protocol::BAR0_WORK_PACKAGE_OFFSET,
         doorbell_reg: base + protocol::BAR0_CALL_DOORBELL_OFFSET,

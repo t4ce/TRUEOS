@@ -37,9 +37,6 @@ impl ProcessErrno {
         self.current().store(value, ordering);
     }
 
-    pub(crate) fn load(&self, ordering: Ordering) -> i32 {
-        self.current().load(ordering)
-    }
 
     fn as_ptr(&self) -> *mut i32 {
         self.current().as_ptr()
@@ -774,15 +771,6 @@ pub(crate) fn environ_import_address() -> Option<usize> {
     with_environment(vm_id, |env| core::ptr::addr_of_mut!(env.environ) as usize).ok()
 }
 
-pub(crate) fn refresh_reserved_environment(vm_id: u8, key: &str, value: &str) {
-    let Some(state) = blueprint_process_state(vm_id) else {return;};
-    let mut env = state.environment.lock();
-    if !env.initialized() {return;}
-    let result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || env.refresh_reserved(key.as_bytes(),value.as_bytes()));
-    if !matches!(result, Some(Ok(()))) {
-        crate::log_important!(target: "hv"; "std-abi environment reserved refresh failed vm={}\n",vm_id);
-    }
-}
 
 unsafe fn environment_cstr(pointer: *const c_char) -> Result<Vec<u8>,c_int> {
     if pointer.is_null() { return Err(TRUEOS_EINVAL); }

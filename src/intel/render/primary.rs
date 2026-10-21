@@ -30,24 +30,11 @@ pub(crate) struct FontRenderTargetReadback {
 }
 
 
-pub(crate) const fn font_native_scale_supported(native_scale: u32) -> bool {
-    native_scale > 0 && native_scale <= FONT_STAMP_MAX_NATIVE_SCALE
-}
 
-pub(crate) const fn font_native_scale_count() -> u32 {
-    FONT_STAMP_MAX_NATIVE_SCALE
-}
 
-/// Return the square render-target extent selected by one supported native
-/// font scale. Consumers use this instead of duplicating the render backend's
-/// scale-to-pixel mapping.
-pub(crate) const fn font_native_scale_target_pixels(native_scale: u32) -> Option<u32> {
-    if font_native_scale_supported(native_scale) {
-        Some(FONT_STAMP_BASE_SIZE as u32 * native_scale)
-    } else {
-        None
-    }
-}
+
+
+
 
 
 
@@ -1269,9 +1256,7 @@ fn prepare_picasso_resident_scene_depth(
     })
 }
 
-pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
-    (RESIDENT_SCENE_TARGET_WIDTH, RESIDENT_SCENE_TARGET_HEIGHT)
-}
+
 
 /// UI4-sized 4x triangle scene followed by persistent analytical font masks.
 /// Coverage is composited only after the MSAA resolve, preserving its R8 alpha
@@ -1456,31 +1441,7 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
     )
 }
 
-/// Helio Churn rendered into UI4's leased linear RGBA surface in one scene
-/// submission. Retained-transform frames can feed GPU-authored matrices and
-/// compacted indices straight into the artifact-native VS; the GPU-expanded
-/// Float3 stream remains an explicit fallback during physical admission.
-pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
-    resident: &ResidentChurnForward,
-    clear_rgba: Option<[u8; 4]>,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_scene_capture_inner(
-        &[],
-        Some(resident),
-        None,
-        &[],
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        true,
-        ResidentSceneRasterQuality::SingleSample,
-        destination.width as usize,
-        destination.height as usize,
-        ResidentSceneFrameOutput::DirectGpuSurface(destination),
-    )
-}
+
 
 /// Submit one retained GPU-transform scene together with ordinary resident
 /// primitives. The retained object owns the compute/native-matrix secondary;

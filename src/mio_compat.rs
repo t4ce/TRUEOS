@@ -271,19 +271,6 @@ fn tcp_flow_logging_enabled(socket: &MioSocketState) -> bool {
     crate::log_os::flags::NET_LOG_TCP_FLOW && socket.kind == MioSocketKind::TcpStream
 }
 
-fn should_log_selector_probe(readiness: u8) -> bool {
-    let interesting =
-        readiness & (READY_READABLE | READY_ERROR | READY_READ_CLOSED | READY_WRITE_CLOSED);
-    if interesting != 0 {
-        return true;
-    }
-
-    static PURE_WRITABLE_PROBE_COUNT: core::sync::atomic::AtomicU32 =
-        core::sync::atomic::AtomicU32::new(0);
-    static PURE_WRITABLE_PROBE_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-    let count = PURE_WRITABLE_PROBE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
-    count <= 4 || once_per_second(&PURE_WRITABLE_PROBE_LAST_LOG_NS)
-}
 
 fn once_per_second(last: &AtomicU64) -> bool {
     const ONE_SECOND_NS: u64 = 1_000_000_000;

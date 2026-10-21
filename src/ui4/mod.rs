@@ -97,18 +97,17 @@ pub(crate) use frame_pool::{
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
     create_gpu_full_overwrite_frame, destroy_frame, frame_buffer_ownership_probe, frame_snapshot,
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
-    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_gpgpu_render_frame_buffer,
+    publish_frame_buffer, publish_gpgpu_frame_buffer,
     publish_gpgpu_scene_frame_buffer, publish_gpgpu_video_frame_buffer,
-    publish_gpu_frame_buffer, publish_resident_scene_frame_buffer,
+    publish_resident_scene_frame_buffer,
     published_rgba_view, release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewPreset,
-    gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_gpgpu_preview_stop,
-    };
+    gpgpu_preview_consumer_service_task,
+};
 pub(crate) use gpgpu_svg_probe_consumer::{
-    GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
-    request_gpgpu_svg_probe_start, request_gpgpu_svg_probe_stop,
+    GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task,
 };
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
@@ -117,7 +116,7 @@ pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PointerEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
     Ui4VisualRect, focused_keyboard_state, reselect_window_for_cursor, select_window_for_cursor,
-    show_context_menu, software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
+    software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
     window_input_routes,
 };
 pub(crate) use link_service::{request_open as request_link_open, ui4_link_service_task};
@@ -133,21 +132,20 @@ pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
     VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession, begin_decoded_nv12_conversion_batch,
     begin_texture_video_player, enqueue_decoded_nv12_stream_frame, open_shell_decoded_video_player,
-    request_video_playback_stop, reserve_shell_decoded_video_player,
-    ui4_video_conversion_service_task, video_playback_status, wait_decoded_nv12_conversion_idle,
+    reserve_shell_decoded_video_player, ui4_video_conversion_service_task,
+    wait_decoded_nv12_conversion_idle,
 };
 
 pub(crate) use window_broker::{
     MAX_WINDOW_TITLE_BYTES, Ui4FrameEscapeKeyAction, WindowBrokerError, WindowCreate,
     WindowDockTarget, WindowId, WindowInteraction, WindowOwner, WindowPlacement, WindowPlane,
     WindowSessionCloseRequest, WindowSessionId, WindowSnapshot, WindowState,
-    acknowledge_window_frame, advance_window_close_transitions, advance_window_open_transitions,
+    advance_window_close_transitions, advance_window_open_transitions,
     application_windows_for_output_with_revision, begin_additional_window_session,
     begin_window_session, close_window, commit_window_frame_refresh,
     commit_window_frame_replacement, create_window, dock_window, finish_window_session,
-    finish_window_session_with_request, live_application_window_count, move_window,
-    note_window_focused, owner_has_first_presentation, publish_window_frame, publish_window_frames,
-    replace_window_frame, restore_docked_window, retire_frame_when_released,
+    finish_window_session_with_request, move_window, note_window_focused,
+    publish_window_frame, replace_window_frame, restore_docked_window, retire_frame_when_released,
     set_window_escape_key_action, set_window_hit_testable, set_window_opacity,
     set_window_placement, set_window_position, set_window_state, set_window_title,
     take_window_first_presentation, ui4_window_broker_snapshot_service_task,
@@ -180,19 +178,7 @@ pub(crate) struct Ui4LiveResourceUsage {
 }
 
 impl Ui4LiveResourceUsage {
-    /// No producer can currently reach a display plane through the broker.
-    ///
-    /// Detached frame allocations are intentionally allowed. Gridpaper keeps
-    /// one retained, offscreen frame warm at boot even when it has no session
-    /// or window, so a detached allocation alone does not make the UI4 output
-    /// busy.
-    pub(crate) const fn is_display_idle(self) -> bool {
-        self.active_sessions == 0 && self.live_windows == 0
-    }
 
-    pub(crate) const fn is_fully_retired(self) -> bool {
-        self.active_frames == 0 && self.is_display_idle()
-    }
 }
 
 /// Read live ownership state rather than the low-frequency diagnostic watch.

@@ -368,57 +368,7 @@ fn is_rustc_runtime_import(name: &str) -> bool {
         || rustc_tail.contains("___rust_no_alloc_shim_is_unstable")
 }
 
-pub(crate) fn is_joker_import(name: &str) -> bool {
-    is_rustc_runtime_import(name)
-}
 
-pub(crate) fn rustc_runtime_import_note(name: &str) -> Option<&'static str> {
-    if name == "__rust_no_alloc_shim_is_unstable_v2"
-        || name
-            .rsplit_once("___rustc")
-            .is_some_and(|(_, tail)| tail.contains("___rust_no_alloc_shim_is_unstable"))
-    {
-        return Some(
-            "class=rustc-no-alloc-shim need=noop-provider reason=allocator-presence-marker",
-        );
-    }
-    if name == "__rust_alloc"
-        || name
-            .rsplit_once("___rustc")
-            .is_some_and(|(_, tail)| tail.contains("___rust_alloc"))
-    {
-        return Some("class=rustc-alloc need=portal-rust-alloc");
-    }
-    if name == "__rust_dealloc"
-        || name
-            .rsplit_once("___rustc")
-            .is_some_and(|(_, tail)| tail.contains("___rust_dealloc"))
-    {
-        return Some("class=rustc-dealloc need=portal-rust-dealloc");
-    }
-    if name == "__rust_realloc"
-        || name
-            .rsplit_once("___rustc")
-            .is_some_and(|(_, tail)| tail.contains("___rust_realloc"))
-    {
-        return Some("class=rustc-realloc need=portal-rust-realloc");
-    }
-    if name == "__rust_alloc_zeroed"
-        || name
-            .rsplit_once("___rustc")
-            .is_some_and(|(_, tail)| tail.contains("___rust_alloc_zeroed"))
-    {
-        return Some("class=rustc-alloc-zeroed need=portal-rust-alloc-zeroed");
-    }
-    if name == "__rust_alloc_error_handler"
-        || name
-            .rsplit_once("___rustc")
-            .is_some_and(|(_, tail)| tail.contains("___rust_alloc_error_handler"))
-    {
-        return Some("class=rustc-alloc-error-handler need=portal-rust-alloc-error-handler");
-    }
-    None
-}
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn portal_logf(args: core::fmt::Arguments<'_>) {
@@ -716,47 +666,7 @@ fn looks_like_rust_main_symbol(name: &str) -> bool {
         || (name.starts_with("_ZN") && name.contains("4main17h") && name.ends_with('E'))
 }
 
-fn best_entry_symbol<'a>(
-    file: &ParsedElf<'a>,
-) -> Result<Option<(&'static str, String, u16, u64)>, String> {
-    require_symtab(file)?;
-    let mut rust_main: Option<(String, u16, u64)> = None;
 
-    for sym_index in 0..file.elf_symbol_table().len() {
-        let sym = read_symbol(file, sym_index)?;
-        let SymbolSection::Section(section_index) = sym.section else {
-            continue;
-        };
-        if sym.info & 0x0f != 2 {
-            continue;
-        }
-        let section_index = u16::try_from(section_index.0)
-            .map_err(|_| String::from("ELF symbol section index out of range"))?;
-        if sym.name == "main" {
-            return Ok(Some(("exact", String::from(sym.name), section_index, sym.value)));
-        }
-        if looks_like_rust_main_symbol(sym.name) {
-            let prefer = match &rust_main {
-                Some((best_name, _, _)) => sym.name.len() < best_name.len(),
-                None => true,
-            };
-            if prefer {
-                rust_main = Some((String::from(sym.name), section_index, sym.value));
-            }
-        }
-    }
-
-    Ok(rust_main.map(|(name, section_index, value)| ("rust", name, section_index, value)))
-}
-
-fn abbreviate_symbol_name(name: &str) -> String {
-    const HEAD: usize = 24;
-    const TAIL: usize = 20;
-    if name.len() <= HEAD + TAIL + 2 {
-        return String::from(name);
-    }
-    alloc::format!("{}..{}", &name[..HEAD], &name[name.len() - TAIL..])
-}
 
 fn is_gotpc_rel_relocation(r_type: u32) -> bool {
     matches!(r_type, R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX)
@@ -1190,35 +1100,6 @@ fn elf_alloc_stats_from_file(file: &ParsedElf<'_>) -> ElfAllocStats {
     stats
 }
 
-pub(crate) fn elf_rel_debug_summary(bytes: &[u8], entry_hint: u64) -> Result<String, String> {
-    let file = parse_elf(bytes).map_err(String::from)?;
-    let stats = elf_alloc_stats_from_file(&file);
-
-    let entry_symbol = match require_symtab(&file) {
-        Ok(()) => match best_entry_symbol(&file) {
-            Ok(Some((kind, name, section_index, value))) => alloc::format!(
-                "entry_symbol={} sec={} value=0x{:x} kind={}",
-                abbreviate_symbol_name(name.as_str()),
-                section_index,
-                value,
-                kind
-            ),
-            Ok(None) => String::from("entry_symbol=missing"),
-            Err(err) => alloc::format!("entry_symbol=scan-failed:{}", err),
-        },
-        Err(err) => alloc::format!("entry_symbol=scan-failed:{}", err),
-    };
-
-    Ok(alloc::format!(
-        "ELF diag sections={} alloc_sections={} alloc_bytes={} entry_hint=sec:{}+0x{:x} {}",
-        stats.sections,
-        stats.alloc_sections,
-        stats.alloc_bytes,
-        entry_hint_section(entry_hint),
-        entry_hint_offset(entry_hint),
-        entry_symbol
-    ))
-}
 
 pub(crate) fn elf_imports<'a>(bytes: &'a [u8]) -> Result<Vec<ElfImport<'a>>, &'static str> {
     let file = parse_elf(bytes)?;

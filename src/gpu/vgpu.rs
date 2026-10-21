@@ -8469,17 +8469,6 @@ fn lookup_buffer(device: &VirtualDevice, handle: BufferHandle) -> Result<&Buffer
     entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
 }
 
-fn lookup_surface(
-    device: &VirtualDevice,
-    handle: SurfaceHandle,
-) -> Result<&SurfaceRecord, VgpuError> {
-    let (slot, generation) = decode_handle(handle.raw())?;
-    let entry = device.surfaces.get(slot).ok_or(VgpuError::InvalidHandle)?;
-    if entry.generation != generation {
-        return Err(VgpuError::InvalidHandle);
-    }
-    entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
-}
 
 fn lookup_buffer_mut(
     device: &mut VirtualDevice,

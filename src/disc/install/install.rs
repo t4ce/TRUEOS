@@ -4,22 +4,6 @@ use crate::r::fs::trueosfs;
 
 use super::{fat32, gpt};
 
-pub async fn install_bootable_uefi_gpt_with_log(
-    disk: block::DeviceHandle,
-    bootx64_efi: &[u8],
-    kernel_elf: &[u8],
-    log: &mut dyn FnMut(&str),
-) -> Result<(), block::Error> {
-    install_bootable_uefi_gpt_mode_with_log(
-        disk,
-        bootx64_efi,
-        kernel_elf,
-        super::pxeproc::InstallMode::Regular,
-        log,
-    )
-    .await
-}
-
 pub async fn install_bootable_uefi_gpt_mode_with_log(
     disk: block::DeviceHandle,
     bootx64_efi: &[u8],

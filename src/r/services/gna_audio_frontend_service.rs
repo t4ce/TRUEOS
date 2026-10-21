@@ -13,7 +13,6 @@ use trueos_time::{Duration, Timer};
 pub const POLL_SOFTCAP_MS: u64 = 100;
 pub const WAKE_LOG_SOFTCAP_MS: u64 = 250;
 const CADENCE_VALIDATION_SAMPLES: u32 = 10;
-const Q15_MAX: u16 = i16::MAX as u16;
 const SNAPSHOT_ATTEMPTS: usize = 4;
 
 const _: () = {
@@ -54,17 +53,6 @@ impl PipelineState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FrontEndStatus {
-    pub pipeline: PipelineState,
-    pub noise_reduction_active: bool,
-    pub noise_reduction_observations: u64,
-    pub vad_active: bool,
-    pub vad_observations: u64,
-    pub wake_events: u64,
-    pub wake_logs: u64,
-    pub wake_events_coalesced: u64,
-}
 
 #[derive(Clone, Copy)]
 struct LevelSnapshot {
@@ -108,119 +96,13 @@ static WAKE_SOURCE_TIMESTAMP_MS: AtomicU64 = AtomicU64::new(0);
 static WAKE_LOGS: AtomicU64 = AtomicU64::new(0);
 static WAKE_EVENTS_COALESCED: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn publish_pipeline_state(state: PipelineState) {
-    PIPELINE_STATE.store(state as u8, Ordering::Release);
-}
 
-#[must_use]
-pub(crate) fn publish_noise_reduction_observation(
-    active: bool,
-    confidence_q15: u16,
-    source_timestamp_ms: u64,
-) -> bool {
-    publish_level(
-        &NOISE_SEQUENCE,
-        &NOISE_ACTIVE,
-        &NOISE_CONFIDENCE_Q15,
-        &NOISE_SOURCE_TIMESTAMP_MS,
-        active,
-        confidence_q15,
-        source_timestamp_ms,
-    )
-}
 
-#[must_use]
-pub(crate) fn publish_vad_observation(
-    active: bool,
-    confidence_q15: u16,
-    source_timestamp_ms: u64,
-) -> bool {
-    publish_level(
-        &VAD_SEQUENCE,
-        &VAD_ACTIVE,
-        &VAD_CONFIDENCE_Q15,
-        &VAD_SOURCE_TIMESTAMP_MS,
-        active,
-        confidence_q15,
-        source_timestamp_ms,
-    )
-}
 
-#[must_use]
-pub(crate) fn publish_wake_word(
-    word_id: u32,
-    confidence_q15: u16,
-    source_timestamp_ms: u64,
-) -> bool {
-    let Some(writing) = begin_publish(&WAKE_SEQUENCE) else {
-        return false;
-    };
-    WAKE_WORD_ID.store(word_id, Ordering::Relaxed);
-    WAKE_CONFIDENCE_Q15.store(confidence_q15.min(Q15_MAX), Ordering::Relaxed);
-    WAKE_SOURCE_TIMESTAMP_MS.store(source_timestamp_ms, Ordering::Relaxed);
-    finish_publish(&WAKE_SEQUENCE, writing);
-    true
-}
 
-pub(crate) fn status() -> FrontEndStatus {
-    let noise = load_level(
-        &NOISE_SEQUENCE,
-        &NOISE_ACTIVE,
-        &NOISE_CONFIDENCE_Q15,
-        &NOISE_SOURCE_TIMESTAMP_MS,
-    );
-    let vad = load_level(&VAD_SEQUENCE, &VAD_ACTIVE, &VAD_CONFIDENCE_Q15, &VAD_SOURCE_TIMESTAMP_MS);
-    FrontEndStatus {
-        pipeline: PipelineState::from_u8(PIPELINE_STATE.load(Ordering::Acquire)),
-        noise_reduction_active: noise.is_some_and(|snapshot| snapshot.active),
-        noise_reduction_observations: noise.map_or(0, |snapshot| snapshot.sequence),
-        vad_active: vad.is_some_and(|snapshot| snapshot.active),
-        vad_observations: vad.map_or(0, |snapshot| snapshot.sequence),
-        wake_events: WAKE_SEQUENCE.load(Ordering::Acquire) / 2,
-        wake_logs: WAKE_LOGS.load(Ordering::Acquire),
-        wake_events_coalesced: WAKE_EVENTS_COALESCED.load(Ordering::Acquire),
-    }
-}
 
-fn publish_level(
-    sequence: &AtomicU64,
-    active_slot: &AtomicBool,
-    confidence_slot: &AtomicU16,
-    timestamp_slot: &AtomicU64,
-    active: bool,
-    confidence_q15: u16,
-    source_timestamp_ms: u64,
-) -> bool {
-    let Some(writing) = begin_publish(sequence) else {
-        return false;
-    };
-    active_slot.store(active, Ordering::Relaxed);
-    confidence_slot.store(confidence_q15.min(Q15_MAX), Ordering::Relaxed);
-    timestamp_slot.store(source_timestamp_ms, Ordering::Relaxed);
-    finish_publish(sequence, writing);
-    true
-}
 
-fn begin_publish(sequence: &AtomicU64) -> Option<u64> {
-    for _ in 0..SNAPSHOT_ATTEMPTS {
-        let stable = sequence.load(Ordering::Acquire);
-        if stable & 1 != 0 {
-            return None;
-        }
-        let writing = stable.wrapping_add(1);
-        if sequence
-            .compare_exchange_weak(stable, writing, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            return Some(writing);
-        }
-    }
-    None
-}
 
-fn finish_publish(sequence: &AtomicU64, writing: u64) {
-    sequence.store(writing.wrapping_add(1), Ordering::Release);
-}
 
 fn load_level(
     sequence: &AtomicU64,

@@ -286,18 +286,6 @@ pub mod env {
         }
     }
 
-    unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
-        if ptr.is_null() {
-            return None;
-        }
-
-        let mut len = 0usize;
-        while unsafe { *ptr.add(len) } != 0 {
-            len = len.saturating_add(1);
-        }
-
-        str::from_utf8(unsafe { slice::from_raw_parts(ptr.cast::<u8>(), len) }).ok()
-    }
 
     #[inline]
     fn context_slot() -> usize {
@@ -430,14 +418,7 @@ pub mod env {
         var("TRUEOS_FS_SCOPE").as_deref() == Some("trueosfs")
     }
 
-    pub(crate) unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
-        unsafe { crate::std_abi_shim::getenv(name) }
-    }
 
-    pub(crate) fn console_target() -> Option<MatrixTarget> {
-        let stack = context_stack().lock();
-        stack.last().and_then(|ctx| ctx.console_target.clone())
-    }
 
     pub(crate) fn retarget_console_slot(requested: &str) -> bool {
         false

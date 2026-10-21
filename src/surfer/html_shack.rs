@@ -37,64 +37,19 @@ static HTML_FETCH_WORKER_SEQ: AtomicU32 = AtomicU32::new(0);
 static HTML_BYTE_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static HTML_HTTPS_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 
-/// A fetched HTML document.
-///
-/// We keep the source URL with the HTML body so later work can add ids,
-/// diffing, and incremental DOM updates without changing the basic shape.
-#[derive(Clone, Debug)]
-pub struct Html {
-    pub url: String,
-    pub html: String,
-}
 
-impl Html {
-    pub fn new(url: impl Into<String>, html: impl Into<String>) -> Self {
-        Self {
-            url: url.into(),
-            html: html.into(),
-        }
-    }
-}
 
-/// Which network road should be used when the shack manager eventually drives
-/// the queued request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HtmlRoad {
-    Http,
-    Https,
-}
 
-impl HtmlRoad {
-    pub const fn as_scheme(self) -> &'static str {
-        match self {
-            Self::Http => "http://",
-            Self::Https => "https://",
-        }
-    }
-}
 
-pub type HtmlAutoHandoffCallback = Box<dyn FnMut(Html) + Send + 'static>;
 
-/// One queued "get this HTML ready" request.
-pub struct HtmlRequest {
-    pub url: String,
-    pub road: HtmlRoad,
-    pub auto_handoff_callback: Option<HtmlAutoHandoffCallback>,
-}
 
-impl HtmlRequest {
-    pub fn new(
-        url: impl Into<String>,
-        road: HtmlRoad,
-        auto_handoff_callback: Option<HtmlAutoHandoffCallback>,
-    ) -> Self {
-        Self {
-            url: url.into(),
-            road,
-            auto_handoff_callback,
-        }
-    }
-}
+
+
+
+
+
+
+
 
 struct ByteFetchRequest {
     id: u32,
@@ -145,8 +100,6 @@ pub enum HtmlShackFileError {
 /// to the callback.
 #[derive(Default)]
 pub struct HtmlShack {
-    html_request_queue: VecDeque<HtmlRequest>,
-    ready_html_queue: VecDeque<Html>,
     byte_request_queue: VecDeque<ByteFetchRequest>,
     ready_byte_queue: VecDeque<ByteFetchCompletion>,
     active_byte_fetches: BTreeSet<u32>,
@@ -158,42 +111,8 @@ impl HtmlShack {
         Self::default()
     }
 
-    /// Queue a request so the future shack manager can act on it.
-    ///
-    /// Returns the queue length after enqueue so callers can cheaply confirm
-    /// that the request made it into the box.
-    pub fn get_ready(
-        &mut self,
-        url: impl Into<String>,
-        road: HtmlRoad,
-        auto_handoff_callback: Option<HtmlAutoHandoffCallback>,
-    ) -> usize {
-        let request = HtmlRequest::new(url, road, auto_handoff_callback);
-        if crate::log_os::flags::HTML_SHACK_VERBOSE {
-            crate::log!(
-                "html_shack: enqueue url={} road={:?} pending_before={}\n",
-                request.url,
-                request.road,
-                self.html_request_queue.len()
-            );
-        }
-        self.html_request_queue.push_back(request);
-        self.html_request_queue.len()
-    }
 
-    pub fn pop_latest(&mut self) -> Option<(HtmlRequest, usize)> {
-        let dropped = self.html_request_queue.len().saturating_sub(1);
-        let latest = self.html_request_queue.pop_back()?;
-        self.html_request_queue.clear();
-        if crate::log_os::flags::HTML_SHACK_VERBOSE {
-            crate::log!(
-                "html_shack: pop_latest url={} dropped={} pending_after=0\n",
-                latest.url,
-                dropped
-            );
-        }
-        Some((latest, dropped))
-    }
+    
 
     fn push_byte_fetch(&mut self, request: ByteFetchRequest) -> usize {
         if crate::log_os::flags::HTML_SHACK_VERBOSE {
@@ -263,29 +182,11 @@ impl HtmlShack {
         }
     }
 
-    pub fn put_ready_html(&mut self, html: Html) -> usize {
-        self.ready_html_queue.push_back(html);
-        self.ready_html_queue.len()
-    }
+    
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    pub fn get_ready_inline_html(&mut self, html: impl Into<String>) -> usize {
-        self.put_ready_html(Html::new("inline", html))
-    }
+    
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    pub fn get_ready_file_html(&mut self, file_ref: &str) -> Result<usize, HtmlShackFileError> {
-        let path = normalize_file_reference(file_ref);
-        let bytes = match crate::r::io::kfs::read_file(path.as_str()) {
-            Ok(bytes) => bytes,
-            Err(crate::r::io::kfs::FsError::NoRoot) => return Err(HtmlShackFileError::NoRoot),
-            Err(crate::r::io::kfs::FsError::NotFound) => return Err(HtmlShackFileError::NotFound),
-            Err(_) => return Err(HtmlShackFileError::ReadFailed),
-        };
-
-        let html = String::from_utf8_lossy(bytes.as_slice()).into_owned();
-        Ok(self.put_ready_html(Html::new(alloc::format!("file://{}", path), html)))
-    }
+    
 }
 
 #[cfg(test)]
@@ -374,38 +275,15 @@ pub fn with_html_shack<R>(f: impl FnOnce(&mut HtmlShack) -> R) -> R {
     f(shack)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub fn get_ready_inline_html(html: impl Into<String>) -> usize {
-    let html = prepare_ready_inline_html(html);
-    with_html_shack(|shack| shack.put_ready_html(html))
-}
 
-pub fn prepare_ready_inline_html(html: impl Into<String>) -> Html {
-    Html::new("inline", html)
-}
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub fn get_ready_file_html(file_ref: &str) -> Result<usize, HtmlShackFileError> {
-    let html = prepare_ready_file_html(file_ref)?;
-    Ok(with_html_shack(|shack| shack.put_ready_html(html)))
-}
 
-pub fn prepare_ready_file_html(file_ref: &str) -> Result<Html, HtmlShackFileError> {
-    let path = normalize_file_reference(file_ref);
-    let bytes = match crate::r::io::kfs::read_file(path.as_str()) {
-        Ok(bytes) => bytes,
-        Err(crate::r::io::kfs::FsError::NoRoot) => return Err(HtmlShackFileError::NoRoot),
-        Err(crate::r::io::kfs::FsError::NotFound) => return Err(HtmlShackFileError::NotFound),
-        Err(_) => return Err(HtmlShackFileError::ReadFailed),
-    };
 
-    let source = String::from_utf8_lossy(bytes.as_slice()).into_owned();
-    Ok(Html::new(alloc::format!("file://{}", path), source))
-}
 
-fn pop_latest_request() -> Option<(HtmlRequest, usize)> {
-    with_html_shack(HtmlShack::pop_latest)
-}
+
+
+
+
 
 fn pop_byte_fetch_request() -> Option<ByteFetchRequest> {
     with_html_shack(HtmlShack::pop_byte_fetch)
@@ -553,16 +431,7 @@ fn normalize_http_url_scheme(url: &str) -> Option<String> {
     None
 }
 
-fn resolve_request_url(request: &HtmlRequest) -> String {
-    let trimmed = request.url.trim();
-    if let Some(url) = normalize_http_url_scheme(trimmed) {
-        return url;
-    }
 
-    let mut out = String::from(request.road.as_scheme());
-    out.push_str(trimmed);
-    out
-}
 
 fn preview_line(line: &str) -> &str {
     if line.len() <= HTML_PREVIEW_LINE_CHARS {
@@ -1714,41 +1583,7 @@ async fn fetch_https_body_once(
     }
 }
 
-async fn fetch_html_body_for_navigation(
-    worker_transport: &mut HttpWorkerTransport,
-    url: &str,
-    max_bytes: usize,
-    timeout_ms: u64,
-) -> Result<(String, Vec<u8>), HttpFetchError> {
-    let mut current = String::from(url);
-    let mut seen = BTreeSet::new();
 
-    for hop in 0..=HTML_FETCH_MAX_REDIRECTS {
-        if !seen.insert(current.clone()) {
-            return Err(HttpFetchError::Body);
-        }
-
-        if strip_url_prefix_ignore_ascii_case(current.trim(), "https://").is_some() {
-            let target = parse_https_url(current.as_str())?;
-            let body = fetch_https_body_once(&target, max_bytes, timeout_ms).await?;
-            return Ok((target.url, body));
-        }
-
-        let target = parse_http_url(current.as_str())?;
-        match fetch_http_body_once(worker_transport, &target, max_bytes, &ByteFetchMethod::Get)
-            .await
-        {
-            Ok(body) => return Ok((target.url, body)),
-            Err(HttpFetchError::Redirect(next)) if hop < HTML_FETCH_MAX_REDIRECTS => {
-                let next = resolve_redirect(&target, next.as_str())?;
-                crate::log!("html_shack: redirect hop={} {} -> {}\n", hop + 1, target.url, next);
-                current = next;
-            }
-            Err(err) => return Err(err),
-        }
-    }
-    Err(HttpFetchError::Body)
-}
 
 async fn handle_byte_fetch_request(
     worker_id: u32,
@@ -1809,91 +1644,7 @@ async fn handle_byte_fetch_request(
     put_byte_fetch_result(request.id, result);
 }
 
-async fn handle_html_fetch_request(
-    worker_id: u32,
-    worker_transport: &mut HttpWorkerTransport,
-    mut request: HtmlRequest,
-    dropped_requests: usize,
-) {
-    let fetch_url = resolve_request_url(&request);
-    if dropped_requests > 0 {
-        crate::log!(
-            "html_shack: dropped stale navigation requests worker={} count={} newest={}\n",
-            worker_id,
-            dropped_requests,
-            fetch_url
-        );
-    }
 
-    if fetch_url.len() > 256 {
-        crate::log!(
-            "html_shack: drop worker={} url={} reason=url too long max=256\n",
-            worker_id,
-            fetch_url
-        );
-        return;
-    }
-
-    let started_at = Instant::now();
-    let result = with_timeout_or_none(
-        fetch_html_body_for_navigation(
-            worker_transport,
-            fetch_url.as_str(),
-            HTML_FETCH_MAX_BYTES,
-            HTML_FETCH_BODY_TIMEOUT_MS,
-        ),
-        HTML_FETCH_BODY_TIMEOUT_MS,
-    )
-    .await;
-    let elapsed_ms = Instant::now()
-        .saturating_duration_since(started_at)
-        .as_millis();
-
-    let Some(result) = result else {
-        crate::log!(
-            "html_shack: fetch failed worker={} url={} reason=timeout elapsed_ms={}\n",
-            worker_id,
-            fetch_url,
-            elapsed_ms
-        );
-        return;
-    };
-
-    let (source_url, bytes) = match result {
-        Ok(ok) => ok,
-        Err(err) => {
-            crate::log!(
-                "html_shack: fetch failed worker={} url={} reason={} elapsed_ms={}\n",
-                worker_id,
-                fetch_url,
-                err.reason(),
-                elapsed_ms
-            );
-            return;
-        }
-    };
-
-    let html_text = String::from_utf8_lossy(bytes.as_slice()).into_owned();
-    if HTML_SHACK_PREVIEW_ENABLE {
-        log_html_preview(source_url.as_str(), html_text.as_str());
-    }
-
-    let html = Html::new(source_url.clone(), html_text);
-    let delegated_handoff = request.auto_handoff_callback.is_some();
-    if let Some(callback) = request.auto_handoff_callback.as_mut() {
-        callback(html.clone());
-    }
-    let ready_len = with_html_shack(|shack| shack.put_ready_html(html));
-    crate::log!(
-        "html_shack: fetched worker={} url={} bytes={} ready={} elapsed_ms={} transport=hyper-vnet delegated={}\n",
-        worker_id,
-        source_url,
-        bytes.len(),
-        ready_len,
-        elapsed_ms,
-        if delegated_handoff { 1 } else { 0 }
-    );
-}
 
 #[trueos_executor::task(pool_size = 10)]
 pub async fn html_fetch_worker_task() {
@@ -1918,18 +1669,12 @@ pub async fn html_fetch_worker_task() {
             continue;
         }
 
-        let Some((request, dropped_requests)) = pop_latest_request() else {
-            if crate::log_os::flags::HTML_SHACK_IDLE_LOGS {
-                let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
-                if n.is_multiple_of(256) {
-                    crate::log!("html_shack: fetch service idle polls={}\n", n + 1);
-                }
+        if crate::log_os::flags::HTML_SHACK_IDLE_LOGS {
+            let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
+            if n.is_multiple_of(256) {
+                crate::log!("html_shack: fetch service idle polls={}\n", n + 1);
             }
-            Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
-            continue;
-        };
-
-        handle_html_fetch_request(worker_id, &mut worker_transport, request, dropped_requests)
-            .await;
+        }
+        Timer::after(EmbassyDuration::from_millis(HTML_FETCH_IDLE_MS)).await;
     }
 }

@@ -119,6 +119,22 @@ fn direct_rcs_push_gpgpu_walker_2d(
     batch: &mut [u32],
     cursor: &mut usize,
     payload_offset: usize,
+/// A deliberately bounded Xe-LP 3D walker shape.
+///
+/// The compiler contract selects the SIMD width and therefore both the number
+/// of hardware threads and the local-ID payload footprint. This is not a
+/// general OpenCL launch description: widening either dimension needs a new
+/// hardware/ABI proof before it can enter the direct-RCS path.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct DirectRcsXeLp3dWalkerShape {
+    group_dimensions: [u32; 3],
+    local_dimensions: [u32; 3],
+    simd_select: u32,
+    hardware_threads: u32,
+    right_execution_mask: u32,
+    bottom_execution_mask: u32,
+    indirect_bytes: usize,
+}
     indirect_bytes: usize,
     group_x: u32,
     group_y: u32,
@@ -148,155 +164,13 @@ fn direct_rcs_push_gpgpu_walker_2d(
         && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
 }
 
-/// A deliberately bounded Xe-LP 3D walker shape.
-///
-/// The compiler contract selects the SIMD width and therefore both the number
-/// of hardware threads and the local-ID payload footprint. This is not a
-/// general OpenCL launch description: widening either dimension needs a new
-/// hardware/ABI proof before it can enter the direct-RCS path.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct DirectRcsXeLp3dWalkerShape {
-    group_dimensions: [u32; 3],
-    local_dimensions: [u32; 3],
-    simd_select: u32,
-    hardware_threads: u32,
-    right_execution_mask: u32,
-    bottom_execution_mask: u32,
-    indirect_bytes: usize,
-}
+
 
 impl DirectRcsXeLp3dWalkerShape {
-    fn from_authenticated_contract(
-        contract: &GpgpuKernelAbiContract,
-        group_dimensions: [u32; 3],
-        local_dimensions: [u32; 3],
-        indirect_bytes: usize,
-        right_execution_mask: u32,
-        bottom_execution_mask: u32,
-    ) -> Option<Self> {
-        // The artifact uploader authenticates the contract against the
-        // compiler output. Revalidate here so this low-level encoder remains
-        // fail-closed when it is used independently of an upload path.
-        if contract.validate().is_err()
-            || group_dimensions != XELP_3D_WALKER_GROUP_DIMENSIONS
-            || local_dimensions != XELP_3D_WALKER_LOCAL_DIMENSIONS
-        {
-            return None;
-        }
-
-        let local_invocations = local_dimensions[0]
-            .checked_mul(local_dimensions[1])?
-            .checked_mul(local_dimensions[2])?;
-        if local_invocations != XELP_3D_WALKER_LOCAL_INVOCATIONS {
-            return None;
-        }
-
-        let (simd_select, simd_width, expected_per_thread_bytes, expected_right_mask) =
-            match contract.simd_width {
-                16 => (
-                    GPGPU_WALKER_SIMD16_SELECT,
-                    16,
-                    96usize,
-                    GPGPU_WALKER_SIMD16_MASK,
-                ),
-                32 => (
-                    GPGPU_WALKER_SIMD32_SELECT,
-                    32,
-                    192usize,
-                    GPGPU_WALKER_SIMD32_MASK,
-                ),
-                _ => return None,
-            };
-        if contract.per_thread_data_bytes as usize != expected_per_thread_bytes
-            || local_invocations % simd_width != 0
-            || right_execution_mask != expected_right_mask
-            || bottom_execution_mask != GPGPU_WALKER_BOTTOM_MASK
-        {
-            return None;
-        }
-        let hardware_threads = local_invocations / simd_width;
-        // This literal 64-work-item shape has a proven thread count for each
-        // admitted SIMD width. Keep the expectation explicit rather than
-        // treating the packet's thread-count field as a generic scheduler.
-        if hardware_threads
-            != match simd_width {
-                16 => 4,
-                32 => 2,
-                _ => return None,
-            }
-        {
-            return None;
-        }
-
-        let expected_indirect_bytes = (contract.cross_thread_data_bytes as usize)
-            .checked_add(expected_per_thread_bytes.checked_mul(hardware_threads as usize)?)?;
-        if indirect_bytes != expected_indirect_bytes {
-            return None;
-        }
-
-        Some(Self {
-            group_dimensions,
-            local_dimensions,
-            simd_select,
-            hardware_threads,
-            right_execution_mask,
-            bottom_execution_mask,
-            indirect_bytes,
-        })
-    }
+    
 }
 
-/// Emit the one admitted Xe-LP 3D GPGPU_WALKER packet.
-///
-/// `shape` can only be constructed from a validated compiler ABI contract.
-/// Preserve the legacy 2D encoder for all existing users, including Font,
-/// whose full-SIMD16 lane behavior is intentionally unchanged.
-fn direct_rcs_push_xelp_3d_gpgpu_walker(
-    batch: &mut [u32],
-    cursor: &mut usize,
-    payload_offset: usize,
-    shape: DirectRcsXeLp3dWalkerShape,
-) -> bool {
-    if !payload_offset.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
-        || payload_offset
-            .checked_add(shape.indirect_bytes)
-            .is_none_or(|end| end > DIRECT_RCS_BATCH_BYTES)
-        || *cursor > batch.len()
-        || batch.len() - *cursor < GPGPU_WALKER_DWORDS
-    {
-        return false;
-    }
-    debug_assert_eq!(shape.local_dimensions, XELP_3D_WALKER_LOCAL_DIMENSIONS);
-    let simd_width = if shape.simd_select == GPGPU_WALKER_SIMD16_SELECT {
-        16
-    } else {
-        32
-    };
-    debug_assert_eq!(
-        shape.hardware_threads * simd_width,
-        XELP_3D_WALKER_LOCAL_INVOCATIONS
-    );
 
-    direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, shape.indirect_bytes as u32)
-        && direct_rcs_push(batch, cursor, payload_offset as u32)
-        && direct_rcs_push(
-            batch,
-            cursor,
-            (shape.simd_select << 30) | (shape.hardware_threads - 1),
-        )
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, shape.group_dimensions[0])
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, shape.group_dimensions[1])
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, shape.group_dimensions[2])
-        && direct_rcs_push(batch, cursor, shape.right_execution_mask)
-        && direct_rcs_push(batch, cursor, shape.bottom_execution_mask)
-}
 
 fn direct_rcs_push_rect_worklist_walker(
     batch: &mut [u32],
@@ -522,9 +396,7 @@ fn direct_rcs_submit_batch_state(
     direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::SystemService)
 }
 
-fn font_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    matches!(font_rcs_submit_batch_state(dev, state), DirectRcsSubmissionState::Submitted)
-}
+
 
 fn font_rcs_submit_batch_state(dev: super::Dev, state: DirectRcsState) -> DirectRcsSubmissionState {
     direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Font)
@@ -537,16 +409,7 @@ fn execution_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     )
 }
 
-fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    if !super::gen12_lumen_mocs_ready() {
-        quarantine_lfm25_rcs_context("lumen-mocs-not-ready");
-        return false;
-    }
-    matches!(
-        direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Lfm25),
-        DirectRcsSubmissionState::Submitted
-    )
-}
+
 
 fn direct_rcs_submit_batch_on_lane_state(
     dev: super::Dev,
@@ -1094,37 +957,9 @@ fn execution_rcs_poll_result_slot_timeout_ms(
     )
 }
 
-fn lfm25_rcs_poll_result_slot_timeout_ms(
-    state: DirectRcsState,
-    slot: usize,
-    expected: u32,
-    timeout_ms: u64,
-) -> u32 {
-    direct_rcs_poll_result_slot_timeout_ms_on_lane(
-        state,
-        slot,
-        expected,
-        timeout_ms,
-        DirectRcsLane::Lfm25,
-    )
-}
 
-fn lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
-    dev: super::Dev,
-    state: DirectRcsState,
-    slot: usize,
-    expected: u32,
-    timeout_ms: u64,
-) -> (u32, u64) {
-    direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
-        state,
-        slot,
-        expected,
-        timeout_ms,
-        DirectRcsLane::Lfm25,
-        Some(dev),
-    )
-}
+
+
 
 fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
     state: DirectRcsState,
@@ -1242,15 +1077,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
     (if completed { observed } else { 0 }, marker_observe_timestamp)
 }
 
-fn direct_rcs_poll_result_slot_elapsed(
-    state: DirectRcsState,
-    slot: usize,
-    expected: u32,
-    start_tick: u64,
-) -> (u32, u64) {
-    let observed = direct_rcs_poll_result_slot(state, slot, expected);
-    (observed, direct_rcs_elapsed_ms_since(start_tick))
-}
+
 
 fn direct_rcs_read_result_slot(state: DirectRcsState, slot: usize) -> u32 {
     let offset = slot.saturating_mul(core::mem::size_of::<u32>());

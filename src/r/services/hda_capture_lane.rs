@@ -1207,48 +1207,6 @@ pub(crate) fn status() -> CaptureStatus {
     *STATUS.lock()
 }
 
-/// Copy the newest completed PCM samples without consuming the capture lane.
-///
-/// Samples are signed little-endian i16 in the lane's native interleaved
-/// channel layout. This is intentionally a read-only tap: GNA or another
-/// consumer cannot move the hardware cursor or alter stream ownership.
-pub(crate) fn copy_latest_i16(out: &mut [i16]) -> Option<CaptureRead> {
-    if out.is_empty() {
-        return None;
-    }
-    let engine = ENGINE.lock();
-    let engine = engine.as_ref()?;
-    let status = status();
-    if status.state != CaptureState::Running {
-        return None;
-    }
-
-    let channels = usize::from(engine.channels);
-    if channels == 0 {
-        return None;
-    }
-    let capacity_samples = CAPTURE_DMA_BYTES / 2;
-    let lpib = unsafe { read32(engine.mmio, engine.stream_base() + SD_LPIB) } as usize;
-    let end_sample = (lpib.min(CAPTURE_DMA_BYTES) / 2) % capacity_samples;
-    let mut sample_count = out.len().min(capacity_samples);
-    sample_count -= sample_count % channels;
-    if sample_count == 0 {
-        return None;
-    }
-    let start_sample = (end_sample + capacity_samples - sample_count) % capacity_samples;
-    for (index, slot) in out.iter_mut().take(sample_count).enumerate() {
-        let sample_index = (start_sample + index) % capacity_samples;
-        *slot =
-            unsafe { core::ptr::read_volatile((engine.dma_virt as *const i16).add(sample_index)) };
-    }
-    Some(CaptureRead {
-        samples: sample_count,
-        channels: engine.channels,
-        sample_rate_hz: PCM_SAMPLE_RATE_HZ,
-        sample_bits: PCM_SAMPLE_BITS,
-        total_frames: engine.total_frames,
-    })
-}
 
 /// Independent sequential tap; never changes the hardware or another reader.
 pub(crate) struct CaptureCursor {

@@ -94,7 +94,6 @@ pub trait WifiDriver: NetworkDriver + Send {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn disconnect(&mut self) -> Result<(), &'static str>;
     fn connected_ssid(&self) -> Option<String>;
-    fn current_channel(&self) -> Option<u8>;
     fn signal_strength(&self) -> Option<i8>;
 }
 

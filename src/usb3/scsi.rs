@@ -51,18 +51,7 @@ pub const OP_READ_10: u8 = 0x28;
 pub const OP_WRITE_10: u8 = 0x2A;
 pub const OP_SYNCHRONIZE_CACHE_10: u8 = 0x35;
 
-pub const CDB6_LEN: usize = 6;
-pub const CDB10_LEN: usize = 10;
-pub const READ_WRITE_10_MAX_BLOCKS: u32 = u16::MAX as u32;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum CdbBuildError {
-    ZeroBlockSize,
-    EmptyTransfer,
-    MisalignedOffset,
-    MisalignedLength,
-    TransferTooLarge,
-}
 
 pub fn cdb_request_sense(allocation_len: u8) -> [u8; 6] {
     [OP_REQUEST_SENSE, 0, 0, 0, allocation_len, 0]
@@ -76,50 +65,8 @@ pub fn cdb_write_10(lba: u32, blocks: u16) -> [u8; 10] {
     cdb_rw_10(OP_WRITE_10, lba, blocks)
 }
 
-pub fn cdb_read_10_for_bytes(
-    offset_bytes: u64,
-    transfer_bytes: u32,
-    block_size: u32,
-) -> Result<[u8; 10], CdbBuildError> {
-    let (lba, blocks) = rw_10_lba_blocks(offset_bytes, transfer_bytes, block_size)?;
-    Ok(cdb_read_10(lba, blocks))
-}
 
-pub fn cdb_write_10_for_bytes(
-    offset_bytes: u64,
-    transfer_bytes: u32,
-    block_size: u32,
-) -> Result<[u8; 10], CdbBuildError> {
-    let (lba, blocks) = rw_10_lba_blocks(offset_bytes, transfer_bytes, block_size)?;
-    Ok(cdb_write_10(lba, blocks))
-}
 
-fn rw_10_lba_blocks(
-    offset_bytes: u64,
-    transfer_bytes: u32,
-    block_size: u32,
-) -> Result<(u32, u16), CdbBuildError> {
-    if block_size == 0 {
-        return Err(CdbBuildError::ZeroBlockSize);
-    }
-    if transfer_bytes == 0 {
-        return Err(CdbBuildError::EmptyTransfer);
-    }
-    let block_size_u64 = u64::from(block_size);
-    if offset_bytes % block_size_u64 != 0 {
-        return Err(CdbBuildError::MisalignedOffset);
-    }
-    if transfer_bytes % block_size != 0 {
-        return Err(CdbBuildError::MisalignedLength);
-    }
-
-    let lba = offset_bytes / block_size_u64;
-    let blocks = transfer_bytes / block_size;
-    if lba > u64::from(u32::MAX) || blocks == 0 || blocks > READ_WRITE_10_MAX_BLOCKS {
-        return Err(CdbBuildError::TransferTooLarge);
-    }
-    Ok((lba as u32, blocks as u16))
-}
 
 fn cdb_rw_10(opcode: u8, lba: u32, blocks: u16) -> [u8; 10] {
     let lba_be = lba.to_be_bytes();

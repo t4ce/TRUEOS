@@ -30,6 +30,12 @@ const SHADERTOY_PROTEAN_CLOUDS_ADLS_GPU: u64 = 0x0DE8_0000;
 const SHADERTOY_PALETTE_GRID_ADLS_GPU: u64 = 0x0DF8_0000;
 const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU: u64 = 0x0DF0_0000;
 const SHADERTOY_COSMIC_STRANDS_ADLS_GPU: u64 = 0x0DFC_0000;
+const KOKORO_CONV1D_POST_MARKER: u32 = 0xC0DE_7C02;
+const KOKORO_CONV1D_PRE_MARKER: u32 = 0xC0DE_7C01;
+const KOKORO_CONV1D_COMPLETION_TIMEOUT_MS: u64 = 5_000;
+const KOKORO_QGEMM_POST_MARKER: u32 = 0xC0DE_7A02;
+const KOKORO_QGEMM_PRE_MARKER: u32 = 0xC0DE_7A01;
+const KOKORO_QGEMM_COMPLETION_TIMEOUT_MS: u64 = 5_000;
 const _: () = {
     assert!(
         SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() as u64
@@ -184,16 +190,6 @@ const RCS_RING_EXECLIST_CONTROL: usize = RCS_RING_BASE + 0x550;
 const RCS_RING_EXECLIST_STATUS_LO: usize = RCS_RING_BASE + 0x234;
 const RCS_RING_EXECLIST_STATUS_HI: usize = RCS_RING_BASE + 0x238;
 
-const RCS_CS_DEBUG_MODE1: usize = RCS_RING_BASE + 0xEC;
-
-const FORCEWAKE_RENDER: usize = 0x0A278;
-const FORCEWAKE_GT: usize = 0x0A188;
-const FORCEWAKE_ACK_RENDER: usize = 0x0D84;
-const FORCEWAKE_ACK_GT: usize = 0x130044;
-const FORCEWAKE_KERNEL: u32 = 1 << 0;
-const FORCEWAKE_FALLBACK: u32 = 1 << 15;
-const FORCEWAKE_POLL_ITERS: usize = 20_000;
-const FF_DOP_CLOCK_GATE_DISABLE: u32 = 1 << 1;
 const RING_VALID: u32 = 1;
 
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
@@ -294,9 +290,6 @@ const KOKORO_CONV1D_INDIRECT_BYTES: usize =
     KOKORO_CONV1D_CROSS_THREAD_BYTES + KOKORO_CONV1D_PER_THREAD_BYTES;
 const KOKORO_CONV1D_POST_MARKER_SLOT: usize = 60;
 const KOKORO_CONV1D_PRE_MARKER_SLOT: usize = 62;
-const KOKORO_CONV1D_POST_MARKER: u32 = 0xC0DE_7C02;
-const KOKORO_CONV1D_PRE_MARKER: u32 = 0xC0DE_7C01;
-const KOKORO_CONV1D_COMPLETION_TIMEOUT_MS: u64 = 5_000;
 
 const _: () = {
     assert!(KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.simd_width == 16);
@@ -415,15 +408,15 @@ const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
 const GPGPU_WALKER_SIMD16_MASK: u32 = 0x0000_FFFF;
 const GPGPU_WALKER_SIMD32_MASK: u32 = 0xFFFF_FFFF;
 const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
-const GPGPU_WALKER_DWORDS: usize = 15;
 
+const GPGPU_WALKER_DWORDS: usize = 15;
 // The first Xe-LP 3D compute rung is deliberately narrow. It accepts only
 // the compiler-authenticated 64-work-item shape used by the initial ADL-S
 // experiment; future shapes need their own ABI and hardware validation.
+
 const XELP_3D_WALKER_GROUP_DIMENSIONS: [u32; 3] = [24, 12, 24];
 const XELP_3D_WALKER_LOCAL_DIMENSIONS: [u32; 3] = [4, 4, 4];
 const XELP_3D_WALKER_LOCAL_INVOCATIONS: u32 = 64;
-
 const COPY_RECT_BATCH_IDD_OFFSET_BYTES: usize = 0x1000;
 const COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;
 const COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1080;
@@ -829,9 +822,6 @@ const KOKORO_QGEMM_INDIRECT_BYTES: usize =
     KOKORO_QGEMM_CROSS_THREAD_BYTES + KOKORO_QGEMM_PER_THREAD_BYTES;
 const KOKORO_QGEMM_POST_MARKER_SLOT: usize = 56;
 const KOKORO_QGEMM_PRE_MARKER_SLOT: usize = 58;
-const KOKORO_QGEMM_POST_MARKER: u32 = 0xC0DE_7A02;
-const KOKORO_QGEMM_PRE_MARKER: u32 = 0xC0DE_7A01;
-const KOKORO_QGEMM_COMPLETION_TIMEOUT_MS: u64 = 5_000;
 
 const _: () = {
     assert!(KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.simd_width == 16);
@@ -1084,9 +1074,6 @@ const _: () = assert!(LAB256_POST_MARKER_SLOT.is_multiple_of(2));
 const _: () = assert!(
     LAB256_COMPOSITE_PAYLOAD_OFFSET_BYTES + LAB256_INDIRECT_BYTES <= DIRECT_RCS_BATCH_BYTES
 );
-pub(crate) const FONT_OUTLINE_STAGE_AUDIT: u32 = 1;
-pub(crate) const FONT_OUTLINE_STAGE_FLATTEN: u32 = 2;
-pub(crate) const FONT_OUTLINE_STAGE_STROKE_MESH: u32 = 3;
 const COPY_RECT_POST_MARKER_SLOT: usize = 4;
 // PIPE_CONTROL post-sync writes a QWord, so slot 5 is reserved for the high
 // DWORD of the completion cookie. Keep the diagnostic pre marker outside that
@@ -1174,8 +1161,6 @@ const DIRECT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01B1_0000;
 const DIRECT_RCS_GPU_VA_RESULT_BASE: u64 = 0x01B4_0000;
 const DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE: u64 = 0x0089_0000;
 
-const DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE: u64 = 0x0440_0000;
-const DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES: usize = 4 * 1024 * 1024;
 // One tight or canvas stamp may reach the service's UHD/4K RGBA8 soft cap.
 // The primary font VA range has room for one such allocation plus masks; the
 // secondary range is exactly 32 MiB.

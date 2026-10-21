@@ -17,7 +17,7 @@ use super::{
     WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
     cancel_frame_buffer, commit_window_frame_replacement, create_frame, create_window,
     destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
-    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_window_frame, publish_window_frames,
+    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_window_frame,
     reselect_window_for_cursor, retire_frame_when_released, take_owner_input_events,
     window_placement, window_resize_state, writable_rgba_view,
 };
@@ -27,7 +27,6 @@ const PREVIEW_WIDTH: u32 = super::DEFAULT_FRAME_WIDTH;
 const PREVIEW_HEIGHT: u32 = super::DEFAULT_FRAME_HEIGHT;
 const LAB256_PREVIEW_SIZE: u32 = 256;
 const PREVIEW_MARGIN: u32 = 64;
-const PREVIEW_GRID_GAP: u32 = 16;
 const PREVIEW_Z: i32 = 30;
 const IDLE_POLL_MS: u64 = 20;
 const COMMAND_POLL_MAX_MS: u64 = 10;
@@ -61,7 +60,6 @@ impl GpgpuPreviewPreset {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Static => "static",
-
             Self::Lab256 => "lab256",
             Self::CppGallery => "cpp-gallery",
             Self::CppCloudHighWisps => "cpp-cloud-high-wisps",
@@ -163,18 +161,6 @@ pub(crate) enum GpgpuPreviewPhase {
     Faulted,
 }
 
-impl GpgpuPreviewPhase {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Offline => "offline",
-            Self::Idle => "idle",
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Faulted => "faulted",
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GpgpuPreviewMetrics {
     pub(crate) attempted: u64,
@@ -273,12 +259,6 @@ impl PreviewRunPolicy {
         refocus_source: None,
     };
 
-    const WIN_DEMO: Self = Self {
-        frame_limit: 0,
-        target_hz: 0,
-        interactive_win_demo: true,
-        refocus_source: None,
-    };
 }
 
 struct PreviewControl {
@@ -401,20 +381,7 @@ fn request_gpgpu_preview_start_with_policy(
     Ok(serial)
 }
 
-pub(crate) fn request_gpgpu_preview_stop() -> u64 {
-    let mut control = PREVIEW_CONTROL.lock();
-    let serial = next_serial(control.desired.serial);
-    control.desired.serial = serial;
-    control.desired.running = false;
-    control.status.desired_running = false;
-    control.status.request_serial = serial;
 
-    serial
-}
-
-pub(crate) fn gpgpu_preview_status() -> GpgpuPreviewStatus {
-    PREVIEW_CONTROL.lock().status
-}
 
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
@@ -592,13 +559,6 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 
 fn initialize_previews(desired: DesiredPreview) -> Result<Vec<ActivePreview>, &'static str> {
     { Ok(alloc::vec![initialize_preview(desired)?]) }
-}
-
-fn abandon_preview_initialization(session: WindowSessionId, previews: &[ActivePreview]) {
-    let _ = finish_window_session(PREVIEW_OWNER, session);
-    for preview in previews {
-        let _ = destroy_frame(preview.frame);
-    }
 }
 
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
@@ -1231,10 +1191,6 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
 
 fn preview_surface_count(preview: &ActivePreview) -> usize {
     1usize.saturating_add(preview.extra_surfaces.len())
-}
-
-const fn should_log_preview_checkpoint(sequence: u64) -> bool {
-    sequence <= 8 || sequence.is_multiple_of(120)
 }
 
 fn preview_needs_render(preview: &ActivePreview) -> bool {

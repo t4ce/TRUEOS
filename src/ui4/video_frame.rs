@@ -844,48 +844,7 @@ pub(super) fn decoded_video_window_closed(owner: WindowOwner, window: WindowId) 
     }
 }
 
-pub(crate) fn request_video_playback_stop(slot: usize) -> bool {
-    let Some(state) = VIDEO_SESSIONS.get(slot) else {
-        return false;
-    };
-    if state.occupied.load(Ordering::Acquire)
-        && (state.texture_target.load(Ordering::Acquire) != 0 || state.stream.lock().is_none())
-    {
-        state.cancelled.store(true, Ordering::Release);
-        return true;
-    }
-    let stream = *state.stream.lock();
-    // Use the same broker close path as Escape, including its cancellation
-    // notification. The playback task remains the teardown owner.
-    stream.is_some_and(|stream| super::close_window(VIDEO_OWNER, stream.window).is_ok())
-}
 
-pub(crate) struct VideoPlaybackStatus {
-    pub(crate) texture_sink: bool,
-    pub(crate) occupied: bool,
-    pub(crate) cancelled: bool,
-    pub(crate) paused: bool,
-    pub(crate) queued: usize,
-    pub(crate) completed: usize,
-    pub(crate) active: usize,
-    pub(crate) published: usize,
-}
-pub(crate) fn video_playback_status() -> [VideoPlaybackStatus; VIDEO_PLAYBACK_SESSIONS] {
-    core::array::from_fn(|slot| {
-        let session = &VIDEO_SESSIONS[slot];
-        let state = session.conversion.lock();
-        VideoPlaybackStatus {
-            texture_sink: session.texture_target.load(Ordering::Acquire) != 0,
-            occupied: session.occupied.load(Ordering::Acquire),
-            cancelled: session.cancelled.load(Ordering::Acquire),
-            paused: session.paused.load(Ordering::Acquire),
-            queued: state.queued,
-            completed: state.completed,
-            active: state.active,
-            published: state.published,
-        }
-    })
-}
 
 fn decoded_video_conversion_idle(session: VideoPlaybackSession) -> bool {
     let state = session.state().conversion.lock();

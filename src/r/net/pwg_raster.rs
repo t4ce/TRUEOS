@@ -4,6 +4,7 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
+#[cfg(any(feature = "gridpaper", test))]
 const DPI: u32 = 300;
 #[cfg(feature = "gridpaper")]
 const A4_WIDTH_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_WIDTH_MM * 10;
@@ -11,12 +12,15 @@ const A4_WIDTH_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_WIDTH_M
 const A4_HEIGHT_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_HEIGHT_MM * 10;
 #[cfg(feature = "gridpaper")]
 const RULER_GUTTER_TENTH_MM: u32 = crate::r::services::gridpaper_service::RULER_GUTTER_MM * 10;
+#[cfg(any(feature = "gridpaper", test))]
 const PAGE_HEADER_BYTES: usize = 1_796;
+#[cfg(any(feature = "gridpaper", test))]
 const MAX_DOCUMENT_BYTES: usize = 7 * 1024 * 1024;
 
 pub(crate) const MIME_TYPE: &str = "image/pwg-raster";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(feature = "gridpaper", test))]
 pub(crate) enum EncodeError {
     InvalidFrame,
     TooLarge,
@@ -103,6 +107,7 @@ pub(crate) fn encode_gridpaper_a4(
     Ok(document)
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn page_header(width: u32, height: u32) -> [u8; PAGE_HEADER_BYTES] {
     let mut header = [0u8; PAGE_HEADER_BYTES];
     write_cstring(&mut header[0..64], "PwgRaster");
@@ -129,6 +134,7 @@ fn page_header(width: u32, height: u32) -> [u8; PAGE_HEADER_BYTES] {
     header
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn append_compressed_lines(
     output: &mut Vec<u8>,
     repetitions: u16,
@@ -141,6 +147,7 @@ fn append_compressed_lines(
         .ok_or(EncodeError::TooLarge)
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn encode_packbits_rgb(rgb: &[u8], output: &mut Vec<u8>) -> Result<(), EncodeError> {
     if rgb.len() % 3 != 0 {
         return Err(EncodeError::InvalidFrame);
@@ -176,6 +183,7 @@ fn encode_packbits_rgb(rgb: &[u8], output: &mut Vec<u8>) -> Result<(), EncodeErr
     Ok(())
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn repeated_pixels(rgb: &[u8], start: usize, pixels: usize) -> usize {
     let sample = &rgb[start * 3..start * 3 + 3];
     let mut count = 1usize;
@@ -188,22 +196,27 @@ fn repeated_pixels(rgb: &[u8], start: usize, pixels: usize) -> usize {
     count
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn tenth_mm_to_pixels(tenth_mm: u32) -> u32 {
     rounded_ratio(u64::from(tenth_mm) * u64::from(DPI), 254)
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn rounded_ratio(numerator: u64, denominator: u64) -> u32 {
     u32::try_from((numerator + denominator / 2) / denominator).unwrap_or(u32::MAX)
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn write_u32(header: &mut [u8], offset: usize, value: u32) {
     header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn write_i32(header: &mut [u8], offset: usize, value: i32) {
     header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
 }
 
+#[cfg(any(feature = "gridpaper", test))]
 fn write_cstring(destination: &mut [u8], value: &str) {
     let length = value.len().min(destination.len().saturating_sub(1));
     destination[..length].copy_from_slice(&value.as_bytes()[..length]);

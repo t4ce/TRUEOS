@@ -199,16 +199,6 @@ pub(crate) unsafe fn copy(destination: GucBcs0RgbaSurface, copies: &[GucBcs0Rgba
     crate::intel::dma_flush_strided_row_spans(&spans)
 }
 
-pub(crate) fn mono_on_cpu(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) -> bool {
-    let pixels = mono_pixels(glyphs);
-    let half_row = glyphs
-        .first()
-        .map_or(0, |g| s.width as usize * g.height as usize / 2);
-    pixels != 0 && pixels <= crate::allcaps::text_blit::CPU_MONO_MAX_PIXELS.min(half_row)
-}
-pub(crate) unsafe fn try_mono(s: GucBcs0RgbaSurface, glyphs: &[GucBcs0MonoGlyph]) -> bool {
-    mono_on_cpu(s, glyphs) && unsafe { mono(s, glyphs) }
-}
 pub(crate) fn fill_on_cpu(s: GucBcs0RgbaSurface, fills: &[GucBcs0RgbaFill]) -> bool {
     let pixels = fill_pixels(fills);
     let half_row = fills

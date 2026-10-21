@@ -2,6 +2,18 @@
 pub(crate) struct GpgpuPoint {
     pub(crate) x: i32,
     pub(crate) y: i32,
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuMask8Audit {
+    pub(crate) nonzero_pixels: usize,
+    pub(crate) bounds: GpgpuRect,
+/// One immutable-layout font presentation record consumed directly by the
+/// C++/IGC font-instance kernel. The complete record is copied into persistent
+/// GPU-visible storage only when its style program changes.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuFontInstanceDescriptor {
+    dwords: [u32; GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS],
+}
+}
 }
 
 impl GpgpuPoint {
@@ -45,6 +57,17 @@ pub(crate) enum GpgpuRgba8StorageOrder {
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuRgba8Surface {
+/// Linear NV12 storage shared by the UI4 RCS converter and VDEnc input path.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuNv12LinearSurface {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) bytes: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+    pub(crate) uv_offset: u32,
+}
     pub(crate) phys: u64,
     pub(crate) gpu: u64,
     pub(crate) bytes: usize,
@@ -273,17 +296,7 @@ impl GpgpuNv12Tile64Surface {
     }
 }
 
-/// Linear NV12 storage shared by the UI4 RCS converter and VDEnc input path.
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuNv12LinearSurface {
-    pub(crate) phys: u64,
-    pub(crate) gpu: u64,
-    pub(crate) bytes: usize,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) pitch_bytes: u32,
-    pub(crate) uv_offset: u32,
-}
+
 
 impl GpgpuNv12LinearSurface {
     pub(crate) fn new(
@@ -411,11 +424,7 @@ pub(crate) struct GpgpuOwnedMask8Surface {
     quarantined: AtomicBool,
 }
 
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct GpgpuMask8Audit {
-    pub(crate) nonzero_pixels: usize,
-    pub(crate) bounds: GpgpuRect,
-}
+
 
 unsafe impl Send for GpgpuOwnedMask8Surface {}
 unsafe impl Sync for GpgpuOwnedMask8Surface {}
@@ -598,8 +607,8 @@ impl Drop for GpgpuOwnedMask8Surface {
 pub(crate) const GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS: usize = 64;
 pub(crate) const GPGPU_FONT_INSTANCE_DESCRIPTOR_BYTES: usize =
     GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS * core::mem::size_of::<u32>();
-pub(crate) const GPGPU_FONT_INSTANCE_MAX_LAYERS: usize = 64;
 
+pub(crate) const GPGPU_FONT_INSTANCE_MAX_LAYERS: usize = 64;
 const GPGPU_FONT_INSTANCE_MAGIC: u32 = 0x3149_5446;
 const GPGPU_FONT_INSTANCE_FLAG_ENABLED: u32 = 1 << 0;
 const GPGPU_FONT_INSTANCE_FLAG_BACKGROUND: u32 = 1 << 1;
@@ -611,13 +620,6 @@ const GPGPU_FONT_INSTANCE_FRAME_COUNT_SHIFT: u32 = 16;
 const GPGPU_FONT_INSTANCE_FLAG_AFFINE_TRANSFORM: u32 = 1 << 20;
 const GPGPU_FONT_INSTANCE_FLAG_MOTION: u32 = 1 << 21;
 
-/// One immutable-layout font presentation record consumed directly by the
-/// C++/IGC font-instance kernel. The complete record is copied into persistent
-/// GPU-visible storage only when its style program changes.
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct GpgpuFontInstanceDescriptor {
-    dwords: [u32; GPGPU_FONT_INSTANCE_DESCRIPTOR_DWORDS],
-}
 
 impl GpgpuFontInstanceDescriptor {
     pub(crate) fn new(
@@ -741,15 +743,7 @@ impl GpgpuFontInstanceDescriptor {
     }
 }
 
-/// Persistent VM-backed descriptor storage shared by all font walkers in one
-/// retained page. Its PPGTT range is unique for the allocation lifetime.
-pub(crate) struct GpgpuOwnedFontInstanceState {
-    phys: u64,
-    gpu: u64,
-    bytes: usize,
-    virt: *mut u8,
-    capacity: usize,
-}
+
 
 unsafe impl Send for GpgpuOwnedFontInstanceState {}
 unsafe impl Sync for GpgpuOwnedFontInstanceState {}
@@ -810,26 +804,9 @@ impl Drop for GpgpuOwnedFontInstanceState {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct GpgpuFontInstanceLayer {
-    pub(crate) mask: GpgpuMask8Surface,
-    pub(crate) mask_rect: GpgpuRect,
-    pub(crate) dst_center: [f32; 2],
-    pub(crate) dispatch_rect: GpgpuRect,
-    pub(crate) descriptor_index: usize,
-}
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuFontInstanceBatchResult {
-    pub(crate) ok: bool,
-    pub(crate) submitted: bool,
-    pub(crate) requested_layers: usize,
-    pub(crate) active_walkers: usize,
-    pub(crate) submits: usize,
-    /// Exact destination ownership minted from the final cache-draining
-    /// completion packet when this batch targets direct scanout.
-    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
-}
+
+
 
 impl GpgpuMask8Surface {
     pub(crate) fn new(
@@ -1051,23 +1028,7 @@ pub(crate) enum Ui4SpriteSceneCompletion {
     Failed,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuShellMandel64WorklistResult {
-    pub(crate) ok: bool,
-    pub(crate) submitted: bool,
-    pub(crate) marker: u32,
-    pub(crate) requested: usize,
-    pub(crate) descriptors: usize,
-    pub(crate) walkers: usize,
-    pub(crate) pixels: usize,
-    pub(crate) submit_ms: u64,
-    pub(crate) desc_gpu: u64,
-    pub(crate) last_src_xy: GpgpuPoint,
-    pub(crate) last_dst_xy: GpgpuPoint,
-    /// Present only for a complete direct-scanout render whose final
-    /// PIPE_CONTROL and post-sync marker retired for this exact allocation.
-    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
-}
+
 
 /// Common result for a full-surface compute node that does not own
 /// presentation. UI4 consumers decide whether and when to publish the frame.
@@ -1087,6 +1048,15 @@ pub(crate) struct GpgpuRgba8KernelResult {
 /// cannot manufacture display eligibility from an address alone.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GpgpuRgba8ReleaseFence {
+/// Persistent VM-backed descriptor storage shared by all font walkers in one
+/// retained page. Its PPGTT range is unique for the allocation lifetime.
+pub(crate) struct GpgpuOwnedFontInstanceState {
+    phys: u64,
+    gpu: u64,
+    bytes: usize,
+    virt: *mut u8,
+    capacity: usize,
+}
     phys: u64,
     byte_len: usize,
     sequence: u64,
@@ -1159,66 +1129,9 @@ pub(crate) fn release_rgba8_surface_for_scanout(dst: GpgpuRgba8Surface) -> Gpgpu
     }
 }
 
-/// Font Engine equivalent of the scanout release packet. The packet encoding
-/// is shared, but every mutable execution object and retirement proof belongs
-/// to the Font GuC context.
-pub(crate) fn font_release_rgba8_surface_for_scanout(
-    dst: GpgpuRgba8Surface,
-) -> GpgpuRgba8KernelResult {
-    let started = direct_rcs_now_tick();
-    if !dst.is_valid() {
-        return GpgpuRgba8KernelResult::default();
-    }
-    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
-    let Some(dev) = super::claimed_device() else {
-        return GpgpuRgba8KernelResult::default();
-    };
-    let Some(state) = font_rcs_state_once(dev) else {
-        return GpgpuRgba8KernelResult::default();
-    };
-    let prepared = direct_rcs_forcewake(dev)
-        && direct_rcs_map_state(dev, state)
-        && font_rcs_init_ppgtt_once(state)
-        && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
-        && direct_rcs_encode_rgba8_scanout_release_batch(state);
-    let submission = if prepared {
-        font_rcs_submit_batch_state(dev, state)
-    } else {
-        DirectRcsSubmissionState::Rejected
-    };
-    let submitted = submission.may_have_submitted();
-    let marker = if submission.can_poll() {
-        font_rcs_poll_result_slot_timeout_ms(
-            state,
-            RGBA8_SCANOUT_RELEASE_MARKER_SLOT,
-            RGBA8_SCANOUT_RELEASE_MARKER,
-            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
-        )
-    } else {
-        0
-    };
-    let ok = marker == RGBA8_SCANOUT_RELEASE_MARKER;
-    GpgpuRgba8KernelResult {
-        ok,
-        submitted,
-        marker,
-        submit_ms: direct_rcs_elapsed_ms_since(started),
-        release: ok.then(|| gpgpu_rgba8_release(dst)),
-    }
-}
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuMandel64Placement {
-    pub(crate) src_x: i32,
-    pub(crate) src_y: i32,
-    pub(crate) dst_x: i32,
-    pub(crate) dst_y: i32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) view_height: u32,
-    pub(crate) mirror_at_center: bool,
-    pub(crate) iterations: u32,
-}
+
+
 
 #[derive(Copy, Clone, Debug)]
 struct GpgpuRectWorklistDescBuffer {

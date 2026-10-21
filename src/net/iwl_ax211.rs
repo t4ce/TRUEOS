@@ -213,9 +213,7 @@ impl WifiDriver for Ax211Driver {
         None
     }
 
-    fn current_channel(&self) -> Option<u8> {
-        None
-    }
+    
 
     fn signal_strength(&self) -> Option<i8> {
         None

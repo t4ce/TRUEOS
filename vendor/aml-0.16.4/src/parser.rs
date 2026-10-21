@@ -58,16 +58,6 @@ where
         DiscardResult { parser: self, _phantom: PhantomData }
     }
 
-    /// Try parsing with `self`. If it succeeds, return its result. If it returns `AmlError::WrongParser`, try
-    /// parsing with `other`, returning the result of that parser in all cases. Other errors from the first
-    /// parser are propagated without attempting the second parser. To chain more than two parsers using
-    /// `or`, see the `choice!` macro.
-    fn or<OtherParser>(self, other: OtherParser) -> Or<'a, 'c, Self, OtherParser, R>
-    where
-        OtherParser: Parser<'a, 'c, R>,
-    {
-        Or { p1: self, p2: other, _phantom: PhantomData }
-    }
 
     fn then<NextParser, NextR>(self, next: NextParser) -> Then<'a, 'c, Self, NextParser, R, NextR>
     where
@@ -295,31 +285,6 @@ where
     }
 }
 
-pub struct Or<'a, 'c, P1, P2, R>
-where
-    'c: 'a,
-    P1: Parser<'a, 'c, R>,
-    P2: Parser<'a, 'c, R>,
-{
-    p1: P1,
-    p2: P2,
-    _phantom: PhantomData<(&'a R, &'c ())>,
-}
-
-impl<'a, 'c, P1, P2, R> Parser<'a, 'c, R> for Or<'a, 'c, P1, P2, R>
-where
-    'c: 'a,
-    P1: Parser<'a, 'c, R>,
-    P2: Parser<'a, 'c, R>,
-{
-    fn parse(&self, input: &'a [u8], context: &'c mut AmlContext) -> ParseResult<'a, 'c, R> {
-        match self.p1.parse(input, context) {
-            Ok(parse_result) => Ok(parse_result),
-            Err((_, context, Propagate::Err(AmlError::WrongParser))) => self.p2.parse(input, context),
-            Err((_, context, err)) => Err((input, context, err)),
-        }
-    }
-}
 
 pub struct Map<'a, 'c, P, F, R, A>
 where

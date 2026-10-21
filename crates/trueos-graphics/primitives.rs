@@ -185,15 +185,6 @@ impl Rgba8 {
         Self { r, g, b, a }
     }
 
-    #[inline]
-    pub const fn from_rgba_u32(rgba: u32) -> Self {
-        Self {
-            r: ((rgba >> 24) & 0xFF) as u8,
-            g: ((rgba >> 16) & 0xFF) as u8,
-            b: ((rgba >> 8) & 0xFF) as u8,
-            a: (rgba & 0xFF) as u8,
-        }
-    }
 
     #[inline]
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

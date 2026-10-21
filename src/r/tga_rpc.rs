@@ -74,17 +74,6 @@ pub enum Error {
     UnknownCall,
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub struct Stats {
-    pub submitted: u64,
-    pub completed: u64,
-    pub failed: u64,
-    pub queued: usize,
-    pub inflight: usize,
-    pub interrupts: u64,
-    pub interrupt_wakes: u64,
-    pub timeout_recoveries: u64,
-}
 
 #[derive(Copy, Clone)]
 struct Request {
@@ -150,9 +139,6 @@ pub struct FpgaCall {
 }
 
 impl FpgaCall {
-    pub const fn id(&self) -> CallId {
-        self.call_id
-    }
 }
 
 impl Future for FpgaCall {
@@ -228,17 +214,6 @@ pub fn submit(
     })
 }
 
-pub fn submit_with_callback<F>(
-    function: FunctionId,
-    input: &[u8],
-    output_capacity: usize,
-    callback: F,
-) -> Result<CallId, Error>
-where
-    F: FnOnce(CallResult) + Send + 'static,
-{
-    enqueue(function, input, output_capacity, Delivery::Callback(Some(Box::new(callback))))
-}
 
 pub async fn call(function: FunctionId, input: &[u8], output_capacity: usize) -> CallResult {
     submit(function, input, output_capacity)?.await
@@ -250,27 +225,6 @@ pub async fn heartbeat() -> Result<bool, Error> {
     Ok(reply == protocol::HEARTBEAT_REPLY)
 }
 
-pub fn stats() -> Stats {
-    let service = SERVICE.lock();
-    Stats {
-        submitted: service.submitted,
-        completed: service.completed,
-        failed: service.failed,
-        queued: service
-            .calls
-            .iter()
-            .filter(|record| record.state == CallState::Queued)
-            .count(),
-        inflight: service
-            .calls
-            .iter()
-            .filter(|record| record.state == CallState::Inflight)
-            .count(),
-        interrupts: crate::tga::completion_interrupt_count(),
-        interrupt_wakes: service.interrupt_wakes,
-        timeout_recoveries: service.timeout_recoveries,
-    }
-}
 
 fn enqueue(
     function: FunctionId,

@@ -31,9 +31,6 @@ impl Kind {
         }
     }
 }
-pub(super) fn recognizes(name: &str) -> bool {
-    Kind::parse(name).is_some()
-}
 pub(super) fn start(name: &str, frontend: Frontend) -> Result<(), String> {
     let kind = Kind::parse(name).ok_or("Unknown monitor.")?;
     let Some((target, spawner)) = helper::admit(name, frontend)? else {

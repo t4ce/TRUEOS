@@ -32,7 +32,7 @@ const TRUEOSFS_CHECKPOINT_MIN_TAIL_BLOCKS: u64 = 4096;
 pub const TRUEOSFS_LIST_SOFT_CAP: usize = 1024;
 // Worst-case small records for `backups/`, the streamed image header/name,
 // its final manifest, and room for a metadata/checkpoint append.
-const BACKUP_FREE_SPACE_RESERVE_BLOCKS: u64 = 16;
+
 
 struct BuiltIndex {
     tree: Box<TrueosFsIndex>,
@@ -119,36 +119,7 @@ impl ContentIdentityRejectReason {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ContentIdentityDecisionSnapshot {
-    pub typed_commits: u64,
-    pub legacy_blob_commits: u64,
-    pub explicit_blob_imports: u64,
-    pub rejects: u64,
-    pub reject_unsupported_ingress: u64,
-    pub reject_evidence_mismatch: u64,
-    pub reject_type_required: u64,
-    pub reject_unregistered_type: u64,
-    pub reject_legacy_downgrade: u64,
-    pub reject_type_mismatch: u64,
-    pub reject_other: u64,
-}
 
-pub fn content_identity_decisions() -> ContentIdentityDecisionSnapshot {
-    ContentIdentityDecisionSnapshot {
-        typed_commits: CONTENT_TYPED_COMMITS.load(Ordering::Relaxed),
-        legacy_blob_commits: CONTENT_LEGACY_BLOB_COMMITS.load(Ordering::Relaxed),
-        explicit_blob_imports: CONTENT_EXPLICIT_BLOB_IMPORTS.load(Ordering::Relaxed),
-        rejects: CONTENT_REJECTS.load(Ordering::Relaxed),
-        reject_unsupported_ingress: CONTENT_REJECT_UNSUPPORTED_INGRESS.load(Ordering::Relaxed),
-        reject_evidence_mismatch: CONTENT_REJECT_EVIDENCE_MISMATCH.load(Ordering::Relaxed),
-        reject_type_required: CONTENT_REJECT_TYPE_REQUIRED.load(Ordering::Relaxed),
-        reject_unregistered_type: CONTENT_REJECT_UNREGISTERED.load(Ordering::Relaxed),
-        reject_legacy_downgrade: CONTENT_REJECT_LEGACY_DOWNGRADE.load(Ordering::Relaxed),
-        reject_type_mismatch: CONTENT_REJECT_TYPE_MISMATCH.load(Ordering::Relaxed),
-        reject_other: CONTENT_REJECT_OTHER.load(Ordering::Relaxed),
-    }
-}
 
 pub fn record_explicit_blob_import() {
     CONTENT_EXPLICIT_BLOB_IMPORTS.fetch_add(1, Ordering::Relaxed);
@@ -205,12 +176,6 @@ static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MOUNT_PROBING: AtomicBool = AtomicBool::new(true);
 static MOUNT_PROBE_FAILED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn mounts_settled() -> bool {
-    !MOUNT_PROBE_FAILED.load(Ordering::Acquire)
-        && !MOUNT_PROBING.load(Ordering::Acquire)
-        && !MOUNT_REQUESTED.load(Ordering::Acquire)
-        && MOUNT_QUEUE.lock().is_empty()
-}
 static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
 static INDEX_REQUESTED: AtomicBool = AtomicBool::new(false);
 static INDEX_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
@@ -794,35 +759,8 @@ impl trueos_fs::BlockIo for KernelBlockIo {
     }
 }
 
-/// Read adapter used while a `BackupLease` has fenced ordinary filesystem I/O.
-/// It intentionally has no write path: the lease is for an immutable backup
-/// source, including the interval between digest verification and restore.
-struct BackupLeaseIo<'a> {
-    lease: &'a block::BackupLease,
-}
 
-impl trueos_fs::BlockIo for BackupLeaseIo<'_> {
-    type Error = block::Error;
 
-    fn block_size(&self) -> usize {
-        self.lease.block_size() as usize
-    }
-    fn block_count(&self) -> u64 {
-        self.lease.block_count()
-    }
-    fn max_transfer_bytes(&self) -> usize {
-        usize::try_from(self.lease.max_transfer_bytes()).unwrap_or(usize::MAX)
-    }
-    async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
-        self.lease.read(lba, blocks).await
-    }
-    async fn write_blocks(&self, _lba: u64, _buf: &[u8]) -> Result<(), block::Error> {
-        Err(block::Error::NotSupported)
-    }
-    async fn flush(&self) -> Result<(), block::Error> {
-        Ok(())
-    }
-}
 
 #[inline]
 fn map_engine_err(e: trueos_fs::FsError<block::Error>) -> block::Error {
@@ -1624,16 +1562,6 @@ async fn file_in_with_metadata_async(
     Ok(true)
 }
 
-#[deprecated(note = "use file_in_typed_async")]
-pub async fn file_in_with_key_async(
-    disk: block::DeviceHandle,
-    name: &str,
-    bytes: &[u8],
-    record_key: RecordKey,
-) -> Result<bool, block::Error> {
-    let _activity = crate::disc::access::Activity::begin(disk)?;
-    file_in_with_metadata_async(disk, name, bytes, ContentTypeId::BLOB, record_key, true).await
-}
 
 /// Asynchronously materialize every directory prefix using indexed directory records.
 ///
@@ -1703,24 +1631,6 @@ pub async fn file_write_begin_typed_async(
         .await
 }
 
-/// Begin a streamed file write with an explicit native record key.
-pub async fn file_write_begin_with_key_async(
-    disk: block::DeviceHandle,
-    name: &str,
-    total_len: u64,
-    record_key: RecordKey,
-) -> Result<Option<u32>, block::Error> {
-    let _activity = crate::disc::access::Activity::begin(disk)?;
-    file_write_begin_with_metadata_async(
-        disk,
-        name,
-        total_len,
-        ContentTypeId::BLOB,
-        record_key,
-        true,
-    )
-    .await
-}
 
 pub(crate) async fn file_write_begin_with_metadata_async(
     disk: block::DeviceHandle,
@@ -2164,14 +2074,6 @@ pub async fn node_info_async(
         }))
 }
 
-/// Primary metadata API carrying the stored raw content identity.
-pub async fn typed_metadata_async(
-    disk: block::DeviceHandle,
-    name: &str,
-) -> Result<Option<NodeInfo>, block::Error> {
-    let _activity = crate::disc::access::Activity::begin(disk)?;
-    node_info_async(disk, name).await
-}
 
 pub async fn dir_exists_async(disk: block::DeviceHandle, path: &str) -> Result<bool, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
@@ -2393,23 +2295,7 @@ pub(crate) fn file_read_handle_is_current(handle: FileReadHandle) -> bool {
             .any(|mount| mount.disk_id == handle.disk.id() && mount.seq == handle.mount_seq)
 }
 
-/// Read through a previously opened handle while its whole disk is held by a
-/// `BackupLease`. This keeps a local backup image stable without reopening the
-/// ordinary activity gate.
-pub(crate) async fn file_read_handle_range_backup_lease_async(
-    handle: FileReadHandle,
-    lease: &block::BackupLease,
-    offset: u64,
-    out: &mut [u8],
-) -> Result<Option<usize>, block::Error> {
-    if handle.disk.id() != lease.disk_id() {
-        return Err(block::Error::InvalidParam);
-    }
-    let io = BackupLeaseIo { lease };
-    trueos_fs::read_file_range_at(&io, &handle.params, &handle.record, offset, out)
-        .await
-        .map_err(map_engine_err)
-}
+
 
 /// Async TRUEOSFS: read a file range into a caller-provided buffer.
 pub async fn file_read_range_async(
@@ -2981,14 +2867,6 @@ pub(crate) async fn list_dir_with_limit_async(
     Ok(Some(DirListing { entries, truncated }))
 }
 
-/// Primary typed directory API; raw future IDs are preserved in file entries.
-pub async fn list_dir_typed_async(
-    disk: block::DeviceHandle,
-    dir: &str,
-) -> Result<Option<DirListing>, block::Error> {
-    let _activity = crate::disc::access::Activity::begin(disk)?;
-    list_dir_async(disk, dir).await
-}
 
 fn normalized_dir_prefix(dir: &str) -> String {
     if dir.is_empty() || dir == "/" {
@@ -3562,34 +3440,6 @@ pub async fn file_append_async(
     Ok(true)
 }
 
-pub async fn file_append_typed_async(
-    disk: block::DeviceHandle,
-    name: &str,
-    append_bytes: &[u8],
-    content_type: ContentTypeId,
-) -> Result<bool, block::Error> {
-    let _activity = crate::disc::access::Activity::begin(disk)?;
-    if content_type == ContentTypeId::NONE {
-        record_type_reject(ContentIdentityRejectReason::TypeRequired);
-        return Err(block::Error::InvalidParam);
-    }
-    if !content_type.is_registered() {
-        record_type_reject(ContentIdentityRejectReason::UnregisteredType);
-        return Err(block::Error::InvalidParam);
-    }
-    let Some(info) = file_info_async(disk, name).await? else {
-        return file_in_typed_async(disk, name, append_bytes, content_type).await;
-    };
-    if info.content_type != content_type {
-        record_type_reject(ContentIdentityRejectReason::TypeMismatch);
-        return Err(block::Error::InvalidParam);
-    }
-    let Some(mut bytes) = file_out_async(disk, name).await? else {
-        return Ok(false);
-    };
-    bytes.extend_from_slice(append_bytes);
-    file_in_typed_async(disk, name, &bytes, content_type).await
-}
 
 // NOTE: synchronous TRUEOSFS file operations (`file_in`, `file_out`, etc.) were removed.
 // Use the async entrypoints above.
@@ -3652,20 +3502,6 @@ pub fn root_index_paths(disk_id: block::DiscId, max_paths: usize) -> Option<Vec<
     Some(out)
 }
 
-/// Conservative account-history check over the complete durable index. Partial
-/// enrollment, corrupt credential contents, and a locked account all count.
-pub(crate) async fn has_persisted_account_async(disk: block::DeviceHandle) -> Result<bool, block::Error> {
-    let placement = placement_for_io_async(disk).await?.ok_or(block::Error::Corrupted)?;
-    ensure_index_async(disk, &placement).await?;
-    let roots = ROOTS.lock();
-    let index = roots.iter().find(|root| root.disk_id == disk.id())
-        .and_then(|root| root.index.as_ref()).ok_or(block::Error::Corrupted)?;
-    Ok(index.keys().any(|path| {
-        path.starts_with(b"users/")
-            || path.as_slice() == b"trueos/uncrypted.blob"
-            || path.as_slice() == b"trueos/users-ever-persisted"
-    }))
-}
 
 #[derive(Clone, Debug)]
 pub(super) struct IndexNode {
@@ -4272,86 +4108,13 @@ pub(crate) async fn format_blank_at_async(
     Ok(())
 }
 
-/// Preserve the exact mount and caches while a block backup owns the device.
-/// Admission must already be fenced by a BackupLease before taking this guard.
-pub(crate) struct BackupMount {
-    mount: Option<RootMount>,
-    primary: bool,
-}
-pub(crate) fn suspend_backup_mount(id: block::DiscId) -> BackupMount {
-    let mut roots = ROOTS.lock();
-    let mount = roots
-        .iter()
-        .position(|m| m.disk_id == id)
-        .map(|i| roots.remove(i));
-    let primary = PRIMARY_ROOT_RAW.load(Ordering::Acquire) == id.raw();
-    if primary {
-        PRIMARY_ROOT_RAW.store(0, Ordering::Release);
-        PRIMARY_ROOT_HANDLE_RAW.store(0, Ordering::Release);
-    }
-    BackupMount { mount, primary }
-}
-impl Drop for BackupMount {
-    fn drop(&mut self) {
-        if let Some(mount) = self.mount.take() {
-            let id = mount.disk_id;
-            ROOTS.lock().push(mount);
-            if self.primary {
-                PRIMARY_ROOT_RAW.store(id.raw(), Ordering::Release);
-                if let Some(disk) = block::device_handle(id) {
-                    PRIMARY_ROOT_HANDLE_RAW.store(disk.into_raw(), Ordering::Release);
-                }
-            }
-        }
-    }
-}
 
-impl BackupMount {
-    /// Do not reinstate an old mount after raw sectors were overwritten.
-    /// The caller must queue a fresh probe only after releasing the exclusive
-    /// block lease, because probing itself is ordinary disk activity.
-    pub(crate) fn discard_after_raw_overwrite(&mut self) {
-        if let Some(mount) = self.mount.take() {
-            file_record_cache_invalidate_disk(mount.disk_id);
-        }
-        self.primary = false;
-    }
-}
 
-/// A conservative payload estimate for one additional backup image.
-///
-/// The streaming writer remains the authoritative admission check; this is a
-/// cheap UI preflight based on the current TRUEOSFS log head and reserves
-/// space for directory creation, image/manifest records, and metadata.
-pub async fn available_backup_bytes_async(
-    disk: block::DeviceHandle,
-) -> Result<Option<u64>, block::Error> {
-    let _activity = crate::disc::access::Activity::begin(disk)?;
-    if disk.parent().is_some() {
-        return Err(block::Error::InvalidParam);
-    }
-    let Some(placement) = locate_async(disk).await? else {
-        return Ok(None);
-    };
-    let block_size = disk.block_size() as u64;
-    if block_size == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-    let superblock = disk.read_blocks(placement.super_lba, 1).await?;
-    let Some(superblock) = trueos_fs::parse_superblock(&superblock) else {
-        return Err(block::Error::Corrupted);
-    };
-    let end = placement
-        .data_end_lba_exclusive
-        .unwrap_or(disk.block_count());
-    let used_end = placement
-        .data_lba
-        .saturating_add(superblock.log_head_rel_blocks);
-    let available_blocks = end
-        .saturating_sub(used_end)
-        .saturating_sub(BACKUP_FREE_SPACE_RESERVE_BLOCKS);
-    Ok(Some(available_blocks.saturating_mul(block_size)))
-}
+
+
+
+
+
 
 /// Select content-typed descendants without loading their payloads. Legacy
 /// BLOB records are probed with at most 4096 bytes and never rewritten.

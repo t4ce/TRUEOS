@@ -6,9 +6,7 @@ use spin::Mutex;
 
 use crate::hv::hvlogf;
 
-pub const VM_NET_INLINE_CAP: usize = 512;
 pub const VM_NET_OP_TCP_WRITE: u32 = 0x10;
-pub const VM_NET_OP_TCP_READ: u32 = 0x11;
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

@@ -31,7 +31,7 @@ pub(crate) mod matrix_target;
 mod log_tap;
 #[path = "system/log.rs"]
 mod system_log;
-pub(crate) use matrix_target::{matrix_target_print_line, MatrixTarget, MatrixSlotLease, matrix_target_slot_lease, release_matrix_target_terminal_handoff};
+pub(crate) use matrix_target::{matrix_target_print_line, MatrixTarget, MatrixSlotLease, matrix_target_slot_lease};
 mod metafmtstr;
 mod names;
 pub mod net;
@@ -67,7 +67,6 @@ use zeroize::Zeroize;
 
 pub const MAX_SHELL3_INSTANCES: usize = 256;
 pub const OPERATOR: char = '§';
-pub const MODESTEP: char = '\t';
 pub const PROMPT_CURSOR: char = ' ';
 pub const Default_COLUMNS: usize = 100;
 pub const Default_ROWS: usize = 25;
@@ -152,9 +151,6 @@ pub enum Shell3Error {
     WrongExecutor { expected: u32, actual: u32 },
 }
 
-pub fn live_shell3_instances() -> usize {
-    service::live_shell_count()
-}
 
 pub struct TitleTime;
 
@@ -168,13 +164,7 @@ impl TitleTime {
         alloc::format!("{:02}:{:02}", minutes_of_day / 60, minutes_of_day % 60)
     }
 
-    pub fn set(shell: &mut Shell3, time: &str) {
-        shell.set_time(time);
-    }
 
-    pub fn get(shell: &Shell3) -> &str {
-        shell.time()
-    }
 }
 
 fn title_left_text(time: &str) -> String {
@@ -248,7 +238,6 @@ fn current_matrix_slots_text() -> String {
 }
 
 impl MatrixSlots {
-    pub const DEFAULT: &'static str = "§";
 
     /// Background host activity is independent of selection and VMX affinity.
     pub(super) fn set_background_active(lease: &MatrixSlotLease, active: bool) -> bool {
@@ -271,36 +260,6 @@ impl MatrixSlots {
         matrix_slots().lock().background_active.iter().map(|lease| lease.name().to_string()).collect()
     }
 
-    /// Shared across every Shell3. Names are supplied without the § prefix.
-    pub fn set<T: AsRef<str>>(names: &[T]) {
-        let mut slots = matrix_slots().lock();
-        let mut ids = Vec::with_capacity(names.len());
-
-        for name in names {
-            let name = name.as_ref();
-            if !ids.iter().any(|existing: &String| existing == name) {
-                ids.push(name.to_string());
-            }
-        }
-
-        slots.lifetimes.retain(|(id, _)| ids.contains(id));
-        for id in &ids {
-            if !slots.lifetimes.iter().any(|(name, _)| name == id) {
-                let lifetime = slots.next_lifetime;
-                slots.next_lifetime = slots.next_lifetime.wrapping_add(1);
-                slots.lifetimes.push((id.clone(), lifetime));
-            }
-        }
-        slots
-            .echoes
-            .retain(|(id, _)| id.as_ref().is_none_or(|id| ids.contains(id)));
-        slots.ids = ids;
-        let retired = matrix_target::retire_expired_attachments(&mut slots);
-        slots.generation = slots.generation.wrapping_add(1);
-        drop(slots);
-        for (lease, resource) in retired { resource.on_matrix_slot_freed(&lease); }
-        service::notify_work();
-    }
 
     /// Demand a slot and return its lifetime, so a freed/recreated id cannot
     /// silently reattach an old Shell3 view to the new slot.
@@ -431,10 +390,6 @@ impl MatrixSlots {
         service::notify_work();
     }
 
-    /// Transcript of one Matrix slot, independent of any shell's selection.
-    pub fn echo_lines(active: Option<&str>) -> Vec<String> {
-        Self::echo_snapshot(active).1
-    }
 
     fn echo_snapshot(active: Option<&str>) -> (u64, Vec<String>) {
         let slots = matrix_slots().lock();
@@ -465,36 +420,13 @@ impl MatrixSlots {
         (slots.generation, lines)
     }
 
-    pub fn slot_ids() -> Vec<String> {
-        matrix_slots().lock().ids.clone()
-    }
 
-    pub fn get() -> String {
-        current_matrix_slots_text()
-    }
 
-    /// Returns the slot strip as text runs carrying style metadata.
-    pub fn formatted() -> Vec<MetaFmtStr> {
-        let slots = matrix_slots().lock();
-        matrix_slots_meta(&slots.ids, None)
-    }
 
     // Active selection is per shell, not shared.
-    pub fn select_index(shell: &mut Shell3, index: usize) -> bool {
-        shell.select_matrix_slot_index(index)
-    }
 
-    pub fn select_name(shell: &mut Shell3, name: &str) -> bool {
-        shell.select_matrix_slot_name(name)
-    }
 
-    pub fn active_index(shell: &Shell3) -> usize {
-        shell.active_matrix_slot_index()
-    }
 
-    pub fn active_name(shell: &Shell3) -> Option<String> {
-        shell.active_matrix_slot_name()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -538,14 +470,6 @@ impl SpecialRowsState {
         }
     }
 
-    fn row_mut(&mut self, row: SpecialRows) -> &mut RowStrips {
-        match row {
-            SpecialRows::TitleRow => &mut self.title,
-            SpecialRows::StatusRow => &mut self.status,
-            SpecialRows::PromtRow => &mut self.promt,
-            SpecialRows::MatrixRow(_) => panic!("Matrix transcript is not a special strip"),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -640,10 +564,6 @@ impl Drop for Shell3 {
 }
 
 impl Shell3 {
-    /// Construct a previously admitted terminal on its permanent AP owner.
-    pub(super) fn new_terminal_reserved(slot: u32, peer_port: Option<u16>) -> Self {
-        Self::new_terminal_sized_reserved(slot, peer_port, Default_COLUMNS, Default_ROWS)
-    }
 
     pub(super) fn active_matrix_lease(&self) -> Option<MatrixSlotLease> {
         Some(MatrixSlotLease::from_identity(self.active_matrix_slot.clone()?, self.active_matrix_lifetime?))
@@ -671,27 +591,6 @@ impl Shell3 {
         shell
     }
 
-    pub fn new(
-        time: &str,
-        aka_names: Vec<String>,
-        appdb_names: Vec<String>,
-        update_callbacks: Vec<UpdateCallback>,
-        columns: usize,
-        rows: usize,
-    ) -> Result<Self, Shell3Error> {
-        let executor_slot = crate::percpu::current_slot() as u32;
-        service::reserve_shell_on_executor(executor_slot)?;
-
-        Ok(Self::new_inner(
-            time,
-            aka_names,
-            appdb_names,
-            update_callbacks,
-            columns,
-            rows,
-            executor_slot,
-        ))
-    }
 
     pub(super) fn new_reserved(
         time: &str,
@@ -790,9 +689,6 @@ impl Shell3 {
         }
     }
 
-    pub const fn show_backend(&self) -> ShowBackend {
-        self.show.backend()
-    }
 
     pub(super) fn configure_window(&mut self, mut geometry: service::WindowGeometry) {
         let scale = service::microfont_scale();
@@ -923,10 +819,6 @@ impl Shell3 {
         (self.columns, self.rows_count)
     }
 
-    /// CPU slot of the executor that created this shell.
-    pub const fn executor_slot(&self) -> u32 {
-        self.executor_slot
-    }
 
     pub(super) fn refresh_clock(&mut self) -> bool {
         let Some(tick) = self.clock.take() else { return false; };
@@ -943,9 +835,6 @@ impl Shell3 {
         self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time))];
     }
 
-    pub fn time(&self) -> &str {
-        &self.time
-    }
 
     pub fn set_mode(&mut self, mode: u8) -> bool {
         if self.active_vmx_app().is_some() {
@@ -969,9 +858,6 @@ impl Shell3 {
         self.rows.title.right = target;
     }
 
-    pub fn mode(&self) -> Mode {
-        self.mode
-    }
 
     pub fn get_mode(&self) -> u8 {
         self.mode as u8
@@ -1040,18 +926,6 @@ impl Shell3 {
         true
     }
 
-    pub fn active_matrix_slot_index(&self) -> usize {
-        let Some(active) = self.active_matrix_slot_name() else {
-            return 0;
-        };
-        matrix_slots()
-            .lock()
-            .ids
-            .iter()
-            .position(|id| *id == active)
-            .map(|index| index + 1)
-            .unwrap_or(0)
-    }
 
     pub fn active_matrix_slot_name(&self) -> Option<String> {
         let active = self.active_matrix_slot.as_deref()?;
@@ -1496,9 +1370,6 @@ impl Shell3 {
         true
     }
 
-    pub fn cursor(&self) -> usize {
-        self.prompt.cursor
-    }
 
     fn refresh_prompt_strip(&mut self) {
         let mut colors = self.prompt.colors.clone();
@@ -1522,74 +1393,7 @@ impl Shell3 {
             .collect();
     }
 
-    pub fn set_strip(&mut self, row: SpecialRows, side: StripSide, text: &str) -> bool {
-        if matches!(row, SpecialRows::MatrixRow(_)) {
-            return false;
-        }
-        if side == StripSide::Left {
-            match row {
-                SpecialRows::TitleRow => {
-                    self.rows.title.left.clear();
-                    self.rows.title.left.push(MetaFmtStr::new(text));
-                    return true;
-                }
-                SpecialRows::StatusRow | SpecialRows::MatrixRow(_) => return false,
-                SpecialRows::PromtRow => {
-                    self.set_prompt(text);
-                    return true;
-                }
-            }
-        }
 
-        match row {
-            SpecialRows::TitleRow => self.title_transition.finish(),
-            SpecialRows::StatusRow => self.aka_transition.finish(),
-            _ => {}
-        }
-        let strip = self.rows.row_mut(row);
-        strip.right.clear();
-        strip.right.push(MetaFmtStr::new(text));
-        true
-    }
-
-    /// Set styled text without flattening its MetaFmt colors. Bold is retained
-    /// in the runs but deliberately has no raster effect yet.
-    pub fn set_strip_formatted(
-        &mut self,
-        row: SpecialRows,
-        side: StripSide,
-        runs: Vec<MetaFmtStr>,
-    ) -> bool {
-        if matches!(row, SpecialRows::MatrixRow(_)) {
-            return false;
-        }
-        if side == StripSide::Left && row == SpecialRows::StatusRow {
-            return false;
-        }
-        if side == StripSide::Left && row == SpecialRows::PromtRow {
-            let text: String = runs.iter().map(|run| run.text.as_str()).collect();
-            self.set_prompt(&text);
-            self.prompt.colors = runs
-                .iter()
-                .flat_map(|run| run.text.chars().map(|_| run.color))
-                .collect();
-            self.refresh_prompt_strip();
-            return true;
-        }
-        if side == StripSide::Right {
-            match row {
-                SpecialRows::TitleRow => self.title_transition.finish(),
-                SpecialRows::StatusRow => self.aka_transition.finish(),
-                _ => {}
-            }
-        }
-        let strip = self.rows.row_mut(row);
-        match side {
-            StripSide::Left => strip.left = runs,
-            StripSide::Right => strip.right = runs,
-        }
-        true
-    }
 
     pub fn get_strip(&self, row: SpecialRows, side: StripSide) -> String {
         if let SpecialRows::MatrixRow(index) = row {
@@ -1656,14 +1460,6 @@ impl Shell3 {
         strips
     }
 
-    pub fn render_strips(&self, row: SpecialRows) -> String {
-        if !matches!(row, SpecialRows::MatrixRow(_)) {
-            let index = match row { SpecialRows::TitleRow => 0, SpecialRows::StatusRow => 1, _ => 2 };
-            return self.capture_controls_snapshot().rendered_lines()[index].iter().map(|cell| cell.0).collect();
-        }
-        let strips = self.row_for_render(row);
-        update::fit_meta_strips(&strips.left, &strips.right, self.columns).iter().map(|cell| cell.0).collect()
-    }
 
     /// Move this view through the shared newest-first transcript. Positive
     /// rows move down toward older entries; each Shell3 owns its own offset.
@@ -1754,25 +1550,7 @@ impl Shell3 {
         self.capture_matrix_snapshot().with_tui_revision(revision).with_blink_phase(Self::cursor_blink_phase())
     }
 
-    pub fn take_updates(&mut self) -> UpdateBatch {
-        self.sync_aka_names();
-        if let Some((_, batch, _)) = &self.pending_presentation {
-            return batch.clone();
-        }
-        let current = self.capture_update_snapshot();
-        let batch = update::take_updates(
-            &mut self.update_baseline,
-            current.clone(),
-            &self.update_callbacks,
-        );
-        let lines = current.rendered_lines();
-        self.pending_presentation = Some((current, batch.clone(), lines));
-        batch
-    }
 
-    pub fn add_update_callback(&mut self, callback: UpdateCallback) {
-        self.update_callbacks.push(callback);
-    }
 
     fn sync_aka_names(&mut self) {
         let (appdb_generation, appdb_names) = service::appdb_names_snapshot();
@@ -1797,12 +1575,6 @@ impl Shell3 {
         self.refresh_mode_title();
     }
 
-    pub fn parse(&self, input: &str) -> bool {
-        if input.starts_with(OPERATOR) {
-            return false;
-        }
-        self.parse_name(input)
-    }
 
     /// Operator contract: §, §id, §id§, §§, and §§Appname, submitted by Enter.
     pub fn parse_operator(&mut self, input: &str) -> bool {
@@ -1902,17 +1674,6 @@ impl Shell3 {
     }
 }
 
-#[allow(non_snake_case)]
-pub fn newShell3(
-    time: &str,
-    aka_names: Vec<String>,
-    appdb_names: Vec<String>,
-    updateCallbacks: Vec<UpdateCallback>,
-    col: usize,
-    row: usize,
-) -> Result<Shell3, Shell3Error> {
-    Shell3::new(time, aka_names, appdb_names, updateCallbacks, col, row)
-}
 
 /// The mode legend and exact-name recognizer use the same three registries.
 fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) -> Vec<MetaFmtStr> {

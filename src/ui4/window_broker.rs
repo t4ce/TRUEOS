@@ -331,14 +331,6 @@ impl<'a> WindowSessionCloseRequest<'a> {
         self
     }
 
-    /// Slightly enlarge and fade a direct plane while the producer keeps ownership of
-    /// the underlying frame ring for a later presentation session.
-    pub(crate) const fn direct_plane_animate(mut self) -> Self {
-        self.animate = true;
-        self.puff = true;
-        self.direct_plane_scaling = true;
-        self
-    }
 
     pub(crate) const fn transfers_frame_ownership(self) -> bool {
         self.retire_frames
@@ -1688,21 +1680,6 @@ pub(super) fn live_resource_counts() -> (usize, usize) {
     WINDOW_BROKER.lock().live_resource_counts()
 }
 
-/// Count every non-closed window which can consume application compositor
-/// slots 0..3 on one output. Pending and hidden windows still count; slot-4
-/// interaction-service windows deliberately do not.
-pub(crate) fn live_application_window_count(output: OutputId) -> usize {
-    WINDOW_BROKER
-        .lock()
-        .windows
-        .iter()
-        .filter(|window| {
-            window.state != WindowState::Closed
-                && window.output == output
-                && window.plane.is_application()
-        })
-        .count()
-}
 
 /// Optionally subscribe to future diagnostic publications.
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1923,15 +1900,6 @@ pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBro
     Ok(id)
 }
 
-/// Attach the second surface while the sole input window is still pending.
-/// Allocation, format and ownership are checked before the registry changes.
-pub(super) fn attach_window_background(
-    owner: WindowOwner,
-    id: WindowId,
-    frame: FrameHandle,
-) -> Result<(), WindowBrokerError> {
-    attach_window_background_scaled(owner, id, frame, 1)
-}
 
 pub(super) fn attach_window_background_scaled(
     owner: WindowOwner,
@@ -2025,16 +1993,6 @@ pub(crate) fn commit_window_frame_replacement(
     commit_window_replacement(owner, id, frame, None, placement, resize_epoch, damage)
 }
 
-pub(super) fn commit_window_layered_replacement(
-    owner: WindowOwner,
-    id: WindowId,
-    foreground: FrameHandle,
-    background: FrameHandle,
-    placement: WindowPlacement,
-    resize_epoch: u64,
-) -> Result<u64, WindowBrokerError> {
-    commit_window_layered_replacement_scaled(owner, id, foreground, background, placement, resize_epoch, 1)
-}
 
 pub(super) fn commit_window_layered_replacement_scaled(
     owner: WindowOwner,
@@ -2283,15 +2241,6 @@ pub(crate) fn set_window_opacity(
     })
 }
 
-/// Set one window's visibility. Visibility is a compositor and input-routing
-/// property: hidden windows are omitted from snapshots and cannot be selected.
-pub(crate) fn set_window_visible(
-    owner: WindowOwner,
-    id: WindowId,
-    visible: bool,
-) -> Result<(), WindowBrokerError> {
-    set_windows_visible(owner, &[id], visible).map(|_| ())
-}
 
 /// Read the authoritative state exposed by the narrow Blueprint window API.
 pub(crate) fn window_state(
@@ -2563,62 +2512,6 @@ pub(crate) fn window_escape_key_action(
     Ok(broker.checked_window_mut(owner, id)?.escape_key_action)
 }
 
-/// Change several windows' visibility as one broker transaction. The complete
-/// set is validated before any record changes, so compositor snapshots cannot
-/// observe a prefix of a multi-window pass transition.
-pub(crate) fn set_windows_visible(
-    owner: WindowOwner,
-    ids: &[WindowId],
-    visible: bool,
-) -> Result<u64, WindowBrokerError> {
-    let mut broker = WINDOW_BROKER.lock();
-    let mut changed_ids = Vec::with_capacity(ids.len());
-    for (index, id) in ids.iter().copied().enumerate() {
-        if ids[..index].contains(&id) {
-            return Err(WindowBrokerError::InvalidHandle);
-        }
-        let (slot, generation) = unpack_handle(id.0)?;
-        let window = broker
-            .windows
-            .get(slot)
-            .ok_or(WindowBrokerError::InvalidHandle)?;
-        if window.generation != generation {
-            return Err(WindowBrokerError::InvalidHandle);
-        }
-        if window.owner != owner {
-            return Err(WindowBrokerError::OwnerMismatch);
-        }
-        match window.state {
-            WindowState::Pending | WindowState::Ready => {}
-            WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
-            WindowState::Closed => return Err(WindowBrokerError::Closed),
-        }
-        if window.placement.visible != visible {
-            changed_ids.push(id);
-        }
-    }
-
-    for id in changed_ids.iter().copied() {
-        let (slot, _) = unpack_handle(id.0)?;
-        let window = &mut broker.windows[slot];
-        window.placement.visible = visible;
-        window.revision = next_serial(window.revision);
-    }
-    if !changed_ids.is_empty() {
-        broker.mark_composition_changed();
-    }
-    let stack_changed = !changed_ids.is_empty();
-    let composition_revision = broker.composition_revision;
-    drop(broker);
-
-    for id in changed_ids {
-        super::cursor_frame_inout::frame_visual_changed(owner, id);
-    }
-    if stack_changed {
-        super::cursor_frame_inout::selection_strip_stack_changed();
-    }
-    Ok(composition_revision)
-}
 
 /// Translate a window through UI4's frame interaction policy.
 ///
@@ -3014,79 +2907,6 @@ pub(crate) fn publish_window_frame(
     Ok(publish_serial)
 }
 
-/// Publish a coherent set of already-complete producer frames as one broker
-/// transaction. The validation pass changes nothing; only after every handle
-/// and damage rectangle is accepted do all records become Ready under the same
-/// lock. A compositor snapshot therefore observes either the old set or the
-/// complete new set, never a prefix of a multi-window scene.
-pub(crate) fn publish_window_frames(
-    owner: WindowOwner,
-    publications: &[(WindowId, DamageRect)],
-) -> Result<(), WindowBrokerError> {
-    if publications.iter().any(|(_, damage)| !damage.valid()) {
-        return Err(WindowBrokerError::EmptyDamage);
-    }
-    let started_ms = trueos_time::Instant::now().as_millis();
-    let mut broker = WINDOW_BROKER.lock();
-    let mut stack_changed = false;
-    for (index, (id, _)) in publications.iter().copied().enumerate() {
-        if publications[..index]
-            .iter()
-            .any(|(previous, _)| *previous == id)
-        {
-            return Err(WindowBrokerError::InvalidHandle);
-        }
-        let (slot, generation) = unpack_handle(id.0)?;
-        let window = broker
-            .windows
-            .get(slot)
-            .ok_or(WindowBrokerError::InvalidHandle)?;
-        if window.generation != generation {
-            return Err(WindowBrokerError::InvalidHandle);
-        }
-        if window.owner != owner {
-            return Err(WindowBrokerError::OwnerMismatch);
-        }
-        match window.state {
-            WindowState::Pending => stack_changed = true,
-            WindowState::Ready => {}
-            WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
-            WindowState::Closed => return Err(WindowBrokerError::Closed),
-        }
-    }
-    for (id, damage) in publications.iter().copied() {
-        let (slot, _) = unpack_handle(id.0)?;
-        let window = &mut broker.windows[slot];
-        if window.state == WindowState::Pending {
-            if window.pending_resize_extent.is_none() {
-                if window.background.is_none()
-                    && !window.first_presentation_emitted
-                    && window.replacement_presentation.is_none()
-                {
-                    window.open_transition =
-                        Some(open_transition(window.placement, window.plane, started_ms));
-                }
-                window.replacement_presentation = None;
-            }
-        }
-        window.state = WindowState::Ready;
-        window.publish_serial = next_serial(window.publish_serial);
-        window.revision = next_serial(window.revision);
-        let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
-        pending.add(damage);
-    }
-    if !publications.is_empty() {
-        broker.mark_composition_changed();
-    }
-    drop(broker);
-    if stack_changed {
-        super::cursor_frame_inout::selection_strip_stack_changed();
-    }
-    for (id, _) in publications.iter().copied() {
-        super::cursor_frame_inout::frame_visual_changed(owner, id);
-    }
-    Ok(())
-}
 
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
     let icon = {
@@ -3335,18 +3155,6 @@ pub(crate) fn visible_windows_for_output(output: OutputId) -> Vec<WindowSnapshot
     WINDOW_BROKER.lock().snapshots(output)
 }
 
-/// Whether this owner has a live window whose first frame reached SURFLIVE.
-///
-/// Unlike `take_window_first_presentation`, this is an observation rather than
-/// a consuming event, so kernel lifecycle orchestration cannot steal the
-/// application's own first-presentation notification.
-pub(crate) fn owner_has_first_presentation(owner: WindowOwner) -> bool {
-    WINDOW_BROKER.lock().windows.iter().any(|window| {
-        window.owner == owner
-            && window.state != WindowState::Closed
-            && window.first_presentation_emitted
-    })
-}
 
 pub(super) fn interaction_windows_for_output(output: OutputId) -> Vec<WindowSnapshot> {
     WINDOW_BROKER
@@ -3412,9 +3220,6 @@ pub(super) fn acknowledge_window_surface(window: WindowSnapshot) -> bool {
     acknowledge_window_frame_revision(window.id, window.publish_serial, window.revision)
 }
 
-pub(crate) fn acknowledge_window_frame(id: WindowId, publish_serial: u64) -> bool {
-    acknowledge_window_frame_inner(id, publish_serial, None)
-}
 
 /// Slot 4 advances independently from the application compositor. Require the
 /// exact broker revision copied into its pending scene so an older SURFLIVE

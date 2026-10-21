@@ -2,6 +2,7 @@ pub mod allocation_registry;
 pub mod archive_cabi;
 mod archive_limits;
 pub mod blocking;
+pub(crate) mod cabi_codes;
 pub mod codec;
 pub mod cursor;
 pub mod disc;

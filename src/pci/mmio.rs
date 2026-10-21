@@ -102,85 +102,6 @@ pub fn map_mmio_region_exact(phys_base: u64, size: usize) -> Result<NonNull<u8>,
     map_mmio_region_custom(phys_base, size)
 }
 
-/// Map ordinary cacheable RAM at a specific virtual address in the active
-/// kernel pagemap. The virtual and physical page offsets must match.
-///
-/// This is the shared-address primitive used by the retained firmware-context
-/// bridge: Limine leaves a tiny trampoline/control page mapped in its original
-/// firmware address space, and TRUEOS maps the same physical pages at the same
-/// virtual addresses before crossing CR3. It is deliberately not an MMIO path.
-pub fn map_ram_region_at(
-    virt_base: u64,
-    phys_base: u64,
-    size: usize,
-    executable: bool,
-) -> Result<NonNull<u8>, MapError> {
-    if size == 0 || (virt_base & (PAGE_SIZE - 1)) != (phys_base & (PAGE_SIZE - 1)) {
-        return Err(MapError::InvalidArgs);
-    }
-
-    // `VirtAddr::new` must never see a non-canonical value. TRUEOS currently
-    // runs four-level paging, so accept the ordinary x86-64 canonical halves.
-    let canonical = virt_base <= 0x0000_7FFF_FFFF_FFFF || virt_base >= 0xFFFF_8000_0000_0000;
-    if !canonical {
-        return Err(MapError::InvalidArgs);
-    }
-
-    let hhdm = limine::hhdm_offset().ok_or(MapError::NoHhdm)?;
-    let page_offset = virt_base & (PAGE_SIZE - 1);
-    let virt_start = virt_base - page_offset;
-    let phys_start = phys_base - page_offset;
-    let span = u64::try_from(size)
-        .ok()
-        .and_then(|size| size.checked_add(page_offset))
-        .ok_or(MapError::InvalidArgs)?;
-    let total = align_up(span, PAGE_SIZE);
-    let virt_end = virt_start.checked_add(total).ok_or(MapError::InvalidArgs)?;
-    if virt_end == 0 {
-        return Err(MapError::InvalidArgs);
-    }
-
-    let _guard = PAGING_LOCK.lock();
-    let phys_offset = VirtAddr::new(hhdm);
-    let mut mapper = unsafe { active_mapper(phys_offset)? };
-    let mut allocator = PageTableAllocator;
-
-    let mut flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
-    if !executable {
-        flags |= PageTableFlags::NO_EXECUTE;
-    }
-    let table_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
-
-    for delta in (0..total as usize).step_by(PAGE_SIZE as usize) {
-        let virt_addr = virt_start + delta as u64;
-        let phys_addr = phys_start + delta as u64;
-        let page: Page<Size4KiB> = Page::containing_address(VirtAddr::new(virt_addr));
-        let frame = PhysFrame::containing_address(PhysAddr::new(phys_addr));
-
-        unsafe {
-            match mapper.map_to_with_table_flags(page, frame, flags, table_flags, &mut allocator) {
-                Ok(flush) => flush.flush(),
-                Err(MapToError::PageAlreadyMapped(existing)) => {
-                    if existing != frame {
-                        return Err(MapError::AddressConflict);
-                    }
-                }
-                // A huge parent can only be accepted for an identity alias;
-                // otherwise we cannot prove that it backs the requested frame.
-                Err(MapToError::ParentEntryHugePage) => {
-                    if virt_addr != phys_addr {
-                        return Err(MapError::AddressConflict);
-                    }
-                }
-                Err(MapToError::FrameAllocationFailed) => {
-                    return Err(MapError::FrameAllocationFailed);
-                }
-            }
-        }
-    }
-
-    NonNull::new(virt_base as *mut u8).ok_or(MapError::InvalidPointer)
-}
 
 /// Map an exclusively reserved stack window, leaving the page immediately
 /// below and above it absent. Unlike firmware aliases, no existing mapping
@@ -309,17 +230,6 @@ fn guarded_stack_geometry(
     Ok((low, high))
 }
 
-/// Identity-map ordinary RAM at its physical address in the active kernel
-/// pagemap. This is intentionally separate from MMIO mapping: retained UEFI
-/// code/data is normal cacheable RAM and firmware function pointers still name
-/// the pre-ExitBootServices identity address.
-pub fn map_identity_ram_region(
-    phys_base: u64,
-    size: usize,
-    executable: bool,
-) -> Result<(), MapError> {
-    map_ram_region_at(phys_base, phys_base, size, executable).map(|_| ())
-}
 
 fn map_mmio_region_custom(phys_base: u64, map_size: usize) -> Result<NonNull<u8>, MapError> {
     let requested = map_size;

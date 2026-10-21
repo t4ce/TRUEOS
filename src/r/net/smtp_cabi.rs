@@ -1,6 +1,6 @@
 extern crate alloc;
 
-include!("../cabi_codes.rs");
+use crate::r::cabi_codes::*;
 
 use alloc::collections::BTreeMap;
 use alloc::format;

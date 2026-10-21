@@ -2,8 +2,6 @@
 use super::*;
 pub(crate) const SOURCE_SHA256: &str =
     "1166ee9b78e3e502466cc0737c4e0727d4eefbce3336b43284f6bd342f9ed6d2";
-pub(crate) const PALETTE_SHA256: &str =
-    "9c862068c7a3a032ed3d70585063e0de9ecb41466a34a1e45c66935df2a33d6d";
 pub(crate) const CONTRACT_VERSION: u32 = 11;
 pub(crate) static VERTEX: [u32; 188] = [
     0xa1110040, 0x05000602, 0x80000061, 0x45054660, 0x00000000, 0x3c000000, 0x80030061, 0x44054220,

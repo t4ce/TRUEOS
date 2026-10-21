@@ -87,9 +87,6 @@ impl WarmReservedRange {
     }
 }
 
-const SHELL_NOTICE: &[u8] =
-    b"\r\nlive-update: step=20/20 new kernel accepted this fresh TCP connection; Blueprint autostart uplift was armed\r\n";
-
 unsafe extern "C" {
     static __limine_requests_start: u8;
     static __limine_requests_end: u8;
@@ -167,7 +164,6 @@ static mut LIVE_HANDOFF: WarmHandoff = WarmHandoff::EMPTY;
 static WARM_HANDOFF_VALIDATION: AtomicU8 = AtomicU8::new(HANDOFF_VALIDATION_UNCHECKED);
 static LIVE_UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static WARM_APS_RELEASED: AtomicBool = AtomicBool::new(false);
-static SHELL_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);
 static POST_BOOT_UPLIFT_COMPLETE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CONTROL_HHDM: AtomicU64 = AtomicU64::new(0);
 static RENDEZVOUS_ISR_ACTIVE: AtomicU64 = AtomicU64::new(0);
@@ -744,24 +740,11 @@ pub fn spawn_post_boot(_spawner: Spawner) {
         crate::virtio_gpu_logo::request_live_update_stamp(handoff.generation);
     }
 
-    SHELL_NOTICE_PENDING.store(true, Ordering::Release);
     crate::log_important!(
         target: "global";
-        "live-update: step=20/20 bp-autostart-uplift-delegated generation={} fresh_tcp_notice=armed\n",
+        "live-update: step=20/20 bp-autostart-uplift-delegated generation={}\n",
         handoff.generation,
     );
-}
-
-pub fn take_shell_notice() -> Option<&'static [u8]> {
-    SHELL_NOTICE_PENDING
-        .swap(false, Ordering::AcqRel)
-        .then_some(SHELL_NOTICE)
-}
-
-pub fn rearm_shell_notice() {
-    if warm_boot_active() {
-        SHELL_NOTICE_PENDING.store(true, Ordering::Release);
-    }
 }
 
 pub(crate) struct WarmVmRestartEntry {

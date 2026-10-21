@@ -44,10 +44,9 @@ const _: () = {
 };
 mod mirror_map_dp_engine;
 pub(crate) use self::mirror_map_dp_engine::{
-    MirrorMapMode, WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame,
+    MirrorMapMode, WdCaptureError, WdCapturePoll, WdXyuv8888Frame,
     begin_ui4_wd_xyuv8888_capture, pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture,
-    set_mirror_map_mode, start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
-    ui4_wd_xyuv8888_capture_status,
+    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
 };
 
 macro_rules! intel_display_focus_log {
@@ -5065,18 +5064,7 @@ const fn overlay_composition_constant_alpha(tile_count: usize, all_tiles_transpa
     }
 }
 
-pub(crate) fn ui4_direct_scanout_ready_for_frame(producer_frame: u64) -> Option<u64> {
-    (producer_frame != 0)
-        .then(|| {
-            UI4_DIRECT_SCANOUT_PROOFS
-                .lock()
-                .iter()
-                .filter(|proof| proof.producer_frame == producer_frame)
-                .map(|proof| proof.publish_serial)
-                .max()
-        })
-        .flatten()
-}
+
 
 const fn should_log_ui4_direct_checkpoint(sequence: u64) -> bool {
     crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED

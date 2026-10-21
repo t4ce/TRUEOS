@@ -52,14 +52,6 @@ impl TrueosHiiCaptureRequest {
         }
     }
 
-    pub fn response(&self) -> Option<&'static TrueosHiiCaptureResponse> {
-        let ptr = unsafe { *self.response.get() };
-        if ptr.is_null() {
-            None
-        } else {
-            Some(unsafe { &*ptr })
-        }
-    }
 }
 
 const UNSET_U64: u64 = u64::MAX;
@@ -301,9 +293,6 @@ pub fn efi_system_table_address() -> Option<u64> {
     Some(resp.address as u64)
 }
 
-pub fn trueos_hii_capture_response() -> Option<&'static TrueosHiiCaptureResponse> {
-    TRUEOS_HII_CAPTURE_REQUEST.response()
-}
 
 pub fn smbios_response() -> Option<&'static SmbiosResponse> {
     SMBIOS_REQUEST.response()

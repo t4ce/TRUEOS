@@ -68,19 +68,6 @@ impl AudioVisualizerFrame {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct AudioVisualizerStatus {
-    pub(crate) enabled: bool,
-    pub(crate) sequence: u64,
-    pub(crate) captured_frames: usize,
-    pub(crate) active: bool,
-    pub(crate) rms: f32,
-    pub(crate) peak: f32,
-    pub(crate) low: f32,
-    pub(crate) mid: f32,
-    pub(crate) high: f32,
-    pub(crate) beat: f32,
-}
 
 struct AudioAnalyzer {
     fft: Fft,
@@ -313,20 +300,3 @@ pub(crate) fn snapshot() -> AudioVisualizerFrame {
     analyzer.get_or_insert_with(AudioAnalyzer::new).analyze()
 }
 
-pub(crate) fn status() -> AudioVisualizerStatus {
-    let tap = audio_visualizer_tap::status();
-    let analyzer = ANALYZER.lock();
-    let frame = analyzer.as_ref().map(|analyzer| &analyzer.last_frame);
-    AudioVisualizerStatus {
-        enabled: tap.enabled,
-        sequence: tap.end_frame_sequence,
-        captured_frames: tap.frames,
-        active: frame.is_some_and(|frame| frame.active),
-        rms: frame.map_or(0.0, |frame| (frame.rms_left + frame.rms_right) * 0.5),
-        peak: frame.map_or(0.0, |frame| frame.peak),
-        low: frame.map_or(0.0, |frame| frame.low),
-        mid: frame.map_or(0.0, |frame| frame.mid),
-        high: frame.map_or(0.0, |frame| frame.high),
-        beat: frame.map_or(0.0, |frame| frame.beat),
-    }
-}

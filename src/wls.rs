@@ -285,13 +285,6 @@ fn wls_blueprint_worker_slot(vm_id: u8, worker_id: usize) -> u32 {
         .saturating_add(worker_id.min(WORKER_SLOT_COUNT - 1)) as u32
 }
 
-#[inline]
-fn wls_blueprint_thread_slot(vm_id: u8, thread_id: u32) -> Option<u32> {
-    let identity = blueprint_thread_identity(vm_id, thread_id)?;
-    let index = BLUEPRINT_THREAD_IDENTITIES.iter()
-        .position(|slot| slot.load(Ordering::Acquire) == identity)?;
-    Some((WLS_BLUEPRINT_THREAD_BASE + index) as u32)
-}
 
 fn current_blueprint_thread_slot(vm_id: u8, thread_id: u32) -> Option<u32> {
     let slot = CURRENT_BLUEPRINT_THREAD_SLOT_BY_CPU.get(cpu_slot_now() as usize)?.load(Ordering::Acquire);
@@ -348,25 +341,6 @@ pub(crate) fn replace_thread_context((worker, thread, identity_slot): ThreadCont
     )
 }
 
-pub fn with_current_blueprint_thread_id<R>(thread_id: usize, f: impl FnOnce() -> R) -> R {
-    let cpu_slot = cpu_slot_now();
-    if cpu_slot == NO_CPU_SLOT {
-        return f();
-    }
-    let Some(slot) = CURRENT_BLUEPRINT_THREAD_ID_BY_CPU.get(cpu_slot as usize) else {
-        return f();
-    };
-    let thread_id = thread_id.min(u32::MAX as usize) as u32;
-    let identity_slot = crate::hv::current_guest_execution_context_vm_id()
-        .and_then(|vm| wls_blueprint_thread_slot(vm, thread_id));
-    let slot_cell = &CURRENT_BLUEPRINT_THREAD_SLOT_BY_CPU[cpu_slot as usize];
-    let previous_slot = slot_cell.swap(identity_slot.unwrap_or(NO_BLUEPRINT_THREAD_SLOT), Ordering::AcqRel);
-    let previous = slot.swap(thread_id.max(1), Ordering::AcqRel);
-    let result = f();
-    slot.store(previous, Ordering::Release);
-    slot_cell.store(previous_slot, Ordering::Release);
-    result
-}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_wls_current_slot() -> u32 {

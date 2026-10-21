@@ -104,7 +104,6 @@ pub(crate) enum CryTwoFactorState {
 
 pub(crate) struct CryTotpEnrollment {
     pub qr_payload: Zeroizing<String>,
-    pub account_tag: [u8; 4],
     pub username: String,
 }
 
@@ -446,7 +445,6 @@ fn begin_totp_enrollment_for_state(state: &mut CryState) -> Result<CryTotpEnroll
     base32.zeroize();
     Ok(CryTotpEnrollment {
         qr_payload: payload,
-        account_tag,
         username,
     })
 }
@@ -1101,20 +1099,6 @@ fn append_hex(output: &mut String, bytes: &[u8]) {
     }
 }
 
-/// Stable, domain-separated SSH host identity backed by the encrypted cry seed.
-/// No host identity is available before the account is unlocked and sealed.
-pub(crate) fn ssh_host_seed() -> Result<Zeroizing<[u8; 32]>, CryError> {
-    let state = CRY_STATE.lock();
-    if state.durable.is_none() {
-        return Err(CryError::NotAuthenticated);
-    }
-    let key = state.signing_key.as_ref().ok_or(CryError::NotConfigured)?;
-    let seed = Zeroizing::new(key.to_bytes());
-    let mut hash = Sha256::new();
-    hash.update(b"TRUEOS/ssh-host/ed25519/v1\0");
-    hash.update(seed.as_slice());
-    Ok(Zeroizing::new(hash.finalize().into()))
-}
 
 const SSH_ED25519_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
 

@@ -53,9 +53,6 @@ pub(crate) fn wake_guest_control(vm_id: u8) {
     }
 }
 
-pub(crate) fn wake_killed_guest(vm_id: u8) {
-    wake_guest_control(vm_id);
-}
 static CURRENT: [AtomicPtr<Thread>; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicPtr::new(core::ptr::null_mut()) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 

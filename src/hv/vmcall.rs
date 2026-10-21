@@ -16,21 +16,14 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use log_os_core::LogLevel;
 
 const BLUEPRINT_AUDIO_LOG_SAMPLE_EVERY: u32 = 1_000;
-const BLUEPRINT_TEXT_SCENE_BUSY_LOG_SAMPLE_EVERY: u32 = 1_000;
 
 static BLUEPRINT_AUDIO_WRITE_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
 static BLUEPRINT_AUDIO_POLL_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
-static BLUEPRINT_TEXT_SCENE_BUSY_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
 
 fn sampled_log(counter: &AtomicU32) -> bool {
     counter.fetch_add(1, Ordering::Relaxed) % BLUEPRINT_AUDIO_LOG_SAMPLE_EVERY == 0
 }
 
-fn sampled_text_scene_busy_log() -> bool {
-    BLUEPRINT_TEXT_SCENE_BUSY_LOG_SEQ.fetch_add(1, Ordering::Relaxed)
-        % BLUEPRINT_TEXT_SCENE_BUSY_LOG_SAMPLE_EVERY
-        == 0
-}
 
 fn vm_has_trueosfs_scope(vm_id: u8) -> bool {
     crate::hv::blueprint_process_env_var(vm_id, "TRUEOS_FS_SCOPE").as_deref() == Some("trueosfs")
@@ -97,13 +90,13 @@ pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
 pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 mode:window,arg1 x/y,payload w/h -> rc [+ mode1 serial]
 pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window,arg1 close flags -> rc
-pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 instance:scale,payload fixed page -> rc
-pub const OP_BP_GRIDPAPER_CLOSE: u32 = 0xBA; // arg0 instance, detach calling VM's producer -> rc
-pub const OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT: u32 = 0xBB; // arg0 instance,payload CSS-like text color programs -> rc
+ // arg0 generation,arg1 instance:scale,payload fixed page -> rc
+ // arg0 instance, detach calling VM's producer -> rc
+ // arg0 instance,payload CSS-like text color programs -> rc
 pub const OP_BP_PRINTER_SNAPSHOT_READ: u32 = 0xBC; // arg0 offset, arg1 cap -> IPP printer registry
 pub const OP_BP_PRINT2D_SUBMIT: u32 = 0xBD; // arg0 document kind,arg1 subject,payload compact document -> job/rc
 pub const OP_BP_PRINT2D_STATUS: u32 = 0xBE; // arg0 job id -> PrintJobState/rc
-pub const OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE: u32 = 0xBF; // arg0 instance, focused Print Screen request token
+ // arg0 instance, focused Print Screen request token
 pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_BEGIN: u32 = 0xC0; // arg0 window,arg1 width/height -> rc
 pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_CHUNK: u32 = 0xC1; // arg0 window,arg1 byte offset,payload RGB565 -> rc
 pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_FINISH: u32 = 0xC2; // arg0 window -> rc
@@ -229,7 +222,7 @@ pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5; // arg0 mode:wind
 pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output width:height
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7; // arg0 offset, arg1 cap -> USB inventory snapshot
 pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8; // arg0 window,arg1 cap -> selected combo/keyboard routes
-pub const OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT: u32 = 0xF9; // arg0 instance -> page image + release
+ // arg0 instance -> page image + release
 pub const OP_BP_ARCHIVE_PACK_START: u32 = 0xFA; // arg0 source len,payload source+archive paths -> operation id/rc
 pub const OP_BP_ARCHIVE_UNPACK_START: u32 = 0xFB; // arg0 archive len,payload archive+destination paths -> operation id/rc
 pub const OP_BP_ARCHIVE_STATUS: u32 = 0xFC; // arg0 operation id -> pending/ready/rc
@@ -1225,9 +1218,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
-
-
-
 
         OP_PING => {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
@@ -3360,7 +3350,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (i64::from(rc)) as u64, 0);
             DispatchOutcome::Resume
         }
-
 
         #[cfg(feature = "gridpaper")]
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {

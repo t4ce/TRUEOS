@@ -7,7 +7,6 @@ use core::mem::ManuallyDrop;
 
 use trueos_vm::vmcall;
 
-
 fn attached_write(bytes: &[u8]) {
     let mut written = 0usize;
     while written < bytes.len() {
@@ -207,8 +206,6 @@ fn create_blueprint_dir_all_async(path: &str) -> Result<(), alloc::string::Strin
         }
     }
 }
-
-
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {

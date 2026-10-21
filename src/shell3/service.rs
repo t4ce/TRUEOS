@@ -172,16 +172,6 @@ pub fn worker_limit() -> usize {
     ap_cores / 2
 }
 
-/// Preview the next AP in the admission sequence.
-/// Executors receive their first three shells in order; later shells go to
-/// the next executor in a strict round-robin loop.
-pub fn next_executor_for_shell() -> Option<u32> {
-    let ownership = SHELL_OWNERSHIP.lock();
-    (ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
-        < super::MAX_SHELL3_INSTANCES)
-        .then(|| ownership.preferred_slot())
-        .flatten()
-}
 
 /// Queue a fresh Shell3 on the executor selected by the shell distribution policy.
 pub fn request_shell3() -> Result<u32, super::Shell3Error> {
@@ -234,36 +224,7 @@ fn has_pending_for_executor(slot: u32) -> bool {
         .is_some_and(|pending| *pending != 0)
 }
 
-pub(super) fn live_shell_count() -> usize {
-    SHELL_OWNERSHIP.lock().live_shells
-}
 
-pub(super) fn reserve_shell_on_executor(slot: u32) -> Result<(), super::Shell3Error> {
-    let mut ownership = SHELL_OWNERSHIP.lock();
-    if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
-        >= super::MAX_SHELL3_INSTANCES
-    {
-        warn_instance_limit();
-        return Err(super::Shell3Error::InstanceLimit);
-    }
-    let expected = ownership
-        .preferred_slot()
-        .ok_or(super::Shell3Error::NoExecutor)?;
-    if expected != slot {
-        return Err(super::Shell3Error::WrongExecutor {
-            expected,
-            actual: slot,
-        });
-    }
-    let Some(shell_count) = ownership.shells_by_slot.get_mut(slot as usize) else {
-        warn_instance_limit();
-        return Err(super::Shell3Error::InstanceLimit);
-    };
-    *shell_count += 1;
-    ownership.live_shells += 1;
-    advance_round_robin(&mut ownership, slot);
-    Ok(())
-}
 
 fn warn_instance_limit() {
     crate::log_warn!(target: "service";
@@ -367,9 +328,6 @@ impl Shell3Executor {
         })
     }
 
-    pub const fn slot(&self) -> u32 {
-        self.slot
-    }
 
     pub fn len(&self) -> usize {
         self.shells.len()
@@ -379,28 +337,6 @@ impl Shell3Executor {
         self.shells.is_empty()
     }
 
-    pub fn create_shell(
-        &mut self,
-        time: &str,
-        aka_names: Vec<alloc::string::String>,
-        update_callbacks: Vec<super::UpdateCallback>,
-        columns: usize,
-        rows: usize,
-    ) -> Result<usize, super::Shell3Error> {
-        self.ensure_current_executor()?;
-        refresh_appdb_names();
-        let shell = super::Shell3::new(
-            time,
-            aka_names,
-            appdb_names_snapshot().1,
-            update_callbacks,
-            columns,
-            rows,
-        )?;
-        let index = self.shells.len();
-        self.shells.push(shell);
-        Ok(index)
-    }
 
     fn create_shell_reserved(
         &mut self,

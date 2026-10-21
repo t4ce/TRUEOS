@@ -14,17 +14,12 @@ use alloc::{
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
-pub const DOCUMENT_GRIDPAPER_A4: u32 = 1;
-pub const DOCUMENT_GRIDPAPER_REQUEST: u32 = 2;
 
 pub const ERROR_INVALID_DOCUMENT: i64 = -1;
-pub const ERROR_QUEUE_FULL: i64 = -2;
 pub const ERROR_NOT_OWNER: i64 = -3;
 pub const ERROR_UNKNOWN_JOB: i32 = -4;
 pub const ERROR_TRANSPORT: i64 = -5;
 
-const QUEUE_CAPACITY: usize = 8;
-const STATUS_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
@@ -65,9 +60,6 @@ impl PrintJobState {
         }
     }
 
-    pub const fn terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Canceled | Self::OutcomeUnknown)
-    }
 }
 
 pub(crate) enum PrintDocument {
@@ -107,65 +99,12 @@ impl PrintQueue {
         }
     }
 
-    fn retain_status_capacity(&mut self) {
-        while self.records.len() >= STATUS_CAPACITY {
-            let removable = self
-                .records
-                .iter()
-                .position(|record| record.state.terminal())
-                .unwrap_or(0);
-            let _ = self.records.remove(removable);
-        }
-    }
 
-    fn has_job_capacity(&self) -> bool {
-        self.records
-            .iter()
-            .filter(|record| !record.state.terminal())
-            .count()
-            < QUEUE_CAPACITY
-    }
 }
 
-static NEXT_JOB_ID: AtomicU32 = AtomicU32::new(1);
 static PRINT_QUEUE: Mutex<PrintQueue> = Mutex::new(PrintQueue::new());
 
-fn next_job_id() -> u32 {
-    loop {
-        let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
-        if id != 0 {
-            return id;
-        }
-    }
-}
 
-fn enqueue(
-    owner: PrintOwner,
-    document: PrintDocument,
-    printer_uri: Option<String>,
-) -> Result<u32, i64> {
-    let id = next_job_id();
-    {
-        let mut queue = PRINT_QUEUE.lock();
-        if !queue.has_job_capacity() {
-            return Err(ERROR_QUEUE_FULL);
-        }
-        queue.retain_status_capacity();
-        queue.records.push_back(JobRecord {
-            id,
-            owner,
-            state: PrintJobState::Queued,
-        });
-        queue.pending.push_back(PrintJob {
-            id,
-            owner,
-            document,
-            printer_uri,
-        });
-    }
-    crate::log_os::print2d_job_state(id, PrintJobState::Queued.name(), "accepted");
-    Ok(id)
-}
 
 #[cfg(feature = "gridpaper")]
 fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
