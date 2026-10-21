@@ -30,10 +30,8 @@ pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_compose_layers_rgba8.clcpp");
 pub(crate) const SKYBOX_SAMPLE_RGB565_KERNEL_NAME: &str = "skybox_sample_rgb565";
 pub(crate) const CPP_DEMO_RGBA8_KERNEL_NAME: &str = "cpp_demo_rgba8";
-pub(crate) const CPP_DEMO_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/cpp_demo_rgba8.clcpp");
 pub(crate) const CPP_DEMO_RGBA8_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/cpp_demo_rgba8.clcpp";
+    "../TRUEOS-Blueprints/apps/shadertoy/assets/cpp_gallery/kernel.clcpp";
 pub(crate) const SHADERTOY_MANDELBROT_KERNEL_NAME: &str = "shadertoy_mandelbrot";
 pub(crate) const SHADERTOY_CUBE_FIELD_KERNEL_NAME: &str = "shadertoy_cube_field";
 pub(crate) const SHADERTOY_NGUYEN_KERNEL_NAME: &str = "shadertoy_nguyen";
@@ -51,18 +49,14 @@ pub(crate) const SHADERTOY_PALETTE_GRID_SOURCE_PATH: &str =
 pub(crate) const SHADERTOY_COSMIC_STRANDS_SOURCE_PATH: &str =
     "Blueprint:shadertoy/assets/cosmic_strands/kernel.clcpp";
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME: &str = "cpp_audio_visualizer_rgba8";
-pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp");
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp";
+    "../TRUEOS-Blueprints/apps/shadertoy/assets/audio_visualizer/kernel.clcpp";
 pub(crate) const PARTICLE_CRAFT_KERNEL_NAME: &str = "particle_craft";
 pub(crate) const PARTICLE_CRAFT_STEP_KERNEL_NAME: &str = "particle_craft_step";
 pub(crate) const PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME: &str = "particle_craft_bin_tiles";
 pub(crate) const PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME: &str = "particle_craft_render_rgba8";
-pub(crate) const PARTICLE_CRAFT_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp");
 pub(crate) const PARTICLE_CRAFT_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/particle_craft.clcpp";
+    "../TRUEOS-Blueprints/apps/shadertoy/assets/particle_craft/kernel.clcpp";
 pub(crate) const LFM25_Q8_PROJECT_PACKED_KERNEL_NAME: &str = "lfm25_q8_project_packed";
 pub(crate) const LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/lfm25_q8_project_packed.clcpp");
@@ -114,12 +108,12 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE),
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => Some(UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE),
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => None,
-        CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_OPENCL_SOURCE),
-        CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE),
+        CPP_DEMO_RGBA8_KERNEL_NAME => None,
+        CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => None,
         PARTICLE_CRAFT_KERNEL_NAME
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
         | PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME
-        | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_OPENCL_SOURCE),
+        | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => None,
 
         LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE),
         KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(KOKORO_QGEMM_U8_I8_OPENCL_SOURCE),
@@ -311,12 +305,8 @@ pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_SPV: &[u8] =
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.contract.rs"
 );
-pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.bin"
-);
-pub(crate) const CPP_DEMO_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.spv"
-);
+pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN_BYTES: usize = shadertoy_package::SHADERTOY_CPP_GALLERY_PACKAGE.bin_bytes;
+pub(crate) const CPP_DEMO_RGBA8_ADLS_SPV_BYTES: usize = shadertoy_package::SHADERTOY_CPP_GALLERY_PACKAGE.spv_bytes;
 pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = assert!(matches!(CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
@@ -396,12 +386,8 @@ const _: () = {
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_audio_visualizer_rgba8.contract.rs"
 );
-pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_audio_visualizer_rgba8.bin"
-);
-pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_audio_visualizer_rgba8.spv"
-);
+pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN_BYTES: usize = shadertoy_package::SHADERTOY_AUDIO_VISUALIZER_PACKAGE.bin_bytes;
+pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_SPV_BYTES: usize = shadertoy_package::SHADERTOY_AUDIO_VISUALIZER_PACKAGE.spv_bytes;
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () =
@@ -428,20 +414,16 @@ const _: () = {
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/particle_craft.contract.rs"
 );
-pub(crate) const PARTICLE_CRAFT_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/particle_craft.bin"
-);
-pub(crate) const PARTICLE_CRAFT_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/particle_craft.spv"
-);
+pub(crate) const PARTICLE_CRAFT_ADLS_BIN_BYTES: usize = shadertoy_package::SHADERTOY_PARTICLE_CRAFT_PACKAGE.bin_bytes;
+pub(crate) const PARTICLE_CRAFT_ADLS_SPV_BYTES: usize = shadertoy_package::SHADERTOY_PARTICLE_CRAFT_PACKAGE.spv_bytes;
 pub(crate) const PARTICLE_CRAFT_ADLS_BIN_SHA256: [u8; 32] =
     PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = assert!(matches!(PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () = assert!(matches!(PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () =
     assert!(matches!(PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN.len() == 157_536);
-const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV.len() == 91_764);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_BIN_BYTES == 157_536);
+const _: () = assert!(PARTICLE_CRAFT_ADLS_SPV_BYTES == 91_764);
 const _: () = {
     let step = PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT;
     let bin = PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT;

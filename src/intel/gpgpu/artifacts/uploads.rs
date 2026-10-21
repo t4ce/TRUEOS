@@ -240,22 +240,9 @@ pub(crate) fn register_skybox_package(package: &[u8]) -> bool {
     true
 }
 
+/// Executable bytes must first be admitted from a Blueprint-owned package.
 pub(crate) fn upload_cpp_demo_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CPP_DEMO_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: cpp-demo-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(dev, CPP_DEMO_RGBA8_ADLS_ARTIFACT, CPP_DEMO_RGBA8_ADLS_GPU)?;
-    *CPP_DEMO_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
+    *CPP_DEMO_RGBA8_UPLOAD.lock()
 }
 
 fn shadertoy_artifact_slot(
@@ -368,44 +355,14 @@ pub(crate) fn register_shadertoy_package(shader_id: u32, package: &[u8]) -> bool
     true
 }
 
+/// Executable bytes must first be admitted from a Blueprint-owned package.
 pub(crate) fn upload_cpp_audio_visualizer_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: cpp-audio-visualizer-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,
-        CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU,
-    )?;
-    *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
+    *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock()
 }
 
+/// Executable bytes must first be admitted from a Blueprint-owned package.
 pub(crate) fn upload_particle_craft_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *PARTICLE_CRAFT_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: particle-craft upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(dev, PARTICLE_CRAFT_ADLS_ARTIFACT, PARTICLE_CRAFT_ADLS_GPU)?;
-    *PARTICLE_CRAFT_UPLOAD.lock() = Some(upload);
-    Some(upload)
+    *PARTICLE_CRAFT_UPLOAD.lock()
 }
 
 pub(crate) fn upload_lfm25_q8_project_packed_kernel() -> Option<UploadedKernelArtifact> {

@@ -79,7 +79,7 @@ fn direct_rcs_encode_cpp_audio_visualizer_rgba8_batch(
         || audio_bytes != CPP_AUDIO_VISUALIZER_SNAPSHOT_BYTES
         || upload.bin_sha256 != CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN_SHA256
         || upload.gpu != CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU
-        || upload.bytes != CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN.len()
+        || upload.bytes != CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN_BYTES
     {
         return false;
     }

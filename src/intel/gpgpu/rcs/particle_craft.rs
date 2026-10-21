@@ -61,7 +61,7 @@ fn direct_rcs_encode_particle_craft_batch(
 ) -> bool {
     if upload.bin_sha256 != PARTICLE_CRAFT_ADLS_BIN_SHA256
         || upload.gpu != PARTICLE_CRAFT_ADLS_GPU
-        || upload.bytes != PARTICLE_CRAFT_ADLS_BIN.len()
+        || upload.bytes != PARTICLE_CRAFT_ADLS_BIN_BYTES
         || active_count == 0
         || active_count > PARTICLE_CRAFT_MAX_PARTICLES
     {
