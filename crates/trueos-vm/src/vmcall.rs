@@ -165,6 +165,8 @@ const _: () = {
     assert!(OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V3 == 0x17A);
 };
 pub const OP_BP_CLIPBOARD_COMMAND_V1: u32 = 0x230;
+/// Bounded pointer-free Hull microfont text runs into a retired frame lease.
+pub const OP_BP_UI4_HULL_TEXT_RUNS_V1: u32 = 0x235;
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB;
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123;
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150;

@@ -191,6 +191,7 @@ const _: () = {
     assert!(core::mem::size_of::<v::vgpu::RetainedFrameSubmitV4>() <= PAYLOAD_CAP);
 };
 pub const OP_BP_CLIPBOARD_COMMAND_V1: u32 = 0x230;
+pub const OP_BP_UI4_HULL_TEXT_RUNS_V1: u32 = 0x235;
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
@@ -2646,6 +2647,19 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 crate::ui4::WindowOwner::Vm(vm_id),
                 arg0 as u32,
                 arg1 as usize,
+                payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_HULL_TEXT_RUNS_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui4::blueprint_ui4::hull_text_api::draw_wire(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
                 payload,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);

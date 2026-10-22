@@ -9,6 +9,7 @@ pub(crate) mod collapse_api;
 pub(crate) mod cursor_image_api;
 pub(crate) mod display_api;
 pub(crate) mod drag_drop_api;
+pub(crate) mod hull_text_api;
 pub use cursor_image_api::{
     trueos_cabi_ui4_scene_register_cursor_image_v1, trueos_cabi_ui4_scene_select_cursor_image_v1,
 };

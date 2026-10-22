@@ -1239,15 +1239,10 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         return None;
     }
     match name {
-        "sys_alloc_words" => Some(crate::std_abi_shim::sys_alloc_words as *const () as usize),
         "sys_alloc_aligned" => Some(crate::std_abi_shim::sys_alloc_aligned as *const () as usize),
         "sys_rand" => Some(crate::std_abi_shim::sys_rand as *const () as usize),
         "sys_write" => Some(crate::std_abi_shim::sys_write as *const () as usize),
         "sys_read" => Some(crate::std_abi_shim::sys_read as *const () as usize),
-        "sys_getenv" => Some(crate::std_abi_shim::sys_getenv as *const () as usize),
-        "sys_argc" => Some(crate::std_abi_shim::sys_argc as *const () as usize),
-        "sys_argv" => Some(crate::std_abi_shim::sys_argv as *const () as usize),
-        "sys_sha_compress" => Some(crate::std_abi_shim::sys_sha_compress as *const () as usize),
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
         "exit" | "_exit" => Some(crate::std_abi_shim::exit as *const () as usize),
         "abort" => Some(crate::blueprint_shims::abort as *const () as usize),

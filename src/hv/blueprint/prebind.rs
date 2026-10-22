@@ -56,6 +56,11 @@ pub(crate) fn prebind_import_readiness(name: &str, filesystem_independent: bool)
 pub(crate) fn retired_import_error(name: &str) -> Option<&'static str> {
     match name {
         "_Unwind_RaiseException"
+        | "sys_alloc_words"
+        | "sys_getenv"
+        | "sys_argc"
+        | "sys_argv"
+        | "sys_sha_compress"
         | "sys_cycle_count"
         | "sys_log"
         | "sys_output"

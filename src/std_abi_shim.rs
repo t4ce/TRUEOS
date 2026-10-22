@@ -1191,32 +1191,6 @@ fn unspecified_socket_addr(domain: c_int) -> SocketAddr {
     )
 }
 
-fn copy_bytes_to_words(out_words: *mut u32, out_nwords: usize, bytes: &[u8]) -> usize {
-    if !out_words.is_null() && out_nwords != 0 {
-        let cap = out_nwords.saturating_mul(core::mem::size_of::<u32>());
-        if cap >= bytes.len() {
-            let _ = copy_to_abi_out(out_words.cast::<u8>(), bytes);
-        }
-    }
-    bytes.len()
-}
-
-fn copy_vmcall_text_response_to_words(
-    status: u32,
-    len: u64,
-    bytes: &[u8],
-    out_words: *mut u32,
-    out_nwords: usize,
-    missing: usize,
-) -> usize {
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return missing;
-    }
-    let len = len as usize;
-    let n = core::cmp::min(len, bytes.len());
-    copy_bytes_to_words(out_words, out_nwords, &bytes[..n])
-}
-
 fn pthread_key(ptr: *mut c_void) -> Option<usize> {
     let key = ptr as usize;
     if key == 0 { None } else { Some(key) }
@@ -2811,12 +2785,6 @@ unsafe fn freeaddrinfo_chain(mut res: *mut TrueosAddrInfo) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_alloc_words(nwords: usize) -> *mut u32 {
-    let bytes = nwords.saturating_mul(core::mem::size_of::<u32>());
-    unsafe { sys_alloc_aligned(bytes, core::mem::align_of::<u32>()) as *mut u32 }
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_alloc_aligned(size: usize, align: usize) -> *mut u8 {
     if size == 0 {
         return ptr::null_mut();
@@ -2916,110 +2884,6 @@ pub unsafe extern "C" fn sys_read(_fd: u32, recv_buf: *mut u8, nrequested: usize
         let n = unsafe { crate::r::io::fs_cabi::trueos_cabi_blueprint_child_read_v1(0, out.as_mut_ptr(), out.len()) };
         if n > 0 { n as usize } else { 0 }
     } else { crate::r::io::fs_cabi::read_attached_console_bytes(out) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_getenv(
-    recv_buf: *mut u32,
-    words: usize,
-    varname: *const u8,
-    varname_len: usize,
-) -> usize {
-    if varname.is_null() {
-        return usize::MAX;
-    }
-    let Some(key_bytes) = abi_read_bytes(varname, varname_len) else {
-        return usize::MAX;
-    };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        if key_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
-            return usize::MAX;
-        }
-        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
-        let (status, len) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_ENV_VAR,
-            0,
-            0,
-            key_bytes,
-            &mut bytes,
-        );
-        return copy_vmcall_text_response_to_words(
-            status,
-            len,
-            &bytes,
-            recv_buf,
-            words,
-            usize::MAX,
-        );
-    }
-    let Some(value) = environment_bytes(environment_vm_id(), key_bytes) else {
-        return usize::MAX;
-    };
-    copy_bytes_to_words(recv_buf, words, &value)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_argc() -> usize {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, count) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_ENV_ARGS_COUNT, 0, 0);
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            count as usize
-        } else {
-            0
-        };
-    }
-    crate::r::io::env::arg_count()
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_argv(
-    out_words: *mut u32,
-    out_nwords: usize,
-    arg_index: usize,
-) -> usize {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
-        let (status, len) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_ENV_ARG,
-            arg_index as u64,
-            0,
-            &[],
-            &mut bytes,
-        );
-        return copy_vmcall_text_response_to_words(status, len, &bytes, out_words, out_nwords, 0);
-    }
-    let Some(arg) = crate::r::io::env::arg(arg_index) else {
-        return 0;
-    };
-    copy_bytes_to_words(out_words, out_nwords, arg.as_bytes())
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_sha_compress(
-    out_state: *mut [u32; 8],
-    in_state: *const [u32; 8],
-    _block1_ptr: *const [u32; 8],
-    _block2_ptr: *const [u32; 8],
-) {
-    if out_state.is_null() {
-        return;
-    }
-
-    if in_state.is_null() {
-        let _ = copy_to_abi_out(out_state.cast::<u8>(), &[0; core::mem::size_of::<[u32; 8]>()]);
-    } else {
-        let Some(state) = abi_read_struct(in_state) else {
-            return;
-        };
-        let bytes = unsafe {
-            slice::from_raw_parts(
-                (&state as *const [u32; 8]).cast::<u8>(),
-                core::mem::size_of::<[u32; 8]>(),
-            )
-        };
-        let _ = copy_to_abi_out(out_state.cast::<u8>(), bytes);
-    }
 }
 
 #[unsafe(no_mangle)]

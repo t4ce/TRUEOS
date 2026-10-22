@@ -662,6 +662,36 @@ pub(crate) fn mark_frame_buffer_cpu_authored(lease: FrameWriteLease) -> Result<(
     Ok(())
 }
 
+/// Transfer a completed GPU producer to a CPU overlay on the same allocation.
+/// The caller must invalidate CPU cache lines before reading GPU-authored
+/// pixels, then flush its final writes before ordinary CPU publication.
+pub(crate) fn mark_frame_buffer_cpu_overlay(
+    lease: FrameWriteLease,
+    release: Option<FrameGpuRelease>,
+) -> Result<(), FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    if frame.gpu_full_overwrite_required {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    match release {
+        Some(release) if frame.gpu_authored[index] => {
+            if !release.matches(access.phys, access.byte_len) {
+                return Err(FramePoolError::InvalidLease);
+            }
+        }
+        None if !frame.gpu_authored[index] => {}
+        _ => return Err(FramePoolError::ProducerReleaseRequired),
+    }
+    frame.gpu_authored[index] = false;
+    frame.gpu_release[index] = None;
+    Ok(())
+}
+
 /// Mark a leased frame as fully opaque after the producer has overwritten the
 /// complete allocation with alpha 255. Later GPU source-over rendering retains
 /// this invariant, enabling an ordered copy fallback for the slot-0 stack.

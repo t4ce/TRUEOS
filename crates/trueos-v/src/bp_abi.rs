@@ -146,6 +146,23 @@ pub struct TrueosUi4Shell2FontScaleStep {
     pub cache_eligible: u32,
 }
 
+/// One Hull microfont run in physical frame pixels. `advance_px` is the whole
+/// run's SVG textLength, or zero for the font's natural advance. RGBA is packed
+/// with `u32::from_le_bytes([r, g, b, a])`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct TrueosUi4HullTextRunV1 {
+    pub text: *const u8,
+    pub text_len: usize,
+    pub x: f32,
+    pub baseline_y: f32,
+    pub size_px: f32,
+    pub advance_px: f32,
+    pub rgba: u32,
+    /// Prior Unicode scalar columns for a split natural-advance run.
+    pub column_offset: u32,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrueosImageSourceInfo {
@@ -904,6 +921,11 @@ unsafe extern "C" {
         window_id: u32,
         quads: *const TrueosUi4SpriteQuad,
         quad_count: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_hull_text_runs_v1(
+        window_id: u32,
+        runs: *const TrueosUi4HullTextRunV1,
+        run_count: usize,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_skybox_upload_rgb565(
         window_id: u32,
