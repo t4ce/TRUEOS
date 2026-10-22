@@ -311,20 +311,6 @@ pub unsafe extern "C" fn trueos_cabi_log(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8) {
-    if cstr.is_null() {
-        return;
-    }
-    let mut len = 0usize;
-    while unsafe { *cstr.add(len) } != 0 {
-        len = len.saturating_add(1);
-    }
-    unsafe {
-        trueos_cabi_write(stream, cstr, len);
-    }
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_poll_once() {
     if crate::r::threads::yield_now() {
         return;
@@ -1851,27 +1837,6 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
 
 
 
-
-// Retired portal ABI signatures remain locked; there is no Shell2 backend.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_shell2_raw_write(_data_ptr: *const u8, _data_len: usize) -> usize { 0 }
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_shell2_frontend_attach_v1(_cols: u32, _rows: u32) -> i32 { -38 }
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_shell2_frontend_read_v1(
-    _read_seq: u64, _out_ptr: *mut u8, _out_cap: usize,
-    _out_next_seq: *mut u64, _out_epoch: *mut u64, _out_flags: *mut u32,
-) -> isize { -38 }
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_shell2_frontend_submit_input_v1(
-    _data_ptr: *const u8, _data_len: usize,
-) -> isize { -38 }
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_shell2_frontend_detach_v1() -> i32 { -38 }
 
 pub(crate) fn blueprint_img_open_payload(vm_id: u8, payload: &[u8]) -> i32 {
     crate::r::services::image_open_service::enqueue(vm_id, payload)

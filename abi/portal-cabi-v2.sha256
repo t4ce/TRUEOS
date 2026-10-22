@@ -1,3 +1,4 @@
+# Intentional removal of ten unused Blueprint exports after local app/import audit; all surviving signatures unchanged.
 # Intentional removal of private XPAPP/x86 contexts and prepared-raster batch; surviving signatures unchanged.
 # Intentional retirement of the eight legacy UI4 font/text imports with the removed font backend.
 # All surviving signatures are unchanged; old font/text Blueprint imports are no longer supported.
@@ -26,4 +27,4 @@
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
-82990c8edc159c03b41aeb24485c5b2b801cdf67b48053233c8fa888d87c9331
+20a13848e8fe917bea6f7a2daf0bd1d0414ca7085b4fe10bf05ff1dbd64127e1

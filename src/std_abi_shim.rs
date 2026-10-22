@@ -2904,17 +2904,6 @@ pub unsafe extern "C" fn sys_write(fd: u32, write_buf: *const u8, nbytes: usize)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_internal_log_write(bytes: *const u8, len: usize) {
-    if bytes.is_null() || len == 0 {
-        return;
-    }
-    let Some(bytes) = abi_read_bytes(bytes, len) else {
-        return;
-    };
-    write_platform_fd(2, bytes);
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_read(_fd: u32, recv_buf: *mut u8, nrequested: usize) -> usize {
     if recv_buf.is_null() || nrequested == 0 {
         return 0;
@@ -3007,9 +2996,6 @@ pub unsafe extern "C" fn sys_argv(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_output(_output_id: u32, _output_value: u32) {}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_sha_compress(
     out_state: *mut [u32; 8],
     in_state: *const [u32; 8],
@@ -3034,31 +3020,6 @@ pub unsafe extern "C" fn sys_sha_compress(
         };
         let _ = copy_to_abi_out(out_state.cast::<u8>(), bytes);
     }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_sha_buffer(
-    out_state: *mut [u32; 8],
-    in_state: *const [u32; 8],
-    _buf: *const u8,
-    _count: u32,
-) {
-    unsafe { sys_sha_compress(out_state, in_state, ptr::null(), ptr::null()) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_log(msg_ptr: *const u8, len: usize) {
-    if msg_ptr.is_null() || len == 0 {
-        return;
-    }
-    if let Some(bytes) = abi_read_bytes(msg_ptr, len) {
-        write_platform_fd(2, bytes);
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_cycle_count() -> usize {
-    0
 }
 
 #[unsafe(no_mangle)]
@@ -3122,18 +3083,6 @@ pub unsafe extern "C" fn trueos_cabi_ntp_kernel_date_day_month_year(
         ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, n);
     }
     n
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sys_panic(msg_ptr: *const u8, len: usize) -> ! {
-    if !msg_ptr.is_null() && len != 0 {
-        if let Some(bytes) = abi_read_bytes(msg_ptr, len) {
-            write_platform_fd(2, b"std-trueos panic: ");
-            write_platform_fd(2, bytes);
-            write_platform_fd(2, b"\n");
-        }
-    }
-    unsafe { sys_halt() }
 }
 
 #[unsafe(no_mangle)]

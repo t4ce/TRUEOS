@@ -53,7 +53,43 @@ pub(crate) fn prebind_import_readiness(name: &str, filesystem_independent: bool)
     mask
 }
 
+pub(crate) fn retired_import_error(name: &str) -> Option<&'static str> {
+    match name {
+        "_Unwind_RaiseException"
+        | "sys_cycle_count"
+        | "sys_log"
+        | "sys_output"
+        | "sys_panic"
+        | "sys_sha_buffer"
+        | "trueos_cabi_async_fs_metadata_start_v1"
+        | "trueos_cabi_shell2_frontend_attach_v1"
+        | "trueos_cabi_shell2_frontend_detach_v1"
+        | "trueos_cabi_shell2_frontend_read_v1"
+        | "trueos_cabi_shell2_frontend_submit_input_v1"
+        | "trueos_cabi_shell2_raw_write"
+        | "trueos_cabi_socket_tcp_bind_v4"
+        | "trueos_cabi_socket_tcp_bind_v6"
+        | "trueos_cabi_vgpu_call_f32_v1"
+        | "trueos_cabi_write_cstr"
+        | "trueos_internal_log_write"
+        | "trueos_tokio_platform_log"
+        | "trueos_tokio_platform_log_semantic_gap"
+        | "trueos_tokio_platform_monotonic_nanos"
+        | "trueos_tokio_platform_poll_once"
+        | "trueos_tokio_platform_sleep_ms"
+        | "trueos_tokio_platform_wait"
+        | "trueos_tokio_spawn_blocking_job"
+        | "trueos_tokio_worker_carriers_enabled" => Some(
+            "retired unused Blueprint import; rebuild against the current Blueprint SDK",
+        ),
+        _ => None,
+    }
+}
+
 pub(crate) fn prebind_import_error(name: &str) -> Option<&'static str> {
+    if let Some(reason) = retired_import_error(name) {
+        return Some(reason);
+    }
     if let Some(reason) = crate::unix_compat::unsupported_unix_import_reason(name) {
         return Some(reason);
     }

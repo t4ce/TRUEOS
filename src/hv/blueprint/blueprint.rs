@@ -470,12 +470,6 @@ unsafe extern "C" fn portal_unwind_find_enclosing_function(_pc: *mut c_void) -> 
     core::ptr::null_mut()
 }
 
-unsafe extern "C" fn portal_unwind_raise_exception(
-    _exception: *mut c_void,
-) -> PortalUnwindReasonCode {
-    PORTAL_URC_END_OF_STACK
-}
-
 include!(concat!(env!("OUT_DIR"), "/generated_portal_imports.rs"));
 include!(concat!(env!("OUT_DIR"), "/generated_ring_runtime_imports.rs"));
 
@@ -1146,14 +1140,6 @@ fn resolve_known_import(name: &str) -> Option<usize> {
     }
 
     match name {
-        "_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler"
-        | "_RNvCs2csqI13tepL_7___rustc26___rust_alloc_error_handler" => {
-            Some(portal_rust_alloc_error_handler as *const () as usize)
-        }
-        "_RNvCs75cmLyI1ip2_7___rustc35___rust_no_alloc_shim_is_unstable_v2"
-        | "_RNvCs2csqI13tepL_7___rustc35___rust_no_alloc_shim_is_unstable_v2" => {
-            Some(portal_no_alloc_shim_is_unstable_v2 as *const () as usize)
-        }
         "memcpy" => Some(crate::blueprint_shims::memcpy as *const () as usize),
         "memmove" => Some(crate::blueprint_shims::memmove as *const () as usize),
         "memset" => Some(crate::blueprint_shims::memset as *const () as usize),
@@ -1216,25 +1202,17 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         }
         "_Unwind_GetCFA" => Some(portal_unwind_get_cfa as *const () as usize),
         "_Unwind_GetIP" => Some(portal_unwind_get_ip as *const () as usize),
-        "_Unwind_RaiseException" => Some(portal_unwind_raise_exception as *const () as usize),
         "__rust_alloc"
-        | "_RNvCs75cmLyI1ip2_7___rustc12___rust_alloc"
-        | "_RNvCs2csqI13tepL_7___rustc12___rust_alloc" => {
+        | "_RNvCs75cmLyI1ip2_7___rustc12___rust_alloc" => {
             Some(portal_rust_alloc as *const () as usize)
         }
-        "__rust_dealloc"
-        | "_RNvCs75cmLyI1ip2_7___rustc14___rust_dealloc"
-        | "_RNvCs2csqI13tepL_7___rustc14___rust_dealloc" => {
+        "__rust_dealloc" => {
             Some(portal_rust_dealloc as *const () as usize)
         }
-        "__rust_realloc"
-        | "_RNvCs75cmLyI1ip2_7___rustc14___rust_realloc"
-        | "_RNvCs2csqI13tepL_7___rustc14___rust_realloc" => {
+        "__rust_realloc" => {
             Some(portal_rust_realloc as *const () as usize)
         }
-        "__rust_alloc_zeroed"
-        | "_RNvCs75cmLyI1ip2_7___rustc19___rust_alloc_zeroed"
-        | "_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed" => {
+        "__rust_alloc_zeroed" => {
             Some(portal_rust_alloc_zeroed as *const () as usize)
         }
         _ => resolve_ring_runtime_import(name)
@@ -1245,10 +1223,11 @@ fn resolve_known_import(name: &str) -> Option<usize> {
 }
 
 fn resolve_import(name: &str) -> Option<usize> {
-    // Imports that are deliberately classified as unsupported must not fall
-    // through to the generic unresolved/Joker stub. Prebind rejects them on
-    // the normal launch path; this check keeps every direct loader path honest.
-    if crate::unix_compat::unsupported_unix_import_reason(name).is_some() {
+    // Retired and unsupported imports must not fall through to a return-zero
+    // Joker stub on loader paths that do not run the normal launch prebind.
+    if prebind::retired_import_error(name).is_some()
+        || crate::unix_compat::unsupported_unix_import_reason(name).is_some()
+    {
         return None;
     }
     resolve_known_import(name).or_else(|| resolve_unresolved_import(name))
@@ -1264,19 +1243,11 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "sys_alloc_aligned" => Some(crate::std_abi_shim::sys_alloc_aligned as *const () as usize),
         "sys_rand" => Some(crate::std_abi_shim::sys_rand as *const () as usize),
         "sys_write" => Some(crate::std_abi_shim::sys_write as *const () as usize),
-        "trueos_internal_log_write" => {
-            Some(crate::std_abi_shim::trueos_internal_log_write as *const () as usize)
-        }
         "sys_read" => Some(crate::std_abi_shim::sys_read as *const () as usize),
         "sys_getenv" => Some(crate::std_abi_shim::sys_getenv as *const () as usize),
         "sys_argc" => Some(crate::std_abi_shim::sys_argc as *const () as usize),
         "sys_argv" => Some(crate::std_abi_shim::sys_argv as *const () as usize),
-        "sys_output" => Some(crate::std_abi_shim::sys_output as *const () as usize),
         "sys_sha_compress" => Some(crate::std_abi_shim::sys_sha_compress as *const () as usize),
-        "sys_sha_buffer" => Some(crate::std_abi_shim::sys_sha_buffer as *const () as usize),
-        "sys_log" => Some(crate::std_abi_shim::sys_log as *const () as usize),
-        "sys_cycle_count" => Some(crate::std_abi_shim::sys_cycle_count as *const () as usize),
-        "sys_panic" => Some(crate::std_abi_shim::sys_panic as *const () as usize),
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
         "exit" | "_exit" => Some(crate::std_abi_shim::exit as *const () as usize),
         "abort" => Some(crate::blueprint_shims::abort as *const () as usize),
@@ -1331,9 +1302,6 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_platform_cpu_count" => {
             Some(crate::r::platform::trueos_platform_cpu_count as *const () as usize)
         }
-        "trueos_tokio_worker_carriers_enabled" => {
-            Some(crate::r::platform::trueos_tokio_worker_carriers_enabled as *const () as usize)
-        }
         "trueos_service_lane_submit_job" => {
             Some(crate::r::blocking::trueos_service_lane_submit_job as *const () as usize)
         }
@@ -1343,9 +1311,6 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_service_lane_cancellation_requested" => Some(
             crate::r::blocking::trueos_service_lane_cancellation_requested as *const () as usize,
         ),
-        "trueos_tokio_spawn_blocking_job" => {
-            Some(crate::r::blocking::trueos_tokio_spawn_blocking_job as *const () as usize)
-        }
         "trueos_time_monotonic_nanos" => {
             Some(crate::std_abi_shim::trueos_time_monotonic_nanos as *const () as usize)
         }
@@ -1361,29 +1326,11 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_time_unix_seconds" => {
             Some(crate::std_abi_shim::trueos_time_unix_seconds as *const () as usize)
         }
-        "trueos_tokio_platform_log_semantic_gap" => {
-            Some(crate::r::platform::trueos_tokio_platform_log_semantic_gap as *const () as usize)
-        }
-        "trueos_tokio_platform_log" => {
-            Some(crate::r::platform::trueos_tokio_platform_log as *const () as usize)
-        }
-        "trueos_tokio_platform_monotonic_nanos" => {
-            Some(crate::r::platform::trueos_tokio_platform_monotonic_nanos as *const () as usize)
-        }
-        "trueos_tokio_platform_poll_once" => {
-            Some(crate::r::platform::trueos_tokio_platform_poll_once as *const () as usize)
-        }
-        "trueos_tokio_platform_sleep_ms" => {
-            Some(crate::r::platform::trueos_tokio_platform_sleep_ms as *const () as usize)
-        }
         "trueos_tokio_platform_wait_observe" => {
             Some(crate::r::platform::trueos_tokio_platform_wait_observe as *const () as usize)
         }
         "trueos_tokio_platform_wait_after" => {
             Some(crate::r::platform::trueos_tokio_platform_wait_after as *const () as usize)
-        }
-        "trueos_tokio_platform_wait" => {
-            Some(crate::r::platform::trueos_tokio_platform_wait as *const () as usize)
         }
         "trueos_tokio_platform_wake_one" => {
             Some(crate::r::platform::trueos_tokio_platform_wake_one as *const () as usize)

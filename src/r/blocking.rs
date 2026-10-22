@@ -747,11 +747,6 @@ pub extern "Rust" fn trueos_service_lane_submit_job(job: BlockingJobFn) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_tokio_spawn_blocking_job(job: BlockingJobFn) -> i32 {
-    trueos_service_lane_submit_job(job)
-}
-
 /// Advisory native capacity, independent of std thread counts and archive names.
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_service_lane_available_capacity() -> usize {

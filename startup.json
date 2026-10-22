@@ -1,7 +1,7 @@
 {
   "aliases": [
     { "name": "cub", "blueprint": "cubes.bp" },
-    { "name": "grid", "blueprint": "gridpaper" },
+    { "name": "grid", "blueprint": "gridpape" },
     { "name": "td", "blueprint": "termdir" },
     { "name": "apps", "blueprint": "appstore.bp" },
     { "name": "cdx", "blueprint": "codex.bp" }

@@ -995,47 +995,6 @@ pub extern "C" fn trueos_cabi_socket_tcp_set_nonblocking(socket_id: u32, nonbloc
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_bind_v4(
-    socket_id: u32,
-    addr_be: u32,
-    port_be: u16,
-) -> i32 {
-    if vm_guest_vmcall_active() {
-        return guest_call_i32(
-            trueos_vm::vmcall::OP_BP_SOCKET_TCP_BIND_V4,
-            socket_id as u64,
-            pack_v4_port(addr_be, port_be),
-        );
-    }
-    socket_tcp_bind_v4_host(socket_id, addr_be, port_be)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_socket_tcp_bind_v6(
-    socket_id: u32,
-    addr_ptr: *const u8,
-    port_be: u16,
-) -> i32 {
-    if addr_ptr.is_null() {
-        return -EINVAL;
-    }
-
-    let mut addr = [0u8; 16];
-    // SAFETY: the caller provides a 16-byte IPv6 buffer.
-    unsafe { addr.copy_from_slice(slice::from_raw_parts(addr_ptr, 16)) };
-
-    if vm_guest_vmcall_active() {
-        return guest_call_i32_payload(
-            trueos_vm::vmcall::OP_BP_SOCKET_TCP_BIND_V6,
-            socket_id as u64,
-            port_be as u64,
-            &addr,
-        );
-    }
-    socket_tcp_bind_v6_host(socket_id, addr, port_be)
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_socket_tcp_connect_v4(
     socket_id: u32,
     addr_be: u32,

@@ -961,7 +961,6 @@ unsafe extern "C" {
     pub fn trueos_time_unix_seconds() -> u64;
     pub fn trueos_time_unix_nanos() -> u64;
     pub fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
-    pub fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8);
     pub fn trueos_cabi_log(
         level: u32,
         target_ptr: *const u8,
@@ -1050,7 +1049,6 @@ unsafe extern "C" {
     pub fn trueos_cabi_async_fs_write_commit(id: u32) -> i32;
     pub fn trueos_cabi_async_fs_create_dir_all_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_metadata_start_v2(path_ptr: *const u8, path_len: usize) -> i32;
-    pub fn trueos_cabi_async_fs_metadata_start_v1(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_stat_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_typed_stat_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_record_key_start(path_ptr: *const u8, path_len: usize) -> i32;
@@ -1175,9 +1173,6 @@ unsafe extern "C" {
     pub fn trueos_cabi_socket_tcp_open(domain: i32, socket_type: i32, protocol: i32) -> i32;
     pub fn trueos_cabi_socket_tcp_close(socket_id: u32) -> i32;
     pub fn trueos_cabi_socket_tcp_set_nonblocking(socket_id: u32, nonblocking: u32) -> i32;
-    pub fn trueos_cabi_socket_tcp_bind_v4(socket_id: u32, addr_be: u32, port_be: u16) -> i32;
-    pub fn trueos_cabi_socket_tcp_bind_v6(socket_id: u32, addr_ptr: *const u8, port_be: u16)
-    -> i32;
     pub fn trueos_cabi_socket_tcp_connect_v4(
         socket_id: u32,
         addr_be: u32,
@@ -1318,13 +1313,6 @@ unsafe extern "C" {
     pub fn trueos_cabi_vgpu_scalar_f32_v1(
         device: u64,
         code: u64,
-        bytes: usize,
-        a: f32,
-        b: f32,
-        out: *mut f32,
-    ) -> i32;
-    pub fn trueos_cabi_vgpu_call_f32_v1(
-        code: *const u8,
         bytes: usize,
         a: f32,
         b: f32,
@@ -1662,21 +1650,6 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_attached_read_byte() -> i32;
     pub fn trueos_cabi_shell_attached_retarget_slot(slot_ptr: *const u8, slot_len: usize) -> i32;
-    pub fn trueos_cabi_shell2_raw_write(data_ptr: *const u8, data_len: usize) -> usize;
-    pub fn trueos_cabi_shell2_frontend_attach_v1(cols: u32, rows: u32) -> i32;
-    pub fn trueos_cabi_shell2_frontend_read_v1(
-        read_seq: u64,
-        out_ptr: *mut u8,
-        out_cap: usize,
-        out_next_seq: *mut u64,
-        out_epoch: *mut u64,
-        out_flags: *mut u32,
-    ) -> isize;
-    pub fn trueos_cabi_shell2_frontend_submit_input_v1(
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> isize;
-    pub fn trueos_cabi_shell2_frontend_detach_v1() -> i32;
 
     pub fn trueos_cabi_shell3_session_open_v1(
         script_ptr: *const u8,

@@ -683,10 +683,6 @@ pub fn guest_yield() {
     let _ = guest_call(OP_YIELD, 0, 0);
 }
 
-pub fn guest_sleep_ms(ms: u64) {
-    let _ = guest_call(OP_SLEEP_MS, ms, 0);
-}
-
 pub fn guest_platform_wait_observe(key: u64) -> u32 {
     let (status, generation) = guest_call(OP_BP_PLATFORM_WAIT_OBSERVE, key, 0);
     if status == STATUS_OK {

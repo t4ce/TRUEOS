@@ -1623,16 +1623,6 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_metadata_start_v2(path_ptr: *const
     } else { start_metadata_v2(direct_owner(), path) }
 }
 
-/// Read versioned node metadata without changing the legacy stat wire format.
-/// Result: kind:u32, size:u64, persistent file id:u64, root id:u32 (LE).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_async_fs_metadata_start_v1(path_ptr: *const u8, path_len: usize) -> i32 {
-    let path = match parse_path(path_ptr, path_len, true) { Ok(path) => path, Err(code) => return code };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_METADATA_START_V1, path.as_str())
-    } else { start_metadata(direct_owner(), path) }
-}
-
 /// Start a metadata-only read of the `RecordKey` stored in a TRUEOSFS file header.
 ///
 /// The result is a fixed 56-byte wire record: kind (0 = FFA, 1 = key), seven
