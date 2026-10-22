@@ -1,3 +1,4 @@
+# Additive test-only runtime-generated native compute v1; all existing signatures unchanged.
 # Additive bounded Hull microfont text runs v1; all existing signatures reviewed unchanged.
 # Intentional removal of unused native scheduled audio and Konsole row/cursor/end-frame exports; surviving signatures unchanged.
 # Intentional removal of ten unused Blueprint exports after local app/import audit; all surviving signatures unchanged.
@@ -29,4 +30,4 @@
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
-c0a295e30999b740f61c632348a547cc0ab8ca9a859cf8ba9201a5202206e6f6
+6d66d963ad24a3b8fa1753bf5f98f41800c400f14ccff5339362c99d1293dbdd

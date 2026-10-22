@@ -37,6 +37,7 @@ pub(crate) fn is_virtual_write(path: &str) -> bool { path == "vFile:appdb-instal
 
 pub(crate) fn is_virtual_read(path: &str) -> bool {
     matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE)
+        || path.starts_with("vFile:microfont-grid/")
 }
 const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
 
@@ -905,6 +906,25 @@ fn mounted_roots_text() -> String {
 }
 
 async fn process(request: &Request) -> OperationState {
+    // Bounded native Microfont raster service, consumed before a UI4 write lease.
+    // Payload: little-endian width/height followed by opaque RGBA8 pixels.
+    if let RequestKind::Read { path } = &request.kind
+        && let Some(spec) = path.strip_prefix("vFile:microfont-grid/") {
+        let mut parts = spec.split('/');
+        let scale = parts.next().and_then(|v| v.parse::<u32>().ok());
+        let ch = parts.next().and_then(|v| u32::from_str_radix(v, 16).ok()).and_then(char::from_u32);
+        if let (Some(scale @ 1..=8), Some(ch), None) = (scale, ch, parts.next()) {
+            return match crate::r::services::shell3_font_service::grid_glyph(scale, ch).await {
+                Ok(bytes) => OperationState::Read(bytes),
+                Err(error) => {
+                    crate::log_error!(target: "microfont-mask"; "grid-font: {}\n", error);
+                    OperationState::Failed(FS_ERR_IO)
+                }
+            };
+        }
+        return OperationState::Failed(FS_ERR_IO);
+    }
+
     if let RequestKind::Write { path, bytes, .. } = &request.kind {
         if is_virtual_write(path) {
             let vm = request.owner & !0x8000_0000;

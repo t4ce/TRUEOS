@@ -200,3 +200,69 @@ fn tint(coverage: u8, foreground: [u8; 4], background: [u8; 4]) -> [u8; 4] {
     pixel[3] = (a + (u32::from(background[3]) * (255 - a) + 127) / 255) as u8;
     pixel
 }
+
+// Native raster masks shared by every Gridpape instance. Full alphabets stop
+// at 4x; larger sizes are produced one character at a time on demand.
+static GRID_ATLASES: spin::Mutex<BTreeMap<u32, OwnedAlphaAtlas>> = spin::Mutex::new(BTreeMap::new());
+
+pub(crate) async fn grid_glyph(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
+    if !(1..=8).contains(&scale) { return Err("grid-font-scale"); }
+    prepare().await?;
+    type GlyphReply = Signal<crate::wait::EmbassySpinRawMutex, Result<Vec<u8>, &'static str>>;
+    loop {
+        let reply = alloc::sync::Arc::new(GlyphReply::new());
+        let response = alloc::sync::Arc::clone(&reply);
+        let job = Box::new(move || response.signal(grid_glyph_blocking(scale, ch)));
+        if let Err(job) = crate::r::blocking::try_spawn_blocking_job_with_purpose(job, "grid-font") {
+            drop(job);
+            Timer::after(Duration::from_millis(20)).await;
+            continue;
+        }
+        match reply.wait().await {
+            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy") =>
+                Timer::after(Duration::from_millis(20)).await,
+            result => return result,
+        }
+    }
+}
+
+fn grid_glyph_blocking(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
+    let font = FONT.get().ok_or("shell3-font-not-ready")?;
+    let height = crate::intel::physical_extent_pixels(5 * scale, 5 * scale)
+        .ok_or("grid-font-physical-size")?.1;
+    let width = (height * 6 + 5) / 11;
+    let mut result = Vec::with_capacity(8 + (width * height * 4) as usize);
+    result.extend_from_slice(&width.to_le_bytes());
+    result.extend_from_slice(&height.to_le_bytes());
+    let mut emit = |mask: &[u8], stride: u32, gutter: u32| {
+        for y in 0..height {
+            for x in 0..width {
+                let alpha = mask[((y + gutter) * stride + x + gutter) as usize];
+                // Opaque white-backed glyphs can be copied directly by BCS0.
+                let value = 255 - alpha;
+                result.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+    };
+    if scale == 1 {
+        let atlas = &font.alpha;
+        emit(atlas.glyph(ch).or_else(|| atlas.glyph('?')).ok_or("grid-font-glyph")?,
+            atlas.glyph_width, atlas.gutter_px);
+    } else if scale <= 4 {
+        let mut atlases = GRID_ATLASES.lock();
+        if !atlases.contains_key(&height) {
+            atlases.insert(height, build_shell3_alpha_atlas(height)?);
+        }
+        let atlas = &atlases[&height];
+        emit(atlas.glyph(ch).or_else(|| atlas.glyph('?')).ok_or("grid-font-glyph")?,
+            atlas.glyph_width, atlas.gutter_px);
+    } else {
+        let glyph = super::microfont_mask_service::build_single_glyph_mask(ch, height)
+            .or_else(|error| if error == "microfont-single-glyph-missing" {
+                super::microfont_mask_service::build_single_glyph_mask('?', height)
+            } else { Err(error) })?;
+        // Single-glyph production currently uses a 16px stroke and a 9px gutter.
+        emit(&glyph.pixels, glyph.width, 9);
+    }
+    Ok(result)
+}

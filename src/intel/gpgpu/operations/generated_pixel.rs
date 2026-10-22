@@ -1,8 +1,8 @@
-//! Experimental native Odin pixel programs. The compiler supplies only a
-//! bounded SIMD8 arithmetic body; this driver owns coordinates, the only
-//! memory SEND, cache release and EOT. No catalog entry or static hash admits
-//! the code. An owned immutable copy is staged in the system compute carrier
-//! while its submission lock is held, exactly as for native scalar calls.
+// Experimental native Odin pixel programs. The compiler supplies only a
+// bounded SIMD8 arithmetic body; this driver owns coordinates, the only
+// memory SEND, cache release and EOT. No catalog entry or static hash admits
+// the code. An owned immutable copy is staged in the system compute carrier
+// while its submission lock is held, exactly as for native scalar calls.
 
 pub(crate) const GENERATED_PIXEL_MAX_BODY_BYTES: usize = 24 * 1024;
 const GENERATED_PIXEL_CODE_OFFSET: usize = 0x1000;
@@ -176,18 +176,14 @@ pub(crate) fn generated_pixel_rgba8_surface_full(
     while first_row < dst.height {
         let rows = rows_per_batch.min(dst.height - first_row);
         if !encode_generated_pixel(state, program, dst, params, first_row, rows) {
-            return GpgpuRgba8KernelResult {
-                submitted: any_submitted,
-                ..Default::default()
-            };
+            // Earlier row batches have retired. No GPU reference to this
+            // failed encoding remains, although the image is incomplete.
+            return GpgpuRgba8KernelResult::default();
         }
         let submitted = direct_rcs_submit_batch_state(dev, state);
         any_submitted |= submitted.may_have_submitted();
         if !submitted.may_have_submitted() {
-            return GpgpuRgba8KernelResult {
-                submitted: any_submitted,
-                ..Default::default()
-            };
+            return GpgpuRgba8KernelResult::default();
         }
         let observed = if submitted.can_poll() {
             direct_rcs_poll_result_slot_timeout_ms(
@@ -212,10 +208,10 @@ pub(crate) fn generated_pixel_rgba8_surface_full(
     }
     if !program.reported.swap(true, Ordering::AcqRel) {
         let checksum = generated_pixel_surface_fnv(dst);
-        crate::log_info!(target: "gpgpu";
+        crate::log_important!(target: "gpgpu";
             "odin-native-pixel: completed marker=0x{:08X} extent={}x{} pitch={} body_bytes={} body_sha256={} framebuffer_fnv1a64=0x{:016X} source=native-eu gpu_retired=1 cpu_pixel_writes=0\n",
             GENERATED_PIXEL_COOKIE, dst.width, dst.height, dst.pitch_bytes,
-            program.body_bytes, digest_hex(&program.digest).as_str(), checksum);
+            program.body_bytes, digest_hex(&program.code_hash()).as_str(), checksum);
     }
     GpgpuRgba8KernelResult {
         ok: true,
@@ -392,12 +388,14 @@ fn generated_pixel_envelope(body: &[u8]) -> Result<Vec<u8>, i32> {
             code.extend_from_slice(&word.to_le_bytes());
         }
     };
-    // NaN/negative -> 0, >1 -> 1; conversion truncates after scaling.
+    // NaN/negative -> 0, >1 -> 1. Explicit RNDZ makes the conversion
+    // independent of the thread's floating-point-to-integer rounding mode.
     emit([0x00030170, 0x00018aa0, 0x4a460405, 0]);
     emit([0x01030162, 0x75058aa0, 0x0a460405, 0]);
     emit([0x00030170, 0x00018aa0, 0x6a467505, 0x3f800000]);
     emit([0x01030162, 0x75058aa0, 0x0a467505, 0x3f800000]);
     emit(generated_pixel_binary(0x41, 117, 117, 255f32.to_bits(), true, true));
+    emit([0x00030147, 0x75050aa0, 0x00467505, 0]);
     emit([0x00030161, 0x75050a20, 0x00467505, 0]);
     emit(generated_pixel_binary(0x69, 118, 117, 8, true, false));
     emit(generated_pixel_binary(0x66, 117, 117, 118, false, false));

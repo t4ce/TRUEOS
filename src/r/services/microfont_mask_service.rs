@@ -679,6 +679,9 @@ impl OwnedAlphaAtlas {
 /// One native-line/quad render submission and one R8 readback for Shell3's
 /// service lifetime. Resident source geometry is shared with the demo; each
 /// consumer retains its own immutable result after this function returns.
+static REPORTED_FULL_ATLAS_SIZES: spin::Mutex<alloc::collections::BTreeSet<u32>> =
+    spin::Mutex::new(alloc::collections::BTreeSet::new());
+
 pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<OwnedAlphaAtlas, &'static str> {
     let config = AtlasConfig {
         glyph_height_px: Some(em_height_px),
@@ -708,6 +711,14 @@ pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<OwnedAlphaAt
                     };
                 }
             }
+        }
+        if REPORTED_FULL_ATLAS_SIZES.lock().insert(em_height_px) {
+            // ONCE severity with per-size deduplication: log_once! would instead
+            // suppress all sizes after the first occurrence at this call site.
+            crate::log_os::log_with_target_level("microfont-mask", crate::log_os::LogLevel::Once,
+                format_args!("microfont-atlas: full em_height_px={} glyph_slots={} gpu_backing_bytes={} retained_cpu_mask_bytes={} total_backing_bytes={} shared_geometry_excluded=1\n",
+                    em_height_px, SLOT_COUNT, surface.bytes, pixels.capacity(),
+                    surface.bytes.saturating_add(pixels.capacity())));
         }
         Ok(OwnedAlphaAtlas {
             em_height_px,
