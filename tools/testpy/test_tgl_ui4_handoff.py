@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def function(source: str, name: str) -> str:
@@ -37,14 +37,18 @@ def main() -> None:
     assert "bootstrap_ui4_rgba8_plane_stack_once(dev, primary_surface)" in function(display, "init_primary_boot_surface")
     for name in ["primary_surface_gpu_for_pipe", "primary_surface_gpu_capacity",
                  "overlay_surface_gpu_for_index", "primary_swap_surface_gpu_for_index"]:
-        assert "native_ui4::active(pipe)" in function(display, name), name
+        assert "native_ui4_for_pipe(pipe)" in function(display, name), name
     for name in ["primary_compose_rcs_gpu_for_surface", "overlay_compose_rcs_gpu_for_surface"]:
-        assert "native_ui4::active(surface.pipe)" in function(display, name), name
-    assert "native_ui4::overlay_capacity(pipe)" in function(display, "ensure_overlay_surface_for_pipe")
-    assert "native_ui4::primary_swap_capacity(pipe)" in function(display, "ensure_primary_swap_surface_for_pipe")
-    primary = function(display, "compose_premultiplied_rgba_tiles_into_primary_gpgpu")
-    assert "native_ui4::compose_capacity(surface.pipe, 0)" in primary
-    assert "native_ui4::base_gpu(primary.pipe, primary.gpu)" in primary
+        assert "native_ui4_for_pipe(surface.pipe)" in function(display, name), name
+    assert "ui4_surface_slot_capacity(pipe, OVERLAY_SWAP_GPU_STRIDE)" in function(display, "ensure_overlay_surface_for_pipe")
+    assert "ui4_surface_slot_capacity(pipe, PRIMARY_SWAP_GPU_STRIDE)" in function(display, "ensure_primary_swap_surface_for_pipe")
+    assert "tgl_ui4_layout::SURFACE_SLOT_BYTES" in function(display, "ui4_surface_slot_capacity")
+    primary = function(display, "queue_ui4_primary_composition")
+    assert "native_ui4::base_gpu(pipe, primary.gpu)" in primary
+    assert "primary_compose_rcs_gpu_for_surface(surface)" in primary
+    assert "ui4_bcs::plan_copies(base, destination, tiles, effective)" in primary
+    assert "ui4_bcs_queue::queue(destination, copies, source_cache)" in primary
+    assert "Ui4AsyncCompositionWork::BcsStack" in primary
     assert "native_ui4::compose_capacity(surface.pipe, surface.plane_slot)" in function(
         display, "compose_premultiplied_rgba_tiles_into_overlay_gpgpu")
     for name in ["OVERLAY_SWAP_GPU_STRIDE", "PRIMARY_SWAP_GPU_STRIDE", "COMPOSE_RCS_GPU_ALIAS_BYTES"]:
@@ -52,9 +56,10 @@ def main() -> None:
     # The probe retains its own allocation; UI4 must not remap/free it.
     assert "pub(super) const SURFACE_GPU: u64 = 0xE000_0000;" in panel
     assert "RETAINED_FRAME.call_once(|| frame);" in panel
-    print("PASS: native-success handoff, unseal, allocation/compute wiring, desktop constants", flush=True)
+    print("PASS: native-success handoff, unseal, allocation/BCS wiring, desktop constants", flush=True)
 
     module_path = json.dumps(str(ROOT / "src/intel/display/native_ui4.rs"))
+    layout_path = json.dumps(str(ROOT / "src/intel/display/tgl_ui4_layout.rs"))
     harness = r'''
 #![allow(dead_code)]
 mod intel {
@@ -80,6 +85,7 @@ mod display {
     const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
     const COMPOSE_RCS_GPU_ALIAS_BYTES: u64 = 0x0100_0000;
     #[path = MODULE_PATH] mod native_ui4;
+    #[path = LAYOUT_PATH] mod tgl_ui4_layout;
     #[test]
     fn native_layout_and_target_isolation() {
         use native_ui4 as n;
@@ -107,15 +113,15 @@ mod display {
         assert!(pitch * 2160 > 32 * mib);
         assert!(guarded <= n::PRIMARY_BYTES && guarded <= n::primary_swap_capacity(a));
         assert!(guarded <= n::compose_capacity(a, 0));
-        let mut ggtt = vec![(0xE000_0000, 64 * mib), (n::PRIMARY_GPU, n::PRIMARY_BYTES)];
-        let mut ppgtt = vec![(n::base_gpu(a, 0), n::PRIMARY_BYTES)];
+        let mut ggtt = vec![(0xE000_0000, 64 * mib), (tgl_ui4_layout::primary_gpu(), tgl_ui4_layout::SURFACE_SLOT_BYTES)];
+        let mut ppgtt = vec![];
         for index in 0..2 {
-            ggtt.push((n::primary_swap_gpu(index).unwrap(), n::PRIMARY_BYTES));
-            ppgtt.push((n::compose_gpu(0, index).unwrap(), n::PRIMARY_BYTES));
+            ggtt.push((tgl_ui4_layout::primary_swap_gpu(index).unwrap(), tgl_ui4_layout::SURFACE_SLOT_BYTES));
+            ppgtt.push((tgl_ui4_layout::compose_gpu(0, index).unwrap(), tgl_ui4_layout::SURFACE_SLOT_BYTES));
             for slot in 1..=4 {
-                ggtt.push((n::overlay_gpu(slot, index).unwrap(), 32 * mib));
-                if slot <= 3 { ppgtt.push((n::compose_gpu(slot, index).unwrap(), 32 * mib)); }
-                else { assert_eq!(n::compose_gpu(slot, index), None); }
+                ggtt.push((tgl_ui4_layout::overlay_gpu(slot, index).unwrap(), tgl_ui4_layout::SURFACE_SLOT_BYTES));
+                if slot <= 3 { ppgtt.push((tgl_ui4_layout::compose_gpu(slot, index).unwrap(), tgl_ui4_layout::SURFACE_SLOT_BYTES)); }
+                else { assert_eq!(tgl_ui4_layout::compose_gpu(slot, index), None); }
             }
         }
         ggtt.sort_unstable();
@@ -128,18 +134,28 @@ mod display {
             }
             for pair in ranges.windows(2) { assert!(pair[0].0 + pair[0].1 <= pair[1].0); }
         }
-        assert_eq!(n::overlay_gpu(0, 0), None);
-        assert_eq!(n::overlay_gpu(5, 0), None);
-        assert_eq!(n::overlay_gpu(usize::MAX, 0), None);
-        assert_eq!(n::primary_swap_gpu(2), None);
-        assert_eq!(n::primary_swap_gpu(usize::MAX), None);
-        assert_eq!(n::overlay_gpu(1, 2), None);
-        assert_eq!(n::compose_gpu(0, 2), None);
-        assert_eq!(n::compose_gpu(usize::MAX, 0), None);
+        // BCS maps the active batch anew. Slot 0 reads the transparent base
+        // while writing either primary swap alias; other planes are separate jobs.
+        let base_gpu = n::base_gpu(a, 0);
+        for index in 0..2 {
+            let destination = tgl_ui4_layout::compose_gpu(0, index).unwrap();
+            assert!(base_gpu + n::PRIMARY_BYTES <= destination
+                || destination + tgl_ui4_layout::SURFACE_SLOT_BYTES <= base_gpu);
+        }
+        assert_eq!(tgl_ui4_layout::overlay_gpu(0, 0), None);
+        assert_eq!(tgl_ui4_layout::overlay_gpu(5, 0), None);
+        assert_eq!(tgl_ui4_layout::overlay_gpu(usize::MAX, 0), None);
+        assert_eq!(tgl_ui4_layout::primary_swap_gpu(2), None);
+        assert_eq!(tgl_ui4_layout::primary_swap_gpu(usize::MAX), None);
+        assert_eq!(tgl_ui4_layout::overlay_gpu(1, 2), None);
+        assert_eq!(tgl_ui4_layout::compose_gpu(0, 2), None);
+        assert_eq!(tgl_ui4_layout::compose_gpu(usize::MAX, 0), None);
         assert_eq!(n::base_gpu(a, 0xE400_0000), 0x3400_0000);
+        assert!(UI4_DIRECT_SCANOUT_GPU_BASE + UI4_DIRECT_SCANOUT_PLANE_COUNT as u64
+            * UI4_DIRECT_SCANOUT_PLANE_STRIDE <= tgl_ui4_layout::GGTT_BASE);
     }
 }
-'''.replace("MODULE_PATH", module_path)
+'''.replace("MODULE_PATH", module_path).replace("LAYOUT_PATH", layout_path)
     rustc = shutil.which("rustc")
     if not rustc:
         raise SystemExit("rustc is required: layout compilation was NOT run")

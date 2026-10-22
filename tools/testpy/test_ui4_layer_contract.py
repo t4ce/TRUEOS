@@ -36,6 +36,8 @@ impl WindowPlane {
 impl DamageRegion { const FULL:Self=Self; }
 fn next_serial(serial:u64)->u64 { serial.wrapping_add(1).max(1) }
 #[derive(Clone, Copy)] struct Record { damage:Option<DamageRegion>, revision:u64, generation:u16,background:Option<()>,output:OutputId,plane:WindowPlane,state:WindowState,placement:Placement,open_transition:Option<()> }
+// Lease-policy fixtures have no rendering transitions or close leases.
+impl Record { fn skip_stack_transitions(&mut self) { if self.plane==WindowPlane::Primary { self.open_transition=None; } } }
 #[derive(Clone, Copy)] struct PlaneLease { window:WindowId,last_hot_ms:u64 }
 fn pack_handle(slot:usize,generation:u16)->Result<u32,()> { Ok((generation as u32)<<16 | slot as u32+1) }
 fn unpack_handle(raw:u32)->Result<(usize,u16),()> { Ok(((raw as u16-1) as usize,(raw>>16) as u16)) }

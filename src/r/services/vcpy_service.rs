@@ -9,6 +9,18 @@ pub(crate) fn queue_rgba_copies(
     crate::intel::queue_guc_bcs0_rgba_copies(destination, copies)
 }
 
+pub(crate) fn queue_rgba_copies_with_scanout_cache(
+    destination: crate::intel::GucBcs0RgbaSurface,
+    copies: &[crate::intel::GucBcs0RgbaCopy],
+    source_scanout_cache: &[bool],
+) -> Result<crate::intel::GucBcs0CopySubmission, crate::intel::GucBcs0CopySubmitError> {
+    crate::intel::queue_guc_bcs0_rgba_copies_with_scanout_cache(
+        destination,
+        copies,
+        source_scanout_cache,
+    )
+}
+
 pub(crate) fn queue_uncached_copies(
     destination: crate::intel::GucBcs0RgbaSurface,
     copies: &[crate::intel::GucBcs0RgbaCopy],

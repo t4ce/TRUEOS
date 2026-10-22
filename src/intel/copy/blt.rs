@@ -740,7 +740,27 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     if copies.is_empty() {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, copies, false, GucBcs0BatchKind::FastCopy)
+    queue_guc_bcs0_batch(destination, copies, false, None, GucBcs0BatchKind::FastCopy)
+}
+
+/// Ordered RGBA copies preserving each producer's source cache contract.
+/// `true` selects PAT3/UC for released render-to-scanout sources; ordinary
+/// CPU-authored sources retain PAT0/WB. Flags correspond one-for-one to copies.
+pub(crate) fn queue_guc_bcs0_rgba_copies_with_scanout_cache(
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+    source_scanout_cache: &[bool],
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    if copies.is_empty() || source_scanout_cache.len() != copies.len() {
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    }
+    queue_guc_bcs0_batch(
+        destination,
+        copies,
+        false,
+        Some(source_scanout_cache),
+        GucBcs0BatchKind::FastCopy,
+    )
 }
 
 /// Classical BLT backend, linear 32bpp SRCCOPY with RGB and alpha writes.
@@ -756,7 +776,7 @@ pub(crate) fn queue_guc_bcs0_legacy_rgba_copies(
     {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, copies, false, GucBcs0BatchKind::LegacyCopy)
+    queue_guc_bcs0_batch(destination, copies, false, None, GucBcs0BatchKind::LegacyCopy)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -795,7 +815,7 @@ pub(crate) fn queue_guc_bcs0_mono_glyphs(
     {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::LegacyMono(glyphs))
+    queue_guc_bcs0_batch(destination, &[], false, None, GucBcs0BatchKind::LegacyMono(glyphs))
 }
 
 
@@ -808,7 +828,7 @@ pub(crate) fn queue_guc_bcs0_uncached_copies(
     if copies.is_empty() {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, copies, true, GucBcs0BatchKind::FastCopy)
+    queue_guc_bcs0_batch(destination, copies, true, None, GucBcs0BatchKind::FastCopy)
 }
 
 /// Fill an entire linear RGBA8 allocation with one packed pixel value.
@@ -820,7 +840,7 @@ pub(crate) fn queue_guc_bcs0_rgba_fill(
     if !guc_blt_valid_fill(destination) {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::FastFill(color))
+    queue_guc_bcs0_batch(destination, &[], false, None, GucBcs0BatchKind::FastFill(color))
 }
 
 pub(crate) fn queue_guc_bcs0_rgba_fills(
@@ -835,13 +855,14 @@ pub(crate) fn queue_guc_bcs0_rgba_fills(
     {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::FastFills(fills))
+    queue_guc_bcs0_batch(destination, &[], false, None, GucBcs0BatchKind::FastFills(fills))
 }
 
 fn queue_guc_bcs0_batch(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
     uncached_sources: bool,
+    source_scanout_cache: Option<&[bool]>,
     kind: GucBcs0BatchKind<'_>,
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
     if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
@@ -875,7 +896,15 @@ fn queue_guc_bcs0_batch(
         let forcewake = direct_blt_forcewake(dev);
         let ggtt = forcewake && direct_blt_map_state(dev, state);
         let ppgtt = ggtt && direct_blt_init_ppgtt(state);
-        if !ppgtt || !guc_blt_map_ui4_surfaces(state, destination, copies, uncached_sources) {
+        if !ppgtt
+            || !guc_blt_map_ui4_surfaces(
+                state,
+                destination,
+                copies,
+                uncached_sources,
+                source_scanout_cache,
+            )
+        {
             return None;
         }
         let sequence = DIRECT_BLT_SUBMIT_COUNTER
@@ -1717,7 +1746,32 @@ fn guc_blt_map_ui4_surfaces(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
     uncached_sources: bool,
+    source_scanout_cache: Option<&[bool]>,
 ) -> bool {
+    if source_scanout_cache.is_some_and(|flags| flags.len() != copies.len()) {
+        return false;
+    }
+    let scanout_cache = |index: usize| {
+        source_scanout_cache.map_or(uncached_sources, |flags| flags[index])
+    };
+    // All mappings coexist for the entire batch. Reject aliases that would
+    // replace a prior source's backing or give overlapping backing two cache
+    // policies before changing any PTEs.
+    for (index, copy) in copies.iter().enumerate() {
+        if !guc_blt_valid_copy(destination, *copy) {
+            return false;
+        }
+        for (previous_index, previous) in copies[..index].iter().enumerate() {
+            if !guc_blt_source_mappings_compatible(
+                copy.source,
+                scanout_cache(index),
+                previous.source,
+                scanout_cache(previous_index),
+            ) {
+                return false;
+            }
+        }
+    }
     let pte_present_rw_wb = super::GEN8_PAGE_PRESENT | (1 << 1);
     // PAT3 is the system-memory UC contract used by render-to-scanout targets.
     // BCS completion therefore releases into memory visible to the display,
@@ -1733,16 +1787,13 @@ fn guc_blt_map_ui4_surfaces(
         return false;
     }
 
-    for copy in copies.iter().copied() {
-        if !guc_blt_valid_copy(destination, copy) {
-            return false;
-        }
+    for (index, copy) in copies.iter().copied().enumerate() {
         if !direct_blt_map_ppgtt_region(
             state,
             copy.source.gpu,
             copy.source.phys,
             copy.source.bytes,
-            if uncached_sources {
+            if scanout_cache(index) {
                 pte_present_rw_scanout_uc
             } else {
                 pte_present_rw_wb
@@ -1753,6 +1804,27 @@ fn guc_blt_map_ui4_surfaces(
     }
     super::dma_flush(state.ppgtt_virt, DIRECT_BLT_PPGTT_BYTES);
     true
+}
+
+fn guc_blt_source_mappings_compatible(
+    first: GucBcs0RgbaSurface,
+    first_scanout_cache: bool,
+    second: GucBcs0RgbaSurface,
+    second_scanout_cache: bool,
+) -> bool {
+    let same_cache = first_scanout_cache == second_scanout_cache;
+    if guc_blt_physical_ranges_overlap(first, second) && !same_cache {
+        return false;
+    }
+    if !guc_blt_gpu_ranges_overlap(first, second) {
+        return true;
+    }
+    let same_backing = if first.gpu <= second.gpu {
+        first.phys.checked_add(second.gpu - first.gpu) == Some(second.phys)
+    } else {
+        second.phys.checked_add(first.gpu - second.gpu) == Some(first.phys)
+    };
+    same_cache && same_backing
 }
 
 fn guc_blt_encode_ui4_copy_batch(

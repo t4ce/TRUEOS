@@ -15,8 +15,10 @@ be sent to a native worker. Closing its parent revokes it; it cannot close a
 second window. Existing ABI signatures remain unchanged.
 
 `BackgroundLayer::set_opacity` uses the existing opacity ABI with its producer
-target. Its factor multiplies parent opacity on both direct scanout and slot-0
-composition; it does not dim the foreground. The factor survives paired resize.
+target. Its factor multiplies parent opacity on hardware scanout; it does not
+dim the foreground. The factor survives paired resize. Slot 0 resolves pixel
+ownership rather than blending layers: a covering foreground replaces its
+background, including transparent pixels.
 
 ## Winit frame contract v1
 
@@ -78,11 +80,23 @@ this contract does not by itself make the rich game renderer operational.
 
 ## Plane budget and interaction
 
-Slot 0 is shared composition; slots 1–3 are hardware leases; slot 4 remains
-reserved for interaction. A single window costs one lease and a layered window
+Slots 0–3 are application planes; slot 4 remains reserved for interaction.
+A lone eligible slot-0 source scans out directly, so four ordinary windows
+need no composition jobs. Slots 1–3 are hardware leases. A single window costs one lease and a layered window
 two. A pair receives adjacent slots or stays entirely on slot 0. One spare slot
 cannot admit half a pair. Multiple layered windows can be created; the frame
 contract does not promise permanent hardware residency.
+
+Overflow shares slot 0 through native-size BCS0 RGBA copies in broker z order.
+The highest covering outline owns each pixel, including alpha-zero pixels;
+display hardware blends that pixel against the opaque pipe bottom color.
+No shader blends slot-0 windows together. Open/close scale and fade effects
+are skipped on slot 0; authored pixel alpha is preserved. Scaling and visible
+per-window intermediate opacity cannot be represented by these raw copies.
+Rounded outlines use clipped copy spans, submitted in bounded batches before
+the same SURFLIVE boundary. Both swap buffers retain damage repair debt.
+Damage includes every moved window's old and new bounds, including simultaneous
+drags by independent cursors; leases remain owned by windows.
 
 Create/close rebalancing packs a complete top suffix in broker z order. Hot
 interaction refreshes both leases of a pair. Focus raises the entire group.

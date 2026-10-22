@@ -19,6 +19,8 @@ use spin::Mutex;
 mod regs;
 pub(super) use self::regs::*;
 mod native_ui4;
+mod ui4_bcs;
+mod ui4_bcs_queue;
 
 mod display_metrics;
 mod tgl_ui4_layout;
@@ -474,10 +476,6 @@ pub(crate) struct RgbaOverlayTile<'a> {
     pub(crate) opacity: u8,
     /// Rounded destination clip, as per-mille of a full half-short-side arc.
     pub(crate) arc: u16,
-    /// The producer contract guarantees alpha=255 for every published pixel.
-    /// This permits an opaque primary tile to replace damaged pixels directly,
-    /// without first sampling the immutable base in a second GPU run.
-    pub(crate) known_opaque: bool,
     pub(crate) expected_rgba: Option<Rgba8>,
 }
 
@@ -1092,12 +1090,6 @@ enum OverlayAlphaMode {
 }
 
 const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::PremultipliedRgba;
-/// Slot0 is an application plane, not an opaque framebuffer. Its composition
-/// starts transparent and remains native premultiplied RGBA through scanout.
-/// Frames source-over blend in broker-z order before display hardware blends
-/// the result with the pipe background. Empty pixels stay clear.
-const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = 0;
-
 /// Give the firmware-compatible XRGB boot phase deterministic pixels. UI4
 /// discards this boot content when Slot0 becomes its transparent RGBA slice.
 fn initialize_primary_boot_surface_black(surface: PrimarySurface) -> bool {
@@ -3372,7 +3364,7 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
     let ready =
         plane_ready && prepare_ui4_primary_swap_surfaces(dev, pipe, primary.width, primary.height);
     crate::log_info!(target: "ui4";
-        "ui4/application-plane-stack slot0=rgba8-transparent/preallocated-double/gpu-topmost-wins pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
+        "ui4/application-plane-stack slot0=rgba8-direct-or-bcs0-topmost-wins pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
         ready as u8,
         pipe.name,
     );
@@ -4404,138 +4396,6 @@ fn copy_primary_swap_front_into_back(back: PrimarySwapSurface) -> bool {
     true
 }
 
-fn restore_primary_composition_base_rect(
-    back: PrimarySwapSurface,
-    damage: CompositionDamageRect,
-) -> bool {
-    let Some(primary) = primary_surface_for_pipe(back.pipe) else {
-        return false;
-    };
-    if primary.virt.is_null()
-        || back.virt.is_null()
-        || primary.width != back.width
-        || primary.height != back.height
-        || primary.pitch_bytes < primary.width.saturating_mul(4)
-        || back.pitch_bytes < back.width.saturating_mul(4)
-    {
-        return false;
-    }
-    let row_bytes = damage.width as usize * 4;
-    for row in 0..damage.height as usize {
-        let src_offset = (damage.y as usize + row)
-            .saturating_mul(primary.pitch_bytes as usize)
-            .saturating_add(damage.x as usize * 4);
-        let dst_offset = (damage.y as usize + row)
-            .saturating_mul(back.pitch_bytes as usize)
-            .saturating_add(damage.x as usize * 4);
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                primary.virt.add(src_offset),
-                back.virt.add(dst_offset),
-                row_bytes,
-            );
-        }
-    }
-    true
-}
-
-fn restore_primary_composition_base_outside_opaque_rect(
-    back: PrimarySwapSurface,
-    damage: CompositionDamageRegion,
-    opaque: CompositionDamageRect,
-) -> Option<CompositionDamageRegion> {
-    let already_composited = {
-        let pool = primary_swap_surface_pool(back.pipe).lock();
-        if !pool.matches(back.width, back.height, back.pipe) {
-            return None;
-        }
-        pool.composited[back.buffer_index]
-    };
-    if !already_composited {
-        // A newly allocated swap surface is already an exact base copy.
-        return Some(CompositionDamageRegion::EMPTY);
-    }
-
-    let mut restored = CompositionDamageRegion::EMPTY;
-    for damaged in damage.rects().iter().copied() {
-        let Some(covered) = damaged.intersection(opaque) else {
-            if !restore_primary_composition_base_rect(back, damaged) {
-                return None;
-            }
-            restored.add(damaged);
-            continue;
-        };
-        let damaged_right = damaged.x.saturating_add(damaged.width);
-        let damaged_bottom = damaged.y.saturating_add(damaged.height);
-        let covered_right = covered.x.saturating_add(covered.width);
-        let covered_bottom = covered.y.saturating_add(covered.height);
-        let pieces = [
-            CompositionDamageRect::new(
-                damaged.x,
-                damaged.y,
-                damaged.width,
-                covered.y.saturating_sub(damaged.y),
-            ),
-            CompositionDamageRect::new(
-                damaged.x,
-                covered_bottom,
-                damaged.width,
-                damaged_bottom.saturating_sub(covered_bottom),
-            ),
-            CompositionDamageRect::new(
-                damaged.x,
-                covered.y,
-                covered.x.saturating_sub(damaged.x),
-                covered.height,
-            ),
-            CompositionDamageRect::new(
-                covered_right,
-                covered.y,
-                damaged_right.saturating_sub(covered_right),
-                covered.height,
-            ),
-        ];
-        for piece in pieces.into_iter().filter(|piece| piece.valid()) {
-            if !restore_primary_composition_base_rect(back, piece) {
-                return None;
-            }
-            restored.add(piece);
-        }
-    }
-    Some(restored)
-}
-
-fn dma_flush_primary_swap_region(
-    surface: PrimarySwapSurface,
-    damage: CompositionDamageRegion,
-) -> bool {
-    dma_flush_surface_region(surface.virt, surface.byte_len, surface.pitch_bytes as usize, damage)
-}
-
-fn clear_primary_swap_surface_region(
-    surface: PrimarySwapSurface,
-    damage: CompositionDamageRegion,
-) -> Option<()> {
-    if surface.virt.is_null() || surface.pitch_bytes < surface.width.saturating_mul(4) {
-        return None;
-    }
-    for rect in damage.rects().iter().copied() {
-        let rect = clip_composition_damage(rect, surface.width, surface.height)?;
-        let row_bytes = (rect.width as usize).checked_mul(PRIMARY_BYTES_PER_PIXEL as usize)?;
-        for row in 0..rect.height as usize {
-            let offset = (rect.y as usize)
-                .checked_add(row)?
-                .checked_mul(surface.pitch_bytes as usize)?
-                .checked_add((rect.x as usize).checked_mul(PRIMARY_BYTES_PER_PIXEL as usize)?)?;
-            if offset.checked_add(row_bytes)? > surface.byte_len {
-                return None;
-            }
-            unsafe { core::ptr::write_bytes(surface.virt.add(offset), 0, row_bytes) };
-        }
-    }
-    Some(())
-}
-
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) -> bool {
     if !DEFAULT_OVERLAY_MARKER_ENABLED {
@@ -5002,6 +4862,7 @@ enum Ui4AsyncCompositionTarget {
 enum Ui4AsyncCompositionWork {
     GucRcs(crate::intel::gpgpu::Ui4CompositorSubmission),
     GucBcs(crate::intel::GucBcs0CopySubmission),
+    BcsStack(u64),
 }
 
 /// Display-owned record for either a GPU composition or a zero-work direct
@@ -5069,26 +4930,21 @@ pub(crate) enum Ui4AsyncCompositionPoll {
     Failed,
 }
 
+/// Resolve slot-0 pixel ownership with raw RGBA copies. Display hardware
+/// performs the only alpha blend, against the pipe bottom color.
 pub(crate) fn queue_ui4_primary_composition(
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
-    sparse_static_painter: bool,
+    _sparse_static_painter: bool,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
     let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let pipe = target
-        .pipeline
-        .pipe()
-        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    if target.width == 0 || target.height == 0 {
-        return Err(Ui4AsyncCompositionError::Unavailable);
-    }
+    let pipe = target.pipeline.pipe().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let change = clip_composition_damage_region(damage, target.width, target.height);
-    if change.is_empty() {
-        return Err(Ui4AsyncCompositionError::Unavailable);
-    }
-    if !prepare_ui4_primary_swap_surfaces(dev, pipe, target.width, target.height) {
+    if change.is_empty()
+        || !prepare_ui4_primary_swap_surfaces(dev, pipe, target.width, target.height)
+    {
         return Err(Ui4AsyncCompositionError::Unavailable);
     }
     let surface = ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
@@ -5099,139 +4955,29 @@ pub(crate) fn queue_ui4_primary_composition(
         effective.add_region(change);
         effective
     };
-    let proof = prepare_ui4_composition_proof(tiles, effective, target.width, target.height, true);
-    match compose_premultiplied_rgba_tiles_into_primary_gpgpu(
-        surface,
-        tiles,
-        effective,
-        true,
-        sparse_static_painter,
-    ) {
-        GpgpuCompositionResult::Queued(gpu) => Ok(Ui4AsyncComposition {
-            work: Some(Ui4AsyncCompositionWork::GucRcs(gpu)),
-            target: Ui4AsyncCompositionTarget::Primary {
-                surface,
-                pipeline: target.pipeline,
-            },
-            proof,
-            change,
-            effective,
-            tile_count: tiles.len(),
-            queued_ns: crate::chronos::monotonic_nanos(),
-            reason,
-        }),
-        GpgpuCompositionResult::SubmittedIncomplete => Err(Ui4AsyncCompositionError::Busy),
-        _ => Err(Ui4AsyncCompositionError::Failed),
-    }
-}
-
-/// Compose fully opaque static frames into the slot-0 swap surface through
-/// ordered BCS copies. This is the low-overhead fallback when the primary RCS
-/// destination cannot be mapped, and intentionally cannot blend transparent
-/// producers.
-pub(crate) fn queue_ui4_static_primary_composition_bcs0(
-    tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRegion,
-    reason: &'static str,
-) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
-    let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let pipe = target
-        .pipeline
-        .pipe()
-        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let change = clip_composition_damage_region(damage, target.width, target.height);
-    if change.is_empty() || tiles.is_empty() {
-        return Err(Ui4AsyncCompositionError::Unavailable);
-    }
-    if !prepare_ui4_primary_swap_surfaces(dev, pipe, target.width, target.height) {
-        return Err(Ui4AsyncCompositionError::Unavailable);
-    }
-    let surface = ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
-        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let effective = {
-        let pool = primary_swap_surface_pool(surface.pipe).lock();
-        let mut effective = pool.damage_debt[surface.buffer_index];
-        effective.add_region(change);
-        effective
+    let primary = primary_surface_for_pipe(pipe).ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let base = crate::intel::GucBcs0RgbaSurface {
+        phys: primary.phys,
+        gpu: native_ui4::base_gpu(pipe, primary.gpu),
+        bytes: primary.byte_len,
+        width: primary.width,
+        height: primary.height,
+        pitch_bytes: primary.pitch_bytes,
     };
-    for damaged in effective.rects().iter().copied() {
-        if !restore_primary_composition_base_rect(surface, damaged) {
-            return Err(Ui4AsyncCompositionError::Failed);
-        }
-    }
-    if !dma_flush_primary_swap_region(surface, effective) {
-        return Err(Ui4AsyncCompositionError::Failed);
-    }
-
-    let destination_gpu = primary_compose_rcs_gpu_for_surface(surface)
-        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let destination = crate::intel::GucBcs0RgbaSurface {
         phys: surface.phys,
-        gpu: destination_gpu,
+        gpu: primary_compose_rcs_gpu_for_surface(surface)
+            .ok_or(Ui4AsyncCompositionError::Unavailable)?,
         bytes: surface.byte_len,
         width: surface.width,
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
     };
-    let mut copies = Vec::with_capacity(tiles.len());
-    for tile in tiles {
-        if tile.opacity != u8::MAX
-            || !tile.known_opaque
-            || tile.width != tile.source_width
-            || tile.height != tile.source_height
-        {
-            return Err(Ui4AsyncCompositionError::Unavailable);
-        }
-        let source = tile
-            .gpgpu_surface
-            .filter(|source| source.is_valid())
-            .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-        let Some(draw) = clip_composition_damage(
-            CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height),
-            surface.width,
-            surface.height,
-        ) else {
-            continue;
-        };
-        copies.push(crate::intel::GucBcs0RgbaCopy {
-            source: crate::intel::GucBcs0RgbaSurface {
-                phys: source.phys,
-                gpu: source.gpu,
-                bytes: source.bytes,
-                width: source.width,
-                height: source.height,
-                pitch_bytes: source.pitch_bytes,
-            },
-            source_x: draw.x.saturating_sub(tile.x),
-            source_y: draw.y.saturating_sub(tile.y),
-            destination_x: draw.x,
-            destination_y: draw.y,
-            width: draw.width,
-            height: draw.height,
-        });
-    }
-    if copies.is_empty() {
-        return Err(Ui4AsyncCompositionError::Unavailable);
-    }
-    let blit = crate::r::services::vcpy_service::queue_rgba_copies(destination, &copies).map_err(
-        |error| match error {
-            crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
-            crate::intel::GucBcs0CopySubmitError::Unavailable => {
-                Ui4AsyncCompositionError::Unavailable
-            }
-            crate::intel::GucBcs0CopySubmitError::InvalidRequest
-            | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
-                Ui4AsyncCompositionError::Failed
-            }
-        },
-    )?;
+    let (copies, source_cache) = ui4_bcs::plan_copies(base, destination, tiles, effective)?;
+    let blit = ui4_bcs_queue::queue(destination, copies, source_cache)?;
     Ok(Ui4AsyncComposition {
-        work: Some(Ui4AsyncCompositionWork::GucBcs(blit)),
-        target: Ui4AsyncCompositionTarget::Primary {
-            surface,
-            pipeline: target.pipeline,
-        },
+        work: Some(Ui4AsyncCompositionWork::BcsStack(blit)),
+        target: Ui4AsyncCompositionTarget::Primary { surface, pipeline: target.pipeline },
         proof: None,
         change,
         effective,
@@ -5279,14 +5025,7 @@ pub(crate) fn queue_ui4_primary_transparent_park(
         effective
     };
     if !work_damage.is_empty() {
-        clear_primary_swap_surface_region(surface, work_damage)
-            .ok_or(Ui4AsyncCompositionError::Failed)?;
-        if !dma_flush_primary_swap_region(surface, work_damage) {
-            // A large fragmented history is still safe: it is one bounded
-            // CPU clear followed by a complete cache flush, never an RCS
-            // composition fallback.
-            crate::intel::dma_flush(surface.virt, surface.byte_len);
-        }
+        return queue_ui4_primary_composition(&[], damage, true, reason);
     }
     Ok(Ui4AsyncComposition {
         work: None,
@@ -5822,6 +5561,7 @@ pub(crate) fn poll_ui4_composition(composition: Ui4AsyncComposition) -> Ui4Async
                 }
             }
         }
+        Some(Ui4AsyncCompositionWork::BcsStack(sequence)) => ui4_bcs_queue::poll(sequence),
         Some(Ui4AsyncCompositionWork::GucBcs(blit)) => {
             match crate::r::services::vcpy_service::poll_rgba_copies(blit) {
                 crate::intel::GucBcs0CopyCompletion::Pending => Ui4AsyncCompositionPoll::Pending,
@@ -6035,18 +5775,28 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         Ui4AsyncCompositionTarget::Overlay { surface, .. } => {
             mark_overlay_composition_surface_front(surface, composition.change)
         }
-        Ui4AsyncCompositionTarget::DirectOverlay { .. } => {}
+        Ui4AsyncCompositionTarget::DirectOverlay { surface } => {
+            if surface.plane_slot == crate::ui4::PRIMARY_PLANE_SLOT {
+                // Direct scanout bypasses both swap surfaces. Their contents
+                // no longer describe the last presented slot-0 scene.
+                let mut pool = primary_swap_surface_pool(surface.pipe).lock();
+                let full = CompositionDamageRegion::from_rect(CompositionDamageRect::new(
+                    0, 0, pool.width, pool.height,
+                ));
+                pool.damage_debt = [full; PRIMARY_SWAP_BUFFER_COUNT];
+            }
+        }
     }
     let elapsed_us =
         crate::chronos::monotonic_nanos().saturating_sub(composition.queued_ns) / 1_000;
     let effective_bounds = composition.effective.bounding_rect().unwrap_or_default();
     if matches!(composition.target, Ui4AsyncCompositionTarget::Primary { .. })
-        && matches!(composition.work, Some(Ui4AsyncCompositionWork::GucRcs(_)))
+        && matches!(composition.work, Some(Ui4AsyncCompositionWork::BcsStack(_)))
         && composition.tile_count != 0
         && !UI4_PRIMARY_STACK_PROOF_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "ui4";
-            "ui4/slot0-composition-proof accepted=1 backend=guc-rcs pixel_op=topmost-wins tiles={} effective_rects={} effective_bounds={}x{}@{},{} guc_retired=1 primary_surflive=1 boundary=slot0-guc-retired-and-primary-surflive elapsed_us={} log=once\n",
+            "ui4/slot0-composition-proof accepted=1 backend=guc-bcs0 pixel_op=topmost-wins tiles={} effective_rects={} effective_bounds={}x{}@{},{} guc_retired=1 primary_surflive=1 boundary=slot0-bcs-retired-and-primary-surflive elapsed_us={} log=once\n",
             composition.tile_count,
             composition.effective.len(),
             effective_bounds.width,
@@ -6086,6 +5836,7 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         let backend = match composition.work {
             Some(Ui4AsyncCompositionWork::GucRcs(_)) => "guc-rcs",
             Some(Ui4AsyncCompositionWork::GucBcs(_)) => "guc-bcs0-fast-copy",
+            Some(Ui4AsyncCompositionWork::BcsStack(_)) => "guc-bcs0-ordered-copy",
             None => "cpu-sparse-copy",
         };
         crate::log_trace!(target: "ui4";
@@ -6132,321 +5883,6 @@ pub(crate) fn ui4_composition_flip_is_live(composition: Ui4AsyncComposition) -> 
     surface_reg.is_some_and(|surface_reg| {
         crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF) == surface_reg
     })
-}
-
-fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
-    surface: PrimarySwapSurface,
-    tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRegion,
-    asynchronous: bool,
-    _sparse_static_painter: bool,
-) -> GpgpuCompositionResult {
-    // Slot0 has exactly one legal compositor: the asynchronous layer kernel.
-    // It source-over blends frames in broker-z order; the display plane then
-    // blends the resulting premultiplied RGBA with Pipe A.
-    if !asynchronous || surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, 0) {
-        return GpgpuCompositionResult::Unavailable;
-    }
-    let Some(primary) = primary_surface_for_pipe(surface.pipe) else {
-        return GpgpuCompositionResult::Unavailable;
-    };
-    if primary.width != surface.width
-        || primary.height != surface.height
-        || primary.pitch_bytes < primary.width.saturating_mul(4)
-    {
-        return GpgpuCompositionResult::Unavailable;
-    }
-    let Some(destination_gpu) = primary_compose_rcs_gpu_for_surface(surface) else {
-        return GpgpuCompositionResult::Unavailable;
-    };
-    let Some(destination) = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-        surface.phys,
-        destination_gpu,
-        surface.byte_len,
-        surface.width,
-        surface.height,
-        surface.pitch_bytes,
-    ) else {
-        return GpgpuCompositionResult::Unavailable;
-    };
-    let Some(base) = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-        primary.phys,
-        native_ui4::base_gpu(primary.pipe, primary.gpu),
-        primary.byte_len,
-        primary.width,
-        primary.height,
-        primary.pitch_bytes,
-    ) else {
-        return GpgpuCompositionResult::Unavailable;
-    };
-    if gpgpu_ranges_overlap(destination.gpu, destination.bytes, base.gpu, base.bytes) {
-        return GpgpuCompositionResult::Unavailable;
-    }
-
-    // The async Slot0 kernel blends covering descriptors for each output
-    // pixel, leaving uncovered pixels transparent.
-    if asynchronous {
-        let Some(bounds) = damage
-            .bounding_rect()
-            .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
-        else {
-            return GpgpuCompositionResult::Complete;
-        };
-        let mut layers = Vec::with_capacity(tiles.len());
-        for tile in tiles {
-            let Some(source) = tile.gpgpu_surface else {
-                return GpgpuCompositionResult::Unavailable;
-            };
-            if !source.is_valid()
-                || source.width != tile.source_width
-                || source.height != tile.source_height
-                || source.pitch_bytes as usize != tile.pitch_bytes
-                || tile.width == 0
-                || tile.height == 0
-                || gpgpu_ranges_overlap(
-                    destination.gpu,
-                    destination.bytes,
-                    source.gpu,
-                    source.bytes,
-                )
-            {
-                return GpgpuCompositionResult::Unavailable;
-            }
-            layers.push(crate::intel::gpgpu::GpgpuUi4ComposeLayer {
-                src: source,
-                src_scanout_cache: tile.gpgpu_scanout_cache,
-                dst_x: tile.x.min(i32::MAX as u32) as i32,
-                dst_y: tile.y.min(i32::MAX as u32) as i32,
-                dst_width: tile.width,
-                dst_height: tile.height,
-                opacity: tile.opacity,
-                arc: tile.arc,
-            });
-        }
-        return match crate::intel::gpgpu::queue_ui4_compositor_layers(
-            Some(base),
-            destination,
-            &layers,
-            crate::intel::gpgpu::GpgpuRect::new(
-                bounds.x.min(i32::MAX as u32) as i32,
-                bounds.y.min(i32::MAX as u32) as i32,
-                bounds.width,
-                bounds.height,
-            ),
-            UI4_PRIMARY_COMPOSITION_FLAGS,
-        ) {
-            Ok(submission) => GpgpuCompositionResult::Queued(submission),
-            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
-                GpgpuCompositionResult::SubmittedIncomplete
-            }
-            Err(_) => GpgpuCompositionResult::Unavailable,
-        };
-    }
-
-    // The normal video case is deliberately one source run. The decoded RGBA
-    // contract is fully opaque, so its covered pixels do not depend on the old
-    // destination. Newly allocated swap surfaces start as exact base copies;
-    // after a move, only damage left outside the current video rectangle is
-    // restored on the CPU. This avoids the unproven Gen12 mid-batch bindful
-    // source switch which retired successfully while replaying the base source.
-    if let [tile] = tiles {
-        if tile.known_opaque && tile.opacity == u8::MAX {
-            let Some(source) = tile.gpgpu_surface else {
-                return GpgpuCompositionResult::Unavailable;
-            };
-            if !source.is_valid()
-                || source.width != tile.source_width
-                || source.height != tile.source_height
-                || source.pitch_bytes as usize != tile.pitch_bytes
-                || tile.width == 0
-                || tile.height == 0
-                || gpgpu_ranges_overlap(
-                    destination.gpu,
-                    destination.bytes,
-                    source.gpu,
-                    source.bytes,
-                )
-            {
-                return GpgpuCompositionResult::Unavailable;
-            }
-            let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
-            let Some(restored) =
-                restore_primary_composition_base_outside_opaque_rect(surface, damage, tile_rect)
-            else {
-                return GpgpuCompositionResult::Unavailable;
-            };
-            if !restored.is_empty() && !dma_flush_primary_swap_region(surface, restored) {
-                return GpgpuCompositionResult::Unavailable;
-            }
-            let descriptors = damage
-                .rects()
-                .iter()
-                .filter_map(|damaged| {
-                    intersect_composition_damage(tile_rect, *damaged)
-                        .and_then(|rect| {
-                            clip_composition_damage(rect, surface.width, surface.height)
-                        })
-                        .map(|draw| {
-                            composition_quad_descriptor(
-                                draw,
-                                tile.x,
-                                tile.y,
-                                tile.width,
-                                tile.height,
-                                u8::MAX,
-                                crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_DEST_XRGB,
-                            )
-                        })
-                })
-                .collect::<Vec<_>>();
-            if descriptors.is_empty()
-                || descriptors.len() > crate::intel::gpgpu::sprite_quad_worklist_max_descs()
-            {
-                return GpgpuCompositionResult::Unavailable;
-            }
-            let run = crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
-                src: source,
-                descs: &descriptors,
-            };
-            if asynchronous {
-                return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(
-                    destination,
-                    core::slice::from_ref(&run),
-                ) {
-                    Ok(submission) => GpgpuCompositionResult::Queued(submission),
-                    Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
-                        GpgpuCompositionResult::SubmittedIncomplete
-                    }
-                    Err(_) => GpgpuCompositionResult::Unavailable,
-                };
-            }
-            let result = crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(
-                destination,
-                core::slice::from_ref(&run),
-            );
-            return match result.outcome {
-                crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete
-                    if result.stats.descs == descriptors.len() && result.stats.submits == 1 =>
-                {
-                    GpgpuCompositionResult::Complete
-                }
-                crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete => {
-                    GpgpuCompositionResult::SubmittedIncomplete
-                }
-                _ => GpgpuCompositionResult::Unavailable,
-            };
-        }
-    }
-
-    // The immutable boot/base primary is copied only over damage. Every later
-    // run source-overs one producer surface onto that restored XRGB base. All
-    // work stays in one ordered submission and the display keeps its separate
-    // stable GGTT address for the same physical destination allocation.
-    let base_descriptors = damage
-        .rects()
-        .iter()
-        .copied()
-        .map(|rect| {
-            composition_quad_descriptor(
-                rect,
-                0,
-                0,
-                surface.width,
-                surface.height,
-                u8::MAX,
-                crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SOURCE_XRGB
-                    | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_DEST_XRGB,
-            )
-        })
-        .collect::<Vec<_>>();
-    if base_descriptors.is_empty() {
-        return GpgpuCompositionResult::Complete;
-    }
-
-    let mut descriptors = Vec::with_capacity(tiles.len());
-    for tile in tiles {
-        let Some(source) = tile.gpgpu_surface else {
-            return GpgpuCompositionResult::Unavailable;
-        };
-        if !source.is_valid()
-            || source.width != tile.source_width
-            || source.height != tile.source_height
-            || source.pitch_bytes as usize != tile.pitch_bytes
-            || tile.width == 0
-            || tile.height == 0
-            || gpgpu_ranges_overlap(destination.gpu, destination.bytes, source.gpu, source.bytes)
-        {
-            return GpgpuCompositionResult::Unavailable;
-        }
-        let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
-        let mut tile_descriptors = Vec::new();
-        for damaged in damage.rects() {
-            let Some(draw) = intersect_composition_damage(tile_rect, *damaged)
-                .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
-            else {
-                continue;
-            };
-            tile_descriptors.push(composition_quad_descriptor(
-                draw,
-                tile.x,
-                tile.y,
-                tile.width,
-                tile.height,
-                tile.opacity,
-                crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
-                    | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC
-                    | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_DEST_XRGB,
-            ));
-        }
-        descriptors.push((source, tile_descriptors));
-    }
-
-    let expected_descriptors = base_descriptors.len().saturating_add(
-        descriptors
-            .iter()
-            .map(|(_, descriptors)| descriptors.len())
-            .sum::<usize>(),
-    );
-    if expected_descriptors > crate::intel::gpgpu::sprite_quad_worklist_max_descs() {
-        return GpgpuCompositionResult::Unavailable;
-    }
-    let mut runs = Vec::with_capacity(descriptors.len().saturating_add(1));
-    runs.push(crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
-        src: base,
-        descs: &base_descriptors,
-    });
-    runs.extend(
-        descriptors
-            .iter()
-            .filter(|(_, descriptors)| !descriptors.is_empty())
-            .map(|(src, descriptors)| crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
-                src: *src,
-                descs: descriptors,
-            }),
-    );
-    if asynchronous {
-        return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(destination, &runs)
-        {
-            Ok(submission) => GpgpuCompositionResult::Queued(submission),
-            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
-                GpgpuCompositionResult::SubmittedIncomplete
-            }
-            Err(_) => GpgpuCompositionResult::Unavailable,
-        };
-    }
-    let result =
-        crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(destination, &runs);
-    match result.outcome {
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete
-            if result.stats.descs == expected_descriptors && result.stats.submits == 1 =>
-        {
-            GpgpuCompositionResult::Complete
-        }
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete => {
-            GpgpuCompositionResult::SubmittedIncomplete
-        }
-        _ => GpgpuCompositionResult::Unavailable,
-    }
 }
 
 fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
@@ -7638,15 +7074,13 @@ mod direct_plane_scaler_tests {
     use super::{
         OverlayAlphaMode, PLANE_COLOR_ALPHA_MASK, PLANE_COLOR_ALPHA_SW_PREMULT,
         PLANE_CTL_FORMAT_MASK_SKL, PLANE_CTL_FORMAT_XRGB_8888, PLANE_CTL_ORDER_RGBX,
-        PrimaryPlaneSourceFormat, UI4_PRIMARY_COMPOSITION_FLAGS, direct_plane_scaler_factor,
+        PrimaryPlaneSourceFormat, direct_plane_scaler_factor,
         overlay_composition_constant_alpha, plane_color_ctl_alpha,
         primary_plane_ctl_enabled_for_format, primary_plane_source_contract_accepted,
     };
 
     #[test]
     fn rgba_primary_source_preserves_native_order_and_premultiplied_alpha() {
-        assert_eq!(UI4_PRIMARY_COMPOSITION_FLAGS, 0);
-
         let plane_ctl = primary_plane_ctl_enabled_for_format(
             0,
             PrimaryPlaneSourceFormat::Rgba8888Premultiplied,

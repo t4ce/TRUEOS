@@ -27,7 +27,8 @@ pub(crate) use self::blt::{
     GUC_BCS0_MONO_MAX_GLYPHS, GucBcs0CopyCompletion, GucBcs0CopySubmission, GucBcs0CopySubmitError,
     GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaFill, GucBcs0RgbaSurface, guc_bcs0_last_timeout,
     poll_guc_bcs0_rgba_copies, queue_guc_bcs0_legacy_rgba_copies,
-    queue_guc_bcs0_mono_glyphs, queue_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_fill,
+    queue_guc_bcs0_mono_glyphs, queue_guc_bcs0_rgba_copies,
+    queue_guc_bcs0_rgba_copies_with_scanout_cache, queue_guc_bcs0_rgba_fill,
     queue_guc_bcs0_rgba_fills, queue_guc_bcs0_uncached_copies, submit_guc_bcs0_fast_copy_probe_now,
 };
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;
@@ -726,14 +727,6 @@ pub(crate) fn queue_ui4_primary_composition(
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
     self::display::queue_ui4_primary_composition(tiles, damage, sparse_static_painter, reason)
-}
-
-pub(crate) fn queue_ui4_static_primary_composition_bcs0(
-    tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRegion,
-    reason: &'static str,
-) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_static_primary_composition_bcs0(tiles, damage, reason)
 }
 
 pub(crate) fn queue_ui4_primary_transparent_park(

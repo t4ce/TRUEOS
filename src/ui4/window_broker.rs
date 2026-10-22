@@ -550,11 +550,29 @@ struct WindowOpenTransition {
 struct WindowCloseTransition {
     lease: super::FrameReadLease,
     initial: WindowPlacement,
+    native: WindowPlacement,
     started_ms: u64,
     delay_ms: u64,
     duration_ms: u64,
     puff_per_mille: u64,
     retire_frame: bool,
+}
+
+impl WindowCloseTransition {
+    fn placement(self, elapsed_ms: u64, output_extent: Option<(u32, u32)>) -> WindowPlacement {
+        if self.duration_ms == 0 {
+            return WindowPlacement { opacity: 0, ..self.native };
+        }
+        clamp_transition_to_output(
+            close_transition_placement(
+                self.initial,
+                elapsed_ms,
+                self.duration_ms,
+                self.puff_per_mille,
+            ),
+            output_extent,
+        )
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -759,6 +777,7 @@ impl WindowBroker {
             return;
         }
         window.plane = plane;
+        window.skip_stack_transitions();
         window.damage = Some(DamageRegion::FULL);
         window.revision = next_serial(window.revision);
     }
@@ -829,6 +848,7 @@ impl WindowBroker {
             let window = &mut self.windows[slot];
             if window.plane != plane {
                 window.plane = plane;
+                window.skip_stack_transitions();
                 window.damage = Some(DamageRegion::FULL);
                 window.revision = next_serial(window.revision);
             }
@@ -1269,7 +1289,11 @@ impl WindowBroker {
                 {
                     final_frames.push(snapshot);
                 }
-                let (delay_ms, duration_ms, puff_per_mille) = if direct_plane_scaling {
+                let (delay_ms, duration_ms, puff_per_mille) = if window.plane == WindowPlane::Primary {
+                    // Slot0 resolves pixel ownership with native-size BCS
+                    // copies; whole-window fades and scaling need blending.
+                    (0, 0, 0)
+                } else if direct_plane_scaling {
                     let delay_ms = if window.plane.slot() == 3 && direct_first_wave_present {
                         DIRECT_PLANE_CLOSE_WAVE_DURATION_MS
                     } else {
@@ -1291,7 +1315,12 @@ impl WindowBroker {
                         },
                     )
                 };
-                let presentation = (*window).presentation_placement();
+                let native = window.replacement_presentation.unwrap_or(window.placement);
+                let presentation = if window.plane == WindowPlane::Primary {
+                    WindowPlacement { opacity: 0, ..native }
+                } else {
+                    (*window).presentation_placement()
+                };
                 window.pending_resize_extent = None;
                 window.replacement_presentation = None;
                 window.open_transition = None;
@@ -1303,6 +1332,7 @@ impl WindowBroker {
                             .map(|lease| WindowCloseTransition {
                                 lease,
                                 initial: presentation,
+                                native,
                                 started_ms,
                                 delay_ms,
                                 duration_ms,
@@ -1376,15 +1406,7 @@ impl WindowBroker {
                 // last non-zero direct-plane sample to the transparent parking
                 // surface, leaving the old producer surface vulnerable to an
                 // opacity re-arm during that final handoff.
-                let terminal = clamp_transition_to_output(
-                    close_transition_placement(
-                        transition.initial,
-                        transition.duration_ms,
-                        transition.duration_ms,
-                        transition.puff_per_mille,
-                    ),
-                    output_extent,
-                );
+                let terminal = transition.placement(transition.duration_ms, output_extent);
                 if window.placement.opacity != 0 || window.damage.is_some() {
                     if window.placement != terminal {
                         window.placement = terminal;
@@ -1410,15 +1432,7 @@ impl WindowBroker {
                 continue;
             }
             let active_elapsed_ms = elapsed_ms.saturating_sub(transition.delay_ms);
-            let placement = clamp_transition_to_output(
-                close_transition_placement(
-                    transition.initial,
-                    active_elapsed_ms,
-                    transition.duration_ms,
-                    transition.puff_per_mille,
-                ),
-                output_extent,
-            );
+            let placement = transition.placement(active_elapsed_ms, output_extent);
             if placement != window.placement {
                 window.placement = placement;
                 window.damage = Some(DamageRegion::FULL);
@@ -1652,6 +1666,23 @@ impl WindowRecord {
             self.collapse
                 .map_or(snapshot, |collapse| collapse.project(snapshot)),
         )
+    }
+
+    /// Slot0 uses BCS copies, so a lease demotion must also end any effects
+    /// which rely on a scaler or whole-window alpha. A closing frame still
+    /// presents a zero-alpha sample before its SURFLIVE retirement.
+    fn skip_stack_transitions(&mut self) {
+        if self.plane != WindowPlane::Primary {
+            return;
+        }
+        self.open_transition = None;
+        if let Some(transition) = &mut self.close_transition {
+            transition.initial = transition.native;
+            transition.delay_ms = 0;
+            transition.duration_ms = 0;
+            transition.puff_per_mille = 0;
+            self.placement = WindowPlacement { opacity: 0, ..transition.native };
+        }
     }
 
     fn presentation_placement(self) -> WindowPlacement {
@@ -2186,7 +2217,7 @@ pub(crate) fn commit_window_frame_refresh(
         && !window.first_presentation_emitted
         && window.replacement_presentation.is_none()
     {
-        window.open_transition = Some(open_transition(window.placement, window.plane, started_ms));
+        window.open_transition = open_transition(window.placement, window.plane, started_ms);
     }
     window.state = WindowState::Ready;
     window.publish_serial = next_serial(window.publish_serial);
@@ -2903,7 +2934,7 @@ pub(crate) fn publish_window_frame(
                 && window.replacement_presentation.is_none()
             {
                 window.open_transition =
-                    Some(open_transition(window.placement, window.plane, started_ms));
+                    open_transition(window.placement, window.plane, started_ms);
             }
             window.replacement_presentation = None;
         }
@@ -3469,19 +3500,22 @@ fn open_transition(
     initial: WindowPlacement,
     plane: WindowPlane,
     started_ms: u64,
-) -> WindowOpenTransition {
+) -> Option<WindowOpenTransition> {
+    if plane == WindowPlane::Primary {
+        return None;
+    }
     let (duration_ms, shrink_per_mille) = if matches!(plane.slot(), 1..=3) {
         (DIRECT_PLANE_CLOSE_WAVE_DURATION_MS, DIRECT_PLANE_OPEN_SHRINK_PER_MILLE)
     } else {
         (CLOSE_TRANSITION_DURATION_MS, OPEN_TRANSITION_SHRINK_PER_MILLE)
     };
-    WindowOpenTransition {
+    Some(WindowOpenTransition {
         initial,
         current: open_transition_placement(initial, 0, duration_ms, shrink_per_mille),
         started_ms,
         duration_ms,
         shrink_per_mille,
-    }
+    })
 }
 
 fn open_transition_placement(
@@ -3602,6 +3636,7 @@ fn release_collapse(owner: WindowOwner, session: Option<WindowSessionId>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::FrameReadLease;
 
     fn test_window(
         owner: WindowOwner,
@@ -4029,6 +4064,7 @@ mod tests {
                 buffer_index: 0,
             },
             initial: broker.windows[slot].placement,
+            native: broker.windows[slot].placement,
             started_ms: 1_000,
             delay_ms: 0,
             duration_ms: 200,
@@ -4047,6 +4083,69 @@ mod tests {
         assert_eq!(retirements.len(), 1);
         assert_eq!(broker.windows[slot].state, WindowState::Closed);
         assert!(broker.windows[slot].close_transition.is_none());
+    }
+
+    #[test]
+    fn stack_demotion_ends_open_effects_at_native_geometry() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let window = broker
+            .create(test_window(owner, session, 1, 0, 0, true), FrameBuffering::Single, 0)
+            .unwrap();
+        let (slot, _) = unpack_handle(window.raw()).unwrap();
+        let native = broker.windows[slot].placement;
+        broker.windows[slot].open_transition = open_transition(native, WindowPlane::Universal(1), 0);
+        assert_ne!(broker.windows[slot].presentation_placement(), native);
+
+        // Adding the fourth application window moves the oldest one onto
+        // Slot0 while its opening effect could still be running.
+        for frame in 2..=4 {
+            broker
+                .create(test_window(owner, session, frame, 0, frame as i32, true), FrameBuffering::Single, 0)
+                .unwrap();
+        }
+        assert_eq!(broker.windows[slot].plane, WindowPlane::Primary);
+        assert!(broker.windows[slot].open_transition.is_none());
+        assert_eq!(broker.windows[slot].presentation_placement(), native);
+        assert!(open_transition(native, WindowPlane::Primary, 0).is_none());
+    }
+
+    #[test]
+    fn closing_stack_demotion_keeps_native_geometry_and_acknowledged_retirement() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let window = broker
+            .create(test_window(owner, session, 7, 0, 0, true), FrameBuffering::Single, 0)
+            .unwrap();
+        let (slot, _) = unpack_handle(window.raw()).unwrap();
+        let native = WindowPlacement { x: -15, ..broker.windows[slot].placement };
+        let scaled = close_transition_placement(native, 100, 200, 50);
+        broker.windows[slot].state = WindowState::Closing;
+        broker.windows[slot].placement = scaled;
+        broker.windows[slot].close_transition = Some(WindowCloseTransition {
+            lease: FrameReadLease { frame: broker.windows[slot].frame, buffer_index: 0 },
+            initial: scaled,
+            native,
+            started_ms: 1_000,
+            delay_ms: 100,
+            duration_ms: 200,
+            puff_per_mille: 50,
+            retire_frame: true,
+        });
+
+        broker.demote_to_stack(window);
+        let terminal = WindowPlacement { opacity: 0, ..native };
+        assert_eq!(broker.windows[slot].placement, terminal);
+        assert_eq!(broker.windows[slot].close_transition.unwrap().duration_ms, 0);
+        assert!(broker.advance_close_transitions(1_000, Some((100, 100))).is_empty());
+        assert_eq!(broker.windows[slot].placement, terminal, "stack close must not scale or fit native geometry");
+        assert_eq!(broker.windows[slot].state, WindowState::Closing);
+
+        assert!(broker.acknowledge(window, 0));
+        assert_eq!(broker.advance_close_transitions(1_001, None).len(), 1);
+        assert_eq!(broker.windows[slot].state, WindowState::Closed);
     }
 
     fn plane_slot_of(broker: &WindowBroker, window: WindowId) -> usize {

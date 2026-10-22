@@ -33,6 +33,7 @@ mod blt {
     source += '\n' + '\n'.join(extract.item(BLT, name) for name in (
         'DirectBltState', 'GucBcs0RgbaSurface', 'GucBcs0RgbaCopy', 'GucBcs0RgbaFill',
         'guc_blt_valid_surface', 'guc_blt_valid_copy', 'guc_blt_map_ui4_surfaces',
+        'guc_blt_source_mappings_compatible',
         'guc_blt_physical_ranges_overlap', 'guc_blt_gpu_ranges_overlap', 'guc_blt_encode_ui4_copy_batch',
         'guc_blt_append_ring_batch_start', 'boot_bcs0_legacy_ring_words',
         'guc_blt_valid_fill', 'guc_blt_valid_fill_rect', 'guc_blt_encode_ui4_fill_batch', 'guc_blt_encode_ui4_fill_rects_batch',
@@ -41,18 +42,53 @@ mod blt {
     ))
     source += r'''
 static MAPPINGS: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
+static MAPPING_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn direct_blt_map_ppgtt_region(_: DirectBltState, gpu: u64, _: u64, _: usize, flags: u64) -> bool {
     MAPPINGS.lock().unwrap().push((gpu, flags)); true
 }
 #[test]
 fn device_written_snapshot_source_uses_uc_without_changing_ordinary_sources() {
+    let _guard = MAPPING_TEST_LOCK.lock().unwrap();
+    MAPPINGS.lock().unwrap().clear();
     let state: DirectBltState = unsafe { core::mem::zeroed() };
     let copy = GucBcs0RgbaCopy { source: surface(0x100000), source_x: 0,
         source_y: 0, destination_x: 0, destination_y: 0, width: 512, height: 2 };
-    assert!(guc_blt_map_ui4_surfaces(state, surface(0x200000), &[copy], true));
-    assert!(guc_blt_map_ui4_surfaces(state, surface(0x200000), &[copy], false));
+    assert!(guc_blt_map_ui4_surfaces(state, surface(0x200000), &[copy], true, None));
+    assert!(guc_blt_map_ui4_surfaces(state, surface(0x200000), &[copy], false, None));
     assert_eq!(*MAPPINGS.lock().unwrap(), [(0x200000, 0x1b), (0x100000, 0x1b),
         (0x200000, 0x1b), (0x100000, 3)]);
+}
+#[test]
+fn mixed_sources_keep_per_copy_cache_policy_and_reject_alias_conflicts() {
+    let _guard = MAPPING_TEST_LOCK.lock().unwrap();
+    let mut ppgtt = vec![0u8; DIRECT_BLT_PPGTT_BYTES];
+    let mut state: DirectBltState = unsafe { core::mem::zeroed() };
+    state.ppgtt_virt = ppgtt.as_mut_ptr();
+    let copy = GucBcs0RgbaCopy { source: surface(0x300000), source_x: 0,
+        source_y: 0, destination_x: 0, destination_y: 0, width: 512, height: 2 };
+    let copies = [copy, GucBcs0RgbaCopy { source: surface(0x400000), ..copy }];
+    let mut mappings = MAPPINGS.lock().unwrap();
+    mappings.clear();
+    drop(mappings);
+    assert!(guc_blt_map_ui4_surfaces(state, surface(0x500000), &copies,
+        false, Some(&[false, true])));
+    assert_eq!(*MAPPINGS.lock().unwrap(),
+        [(0x500000, 0x1b), (0x300000, 3), (0x400000, 0x1b)]);
+    assert!(!guc_blt_map_ui4_surfaces(state, surface(0x500000), &copies,
+        false, Some(&[true])));
+    assert!(!guc_blt_map_ui4_surfaces(state, surface(0x500000), &[copy, copy],
+        false, Some(&[false, true])));
+    let remapped = GucBcs0RgbaCopy {
+        source: GucBcs0RgbaSurface { phys: 0x600000, ..copy.source }, ..copy
+    };
+    assert!(!guc_blt_map_ui4_surfaces(state, surface(0x500000), &[copy, remapped],
+        false, Some(&[false, false])));
+    assert!(guc_blt_source_mappings_compatible(copy.source, true, copy.source, true));
+    let adjacent = GucBcs0RgbaSurface { phys: 0x301000, gpu: 0x301000,
+        ..copy.source };
+    assert!(guc_blt_source_mappings_compatible(copy.source, true, adjacent, false));
+    let alias = GucBcs0RgbaSurface { gpu: 0x700000, ..copy.source };
+    assert!(!guc_blt_source_mappings_compatible(copy.source, false, alias, true));
 }
 fn surface(phys: u64) -> GucBcs0RgbaSurface {
     GucBcs0RgbaSurface { phys, gpu: phys, bytes: 4096, width: 512,

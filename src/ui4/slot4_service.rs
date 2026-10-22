@@ -202,7 +202,6 @@ fn queue_slot4(
                 gpgpu_scanout_cache: false,
                 opacity: window.placement.opacity,
                 arc: window.arc,
-                known_opaque: false,
                 expected_rgba: None,
             })
             .collect::<Vec<_>>();
