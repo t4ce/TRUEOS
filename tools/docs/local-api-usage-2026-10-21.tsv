@@ -1,0 +1,793 @@
+category	name	status	consumer_evidence	kernel_refs	registration
+Kernel sys_*	sys_alloc_aligned	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2816	TRUEOS/src/hv/blueprint/blueprint.rs:1264
+Kernel sys_*	sys_alloc_words	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1263
+Kernel sys_*	sys_argc	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1272
+Kernel sys_*	sys_argv	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1273
+Kernel sys_*	sys_cycle_count	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1278
+Kernel sys_*	sys_getenv	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1271
+Kernel sys_*	sys_halt	registered candidate	no consumer reference	TRUEOS/src/blueprint_shims.rs:19; TRUEOS/src/blueprint_shims.rs:28; TRUEOS/src/std_abi_shim.rs:3136; TRUEOS/src/std_abi_shim.rs:3159; TRUEOS/src/std_abi_shim.rs:3165; TRUEOS/src/std_abi_shim.rs:7129	TRUEOS/src/hv/blueprint/blueprint.rs:1280
+Kernel sys_*	sys_log	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1277
+Kernel sys_*	sys_output	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1274
+Kernel sys_*	sys_panic	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1279
+Kernel sys_*	sys_rand	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1265
+Kernel sys_*	sys_read	registered candidate	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:3769	TRUEOS/src/hv/blueprint/blueprint.rs:1270
+Kernel sys_*	sys_sha_buffer	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1276
+Kernel sys_*	sys_sha_compress	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:3046	TRUEOS/src/hv/blueprint/blueprint.rs:1275
+Kernel sys_*	sys_write	registered candidate	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:3645	TRUEOS/src/hv/blueprint/blueprint.rs:1266
+Native CABI	trueos_cabi_alloc	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:2086
+Native CABI	trueos_cabi_archive_discard	registered candidate	app/package reference		TRUEOS/src/r/archive_cabi.rs:422
+Native CABI	trueos_cabi_archive_lz4_decode_start_v1	registered candidate	app/package reference	TRUEOS/src/hv/mod.rs:2710	TRUEOS/src/r/archive_cabi.rs:107
+Native CABI	trueos_cabi_archive_pack_many_start	registered candidate	SDK/dependency only		TRUEOS/src/r/archive_cabi.rs:313
+Native CABI	trueos_cabi_archive_pack_start	registered candidate	SDK/dependency only		TRUEOS/src/r/archive_cabi.rs:288
+Native CABI	trueos_cabi_archive_report	registered candidate	app/package reference		TRUEOS/src/r/archive_cabi.rs:379
+Native CABI	trueos_cabi_archive_result_len_v1	registered candidate	app/package reference		TRUEOS/src/r/archive_cabi.rs:125
+Native CABI	trueos_cabi_archive_result_read_v1	registered candidate	app/package reference		TRUEOS/src/r/archive_cabi.rs:134
+Native CABI	trueos_cabi_archive_status	registered candidate	app/package reference		TRUEOS/src/r/archive_cabi.rs:365
+Native CABI	trueos_cabi_archive_unpack_start	registered candidate	SDK/dependency only		TRUEOS/src/r/archive_cabi.rs:339
+Native CABI	trueos_cabi_async_fs_checked_write_begin_v1	registered candidate	app/package reference		TRUEOS/src/r/io/async_fs_cabi.rs:1479
+Native CABI	trueos_cabi_async_fs_create_dir_all_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:496; TRUEOS/src/r/io/fs_cabi.rs:739	TRUEOS/src/r/io/async_fs_cabi.rs:1569
+Native CABI	trueos_cabi_async_fs_discard	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2543; TRUEOS/src/std_abi_shim.rs:6587; TRUEOS/src/r/io.rs:496; TRUEOS/src/r/io/fs_cabi.rs:752; TRUEOS/src/r/io/fs_cabi.rs:755	TRUEOS/src/r/io/async_fs_cabi.rs:1836
+Native CABI	trueos_cabi_async_fs_list_dir_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:497	TRUEOS/src/r/io/async_fs_cabi.rs:1657
+Native CABI	trueos_cabi_async_fs_list_mounts_start	registered candidate	SDK/dependency only	TRUEOS/src/r/io.rs:497	TRUEOS/src/r/io/async_fs_cabi.rs:1693
+Native CABI	trueos_cabi_async_fs_metadata_start_v1	registered candidate	no consumer reference		TRUEOS/src/r/io/async_fs_cabi.rs:1629
+Native CABI	trueos_cabi_async_fs_metadata_start_v2	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2491	TRUEOS/src/r/io/async_fs_cabi.rs:1619
+Native CABI	trueos_cabi_async_fs_read_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:498	TRUEOS/src/r/io/async_fs_cabi.rs:1402
+Native CABI	trueos_cabi_async_fs_record_key_start	registered candidate	SDK/dependency only		TRUEOS/src/r/io/async_fs_cabi.rs:1641
+Native CABI	trueos_cabi_async_fs_remove_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:498	TRUEOS/src/r/io/async_fs_cabi.rs:1711
+Native CABI	trueos_cabi_async_fs_rename_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:499	TRUEOS/src/r/io/async_fs_cabi.rs:1727
+Native CABI	trueos_cabi_async_fs_result_len	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2508; TRUEOS/src/r/io.rs:499	TRUEOS/src/r/io/async_fs_cabi.rs:1788
+Native CABI	trueos_cabi_async_fs_result_read	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2517; TRUEOS/src/r/io.rs:500	TRUEOS/src/r/io/async_fs_cabi.rs:1802
+Native CABI	trueos_cabi_async_fs_select_files_start_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/async_fs_cabi.rs:1851
+Native CABI	trueos_cabi_async_fs_stat_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:500	TRUEOS/src/r/io/async_fs_cabi.rs:1585
+Native CABI	trueos_cabi_async_fs_status	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2502; TRUEOS/src/std_abi_shim.rs:6575; TRUEOS/src/r/io.rs:501; TRUEOS/src/r/io/fs_cabi.rs:747	TRUEOS/src/r/io/async_fs_cabi.rs:1774
+Native CABI	trueos_cabi_async_fs_typed_list_dir_start	registered candidate	app/package reference		TRUEOS/src/r/io/async_fs_cabi.rs:1673
+Native CABI	trueos_cabi_async_fs_typed_stat_start	registered candidate	app/package reference		TRUEOS/src/r/io/async_fs_cabi.rs:1601
+Native CABI	trueos_cabi_async_fs_typed_write_begin	registered candidate	app/package reference		TRUEOS/src/r/io/async_fs_cabi.rs:1448
+Native CABI	trueos_cabi_async_fs_write_begin	registered candidate	app/package reference	TRUEOS/src/r/io.rs:501	TRUEOS/src/r/io/async_fs_cabi.rs:1431
+Native CABI	trueos_cabi_async_fs_write_chunk	registered candidate	app/package reference	TRUEOS/src/r/io.rs:502	TRUEOS/src/r/io/async_fs_cabi.rs:1511
+Native CABI	trueos_cabi_async_fs_write_commit	registered candidate	app/package reference	TRUEOS/src/r/io.rs:502	TRUEOS/src/r/io/async_fs_cabi.rs:1554
+Native CABI	trueos_cabi_audio_buffer_frames	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:607
+Native CABI	trueos_cabi_audio_close	registered candidate	app/package reference		TRUEOS/src/aud/cabi.rs:347
+Native CABI	trueos_cabi_audio_drain	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:508
+Native CABI	trueos_cabi_audio_drop	registered candidate	app/package reference		TRUEOS/src/aud/cabi.rs:386
+Native CABI	trueos_cabi_audio_endpoint_caps_v1	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:639
+Native CABI	trueos_cabi_audio_monitor_read_i16_since	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:680
+Native CABI	trueos_cabi_audio_monitor_start_cursor	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:675
+Native CABI	trueos_cabi_audio_native_render_v1	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:876
+Native CABI	trueos_cabi_audio_native_render_v2	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:915
+Native CABI	trueos_cabi_audio_native_render_v3	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:952
+Native CABI	trueos_cabi_audio_native_sample_register_v1	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:988
+Native CABI	trueos_cabi_audio_native_sample_remove_v1	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:1020
+Native CABI	trueos_cabi_audio_open_playback	registered candidate	app/package reference		TRUEOS/src/aud/cabi.rs:261
+Native CABI	trueos_cabi_audio_paused	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:435
+Native CABI	trueos_cabi_audio_queued_frames	registered candidate	app/package reference		TRUEOS/src/aud/cabi.rs:593
+Native CABI	trueos_cabi_audio_set_paused	registered candidate	app/package reference		TRUEOS/src/aud/cabi.rs:407
+Native CABI	trueos_cabi_audio_set_volume_percent	registered candidate	app/package reference		TRUEOS/src/aud/cabi.rs:450
+Native CABI	trueos_cabi_audio_start	registered candidate	app/package reference		TRUEOS/src/aud/cabi.rs:363
+Native CABI	trueos_cabi_audio_state	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:618
+Native CABI	trueos_cabi_audio_volume_percent	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:488
+Native CABI	trueos_cabi_audio_write_i16_interleaved	registered candidate	app/package reference		TRUEOS/src/aud/cabi.rs:522
+Native CABI	trueos_cabi_audio_write_i16_stereo_48k	registered candidate	SDK/dependency only		TRUEOS/src/aud/cabi.rs:561
+Native CABI	trueos_cabi_blueprint_child_read_v1	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2927; TRUEOS/src/std_abi_shim.rs:3755	TRUEOS/src/r/io/fs_cabi.rs:1981
+Native CABI	trueos_cabi_blueprint_child_receive_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2022
+Native CABI	trueos_cabi_blueprint_child_send_v1	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2880	TRUEOS/src/r/io/fs_cabi.rs:1991
+Native CABI	trueos_cabi_blueprint_child_spawn_program_v1	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:1966
+Native CABI	trueos_cabi_blueprint_child_spawn_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:1933
+Native CABI	trueos_cabi_blueprint_child_status_v1	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:3757	TRUEOS/src/r/io/fs_cabi.rs:2054
+Native CABI	trueos_cabi_blueprint_child_terminate_v1	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2068
+Native CABI	trueos_cabi_blueprint_exit_reason	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2082
+Native CABI	trueos_cabi_blueprint_launch_script_v1	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2824
+Native CABI	trueos_cabi_blueprint_return_to_cli	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2308
+Native CABI	trueos_cabi_blueprint_shutdown	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2279
+Native CABI	trueos_cabi_blueprint_stop_control_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2110
+Native CABI	trueos_cabi_blueprint_terminal_lease_current_v1	registered candidate	app/package reference	TRUEOS/src/r/io/fs_cabi.rs:2696	TRUEOS/src/r/io/fs_cabi.rs:2381
+Native CABI	trueos_cabi_blueprint_terminal_lease_poll_reentry_v1	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2414
+Native CABI	trueos_cabi_blueprint_terminal_lease_release_v1	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2397
+Native CABI	trueos_cabi_blueprint_terminal_surface_snapshot_v1	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2434
+Native CABI	trueos_cabi_boot_timestamp_secs	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:1605	TRUEOS/src/std_abi_shim.rs:3094
+Native CABI	trueos_cabi_calculator_evaluate	registered candidate	app/package reference	TRUEOS/src/r/io/calculator_cabi.rs:52; TRUEOS/src/r/io/calculator_cabi.rs:64	TRUEOS/src/r/io/calculator_cabi.rs:8
+Native CABI	trueos_cabi_calloc	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:2091
+Native CABI	trueos_cabi_clipboard_command_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3028	TRUEOS/src/ui4/blueprint_ui4/clipboard_api.rs:13
+Native CABI	trueos_cabi_dns_resolve_ipv4	registered candidate	app/package reference	TRUEOS/src/hv/blueprint/prebind.rs:37	TRUEOS/src/std_abi_shim.rs:6941; TRUEOS/src/hv/blueprint/blueprint.rs:1283
+Native CABI	trueos_cabi_dobby_ui4_focus	registered candidate	app/package reference		TRUEOS/src/spirit/dobby_ui.rs:725
+Native CABI	trueos_cabi_dobby_ui4_key	registered candidate	app/package reference		TRUEOS/src/spirit/dobby_ui.rs:835
+Native CABI	trueos_cabi_dobby_ui4_observe_metadata	registered candidate	app/package reference		TRUEOS/src/spirit/dobby_ui.rs:749
+Native CABI	trueos_cabi_dobby_ui4_observe_prepare	registered candidate	app/package reference		TRUEOS/src/spirit/dobby_ui.rs:737
+Native CABI	trueos_cabi_dobby_ui4_observe_read	registered candidate	app/package reference		TRUEOS/src/spirit/dobby_ui.rs:773
+Native CABI	trueos_cabi_dobby_ui4_pointer	registered candidate	app/package reference		TRUEOS/src/spirit/dobby_ui.rs:798
+Native CABI	trueos_cabi_dobby_ui4_type	registered candidate	app/package reference		TRUEOS/src/spirit/dobby_ui.rs:814
+Native CABI	trueos_cabi_dobby_ui4_windows	registered candidate	app/package reference		TRUEOS/src/spirit/dobby_ui.rs:704
+Native CABI	trueos_cabi_env_arg	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:1715
+Native CABI	trueos_cabi_env_args_count	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:1678
+Native CABI	trueos_cabi_env_var	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:1738
+Native CABI	trueos_cabi_free	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:2096
+Native CABI	trueos_cabi_fs_read_file	prebind rejected	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:2416; TRUEOS/src/std_abi_shim.rs:2429	TRUEOS/src/r/io/fs_cabi.rs:1271
+Native CABI	trueos_cabi_fs_remove	prebind rejected	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:6419	TRUEOS/src/r/io/fs_cabi.rs:1598
+Native CABI	trueos_cabi_fs_typed_list_dir	prebind rejected	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:1571
+Native CABI	trueos_cabi_fs_typed_stat	prebind rejected	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:1512
+Native CABI	trueos_cabi_fs_typed_write_begin	prebind rejected	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:1346
+Native CABI	trueos_cabi_fs_write_abort	prebind rejected	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:2462	TRUEOS/src/r/io/fs_cabi.rs:1449
+Native CABI	trueos_cabi_fs_write_begin	prebind rejected	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:2446	TRUEOS/src/r/io/fs_cabi.rs:1312
+Native CABI	trueos_cabi_fs_write_chunk	prebind rejected	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:2459	TRUEOS/src/r/io/fs_cabi.rs:1415
+Native CABI	trueos_cabi_fs_write_finish	prebind rejected	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:2467	TRUEOS/src/r/io/fs_cabi.rs:1435
+Native CABI	trueos_cabi_gamepad_control_idle	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:998
+Native CABI	trueos_cabi_gamepad_control_release	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:963
+Native CABI	trueos_cabi_gamepad_control_request	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:935
+Native CABI	trueos_cabi_gamepad_control_snapshot	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:1005
+Native CABI	trueos_cabi_gamepad_control_submit	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:970
+Native CABI	trueos_cabi_gamepad_control_submit_json	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:983
+Native CABI	trueos_cabi_gridpaper_close	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1850	TRUEOS/src/r/services/gridpaper_service.rs:1782
+Native CABI	trueos_cabi_gridpaper_close_instance	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1783; TRUEOS/src/r/services/gridpaper_service.rs:1851	TRUEOS/src/r/services/gridpaper_service.rs:1787
+Native CABI	trueos_cabi_gridpaper_print_request_take	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1852	TRUEOS/src/r/services/gridpaper_service.rs:1806; TRUEOS/src/hv/blueprint/blueprint.rs:1321
+Native CABI	trueos_cabi_gridpaper_print_request_take_instance	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1807; TRUEOS/src/r/services/gridpaper_service.rs:1853	TRUEOS/src/r/services/gridpaper_service.rs:1811
+Native CABI	trueos_cabi_gridpaper_snapshot_checkpoint	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1837	TRUEOS/src/r/services/gridpaper_service.rs:1614
+Native CABI	trueos_cabi_gridpaper_snapshot_checkpoint_instance	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1619; TRUEOS/src/r/services/gridpaper_service.rs:1839	TRUEOS/src/r/services/gridpaper_service.rs:1624
+Native CABI	trueos_cabi_gridpaper_snapshot_submit	feature gated: gridpaper	app/package reference	TRUEOS/src/r/services/gridpaper_service.rs:1836	TRUEOS/src/r/services/gridpaper_service.rs:1556
+Native CABI	trueos_cabi_gridpaper_snapshot_submit_instance	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1565; TRUEOS/src/r/services/gridpaper_service.rs:1841	TRUEOS/src/r/services/gridpaper_service.rs:1576
+Native CABI	trueos_cabi_gridpaper_snapshot_submit_instance_sized	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1663; TRUEOS/src/r/services/gridpaper_service.rs:1845	TRUEOS/src/r/services/gridpaper_service.rs:1676
+Native CABI	trueos_cabi_gridpaper_snapshot_submit_sized	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1843	TRUEOS/src/r/services/gridpaper_service.rs:1654
+Native CABI	trueos_cabi_gridpaper_text_animations_submit	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1847	TRUEOS/src/r/services/gridpaper_service.rs:1738
+Native CABI	trueos_cabi_gridpaper_text_animations_submit_instance	feature gated: gridpaper	SDK/dependency only	TRUEOS/src/r/services/gridpaper_service.rs:1744; TRUEOS/src/r/services/gridpaper_service.rs:1849	TRUEOS/src/r/services/gridpaper_service.rs:1749
+Native CABI	trueos_cabi_heap_stats	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:2117
+Native CABI	trueos_cabi_hid_hut_read_keyboards	registered candidate	SDK/dependency only		TRUEOS/src/usb3/hid/mod.rs:833
+Native CABI	trueos_cabi_hid_hut_read_mice	registered candidate	SDK/dependency only		TRUEOS/src/usb3/hid/mod.rs:803
+Native CABI	trueos_cabi_hid_hut_read_tablets	registered candidate	SDK/dependency only		TRUEOS/src/usb3/hid/mod.rs:818
+Native CABI	trueos_cabi_hid_keyboard_read	registered candidate	app/package reference		TRUEOS/src/usb3/hid/mod.rs:755
+Native CABI	trueos_cabi_hid_mouse_read	registered candidate	SDK/dependency only		TRUEOS/src/usb3/hid/mod.rs:731
+Native CABI	trueos_cabi_hid_tablet_read	registered candidate	SDK/dependency only		TRUEOS/src/usb3/hid/mod.rs:779
+Native CABI	trueos_cabi_image_source_info	registered candidate	app/package reference		TRUEOS/src/ui4/blueprint_ui4.rs:4787
+Native CABI	trueos_cabi_image_source_read	registered candidate	app/package reference		TRUEOS/src/ui4/blueprint_ui4.rs:4811
+Native CABI	trueos_cabi_img_open_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:1883
+Native CABI	trueos_cabi_input_combo_bind_gamepad	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:1119
+Native CABI	trueos_cabi_input_combo_bind_keyboard	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:1091
+Native CABI	trueos_cabi_input_combo_bind_mouse	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:1077
+Native CABI	trueos_cabi_input_combo_bind_tablet	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:1105
+Native CABI	trueos_cabi_input_combo_read	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:1142
+Native CABI	trueos_cabi_input_combo_remove	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:1133
+Native CABI	trueos_cabi_input_combo_request	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:1035
+Native CABI	trueos_cabi_input_combo_set_color	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:1068
+Native CABI	trueos_cabi_input_cursor_buttons	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:643
+Native CABI	trueos_cabi_input_cursor_pos	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:552
+Native CABI	trueos_cabi_input_midi_read_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:610
+Native CABI	trueos_cabi_input_pop_keyboard_output	registered candidate	SDK/dependency only		TRUEOS/src/r/io/input_cabi.rs:580
+Native CABI	trueos_cabi_input_read_cursor_events_since	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:661
+Native CABI	trueos_cabi_input_read_keyboard_output_since	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:590
+Native CABI	trueos_cabi_input_write_cursor	registered candidate	app/package reference		TRUEOS/src/r/io/input_cabi.rs:681
+Native CABI	trueos_cabi_keyboard_control_idle	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:3761	TRUEOS/src/r/io/input_cabi.rs:925
+Native CABI	trueos_cabi_keyboard_control_release	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3705	TRUEOS/src/r/io/input_cabi.rs:841
+Native CABI	trueos_cabi_keyboard_control_request	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3687	TRUEOS/src/r/io/input_cabi.rs:804
+Native CABI	trueos_cabi_keyboard_control_submit	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3721	TRUEOS/src/r/io/input_cabi.rs:856
+Native CABI	trueos_cabi_keyboard_control_submit_json	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:3750	TRUEOS/src/r/io/input_cabi.rs:902
+Native CABI	trueos_cabi_keyboard_control_submit_text	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:3734	TRUEOS/src/r/io/input_cabi.rs:877
+Native CABI	trueos_cabi_konsole_begin_frame	registered candidate	app/package reference		TRUEOS/src/r/io/fs_cabi.rs:2513
+Native CABI	trueos_cabi_konsole_end_frame	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2621
+Native CABI	trueos_cabi_konsole_set_cursor	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2601
+Native CABI	trueos_cabi_konsole_size	registered candidate	app/package reference	TRUEOS/src/unix_abi_shim.rs:445	TRUEOS/src/r/io/fs_cabi.rs:2489
+Native CABI	trueos_cabi_konsole_write_row	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2557
+Native CABI	trueos_cabi_lifecycle_checkpoint_restore	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2215
+Native CABI	trueos_cabi_lifecycle_identity	registered candidate	app/package reference	TRUEOS/src/hv/mod.rs:2932	TRUEOS/src/r/io/fs_cabi.rs:2244
+Native CABI	trueos_cabi_lifecycle_poll	registered candidate	app/package reference	TRUEOS/src/hv/mod.rs:2930	TRUEOS/src/r/io/fs_cabi.rs:2128
+Native CABI	trueos_cabi_lifecycle_ready	registered candidate	app/package reference	TRUEOS/src/hv/mod.rs:2931	TRUEOS/src/r/io/fs_cabi.rs:2165
+Native CABI	trueos_cabi_lifecycle_ready_with_checkpoint	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2184
+Native CABI	trueos_cabi_log	registered candidate	app/package reference	TRUEOS/src/hv/guest_run.rs:247	TRUEOS/src/r/io/fs_cabi.rs:223
+Native CABI	trueos_cabi_lumen_checkpoint_read	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1161
+Native CABI	trueos_cabi_lumen_checkpoint_request	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1145
+Native CABI	trueos_cabi_lumen_close	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1254
+Native CABI	trueos_cabi_lumen_prompt_submit	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:924
+Native CABI	trueos_cabi_lumen_prompt_submit_with_no_argument_tool_v1	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:977
+Native CABI	trueos_cabi_lumen_reply_read	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1120
+Native CABI	trueos_cabi_lumen_restore_begin	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1190
+Native CABI	trueos_cabi_lumen_restore_commit	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1238
+Native CABI	trueos_cabi_lumen_restore_write	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1209
+Native CABI	trueos_cabi_lumen_status	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1088
+Native CABI	trueos_cabi_lumen_template_open	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:892
+Native CABI	trueos_cabi_lumen_tool_result_submit	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1038
+Native CABI	trueos_cabi_malloc_usable_size	registered candidate	app/package reference	TRUEOS/src/blueprint_shims.rs:32	TRUEOS/src/std_abi_shim.rs:2106
+Native CABI	trueos_cabi_mouse_motion_cursor_idle	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:3676	TRUEOS/src/r/io/input_cabi.rs:789
+Native CABI	trueos_cabi_mouse_motion_cursor_release	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3639	TRUEOS/src/r/io/input_cabi.rs:730
+Native CABI	trueos_cabi_mouse_motion_cursor_request	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3621	TRUEOS/src/r/io/input_cabi.rs:693
+Native CABI	trueos_cabi_mouse_motion_submit	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3655	TRUEOS/src/r/io/input_cabi.rs:745
+Native CABI	trueos_cabi_mouse_motion_submit_json	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:3665	TRUEOS/src/r/io/input_cabi.rs:766
+Native CABI	trueos_cabi_mouse_poll	registered candidate	app/package reference		TRUEOS/src/usb3/hid/input.rs:287
+Native CABI	trueos_cabi_net_fetch_bytes_discard	registered candidate	app/package reference	TRUEOS/src/r/io.rs:509	TRUEOS/src/r/net/https.rs:2270
+Native CABI	trueos_cabi_net_fetch_bytes_read	registered candidate	app/package reference	TRUEOS/src/r/io.rs:509	TRUEOS/src/r/net/https.rs:2253
+Native CABI	trueos_cabi_net_fetch_bytes_result_len	registered candidate	app/package reference	TRUEOS/src/r/io.rs:510; TRUEOS/src/r/net/https.rs:2259	TRUEOS/src/r/net/https.rs:2244
+Native CABI	trueos_cabi_net_fetch_bytes_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:510	TRUEOS/src/r/net/https.rs:2104
+Native CABI	trueos_cabi_net_fetch_bytes_start_happy_eyeballs	registered candidate	app/package reference		TRUEOS/src/r/net/https.rs:2604
+Native CABI	trueos_cabi_net_fetch_bytes_wait	registered candidate	app/package reference	TRUEOS/src/r/io.rs:511	TRUEOS/src/r/net/https.rs:2279
+Native CABI	trueos_cabi_net_fetch_discard	registered candidate	app/package reference	TRUEOS/src/r/io.rs:511	TRUEOS/src/r/net/https.rs:2239
+Native CABI	trueos_cabi_net_fetch_post_json_bytes_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:512	TRUEOS/src/r/net/https.rs:2188
+Native CABI	trueos_cabi_net_fetch_post_json_bytes_start_with_timeout	registered candidate	app/package reference	TRUEOS/src/r/io.rs:513; TRUEOS/src/r/net/https.rs:2197	TRUEOS/src/r/net/https.rs:2204
+Native CABI	trueos_cabi_net_fetch_post_json_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:514	TRUEOS/src/r/net/https.rs:2131
+Native CABI	trueos_cabi_net_fetch_post_json_start_with_timeout	registered candidate	SDK/dependency only	TRUEOS/src/r/io.rs:514; TRUEOS/src/r/net/https.rs:2142	TRUEOS/src/r/net/https.rs:2150
+Native CABI	trueos_cabi_net_fetch_result	registered candidate	app/package reference	TRUEOS/src/r/io.rs:515	TRUEOS/src/r/net/https.rs:2234
+Native CABI	trueos_cabi_net_fetch_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:515	TRUEOS/src/r/net/https.rs:2088
+Native CABI	trueos_cabi_net_fetch_wait	registered candidate	app/package reference	TRUEOS/src/r/io.rs:515	TRUEOS/src/r/net/https.rs:2317
+Native CABI	trueos_cabi_net_prewarm_url_start	registered candidate	app/package reference	TRUEOS/src/r/io.rs:516	TRUEOS/src/r/net/https.rs:2119
+Native CABI	trueos_cabi_ntp_current_unix_seconds	registered candidate	SDK/dependency only		TRUEOS/src/std_abi_shim.rs:3104
+Native CABI	trueos_cabi_ntp_kernel_date_day_month_year	registered candidate	SDK/dependency only		TRUEOS/src/std_abi_shim.rs:3111
+Native CABI	trueos_cabi_poll_once	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2503; TRUEOS/src/std_abi_shim.rs:6576; TRUEOS/src/std_abi_shim.rs:7001	TRUEOS/src/r/io/fs_cabi.rs:328
+Native CABI	trueos_cabi_qjs_mouse_pop	registered candidate	app/package reference		TRUEOS/src/usb3/hid/input.rs:409
+Native CABI	trueos_cabi_realloc	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:2101
+Native CABI	trueos_cabi_shell2_frontend_attach_v1	registered candidate	no consumer reference		TRUEOS/src/r/io/fs_cabi.rs:1860
+Native CABI	trueos_cabi_shell2_frontend_detach_v1	registered candidate	no consumer reference		TRUEOS/src/r/io/fs_cabi.rs:1874
+Native CABI	trueos_cabi_shell2_frontend_read_v1	registered candidate	no consumer reference		TRUEOS/src/r/io/fs_cabi.rs:1863
+Native CABI	trueos_cabi_shell2_frontend_submit_input_v1	registered candidate	no consumer reference		TRUEOS/src/r/io/fs_cabi.rs:1869
+Native CABI	trueos_cabi_shell2_raw_write	registered candidate	no consumer reference		TRUEOS/src/r/io/fs_cabi.rs:1857
+Native CABI	trueos_cabi_shell3_session_control_v1	registered candidate	app/package reference		TRUEOS/src/r/io/shell3_sessions_cabi.rs:53
+Native CABI	trueos_cabi_shell3_session_open_v1	registered candidate	app/package reference		TRUEOS/src/r/io/shell3_sessions_cabi.rs:3
+Native CABI	trueos_cabi_shell3_session_read_v1	registered candidate	app/package reference		TRUEOS/src/r/io/shell3_sessions_cabi.rs:22
+Native CABI	trueos_cabi_shell3_session_write_v1	registered candidate	app/package reference		TRUEOS/src/r/io/shell3_sessions_cabi.rs:38
+Native CABI	trueos_cabi_shell3_window_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2854
+Native CABI	trueos_cabi_shell_attached_read_byte	registered candidate	app/package reference	TRUEOS/src/hv/mod.rs:3090	TRUEOS/src/r/io/fs_cabi.rs:2650
+Native CABI	trueos_cabi_shell_attached_retarget_slot	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:2738
+Native CABI	trueos_cabi_shell_attached_write	registered candidate	app/package reference	TRUEOS/src/r/io/fs_cabi.rs:185	TRUEOS/src/r/io/fs_cabi.rs:1821
+Native CABI	trueos_cabi_sleep_ms	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2883; TRUEOS/src/std_abi_shim.rs:3617; TRUEOS/src/std_abi_shim.rs:3763; TRUEOS/src/std_abi_shim.rs:3781; TRUEOS/src/std_abi_shim.rs:6291; TRUEOS/src/unix_abi_shim.rs:406	TRUEOS/src/r/io/fs_cabi.rs:344
+Native CABI	trueos_cabi_smtp_configure_account	registered candidate	SDK/dependency only		TRUEOS/src/r/net/smtp_cabi.rs:141
+Native CABI	trueos_cabi_smtp_discard	registered candidate	SDK/dependency only		TRUEOS/src/r/net/smtp_cabi.rs:214
+Native CABI	trueos_cabi_smtp_password_configured	registered candidate	SDK/dependency only		TRUEOS/src/r/net/smtp_cabi.rs:162
+Native CABI	trueos_cabi_smtp_result	registered candidate	SDK/dependency only	TRUEOS/src/r/net/smtp_cabi.rs:226	TRUEOS/src/r/net/smtp_cabi.rs:206
+Native CABI	trueos_cabi_smtp_send_text_start	registered candidate	SDK/dependency only		TRUEOS/src/r/net/smtp_cabi.rs:171
+Native CABI	trueos_cabi_smtp_wait	registered candidate	SDK/dependency only		TRUEOS/src/r/net/smtp_cabi.rs:220
+Native CABI	trueos_cabi_socket_tcp_bind_v4	registered candidate	no consumer reference		TRUEOS/src/r/net/socket_cabi.rs:998
+Native CABI	trueos_cabi_socket_tcp_bind_v6	registered candidate	no consumer reference		TRUEOS/src/r/net/socket_cabi.rs:1014
+Native CABI	trueos_cabi_socket_tcp_close	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4032; TRUEOS/src/std_abi_shim.rs:4282; TRUEOS/src/std_abi_shim.rs:4497; TRUEOS/src/std_abi_shim.rs:5545	TRUEOS/src/r/net/socket_cabi.rs:978
+Native CABI	trueos_cabi_socket_tcp_connect_v4	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4507	TRUEOS/src/r/net/socket_cabi.rs:1039
+Native CABI	trueos_cabi_socket_tcp_connect_v6	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4513	TRUEOS/src/r/net/socket_cabi.rs:1056
+Native CABI	trueos_cabi_socket_tcp_open	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4010	TRUEOS/src/r/net/socket_cabi.rs:966
+Native CABI	trueos_cabi_socket_tcp_peer_v4	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:5954	TRUEOS/src/r/net/socket_cabi.rs:1213
+Native CABI	trueos_cabi_socket_tcp_peer_v6	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:5966	TRUEOS/src/r/net/socket_cabi.rs:1262
+Native CABI	trueos_cabi_socket_tcp_poll_connect	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:3959	TRUEOS/src/r/net/socket_cabi.rs:1082
+Native CABI	trueos_cabi_socket_tcp_recv	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4895	TRUEOS/src/r/net/socket_cabi.rs:1142
+Native CABI	trueos_cabi_socket_tcp_send	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4781	TRUEOS/src/r/net/socket_cabi.rs:1094
+Native CABI	trueos_cabi_socket_tcp_set_nonblocking	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4122; TRUEOS/src/std_abi_shim.rs:4556	TRUEOS/src/r/net/socket_cabi.rs:986
+Native CABI	trueos_cabi_socket_tcp_shutdown	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4405	TRUEOS/src/r/net/socket_cabi.rs:1193
+Native CABI	trueos_cabi_socket_tcp_take_error	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4638	TRUEOS/src/r/net/socket_cabi.rs:1205
+Native CABI	trueos_cabi_spirit_emotion_play	registered candidate	app/package reference		TRUEOS/src/ai/lumen_service.rs:1267
+Native CABI	trueos_cabi_spirit_move	registered candidate	app/package reference		TRUEOS/src/ai/lumen_service.rs:1367
+Native CABI	trueos_cabi_spirit_response_present	registered candidate	SDK/dependency only		TRUEOS/src/ai/lumen_service.rs:1325
+Native CABI	trueos_cabi_spirit_text_present_silent	registered candidate	app/package reference		TRUEOS/src/ai/lumen_service.rs:1298
+Native CABI	trueos_cabi_thread_available_parallelism	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:7856
+Native CABI	trueos_cabi_thread_current_id	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:3099
+Native CABI	trueos_cabi_thread_detach	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:7851
+Native CABI	trueos_cabi_thread_join	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:7846
+Native CABI	trueos_cabi_thread_set_name	registered candidate	app/package reference		TRUEOS/src/std_abi_shim.rs:7861
+Native CABI	trueos_cabi_thread_spawn	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:7738	TRUEOS/src/std_abi_shim.rs:7742
+Native CABI	trueos_cabi_tun_close	registered candidate	SDK/dependency only	TRUEOS/src/r/io.rs:519	TRUEOS/src/r/net/socket_cabi.rs:934
+Native CABI	trueos_cabi_tun_open	registered candidate	SDK/dependency only	TRUEOS/src/r/io.rs:519	TRUEOS/src/r/net/socket_cabi.rs:916
+Native CABI	trueos_cabi_tun_recv	registered candidate	SDK/dependency only	TRUEOS/src/r/io.rs:519	TRUEOS/src/r/net/socket_cabi.rs:952
+Native CABI	trueos_cabi_tun_send	registered candidate	SDK/dependency only	TRUEOS/src/r/io.rs:519	TRUEOS/src/r/net/socket_cabi.rs:939
+Native CABI	trueos_cabi_ui4_context_menu_dynamic_v2	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:1999	TRUEOS/src/ui4/blueprint_ui4.rs:1985
+Native CABI	trueos_cabi_ui4_context_menu_event_take	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2040	TRUEOS/src/ui4/blueprint_ui4.rs:2133
+Native CABI	trueos_cabi_ui4_context_menu_event_take_v2	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2022	TRUEOS/src/ui4/blueprint_ui4.rs:1997
+Native CABI	trueos_cabi_ui4_context_menu_register	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2006	TRUEOS/src/ui4/blueprint_ui4.rs:2036
+Native CABI	trueos_cabi_ui4_display_close_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2959	TRUEOS/src/ui4/blueprint_ui4/display_api.rs:56
+Native CABI	trueos_cabi_ui4_display_open_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2955	TRUEOS/src/ui4/blueprint_ui4/display_api.rs:21
+Native CABI	trueos_cabi_ui4_display_retain_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2957	TRUEOS/src/ui4/blueprint_ui4/display_api.rs:36
+Native CABI	trueos_cabi_ui4_display_validate_window_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2960	TRUEOS/src/ui4/blueprint_ui4/display_api.rs:76
+Native CABI	trueos_cabi_ui4_drag_begin_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2730	TRUEOS/src/ui4/blueprint_ui4/drag_drop_api.rs:27
+Native CABI	trueos_cabi_ui4_drag_cancel_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2736	TRUEOS/src/ui4/blueprint_ui4/drag_drop_api.rs:77
+Native CABI	trueos_cabi_ui4_drag_take_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2742	TRUEOS/src/ui4/blueprint_ui4/drag_drop_api.rs:92
+Native CABI	trueos_cabi_ui4_scene_compute_frame_publish	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2104	TRUEOS/src/ui4/blueprint_ui4.rs:4747
+Native CABI	trueos_cabi_ui4_scene_display_fade_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2400	TRUEOS/src/ui4/blueprint_ui4.rs:2995
+Native CABI	trueos_cabi_ui4_scene_enable_collapse_v1	registered candidate	app/package reference		TRUEOS/src/ui4/blueprint_ui4/collapse_api.rs:9
+Native CABI	trueos_cabi_ui4_scene_first_presentation_take	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2701	TRUEOS/src/ui4/blueprint_ui4.rs:2397
+Native CABI	trueos_cabi_ui4_scene_frame_get_position	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2342	TRUEOS/src/ui4/blueprint_ui4.rs:2877
+Native CABI	trueos_cabi_ui4_scene_frame_layer_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2507	TRUEOS/src/ui4/blueprint_ui4.rs:1006
+Native CABI	trueos_cabi_ui4_scene_frame_open_immutable	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2544	TRUEOS/src/ui4/blueprint_ui4.rs:792
+Native CABI	trueos_cabi_ui4_scene_frame_open_layered_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2457	TRUEOS/src/ui4/blueprint_ui4.rs:843
+Native CABI	trueos_cabi_ui4_scene_frame_open_streaming	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2517	TRUEOS/src/ui4/blueprint_ui4.rs:817
+Native CABI	trueos_cabi_ui4_scene_frame_open_visual	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2535	TRUEOS/src/ui4/blueprint_ui4.rs:1044
+Native CABI	trueos_cabi_ui4_scene_frame_primary_activation	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2332	TRUEOS/src/ui4/blueprint_ui4.rs:3184
+Native CABI	trueos_cabi_ui4_scene_frame_publish_tracked_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2071	TRUEOS/src/ui4/blueprint_ui4.rs:4474
+Native CABI	trueos_cabi_ui4_scene_frame_resize	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2443	TRUEOS/src/ui4/blueprint_ui4.rs:3501
+Native CABI	trueos_cabi_ui4_scene_frame_set_arc	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2417	TRUEOS/src/ui4/blueprint_ui4.rs:3248
+Native CABI	trueos_cabi_ui4_scene_frame_set_escape_key_action	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2434	TRUEOS/src/ui4/blueprint_ui4.rs:3281
+Native CABI	trueos_cabi_ui4_scene_frame_set_hit_testable	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2426	TRUEOS/src/ui4/blueprint_ui4.rs:3216
+Native CABI	trueos_cabi_ui4_scene_frame_set_opacity	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2406	TRUEOS/src/ui4/blueprint_ui4.rs:3146
+Native CABI	trueos_cabi_ui4_scene_frame_set_position	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2356	TRUEOS/src/ui4/blueprint_ui4.rs:2925
+Native CABI	trueos_cabi_ui4_scene_frame_was_presented_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2705	TRUEOS/src/ui4/blueprint_ui4.rs:2425
+Native CABI	trueos_cabi_ui4_scene_frame_write_opaque_rgba8	registered candidate	app/package reference		TRUEOS/src/ui4/blueprint_ui4.rs:3686
+Native CABI	trueos_cabi_ui4_scene_input_routes	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3059	TRUEOS/src/ui4/blueprint_ui4.rs:2598
+Native CABI	trueos_cabi_ui4_scene_keyboard_event_take	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2895	TRUEOS/src/ui4/blueprint_ui4.rs:2170
+Native CABI	trueos_cabi_ui4_scene_keyboard_event_take_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3010	TRUEOS/src/ui4/blueprint_ui4.rs:2325
+Native CABI	trueos_cabi_ui4_scene_keyboard_state	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:3041	TRUEOS/src/ui4/blueprint_ui4.rs:2550
+Native CABI	trueos_cabi_ui4_scene_output_dimensions	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2721	TRUEOS/src/ui4/blueprint_ui4.rs:2459
+Native CABI	trueos_cabi_ui4_scene_pan_event_take	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2671	TRUEOS/src/ui4/blueprint_ui4.rs:2359
+Native CABI	trueos_cabi_ui4_scene_particle_craft_render	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2243	TRUEOS/src/ui4/blueprint_ui4.rs:4134
+Native CABI	trueos_cabi_ui4_scene_physical_extent_v1	registered candidate	SDK/dependency only		TRUEOS/src/ui4/blueprint_ui4.rs:2488
+Native CABI	trueos_cabi_ui4_scene_pointer_event_take	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2880	TRUEOS/src/ui4/blueprint_ui4.rs:1876
+Native CABI	trueos_cabi_ui4_scene_register_cursor_image_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2766; TRUEOS/src/ui4/blueprint_ui4.rs:13	TRUEOS/src/ui4/blueprint_ui4/cursor_image_api.rs:13
+Native CABI	trueos_cabi_ui4_scene_resize_event_take	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2686	TRUEOS/src/ui4/blueprint_ui4.rs:2504
+Native CABI	trueos_cabi_ui4_scene_select_cursor_image_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2781; TRUEOS/src/ui4/blueprint_ui4.rs:13	TRUEOS/src/ui4/blueprint_ui4/cursor_image_api.rs:82
+Native CABI	trueos_cabi_ui4_scene_set_center_snapped_mouse	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2870	TRUEOS/src/ui4/blueprint_ui4.rs:3469
+Native CABI	trueos_cabi_ui4_scene_set_cursor_icon	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2821	TRUEOS/src/ui4/blueprint_ui4.rs:3347
+Native CABI	trueos_cabi_ui4_scene_set_cursor_step	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2856	TRUEOS/src/ui4/blueprint_ui4.rs:3409
+Native CABI	trueos_cabi_ui4_scene_set_custom_cursor	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2789	TRUEOS/src/ui4/blueprint_ui4.rs:3317
+Native CABI	trueos_cabi_ui4_scene_set_display_bottom_color	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2368	TRUEOS/src/ui4/blueprint_ui4.rs:2960
+Native CABI	trueos_cabi_ui4_scene_set_display_gamma_ramp	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2385	TRUEOS/src/ui4/blueprint_ui4.rs:3063
+Native CABI	trueos_cabi_ui4_scene_shadertoy_render	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2299	TRUEOS/src/ui4/blueprint_ui4.rs:4348
+Native CABI	trueos_cabi_ui4_scene_shadertoy_upload_v1	registered candidate	app/package reference		TRUEOS/src/ui4/blueprint_ui4.rs:4248
+Native CABI	trueos_cabi_ui4_scene_skybox_register_kernel	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2139	TRUEOS/src/ui4/blueprint_ui4.rs:3864
+Native CABI	trueos_cabi_ui4_scene_skybox_render_rgb565	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2203	TRUEOS/src/ui4/blueprint_ui4.rs:4004
+Native CABI	trueos_cabi_ui4_scene_skybox_upload_rgb565	registered candidate	SDK/dependency only		TRUEOS/src/ui4/blueprint_ui4.rs:3941
+Native CABI	trueos_cabi_ui4_scene_sprite_frame_begin	registered candidate	app/package reference		TRUEOS/src/ui4/blueprint_ui4.rs:1417
+Native CABI	trueos_cabi_ui4_scene_sprite_frame_begin_region_v1	registered candidate	SDK/dependency only		TRUEOS/src/ui4/blueprint_ui4.rs:1436
+Native CABI	trueos_cabi_ui4_scene_sprite_quads	registered candidate	app/package reference		TRUEOS/src/ui4/blueprint_ui4.rs:3795
+Native CABI	trueos_cabi_ui4_scene_sprite_upload_rgba8	registered candidate	app/package reference		TRUEOS/src/ui4/blueprint_ui4.rs:3723
+Native CABI	trueos_cabi_ui4_scene_visual_frame_begin	registered candidate	SDK/dependency only		TRUEOS/src/ui4/blueprint_ui4.rs:1683
+Native CABI	trueos_cabi_ui4_scene_window_state_get_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2909; TRUEOS/src/hv/vmcall.rs:2919	TRUEOS/src/ui4/blueprint_ui4.rs:2203
+Native CABI	trueos_cabi_ui4_scene_window_state_set_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2910; TRUEOS/src/hv/vmcall.rs:2934	TRUEOS/src/ui4/blueprint_ui4.rs:2231
+Native CABI	trueos_cabi_ui4_scene_window_title_get_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2967; TRUEOS/src/hv/vmcall.rs:2978	TRUEOS/src/ui4/blueprint_ui4.rs:2262
+Native CABI	trueos_cabi_ui4_scene_window_title_set_v1	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2968; TRUEOS/src/hv/vmcall.rs:2995	TRUEOS/src/ui4/blueprint_ui4.rs:2295
+Native CABI	trueos_cabi_ui4_solara_frame_begin	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:1933	TRUEOS/src/ui4/blueprint_ui4.rs:1399
+Native CABI	trueos_cabi_ui4_solara_frame_close	registered candidate	app/package reference	TRUEOS/src/ui4/blueprint_ui4.rs:893; TRUEOS/src/ui4/blueprint_ui4.rs:966; TRUEOS/src/ui4/blueprint_ui4.rs:988	TRUEOS/src/ui4/blueprint_ui4.rs:4783
+Native CABI	trueos_cabi_ui4_solara_frame_close_requested	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2115; TRUEOS/src/ui4/blueprint_ui4.rs:4784	TRUEOS/src/ui4/blueprint_ui4.rs:4834
+Native CABI	trueos_cabi_ui4_solara_frame_open	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:1928	TRUEOS/src/ui4/blueprint_ui4.rs:763
+Native CABI	trueos_cabi_ui4_solara_frame_publish	registered candidate	app/package reference	TRUEOS/src/hv/vmcall.rs:2082; TRUEOS/src/ui4/blueprint_ui4.rs:4780	TRUEOS/src/ui4/blueprint_ui4.rs:4462
+Native CABI	trueos_cabi_ui4_winit_frame_open_scaled_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2493; TRUEOS/src/ui4/blueprint_ui4.rs:909	TRUEOS/src/ui4/blueprint_ui4.rs:913
+Native CABI	trueos_cabi_ui4_winit_frame_open_v1	registered candidate	SDK/dependency only	TRUEOS/src/hv/vmcall.rs:2475	TRUEOS/src/ui4/blueprint_ui4.rs:902
+Native CABI	trueos_cabi_vgpu_buffer_create	registered candidate	app/package reference	TRUEOS/src/r/io/vgpu_cabi.rs:122	TRUEOS/src/r/io/vgpu_cabi.rs:1196
+Native CABI	trueos_cabi_vgpu_buffer_destroy	registered candidate	app/package reference	TRUEOS/src/r/io/vgpu_cabi.rs:138	TRUEOS/src/r/io/vgpu_cabi.rs:1672
+Native CABI	trueos_cabi_vgpu_buffer_info	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1778
+Native CABI	trueos_cabi_vgpu_buffer_read	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1725
+Native CABI	trueos_cabi_vgpu_buffer_write	registered candidate	app/package reference	TRUEOS/src/r/io/vgpu_cabi.rs:130	TRUEOS/src/r/io/vgpu_cabi.rs:1681
+Native CABI	trueos_cabi_vgpu_call_f32_v1	registered candidate	no consumer reference		TRUEOS/src/r/io/vgpu_cabi.rs:95
+Native CABI	trueos_cabi_vgpu_close	registered candidate	app/package reference	TRUEOS/src/r/io/vgpu_cabi.rs:143	TRUEOS/src/r/io/vgpu_cabi.rs:1143
+Native CABI	trueos_cabi_vgpu_device_diagnostics	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1174
+Native CABI	trueos_cabi_vgpu_device_info	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1152
+Native CABI	trueos_cabi_vgpu_offscreen_indexed_batch_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1437
+Native CABI	trueos_cabi_vgpu_open	registered candidate	app/package reference	TRUEOS/src/r/io/vgpu_cabi.rs:110	TRUEOS/src/r/io/vgpu_cabi.rs:1124
+Native CABI	trueos_cabi_vgpu_queue_create	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1880
+Native CABI	trueos_cabi_vgpu_queue_destroy	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1903
+Native CABI	trueos_cabi_vgpu_render_pipeline_create	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1332
+Native CABI	trueos_cabi_vgpu_render_pipeline_destroy	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1366
+Native CABI	trueos_cabi_vgpu_retained_frame_submit	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1548
+Native CABI	trueos_cabi_vgpu_retained_frame_submit_v2	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1579
+Native CABI	trueos_cabi_vgpu_retained_frame_submit_v3	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1610
+Native CABI	trueos_cabi_vgpu_retained_frame_submit_v4	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1641
+Native CABI	trueos_cabi_vgpu_retained_mesh_create	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1509
+Native CABI	trueos_cabi_vgpu_retained_mesh_destroy	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1539
+Native CABI	trueos_cabi_vgpu_retained_textured_frame_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1996
+Native CABI	trueos_cabi_vgpu_scalar_f32_v1	registered candidate	SDK/dependency only	TRUEOS/src/r/io/vgpu_cabi.rs:132	TRUEOS/src/r/io/vgpu_cabi.rs:49
+Native CABI	trueos_cabi_vgpu_shader_module_create	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1295
+Native CABI	trueos_cabi_vgpu_shader_module_destroy	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1323
+Native CABI	trueos_cabi_vgpu_submit_control_nop	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1912
+Native CABI	trueos_cabi_vgpu_timeline	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1935
+Native CABI	trueos_cabi_vgpu_ui4_indexed_batch_submit	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1406
+Native CABI	trueos_cabi_vgpu_ui4_indexed_batch_submit_v2	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1473
+Native CABI	trueos_cabi_vgpu_ui4_indexed_submit	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1375
+Native CABI	trueos_cabi_vgpu_ui4_surface_acquire	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1225
+Native CABI	trueos_cabi_vgpu_ui4_surface_clear_submit	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1262
+Native CABI	trueos_cabi_vgpu_ui4_surface_discard	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1253
+Native CABI	trueos_cabi_vgpu_vvideo_create	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1801
+Native CABI	trueos_cabi_vgpu_vvideo_flush	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1854
+Native CABI	trueos_cabi_vgpu_vvideo_invalidate	registered candidate	SDK/dependency only		TRUEOS/src/r/io/vgpu_cabi.rs:1864
+Native CABI	trueos_cabi_vgpu_wait	registered candidate	app/package reference		TRUEOS/src/r/io/vgpu_cabi.rs:1958
+Native CABI	trueos_cabi_vid_open_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:1926
+Native CABI	trueos_cabi_vid_open_v2	registered candidate	SDK/dependency only		TRUEOS/src/r/io/fs_cabi.rs:1921
+Native CABI	trueos_cabi_vmedia_image_decode_begin	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:17
+Native CABI	trueos_cabi_vmedia_image_decode_commit	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:89
+Native CABI	trueos_cabi_vmedia_image_decode_discard	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:250
+Native CABI	trueos_cabi_vmedia_image_decode_info	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:115
+Native CABI	trueos_cabi_vmedia_image_decode_read	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:203
+Native CABI	trueos_cabi_vmedia_image_decode_status	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:102
+Native CABI	trueos_cabi_vmedia_image_decode_write	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:51
+Native CABI	trueos_cabi_vmedia_texture_decode_begin	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:30
+Native CABI	trueos_cabi_vmedia_texture_decode_info	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:156
+Native CABI	trueos_cabi_vmedia_texture_release	registered candidate	app/package reference		TRUEOS/src/r/media_cabi.rs:263
+Native CABI	trueos_cabi_vmedia_video_command_v1	registered candidate	SDK/dependency only		TRUEOS/src/r/video_cabi.rs:4
+Native CABI	trueos_cabi_wls_current_slot	registered candidate	SDK/dependency only	TRUEOS/src/hv/blueprint/prebind.rs:67; TRUEOS/src/r/threads/tests.rs:87; TRUEOS/src/r/threads/tests.rs:89; TRUEOS/src/r/threads/tests.rs:118; TRUEOS/src/r/threads/tests.rs:121	TRUEOS/src/wls.rs:346; TRUEOS/src/hv/blueprint/blueprint.rs:1210
+Native CABI	trueos_cabi_write	registered candidate	app/package reference	TRUEOS/src/r/io/fs_cabi.rs:323	TRUEOS/src/r/io/fs_cabi.rs:203
+Native CABI	trueos_cabi_write_cstr	registered candidate	no consumer reference		TRUEOS/src/r/io/fs_cabi.rs:314
+Platform / std bridge	_embassy_time_now	registered candidate	no consumer reference	TRUEOS/src/r/time.rs:308	TRUEOS/src/hv/blueprint/blueprint.rs:1355
+Platform / std bridge	trueos_internal_log_write	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1267
+Platform / std bridge	trueos_mio_socket_close	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4163; TRUEOS/src/std_abi_shim.rs:4274; TRUEOS/src/std_abi_shim.rs:4278; TRUEOS/src/std_abi_shim.rs:4346; TRUEOS/src/std_abi_shim.rs:4360; TRUEOS/src/std_abi_shim.rs:4493; TRUEOS/src/std_abi_shim.rs:5550	TRUEOS/src/hv/blueprint/blueprint.rs:1403
+Platform / std bridge	trueos_mio_socket_local_addr	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4272; TRUEOS/src/std_abi_shim.rs:5895; TRUEOS/src/std_abi_shim.rs:5909	TRUEOS/src/hv/blueprint/blueprint.rs:1406
+Platform / std bridge	trueos_mio_socket_peer_addr	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4709; TRUEOS/src/std_abi_shim.rs:5983	TRUEOS/src/hv/blueprint/blueprint.rs:1409
+Platform / std bridge	trueos_mio_socket_take_error	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4641	TRUEOS/src/hv/blueprint/blueprint.rs:1412
+Platform / std bridge	trueos_mio_tcp_listener_accept	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4333	TRUEOS/src/hv/blueprint/blueprint.rs:1430
+Platform / std bridge	trueos_mio_tcp_listener_bind	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4252	TRUEOS/src/hv/blueprint/blueprint.rs:1394
+Platform / std bridge	trueos_mio_tcp_stream_connect	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4468	TRUEOS/src/hv/blueprint/blueprint.rs:1397
+Platform / std bridge	trueos_mio_tcp_stream_read	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4884	TRUEOS/src/hv/blueprint/blueprint.rs:1415
+Platform / std bridge	trueos_mio_tcp_stream_write	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4773	TRUEOS/src/hv/blueprint/blueprint.rs:1418
+Platform / std bridge	trueos_mio_udp_socket_bind	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4153	TRUEOS/src/hv/blueprint/blueprint.rs:1400
+Platform / std bridge	trueos_mio_udp_socket_connect	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4456	TRUEOS/src/hv/blueprint/blueprint.rs:1421
+Platform / std bridge	trueos_mio_udp_socket_recv_from	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4821; TRUEOS/src/std_abi_shim.rs:4992	TRUEOS/src/hv/blueprint/blueprint.rs:1427
+Platform / std bridge	trueos_mio_udp_socket_send_to	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:4714; TRUEOS/src/std_abi_shim.rs:4949	TRUEOS/src/hv/blueprint/blueprint.rs:1424
+Platform / std bridge	trueos_platform_cpu_count	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:7857	TRUEOS/src/hv/blueprint/blueprint.rs:1331
+Platform / std bridge	trueos_platform_monotonic_nanos	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:1603; TRUEOS/src/unix_abi_shim.rs:280; TRUEOS/src/unix_abi_shim.rs:342; TRUEOS/src/unix_abi_shim.rs:370; TRUEOS/src/unix_abi_shim.rs:393; TRUEOS/src/r/platform.rs:154	TRUEOS/src/hv/blueprint/blueprint.rs:1325
+Platform / std bridge	trueos_platform_unix_seconds	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1328
+Platform / std bridge	trueos_service_lane_available_capacity	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1340
+Platform / std bridge	trueos_service_lane_cancellation_requested	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1343
+Platform / std bridge	trueos_service_lane_submit_job	registered candidate	app/package reference	TRUEOS/src/r/blocking.rs:752	TRUEOS/src/hv/blueprint/blueprint.rs:1337
+Platform / std bridge	trueos_time_monotonic_nanos	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1349
+Platform / std bridge	trueos_time_unix_nanos	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1358
+Platform / std bridge	trueos_time_unix_seconds	registered candidate	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:3481; TRUEOS/src/std_abi_shim.rs:3493	TRUEOS/src/hv/blueprint/blueprint.rs:1361
+Platform / std bridge	trueos_tokio_platform_log	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1367
+Platform / std bridge	trueos_tokio_platform_log_semantic_gap	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1364
+Platform / std bridge	trueos_tokio_platform_monotonic_nanos	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1370
+Platform / std bridge	trueos_tokio_platform_poll_once	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1373
+Platform / std bridge	trueos_tokio_platform_sleep_ms	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1376
+Platform / std bridge	trueos_tokio_platform_wait	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1385
+Platform / std bridge	trueos_tokio_platform_wait_after	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:1357; TRUEOS/src/std_abi_shim.rs:1666; TRUEOS/src/unix_abi_shim.rs:379; TRUEOS/src/r/platform.rs:213; TRUEOS/src/r/io/fs_cabi.rs:2726	TRUEOS/src/hv/blueprint/blueprint.rs:1382
+Platform / std bridge	trueos_tokio_platform_wait_observe	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:1353; TRUEOS/src/std_abi_shim.rs:1645; TRUEOS/src/std_abi_shim.rs:1667; TRUEOS/src/unix_abi_shim.rs:288; TRUEOS/src/r/platform.rs:212; TRUEOS/src/r/io/fs_cabi.rs:2715	TRUEOS/src/hv/blueprint/blueprint.rs:1379
+Platform / std bridge	trueos_tokio_platform_wake_all	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:1584; TRUEOS/src/std_abi_shim.rs:2202; TRUEOS/src/std_abi_shim.rs:7779	TRUEOS/src/hv/blueprint/blueprint.rs:1391
+Platform / std bridge	trueos_tokio_platform_wake_one	registered candidate	no consumer reference	TRUEOS/src/std_abi_shim.rs:1586	TRUEOS/src/hv/blueprint/blueprint.rs:1388
+Platform / std bridge	trueos_tokio_spawn_blocking_job	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1346
+Platform / std bridge	trueos_tokio_worker_carriers_enabled	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1334
+Platform / std bridge	trueos_vlayer_bios_schema_snapshot_read	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1308
+Platform / std bridge	trueos_vlayer_pci_snapshot_read	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1292
+Platform / std bridge	trueos_vlayer_print2d_status	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1317
+Platform / std bridge	trueos_vlayer_print2d_submit	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1314
+Platform / std bridge	trueos_vlayer_printer_snapshot_read	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1311
+Platform / std bridge	trueos_vlayer_rapl_history_read	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1289
+Platform / std bridge	trueos_vlayer_rapl_snapshot_read	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1286
+Platform / std bridge	trueos_vlayer_system_services_snapshot_read	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1304
+Platform / std bridge	trueos_vlayer_thermal_snapshot_read	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1298
+Platform / std bridge	trueos_vlayer_usb_snapshot_read	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1295
+Platform / std bridge	trueos_vlayer_vram_snapshot_read	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1301
+Ring runtime	ring_core_0_17_14__CRYPTO_memcmp	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__CRYPTO_poly1305_finish	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__CRYPTO_poly1305_init	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__CRYPTO_poly1305_update	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ChaCha20_ctr32_avx2	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ChaCha20_ctr32_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ChaCha20_ctr32_ssse3_4x	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_add_mod	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_are_zero	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_equal	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_less_than	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_reduce_once	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_select_512_32	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_shl_mod	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_sub_mod	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_window5_split_window	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMBS_window5_unsplit_window	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMB_is_zero	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__LIMB_shr	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__OPENSSL_cpuid_setup	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__adx_bmi2_available	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aes_gcm_dec_update_vaes_avx2	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aes_gcm_enc_update_vaes_avx2	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aes_hw_ctr32_encrypt_blocks	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aes_hw_set_encrypt_key_alt	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aes_hw_set_encrypt_key_base	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aes_nohw_ctr32_encrypt_blocks	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aes_nohw_encrypt	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aes_nohw_set_encrypt_key	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aesni_gcm_decrypt	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__aesni_gcm_encrypt	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__avx2_available	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_from_montgomery_in_place	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_gather5	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_mul4x_mont	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_mul4x_mont_gather5	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_mul_mont_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_mulx4x_mont	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_mulx4x_mont_gather5	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_neg_inv_mod_r_u64	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_power5_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_powerx5	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_scatter5	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_sqr8x_internal	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_sqr8x_mont	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__bn_sqrx8x_internal	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__chacha20_poly1305_open_avx2	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__chacha20_poly1305_open_sse41	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__chacha20_poly1305_seal_avx2	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__chacha20_poly1305_seal_sse41	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_mul_mont_adx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_mul_mont_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_neg	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_ord_mul_mont_adx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_ord_mul_mont_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_ord_sqr_mont_adx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_ord_sqr_mont_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_point_add_adx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_point_add_affine_adx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_point_add_affine_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_point_add_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_point_double_adx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_point_double_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_select_w5_avx2	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_select_w5_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_select_w7_avx2	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_select_w7_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_sqr_mont_adx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__ecp_nistz256_sqr_mont_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__fiat_curve25519_adx_mul	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__fiat_curve25519_adx_square	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__gcm_ghash_avx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__gcm_ghash_clmul	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__gcm_ghash_vpclmulqdq_avx2_1	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__gcm_init_avx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__gcm_init_clmul	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__gcm_init_vpclmulqdq_avx2	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__k25519Precomp	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__limbs_mul_add_limb	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__little_endian_bytes_from_scalar	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_mul_mont	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_point_add	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_point_add_affine	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_point_double	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_point_mul	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_point_mul_base	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_point_mul_base_vartime	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_scalar_mul_mont	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_scalar_sqr_rep_mont	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p256_sqr_mont	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p384_elem_div_by_2	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p384_elem_mul_mont	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p384_elem_neg	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p384_elem_sub	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p384_point_add	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p384_point_double	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p384_point_mul	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__p384_scalar_mul_mont	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__sha256_block_data_order_avx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__sha256_block_data_order_hw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__sha256_block_data_order_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__sha256_block_data_order_ssse3	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__sha512_block_data_order_avx	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__sha512_block_data_order_nohw	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__vpaes_ctr32_encrypt_blocks	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__vpaes_set_encrypt_key	registered candidate	app/package reference		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_fe_invert	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_fe_isnegative	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_fe_mul_ttt	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_fe_neg	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_fe_tobytes	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_ge_double_scalarmult_vartime	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_ge_frombytes_vartime	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_ge_scalarmult_base	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_ge_scalarmult_base_adx	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_public_from_private_generic_masked	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_sc_mask	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_sc_muladd	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_sc_reduce	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_scalar_mult_adx	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Ring runtime	ring_core_0_17_14__x25519_scalar_mult_generic_masked	registered candidate	SDK/dependency only		TRUEOS/vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt
+Rust runtime	_RNvCs2csqI13tepL_7___rustc12___rust_alloc	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1220
+Rust runtime	_RNvCs2csqI13tepL_7___rustc14___rust_dealloc	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1225
+Rust runtime	_RNvCs2csqI13tepL_7___rustc14___rust_realloc	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1230
+Rust runtime	_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1235
+Rust runtime	_RNvCs2csqI13tepL_7___rustc26___rust_alloc_error_handler	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1149
+Rust runtime	_RNvCs2csqI13tepL_7___rustc35___rust_no_alloc_shim_is_unstable_v2	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1153
+Rust runtime	_RNvCs75cmLyI1ip2_7___rustc12___rust_alloc	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1220
+Rust runtime	_RNvCs75cmLyI1ip2_7___rustc14___rust_dealloc	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1225
+Rust runtime	_RNvCs75cmLyI1ip2_7___rustc14___rust_realloc	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1230
+Rust runtime	_RNvCs75cmLyI1ip2_7___rustc19___rust_alloc_zeroed	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1235
+Rust runtime	_RNvCs75cmLyI1ip2_7___rustc26___rust_alloc_error_handler	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1149
+Rust runtime	_RNvCs75cmLyI1ip2_7___rustc35___rust_no_alloc_shim_is_unstable_v2	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1153
+Rust runtime	_Unwind_Backtrace	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1213
+Rust runtime	_Unwind_FindEnclosingFunction	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1214
+Rust runtime	_Unwind_GetCFA	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1217
+Rust runtime	_Unwind_GetIP	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1218
+Rust runtime	_Unwind_RaiseException	registered candidate	no consumer reference		TRUEOS/src/hv/blueprint/blueprint.rs:1219
+Rust runtime	__rust_alloc	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1220
+Rust runtime	__rust_alloc_zeroed	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1235
+Rust runtime	__rust_dealloc	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1225
+Rust runtime	__rust_realloc	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1230
+std / libc / math	__assert_fail	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1162
+std / libc / math	__ctype_b_loc	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:233
+std / libc / math	__errno	registered candidate	SDK/dependency only		TRUEOS/src/unix_compat.rs:235
+std / libc / math	__errno_location	registered candidate	app/package reference	TRUEOS/src/unix_fd_probe.rs:49	TRUEOS/src/unix_compat.rs:236
+std / libc / math	__memcpy_chk	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:237
+std / libc / math	__memmove_chk	registered candidate	no consumer reference		TRUEOS/src/unix_compat.rs:238
+std / libc / math	__memset_chk	registered candidate	no consumer reference		TRUEOS/src/unix_compat.rs:239
+std / libc / math	__stack_chk_fail	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:240
+std / libc / math	__xpg_strerror_r	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:241
+std / libc / math	_exit	registered candidate	app/package reference	TRUEOS/src/r/threads/stack.rs:271	TRUEOS/src/hv/blueprint/blueprint.rs:1281
+std / libc / math	abort	registered candidate	app/package reference	TRUEOS/src/live_update.rs:519; TRUEOS/src/live_update.rs:566; TRUEOS/src/live_update.rs:960; TRUEOS/src/live_update.rs:976; TRUEOS/src/live_update.rs:1031; TRUEOS/src/live_update.rs:1114; TRUEOS/src/live_update.rs:1344; TRUEOS/src/live_update.rs:1354; TRUEOS/src/live_update.rs:1367; TRUEOS/src/live_update.rs:1376; TRUEOS/src/live_update.rs:1381; TRUEOS/src/live_update.rs:1666	TRUEOS/src/hv/blueprint/blueprint.rs:1282
+std / libc / math	accept	registered candidate	app/package reference	TRUEOS/src/mio_compat.rs:1061; TRUEOS/src/mio_compat.rs:2539; TRUEOS/src/std_abi_shim.rs:3337; TRUEOS/src/std_abi_shim.rs:3338; TRUEOS/src/std_abi_shim.rs:4372; TRUEOS/src/hv/mod.rs:2694; TRUEOS/src/intel/render/submit.rs:2023; TRUEOS/src/intel/render/submit.rs:2032; TRUEOS/src/intel/render/submit.rs:2034; TRUEOS/src/intel/render/submit.rs:2049; TRUEOS/src/r/fs/http_trueosfs.rs:914; TRUEOS/src/r/services/hid_udp_sequence.rs:42	TRUEOS/src/unix_compat.rs:242
+std / libc / math	accept4	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:4295; TRUEOS/src/hv/mod.rs:2694	TRUEOS/src/unix_compat.rs:243
+std / libc / math	access	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:5371; TRUEOS/src/std_abi_shim.rs:5372; TRUEOS/src/std_abi_shim.rs:5373; TRUEOS/src/std_abi_shim.rs:5379; TRUEOS/src/std_abi_shim.rs:5409; TRUEOS/src/disc/block.rs:559; TRUEOS/src/disc/block.rs:577; TRUEOS/src/disc/block.rs:599; TRUEOS/src/disc/block.rs:626; TRUEOS/src/disc/mod.rs:1; TRUEOS/src/disc/install/fat32.rs:302; TRUEOS/src/disc/install/fat32.rs:708	TRUEOS/src/unix_compat.rs:244
+std / libc / math	acos	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1190
+std / libc / math	acosf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1170
+std / libc / math	acosh	registered candidate	app/package reference	TRUEOS/src/blueprint_shims.rs:87	TRUEOS/src/hv/blueprint/blueprint.rs:1191
+std / libc / math	acoshf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1178
+std / libc / math	asin	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1192
+std / libc / math	asinf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1171
+std / libc / math	asinh	registered candidate	app/package reference	TRUEOS/src/blueprint_shims.rs:91	TRUEOS/src/hv/blueprint/blueprint.rs:1193
+std / libc / math	asinhf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1177
+std / libc / math	atan	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1194
+std / libc / math	atan2	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1209
+std / libc / math	atan2f	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1173
+std / libc / math	atanf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1172
+std / libc / math	atanh	registered candidate	app/package reference	TRUEOS/src/blueprint_shims.rs:95	TRUEOS/src/hv/blueprint/blueprint.rs:1195
+std / libc / math	bind	registered candidate	app/package reference	TRUEOS/src/mio_compat.rs:590; TRUEOS/src/mio_compat.rs:604; TRUEOS/src/mio_compat.rs:865; TRUEOS/src/mio_compat.rs:1435; TRUEOS/src/mio_compat.rs:1446; TRUEOS/src/mio_compat.rs:1460; TRUEOS/src/mio_compat.rs:1471; TRUEOS/src/mio_probe.rs:40; TRUEOS/src/mio_probe.rs:41; TRUEOS/src/mio_probe.rs:42; TRUEOS/src/mio_probe.rs:50; TRUEOS/src/mio_probe.rs:52	TRUEOS/src/unix_compat.rs:245
+std / libc / math	calloc	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2092; TRUEOS/crates/trueos-shader/intel_vk_empty_compute.c:69; TRUEOS/crates/trueos-shader/intel_vk_empty_compute.c:90; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:136; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:273; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:301; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:340; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:501; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:539	TRUEOS/src/unix_compat.rs:246
+std / libc / math	cfmakeraw	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:247
+std / libc / math	chdir	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:248
+std / libc / math	chroot	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:249
+std / libc / math	clock_gettime	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:250
+std / libc / math	close	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:4367; TRUEOS/src/std_abi_shim.rs:5060; TRUEOS/src/std_abi_shim.rs:5061; TRUEOS/src/std_abi_shim.rs:5062; TRUEOS/src/std_abi_shim.rs:5088; TRUEOS/src/std_abi_shim.rs:5089; TRUEOS/src/std_abi_shim.rs:5097; TRUEOS/src/std_abi_shim.rs:5098; TRUEOS/src/std_abi_shim.rs:5514; TRUEOS/src/std_abi_shim.rs:5581; TRUEOS/src/std_abi_shim.rs:5600; TRUEOS/src/std_abi_shim.rs:5644	TRUEOS/src/unix_compat.rs:251
+std / libc / math	closedir	prebind rejected	app/package reference	TRUEOS/src/hv/blueprint/prebind.rs:86	TRUEOS/src/unix_compat.rs:252
+std / libc / math	connect	registered candidate	app/package reference	TRUEOS/src/mio_compat.rs:865; TRUEOS/src/mio_compat.rs:1551; TRUEOS/src/mio_probe.rs:45; TRUEOS/src/mio_probe.rs:46; TRUEOS/src/mio_probe.rs:47; TRUEOS/src/std_abi_shim.rs:4499; TRUEOS/src/std_abi_shim.rs:4533; TRUEOS/src/aud/audio_live_http.rs:482; TRUEOS/src/hv/blueprint_net.rs:79; TRUEOS/src/net/adapter.rs:2206; TRUEOS/src/net/adapter.rs:2207; TRUEOS/src/net/adapter.rs:2695	TRUEOS/src/unix_compat.rs:253
+std / libc / math	cos	registered candidate	app/package reference	TRUEOS/src/r/services/gamepad_control_service.rs:356; TRUEOS/src/r/services/mouse_motion_service.rs:627	TRUEOS/src/hv/blueprint/blueprint.rs:1189
+std / libc / math	cosf	registered candidate	app/package reference	TRUEOS/src/aud/audio_visualizer.rs:96; TRUEOS/src/intel/gpgpu/operations/shadertoy_focus.rs:68; TRUEOS/src/intel/gpgpu/operations/shadertoy_focus.rs:86; TRUEOS/src/spirit/Spirit_VFX.rs:1095; TRUEOS/src/ui4/cursor_frame_inout.rs:1167	TRUEOS/src/hv/blueprint/blueprint.rs:1169
+std / libc / math	cosh	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1198
+std / libc / math	coshf	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1176
+std / libc / math	dirfd	prebind rejected	app/package reference	TRUEOS/src/std_abi_shim.rs:5260; TRUEOS/src/std_abi_shim.rs:5268; TRUEOS/src/std_abi_shim.rs:5273; TRUEOS/src/std_abi_shim.rs:5281; TRUEOS/src/std_abi_shim.rs:5290; TRUEOS/src/std_abi_shim.rs:5306; TRUEOS/src/std_abi_shim.rs:5317; TRUEOS/src/std_abi_shim.rs:5322; TRUEOS/src/std_abi_shim.rs:5326; TRUEOS/src/std_abi_shim.rs:5328; TRUEOS/src/std_abi_shim.rs:5484; TRUEOS/src/std_abi_shim.rs:5489	TRUEOS/src/unix_compat.rs:254
+std / libc / math	dladdr	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:255
+std / libc / math	dlclose	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:256
+std / libc / math	dlerror	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:257
+std / libc / math	dlopen	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:258
+std / libc / math	dlsym	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:259
+std / libc / math	dup	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:5083; TRUEOS/src/std_abi_shim.rs:5084; TRUEOS/src/net/iwl4965.rs:1711; TRUEOS/src/net/iwl4965.rs:1712	TRUEOS/src/unix_compat.rs:260
+std / libc / math	dup2	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:261
+std / libc / math	environ	registered candidate	app/package reference	TRUEOS/src/process_environment.rs:25; TRUEOS/src/process_environment.rs:35; TRUEOS/src/process_environment.rs:112; TRUEOS/src/process_environment.rs:195; TRUEOS/src/process_environment.rs:218; TRUEOS/src/process_environment.rs:227; TRUEOS/src/process_environment.rs:237; TRUEOS/src/process_environment.rs:243; TRUEOS/src/process_environment.rs:255; TRUEOS/src/std_abi_shim.rs:770	TRUEOS/src/unix_compat.rs:262
+std / libc / math	errno_location	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:3175; TRUEOS/src/std_abi_shim.rs:3180	TRUEOS/src/unix_compat.rs:263
+std / libc / math	execvp	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:264
+std / libc / math	exit	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:3148; TRUEOS/src/std_abi_shim.rs:3158; TRUEOS/src/hv/depthchecker_debug.rs:98; TRUEOS/src/hv/depthchecker_debug.rs:113; TRUEOS/src/hv/depthchecker_debug.rs:125; TRUEOS/src/hv/depthchecker_debug.rs:146; TRUEOS/src/hv/mod.rs:548; TRUEOS/src/hv/mod.rs:2284; TRUEOS/src/hv/mod.rs:3507; TRUEOS/src/hv/mod.rs:3509; TRUEOS/src/hv/mod.rs:4397; TRUEOS/src/hv/mod.rs:5254	TRUEOS/src/hv/blueprint/blueprint.rs:1281
+std / libc / math	exp	registered candidate	app/package reference	TRUEOS/src/pci/mod.rs:74; TRUEOS/src/turbo/avx2_fma_sse2_help.rs:11; TRUEOS/src/turbo/avx2_fma_sse2_help.rs:13	TRUEOS/src/hv/blueprint/blueprint.rs:1203
+std / libc / math	exp2	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1204
+std / libc / math	exp2f	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1184
+std / libc / math	expf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1183
+std / libc / math	expm1	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1205
+std / libc / math	fchmod	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:265
+std / libc / math	fchown	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:266
+std / libc / math	fcntl	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:5040; TRUEOS/src/std_abi_shim.rs:5868; TRUEOS/src/std_abi_shim.rs:7288; TRUEOS/src/unix_abi_shim.rs:514; TRUEOS/src/unix_fd_probe.rs:285; TRUEOS/src/unix_fd_probe.rs:286; TRUEOS/src/unix_fd_probe.rs:287; TRUEOS/src/unix_fd_probe.rs:289; TRUEOS/src/unix_fd_probe.rs:291; TRUEOS/src/unix_fd_probe.rs:293; TRUEOS/src/unix_fd_probe.rs:298; TRUEOS/src/unix_fd_probe.rs:299	TRUEOS/src/unix_compat.rs:267
+std / libc / math	fcntl64	registered candidate	no consumer reference		TRUEOS/src/unix_compat.rs:268
+std / libc / math	fdatasync	registered candidate	app/package reference	TRUEOS/src/unix_fd_probe.rs:731; TRUEOS/src/unix_fd_probe.rs:732	TRUEOS/src/unix_compat.rs:270
+std / libc / math	fdopendir	prebind rejected	app/package reference	TRUEOS/src/hv/blueprint/prebind.rs:83	TRUEOS/src/unix_compat.rs:271
+std / libc / math	flock	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:269
+std / libc / math	fork	registered candidate	app/package reference	TRUEOS/src/r/threads/stack.rs:266	TRUEOS/src/unix_compat.rs:272
+std / libc / math	free	registered candidate	app/package reference	TRUEOS/src/allocators.rs:827; TRUEOS/src/allocators.rs:836; TRUEOS/src/allocators.rs:853; TRUEOS/src/allocators.rs:854; TRUEOS/src/allocators.rs:855; TRUEOS/src/allocators.rs:860; TRUEOS/src/allocators.rs:1874; TRUEOS/src/allocators.rs:1880; TRUEOS/src/allocators.rs:1885; TRUEOS/src/allocators.rs:1887; TRUEOS/src/allocators.rs:1889; TRUEOS/src/allocators.rs:1896	TRUEOS/src/unix_compat.rs:273
+std / libc / math	freeaddrinfo	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:274
+std / libc / math	fstat	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6376; TRUEOS/src/unix_fd_probe.rs:633; TRUEOS/src/unix_fd_probe.rs:635; TRUEOS/src/unix_fd_probe.rs:636	TRUEOS/src/unix_compat.rs:275
+std / libc / math	fstat64	registered candidate	SDK/dependency only		TRUEOS/src/unix_compat.rs:276
+std / libc / math	fstatat	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:5322	TRUEOS/src/unix_compat.rs:277
+std / libc / math	fstatat64	registered candidate	SDK/dependency only		TRUEOS/src/unix_compat.rs:278
+std / libc / math	fsync	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6208; TRUEOS/src/std_abi_shim.rs:6219; TRUEOS/src/std_abi_shim.rs:6227; TRUEOS/src/unix_fd_probe.rs:651; TRUEOS/src/unix_fd_probe.rs:652	TRUEOS/src/unix_compat.rs:279
+std / libc / math	ftruncate	registered candidate	app/package reference	TRUEOS/src/unix_fd_probe.rs:725; TRUEOS/src/unix_fd_probe.rs:726; TRUEOS/src/unix_fd_probe.rs:728; TRUEOS/src/unix_fd_probe.rs:729	TRUEOS/src/unix_compat.rs:280
+std / libc / math	ftruncate64	registered candidate	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:6316	TRUEOS/src/unix_compat.rs:281
+std / libc / math	futimens	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:282
+std / libc / math	gai_strerror	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:283
+std / libc / math	getaddrinfo	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:311	TRUEOS/src/unix_compat.rs:284
+std / libc / math	getcwd	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:285
+std / libc / math	getenv	registered candidate	app/package reference	TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:119; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:160; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:217; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:258; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:391; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:442; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:468; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:471	TRUEOS/src/unix_compat.rs:287
+std / libc / math	geteuid	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:286
+std / libc / math	getpeername	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:290
+std / libc / math	getpid	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:291
+std / libc / math	getsockname	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:292
+std / libc / math	getsockopt	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:293
+std / libc / math	gettimeofday	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:294
+std / libc / math	hypot	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1208
+std / libc / math	hypotf	registered candidate	app/package reference	TRUEOS/src/ui4/cursor_frame_inout.rs:1144	TRUEOS/src/hv/blueprint/blueprint.rs:1187
+std / libc / math	ioctl	registered candidate	app/package reference	TRUEOS/src/unix_fd_probe.rs:183; TRUEOS/src/unix_fd_probe.rs:185; TRUEOS/src/unix_fd_probe.rs:188; TRUEOS/src/unix_fd_probe.rs:235; TRUEOS/src/unix_fd_probe.rs:237; TRUEOS/src/unix_fd_probe.rs:238; TRUEOS/src/unix_fd_probe.rs:258; TRUEOS/src/unix_fd_probe.rs:260; TRUEOS/src/unix_fd_probe.rs:262; TRUEOS/src/unix_fd_probe.rs:328; TRUEOS/src/unix_fd_probe.rs:330; TRUEOS/src/unix_fd_probe.rs:332	TRUEOS/src/unix_compat.rs:295
+std / libc / math	isatty	registered candidate	app/package reference	TRUEOS/src/unix_fd_probe.rs:163; TRUEOS/src/unix_fd_probe.rs:165; TRUEOS/src/unix_fd_probe.rs:166; TRUEOS/src/unix_fd_probe.rs:170; TRUEOS/src/unix_fd_probe.rs:172; TRUEOS/src/unix_fd_probe.rs:173; TRUEOS/src/unix_fd_probe.rs:250; TRUEOS/src/unix_fd_probe.rs:252; TRUEOS/src/unix_fd_probe.rs:253	TRUEOS/src/unix_compat.rs:296
+std / libc / math	iswalnum	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:232
+std / libc / math	iswalpha	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:230
+std / libc / math	iswdigit	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:231
+std / libc / math	iswspace	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:229
+std / libc / math	linkat	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:297
+std / libc / math	listen	registered candidate	app/package reference	TRUEOS/src/mio_compat.rs:865; TRUEOS/src/std_abi_shim.rs:4286; TRUEOS/src/aud/audio_live_http.rs:258; TRUEOS/src/aud/audio_live_http.rs:269; TRUEOS/src/aud/audio_live_http.rs:280; TRUEOS/src/aud/audio_live_http.rs:948; TRUEOS/src/hv/blueprint_net.rs:84; TRUEOS/src/hv/mod.rs:2694; TRUEOS/src/hv/store.rs:713; TRUEOS/src/net/adapter.rs:2632; TRUEOS/src/net/adapter.rs:4153; TRUEOS/src/r/fs/http_trueosfs.rs:101	TRUEOS/src/unix_compat.rs:298
+std / libc / math	localtime_r	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:299
+std / libc / math	log	registered candidate	app/package reference	TRUEOS/src/allocators.rs:600; TRUEOS/src/allocators.rs:617; TRUEOS/src/allocators.rs:1266; TRUEOS/src/allocators.rs:1286; TRUEOS/src/allocators.rs:1296; TRUEOS/src/allocators.rs:1327; TRUEOS/src/allocators.rs:1342; TRUEOS/src/allocators.rs:1369; TRUEOS/src/allocators.rs:1381; TRUEOS/src/allocators.rs:1390; TRUEOS/src/allocators.rs:2146; TRUEOS/src/allocators.rs:2156	TRUEOS/src/hv/blueprint/blueprint.rs:1200; TRUEOS/src/unix_compat.rs:300
+std / libc / math	log10	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1201
+std / libc / math	log10f	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1181
+std / libc / math	log1p	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1202
+std / libc / math	log1pf	registered candidate	app/package reference	TRUEOS/src/aud/audio_visualizer.rs:193	TRUEOS/src/hv/blueprint/blueprint.rs:1182
+std / libc / math	log2	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1199
+std / libc / math	log2f	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1179
+std / libc / math	logf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1180
+std / libc / math	lrint	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1166
+std / libc / math	lseek	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6039; TRUEOS/src/unix_fd_probe.rs:639; TRUEOS/src/unix_fd_probe.rs:640; TRUEOS/src/unix_fd_probe.rs:654; TRUEOS/src/unix_fd_probe.rs:655	TRUEOS/src/unix_compat.rs:301
+std / libc / math	lstat	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:302
+std / libc / math	lstat64	registered candidate	SDK/dependency only		TRUEOS/src/unix_compat.rs:303
+std / libc / math	malloc	registered candidate	app/package reference	TRUEOS/crates/trueos-shader/intel_vk_empty_compute.c:31; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:40; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:229; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:347	TRUEOS/src/unix_compat.rs:304
+std / libc / math	malloc_usable_size	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1163
+std / libc / math	memchr	registered candidate	app/package reference	TRUEOS/src/r/pat.rs:2; TRUEOS/src/r/pat.rs:131	TRUEOS/src/unix_compat.rs:305
+std / libc / math	memcmp	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1160
+std / libc / math	memcpy	registered candidate	app/package reference	TRUEOS/src/hv/mod.rs:4784; TRUEOS/src/hv/mod.rs:4789; TRUEOS/src/hv/mod.rs:4800; TRUEOS/src/hv/mod.rs:4801; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:932	TRUEOS/src/hv/blueprint/blueprint.rs:1157
+std / libc / math	memmove	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1158
+std / libc / math	memset	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1159
+std / libc / math	mkdir	registered candidate	app/package reference	TRUEOS/src/r/blocking/abi_breadcrumb.rs:31; TRUEOS/src/r/blocking/diagnostics.rs:284; TRUEOS/src/r/blocking/diagnostics.rs:290; TRUEOS/src/r/fs/fs_html.rs:242; TRUEOS/src/r/fs/fs_html.rs:319; TRUEOS/src/r/fs/http_trueosfs.rs:912; TRUEOS/src/r/fs/http_trueosfs.rs:918; TRUEOS/src/r/fs/http_trueosfs.rs:919; TRUEOS/src/r/fs/http_trueosfs.rs:921; TRUEOS/src/r/fs/http_trueosfs.rs:1330; TRUEOS/src/r/fs/http_trueosfs.rs:1332; TRUEOS/src/r/fs/http_trueosfs.rs:1337	TRUEOS/src/unix_compat.rs:306
+std / libc / math	mkdirat	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6406	TRUEOS/src/unix_compat.rs:307
+std / libc / math	mmap	registered candidate	app/package reference	TRUEOS/src/r/threads/stack.rs:211	TRUEOS/src/unix_compat.rs:308
+std / libc / math	mmap64	registered candidate	SDK/dependency only	TRUEOS/src/std_abi_shim.rs:6727	TRUEOS/src/unix_compat.rs:309
+std / libc / math	modf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1167
+std / libc / math	mprotect	registered candidate	app/package reference	TRUEOS/src/r/threads/stack.rs:218	TRUEOS/src/unix_compat.rs:310
+std / libc / math	mremap	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:311
+std / libc / math	munmap	registered candidate	app/package reference	TRUEOS/src/r/threads/stack.rs:231	TRUEOS/src/unix_compat.rs:312
+std / libc / math	nanosleep	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:313
+std / libc / math	open	registered candidate	app/package reference	TRUEOS/src/app_db.rs:153; TRUEOS/src/app_db.rs:156; TRUEOS/src/app_db.rs:159; TRUEOS/src/app_db.rs:191; TRUEOS/src/app_db.rs:194; TRUEOS/src/app_db.rs:197; TRUEOS/src/app_db.rs:234; TRUEOS/src/app_db.rs:253; TRUEOS/src/app_db.rs:256; TRUEOS/src/app_db.rs:259; TRUEOS/src/crypt.rs:17; TRUEOS/src/mio_compat.rs:880	TRUEOS/src/unix_compat.rs:314
+std / libc / math	open64	registered candidate	SDK/dependency only		TRUEOS/src/unix_compat.rs:315
+std / libc / math	openat	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:316
+std / libc / math	opendir	prebind rejected	app/package reference	TRUEOS/src/hv/blueprint/prebind.rs:82	TRUEOS/src/unix_compat.rs:317
+std / libc / math	pipe	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:404; TRUEOS/src/std_abi_shim.rs:408; TRUEOS/src/std_abi_shim.rs:928; TRUEOS/src/std_abi_shim.rs:990; TRUEOS/src/std_abi_shim.rs:1006; TRUEOS/src/std_abi_shim.rs:1008; TRUEOS/src/std_abi_shim.rs:1012; TRUEOS/src/std_abi_shim.rs:1014; TRUEOS/src/std_abi_shim.rs:3715; TRUEOS/src/std_abi_shim.rs:3716; TRUEOS/src/std_abi_shim.rs:3717; TRUEOS/src/std_abi_shim.rs:3721	TRUEOS/src/unix_compat.rs:318
+std / libc / math	poll	registered candidate	app/package reference	TRUEOS/src/main.rs:318; TRUEOS/src/mio_probe.rs:54; TRUEOS/src/mio_probe.rs:55; TRUEOS/src/mio_probe.rs:57; TRUEOS/src/mio_probe.rs:62; TRUEOS/src/mio_probe.rs:76; TRUEOS/src/mio_probe.rs:105; TRUEOS/src/mio_probe.rs:108; TRUEOS/src/mio_probe.rs:109; TRUEOS/src/mio_probe.rs:110; TRUEOS/src/mio_probe.rs:111; TRUEOS/src/mio_probe.rs:114	TRUEOS/src/unix_compat.rs:319
+std / libc / math	posix_memalign	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:1945	TRUEOS/src/unix_compat.rs:320
+std / libc / math	pow	registered candidate	app/package reference	TRUEOS/src/r/services/mouse_motion_service.rs:626	TRUEOS/src/hv/blueprint/blueprint.rs:1206
+std / libc / math	powf	registered candidate	app/package reference	TRUEOS/src/aud/audio_visualizer.rs:104; TRUEOS/src/aud/audio_visualizer.rs:106; TRUEOS/src/ui4/color_picker.rs:624; TRUEOS/src/ui4/color_picker.rs:632	TRUEOS/src/hv/blueprint/blueprint.rs:1185
+std / libc / math	pread	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6087; TRUEOS/src/unix_fd_probe.rs:695; TRUEOS/src/unix_fd_probe.rs:698; TRUEOS/src/unix_fd_probe.rs:700; TRUEOS/src/unix_fd_probe.rs:710; TRUEOS/src/unix_fd_probe.rs:713; TRUEOS/src/unix_fd_probe.rs:715	TRUEOS/src/unix_compat.rs:321
+std / libc / math	pread64	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6110	TRUEOS/src/unix_compat.rs:322
+std / libc / math	pthread_attr_destroy	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:323
+std / libc / math	pthread_attr_init	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:326
+std / libc / math	pthread_attr_setstacksize	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:327
+std / libc / math	pthread_cond_broadcast	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:330
+std / libc / math	pthread_cond_destroy	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:333
+std / libc / math	pthread_cond_init	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:336
+std / libc / math	pthread_cond_signal	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:337
+std / libc / math	pthread_cond_timedwait	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:340
+std / libc / math	pthread_cond_wait	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:343
+std / libc / math	pthread_condattr_destroy	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:344
+std / libc / math	pthread_condattr_init	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:347
+std / libc / math	pthread_condattr_setclock	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:7580	TRUEOS/src/unix_compat.rs:350
+std / libc / math	pthread_getspecific	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:353
+std / libc / math	pthread_key_create	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:356
+std / libc / math	pthread_key_delete	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:357
+std / libc / math	pthread_mutex_destroy	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:358
+std / libc / math	pthread_mutex_init	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:361
+std / libc / math	pthread_mutex_lock	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:362
+std / libc / math	pthread_mutex_trylock	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:363
+std / libc / math	pthread_mutex_unlock	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:366
+std / libc / math	pthread_mutexattr_destroy	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:369
+std / libc / math	pthread_mutexattr_init	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:372
+std / libc / math	pthread_mutexattr_settype	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:375
+std / libc / math	pthread_self	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:378
+std / libc / math	pthread_setname_np	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:379
+std / libc / math	pthread_setspecific	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:380
+std / libc / math	pwrite	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6159; TRUEOS/src/unix_fd_probe.rs:9; TRUEOS/src/unix_fd_probe.rs:667; TRUEOS/src/unix_fd_probe.rs:669; TRUEOS/src/unix_fd_probe.rs:671; TRUEOS/src/unix_fd_probe.rs:681; TRUEOS/src/unix_fd_probe.rs:683; TRUEOS/src/unix_fd_probe.rs:685	TRUEOS/src/unix_compat.rs:383
+std / libc / math	pwrite64	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6182	TRUEOS/src/unix_compat.rs:384
+std / libc / math	qsort	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:385
+std / libc / math	raise	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:7200; TRUEOS/src/std_abi_shim.rs:7210; TRUEOS/src/std_abi_shim.rs:7218; TRUEOS/src/hv/memory.rs:2639; TRUEOS/src/r/threads/stack.rs:276; TRUEOS/src/ui4/layer_contract.rs:31; TRUEOS/src/ui4/layer_contract.rs:45; TRUEOS/src/ui4/window_broker.rs:2984; TRUEOS/src/ui4/window_broker.rs:3013; TRUEOS/src/ui4/window_broker.rs:3019; TRUEOS/src/ui4/window_broker.rs:3023; TRUEOS/src/ui4/window_broker.rs:3036	TRUEOS/src/unix_compat.rs:386
+std / libc / math	read	registered candidate	app/package reference	TRUEOS/src/allocators.rs:586; TRUEOS/src/allocators.rs:671; TRUEOS/src/allocators.rs:708; TRUEOS/src/allocators.rs:748; TRUEOS/src/app_db.rs:186; TRUEOS/src/app_db.rs:188; TRUEOS/src/app_db.rs:189; TRUEOS/src/app_db.rs:192; TRUEOS/src/app_db.rs:195; TRUEOS/src/app_db.rs:203; TRUEOS/src/app_db.rs:207; TRUEOS/src/app_db.rs:212	TRUEOS/src/unix_compat.rs:387
+std / libc / math	readdir	prebind rejected	app/package reference	TRUEOS/src/hv/blueprint/prebind.rs:84	TRUEOS/src/unix_compat.rs:388
+std / libc / math	readdir_r	prebind rejected	SDK/dependency only	TRUEOS/src/hv/blueprint/prebind.rs:85	TRUEOS/src/unix_compat.rs:389
+std / libc / math	readlink	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:390
+std / libc / math	readv	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:391
+std / libc / math	realloc	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2011; TRUEOS/src/std_abi_shim.rs:2024; TRUEOS/src/r/blocking/abi_breadcrumb.rs:27	TRUEOS/src/unix_compat.rs:393
+std / libc / math	realpath	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:392
+std / libc / math	recv	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:5055; TRUEOS/src/std_abi_shim.rs:5057; TRUEOS/src/std_abi_shim.rs:5094; TRUEOS/src/net/adapter.rs:4640	TRUEOS/src/unix_compat.rs:394
+std / libc / math	recvfrom	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:395
+std / libc / math	rename	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6650; TRUEOS/src/r/restart.rs:97; TRUEOS/src/spirit/Spirit_VFX.rs:811	TRUEOS/src/unix_compat.rs:396
+std / libc / math	renameat	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:397
+std / libc / math	rmdir	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:398
+std / libc / math	sched_yield	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:399
+std / libc / math	send	registered candidate	app/package reference	TRUEOS/src/executor_task_profile.rs:313; TRUEOS/src/std_abi_shim.rs:3660; TRUEOS/src/std_abi_shim.rs:5044; TRUEOS/src/std_abi_shim.rs:5092; TRUEOS/src/aud/audio_live_http.rs:17; TRUEOS/src/aud/audio_live_http.rs:478; TRUEOS/src/aud/audio_live_http.rs:481; TRUEOS/src/aud/native_engine.rs:448; TRUEOS/src/aud/native_engine.rs:462; TRUEOS/src/aud/native_engine.rs:464; TRUEOS/src/aud/native_engine.rs:469; TRUEOS/src/aud/native_engine.rs:490	TRUEOS/src/unix_compat.rs:400
+std / libc / math	sendto	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:401
+std / libc / math	setenv	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:288
+std / libc / math	setgid	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:402
+std / libc / math	setgroups	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:403
+std / libc / math	setpgid	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:404
+std / libc / math	setsid	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:405
+std / libc / math	setsockopt	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:406
+std / libc / math	setuid	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:408
+std / libc / math	shutdown	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:3148; TRUEOS/src/efi/mod.rs:424; TRUEOS/src/hv/mod.rs:1879; TRUEOS/src/hv/vmcall.rs:4376; TRUEOS/src/hv/vmcall.rs:4378; TRUEOS/src/hv/vmcall.rs:4388; TRUEOS/src/hv/vmcall.rs:4396; TRUEOS/src/r/io/fs_cabi.rs:2284; TRUEOS/src/r/io/fs_cabi.rs:2302; TRUEOS/src/r/io/fs_cabi.rs:2303; TRUEOS/src/shell3/os.rs:19; TRUEOS/src/shell3/os.rs:98	TRUEOS/src/unix_compat.rs:407
+std / libc / math	sigaction	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:7015; TRUEOS/src/std_abi_shim.rs:7173; TRUEOS/src/std_abi_shim.rs:7183	TRUEOS/src/unix_compat.rs:409
+std / libc / math	signal	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:257; TRUEOS/src/std_abi_shim.rs:7091; TRUEOS/src/std_abi_shim.rs:7384; TRUEOS/src/std_abi_shim.rs:7386; TRUEOS/src/std_abi_shim.rs:7392; TRUEOS/src/std_abi_shim.rs:7395; TRUEOS/src/std_abi_shim.rs:7657; TRUEOS/src/aud/audio_visualizer.rs:41; TRUEOS/src/aud/audio_visualizer.rs:63; TRUEOS/src/aud/audio_visualizer.rs:238; TRUEOS/src/aud/audio_visualizer.rs:247; TRUEOS/src/aud/audio_visualizer.rs:259	TRUEOS/src/unix_compat.rs:410
+std / libc / math	sin	registered candidate	app/package reference	TRUEOS/src/aud/synth.rs:70	TRUEOS/src/hv/blueprint/blueprint.rs:1188
+std / libc / math	sinf	registered candidate	app/package reference	TRUEOS/src/intel/gpgpu/operations/shadertoy_focus.rs:68; TRUEOS/src/intel/gpgpu/operations/shadertoy_focus.rs:74; TRUEOS/src/intel/gpgpu/operations/shadertoy_focus.rs:86; TRUEOS/src/spirit/Spirit_VFX.rs:1127; TRUEOS/src/ui4/cursor_frame_inout.rs:1168; TRUEOS/src/ui4/start_button.rs:427	TRUEOS/src/hv/blueprint/blueprint.rs:1168
+std / libc / math	sinh	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1197
+std / libc / math	sinhf	registered candidate	SDK/dependency only		TRUEOS/src/hv/blueprint/blueprint.rs:1175
+std / libc / math	socket	registered candidate	app/package reference	TRUEOS/src/mio_compat.rs:184; TRUEOS/src/mio_compat.rs:195; TRUEOS/src/mio_compat.rs:212; TRUEOS/src/mio_compat.rs:214; TRUEOS/src/mio_compat.rs:216; TRUEOS/src/mio_compat.rs:220; TRUEOS/src/mio_compat.rs:221; TRUEOS/src/mio_compat.rs:222; TRUEOS/src/mio_compat.rs:223; TRUEOS/src/mio_compat.rs:231; TRUEOS/src/mio_compat.rs:235; TRUEOS/src/mio_compat.rs:236	TRUEOS/src/unix_compat.rs:411
+std / libc / math	socketpair	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:5028; TRUEOS/src/std_abi_shim.rs:5074; TRUEOS/src/unix_fd_probe.rs:405; TRUEOS/src/unix_fd_probe.rs:407; TRUEOS/src/unix_fd_probe.rs:409; TRUEOS/src/unix_fd_probe.rs:411; TRUEOS/src/unix_fd_probe.rs:415; TRUEOS/src/unix_fd_probe.rs:417; TRUEOS/src/unix_fd_probe.rs:451; TRUEOS/src/unix_fd_probe.rs:453; TRUEOS/src/unix_fd_probe.rs:461; TRUEOS/src/unix_fd_probe.rs:463	TRUEOS/src/unix_compat.rs:412
+std / libc / math	stat	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:2483; TRUEOS/src/std_abi_shim.rs:5245; TRUEOS/src/std_abi_shim.rs:5250; TRUEOS/src/std_abi_shim.rs:5255; TRUEOS/src/std_abi_shim.rs:5312; TRUEOS/src/std_abi_shim.rs:6662; TRUEOS/src/hv/vmcall.rs:5705; TRUEOS/src/intel/render/primary.rs:2520; TRUEOS/src/intel/render/primary.rs:2521; TRUEOS/src/intel/render/primary.rs:2618; TRUEOS/src/intel/render/primary.rs:2626; TRUEOS/src/intel/render/submit.rs:1066	TRUEOS/src/unix_compat.rs:413
+std / libc / math	stat64	registered candidate	SDK/dependency only		TRUEOS/src/unix_compat.rs:414
+std / libc / math	statvfs	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:234
+std / libc / math	strchr	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:415
+std / libc / math	strcmp	registered candidate	app/package reference	TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:144; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:444; TRUEOS/crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c:470	TRUEOS/src/unix_compat.rs:416
+std / libc / math	strcspn	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:417
+std / libc / math	strerror_r	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:3230	TRUEOS/src/unix_compat.rs:418
+std / libc / math	strlen	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1161
+std / libc / math	strncmp	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:3280	TRUEOS/src/unix_compat.rs:419
+std / libc / math	strrchr	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:420
+std / libc / math	strspn	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:421
+std / libc / math	sysconf	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:422
+std / libc / math	tan	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1196
+std / libc / math	tanf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1174
+std / libc / math	tanh	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1207
+std / libc / math	tanhf	registered candidate	app/package reference		TRUEOS/src/hv/blueprint/blueprint.rs:1186
+std / libc / math	tcgetattr	registered candidate	app/package reference	TRUEOS/src/unix_abi_shim.rs:516; TRUEOS/src/unix_fd_probe.rs:201; TRUEOS/src/unix_fd_probe.rs:203; TRUEOS/src/unix_fd_probe.rs:204; TRUEOS/src/unix_fd_probe.rs:220; TRUEOS/src/unix_fd_probe.rs:222; TRUEOS/src/unix_fd_probe.rs:224	TRUEOS/src/unix_compat.rs:423
+std / libc / math	tcsetattr	registered candidate	app/package reference	TRUEOS/src/unix_abi_shim.rs:518; TRUEOS/src/unix_fd_probe.rs:212; TRUEOS/src/unix_fd_probe.rs:214; TRUEOS/src/unix_fd_probe.rs:215; TRUEOS/src/unix_fd_probe.rs:226; TRUEOS/src/unix_fd_probe.rs:228; TRUEOS/src/unix_fd_probe.rs:229	TRUEOS/src/unix_compat.rs:424
+std / libc / math	time	registered candidate	app/package reference	TRUEOS/src/Chronos.rs:114; TRUEOS/src/Chronos.rs:145; TRUEOS/src/crypt.rs:1016; TRUEOS/src/executor_task_profile.rs:417; TRUEOS/src/limine.rs:271; TRUEOS/src/main.rs:102; TRUEOS/src/main.rs:318; TRUEOS/src/mio_probe.rs:76; TRUEOS/src/mio_probe.rs:136; TRUEOS/src/ram_probe.rs:60; TRUEOS/src/runtime.rs:56; TRUEOS/src/runtime.rs:59	TRUEOS/src/unix_compat.rs:425
+std / libc / math	unlink	registered candidate	app/package reference	TRUEOS/src/std_abi_shim.rs:6434	TRUEOS/src/unix_compat.rs:426
+std / libc / math	unlinkat	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:427
+std / libc / math	unsetenv	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:289
+std / libc / math	utimes	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:428
+std / libc / math	waitpid	registered candidate	app/package reference	TRUEOS/src/r/threads/stack.rs:275	TRUEOS/src/unix_compat.rs:429
+std / libc / math	write	registered candidate	app/package reference	TRUEOS/src/Chronos.rs:153; TRUEOS/src/Chronos.rs:154; TRUEOS/src/Chronos.rs:167; TRUEOS/src/Chronos.rs:169; TRUEOS/src/Chronos.rs:179; TRUEOS/src/Chronos.rs:180; TRUEOS/src/allocators.rs:423; TRUEOS/src/allocators.rs:508; TRUEOS/src/allocators.rs:535; TRUEOS/src/allocators.rs:627; TRUEOS/src/allocators.rs:2061; TRUEOS/src/app_db.rs:104	TRUEOS/src/unix_compat.rs:430
+std / libc / math	writev	registered candidate	app/package reference		TRUEOS/src/unix_compat.rs:431
