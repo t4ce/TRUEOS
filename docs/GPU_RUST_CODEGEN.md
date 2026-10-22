@@ -455,7 +455,7 @@ success criterion; correctness plus a reported break-even point is.
 - `src/r/fs/http_trueosfs.rs`
 - `src/shell2/shell2_dl.rs`
 - sibling toolchain `TRUEOS_PORT.md`
-- sibling toolchain `blueprints/rustc-min/src/main.rs`
+- sibling Blueprint repository `apps/rustc-min/src/main.rs`
 - sibling toolchain rustc sources in `rustc_codegen_cranelift` and
   `rustc_codegen_ssa`
 - sibling Blueprints app `apps/badc/src/c5/codegen/`

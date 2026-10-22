@@ -1,0 +1,88 @@
+name	version	path	status	review	source_bytes	runtime_apps	host_build_apps	overlay_source_apps	lock_only_apps
+axum	0.8.9	axum-0.8.9	app target graph	required	522085	PlotTwist,bios,codex-cli,cubesrv,monaco,prismq,sqlite,swarm,webmail,websys			
+axum-core	0.5.6	axum-core-0.5.6	app target graph	required	89369	PlotTwist,bios,codex-cli,cubesrv,monaco,prismq,sqlite,swarm,webmail,websys			
+base64	0.22.1	base64-0.22.1	app target graph	required	148539	Frog,appstore,bios,codex-cli,cubes,cubesrv,hyper,monaco,osm,prismq,rebsky,share,sqlite,superseedr,swarm,webmail	QuadTexture,boat,codex-cli,trueos-picasso-example		rustc-min
+bytes	1.11.1	bytes-1.11.1	app target graph	required	408769	Frog,Player,PlotTwist,appstore,backup,bios,codex-cli,cubes,cubesrv,hyper,ipp-printer,monaco,os,osm,pi_snake,prismq,rebsky,share,sqlite,ssh,superseedr,swarm,velory,voxy,webmail,websys	codex-cli		
+crossbeam-deque	0.8.6	crossbeam-deque-0.8.6	app target graph	required	129574	codex-cli,esp32_stt,prismq,rebsky,voxy			
+crossbeam-utils	0.8.21	crossbeam-utils-0.8.21	app target graph	required	190359	codex-cli,esp32_stt,prismq,rebsky,voxy	codex-cli,esp32_stt,prismq,rebsky,voxy		
+crossfont	0.9.0	crossfont	not selected	stale vendor candidate	129317				
+crossterm	0.29.0	crossterm-0.29.0-trueos	app target graph	required	533853	Player,appstore,backup,calculator,codex-cli,commander,lumen,os,pi_snake,qjs,ratatest,rbgb,rebsky,termdir,tredb			
+directories-next	2.0.0	directories-next-2.0.0	app target graph	required	67099	voxy			
+getrandom	0.2.17	getrandom-0.2.17	app target graph	required	86626	Frog,appstore,codex-cli,hyper,osm,rebsky,ssh,superseedr,voxy			
+getrandom	0.3.4	getrandom-0.3.4	app target graph	required	121064	bios,codex-cli,cubesrv,hull,monaco,prismq,rebsky,share,sqlite,swarm,voxy,webmail	bios,codex-cli,cubesrv,hull,monaco,prismq,rebsky,share,sqlite,swarm,voxy,webmail		rustc-min
+getrandom	0.4.2	getrandom-0.4.2	app target graph	required	123944	codex-cli,esp32_stt,rebsky,ssh,superseedr,voxy	codex-cli,esp32_stt,rebsky,ssh,superseedr,voxy		rustc-min
+h2	0.4.14	h2-0.4.14	app target graph	required	728188	codex-cli,superseedr			
+hickory-proto	0.25.2	hickory-proto-0.25.2	not selected	stale vendor candidate	1802682				
+hickory-resolver	0.25.2	hickory-resolver-0.25.2	not selected	stale vendor candidate	346076				
+http	1.4.0	http-1.4.0	app target graph	required	417549	Frog,PlotTwist,appstore,bios,codex-cli,cubes,cubesrv,hyper,ipp-printer,monaco,osm,prismq,rebsky,share,sqlite,superseedr,swarm,voxy,webmail,websys			
+http-body	1.0.1	http-body-1.0.1	app target graph	required	14444	Frog,PlotTwist,appstore,bios,codex-cli,cubes,cubesrv,hyper,monaco,osm,prismq,share,sqlite,superseedr,swarm,voxy,webmail,websys			
+http-body-util	0.1.3	http-body-util-0.1.3	app target graph	required	49547	Frog,PlotTwist,appstore,bios,codex-cli,cubes,cubesrv,hyper,monaco,osm,prismq,share,sqlite,superseedr,swarm,voxy,webmail,websys			
+httpdate	1.0.3	httpdate-1.0.3	app target graph	required	32117	PlotTwist,bios,codex-cli,cubesrv,monaco,prismq,share,sqlite,swarm,webmail,websys			
+hyper	1.10.0	hyper-1.10.0	app target graph	required	623035	Frog,PlotTwist,appstore,bios,codex-cli,cubes,cubesrv,hyper,monaco,osm,prismq,share,sqlite,superseedr,swarm,voxy,webmail,websys			
+hyper-rustls	0.27.9	hyper-rustls-0.27.9	app target graph	required	49774	Frog,appstore,codex-cli,hyper,osm,superseedr,voxy			
+hyper-util	0.1.20	hyper-util-0.1.20	app target graph	required	365116	voxy		Frog,appstore,bios,codex-cli,cubes,cubesrv,hyper,monaco,osm,prismq,sqlite,superseedr,swarm,webmail,websys	
+if-watch	3.2.2	if-watch-3.2.2	app target graph	required	34060	rebsky			
+lazy_static	1.5.0	lazy_static-1.5.0	app target graph	required	25200	Player			rustc-min
+libc	0.2.186	libc-0.2.186	app target graph	required	4432135	Frog,Player,PlotTwist,appstore,backup,badc,bios,calculator,codex-cli,commander,cubes,cubesrv,edit,esp32_stt,games,hello_world_replicatable,hull,hyper,ipp-printer,japan,lumen,monaco,os,osm,pi_snake,prismq,qjs,ratatest,rbgb,rebsky,share,sqlite,ssh,superseedr,swarm,termdir,tredb,velory,voxy,webmail,websys,wgpu-hello-compute	Frog,Player,PlotTwist,appstore,backup,badc,bios,calculator,codex-cli,commander,cubes,cubesrv,edit,esp32_stt,games,hello_world_replicatable,hull,hyper,ipp-printer,japan,lumen,monaco,os,osm,pi_snake,prismq,qjs,ratatest,rbgb,rebsky,share,sqlite,ssh,superseedr,swarm,termdir,tredb,velory,voxy,webmail,websys,wgpu-hello-compute		rustc-min
+libloading	0.8.9	libloading-0.8.9	lock evidence only	required	118404				rustc-min
+matchit	0.8.4	matchit-0.8.4	app target graph	required	65545	PlotTwist,bios,codex-cli,cubesrv,monaco,prismq,sqlite,swarm,webmail,websys			
+mime	0.3.17	mime-0.3.17	app target graph	required	47102	PlotTwist,bios,codex-cli,cubesrv,monaco,prismq,share,sqlite,swarm,webmail,websys			
+mio	1.2.0	mio-1.2.0	app target graph	required	481829	Frog,Player,PlotTwist,appstore,backup,bios,calculator,codex-cli,commander,cubes,cubesrv,esp32_stt,hello_world_replicatable,hyper,ipp-printer,lumen,monaco,os,osm,pi_snake,prismq,qjs,ratatest,rbgb,rebsky,share,sqlite,ssh,superseedr,swarm,termdir,tredb,velory,voxy,webmail,websys			
+quinn	0.11.9	quinn-0.11.9	app target graph	required	191556	codex-cli,rebsky,voxy	codex-cli,rebsky,voxy		
+quinn-proto	0.11.14	quinn-proto-0.11.14	app target graph	required	897487	codex-cli,rebsky,voxy			
+quinn-udp	0.5.14	quinn-udp-0.5.14	app target graph	required	73568	codex-cli,rebsky,voxy	codex-cli,rebsky,voxy		
+rama-dns	0.3.0-alpha.4	rama-dns-0.3.0-alpha.4-trueos	app target graph	required	107046	codex-cli			
+rama-tls-rustls	0.3.0-alpha.4	rama-tls-rustls-0.3.0-alpha.4-rustcrypto	app target graph	required	120836	codex-cli			
+ratatui	0.30.2	ratatui/ratatui	app target graph	required	353339	ratatest			
+ratatui-core	0.1.2	ratatui/ratatui-core	app target graph	required	1030338	ratatest			
+ratatui-crossterm	0.1.2	ratatui/ratatui-crossterm	app target graph	required	82397	ratatest			
+ratatui-macros	0.7.2	ratatui/ratatui-macros	app target graph	required	68253	ratatest			
+ratatui-termina	0.1.0	ratatui/ratatui-termina	not selected	optional terminal backend	58307				
+ratatui-termion	0.1.2	ratatui/ratatui-termion	not selected	optional terminal backend	43787				
+ratatui-termwiz	0.1.2	ratatui/ratatui-termwiz	not selected	optional terminal backend	67465				
+ratatui-widgets	0.3.2	ratatui/ratatui-widgets	app target graph	required	1259056	ratatest			
+raw-window-handle	0.6.2	raw-window-handle	app target graph	required	93866	hull,voxy			
+rayon	1.12.0	rayon	app target graph	required	903084	codex-cli,esp32_stt,prismq,rebsky,voxy			
+rayon-core	1.13.0	rayon/rayon-core	app target graph	required	278986	codex-cli,esp32_stt,prismq,rebsky,voxy	codex-cli,esp32_stt,prismq,rebsky,voxy		
+rayon-demo	0.0.0	rayon/rayon-demo	not selected	example package	159999				
+reqwest	0.13.3	reqwest-0.13.3	app target graph	required	611926	Frog,appstore,codex-cli,cubes,hyper,osm,superseedr			
+ring	0.17.14	ring-0.17.14	app target graph	required	7643087	codex-cli,rebsky,ssh,voxy	codex-cli,rebsky,ssh,voxy		
+russh-cryptovec	0.62.0	russh-cryptovec-0.62.0	app target graph	required	38821	ssh			
+rustix	1.1.4	rustix-1.1.4-trueos	app target graph	required	2358662	Player,appstore,backup,calculator,codex-cli,commander,lumen,os,pi_snake,qjs,ratatest,rbgb,rebsky,termdir,tredb	Player,appstore,backup,calculator,codex-cli,commander,lumen,os,pi_snake,qjs,ratatest,rbgb,rebsky,termdir,tredb		rustc-min
+rustls-rustcrypto	0.0.2-alpha	rustls-rustcrypto-0.0.2-alpha	app target graph	required	74408	Frog,appstore,codex-cli,hyper,osm,superseedr			
+signal-hook-mio	0.2.5	signal-hook-mio-0.2.5-trueos	app target graph	required	64277	Player,appstore,backup,calculator,codex-cli,commander,lumen,os,qjs,ratatest,rbgb,rebsky,termdir,tredb			
+socket2	0.6.3	socket2-0.6.3	app target graph	required	296491	Frog,PlotTwist,appstore,bios,codex-cli,cubes,cubesrv,esp32_stt,hello_world_replicatable,hyper,ipp-printer,monaco,osm,pi_snake,prismq,rebsky,share,sqlite,ssh,superseedr,swarm,velory,voxy,webmail,websys			
+sqlx-sqlite	0.9.0	sqlx-sqlite-0.9.0	app target graph	required	430795	codex-cli			
+starlark	0.14.2	starlark-0.14.2-trueos	app target graph	required	3536054	codex-cli	codex-cli		
+symphonia-codec-aac	0.5.5	symphonia-codec-aac-0.5.5-trueos	app target graph	required	99980	Player			
+symphonia-core	0.5.5	symphonia-core-0.5.5-trueos	app target graph	required	253633	Player			
+taffy	0.15.0	taffy-0.15.0-trueos	not selected	stale vendor candidate	1360017				
+tokio	1.52.3	tokio-1.52.3	app target graph	required	4652997	Frog,Player,PlotTwist,appstore,backup,bios,codex-cli,cubes,cubesrv,esp32_stt,games,hello_world_replicatable,hyper,ipp-printer,japan,monaco,os,osm,pi_snake,prismq,rebsky,share,sqlite,ssh,superseedr,swarm,velory,voxy,webmail,websys			rustc-min
+tokio-macros	2.7.0	tokio-macros-2.7.0	host build only	required	59249		Frog,Player,appstore,backup,bios,codex-cli,cubes,cubesrv,hyper,japan,monaco,os,osm,pi_snake,prismq,rebsky,share,sqlite,ssh,superseedr,swarm,velory,voxy,webmail,websys		
+tokio-rustls	0.26.4	tokio-rustls-0.26.4	app target graph	required	72111	Frog,appstore,codex-cli,hyper,osm,superseedr,voxy			
+tokio-tungstenite	0.29.0	tokio-tungstenite-0.29.0	app target graph	required	51689	bios,codex-cli,cubesrv,monaco,prismq,sqlite,swarm,webmail			
+tokio-util	0.7.18	tokio-util-0.7.18	app target graph	required	687898	codex-cli,rebsky,superseedr			
+tower	0.5.3	tower-0.5.3	overlay source graph	required	367038			Frog,PlotTwist,appstore,bios,codex-cli,cubes,cubesrv,hyper,monaco,osm,prismq,sqlite,superseedr,swarm,webmail,websys	
+tower-http	0.6.9	tower-http-0.6.9	app target graph	required	590644	Frog,appstore,codex-cli,cubes,hyper,osm,superseedr			
+tower-layer	0.3.3	tower-layer-0.3.3	app target graph	required	22277	Frog,PlotTwist,appstore,bios,codex-cli,cubes,cubesrv,hyper,monaco,osm,prismq,sqlite,superseedr,swarm,webmail,websys			
+tower-service	0.3.3	tower-service-0.3.3	app target graph	required	18450	Frog,PlotTwist,appstore,bios,codex-cli,cubes,cubesrv,hyper,monaco,osm,prismq,sqlite,superseedr,swarm,voxy,webmail,websys			
+tracing	0.1.44	tracing-0.1.44	app target graph	required	9818665	Frog,appstore,codex-cli,cubes,hull,hyper,osm,rebsky,superseedr,voxy	codex-cli		rustc-min
+tracing-appender	0.2.5	tracing-appender-0.2.5	app target graph	required	136790	codex-cli,voxy			
+tracing-attributes	0.1.31	tracing-attributes-0.1.31	host build only	required	181939		codex-cli,rebsky,superseedr,voxy		rustc-min
+tracing-core	0.1.36	tracing-core-0.1.36	app target graph	required	270282	Frog,appstore,codex-cli,cubes,hull,hyper,osm,rebsky,superseedr,voxy	codex-cli		rustc-min
+tracing-log	0.2.0	tracing-log-0.2.0	app target graph	required	67003	codex-cli,superseedr,voxy			rustc-min
+tracing-subscriber	0.3.23	tracing-subscriber-0.3.23	app target graph	required	1083195	codex-cli,superseedr,voxy			rustc-min
+want	0.3.1	want-0.3.1	app target graph	required	15489	Frog,PlotTwist,appstore,codex-cli,cubes,hyper,osm,sqlite,superseedr,voxy			
+dpi	0.1.2	winit/dpi	app target graph	required	45687	hull,voxy			
+winit	0.31.0-beta.3	winit/winit	app target graph	required	643409	hull,voxy	hull,voxy		
+winit-android	0.31.0-beta.3	winit/winit-android	not selected	other platform backend	76470				
+winit-appkit	0.31.0-beta.3	winit/winit-appkit	not selected	other platform backend	336898				
+winit-common	0.31.0-beta.3	winit/winit-common	not selected	other platform backend	119901				
+winit-core	0.31.0-beta.3	winit/winit-core	app target graph	required	294522	hull,voxy			
+winit-orbital	0.31.0-beta.3	winit/winit-orbital	not selected	other platform backend	56659				
+winit-trueos	0.31.0-beta.3	winit/winit-trueos	app target graph	required	110393	hull,voxy	hull,voxy		
+winit-uikit	0.31.0-beta.3	winit/winit-uikit	not selected	other platform backend	136509				
+winit-wayland	0.31.0-beta.3	winit/winit-wayland	not selected	other platform backend	321878				
+winit-web	0.31.0-beta.3	winit/winit-web	not selected	other platform backend	271154				
+winit-win32	0.31.0-beta.3	winit/winit-win32	not selected	other platform backend	486886				
+winit-x11	0.31.0-beta.3	winit/winit-x11	not selected	other platform backend	380618				
