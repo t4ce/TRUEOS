@@ -98,14 +98,17 @@ the same SURFLIVE boundary. Both swap buffers retain damage repair debt.
 Damage includes every moved window's old and new bounds, including simultaneous
 drags by independent cursors; leases remain owned by windows.
 
-Create/close rebalancing packs a complete top suffix in broker z order. Hot
-interaction refreshes both leases of a pair. Focus raises the entire group.
-Promoting a stacked pair plans sufficient whole-group revocations before making
-any change: two idle singles may be demoted, while an actively dragged pair and
-single retain their leases under the existing 500 ms grace. Failed admission
-leaves every holder unchanged. A demoted pair contributes its last published
-background followed by its foreground to the slot-0 painter, under the same
-window rectangle; producers need not redraw merely because a lease changes.
+Focus removes the selected window from the current visible order and appends
+it at the top. Every other pair retains its relative order, including windows
+on slot 0. The broker records that order in logical z before assigning a
+complete top suffix to hardware planes. Later create/close rebalancing therefore
+preserves the focused order. A layered window moves as one group.
+
+Motion only refreshes a window's existing leases; it never promotes or reorders
+windows. Independent cursors can continue dragging their selected frames even
+when focus moves one of them to slot 0. A demoted pair contributes its last
+published background followed by its foreground to the slot-0 painter, under
+the same window rectangle; producers need not redraw when a lease changes.
 
 Compositor stamps include both window and layer identity. Direct scanout pins
 the exact member surface until the display's batched SURFLIVE boundary. A late

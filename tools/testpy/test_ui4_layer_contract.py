@@ -37,7 +37,7 @@ impl DamageRegion { const FULL:Self=Self; }
 fn next_serial(serial:u64)->u64 { serial.wrapping_add(1).max(1) }
 #[derive(Clone, Copy)] struct Record { damage:Option<DamageRegion>, revision:u64, generation:u16,background:Option<()>,output:OutputId,plane:WindowPlane,state:WindowState,placement:Placement,open_transition:Option<()> }
 // Lease-policy fixtures have no rendering transitions or close leases.
-impl Record { fn skip_stack_transitions(&mut self) { if self.plane==WindowPlane::Primary { self.open_transition=None; } } }
+impl Record { fn set_stack_z(&mut self,z:i32) { self.placement.z=z; } fn skip_stack_transitions(&mut self) { if self.plane==WindowPlane::Primary { self.open_transition=None; } } }
 #[derive(Clone, Copy)] struct PlaneLease { window:WindowId,last_hot_ms:u64 }
 fn pack_handle(slot:usize,generation:u16)->Result<u32,()> { Ok((generation as u32)<<16 | slot as u32+1) }
 fn unpack_handle(raw:u32)->Result<(usize,u16),()> { Ok(((raw as u16-1) as usize,(raw>>16) as u16)) }
@@ -76,6 +76,36 @@ fn id(slot:usize)->WindowId { WindowId(pack_handle(slot,1).unwrap()) }
     assert_eq!(b.windows[0].plane.slot(),3);
     assert_eq!(b.group_plan(0).iter().flatten().count(),2);
 }
+fn order(b:&WindowBroker)->Vec<usize> {
+    let mut ids:Vec<_>=(0..b.windows.len()).filter(|&i|b.windows[i].state!=WindowState::Closed).collect();
+    ids.sort_by_key(|&i|(b.windows[i].plane.slot(),b.windows[i].placement.z,id(i)));
+    ids
+}
+#[test] fn focus_moves_only_one_window_for_four_and_five_frames() {
+    for count in 1..=8 {
+        let mut b=broker(&vec![1;count]);b.rebalance_application_planes(0,0);
+        for selected in (0..count).chain((0..count).rev()).cycle().take(count*8) {
+            let mut want=order(&b);want.retain(|&i|i!=selected);want.push(selected);
+            b.focus_window(id(selected),0,10);
+            assert_eq!(order(&b),want);
+            assert_eq!(b.windows[selected].plane.slot(),3.min(count));
+            b.rebalance_application_planes(0,11);
+            assert_eq!(order(&b),want,"later rebalance must preserve focus order");
+        }
+    }
+}
+#[test] fn mixed_groups_preserve_every_unselected_pair() {
+    for mask in 0u32..64 {
+        let widths:Vec<_>=(0..6).map(|i|if mask&(1<<i)==0 {1}else{2}).collect();
+        let mut b=broker(&widths);b.rebalance_application_planes(0,0);
+        for selected in 0..6 {
+            let mut want=order(&b);want.retain(|&i|i!=selected);want.push(selected);
+            b.focus_window(id(selected),0,10);
+            assert_eq!(order(&b),want);
+            assert_eq!(b.windows[selected].plane.slot(),3);
+        }
+    }
+}
 #[test] fn every_mixed_topology_preserves_whole_suffix_order() {
     for mask in 1u32..256 {
         let widths:Vec<_>=(0..8).map(|i| if mask&(1<<i)==0 {1}else{2}).collect();
@@ -95,7 +125,7 @@ fn id(slot:usize)->WindowId { WindowId(pack_handle(slot,1).unwrap()) }
 }
 '''
     source = source.replace('LAYER_PATH', str(ROOT / 'src/ui4/layer_contract.rs'))
-    source = source.replace('METHODS', '\n'.join(method(name) for name in ['rebalance_application_planes', 'group_plan', 'apply_group_plan']))
+    source = source.replace('METHODS', '\n'.join(method(name) for name in ['rebalance_application_planes', 'group_plan', 'apply_group_plan', 'focus_window']))
     # Production methods refer to the parent UI4 module.
     source = source.replace('super::layer_contract::', 'crate::layer_contract::')
     with tempfile.TemporaryDirectory(prefix='trueos-layer-contract-') as directory:
