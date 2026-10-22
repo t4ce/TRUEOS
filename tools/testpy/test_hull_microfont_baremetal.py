@@ -82,6 +82,7 @@ def summarize(events: list[dict]) -> dict:
         "cache_budget_bytes": max((row.get("budget_bytes", 0) for row in prepares), default=0),
         "overlay_frame_bytes": max((row.get("frame_bytes", 0) for row in overlays), default=0),
         "cache_sync_bytes": max((row.get("cache_sync_bytes", 0) for row in overlays), default=0),
+        "cache_sync_rows": max((row.get("cache_sync_rows", 0) for row in overlays), default=0),
         "timings_us": durations, "errors": sorted(set(errors)),
     }
 

@@ -14,6 +14,59 @@ const MAX_RUN_TEXT_BYTES: usize = 4_096;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const WIRE_RUN_BYTES: usize = 28;
 
+struct PaintFlushRegion {
+    offset: usize,
+    row_bytes: usize,
+    rows: usize,
+}
+
+/// Validate the clipped paint union against both the visible extent and actual
+/// pitched allocation before constructing an interior DMA pointer.
+fn paint_flush_region(
+    width: u32,
+    height: u32,
+    pitch: u32,
+    byte_len: usize,
+    bounds: Option<(u32, u32, u32, u32)>,
+) -> Result<Option<PaintFlushRegion>, i32> {
+    let Some((x, y, dirty_width, dirty_height)) = bounds else {
+        return Ok(None);
+    };
+    if dirty_width == 0
+        || dirty_height == 0
+        || x.checked_add(dirty_width).is_none_or(|right| right > width)
+        || y.checked_add(dirty_height)
+            .is_none_or(|bottom| bottom > height)
+        || (width as usize)
+            .checked_mul(4)
+            .is_none_or(|row| row > pitch as usize)
+    {
+        return Err(ERROR_UI4);
+    }
+    let row_bytes = (dirty_width as usize).checked_mul(4).ok_or(ERROR_UI4)?;
+    let offset = (y as usize)
+        .checked_mul(pitch as usize)
+        .and_then(|row| {
+            (x as usize)
+                .checked_mul(4)
+                .and_then(|column| row.checked_add(column))
+        })
+        .ok_or(ERROR_UI4)?;
+    let end = (dirty_height as usize - 1)
+        .checked_mul(pitch as usize)
+        .and_then(|last_row| offset.checked_add(last_row))
+        .and_then(|last_row| last_row.checked_add(row_bytes))
+        .ok_or(ERROR_UI4)?;
+    if end > byte_len {
+        return Err(ERROR_UI4);
+    }
+    Ok(Some(PaintFlushRegion {
+        offset,
+        row_bytes,
+        rows: dirty_height as usize,
+    }))
+}
+
 fn valid_geometry(x: f32, y: f32, size: f32, advance: f32) -> bool {
     x.is_finite()
         && y.is_finite()
@@ -206,27 +259,57 @@ pub(crate) fn draw_wire(owner: WindowOwner, window_id: u32, payload: &[u8]) -> i
         Ok(view) => view,
         Err(_) => return ERROR_UI4,
     };
+    let region = match paint_flush_region(
+        width,
+        height,
+        view.pitch,
+        view.byte_len,
+        prepared.paint_bounds(width, height),
+    ) {
+        Ok(region) => region,
+        Err(error) => return error,
+    };
+    let span = region.as_ref().map(|region| {
+        // SAFETY: paint_flush_region proved every row belongs to this allocation.
+        crate::intel::DmaFlushRows::new(
+            unsafe { view.virt.add(region.offset) },
+            region.row_bytes,
+            view.pitch as usize,
+            region.rows,
+        )
+    });
+    let spans = span.as_slice();
     let cache_sync_started = crate::ui4::text_blit::stamp();
-    crate::intel::dma_flush(view.virt, view.byte_len);
+    if !crate::intel::dma_flush_strided_row_spans(spans) {
+        return ERROR_UI4;
+    }
     let paint_started = crate::ui4::text_blit::stamp();
     // SAFETY: SURFACES retains this exact exclusive write lease throughout
     // blending. CPU cache invalidation follows the validated GPU release.
     let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
     let result = prepared.paint(pixels, width, height, view.pitch);
     let paint_finished = crate::ui4::text_blit::stamp();
-    crate::intel::dma_flush(view.virt, view.byte_len);
+    let cache_sync_ok = crate::intel::dma_flush_strided_row_spans(spans);
     let overlay_finished = crate::ui4::text_blit::stamp();
     let cache_sync_ticks = paint_started
         .wrapping_sub(cache_sync_started)
         .saturating_add(overlay_finished.wrapping_sub(paint_finished));
     drop(surfaces);
-    let status = if result.is_err() { ERROR_UI4 } else { 0 };
+    let status = if result.is_err() || !cache_sync_ok {
+        ERROR_UI4
+    } else {
+        0
+    };
+    let cache_sync_bytes = region
+        .as_ref()
+        .map_or(0, |region| region.row_bytes * region.rows * 2);
+    let cache_sync_rows = region.as_ref().map_or(0, |region| region.rows * 2);
     crate::log_important!(target: "hull-font";
-        "hull-font: overlay owner={:?} window={} extent={}x{} frame_bytes={} overlay_us={} cache_sync_us={} paint_us={} status={}\n",
+        "hull-font: overlay owner={:?} window={} extent={}x{} frame_bytes={} overlay_us={} cache_sync_us={} paint_us={} cache_sync_bytes={} cache_sync_rows={} status={}\n",
         owner, window_id, width, height, view.byte_len,
         crate::ui4::text_blit::nanos(overlay_finished.wrapping_sub(overlay_started)) / 1000,
         crate::ui4::text_blit::nanos(cache_sync_ticks) / 1000,
         crate::ui4::text_blit::nanos(paint_finished.wrapping_sub(paint_started)) / 1000,
-        status);
+        cache_sync_bytes, cache_sync_rows, status);
     status
 }

@@ -12,6 +12,7 @@ HARNESS = r'''
 extern crate alloc;
 use alloc::{string::String,vec::Vec};
 const ERROR_INVALID:i32=-1;
+const ERROR_UI4:i32=-6;
 #[derive(Debug)] struct HullTextRun {text:String,x:f32,baseline_y:f32,size_px:f32,advance_px:f32,rgba:u32}
 mod hull_font_service {pub fn natural_advance_px(size:f32)->f32 {size*6.0/11.0}}
 ITEMS
@@ -56,6 +57,21 @@ fn wire(text:&[u8])->Vec<u8> {
             assert!(decode_wire(&p).is_err(),"{offset} {f}");}
     }
 }
+#[test] fn paint_flush_region_respects_pitch_and_exact_last_visible_byte() {
+    let r=paint_flush_region(13,7,64,436,Some((2,3,11,4))).unwrap().unwrap();
+    assert_eq!((r.offset,r.row_bytes,r.rows),(200,44,4));
+    assert!(paint_flush_region(13,7,64,435,Some((2,3,11,4))).is_err());
+    let pixel=paint_flush_region(1,1,4,4,Some((0,0,1,1))).unwrap().unwrap();
+    assert_eq!((pixel.offset,pixel.row_bytes,pixel.rows),(0,4,1));
+}
+#[test] fn paint_flush_region_rejects_outside_empty_and_overflowing_rectangles() {
+    for bounds in [(2,3,12,4),(2,3,11,5),(0,0,0,1),(0,0,1,0),
+        (u32::MAX,0,2,1),(0,u32::MAX,1,2)] {
+        assert!(paint_flush_region(13,7,64,448,Some(bounds)).is_err());
+    }
+    assert!(paint_flush_region(13,7,51,448,Some((0,0,1,1))).is_err());
+    assert!(paint_flush_region(13,7,64,448,None).unwrap().is_none());
+}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] enum FramePoolError {InvalidLease,ProducerReleaseRequired}
 #[derive(Clone,Copy)] struct FrameWriteLease {frame:u32,buffer_index:u8,token:u64}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] struct FrameGpuRelease {phys:u64,bytes:usize}
@@ -98,7 +114,8 @@ OVERLAY
 def main():
     declarations = '\n'.join(constant(BRIDGE, name) for name in (
         'MAX_RUNS', 'MAX_RUN_TEXT_BYTES', 'MAX_TEXT_BYTES', 'WIRE_RUN_BYTES'))
-    declarations += '\n' + '\n'.join(item(BRIDGE, name) for name in ('valid_geometry', 'decode_wire'))
+    declarations += '\n' + '\n'.join(item(BRIDGE, name) for name in (
+        'valid_geometry', 'decode_wire', 'PaintFlushRegion', 'paint_flush_region'))
     source = HARNESS.replace('ITEMS', declarations).replace('OVERLAY', item(POOL, 'mark_frame_buffer_cpu_overlay'))
     with tempfile.TemporaryDirectory(prefix='hull-text-bridge-') as directory:
         path = Path(directory) / 'tests.rs'

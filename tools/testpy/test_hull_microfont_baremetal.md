@@ -62,6 +62,9 @@ overlay duration, frame bytes, cache synchronization duration, and paint
 duration; any unsuccessful status fails the analysis. Prepare counters are per request; resident
 bytes and the budget describe the shared cache. Only accepted log records can
 reach the host capture; the service uses Important records for these samples.
+The bounds-based bridge also reports `cache_sync_bytes` and
+`cache_sync_rows`: requested spans summed across the pre/post synchronization
+passes. Cache-line rounding may touch a few extra edge bytes.
 
 For a quick analysis of an existing capture:
 

@@ -10,6 +10,7 @@ pub(crate) mod cursor_image_api;
 pub(crate) mod display_api;
 pub(crate) mod drag_drop_api;
 pub(crate) mod hull_text_api;
+pub(crate) mod native_compute_api;
 pub use cursor_image_api::{
     trueos_cabi_ui4_scene_register_cursor_image_v1, trueos_cabi_ui4_scene_select_cursor_image_v1,
 };
@@ -531,6 +532,7 @@ struct BlueprintSceneSurface {
     shadertoy_upload: Option<ShaderToyPackageUpload>,
     shadertoy_registered: u32,
     shadertoy_state: Option<ShaderToyRuntimeState>,
+    native_compute: native_compute_api::NativeComputeState,
     placement: WindowPlacement,
     launch_selection: Option<(Ui4CursorSource, u32, u32)>,
     skybox: Option<OwnedRgb565Surface>,
@@ -1290,6 +1292,7 @@ fn open_blueprint_surface_with_cadence_scaled(
                 shadertoy_upload: None,
                 shadertoy_registered: 0,
                 shadertoy_state: Some(ShaderToyRuntimeState::new(window.raw())),
+                native_compute: native_compute_api::NativeComputeState::default(),
                 placement,
                 launch_selection: desktop_shell_launch
                     .map(|launch| (launch.source, launch.x, launch.y)),
@@ -1340,6 +1343,7 @@ fn open_blueprint_surface_with_cadence_scaled(
         shadertoy_upload: None,
         shadertoy_registered: 0,
         shadertoy_state: Some(ShaderToyRuntimeState::new(window.raw())),
+        native_compute: native_compute_api::NativeComputeState::default(),
         placement,
         launch_selection: desktop_shell_launch.map(|launch| (launch.source, launch.x, launch.y)),
         skybox: None,
