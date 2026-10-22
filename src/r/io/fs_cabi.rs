@@ -1756,22 +1756,7 @@ pub unsafe extern "C" fn trueos_cabi_env_var(
 
 static SHELL_ATTACHED_REJECTS: AtomicU32 = AtomicU32::new(0);
 
-struct KonsoleFrameState {
-    cols: u32,
-    rows: u32,
-    reserved_top_rows: u32,
-    terminal_handoff: bool,
-    cursor_row: u32,
-    cursor_col: u32,
-    cursor_visible: bool,
-    bytes: Vec<u8>,
-}
-
 const KONSOLE_FRAME_FLAG_TERMINAL_HANDOFF: u32 = 1 << 31;
-const KONSOLE_RESERVED_TOP_ROWS_MASK: u32 = 0x0000_FFFF;
-
-static KONSOLE_FRAME_STATES: spin::Mutex<BTreeMap<u32, KonsoleFrameState>> =
-    spin::Mutex::new(BTreeMap::new());
 
 fn konsole_write_bytes(data: &[u8]) -> usize {
     if crate::hv::current_hull_guest_context_vm_id().is_some() { return guest_shell_write_op(trueos_vm::vmcall::OP_BP_SHELL_RAW_WRITE, data); }
@@ -1782,25 +1767,6 @@ fn konsole_write_bytes(data: &[u8]) -> usize {
 fn konsole_write_fmt(args: fmt::Arguments<'_>) -> usize {
     let text = alloc::format!("{}", args);
     konsole_write_bytes(text.as_bytes())
-}
-
-fn konsole_frame_push_fmt(bytes: &mut Vec<u8>, args: fmt::Arguments<'_>) {
-    let text = alloc::format!("{}", args);
-    bytes.extend_from_slice(text.as_bytes());
-}
-
-fn konsole_frame_push_hex_byte(bytes: &mut Vec<u8>, byte: u8) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    bytes.push(HEX[(byte >> 4) as usize]);
-    bytes.push(HEX[(byte & 0x0f) as usize]);
-}
-
-fn konsole_frame_push_row_packet(bytes: &mut Vec<u8>, row: u32, col: u32, data: &[u8]) {
-    konsole_frame_push_fmt(bytes, format_args!("\x1b]777;konsole_row={},{};", row, col));
-    for &byte in data {
-        konsole_frame_push_hex_byte(bytes, byte);
-    }
-    bytes.push(0x07);
 }
 
 #[unsafe(no_mangle)]
@@ -2491,123 +2457,10 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
         // the frame; prelease guests have their terminal output suppressed.
         claim_attached_console_for_terminal_io();
     }
-    let Some((frame_cols, frame_rows)) = konsole_begin_frame_size(cols, rows, terminal_handoff)
+    let Some(_) = konsole_begin_frame_size(cols, rows, terminal_handoff)
     else {
         return -1;
     };
-    let state = KonsoleFrameState {
-        cols: frame_cols,
-        rows: frame_rows,
-        reserved_top_rows: if crate::hv::current_hull_guest_context_vm_id().is_some() {
-            0
-        } else {
-            (reserved_top_rows & KONSOLE_RESERVED_TOP_ROWS_MASK).min(32)
-        },
-        terminal_handoff,
-        cursor_row: 0,
-        cursor_col: 0,
-        cursor_visible: false,
-        bytes: Vec::new(),
-    };
-    let key = current_cpu_key();
-    let mut states = KONSOLE_FRAME_STATES.lock();
-    states.insert(key, state);
-    if let Some(state) = states.get_mut(&key) {
-        state.bytes.extend_from_slice(b"\x1b[0m\x1b[?25l");
-    }
-    0
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_konsole_write_row(
-    row: u32,
-    col: u32,
-    data_ptr: *const u8,
-    data_len: usize,
-) -> i32 {
-    if data_ptr.is_null() && data_len != 0 {
-        return -1;
-    }
-    let mut states = KONSOLE_FRAME_STATES.lock();
-    let Some(state) = states.get_mut(&current_cpu_key()) else {
-        return -1;
-    };
-    if row >= state.rows || col >= state.cols {
-        return -1;
-    }
-
-    if state.terminal_handoff {
-        let data = if data_len == 0 {
-            &[][..]
-        } else {
-            unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
-        };
-        konsole_frame_push_row_packet(&mut state.bytes, row, col, data);
-        return 0;
-    }
-
-    let terminal_row = state
-        .reserved_top_rows
-        .saturating_add(row)
-        .saturating_add(1);
-    let terminal_col = col.saturating_add(1);
-    konsole_frame_push_fmt(
-        &mut state.bytes,
-        format_args!("\x1b[{};{}H\x1b[2K", terminal_row, terminal_col),
-    );
-    if data_len != 0 {
-        let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
-        state.bytes.extend_from_slice(data);
-    }
-    0
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_konsole_set_cursor(row: u32, col: u32, visible: u32) -> i32 {
-    let mut states = KONSOLE_FRAME_STATES.lock();
-    let Some(state) = states.get_mut(&current_cpu_key()) else {
-        return -1;
-    };
-    if visible == 0 {
-        state.cursor_visible = false;
-        return 0;
-    }
-    if row >= state.rows || col >= state.cols {
-        return -1;
-    }
-
-    state.cursor_row = row;
-    state.cursor_col = col;
-    state.cursor_visible = true;
-    0
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_konsole_end_frame() -> i32 {
-    let Some(mut state) = KONSOLE_FRAME_STATES.lock().remove(&current_cpu_key()) else {
-        return -1;
-    };
-    if state.cursor_visible {
-        let terminal_row = state
-            .reserved_top_rows
-            .saturating_add(state.cursor_row)
-            .saturating_add(1);
-        let terminal_col = state.cursor_col.saturating_add(1);
-        konsole_frame_push_fmt(
-            &mut state.bytes,
-            format_args!("\x1b[{};{}H\x1b[?25h", terminal_row, terminal_col),
-        );
-    } else {
-        state.bytes.extend_from_slice(b"\x1b[?25l");
-        if !state.terminal_handoff {
-            let terminal_row = state
-                .reserved_top_rows
-                .saturating_add(state.rows.saturating_sub(1))
-                .saturating_add(1);
-            konsole_frame_push_fmt(&mut state.bytes, format_args!("\x1b[{};1H", terminal_row));
-        }
-    }
-    let _ = konsole_write_bytes(state.bytes.as_slice());
     0
 }
 

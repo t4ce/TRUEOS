@@ -20,7 +20,6 @@ pub mod esynth;
 pub mod live_piano;
 pub mod m4a;
 pub mod m4a_demux;
-pub mod native_engine;
 pub mod pattern;
 pub mod pcm_convert;
 pub mod pcm_lane;

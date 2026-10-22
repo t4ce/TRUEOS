@@ -1281,33 +1281,6 @@ unsafe extern "C" {
         out_cap: usize,
         out_next_cursor: *mut u64,
     ) -> isize;
-    pub fn trueos_cabi_audio_native_render_v1(
-        handle: u32,
-        header: *const crate::vaudio::NativeBlockHeaderV1,
-        commands: *const crate::vaudio::NativeRenderCommandV1,
-        count: usize,
-    ) -> isize;
-    pub fn trueos_cabi_audio_native_render_v2(
-        handle: u32,
-        header: *const crate::vaudio::NativeBlockHeaderV2,
-        commands: *const crate::vaudio::NativeRenderCommandV2,
-        count: usize,
-    ) -> isize;
-    pub fn trueos_cabi_audio_native_render_v3(
-        handle: u32,
-        header: *const crate::vaudio::NativeBlockHeaderV3,
-        commands: *const crate::vaudio::NativeRenderCommandV3,
-        count: usize,
-    ) -> isize;
-    pub fn trueos_cabi_audio_native_sample_register_v1(
-        handle: u32,
-        sample_id: u64,
-        channels: u32,
-        rate_hz: u32,
-        samples: *const i16,
-        sample_count: usize,
-    ) -> i32;
-    pub fn trueos_cabi_audio_native_sample_remove_v1(handle: u32, sample_id: u64) -> i32;
 
     pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
     pub fn trueos_cabi_vgpu_scalar_f32_v1(
@@ -1727,14 +1700,6 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_konsole_size(out_cols: *mut u32, out_rows: *mut u32) -> i32;
     pub fn trueos_cabi_konsole_begin_frame(cols: u32, rows: u32, reserved_top_rows: u32) -> i32;
-    pub fn trueos_cabi_konsole_write_row(
-        row: u32,
-        col: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    pub fn trueos_cabi_konsole_set_cursor(row: u32, col: u32, visible: u32) -> i32;
-    pub fn trueos_cabi_konsole_end_frame() -> i32;
     pub fn trueos_cabi_ntp_current_unix_seconds() -> u64;
     pub fn trueos_cabi_ntp_kernel_date_day_month_year(out_ptr: *mut u8, out_cap: usize) -> usize;
 }

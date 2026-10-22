@@ -1,3 +1,4 @@
+# Intentional removal of unused native scheduled audio and Konsole row/cursor/end-frame exports; surviving signatures unchanged.
 # Intentional removal of ten unused Blueprint exports after local app/import audit; all surviving signatures unchanged.
 # Intentional removal of private XPAPP/x86 contexts and prepared-raster batch; surviving signatures unchanged.
 # Intentional retirement of the eight legacy UI4 font/text imports with the removed font backend.
@@ -27,4 +28,4 @@
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
-20a13848e8fe917bea6f7a2daf0bd1d0414ca7085b4fe10bf05ff1dbd64127e1
+c33309ca03cab36dc4fe625d096bad776364ea7aa3d33bdb8b33a190acf1b536

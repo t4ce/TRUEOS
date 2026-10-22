@@ -14,7 +14,8 @@ def main():
     evidence = json.loads((ROOT / 'tools/docs/unused-export-removal-2026-10-22.json').read_text())
     loader = ROOT / 'src/hv/blueprint/blueprint.rs'
     prebind = ROOT / 'src/hv/blueprint/prebind.rs'
-    retired = ','.join(json.dumps(n) for n in evidence['removed'])
+    audio_konsole = json.loads((ROOT / 'tools/docs/audio-konsole-removal-2026-10-22.json').read_text())
+    retired = ','.join(json.dumps(n) for n in evidence['removed'] + audio_konsole['removed'])
     aliases = ','.join(json.dumps(n) for n in evidence['redundant_aliases'])
     # The literal resolver's dependencies are mocked; the production prefix
     # still decides how hash-dependent compiler imports bind to runtime hooks.
@@ -50,7 +51,7 @@ const RETIRED: &[&str] = &[RETIRED_NAMES];
 const OLD_ALIASES: &[&str] = &[ALIAS_NAMES];
 #[test]
 fn retired_imports_fail_prebind_and_never_reach_the_return_zero_fallback() {
-    assert_eq!(RETIRED.len(), 25);
+    assert_eq!(RETIRED.len(), 33);
     FALLBACKS.with(|n| n.set(0));
     for name in RETIRED {
         let reason = prebind::prebind_import_error(name).expect(name);

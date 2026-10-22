@@ -566,26 +566,6 @@ pub fn konsole_begin_frame(cols: u32, rows: u32, reserved_top_rows: u32) -> i32 
     unsafe { vcabi::trueos_cabi_konsole_begin_frame(cols, rows, reserved_top_rows) }
 }
 
-#[inline]
-pub fn konsole_write_row(row: u32, col: u32, bytes: &[u8]) -> i32 {
-    let ptr = if bytes.is_empty() {
-        core::ptr::null()
-    } else {
-        bytes.as_ptr()
-    };
-    unsafe { vcabi::trueos_cabi_konsole_write_row(row, col, ptr, bytes.len()) }
-}
-
-#[inline]
-pub fn konsole_set_cursor(row: u32, col: u32, visible: bool) -> i32 {
-    unsafe { vcabi::trueos_cabi_konsole_set_cursor(row, col, u32::from(visible)) }
-}
-
-#[inline]
-pub fn konsole_end_frame() -> i32 {
-    unsafe { vcabi::trueos_cabi_konsole_end_frame() }
-}
-
 /// Launch an app with a one-shot UTF-8 start script on its own terminal target.
 pub fn launch_with_script(app: &str, script: &str) -> Result<(), i32> {
     if app.is_empty() || app.as_bytes().contains(&0) || script.as_bytes().contains(&0) {

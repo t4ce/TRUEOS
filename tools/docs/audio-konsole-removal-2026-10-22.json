@@ -1,0 +1,44 @@
+{
+  "removed": [
+    "trueos_cabi_audio_native_render_v1",
+    "trueos_cabi_audio_native_render_v2",
+    "trueos_cabi_audio_native_render_v3",
+    "trueos_cabi_audio_native_sample_register_v1",
+    "trueos_cabi_audio_native_sample_remove_v1",
+    "trueos_cabi_konsole_write_row",
+    "trueos_cabi_konsole_set_cursor",
+    "trueos_cabi_konsole_end_frame"
+  ],
+  "retired_vmcall_ids": [
+    "0x152",
+    "0x153",
+    "0x154"
+  ],
+  "before_elf_sections": {
+    "text": 35164394,
+    "data": 2316304,
+    "bss": 77590528
+  },
+  "old_contract_hash": "20a13848e8fe917bea6f7a2daf0bd1d0414ca7085b4fe10bf05ff1dbd64127e1",
+  "new_contract_hash": "c33309ca03cab36dc4fe625d096bad776364ea7aa3d33bdb8b33a190acf1b536",
+  "surviving_unchanged_contracts": 348,
+  "linked_removed_symbols_absent": true,
+  "native_engine_linked_symbols_absent": true,
+  "retained_interfaces_verified": true,
+  "after_elf_sections": {
+    "text": 24568042,
+    "data": 2312208,
+    "bss": 77590528
+  },
+  "section_size_caveat": "Existing pre-change ELF was not rebuilt as a controlled baseline. Whole-ELF section differences cannot be attributed solely to this change.",
+  "post_removal_census": {
+    "packages": 60,
+    "source_files": {
+      "app_refs": 5013,
+      "sdk_dependency_refs": 12460,
+      "kernel_refs": 631
+    },
+    "errors": [],
+    "retired_imports_found": []
+  }
+}

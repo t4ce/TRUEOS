@@ -375,14 +375,7 @@ pub const OP_BP_AUDIO_STOP: u32 = 0x9B;
 pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C;
 pub const OP_BP_AUDIO_SET_VOLUME_PERCENT: u32 = 0x9D;
 pub const OP_BP_AUDIO_VOLUME_PERCENT: u32 = 0x9E;
-/// Fixed-width `NativeBlockHeaderV1 || NativeRenderCommandV1[]` payload.
-/// `arg0` is the command count; the host returns rendered frames or a negative errno.
-pub const OP_BP_AUDIO_NATIVE_RENDER_V1: u32 = 0x152;
-/// Fixed-width `NativeBlockHeaderV2 || NativeRenderCommandV2[]` payload.
-/// `arg0` is the command count; the host returns rendered frames or errno.
-pub const OP_BP_AUDIO_NATIVE_RENDER_V2: u32 = 0x153;
-/// Fixed-width `NativeBlockHeaderV3 || NativeRenderCommandV3[]` payload.
-pub const OP_BP_AUDIO_NATIVE_RENDER_V3: u32 = 0x154;
+// 0x152..=0x154 are retired native scheduled-audio opcodes; do not reuse.
 /// Read-only host HDA endpoint capability snapshot (response payload V1).
 pub const OP_BP_AUDIO_ENDPOINT_CAPS_V1: u32 = 0x156;
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35;
