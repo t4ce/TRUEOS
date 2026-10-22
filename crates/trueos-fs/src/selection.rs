@@ -198,49 +198,49 @@ mod tests {
 
     #[test]
     fn typed_selection_ignores_suffixes_probes_only_blobs_and_obeys_depth() {
-        let map = ContentTypeId::WARCRAFT3_MAP;
+        let archive_type = ContentTypeId::ZIP;
         let tree = BTreeMap::from([
             (
                 "",
                 vec![
-                    file("renamed.data", map),
-                    file("fake.w3m", ContentTypeId::PNG),
-                    file("old.w3m", ContentTypeId::BLOB),
-                    file("bad.w3m", ContentTypeId::BLOB),
+                    file("renamed.data", archive_type),
+                    file("fake.zip", ContentTypeId::PNG),
+                    file("old.zip", ContentTypeId::BLOB),
+                    file("bad.zip", ContentTypeId::BLOB),
                     dir("sub"),
                 ],
             ),
-            ("sub", vec![file("nested.w3m", map), dir("deep")]),
-            ("sub/deep", vec![file("last.w3m", map)]),
+            ("sub", vec![file("nested.zip", archive_type), dir("deep")]),
+            ("sub/deep", vec![file("last.zip", archive_type)]),
         ]);
         let probes = RefCell::new(Vec::new());
         let select = |depth| {
             run(select_files(
-                map,
+                archive_type,
                 depth,
                 |path| core::future::ready(Ok::<_, ()>((tree[path.as_str()].clone(), false))),
                 |path| {
                     probes.borrow_mut().push(path.clone());
-                    core::future::ready(Ok(if path == "old.w3m" { Some(map) } else { None }))
+                    core::future::ready(Ok(if path == "old.zip" { Some(archive_type) } else { None }))
                 },
             ))
             .unwrap()
         };
         let shallow = select(0);
-        assert_eq!(shallow.files, vec!["old.w3m", "renamed.data"]);
+        assert_eq!(shallow.files, vec!["old.zip", "renamed.data"]);
         assert!(shallow.depth_limited);
         assert!(!shallow.truncated);
         let one = select(1);
-        assert_eq!(one.files, vec!["old.w3m", "renamed.data", "sub/nested.w3m"]);
+        assert_eq!(one.files, vec!["old.zip", "renamed.data", "sub/nested.zip"]);
         assert!(one.depth_limited);
         let all = select(8);
         assert_eq!(
             all.files,
             vec![
-                "old.w3m",
+                "old.zip",
                 "renamed.data",
-                "sub/deep/last.w3m",
-                "sub/nested.w3m"
+                "sub/deep/last.zip",
+                "sub/nested.zip"
             ]
         );
         assert!(!all.depth_limited);
@@ -248,22 +248,22 @@ mod tests {
             probes
                 .borrow()
                 .iter()
-                .all(|p| p == "old.w3m" || p == "bad.w3m")
+                .all(|p| p == "old.zip" || p == "bad.zip")
         );
         assert_eq!(decode(&encode(&all).unwrap()), Some(all));
     }
 
     #[test]
     fn limits_and_errors_are_not_silent() {
-        let map = ContentTypeId::WARCRAFT3_MAP;
+        let archive_type = ContentTypeId::ZIP;
         assert!(!valid_query(ContentTypeId::NONE, 8));
         assert!(!valid_query(ContentTypeId::from_raw(u32::MAX), 8));
-        assert!(!valid_query(map, 65));
+        assert!(!valid_query(archive_type, 65));
         let listing = (0..ENTRY_CAP + 1)
-            .map(|i| file(&format!("{i}"), map))
+            .map(|i| file(&format!("{i}"), archive_type))
             .collect::<Vec<_>>();
         let result = run(select_files(
-            map,
+            archive_type,
             0,
             |_| core::future::ready(Ok::<_, i32>((listing.clone(), false))),
             |_| core::future::ready(Ok(None)),
@@ -272,21 +272,21 @@ mod tests {
         assert!(result.truncated);
         assert_eq!(result.files.len(), ENTRY_CAP);
         let error = run(select_files(
-            map,
+            archive_type,
             8,
             |_| core::future::ready(Err::<(Vec<DirEntry>, bool), _>(-42)),
             |_| core::future::ready(Ok(None)),
         ));
         assert_eq!(error, Err(SelectionError::Io(-42)));
         let invalid = run(select_files(
-            map,
+            archive_type,
             8,
             |_| core::future::ready(Ok::<_, ()>((vec![dir("..")], false))),
             |_| core::future::ready(Ok(None)),
         ));
         assert_eq!(invalid, Err(SelectionError::InvalidListing));
         let truncated = run(select_files(
-            map,
+            archive_type,
             0,
             |_| core::future::ready(Ok::<_, ()>((Vec::new(), true))),
             |_| core::future::ready(Ok(None)),
@@ -297,9 +297,9 @@ mod tests {
 
     #[test]
     fn depth_eight_includes_eight_subfolders_but_not_nine() {
-        let map = ContentTypeId::WARCRAFT3_MAP;
+        let archive_type = ContentTypeId::ZIP;
         let result = run(select_files(
-            map,
+            archive_type,
             8,
             |path| {
                 let depth = if path.is_empty() {
@@ -309,9 +309,9 @@ mod tests {
                 };
                 core::future::ready(Ok::<_, ()>((
                     if depth < 10 {
-                        vec![file("map.w3m", map), dir("child")]
+                        vec![file("archive.zip", archive_type), dir("child")]
                     } else {
-                        vec![file("map.w3m", map)]
+                        vec![file("archive.zip", archive_type)]
                     },
                     false,
                 )))
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn wire_rejects_traversal_and_malformed_results() {
         let sample = FileSelection {
-            files: vec!["a/b.w3m".into()],
+            files: vec!["a/b.zip".into()],
             depth_limited: true,
             truncated: true,
         };

@@ -27,4 +27,6 @@ Validation:
 
 Full names and retained-import evidence are in `unused-export-removal-2026-10-22.json`. The updated source/package census is `local-api-usage-2026-10-22.{md,json,tsv}`. That census now flags `sys_sha_compress` as having no consumers or kernel callers after removal of `sys_sha_buffer`; it is outside the original removal subset and remains registered.
 
+TinyFighter was nonexistent and contributed no source or package usage evidence. Its stale optional app catalog entry was subsequently removed; excluding it does not change any removal decision or count. Historical census snapshots retain the missing-path record for the catalog as it existed when scanned.
+
 No rig deployment or runtime boot test was performed.
