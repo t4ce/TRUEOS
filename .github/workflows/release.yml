@@ -214,6 +214,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Older pinned Blueprint packages bundle compiler headers as JSON
+          # without checking out the corresponding include/presets files.
+          python3 tools/shadertoy-cpp-offline/prepare_native_sources.py \
+            --blueprints-root bld/TRUEOS-Blueprints
+
           make intel-gpu-bake-cpp-artifacts
           make intel-gpu-verify-cpp-artifacts
           git diff --exit-code -- \
