@@ -32,8 +32,10 @@ pitch, including one-column standalone masks. The atlas stores:
 | After extra line characters | All 256 Braille patterns |
 
 Missing line bins and the four unsupported rounded box corners stay empty.
-New bins enter through the existing discovery step in `make iso`; runtime source
-geometry is immutable. Mask dimensions and storage follow `AtlasConfig` and
+Cargo discovers mask-first bins and packs the selected representations into one
+font image. TRUEOS embeds only its tar/LZ4 archive and installs the decoded image
+after heap setup, before font consumers start. Runtime source geometry is
+immutable. Mask dimensions and storage follow `AtlasConfig` and
 `SLOT_COUNT` rather than a fixed byte count.
 
 `AtlasConfig` controls uniform glyph scale and pixel line width. Width is rounded
