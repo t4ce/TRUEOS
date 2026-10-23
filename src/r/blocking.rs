@@ -15,9 +15,11 @@ mod lifetime;
 pub(crate) use lifetime::reserve as reserve_guest_job;
 pub(crate) use lifetime::{
     GuestJobOwner, acknowledge_guest_hull_stopped, close_guest_jobs, drain_guest_jobs,
-    guest_jobs_in_flight, guest_jobs_quiescent, guest_jobs_reclaimable, guest_jobs_retiring,
+    guest_jobs_in_flight, guest_jobs_quiescent, guest_jobs_retiring,
     open_guest_jobs, pause_guest_jobs, resume_guest_jobs,
 };
+#[cfg(test)]
+pub(crate) use lifetime::guest_jobs_reclaimable;
 
 const BLOCKING_JOB_QUEUE_WARN_DEPTH: usize = 100;
 const BLOCKING_JOB_QUEUE_CAP: usize = 4094;

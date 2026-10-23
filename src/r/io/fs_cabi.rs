@@ -2232,6 +2232,13 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_shutdown(
     }
     let reason = core::str::from_utf8(data).unwrap_or("non-utf8-shutdown-reason");
     crate::log!("blueprint-shutdown: {}\n", reason);
+    // The SDK's abort/default panic handler reaches this terminal ABI rather
+    // than libc sys_halt. Native continuations must leave through their saved
+    // carrier too; returning success would strand them in the SDK spin fallback.
+    // All logging and borrowed-message access finishes before the transfer.
+    if unsafe { crate::r::threads::terminate_current_guest() } {
+        unreachable!("terminal native shutdown resumed");
+    }
     0
 }
 

@@ -392,7 +392,9 @@ fn portal_alloc_error_handler(layout: Layout) -> ! {
         layout.size(),
         layout.align()
     ));
-    let stats = crate::allocators::hv_guest_heap_stats(crate::hv::current_vm_id().unwrap_or(0));
+    let vm_id = crate::hv::current_guest_execution_context_vm_id()
+        .or_else(crate::hv::current_vm_id).unwrap_or(0);
+    let stats = crate::allocators::hv_guest_heap_stats(vm_id);
     crate::hv::hvlogf(format_args!(
         "portal: hv-guest-heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}",
         stats.heap_start,
@@ -422,9 +424,10 @@ fn portal_alloc_error_handler(layout: Layout) -> ! {
         trace.payload_start,
         trace.aligned_used,
     ));
-    loop {
-        core::hint::spin_loop();
-    }
+    // This loader ABI is a terminal guest allocation failure. All diagnostic
+    // calls above have returned and released their host guards. Retire through
+    // the Hull/native terminal path instead of permanently occupying a carrier.
+    unsafe { crate::std_abi_shim::sys_halt() }
 }
 
 unsafe extern "C" fn portal_rust_alloc_error_handler(size: usize, align: usize) -> ! {

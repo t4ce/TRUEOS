@@ -1,5 +1,9 @@
 # VMX slot recovery audit — 2026-10-23
 
+This records the implementation before the recovery changes. The current
+contract and rig-only verification procedure are in
+[VMX execution lifecycle](vmx_lifecycle.md).
+
 The missing recovery mechanism is forcible retirement of VM-owned **host-native
 execution**. TRUEOS already has a generation-tagged interrupt for a resident
 Hull, and kill already cancels suspended std/Tokio continuations. Neither
