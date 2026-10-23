@@ -2960,6 +2960,12 @@ pub unsafe extern "C" fn sys_halt() -> ! {
         let _ = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_RETURN_TO_CLI, 0, 0);
         trueos_vm::vmcall::shutdown(b"blueprint process exit");
     }
+    // A native application abort/exit is a terminal ABI boundary: there are
+    // no host guards owned by this shim. Resume the saved carrier so it can
+    // restore CR3 and realm state before requesting this VM's teardown.
+    if unsafe { crate::r::threads::terminate_current_guest() } {
+        unreachable!("terminal native continuation resumed");
+    }
     loop {
         core::hint::spin_loop();
     }

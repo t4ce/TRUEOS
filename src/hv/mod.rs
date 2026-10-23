@@ -1876,7 +1876,7 @@ pub(crate) fn shutdown_diagnostic_lines(vm_id: u8) -> alloc::vec::Vec<AllocStrin
     };
     let (stage, age_ms) = teardown_diagnostics::describe(vm_id);
     let mut lines = alloc::vec![alloc::format!(
-        "apps: vm{} shutdown forced={} cleanup_owner={} guest_ack={} stage={} age_ms={} native_jobs={}",
+        "apps: vm{} shutdown forced={} cleanup_owner={} guest_ack={} stage={} age_ms={} native_jobs={} native_retiring={} native_retained={} fs_pending={} fs_streams={} async_fs_pending={}",
         vm_id,
         vm.cooperative_stop.forced() as u8,
         vm.cooperative_stop.registered() as u8,
@@ -1884,6 +1884,13 @@ pub(crate) fn shutdown_diagnostic_lines(vm_id: u8) -> alloc::vec::Vec<AllocStrin
         stage,
         age_ms,
         crate::r::blocking::guest_jobs_in_flight(vm_id),
+        crate::r::blocking::guest_jobs_retiring(vm_id),
+        crate::r::blocking::retained_guest_jobs(vm_id),
+        crate::r::fs::request_broker::pending_for_vm(vm_id),
+        crate::r::fs::request_broker::open_writes_for_vm(vm_id),
+        crate::r::io::async_fs_cabi::pending_for_owner(
+            crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+        ),
     )];
     lines.extend(crate::r::blocking::diagnostics::lines(vm_id));
     lines
@@ -2453,6 +2460,14 @@ fn force_stop(vm_id: u8, vm: &TrueosVmId) {
     reset_prepare_pause(vm);
     clear_blueprint_lifecycle_capability(vm_id);
     crate::r::blocking::close_guest_jobs(vm_id);
+    let generation = vm.run_generation.load(Ordering::Acquire);
+    let discarded = crate::r::blocking::discard_guest_jobs(vm_id, generation);
+    if discarded.queued != 0 || discarded.retained != 0 {
+        crate::log_os::blueprint_important_line(format_args!(
+            "vm-recovery: discard vm={} generation={} queued={} retained={}\n",
+            vm_id, generation, discarded.queued, discarded.retained
+        ));
+    }
     let streams = crate::r::fs::request_broker::request_release_vm(vm_id);
     if streams != 0 {
         hvimportantf(format_args!(
@@ -2463,6 +2478,24 @@ fn force_stop(vm_id: u8, vm: &TrueosVmId) {
     crate::r::threads::wake_guest_control(vm_id);
     VM_CONTROL_WAITS[vm_id as usize].notify_all();
     nudge_vm_control(vm_id, control_kick::LifecycleKickAction::Stop, "kill");
+}
+
+/// A terminal guest ABI has returned to its retained native carrier. The
+/// scheduler calls this only after restoring the host address space and realm.
+/// Never authorize a later occupant of this VM ID from an old continuation.
+pub(crate) fn native_guest_terminated(vm_id: u8, generation: u64) {
+    let Some(vm) = vm_slot(vm_id) else { return };
+    let _control = vm.lifecycle_control.lock();
+    if vm.run_generation.load(Ordering::Acquire) != generation
+        || !vm.running.load(Ordering::Acquire)
+    {
+        return;
+    }
+    crate::log_os::blueprint_important_line(format_args!(
+        "vm-recovery: native-terminal vm={} generation={} carrier={}\n",
+        vm_id, generation, crate::percpu::current_slot()
+    ));
+    force_stop(vm_id, vm);
 }
 
 fn stop_matching_generation(vm_id: u8, generation: Option<u64>) -> Result<bool, StopError> {
@@ -4204,10 +4237,14 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     crate::log!("app-vm-run-queue: vm launch returned vm={} mode={:?}\n", vm_id, boot_mode);
     clear_current_vm_id();
     teardown_diagnostics::set(vm_id, TeardownStage::NativeDrain);
+    crate::r::blocking::acknowledge_guest_hull_stopped(
+        vm_id, vm.run_generation.load(Ordering::Acquire),
+    );
     if !vm.pause_latched.load(Ordering::Acquire) {
         crate::r::fs::request_broker::request_release_vm(vm_id);
     }
     crate::r::blocking::drain_guest_jobs(vm_id).await;
+    teardown_diagnostics::set(vm_id, TeardownStage::FilesystemDrain);
     // A killed continuation may have abandoned a streamed write. The BSP
     // rolls it back before this incarnation's ownership can be forgotten.
     let fs_pending = crate::r::fs::request_broker::pending_for_vm(vm_id);
@@ -4236,6 +4273,10 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
             ),)
             .is_ok()
         );
+        crate::log_os::blueprint_important_line(format_args!(
+            "vm-recovery: filesystem-drained vm={} generation={} fs_pending=0 fs_streams=0 async_fs_pending=0\n",
+            vm_id, vm.run_generation.load(Ordering::Acquire)
+        ));
     }
     if vm.cooperative_stop.forced() {
         vm.pause_latched.store(false, Ordering::Release);
@@ -4344,6 +4385,14 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         }
         teardown_diagnostics::set(vm_id, TeardownStage::Ui4);
         let released = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
+        let surfaces_remaining = crate::ui4::blueprint_ui4::owned_surface_count(
+            crate::ui4::WindowOwner::Vm(vm_id),
+        );
+        crate::log_os::blueprint_important_line(format_args!(
+            "vm-recovery: ui4-released vm={} generation={} surfaces={} surfaces_remaining={} input_routes={} input_events={} context_menus={}\n",
+            vm_id, vm.run_generation.load(Ordering::Acquire), released.surfaces,
+            surfaces_remaining, released.input_routes, released.input_events, released.context_menus
+        ));
         if released != crate::ui4::OwnerReleaseSummary::default() {
             hvlogf(format_args!(
                 "hv: vm{} lifecycle: ui4 owner release surfaces={} input_routes={} input_events={} context_menus={}",
@@ -4386,6 +4435,10 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     let mio_closed = crate::mio_compat::close_sockets_for_vm(vm_id);
     crate::shell3::service::clear_window_spawn(vm_id);
     let cabi_closed = crate::r::net::socket_cabi::close_sockets_for_vm(vm_id);
+    crate::log_os::blueprint_important_line(format_args!(
+        "vm-recovery: network-released vm={} generation={} blueprint_net={} mio={} socket_cabi={}\n",
+        vm_id, vm.run_generation.load(Ordering::Acquire), blueprint_net_closed, mio_closed, cabi_closed
+    ));
     hvlogf(format_args!(
         "hv: vm{} lifecycle: net cleanup complete blueprint_net={} mio={} socket_cabi={}",
         vm_id, blueprint_net_closed, mio_closed, cabi_closed
@@ -4472,12 +4525,13 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // This prevents F2/start from queueing a second Hull behind teardown on
     // the same AP while reporting the first VM as already offline.
     let native_jobs = crate::r::blocking::guest_jobs_in_flight(vm_id);
+    let completed_generation = vm.run_generation.load(Ordering::Acquire);
     teardown_diagnostics::set(vm_id, TeardownStage::CarrierRelease);
     lane_lease.release_now();
     publish_vm_offline(vm_id, vm);
     crate::log_os::blueprint_important_line(format_args!(
-        "hv: vm{} lifecycle: offline native_jobs={} carrier=released wait_queues_retired={}\n",
-        vm_id, native_jobs, wait_queues_retired
+        "hv: vm{} lifecycle: offline native_jobs={} carrier=released wait_queues_retired={} generation={}\n",
+        vm_id, native_jobs, wait_queues_retired, completed_generation
     ));
 }
 

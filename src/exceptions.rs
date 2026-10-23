@@ -9,7 +9,11 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 use x86_64::{instructions::hlt, instructions::interrupts};
 
 static IDT: spin::Once<InterruptDescriptorTable> = spin::Once::new();
-static IN_HANDLER: AtomicUsize = AtomicUsize::new(0);
+// Recursion belongs to the faulting CPU. A halted AP must not suppress the
+// first diagnostic from a different CPU. The last slot covers early boot or
+// an unresolved CPU identity without indexing outside the static storage.
+static IN_HANDLER: [AtomicUsize; crate::percpu::CPU_SLOT_LIMIT + 1] =
+    [const { AtomicUsize::new(0) }; crate::percpu::CPU_SLOT_LIMIT + 1];
 
 #[inline(always)]
 fn idt() -> &'static InterruptDescriptorTable {
@@ -76,12 +80,23 @@ pub(crate) fn load_this_cpu() {
 }
 
 fn enter_handler_or_halt() {
-    if IN_HANDLER.fetch_add(1, Ordering::SeqCst) != 0 {
+    if handler_state().fetch_add(1, Ordering::SeqCst) != 0 {
         interrupts::disable();
         loop {
             hlt();
         }
     }
+}
+
+fn handler_state() -> &'static AtomicUsize {
+    let slot = crate::percpu::current_slot_via_cpuid().min(crate::percpu::CPU_SLOT_LIMIT);
+    &IN_HANDLER[slot]
+}
+
+/// Called only after a replacement executor has been fully initialized. Keep
+/// recursive faults during restart initialization blocked on that CPU.
+pub(crate) fn complete_worker_panic_restart() {
+    handler_state().store(0, Ordering::SeqCst);
 }
 
 fn halt_loop() -> ! {

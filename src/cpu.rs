@@ -276,11 +276,6 @@ async fn atomic_bomb_after_restart_task(restart_count: u32) {
         );
     }
 
-    if restart_count == 1 {
-        Timer::after(EmbassyDuration::from_secs(1)).await;
-        panic!("PANIC PANIC PANIC: atomic_bomb second strike after restart");
-    }
-
     crate::log!(
         "PANIC PANIC PANIC: atomic_bomb stabilized after restart_count={}\n",
         restart_count
@@ -288,9 +283,25 @@ async fn atomic_bomb_after_restart_task(restart_count: u32) {
 }
 
 pub fn can_restart_current_worker_ap_from_panic() -> bool {
-    CpuProfile::current()
-        .map(|profile| profile.slot() >= 2)
-        .unwrap_or(false)
+    // Replacing the executor cannot retire a VM-owned continuation, restore
+    // its realm or release its admission. Native guest abort uses the saved
+    // carrier boundary instead. Retain a kernel panic in such a context for
+    // diagnosis rather than advertising an empty replacement as recovery.
+    if crate::hv::current_vm_id().is_some()
+        || crate::hv::current_guest_execution_context_vm_id().is_some()
+        || crate::r::kernel_task_domain::current().vm_id.is_some()
+    {
+        return false;
+    }
+    let Some(profile) = CpuProfile::current() else { return false };
+    if profile.slot() < 2 {
+        return false;
+    }
+    // A current host task says nothing about suspended guests on this CPU.
+    // Once a spawner is published, remote owners can enqueue concurrently;
+    // even a momentarily empty executor is not disposable. Only an AP that
+    // has not joined shared scheduling may take this startup retry path.
+    crate::workers::spawner_for_slot(profile.slot()).is_none()
 }
 
 pub fn restart_current_worker_ap_from_panic() -> ! {
@@ -318,7 +329,10 @@ pub fn restart_current_worker_ap_from_panic() -> ! {
             e
         ),
     }
-    enter_ap_runtime(spawner)
+    let _profile = register_current_worker_spawner(spawner);
+    exceptions::load_this_cpu();
+    exceptions::complete_worker_panic_restart();
+    runtime::run_ap_forever()
 }
 
 #[unsafe(no_mangle)]

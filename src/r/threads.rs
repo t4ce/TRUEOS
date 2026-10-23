@@ -7,6 +7,7 @@
 
 use alloc::boxed::Box;
 use core::future::Future;
+use core::mem::ManuallyDrop;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
@@ -83,6 +84,8 @@ struct Thread {
     vm_id: Option<u8>,
     job: Option<Job>,
     done: bool,
+    terminated: bool,
+    abandoned: bool,
     kill_waker: Option<Waker>,
     wait: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     timed: bool,
@@ -122,6 +125,30 @@ pub(crate) fn current_vm_id() -> Option<u8> {
     } else {
         unsafe { (*ptr).vm_id }
     }
+}
+
+/// Leave a terminal guest ABI call on a separately owned continuation stack.
+/// Returns false when there is no active VM-owned continuation. A successful
+/// transfer never returns to the abandoned guest frames: the carrier restores
+/// its context before publishing the failure to the VM lifecycle.
+///
+/// # Safety
+/// The caller must be at a terminal guest boundary with no host lock, borrowed
+/// host resource, or host RAII cleanup on the abandoned frames. This is not an
+/// escape from an arbitrary kernel panic or interrupt handler.
+#[inline(never)]
+pub(crate) unsafe fn terminate_current_guest() -> bool {
+    let ptr = active();
+    if ptr.is_null() || unsafe { (*ptr).vm_id.is_none() } {
+        return false;
+    }
+    unsafe {
+        (*ptr).terminated = true;
+        (*ptr).abandoned = true;
+        (*ptr).done = true;
+        context::swap(&mut (*ptr).child, &(*ptr).parent);
+    }
+    unreachable!("terminated guest continuation resumed")
 }
 
 pub(crate) fn current_errno() -> Option<&'static AtomicI32> {
@@ -280,19 +307,37 @@ unsafe extern "C" fn run(data: *mut ()) -> ! {
     unreachable!("completed thread resumed")
 }
 
-struct ThreadTask(Box<Thread>);
+struct ThreadTask(ManuallyDrop<Box<Thread>>);
+
+impl ThreadTask {
+    fn new(thread: Box<Thread>) -> Self {
+        Self(ManuallyDrop::new(thread))
+    }
+}
 
 fn guest_control_boundary(thread: &mut Thread) -> Option<Poll<()>> {
     let vm_id = thread.vm_id?;
     // Never poll the ordinary wait or re-enter guest code/destructors after
-    // kill. Admission retires only when the host-owned stack has been dropped.
+    // kill. Peers may hold scoped references into this suspended stack. Keep
+    // every abandoned stack until the Hull has exited and every remaining
+    // native owner has reached its own host boundary.
     if crate::hv::guest_kill_requested(vm_id) {
         diagnostic_phase(thread, diagnostics::CANCELLING, 0, 0);
-        thread.wait = None;
+        thread.abandoned = true;
         if let Some(job) = thread.job.take() {
             core::mem::forget(job);
         }
         thread.done = true;
+        // A host wait can borrow a queue on a peer's suspended stack. Finish
+        // unregistering before acknowledging retirement: the last such
+        // acknowledgment lets other carriers reclaim their stack mappings.
+        thread.wait = None;
+        if let Some(owner) = thread._admission._owner.as_mut() {
+            owner.retire();
+            if !owner.reclaimable() {
+                return Some(Poll::Pending);
+            }
+        }
         return Some(Poll::Ready(()));
     }
     if crate::hv::guest_native_pause_requested(vm_id) {
@@ -312,7 +357,7 @@ fn guest_control_boundary(thread: &mut Thread) -> Option<Poll<()>> {
 impl Future for ThreadTask {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let thread = &mut *self.get_mut().0;
+        let thread = &mut **self.get_mut().0;
         progress_boundary(thread, diagnostics::POLL_BEGIN);
         if thread.timed && thread.timing.is_none() {
             thread.timing = Some(timing::Timing::new(cx, thread.submitted_ms));
@@ -395,6 +440,13 @@ impl Future for ThreadTask {
         thread.allocation = crate::allocators::replace_thread_context(parent_alloc);
         thread.domain = kernel_task_domain::replace_context(parent_domain);
         progress_boundary(thread, diagnostics::CONTEXT_RESTORED);
+        if core::mem::replace(&mut thread.terminated, false) {
+            let vm_id = thread.vm_id.expect("terminated thread is guest-owned");
+            let generation = thread._admission._owner.as_ref()
+                .map(GuestJobOwner::generation)
+                .or_else(|| crate::hv::vm_run_generation(vm_id)).unwrap_or(0);
+            crate::hv::native_guest_terminated(vm_id, generation);
+        }
         // Snapshot memory belongs to Thread. Guest TLS, WLS, allocation domain
         // and address space are restored before any formatting/logging occurs.
         if let Some(trace) = thread.exit_trace.take(crate::r::input_timing::now_ms()) {
@@ -405,17 +457,17 @@ impl Future for ThreadTask {
                 &trace.frames.addresses[..trace.frames.count], trace.frames.stop);
         }
         if thread.timed { timing::Timing::ran(run_started); }
+        if thread.abandoned || !thread.done {
+            if let Some(result) = guest_control_boundary(thread) {
+                progress_boundary(thread, diagnostics::POLL_RETURN);
+                return result;
+            }
+        }
         if thread.done {
             diagnostic_phase(thread, diagnostics::COMPLETED, 0, 0);
             progress_boundary(thread, diagnostics::POLL_RETURN);
             Poll::Ready(())
         } else {
-            // Guest frames are now off the CPU and every carrier realm guard
-            // has been restored. Only this point may acknowledge RAM parking.
-            if let Some(result) = guest_control_boundary(thread) {
-                progress_boundary(thread, diagnostics::POLL_RETURN);
-                return result;
-            }
             if thread.wait.is_none() {
                 cx.waker().wake_by_ref();
             } else {
@@ -435,14 +487,27 @@ impl Future for ThreadTask {
 
 impl Drop for ThreadTask {
     fn drop(&mut self) {
-        let thread = &mut *self.0;
+        let thread = &mut **self.0;
         if let (Some(vm_id), Some(waker)) = (thread.vm_id, thread.kill_waker.take()) {
             if let Some(wakers) = CONTROL_WAKERS.get(vm_id as usize) {
                 wakers.lock().retain(|registered| !registered.will_wake(&waker));
             }
         }
-        // Host-owned wait/stack/address-space storage drops before admission;
-        // no guest destructor is called for frames on an abandoned stack.
+        if thread.abandoned && thread._admission._owner.as_ref()
+            .is_some_and(|owner| !owner.reclaimable())
+        {
+            // The private executor task normally stays pending until the
+            // barrier opens. If an outer owner nevertheless drops it early,
+            // retain the entire reservation and stack rather than invalidate
+            // a peer's live reference. Normal retirement runs on its carrier.
+            crate::log_warn!(target: "blueprint";
+                "native-thread: premature retirement vm={:?} thread={} resources=retained\n",
+                thread.vm_id, thread.id);
+            return;
+        }
+        // Stack/address-space storage drops before admission. Guest frames on
+        // an abandoned stack are never unwound or re-entered.
+        unsafe { ManuallyDrop::drop(&mut self.0) };
     }
 }
 
@@ -525,6 +590,8 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
             vm_id,
             job: None,
             done: false,
+            terminated: false,
+            abandoned: false,
             kill_waker: None,
             wait: None,
             timed: crate::allcaps::hv::INPUT_TIMING_ENABLED && is_codex,
@@ -549,14 +616,14 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     let mut thread = prepared?;
     thread.job = Some(job);
     if experimental {
-        let task = codex_application_task(ThreadTask(thread))
+        let task = codex_application_task(ThreadTask::new(thread))
             .map_err(|_| admission_rejected(vm_id, id, stack, "executor_pool"))?;
         crate::log_rate_limited!(target: "blueprint"; level: crate::log_os::LogLevel::Info; first: 2; every: 64;
             "codex-executor: vm={:?} thread={} carrier={} owner=codex task=codex_application_task placement=lastap\n",
             vm_id, id, slot);
         spawner.spawn(task);
     } else {
-        let task = thread_task(ThreadTask(thread))
+        let task = thread_task(ThreadTask::new(thread))
             .map_err(|_| admission_rejected(vm_id, id, stack, "executor_pool"))?;
         spawner.spawn(task);
     }

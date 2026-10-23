@@ -32,6 +32,11 @@ def main():
                             wait_source.index("type JobFuture =")]
     platform_items = wait_source[wait_source.index("const PLATFORM_WAIT_HOST_SCOPE:"):
                                 wait_source.index("struct LocalJobQueue {")]
+    # This removed CompletionCell API still has a stale test in wait.rs. Keep
+    # the production implementation and its remaining wait-generation tests.
+    platform_items = re.sub(
+        r"    #\[test\]\n    fn completion_after_async_registration_is_observed\(\) \{.*?\n    \}\n",
+        "", platform_items, flags=re.DOTALL)
 
     support = '''#![allow(dead_code, unused_imports, unexpected_cfgs)]
 extern crate alloc;
@@ -75,6 +80,18 @@ mod hv {
     pub fn set_guest_pause_for_test(vm: u8, value: bool) { VMS[vm as usize].execution_pause.0.store(value, Ordering::Release); }
     pub fn set_guest_io_for_test(vm: u8, value: bool) { IO_ACTIVE[vm as usize].store(value, core::sync::atomic::Ordering::Release); }
     pub fn vm_run_generation(_: u8) -> Option<u64> { Some(19) }
+    pub fn native_guest_terminated(vm: u8, generation: u64) {
+        assert_eq!(crate::r::threads::current_id(), None, "failure published before returning to carrier");
+        let domain = crate::r::kernel_task_domain::replace_context((0, 0));
+        crate::r::kernel_task_domain::replace_context(domain);
+        let allocation = crate::allocators::replace_thread_context([0; 4]);
+        crate::allocators::replace_thread_context(allocation);
+        let wls = crate::wls::replace_thread_context((0, 0, None));
+        crate::wls::replace_thread_context(wls);
+        crate::NATIVE_TERMINATIONS.lock().unwrap().push((vm, generation, domain, allocation, wls));
+        set_guest_kill_for_test(vm, true);
+        crate::r::blocking::close_guest_jobs(vm);
+    }
     fn vm_slot(vm: u8) -> Option<&'static Vm> { VMS.get(vm as usize) }
     fn lifecycle_now_ms() -> u64 { crate::time_driver::now() }
     const TRUEOS_VM_ID_LIMIT: usize = 64;
@@ -258,7 +275,8 @@ mod wait {
         __DIAGNOSTICS__
         mod lifetime { __LIFETIME__ }
         pub(crate) use lifetime::{GuestJobOwner, open_guest_jobs, pause_guest_jobs, resume_guest_jobs,
-            close_guest_jobs, guest_jobs_in_flight, guest_jobs_quiescent};
+            close_guest_jobs, guest_jobs_in_flight, guest_jobs_quiescent,
+            acknowledge_guest_hull_stopped, guest_jobs_reclaimable};
         pub(crate) use lifetime::reserve as reserve_guest_job;
         fn now_ms() -> u64 { crate::time_driver::now() }
         __CANCELLATION__
@@ -280,6 +298,7 @@ mod log_os { pub fn blueprint_important_line(_: core::fmt::Arguments<'_>) {} }
 #[macro_export] macro_rules! log_warn { ($($tokens:tt)*) => {} }
 #[macro_export] macro_rules! log { ($($tokens:tt)*) => {} }
 static SLICE_LOGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static NATIVE_TERMINATIONS: std::sync::Mutex<Vec<(u8, u64, (u32, u8), [u32; 4], crate::wls::ThreadContext)>> = std::sync::Mutex::new(Vec::new());
 fn capture_log(args: core::fmt::Arguments<'_>) {
     let line = args.to_string();
     if line.starts_with("codex-slice-exit ") {
@@ -298,7 +317,10 @@ mod time_driver {
 '''
     diagnostic = (ROOT / 'src/r/blocking/diagnostics.rs').read_text().replace('embassy_time_driver::', 'crate::time_driver::')
     diagnostic = diagnostic.replace('#[path = "abi_breadcrumb.rs"] mod abi_breadcrumb;', f'#[path="{ROOT / "src/r/blocking/abi_breadcrumb.rs"}"] mod abi_breadcrumb;')
-    support = support.replace('__WLS__', f'#[path="{ROOT / "src/wls.rs"}"] mod wls;')
+    # Exercise the real WLS implementation through the scheduler tests. The
+    # separate WLS unit-test module still references its removed lookup API.
+    wls = (ROOT / 'src/wls.rs').read_text().split('#[cfg(test)]')[0]
+    support = support.replace('__WLS__', 'mod wls {\n' + wls.replace('//!', '//') + '\n}')
     support = support.replace('__DIAGNOSTICS__', 'pub mod diagnostics {\n' + diagnostic.replace('//!', '//') + '\n}')
     lifetime = (ROOT / 'src/r/blocking/lifetime.rs').read_text().replace('//!', '//')
     lifetime = lifetime.replace('trueos_time::', 'crate::trueos_time::')

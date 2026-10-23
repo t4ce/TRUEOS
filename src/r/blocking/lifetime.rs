@@ -12,6 +12,8 @@ struct State {
     paused: bool,
     in_flight: usize,
     parked: usize,
+    retiring: usize,
+    hull_stopped: bool,
 }
 
 impl State {
@@ -22,6 +24,8 @@ impl State {
             paused: false,
             in_flight: 0,
             parked: 0,
+            retiring: 0,
+            hull_stopped: false,
         }
     }
 
@@ -31,6 +35,7 @@ impl State {
         }
         self.generation = generation;
         self.accepting = true;
+        self.hull_stopped = false;
         true
     }
 
@@ -94,10 +99,39 @@ impl State {
         }
     }
 
-    fn release(&mut self, generation: u64, parked: &mut bool) {
+    fn retire(&mut self, generation: u64, retiring: &mut bool) {
+        assert_eq!(self.generation, generation, "native job outlived its VM generation");
+        if !*retiring {
+            assert!(self.retiring < self.in_flight, "native job retired without a reservation");
+            self.retiring += 1;
+            *retiring = true;
+        }
+    }
+
+    fn acknowledge_hull_stopped(&mut self, generation: u64) -> bool {
+        if generation == 0 || self.generation != generation {
+            return false;
+        }
+        self.hull_stopped = true;
+        true
+    }
+
+    fn reclaimable(&self, generation: u64) -> bool {
+        generation != 0
+            && self.generation == generation
+            && self.closed()
+            && self.hull_stopped
+            && self.in_flight == self.retiring
+    }
+
+    fn release(&mut self, generation: u64, parked: &mut bool, retiring: bool) {
         assert_eq!(self.generation, generation, "native job outlived its VM generation");
         assert!(self.in_flight != 0, "native job reservation released twice");
         self.unpark(generation, parked);
+        if retiring {
+            assert!(self.retiring != 0, "native job retirement released twice");
+            self.retiring -= 1;
+        }
         self.in_flight -= 1;
     }
 }
@@ -109,6 +143,7 @@ pub(crate) struct GuestJobOwner {
     vm_id: u8,
     generation: u64,
     parked: bool,
+    retiring: bool,
     pub(crate) diagnostic: super::diagnostics::JobDiagnostic,
 }
 
@@ -121,12 +156,40 @@ pub(crate) fn reserve(vm_id: u8) -> Option<GuestJobOwner> {
     // Construct the RAII token only after reserving and releasing the lock.
     // Eager then_some(token) would drop a non-reservation on the failure path.
     Some(GuestJobOwner {
-        vm_id, generation, parked: false,
+        vm_id, generation, parked: false, retiring: false,
         diagnostic: super::diagnostics::JobDiagnostic::new(vm_id, generation),
     })
 }
 
 impl GuestJobOwner {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn matches(&self, vm_id: u8, generation: u64) -> bool {
+        self.vm_id == vm_id && self.generation == generation
+    }
+
+    pub(super) fn kill_requested(&self) -> bool {
+        crate::hv::vm_run_generation(self.vm_id) == Some(self.generation)
+            && crate::hv::guest_kill_requested(self.vm_id)
+    }
+
+    /// Mark this stopped continuation without releasing its reservation or
+    /// stack. Peers can still hold scoped borrows into that stack.
+    pub(crate) fn retire(&mut self) {
+        let reclaimable = {
+            let mut state = STATES[self.vm_id as usize].lock();
+            state.retire(self.generation, &mut self.retiring);
+            state.reclaimable(self.generation)
+        };
+        wake_reclaimable(self.vm_id, reclaimable);
+    }
+
+    pub(crate) fn reclaimable(&self) -> bool {
+        guest_jobs_reclaimable(self.vm_id, self.generation)
+    }
+
     /// Only the scheduler may count a continuation, after its guest stack has
     /// returned to the host. Ordinary wait diagnostics are not a checkpoint.
     pub(crate) fn park(&mut self) -> bool {
@@ -140,7 +203,12 @@ impl GuestJobOwner {
 
 impl Drop for GuestJobOwner {
     fn drop(&mut self) {
-        STATES[self.vm_id as usize].lock().release(self.generation, &mut self.parked);
+        let reclaimable = {
+            let mut state = STATES[self.vm_id as usize].lock();
+            state.release(self.generation, &mut self.parked, self.retiring);
+            state.reclaimable(self.generation)
+        };
+        wake_reclaimable(self.vm_id, reclaimable);
     }
 }
 
@@ -152,9 +220,43 @@ pub(crate) fn open_guest_jobs(vm_id: u8, generation: u64) -> bool {
 
 /// Stop accepting work and return the number of outstanding reservations.
 pub(crate) fn close_guest_jobs(vm_id: u8) -> usize {
-    STATES
-        .get(vm_id as usize)
-        .map_or(0, |state| state.lock().close())
+    let Some(state) = STATES.get(vm_id as usize) else { return 0; };
+    let (count, reclaimable) = {
+        let mut state = state.lock();
+        (state.close(), state.reclaimable(state.generation))
+    };
+    wake_reclaimable(vm_id, reclaimable);
+    count
+}
+
+fn wake_reclaimable(vm_id: u8, reclaimable: bool) {
+    if reclaimable {
+        // Never take the control-waker lock while holding a lifetime lock.
+        crate::r::threads::wake_guest_control(vm_id);
+    }
+}
+
+/// The Hull launch future has returned; no Hull frame can borrow a native
+/// continuation's stack. A stale VM incarnation cannot open this barrier.
+pub(crate) fn acknowledge_guest_hull_stopped(vm_id: u8, generation: u64) -> bool {
+    let Some(state) = STATES.get(vm_id as usize) else { return false; };
+    let (matched, reclaimable) = {
+        let mut state = state.lock();
+        let matched = state.acknowledge_hull_stopped(generation);
+        (matched, state.reclaimable(generation))
+    };
+    wake_reclaimable(vm_id, reclaimable);
+    matched
+}
+
+/// Stopped stacks remain backed until the Hull and every accepted native
+/// operation are stopped. Real reservations are released by their owners.
+pub(crate) fn guest_jobs_reclaimable(vm_id: u8, generation: u64) -> bool {
+    STATES.get(vm_id as usize).is_some_and(|state| state.lock().reclaimable(generation))
+}
+
+pub(crate) fn guest_jobs_retiring(vm_id: u8) -> usize {
+    STATES.get(vm_id as usize).map_or(0, |state| state.lock().retiring)
 }
 
 /// Close admission while retaining existing native continuations in RAM.
@@ -226,11 +328,11 @@ mod tests {
         assert_eq!(state.close(), 1);
         assert!(!state.reserve(1));
         assert!(!state.open(2));
-        state.release(1, &mut false);
+        state.release(1, &mut false, false);
         assert!(state.open(2));
         assert!(!state.reserve(1));
         assert!(state.reserve(2));
-        state.release(2, &mut false);
+        state.release(2, &mut false, false);
     }
 
     #[test]
@@ -242,7 +344,7 @@ mod tests {
         assert!(!state.reserve(1));
         assert!(state.open(2));
         assert!(state.reserve(2));
-        state.release(2, &mut false); // rollback when no physical lane can be leased
+        state.release(2, &mut false, false); // rollback when no physical lane can be leased
         assert_eq!(state.close(), 0);
     }
 
@@ -261,7 +363,7 @@ mod tests {
         assert!(state.park(7, &mut thread_parked));
         assert_eq!(state.parked, 1, "polling a parked task must not count it twice");
         assert_ne!(state.parked, state.in_flight);
-        state.release(7, &mut finite_parked);
+        state.release(7, &mut finite_parked, false);
         assert_eq!(state.parked, state.in_flight);
         assert!(!state.resume(8));
         assert!(state.resume(7));
@@ -270,8 +372,8 @@ mod tests {
         state.unpark(7, &mut thread_parked);
         assert_eq!(state.parked, 0);
         assert!(state.reserve(7));
-        state.release(7, &mut thread_parked);
-        state.release(7, &mut false);
+        state.release(7, &mut thread_parked, false);
+        state.release(7, &mut false, false);
     }
 
     #[test]
@@ -285,7 +387,7 @@ mod tests {
         assert_eq!(state.close(), 1);
         assert!(!state.resume(12));
         assert!(!state.park(12, &mut parked));
-        state.release(12, &mut parked);
+        state.release(12, &mut parked, false);
         assert_eq!(state.parked, 0);
         assert_eq!(state.in_flight, 0);
         assert!(state.open(13));
@@ -301,7 +403,7 @@ mod tests {
         let mut parked = false;
         assert!(!state.park(17, &mut parked));
         assert_eq!(state.parked, 0);
-        state.release(17, &mut parked);
+        state.release(17, &mut parked, false);
     }
 
     #[test]
@@ -313,11 +415,53 @@ mod tests {
         assert!(!state.accepting);
         assert!(!state.closed(), "pause cancelled an admitted finite job");
         assert!(!state.reserve(23));
-        state.release(23, &mut false);
+        state.release(23, &mut false, false);
         assert!(state.resume(23));
         assert!(!state.closed());
         state.close();
         assert!(state.closed());
         assert!(!state.resume(23));
+    }
+
+    #[test]
+    fn cancelled_stacks_wait_for_the_hull_and_every_native_peer() {
+        let mut state = State::new();
+        assert!(state.open(31));
+        assert!(state.reserve(31)); // cancelled thread
+        assert!(state.reserve(31)); // still executing service closure
+        state.close();
+        let mut retiring = false;
+        state.retire(31, &mut retiring);
+        state.retire(31, &mut retiring);
+        assert_eq!(state.retiring, 1, "repeated cancellation counted twice");
+        assert!(!state.reclaimable(31));
+        assert!(state.acknowledge_hull_stopped(31));
+        assert!(!state.reclaimable(31), "running peer still owns stack borrows");
+        state.release(31, &mut false, false);
+        assert!(state.reclaimable(31));
+        state.release(31, &mut false, retiring);
+        assert_eq!(state.in_flight, 0);
+        assert_eq!(state.retiring, 0);
+        assert!(state.open(32));
+        state.close();
+        assert!(!state.reclaimable(32), "old Hull acknowledgement crossed generations");
+        assert!(!state.acknowledge_hull_stopped(31));
+        assert!(!state.reclaimable(31));
+    }
+
+    #[test]
+    fn hull_acknowledgement_does_not_allow_live_or_paused_admission_to_retire_stacks() {
+        let mut state = State::new();
+        assert!(state.open(37));
+        assert!(state.reserve(37));
+        let mut retiring = false;
+        state.retire(37, &mut retiring); // kill observed before close is published
+        assert!(state.acknowledge_hull_stopped(37));
+        assert!(!state.reclaimable(37));
+        state.pause();
+        assert!(!state.reclaimable(37));
+        state.close();
+        assert!(state.reclaimable(37));
+        state.release(37, &mut false, retiring);
     }
 }

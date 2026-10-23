@@ -40,6 +40,7 @@ static WRITES: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_PENDING: AtomicUsize = AtomicUsize::new(0);
 static ADMISSION: AtomicBool = AtomicBool::new(true);
 static RELEASE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+static DISCARD_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 struct EmbassyDuration(u64);
 impl EmbassyDuration { fn from_millis(ms: u64) -> Self { Self(ms) } }
 struct Timer(u64);
@@ -63,12 +64,19 @@ mod wait {
     }
 }
 mod shell3 { #[derive(PartialEq, Eq)] pub struct MatrixSlotLease(pub u64); }
+mod log_os { pub fn blueprint_important_line(_: std::fmt::Arguments<'_>) {} }
+mod percpu { pub fn current_slot() -> usize { 2 } }
 mod r {
     pub mod blocking {
         use super::super::*;
         pub fn pause_guest_jobs(_: u8) -> usize { ADMISSION.store(false, Ordering::SeqCst); 1 }
         pub fn resume_guest_jobs(_: u8, _: u64) -> bool { ADMISSION.store(true, Ordering::SeqCst); true }
         pub fn close_guest_jobs(_: u8) -> usize { ADMISSION.store(false, Ordering::SeqCst); 1 }
+        pub struct GuestDiscardSummary { pub queued: usize, pub retained: usize }
+        pub fn discard_guest_jobs(_: u8, _: u64) -> GuestDiscardSummary {
+            DISCARD_REQUESTS.fetch_add(1, Ordering::SeqCst);
+            GuestDiscardSummary { queued: 0, retained: 0 }
+        }
         pub fn guest_jobs_quiescent(_: u8) -> bool { JOBS_READY.load(Ordering::SeqCst) }
         pub fn guest_jobs_in_flight(_: u8) -> usize { 1 }
     }
@@ -142,6 +150,7 @@ mod hv {
         ASYNC_PENDING.store(0, Ordering::SeqCst);
         ADMISSION.store(true, Ordering::SeqCst);
         RELEASE_REQUESTS.store(0, Ordering::SeqCst);
+        DISCARD_REQUESTS.store(0, Ordering::SeqCst);
     }
     fn poll<F: Future>(future: std::pin::Pin<&mut F>) -> Poll<F::Output> {
         future.poll(&mut Context::from_waker(std::task::Waker::noop()))
@@ -216,7 +225,23 @@ mod hv {
         assert_eq!(poll(future.as_mut()), Poll::Ready(None));
         assert!(VM.cooperative_stop.forced());
         assert_eq!(RELEASE_REQUESTS.load(Ordering::SeqCst), 1);
+        assert_eq!(DISCARD_REQUESTS.load(Ordering::SeqCst), 1);
         assert!(!resume(0).unwrap());
+    }
+    #[test]
+    fn native_terminal_failure_forces_only_its_live_incarnation() {
+        reset();
+        native_guest_terminated(0, 8);
+        assert!(!VM.cooperative_stop.forced());
+        assert_eq!(DISCARD_REQUESTS.load(Ordering::SeqCst), 0);
+        native_guest_terminated(0, 9);
+        assert!(VM.cooperative_stop.forced());
+        assert!(!ADMISSION.load(Ordering::SeqCst));
+        assert_eq!(DISCARD_REQUESTS.load(Ordering::SeqCst), 1);
+        reset();
+        VM.running.store(false, Ordering::SeqCst);
+        native_guest_terminated(0, 9);
+        assert!(!VM.cooperative_stop.forced());
     }
     #[test]
     fn pause_timeout_resumes_execution_and_never_claims_quiescence() {
@@ -288,7 +313,7 @@ mod hv {
 '''
     production = "\n".join(production_item(name) for name in (
         "pause", "resume", "guest_pause_requested", "guest_native_pause_requested",
-        "park_vm_execution", "await_vm_control_boundary", "force_stop",
+        "park_vm_execution", "await_vm_control_boundary", "force_stop", "native_guest_terminated",
         "immediate_stop_requested", "stop_cleanup_deadline",
         "pause_matching_owner", "resume_matching_owner",
     ))

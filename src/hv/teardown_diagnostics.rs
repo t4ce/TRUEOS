@@ -19,12 +19,13 @@ pub(super) enum Stage {
     WaitQueues = 12,
     CrashReport = 13,
     CarrierRelease = 14,
+    FilesystemDrain = 15,
 }
-const LABELS: [&str; 15] = [
+const LABELS: [&str; 16] = [
     "offline", "preparing", "hull", "native-drain", "archive-release",
     "gridpaper-release", "media-release", "ui4-release", "input-release",
     "vgpu-release", "net-release", "state-release", "wait-queue-release",
-    "crash-report", "carrier-release",
+    "crash-report", "carrier-release", "filesystem-drain",
 ];
 struct Progress { stage: AtomicU8, since_ms: AtomicU64 }
 static PROGRESS: [Progress; super::TRUEOS_VM_ID_LIMIT] =

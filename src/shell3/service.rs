@@ -898,6 +898,9 @@ pub(super) fn hv_status_lines() -> Vec<alloc::string::String> {
         }
         let phase = hv_vm_phase(&state);
         lines.push(alloc::format!("{} {} {}", id, label.as_deref().unwrap_or("-"), phase));
+        if state.stop_requested {
+            lines.extend(crate::hv::shutdown_diagnostic_lines(id));
+        }
     }
     lines
 }

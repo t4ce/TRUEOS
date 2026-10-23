@@ -762,6 +762,11 @@ pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
     released
 }
 
+/// Lifecycle verification reads the live owner registry after revocation.
+pub(crate) fn owned_surface_count(owner: WindowOwner) -> usize {
+    SURFACES.lock().iter().filter(|surface| surface.owner == owner).count()
+}
+
 /// Create one dirty-cadence UI4 frame and broker window for the active VM.
 pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
     x: i32,

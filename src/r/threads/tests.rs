@@ -21,7 +21,7 @@ fn realm() -> Realm {
 
 fn make_thread(id: usize, job: impl FnOnce() + Send + 'static) -> ThreadTask {
     THREAD_COUNT.fetch_add(1, Ordering::AcqRel);
-    ThreadTask(Box::new(Thread {
+    ThreadTask::new(Box::new(Thread {
         stack: context::Stack::new(256 * 1024).unwrap(),
         child: 0,
         parent: 0,
@@ -31,6 +31,8 @@ fn make_thread(id: usize, job: impl FnOnce() + Send + 'static) -> ThreadTask {
         vm_id: Some(id as u8),
         job: Some(Job::Owned(Box::new(job))),
         done: false,
+        terminated: false,
+        abandoned: false,
         kill_waker: None,
         wait: None,
         timed: false,
@@ -53,6 +55,184 @@ fn poll_thread(thread: &mut ThreadTask) -> Poll<()> {
     assert!(current_errno().is_none());
     assert_eq!(realm(), parent, "carrier realm leaked across a suspension");
     result
+}
+
+#[cfg(thread_scheduler_harness)]
+fn kill_with_hull_stopped(vm_id: u8) {
+    crate::hv::set_guest_kill_for_test(vm_id, true);
+    crate::r::blocking::close_guest_jobs(vm_id);
+    crate::r::blocking::acknowledge_guest_hull_stopped(vm_id, 19);
+}
+
+#[test]
+#[cfg(thread_scheduler_harness)]
+fn native_termination_restores_carrier_before_lifecycle_and_retains_stack_until_hull_exit() {
+    let _serial = SERIAL.lock().unwrap();
+    const VM: u8 = 58;
+    crate::NATIVE_TERMINATIONS.lock().unwrap().clear();
+    assert!(!unsafe { terminate_current_guest() });
+    assert!(crate::r::blocking::open_guest_jobs(VM, 19));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let progress = Arc::new(AtomicUsize::new(0));
+    struct GuestDrop(Arc<AtomicUsize>);
+    impl Drop for GuestDrop {
+        fn drop(&mut self) { self.0.fetch_add(1, Ordering::AcqRel); }
+    }
+    let child_drops = drops.clone();
+    let child_progress = progress.clone();
+    let mut task = make_thread(VM as usize, move || {
+        let _guard = GuestDrop(child_drops);
+        kernel_task_domain::replace_context((123, VM));
+        crate::allocators::replace_thread_context([9, 8, 7, 6]);
+        crate::wls::replace_thread_context((101, 102, None));
+        child_progress.store(1, Ordering::Release);
+        unsafe { terminate_current_guest() };
+        child_progress.store(2, Ordering::Release);
+    });
+    task.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(VM).unwrap());
+    let parent = realm();
+    assert!(poll_thread(&mut task).is_pending());
+    assert_eq!(progress.load(Ordering::Acquire), 1, "terminal ABI returned to guest");
+    assert_eq!(drops.load(Ordering::Acquire), 0, "abandoned frames were unwound");
+    assert_eq!(*crate::NATIVE_TERMINATIONS.lock().unwrap(),
+        vec![(VM, 19, parent.0, parent.1, parent.2)]);
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(VM), 1);
+    assert!(!crate::r::blocking::guest_jobs_reclaimable(VM, 19));
+    assert!(!crate::r::blocking::acknowledge_guest_hull_stopped(VM, 18), "stale Hull retired new execution");
+    assert!(poll_thread(&mut task).is_pending());
+    assert!(crate::r::blocking::acknowledge_guest_hull_stopped(VM, 19));
+    assert!(poll_thread(&mut task).is_ready());
+    drop(task);
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(VM), 0);
+    assert_eq!(drops.load(Ordering::Acquire), 0);
+    crate::hv::set_guest_kill_for_test(VM, false);
+}
+
+#[test]
+#[cfg(thread_scheduler_harness)]
+fn killed_stack_remains_readable_until_its_native_borrower_stops() {
+    let _serial = SERIAL.lock().unwrap();
+    const VM: u8 = 59;
+    assert!(crate::r::blocking::open_guest_jobs(VM, 19));
+    let pointer = Arc::new(AtomicUsize::new(0));
+    let child_pointer = pointer.clone();
+    let mut parent = make_thread(VM as usize, move || {
+        let borrowed = [0x51a7_0b1eusize; 64];
+        child_pointer.store(borrowed.as_ptr() as usize, Ordering::Release);
+        assert!(yield_now());
+        // A scoped parent would join its borrower before returning normally.
+        assert_eq!(borrowed[0], 0x51a7_0b1e);
+        panic!("killed parent resumed");
+    });
+    parent.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(VM).unwrap());
+    // This real reservation models an executing service-lane borrower, whose
+    // lifetime must protect the cancelled parent's stack until it stops.
+    let borrower = crate::r::blocking::reserve_guest_job(VM).unwrap();
+    assert!(poll_thread(&mut parent).is_pending());
+    let address = pointer.load(Ordering::Acquire);
+    assert_ne!(address, 0);
+    kill_with_hull_stopped(VM);
+    assert!(poll_thread(&mut parent).is_pending());
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(VM), 2);
+    assert!(!crate::r::blocking::open_guest_jobs(VM, 20));
+    let reader = std::thread::spawn(move || {
+        // The parent is already cancelled. Its guarded mapping must still be
+        // live while this admitted peer can dereference the shared stack.
+        let value = unsafe { (address as *const usize).read_volatile() };
+        drop(borrower);
+        value
+    });
+    assert_eq!(reader.join().unwrap(), 0x51a7_0b1e);
+    assert!(poll_thread(&mut parent).is_ready());
+    drop(parent);
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(VM), 0);
+    crate::hv::set_guest_kill_for_test(VM, false);
+}
+
+#[test]
+#[cfg(thread_scheduler_harness)]
+fn killed_native_peers_retire_without_waiting_for_each_others_admission_drop() {
+    let _serial = SERIAL.lock().unwrap();
+    const VM: u8 = 50;
+    assert!(crate::r::blocking::open_guest_jobs(VM, 19));
+    let mut first = make_thread(VM as usize, || {
+        assert!(yield_now());
+        panic!("killed first peer resumed");
+    });
+    let mut second = make_thread(VM as usize, || {
+        assert!(yield_now());
+        panic!("killed second peer resumed");
+    });
+    first.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(VM).unwrap());
+    second.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(VM).unwrap());
+    assert!(poll_thread(&mut first).is_pending());
+    assert!(poll_thread(&mut second).is_pending());
+    kill_with_hull_stopped(VM);
+    assert!(poll_thread(&mut first).is_pending());
+    assert!(poll_thread(&mut second).is_ready());
+    drop(second);
+    assert!(poll_thread(&mut first).is_ready());
+    drop(first);
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(VM), 0);
+    crate::hv::set_guest_kill_for_test(VM, false);
+}
+
+#[test]
+#[cfg(thread_scheduler_harness)]
+fn borrowed_peer_stack_wait_unregisters_before_the_collective_reclaim_barrier() {
+    let _serial = SERIAL.lock().unwrap();
+    const VM: u8 = 49;
+    assert!(crate::r::blocking::open_guest_jobs(VM, 19));
+    let queue_address = Arc::new(AtomicUsize::new(0));
+    let published = queue_address.clone();
+    let mut parent = make_thread(VM as usize, move || {
+        let queue = crate::wait::WaitQueue::new();
+        published.store(&queue as *const crate::wait::WaitQueue as usize, Ordering::Release);
+        assert!(yield_now());
+        panic!("killed queue owner resumed");
+    });
+    let mut child = make_thread(VM as usize, move || {
+        // Models a scoped child borrowing a wait object in its parent frame.
+        let queue = unsafe { &*(queue_address.load(Ordering::Acquire) as *const crate::wait::WaitQueue) };
+        wait(queue, queue.observe(), 0);
+        panic!("killed queue borrower resumed");
+    });
+    parent.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(VM).unwrap());
+    child.0._admission._owner = Some(crate::r::blocking::reserve_guest_job(VM).unwrap());
+    assert!(poll_thread(&mut parent).is_pending());
+    assert!(poll_thread(&mut child).is_pending());
+    struct CheckedWait {
+        wait: Pin<Box<dyn Future<Output = ()> + Send>>,
+        dropped: Arc<AtomicUsize>,
+    }
+    impl Future for CheckedWait {
+        type Output = ();
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            self.wait.as_mut().poll(cx)
+        }
+    }
+    impl Drop for CheckedWait {
+        fn drop(&mut self) {
+            assert!(!crate::r::blocking::guest_jobs_reclaimable(VM, 19),
+                "peer could reclaim its stack before wait unregistration");
+            self.dropped.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+    let cleaned = Arc::new(AtomicUsize::new(0));
+    child.0.wait = Some(Box::pin(CheckedWait {
+        wait: child.0.wait.take().unwrap(), dropped: cleaned.clone(),
+    }));
+    kill_with_hull_stopped(VM);
+    assert!(poll_thread(&mut parent).is_pending());
+    assert!(poll_thread(&mut child).is_ready());
+    assert_eq!(cleaned.load(Ordering::Acquire), 1);
+    assert!(child.0.wait.is_none());
+    assert!(poll_thread(&mut parent).is_ready());
+    // Reclaim the queue-owning stack before the borrowing Thread object.
+    drop(parent);
+    drop(child);
+    assert_eq!(crate::r::blocking::guest_jobs_in_flight(VM), 0);
+    crate::hv::set_guest_kill_for_test(VM, false);
 }
 
 #[test]
@@ -174,8 +354,8 @@ fn diagnostics_identify_the_parked_worker_and_retire_on_force_kill() {
     assert!(poll_thread(&mut thread).is_pending());
     assert!(diagnostics::progress_lines(53, 1)[0].contains("stage=wait-pending"));
     assert!(diagnostics::lines(53)[0].contains("boundary=2"));
-    crate::hv::set_guest_kill_for_test(53, true);
-    wake_killed_guest(53);
+    kill_with_hull_stopped(53);
+    wake_guest_control(53);
     assert!(poll_thread(&mut thread).is_ready());
     assert!(diagnostics::lines(53)[0].contains("phase=cancelling"));
     drop(thread);
@@ -416,8 +596,8 @@ fn kill_discards_a_parked_stack_without_guest_drops_or_resuming() {
     task.0.timed = true;
     assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
     assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
-    crate::hv::set_guest_kill_for_test(51, true);
-    wake_killed_guest(51);
+    kill_with_hull_stopped(51);
+    wake_guest_control(51);
     assert_eq!(wakes.0.load(Ordering::Acquire), 1, "kill must wake an indefinite park");
     assert!(poll_thread(&mut task).is_ready());
     drop(task);
@@ -430,8 +610,8 @@ fn kill_discards_a_parked_stack_without_guest_drops_or_resuming() {
 fn kill_before_first_poll_never_calls_the_guest_closure() {
     let _serial = SERIAL.lock().unwrap();
     let mut task = make_thread(52, || panic!("killed job ran"));
-    crate::hv::set_guest_kill_for_test(52, true);
-    wake_killed_guest(52);
+    kill_with_hull_stopped(52);
+    wake_guest_control(52);
     assert!(poll_thread(&mut task).is_ready());
     drop(task);
     crate::hv::set_guest_kill_for_test(52, false);
@@ -535,7 +715,7 @@ fn control_wakers_survive_repeated_pause_and_resume_notifications() {
     wake_guest_control(56);
     assert_eq!(wakes.0.load(Ordering::Acquire), 3);
     crate::hv::set_guest_pause_for_test(56, false);
-    crate::hv::set_guest_kill_for_test(56, true);
+    kill_with_hull_stopped(56);
     assert!(Pin::new(&mut task).poll(&mut cx).is_ready());
     drop(task);
     wake_guest_control(56);
@@ -558,7 +738,7 @@ fn kill_of_a_paused_native_job_retires_its_counted_park() {
     crate::hv::set_guest_pause_for_test(57, true);
     assert!(poll_thread(&mut task).is_pending());
     assert!(crate::r::blocking::guest_jobs_quiescent(57));
-    crate::hv::set_guest_kill_for_test(57, true);
+    kill_with_hull_stopped(57);
     crate::r::blocking::close_guest_jobs(57);
     assert!(crate::r::blocking::guest_job_cancellation_requested(57));
     wake_guest_control(57);
@@ -596,7 +776,7 @@ fn abi_breadcrumb_follows_nested_parked_stack_and_retires_with_owner() {
     // A carrier's next task cannot inherit the parked stack's active scope.
     drop(unsafe { abi_scope(diagnostics::AbiOperation::Alloc) });
     assert!(diagnostics::progress_lines(52, 1)[0].contains(" abi=wait "));
-    crate::hv::set_guest_kill_for_test(52, true);
+    kill_with_hull_stopped(52);
     assert!(poll_thread(&mut task).is_ready());
     drop(task);
     assert!(diagnostics::progress_lines(52, 1).is_empty());

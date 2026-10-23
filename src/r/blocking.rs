@@ -14,7 +14,8 @@ pub(crate) mod diagnostics;
 mod lifetime;
 pub(crate) use lifetime::reserve as reserve_guest_job;
 pub(crate) use lifetime::{
-    GuestJobOwner, close_guest_jobs, drain_guest_jobs, guest_jobs_in_flight, guest_jobs_quiescent,
+    GuestJobOwner, acknowledge_guest_hull_stopped, close_guest_jobs, drain_guest_jobs,
+    guest_jobs_in_flight, guest_jobs_quiescent, guest_jobs_reclaimable, guest_jobs_retiring,
     open_guest_jobs, pause_guest_jobs, resume_guest_jobs,
 };
 
@@ -40,6 +41,12 @@ static SERVICE_LANE_WAITS: [crate::wait::WaitQueue; crate::allcaps::hv::VM_CPU_S
     [const { crate::wait::WaitQueue::new() }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 static SERVICE_LANE_ACTIVITY: [Mutex<ServiceLaneActivity>; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { Mutex::new(ServiceLaneActivity::new()) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
+// These calls never entered guest code: installing their allocation realm
+// failed. Keep actual ownership recoverable instead of leaking the admission
+// token, and allocate the registry itself in the host allocation realm.
+static RETAINED_GUEST_JOBS: [Mutex<alloc::vec::Vec<RetainedGuestJob>>;
+    crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { Mutex::new(alloc::vec::Vec::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
 
 // Serializes worker start/idle-retire with enqueue. It prevents a band from
 // being added just after the worker decides its queue is empty.
@@ -94,6 +101,102 @@ struct ServiceLaneRequest {
     lane_depth_at_enqueue: usize,
 }
 
+struct RetainedGuestJob {
+    call: BlockingJobCall,
+    owner: GuestJobOwner,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GuestDiscardSummary {
+    pub queued: usize,
+    pub retained: usize,
+    pub stale_generation: bool,
+}
+
+impl BlockingJobEntry {
+    fn matches_guest(&self, vm_id: u8, generation: u64) -> bool {
+        self.vm_id == Some(vm_id)
+            && self.owner.as_ref().is_some_and(|owner| owner.matches(vm_id, generation))
+    }
+
+    fn kill_requested(&self) -> bool {
+        self.owner.as_ref().is_some_and(GuestJobOwner::kill_requested)
+    }
+}
+
+fn discard_unstarted_guest_call(call: BlockingJobCall, owner: Option<GuestJobOwner>) {
+    // Guest captures and vtables can require guest code even in Drop. Their
+    // arena is reclaimed through normal teardown after the real owner retires.
+    core::mem::forget(call);
+    drop(owner);
+}
+
+fn retain_unstarted_guest_call(vm_id: u8, call: BlockingJobCall, owner: GuestJobOwner) -> bool {
+    owner.diagnostic.phase(diagnostics::RETAINED, 0, 0);
+    let mut retained = Some(RetainedGuestJob { call, owner });
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut jobs = RETAINED_GUEST_JOBS[vm_id as usize].lock();
+        // Check under the same lock used by discard_guest_jobs. A kill racing
+        // realm failure either takes this record or causes immediate discard.
+        if !retained.as_ref().unwrap().owner.kill_requested() {
+            jobs.push(retained.take().unwrap());
+        }
+    });
+    if let Some(RetainedGuestJob { call, owner }) = retained {
+        discard_unstarted_guest_call(call, Some(owner));
+        false
+    } else {
+        true
+    }
+}
+
+pub(crate) fn retained_guest_jobs(vm_id: u8) -> usize {
+    RETAINED_GUEST_JOBS.get(vm_id as usize).map_or(0, |jobs| jobs.lock().len())
+}
+
+/// Discard only proven nonrunning work for one forced VM incarnation. Queue
+/// removal is independent of the carrier's executor; a stuck worker cannot
+/// strand later submissions. Call after publishing forced kill and closing
+/// admission. Real owner tokens and lane leases retire outside registry locks.
+pub(crate) fn discard_guest_jobs(vm_id: u8, generation: u64) -> GuestDiscardSummary {
+    let mut summary = GuestDiscardSummary::default();
+    if generation == 0
+        || crate::hv::vm_run_generation(vm_id) != Some(generation)
+        || !crate::hv::guest_kill_requested(vm_id)
+    {
+        summary.stale_generation = true;
+        return summary;
+    }
+    for queue in SERVICE_LANE_QUEUES.iter() {
+        loop {
+            let request = {
+                let mut queue = queue.lock();
+                queue.iter().position(|request| request.entry.matches_guest(vm_id, generation))
+                    .and_then(|position| queue.remove(position))
+            };
+            let Some(ServiceLaneRequest { entry, lease, .. }) = request else { break; };
+            // Release host-only lane state before the last admission token can
+            // allow the VM's executable and arena resources to be reclaimed.
+            drop(lease);
+            discard_unstarted_guest_call(entry.call, entry.owner);
+            summary.queued += 1;
+        }
+    }
+    if let Some(jobs) = RETAINED_GUEST_JOBS.get(vm_id as usize) {
+        loop {
+            let retained = {
+                let mut jobs = jobs.lock();
+                jobs.iter().position(|job| job.owner.matches(vm_id, generation))
+                    .map(|position| jobs.swap_remove(position))
+            };
+            let Some(RetainedGuestJob { call, owner }) = retained else { break; };
+            discard_unstarted_guest_call(call, Some(owner));
+            summary.retained += 1;
+        }
+    }
+    summary
+}
+
 pub fn queued_blocking_jobs() -> usize {
     SERVICE_LANE_QUEUES
         .iter()
@@ -143,9 +246,8 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
         call,
         owner,
     } = entry;
-    if vm_id.is_some_and(crate::hv::guest_kill_requested) {
-        core::mem::forget(call);
-        drop(owner);
+    if owner.as_ref().is_some_and(GuestJobOwner::kill_requested) {
+        discard_unstarted_guest_call(call, owner);
         return;
     }
     let started_ms = now_ms();
@@ -191,16 +293,17 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
             },
         );
         if !ran {
-            // Do not invoke a guest destructor in the host allocation realm,
-            // or publish its executable memory as reusable after losing the
-            // realm. Retain the reservation for diagnosis/recovery.
-            if let Some(owner) = &owner {
-                owner.diagnostic.phase(diagnostics::RETAINED, 0, 0);
-            }
-            core::mem::forget(pending_call);
-            core::mem::forget(owner);
+            // None means the allocation wrapper never invoked the closure.
+            // Retain that proof with its actual owner; forced kill can safely
+            // discard it without entering guest Drop or inventing a decrement.
+            let retained = retain_unstarted_guest_call(
+                vm_id,
+                pending_call.take().expect("unavailable realm did not execute guest call"),
+                owner.expect("guest service job missing admission reservation"),
+            );
             crate::log_error!(target: "service";
-                "blocking-job: guest allocation domain unavailable id={} vm={} resources=retained\n", id, vm_id);
+                "blocking-job: guest allocation domain unavailable id={} vm={} resources={}\n",
+                id, vm_id, if retained { "retained" } else { "discarded" });
             service_lane_activity_finish(slot);
             return;
         }
@@ -515,6 +618,11 @@ fn submit_service_lane_request(
     entry: BlockingJobEntry,
     log_rejection: bool,
 ) -> Result<u64, BlockingJobEntry> {
+    if entry.kill_requested() {
+        let id = entry.id;
+        discard_unstarted_guest_call(entry.call, entry.owner);
+        return Ok(id);
+    }
     if queued_blocking_jobs() >= BLOCKING_JOB_QUEUE_CAP {
         if log_rejection {
             crate::log_error!(
@@ -545,20 +653,34 @@ fn submit_service_lane_request(
     let purpose = entry.purpose;
     let policy_tag = entry.policy_tag;
     let enqueued_ms = now_ms();
+    let mut pending = Some(ServiceLaneRequest {
+        entry,
+        lease,
+        enqueued_ms,
+        lane_depth_at_enqueue: 0,
+    });
     let lane_depth = {
         let Some(queue) = SERVICE_LANE_QUEUES.get(slot as usize) else {
-            return Err(entry);
+            return Err(pending.take().unwrap().entry);
         };
         let mut queue = queue.lock();
-        let lane_depth_at_enqueue = queue.len().saturating_add(1);
-        queue.push_back(ServiceLaneRequest {
-            entry,
-            lease,
-            enqueued_ms,
-            lane_depth_at_enqueue,
-        });
+        // Reservation and publication are separate operations. Kill may have
+        // scanned this queue after reservation but before we reached it. Its
+        // sticky flag, read under the queue lock, covers that late publisher.
+        if !pending.as_ref().unwrap().entry.kill_requested() {
+            let mut request = pending.take().unwrap();
+            request.lane_depth_at_enqueue = queue.len().saturating_add(1);
+            queue.push_back(request);
+        }
         queue.len()
     };
+    if let Some(ServiceLaneRequest { entry, lease, .. }) = pending {
+        drop(lease);
+        discard_unstarted_guest_call(entry.call, entry.owner);
+        // Ownership was accepted and discarded. Returning rejection here
+        // would make a raw guest caller destroy the same payload a second time.
+        return Ok(id);
+    }
     let queued = queued_blocking_jobs();
     let (spawned_tasks, ready_tasks) = service_lane_executor_counts(slot);
     if lane_depth >= SERVICE_LANE_SOFT_THROTTLE_DEPTH {
