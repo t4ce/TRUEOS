@@ -36,9 +36,9 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      # Includes crates/log-os, the staged futures-family lock update, and
-      # the ShaderToy inputs rebuilt by the C++ artifact reproducibility gate.
-      TRUEOS_BLUEPRINTS_REV: daca7948ee4fdb7bcef0e0be8947a36be611fd2a
+      # Matches the current kernel's built-in/ABI migration (hull replaces
+      # the removed Shell2 frontend) and includes the native shader headers.
+      TRUEOS_BLUEPRINTS_REV: f78b0e87ebb6f40c970bfbb17087984acbca5a04
       TRUEOS_MICROGAMES_REV: 24a88ca8cea2f1fafd6ec6e199e865e52df499b9
       TRUEOS_PICASSO_REV: bf187f06dbd3b3d62fa985121f75048092e3e501
 
@@ -150,11 +150,11 @@ jobs:
           # These built-ins are gitlinks in TRUEOS-Blueprints, so the parent
           # checkout alone contains no Cargo manifests for them.
           git -C "${blueprints_dir}" submodule update --init --recursive --depth 1 -- \
-            apps/solara \
             apps/RbGB \
             buildins/edit \
-            buildins/termdir
-          test -f "${blueprints_dir}/apps/solara/Cargo.toml"
+            buildins/termdir \
+            vendor/winit
+          test -f "${blueprints_dir}/buildins/hull/Cargo.toml"
 
           # The checked Blueprint workspace has path dependencies on these
           # sibling repositories, even though this release builds only one app.
