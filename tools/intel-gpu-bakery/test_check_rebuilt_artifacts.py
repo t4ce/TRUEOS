@@ -15,8 +15,8 @@ class RebuiltArtifactTests(unittest.TestCase):
             def git(*args):
                 subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
-            def check(expected):
-                result = subprocess.run(["python3", str(SCRIPT), "artifacts"], cwd=root, capture_output=True)
+            def check(expected, *options):
+                result = subprocess.run(["python3", str(SCRIPT), "artifacts", *options], cwd=root, capture_output=True)
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
             git("init", "-q")
@@ -29,13 +29,22 @@ class RebuiltArtifactTests(unittest.TestCase):
             git("add", ".")
             git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture")
             check(0)
+            original = contract.read_bytes()
             contract.write_text('// source: /new/kernel.clcpp\n// normalized commands: new\nconst ABI: u32 = 1;\n')
             check(0)
+            rebuilt = contract.read_bytes()
+            self.assertNotEqual(original, rebuilt)
             binary.write_bytes(b"changed")
-            check(1)
+            check(1, "--restore-comments")
+            self.assertEqual(contract.read_bytes(), rebuilt)
+            self.assertEqual(binary.read_bytes(), b"changed")
             binary.write_bytes(b"original")
+            check(0, "--restore-comments")
+            self.assertEqual(contract.read_bytes(), original)
+            self.assertEqual(subprocess.check_output(["git", "status", "--porcelain"], cwd=root), b"")
             contract.write_text('const ABI: u32 = 2;\n')
-            check(1)
+            check(1, "--restore-comments")
+            self.assertEqual(contract.read_text(), 'const ABI: u32 = 2;\n')
             git("add", ".")  # Staging must not hide an ABI change.
             check(1)
             contract.unlink()
