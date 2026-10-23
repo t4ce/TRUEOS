@@ -17,7 +17,7 @@ Mandelbrot machine code for source compilation.
 From TRUEOS, build without deploying or resetting the rig:
 
 ```sh
-make iso CARGO_BUILD_FLAGS='--features odin-native-gpgpu' \
+CARGO_NET_OFFLINE=true make iso CARGO_BUILD_FLAGS='--features odin-native-gpgpu' \
   START_BAREMETAL_LOG=0 PUBLISH_RELEASE_SMB=0
 ```
 
@@ -28,7 +28,21 @@ ODIN=/home/t4ce/Programmme/odin/odin bash trueos/build.sh
 python3 trueos/test_mandelbrot.py
 ```
 
-The compiler Blueprint is `trueos/build/odin-son.bp`. A launcher providing argv
+The compiler Blueprint is `trueos/build/odin-son.bp`. Build and deploy the named
+test pack from the sibling TRUEOS-Blueprints repository:
+
+```sh
+ODIN=/home/t4ce/Programmme/odin/odin cargo bp odin-son
+```
+
+In Shell3 over SSH, submit `§§odin-son` and Enter to fetch and launch it. Select
+`gpu-mandelbrot` in the compiler menu; Enter emits `mandelbrot.eu.bin`, and `r`
+compiles the embedded source again and displays it. The image supports mouse
+drag to pan and wheel to zoom. Q/Escape in the image returns to the compiler.
+The currently booted kernel must enable `odin-native-gpgpu`; publishing the
+compiler package does not change the kernel.
+
+A launcher providing argv
 can launch it with
 `--verify-gpu-mandelbrot` for the two-program test or `--run-gpu-mandelbrot`
 for the retained pan/zoom window. Delivery uses the existing Blueprint loader.
@@ -107,5 +121,40 @@ framebuffer hashes. Completion records use Important level so the usual GPGPU
 Warn filter retains them. An application upload/queue marker alone does not
 prove hardware execution.
 
-Physical execution of this new path remains to be measured. Current device
-admission is ADL-S `4680:0c` and TGL `9a49:01`.
+Physical execution passed on ADL-S `4680:0c` on 2026-10-22. The corrected R4
+image was verified by fresh PXE reads of the kernel and bootloader. All three
+native kernels retired, and every visible pixel matched the independent C
+reference in [`reference.c`](../../tools/odin-native/reference.c):
+
+| Runtime-compiled source | EU body bytes | GPU/reference framebuffer FNV-1a64 |
+| --- | ---: | --- |
+| Constant `0.5`, 64×64 | 16 | `679ddd60d6b96325` |
+| Mandelbrot, 25 iterations, 320×240 | 14,496 | `cfa5852b3c69e7a6` |
+| Mandelbrot, 16 iterations, 320×240 | 9,168 | `8a797794491ba3af` |
+
+The two Mandelbrot bodies were compiled inside the same running TRUEOS app
+from source strings with different loop bounds, uploaded through the generated
+code path, executed and published. Neither body was selected from a shader
+catalog. The published `cargo bp odin-son` package was also fetched through
+Shell3, used to emit the body from its menu, and successfully rendered the same
+25-iteration GPU checksum. Kernel/package identities and actual completion
+records are preserved in
+[`odin-runtime-mandelbrot-20261022.json`](odin-runtime-mandelbrot-20261022.json).
+The corrected published package was also left running without keyboard focus.
+A fresh physical-display WD postblend screenshot shows its Mandelbrot window
+at the requested location. Local capture, runtime-emitted EU binary, reset
+receipt and completion excerpts are in `bld/odin-native-mandelbrot-proof/`.
+
+The first bring-up runs exposed two wrapper defects: unsupported Xe-LP
+dword×dword integer multiplication to a dword GRF, and an indirect-payload
+descriptor with zero per-thread read length but nonzero cross-thread length.
+The wrapper now uses SHL/UD×UW and three per-thread GRFs with zero cross-thread
+GRFs. TGL PRM Vol. 2d p.650 permits the latter profile; Intel IGC's hardware
+conformity pass documents the multiply restriction
+([capability table](https://github.com/intel/intel-graphics-compiler/blob/master/visa/HWCaps.inc),
+[lowering](https://github.com/intel/intel-graphics-compiler/blob/master/visa/HWConformity.cpp)).
+These changes affect the
+runtime envelope, not the compiler's floating-point Mandelbrot recurrence.
+
+Current device admission is ADL-S `4680:0c` and TGL `9a49:01`. The physical
+execution proof above covers ADL-S; TGL is admitted but was not tested here.

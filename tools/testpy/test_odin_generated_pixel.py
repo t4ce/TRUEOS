@@ -28,6 +28,7 @@ def main():
         'PIPE_CONTROL_CMD', 'PIPE_CONTROL_HDC_PIPELINE_FLUSH', 'PIPE_CONTROL_FLUSH_ENABLE',
         'PIPE_CONTROL_CS_STALL', 'PIPE_CONTROL_DC_FLUSH_ENABLE', 'PIPE_CONTROL_L3_FABRIC_FLUSH',
         'PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE', 'PIPE_CONTROL_FLUSH_BITS',
+        'MI_STORE_DATA_IMM_GGTT_DW1',
     )]
     declarations += [item(constants, 'direct_rcs_encode_mocs_index')]
     declarations += [item(payloads, name) for name in (
@@ -37,6 +38,7 @@ def main():
     declarations += [item(commands, name) for name in (
         'direct_rcs_push', 'direct_rcs_push_pipe_control_full', 'direct_rcs_push_pipe_control',
         'direct_rcs_push_pipe_control_post_sync_marker_at',
+        'direct_rcs_push_store_marker_at', 'direct_rcs_push_store_marker_for_state',
     )]
     declarations += [item('src/intel/gpgpu/rcs/worklists.rs', 'direct_rcs_push_gpgpu_dispatch_epilogue')]
     source = HARNESS.replace('DECLARATIONS', '\n'.join(declarations))
@@ -57,6 +59,9 @@ def main():
             assembly = directory / 'envelope.asm'
             assembly.write_text(subprocess.run(['iga64', '-p=12p1', '-d', str(envelope)],
                                               text=True, capture_output=True, check=True).stdout)
+            for line in assembly.read_text().splitlines():
+                assert not ('mul (' in line and line.count(':ud') == 3), \
+                    'Xe-LP forbids dword*dword integer MUL with a direct dword GRF destination'
             roundtrip = directory / 'roundtrip.bin'
             subprocess.run(['iga64', '-p=12p1', '-a', '-Xforce-no-compact', str(assembly),
                             '-o', str(roundtrip)], check=True)
@@ -72,10 +77,12 @@ HARNESS = r'''
 mod gpu { #[path="VALIDATOR"] pub(crate) mod native_xelp; }
 mod phys {pub fn phys_to_virt(p:usize)->usize{p}}
 #[macro_export] macro_rules! log_important {($($tt:tt)*)=>{}}
+#[macro_export] macro_rules! log_error {($($tt:tt)*)=>{}}
 mod intel {
     #[derive(Clone, Copy)] pub struct Dev {device_id:u16, revision_id:u8}
     fn claimed_device()->Option<Dev>{Some(Dev{device_id:0x4680,revision_id:12})}
     fn dma_flush(_: *mut u8,_:usize){}
+    fn mmio_read(_: Dev,_:usize)->u32{0}
     mod gpgpu {
         use std::sync::{Mutex, OnceLock};
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -90,6 +97,9 @@ mod intel {
         fn direct_rcs_elapsed_ms_since(_:u64)->u64{0}
         fn sha256_digest(code:&[u8])->[u8;32]{[code[0];32]}
         fn digest_hex(_: &[u8;32])->String{String::new()}
+        struct Activity {acthd:u32,ring_head:u32,ring_tail:u32,ipeir:u32,ipehr:u32,eir:u32,instdone:u32,instps:u32}
+        fn activity_snapshot()->Activity{Activity{acthd:0,ring_head:0,ring_tail:0,ipeir:0,ipehr:0,eir:0,instdone:0,instps:0}}
+        fn direct_rcs_read_result_slot(s:DirectRcsState,slot:usize)->u32{unsafe{s.result_virt.cast::<u32>().add(slot).read_volatile()}}
         static DIRECT_RCS_SUBMIT_LOCK:Mutex<()>=Mutex::new(());
         static STATE:OnceLock<DirectRcsState>=OnceLock::new();
         static LOST:AtomicBool=AtomicBool::new(false);
@@ -139,6 +149,8 @@ mod intel {
             assert!(!generated_pixel_body_valid(&bytes));
             for reg in [0,3,112,127] {let mut bad=body();bad[7]=reg;assert!(!generated_pixel_body_valid(&bad));}
             let mut bad=body();bad[9]=88;assert!(!generated_pixel_body_valid(&bad));
+            let bad_mul=[0x00030141u32,0x04050220,0x02460105,0x00460205].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
+            assert!(!generated_pixel_body_valid(&bad_mul),"Xe-LP dword*dword MUL needs explicit lowering");
             assert!(!generated_pixel_body_valid(&[]));
             assert!(!generated_pixel_body_valid(&vec![0;GENERATED_PIXEL_MAX_BODY_BYTES+16]));
             let cmp=[0x00030170u32,0x05058aa0,0x3a460105,0].into_iter().flat_map(u32::to_le_bytes);
@@ -158,13 +170,15 @@ mod intel {
             assert!(encode_generated_pixel(s,&program,dst,params(),1,2));
             let batch=unsafe{std::slice::from_raw_parts(s.batch_virt.cast::<u32>(),DIRECT_RCS_BATCH_BYTES/4)};
             assert_eq!(batch[GENERATED_PIXEL_IDD/4],GENERATED_PIXEL_CODE_OFFSET as u32);
-            assert_eq!(batch[GENERATED_PIXEL_IDD/4+5],0);assert_eq!(batch[GENERATED_PIXEL_IDD/4+7],3);
+            assert_eq!(batch[GENERATED_PIXEL_IDD/4+5],3<<16);assert_eq!(batch[GENERATED_PIXEL_IDD/4+7],0);
             assert_eq!(&batch[GENERATED_PIXEL_PAYLOAD/4+8..GENERATED_PIXEL_PAYLOAD/4+16],&[0,1,2,3,4,5,6,7]);
             assert_eq!(batch[GENERATED_PIXEL_PAYLOAD/4+6],1);
             let walker=batch.iter().position(|&w|w==GPGPU_WALKER_CMD).unwrap();
             assert_eq!(batch[walker+4],0);assert_eq!(batch[walker+7],3);assert_eq!(batch[walker+10],2);
             assert_eq!(batch[walker+13],255);assert_eq!(batch[walker+14],255);
-            let epilogue=walker+17;assert_eq!(batch[epilogue],PIPE_CONTROL_CMD|PIPE_CONTROL_HDC_PIPELINE_FLUSH);
+            assert_eq!(batch[walker-1],GENERATED_PIXEL_WALKER_COOKIE);
+            assert_eq!(batch[walker+18],GENERATED_PIXEL_AFTER_WALKER_COOKIE);
+            let epilogue=walker+21;assert_eq!(batch[epilogue],PIPE_CONTROL_CMD|PIPE_CONTROL_HDC_PIPELINE_FLUSH);
             assert_eq!(batch[epilogue+7]&PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE,PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE);
             let result=generated_pixel_rgba8_surface_full(&program,dst,params());
             assert!(result.ok);assert_eq!(result.release,Some((dst.phys,dst.bytes)));
@@ -172,6 +186,7 @@ mod intel {
             assert!(generated_pixel_rgba8_surface_full(&program,big,params()).ok);
             let mut next=0;for &(first,rows) in ROWS.lock().unwrap().iter(){assert_eq!(first,next);next+=rows;}
             assert_eq!(next,big.height);
+            for &(_,rows) in ROWS.lock().unwrap().iter(){assert!(big.width.div_ceil(8)*rows<=4096);}
         }
         #[test]fn timeout_and_ambiguous_submission_pin_carrier_without_release(){
             let program=create_generated_pixel_program(&body()).unwrap();let dst=surface(17,3);
@@ -228,6 +243,7 @@ mod intel {
         }
         #[test]fn native_envelope_coordinates_grayscale_packing_and_tail_mask(){
             let kernel=generated_pixel_envelope(&body()).unwrap();
+            assert_eq!(&kernel[kernel.len()-16..],&[0x80000131u32,4,0x70207f0c,0].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>());
             if let Ok(path)=std::env::var("GENERATED_PIXEL_TEST_DUMP"){std::fs::write(path,&kernel).unwrap();}
             for width in [1u32,7,8,9,17,32,1025]{
                 for first in [0,5]{for gy in 0..3{

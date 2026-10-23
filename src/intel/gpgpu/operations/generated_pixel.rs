@@ -11,7 +11,12 @@ const GENERATED_PIXEL_BINDING: usize = 0x840;
 const GENERATED_PIXEL_SURFACE: usize = 0x880;
 const GENERATED_PIXEL_PAYLOAD: usize = 0x900;
 const GENERATED_PIXEL_COOKIE: u32 = 0x4f44_5049;
-const GENERATED_PIXEL_MAX_BATCH_PIXELS: u32 = 64 * 1024;
+const GENERATED_PIXEL_ENTRY_COOKIE: u32 = 0x4f50_0001;
+const GENERATED_PIXEL_WALKER_COOKIE: u32 = 0x4f50_0002;
+const GENERATED_PIXEL_AFTER_WALKER_COOKIE: u32 = 0x4f50_0003;
+// Conservative bring-up budget, rather than a universal hardware limit.
+// At most 4096 SIMD8 groups enter one non-preemptible native dispatch.
+const GENERATED_PIXEL_MAX_BATCH_PIXELS: u32 = 32 * 1024;
 
 pub(crate) struct GeneratedPixelProgram {
     kernel: Vec<u8>,
@@ -108,6 +113,10 @@ fn generated_pixel_body_valid(code: &[u8]) -> bool {
             }
         } else {
             if !matches!(op, 0x40 | 0x41 | 0x62 | 0x65 | 0x66 | 0x67 | 0x68 | 0x69 | 0x70)
+                // Xe-LP does not support a GRF dword destination for a
+                // dword*dword integer MUL. The current compiler profile has
+                // no mixed-width integer multiply or MUL/MACL lowering.
+                || (op == 0x41 && ty == 2)
                 || (matches!(op, 0x65..=0x69) && ty != 2)
                 || (op == 0x62 && pred == 0)
                 || !readable(src0)
@@ -196,6 +205,9 @@ pub(crate) fn generated_pixel_rgba8_surface_full(
             0
         };
         if observed != GENERATED_PIXEL_COOKIE {
+            generated_pixel_failure_diagnostics(
+                dev, state, program, dst, first_row, rows, observed,
+            );
             quarantine_direct_rcs_context("odin-generated-pixel-incomplete");
             return GpgpuRgba8KernelResult {
                 submitted: true,
@@ -276,7 +288,7 @@ fn encode_generated_pixel(
         GENERATED_PIXEL_BINDING,
         GENERATED_PIXEL_CODE_OFFSET as u64,
         1,
-        3,
+        0,
     ) || !direct_rcs_write_buffer_surface_state(
         state,
         GENERATED_PIXEL_SURFACE,
@@ -286,12 +298,10 @@ fn encode_generated_pixel(
         return false;
     }
     unsafe {
-        // Fixed cross-thread r1..r3, no per-thread local-ID payload.
-        state
-            .batch_virt
-            .add(GENERATED_PIXEL_IDD + 20)
-            .cast::<u32>()
-            .write(0);
+        // GPGPU_WALKER indirect data forbids a nonzero cross-thread read
+        // with a zero per-thread read. One hardware thread owns each group,
+        // so the helper's three per-thread GRFs deliver this same fixed
+        // r1..r3 payload without a separate cross-thread allocation.
         state
             .batch_virt
             .add(GENERATED_PIXEL_IDD + 8)
@@ -302,6 +312,15 @@ fn encode_generated_pixel(
         core::slice::from_raw_parts_mut(state.batch_virt.cast::<u32>(), GENERATED_PIXEL_IDD / 4)
     };
     let mut cursor = 0;
+    if !direct_rcs_push_store_marker_for_state(
+        state,
+        batch,
+        &mut cursor,
+        2,
+        GENERATED_PIXEL_ENTRY_COOKIE,
+    ) {
+        return false;
+    }
     if !direct_rcs_push_gpgpu_prologue_with_instruction_base(
         batch,
         &mut cursor,
@@ -316,6 +335,21 @@ fn encode_generated_pixel(
         0,
         32,
         GENERATED_PIXEL_IDD as u32,
+    ] {
+        if !direct_rcs_push(batch, &mut cursor, word) {
+            return false;
+        }
+    }
+    if !direct_rcs_push_store_marker_for_state(
+        state,
+        batch,
+        &mut cursor,
+        4,
+        GENERATED_PIXEL_WALKER_COOKIE,
+    ) {
+        return false;
+    }
+    for word in [
         GPGPU_WALKER_CMD,
         0,
         128,
@@ -331,12 +365,21 @@ fn encode_generated_pixel(
         1,
         0xff,
         0xff,
-        MEDIA_STATE_FLUSH_CMD,
-        0,
     ] {
         if !direct_rcs_push(batch, &mut cursor, word) {
             return false;
         }
+    }
+    if !direct_rcs_push_store_marker_for_state(
+        state,
+        batch,
+        &mut cursor,
+        6,
+        GENERATED_PIXEL_AFTER_WALKER_COOKIE,
+    ) || !direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD)
+        || !direct_rcs_push(batch, &mut cursor, 0)
+    {
+        return false;
     }
     if !direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
@@ -365,11 +408,14 @@ fn generated_pixel_envelope(body: &[u8]) -> Result<Vec<u8>, i32> {
     emit(crate::gpu::native_xelp::PREFIX);
     // r112=x, r113=y. r0.1/r0.6 carry workgroup x/y; r2 holds lane IDs.
     emit([0x80030161, 0x70050220, 0x24, 0]);
-    emit(generated_pixel_binary(0x41, 112, 112, 8, true, false));
+    emit(generated_pixel_binary(0x69, 112, 112, 3, true, false));
     emit(generated_pixel_binary(0x40, 112, 112, 2, false, false));
     emit([0x80030161, 0x71050220, 0xc4, 0]);
     emit(generated_pixel_broadcast(0x40, 113, 113, 1, 6, false));
-    emit(generated_pixel_broadcast(0x41, 114, 113, 1, 5, false));
+    // Xe-LP requires a word multiplier for a direct dword GRF result. The
+    // surface admission bounds pitch to u16, so its low UW is lossless.
+    // mul(8) r114:UD r113:UD r1.10<0;1,0>:UW, verified with IGA 12p1.
+    emit([0x00030141, 0x72050220, 0x01467105, 0x000001a4]);
     emit(generated_pixel_binary(0x69, 3, 112, 2, true, false));
     emit(generated_pixel_binary(0x40, 3, 3, 114, false, false));
     emit([0x00030161, 0x74050220, 0x00000184, 0]); // width r116 <- r1.4
@@ -406,10 +452,62 @@ fn generated_pixel_envelope(body: &[u8]) -> Result<Vec<u8>, i32> {
     emit([0x00030170, 0x00010220, 0x52467005, 0x00467405]);
     emit([0x00000101, 0x00010000, 0, 0]);
     emit([0x01034031, 0, 0xcc00030c, 0x009a750c]);
-    for instruction in crate::gpu::native_xelp::SUFFIX.iter().skip(2) {
+    for instruction in crate::gpu::native_xelp::SUFFIX.iter().skip(2).take(6) {
         emit(*instruction);
     }
+    // Match the proven IGC root-thread termination packet exactly: SIMD1,
+    // write-enable, dependency distance @1. EOT is not an SBID-producing SEND.
+    emit([0x80000131, 0x00000004, 0x70207f0c, 0]);
     Ok(code)
+}
+
+fn generated_pixel_failure_diagnostics(
+    dev: super::Dev,
+    state: DirectRcsState,
+    program: &GeneratedPixelProgram,
+    dst: GpgpuRgba8Surface,
+    first_row: u32,
+    rows: u32,
+    observed: u32,
+) {
+    let stages = [2, 4, 6].map(|slot| direct_rcs_read_result_slot(state, slot));
+    let read = |offset: usize| unsafe {
+        core::ptr::read_volatile(state.batch_virt.add(offset).cast::<u32>())
+    };
+    let idd: [u32; 8] = core::array::from_fn(|i| read(GENERATED_PIXEL_IDD + i * 4));
+    let uniforms: [u32; 8] = core::array::from_fn(|i| read(GENERATED_PIXEL_PAYLOAD + i * 4));
+    let lanes: [u32; 8] = core::array::from_fn(|i| read(GENERATED_PIXEL_PAYLOAD + 32 + i * 4));
+    crate::log_error!(target: "gpgpu";
+        "odin-native-pixel: failed marker=0x{:08X} stages={:08X?} body_bytes={} native_bytes={} extent={}x{} first_row={} rows={} groups={}x{} simd=8\n",
+        observed, stages, program.body_bytes, program.kernel.len(), dst.width, dst.height,
+        first_row, rows, dst.width.div_ceil(8), rows);
+    crate::log_error!(target: "gpgpu";
+        "odin-native-pixel: addresses batch=0x{:X} code=0x{:X} result=0x{:X} dst_gpu=0x{:X} dst_phys=0x{:X} dst_bytes={} pitch={} body_sha256={}\n",
+        state.gpu_va.batch, state.gpu_va.batch + GENERATED_PIXEL_CODE_OFFSET as u64,
+        state.gpu_va.result, dst.gpu, dst.phys, dst.bytes, dst.pitch_bytes,
+        digest_hex(&program.digest).as_str());
+    crate::log_error!(target: "gpgpu";
+        "odin-native-pixel: descriptor idd={:08X?} uniforms={:08X?} lanes={:08X?}\n",
+        idd, uniforms, lanes);
+    let activity = activity_snapshot();
+    crate::log_error!(target: "gpgpu";
+        "odin-native-pixel: shared-rcs acthd=0x{:08X} head=0x{:08X} tail=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instps=0x{:08X} fault=0x{:08X} fault0=0x{:08X} fault1=0x{:08X}\n",
+        activity.acthd, activity.ring_head, activity.ring_tail, activity.ipeir,
+        activity.ipehr, activity.eir, activity.instdone, activity.instps,
+        super::mmio_read(dev, 0xCEC4), super::mmio_read(dev, 0xCEB8), super::mmio_read(dev, 0xCEBC));
+    // Diagnostic observation only. GPU ownership is still retained, and
+    // neither these bytes nor their values authorize release or reuse.
+    let pixels = crate::phys::phys_to_virt(dst.phys as usize) as *mut u8;
+    super::dma_flush(pixels, dst.width.min(8) as usize * 4);
+    let sample: [u32; 8] = core::array::from_fn(|i| {
+        if i < dst.width as usize {
+            unsafe { core::ptr::read_volatile(pixels.cast::<u32>().add(i)) }
+        } else {
+            0
+        }
+    });
+    crate::log_error!(target: "gpgpu";
+        "odin-native-pixel: unretired-diagnostic first_pixels={:08X?} ownership=gpu-retained release=forbidden\n", sample);
 }
 
 fn generated_pixel_surface_fnv(dst: GpgpuRgba8Surface) -> u64 {

@@ -17,12 +17,14 @@ KERNEL_SOURCES = (
     "src/ui4/blueprint_ui4.rs", "src/ui4/blueprint_ui4/native_compute_api.rs",
     "src/hv/blueprint/prebind.rs", "src/hv/vmcall.rs",
     "src/r/io/async_fs_cabi.rs", "crates/trueos-vm/src/vmcall.rs",
+    "crates/trueos-v/src/bp_abi.rs",
 )
 ODIN_SOURCES = (
-    "trueos/main.odin", "trueos/mandelbrot.odin", "trueos/embedded.odin",
+    "trueos/main.odin", "trueos/mandelbrot.odin", "trueos/embedded.odin", "trueos/tui.odin",
     "trueos/build.sh", "trueos/build-mandelbrot.sh", "trueos/prepare.py",
     "trueos/package.py", "typecheck/gpu_native.odin",
     "bac/intel_xelp/target.odin", "bac/intel_xelp/encode.odin",
+    "gpu_native.odin", "examples/gpu-mandelbrot-trueos/main.odin",
 )
 
 
@@ -45,6 +47,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="New artifact directory")
     parser.add_argument("--cache", type=Path,
                         help="Reuse a Cargo cache, including tgt; otherwise clone tgt privately")
+    parser.add_argument("--extra-bp", action="append", default=[], metavar="NAME=PATH",
+                        help="Add a named diagnostic Blueprint to the private bundle")
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.blueprints_root = args.blueprints_root.resolve()
@@ -58,6 +62,12 @@ def main():
     names = [name for name in names if name != "odin-mandelbrot"] + ["odin-mandelbrot"]
     packages = {name: args.blueprints_root / "dist" / f"{name}.bp" for name in names}
     packages["odin-mandelbrot"] = args.bp.resolve()
+    for extra in args.extra_bp:
+        name, separator, path = extra.partition("=")
+        if not separator or not re.fullmatch(r"[A-Za-z0-9_-]+", name) or name in packages:
+            parser.error("--extra-bp requires a unique valid NAME=PATH")
+        names.append(name)
+        packages[name] = Path(path).resolve()
     snapshots = [("kernel", ROOT, name) for name in KERNEL_SOURCES]
     snapshots += [("odin-son", args.odin_root, name) for name in ODIN_SOURCES]
     for path in [args.base_iso, *packages.values(), *(base / name for _, base, name in snapshots)]:

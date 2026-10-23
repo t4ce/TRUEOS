@@ -1,0 +1,77 @@
+{
+  "date": "2026-10-22",
+  "device": "Intel ADL-S 4680:0c, physical TRUEOS rig",
+  "kernel_sha256": "680e20d22afa58440268780a0dcab09dd59fd97f63c20c615d26c63907fada6e",
+  "iso_sha256": "194b26553842135fcbc47457eddd5372053a84e672c020935886e6bcc744609d",
+  "pxe_identity_verified": true,
+  "run_directory": "/tmp/odin-native-demo-20261022-r4",
+  "feature": "odin-native-gpgpu",
+  "reference_command": "clang -std=c11 -O2 -ffp-contract=off tools/odin-native/reference.c -o /tmp/odin-native-reference && /tmp/odin-native-reference",
+  "reference_source_sha256": "9d6afeb9ada9fb07a92caf10d41c81eb4c45d68296007342505ef6a09e783362",
+  "test_packages": {
+    "blueprints/dist/odin-mandelbrot.bp": "afbcfa2aea4a04b70f3f91d72e788e0993d25668aeadbb0cb53d8b25870fd530",
+    "blueprints/dist/odin-envelope.bp": "90f7365beeea3649868d58971cc5b6ecc4870bcdb5245820354f3edf54a61c60"
+  },
+  "results": [
+    {
+      "case": "smoke",
+      "body_bytes": 16,
+      "body_sha256": "95d6b3f3c58a93cc999485c8951c8589286a78609229b7d59e96c51c8e22dc0e",
+      "framebuffer_fnv1a64": "679ddd60d6b96325",
+      "reference_fnv1a64": "679ddd60d6b96325",
+      "completion_record": "[gpgpu] [important] odin-native-pixel: completed marker=0x4F445049 extent=64x64 pitch=256 body_bytes=16 body_sha256=95d6b3f3c58a93cc999485c8951c8589286a78609229b7d59e96c51c8e22dc0e framebuffer_fnv1a64=0x679DDD60D6B96325 source=native-eu gpu_retired=1 cpu_pixel_writes=0"
+    },
+    {
+      "case": "iterations_25",
+      "body_bytes": 14496,
+      "body_sha256": "662f95be3116c2d448de183b18ec30e59b36b13bef868a50c996612c7b733767",
+      "framebuffer_fnv1a64": "cfa5852b3c69e7a6",
+      "reference_fnv1a64": "cfa5852b3c69e7a6",
+      "completion_record": "[gpgpu] [important] odin-native-pixel: completed marker=0x4F445049 extent=320x240 pitch=1280 body_bytes=14496 body_sha256=662f95be3116c2d448de183b18ec30e59b36b13bef868a50c996612c7b733767 framebuffer_fnv1a64=0xCFA5852B3C69E7A6 source=native-eu gpu_retired=1 cpu_pixel_writes=0"
+    },
+    {
+      "case": "iterations_16",
+      "body_bytes": 9168,
+      "body_sha256": "61644e706563125c3ffb017bd36022c9507ef28996044720a7ab3acca17340ec",
+      "framebuffer_fnv1a64": "8a797794491ba3af",
+      "reference_fnv1a64": "8a797794491ba3af",
+      "completion_record": "[gpgpu] [important] odin-native-pixel: completed marker=0x4F445049 extent=320x240 pitch=1280 body_bytes=9168 body_sha256=61644e706563125c3ffb017bd36022c9507ef28996044720a7ab3acca17340ec framebuffer_fnv1a64=0x8A797794491BA3AF source=native-eu gpu_retired=1 cpu_pixel_writes=0"
+    }
+  ],
+  "source_changed_runtime_compilation": true,
+  "native_body_hash_allowlist": false,
+  "submission": "raw GPGPU_WALKER, runtime-owned store/fence/EOT",
+  "known_failures_fixed": [
+    "Xe-LP dword*dword integer MUL to dword GRF replaced by SHL and UD*UW",
+    "Indirect dispatch descriptor changed from per-thread=0/cross-thread=3 to per-thread=3/cross-thread=0"
+  ],
+  "runtime_artifact_readback": {
+    "url_path": "/dl/2/apps/odin-son/mandelbrot.eu.bin",
+    "bytes": 14496,
+    "sha256": "662f95be3116c2d448de183b18ec30e59b36b13bef868a50c996612c7b733767",
+    "desktop_compiler_byte_identical": true,
+    "iga_disassembly_succeeded": true
+  },
+  "published_compiler_package": {
+    "command": "ODIN=/home/t4ce/Programmme/odin/odin cargo bp odin-son",
+    "sha256": "408acc83d17a272e478a998c495ec7c2cdd4a07594f993949a5f70aea56b154a",
+    "bytes": 3151304,
+    "remote_readback_verified": true,
+    "shell3_launch": "\u00a7\u00a7odin-son <Enter>; gpu-mandelbrot; <Enter>; r",
+    "retained_window_owner": "Vm(1)",
+    "retained_window_verified": true,
+    "retained_completion_record": "[gpgpu] [important] odin-native-pixel: completed marker=0x4F445049 extent=320x240 pitch=1280 body_bytes=14496 body_sha256=662f95be3116c2d448de183b18ec30e59b36b13bef868a50c996612c7b733767 framebuffer_fnv1a64=0xCFA5852B3C69E7A6 source=native-eu gpu_retired=1 cpu_pixel_writes=0"
+  },
+  "display_capture": {
+    "source": "physical display Pipe C WD postblend",
+    "size": [
+      2560,
+      1440
+    ],
+    "url_path": "/dl/2/screenshots/wd-postblend-xyuv709-1792702394-361179-wd000001-capture000001.png",
+    "sha256": "99bedb42532d4ae48e72cc1c033a256d211b86cac6b320cb556408fffd35e038",
+    "local_artifact": "bld/odin-native-mandelbrot-proof/mandelbrot-physical.png",
+    "fresh_file_verified": true,
+    "mandelbrot_window_visible": true
+  }
+}
