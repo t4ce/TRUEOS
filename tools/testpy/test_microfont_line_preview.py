@@ -28,7 +28,12 @@ mod spin {
     pub struct Mutex<T>(std::sync::Mutex<T>);
     impl<T> Mutex<T> { pub const fn new(v:T)->Self {Self(std::sync::Mutex::new(v))}
         pub fn try_lock(&self)->Option<std::sync::MutexGuard<'_,T>> {self.0.try_lock().ok()}
+        pub fn lock(&self)->std::sync::MutexGuard<'_,T> {self.0.lock().unwrap()}
     }
+}
+mod log_os {
+    pub enum LogLevel {Once}
+    pub fn log_with_target_level(_: &str, _: LogLevel, _: std::fmt::Arguments<'_>) {}
 }
 #[macro_export] macro_rules! log_important { ($($t:tt)*) => {}; }
 #[macro_export] macro_rules! log_error { ($($t:tt)*) => {}; }
@@ -39,8 +44,29 @@ mod spin {
 static STATE:Mutex<State>=Mutex::new(State {uploads:0,releases:0,renders:0,allocations:0,
     mask_releases:0,fault:0,vertices:Vec::new(),params:Vec::new(),dest:Vec::new(),published:0,constant_allocations:0,constant_writes:Vec::new()});
 fn fault()->u8 {STATE.lock().unwrap().fault}
-mod phys { pub fn phys_to_virt(p:usize)->usize {p} }
+mod phys {
+    pub fn phys_to_virt(p:usize)->usize {p}
+    pub fn virt_to_phys_checked<T>(p:*const T)->Option<u64> {Some(p as u64)}
+}
+mod virtio_gpu_logo {
+    pub static EMULATOR:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+    pub struct NativeMaskVertex {pub position:[f32;4],pub geometry:[f32;4],pub style:[f32;4]}
+    pub struct NativeMaskGeometry {
+        pub lines:Vec<NativeMaskVertex>,pub points:Vec<NativeMaskVertex>,
+        pub quads:Vec<NativeMaskVertex>,pub line_width_px:f32,
+    }
+    pub fn output_dimensions()->Option<(u32,u32)> {
+        EMULATOR.load(std::sync::atomic::Ordering::Relaxed).then_some((1280,720))
+    }
+    pub fn render_coverage_mask(w:u32,h:u32,geometry:NativeMaskGeometry)->Result<Vec<u8>,&'static str> {
+        assert!(output_dimensions().is_some());
+        assert!(!geometry.lines.is_empty());
+        crate::STATE.lock().unwrap().renders+=1;
+        Ok(vec![128;w as usize*h as usize])
+    }
+}
 mod ui4 {
+    pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert_eq!((w,h),(50,50));Some((213,213))}
     #[derive(Clone,Copy)] pub struct FrameHandle;
     pub struct View {pub width:u32,pub height:u32,pub pitch:u32,pub virt:*mut u8}
     pub fn acquire_frame_buffer(_:FrameHandle)->Result<(),()> {Ok(())}
@@ -58,7 +84,7 @@ mod intel {
     impl DmaFlushRows {pub fn new(_:*mut u8,_:usize,_:usize,_:usize)->Self {Self}}
     pub fn dma_flush_strided_row_spans(_:&[DmaFlushRows])->bool {true}
     pub mod gpgpu {
-        #[derive(Clone,Copy)] pub struct GpgpuMask8Surface {
+        #[derive(Clone,Copy,Default)] pub struct GpgpuMask8Surface {
             pub phys:u64,pub bytes:usize,pub width:u32,pub height:u32,pub pitch_bytes:u32,
         }
     }
@@ -145,6 +171,59 @@ mod intel {
 '''
 TESTS=r'''
 use services::microfont_mask_service::*;
+#[test] fn virgl_keeps_line_seeds_and_width_without_tessellating() {
+    let config=AtlasConfig {glyph_height_px:Some(110),line_width_px:3.5,..AtlasConfig::default()};
+    let (width,height)=config.cell_extent();
+    let native=native_mask_geometry(config,width,height,Some('§')).unwrap();
+    let strips=microfont::raster_line::glyph_strips('§').unwrap();
+    let expected:usize=strips.iter().map(|s|s.iter_points().collect::<Vec<_>>().windows(2)
+        .filter(|pair|pair[0]!=pair[1]).count()*2).sum();
+    assert_eq!(native.lines.len(),expected);assert_eq!(native.line_width_px,3.5);
+    assert!(native.quads.is_empty());
+    let mut at=0;
+    for strip in strips {for segment in strip.iter_points().collect::<Vec<_>>().windows(2) {
+        if segment[0]==segment[1] {continue;}
+        for p in segment {
+            let v=&native.lines[at];at+=1;
+            let pixel=[(v.position[0]+1.0)*width as f32/2.0,(v.position[1]+1.0)*height as f32/2.0];
+            let expected=[6.0+(p.x() as f32+0.5)*10.0,6.0+(p.y() as f32+0.5)*10.0];
+            for k in 0..2 {assert!((pixel[k]-expected[k]).abs()<0.001);}
+            assert_eq!(v.style,[1.75,1.0,0.0,0.0]);
+        }
+    }}
+    assert!(native.points.iter().all(|v|[2.0,3.0,4.0].contains(&v.style[1])));
+    assert!(native.points.iter().any(|v|v.style[1]==2.0));
+}
+#[test] fn virgl_native_quads_preserve_all_canonical_box_block_braille_seeds() {
+    let config=AtlasConfig::default();let (width,height)=config.extent();
+    let native=native_mask_geometry(config,width,height,None).unwrap();
+    let boxes:usize=microfont::BOX_DRAW_SYMBOLS.iter().filter_map(|&(ch,_)|
+        microfont::raster_quad::boxdraw_quad_slice(ch)).map(|q|q.len()).sum();
+    let blocks:usize=microfont::BLOCK_SYMBOLS.iter().filter_map(|&(ch,_)|
+        microfont::raster_quad::block_quad_slice(ch)).map(|q|q.len()).sum();
+    let braille:usize=('\u{2800}'..='\u{28ff}').map(|ch|
+        microfont::raster_quad::braille_quad_slice(ch).unwrap().len()).sum();
+    assert_eq!(native.quads.len(),4*(boxes+blocks+braille));
+    assert!(native.quads.iter().all(|v|v.style==[0.0;4]));
+    assert!(native.lines.len()>1000);
+    assert!(native.lines.iter().chain(native.points.iter()).chain(native.quads.iter())
+        .all(|v|v.position.iter().chain(v.geometry.iter()).chain(v.style.iter()).all(|x|x.is_finite())));
+}
+#[test] fn virgl_readback_reuses_retained_mask_and_never_allocates_intel_geometry() {
+    reset(0);
+    virtio_gpu_logo::EMULATOR.store(true,std::sync::atomic::Ordering::Relaxed);
+    let config=AtlasConfig {glyph_height_px:Some(19),line_width_px:3.5,..AtlasConfig::default()};
+    let surface=with_warmed_atlas(config,|atlas|Ok(atlas.surface())).unwrap();
+    assert_eq!((surface.width,surface.height),config.extent());
+    assert_eq!(surface.pitch_bytes,surface.width);
+    assert_eq!(unsafe {std::ptr::read(surface.phys as *const u8)},128);
+    with_warmed_atlas(config,|_|Ok(())).unwrap();
+    let s=STATE.lock().unwrap();
+    assert_eq!(s.renders,1);assert_eq!(s.uploads,0);assert_eq!(s.allocations,0);
+    assert_eq!(s.constant_allocations,0);drop(s);
+    let old=services::microfont_mask_service::ATLAS.try_lock().unwrap().take();drop(old);
+    virtio_gpu_logo::EMULATOR.store(false,std::sync::atomic::Ordering::Relaxed);
+}
 fn reset(fault:u8) {
     // Complete the one-off boot production before measuring atlas reuse.
     warm_start_glyph().unwrap();
@@ -453,7 +532,8 @@ def main():
     # Tests access the private owner only to reset between simulated boots.
     service=service.replace('static ATLAS:', 'pub(crate) static ATLAS:').replace('fn append_join(', 'pub(crate) fn append_join(').replace('pub(super) fn append_strip_joins(', 'pub(crate) fn append_strip_joins(')
     service=service.replace('pub(super) fn corner_triangle(', 'pub(crate) fn corner_triangle(')
-    service=service.replace('static START_GLYPH:', 'pub(crate) static START_GLYPH:').replace('fn warm_start_glyph(', 'pub(crate) fn warm_start_glyph(')
+    service=service.replace('fn native_mask_geometry(', 'pub(crate) fn native_mask_geometry(')
+    service=service.replace('static START_GLYPH:', 'pub(crate) static START_GLYPH:')
     # The fixture discards production logging, so its partial-coverage counter
     # has no reader. Keep the counter in production, where the log consumes it.
     service=service.replace('            let mut partial = 0usize;\n', '')

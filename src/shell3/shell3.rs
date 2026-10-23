@@ -772,7 +772,7 @@ impl Shell3 {
         geometry.height = geometry
             .height
             .max(MIN_ROWS as u32 * microfont::FHEIGHT as u32 * scale);
-        if let Some((width, height)) = crate::intel::active_scanout_dimensions() {
+        if let Some((width, height)) = crate::ui4::output_dimensions() {
             geometry.width = geometry.width.min(width);
             geometry.height = geometry.height.min(height);
         }

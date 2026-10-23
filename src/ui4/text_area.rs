@@ -202,6 +202,7 @@ pub(crate) struct AreaUpdate<C> {
     pub produced: usize,
 }
 
+#[derive(Clone)]
 pub(crate) struct TextArea<C> {
     layout: RasterLayout,
     valid: Option<CellRect>,

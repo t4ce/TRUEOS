@@ -66,7 +66,7 @@ pub(crate) async fn prepare() -> Result<(), &'static str> {
             continue;
         }
         match reply.wait().await {
-            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy") => {
+            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy" | "microfont-start-glyph-busy" | "virgl-offscreen-busy") => {
                 Timer::after(Duration::from_millis(20)).await;
             }
             result => return result,
@@ -76,7 +76,7 @@ pub(crate) async fn prepare() -> Result<(), &'static str> {
 
 fn prepare_once() -> Result<(), &'static str> {
     if FONT.get().is_some() { return Ok(()); }
-    let (_, height) = crate::intel::physical_extent_pixels(5, 5)
+    let (_, height) = crate::ui4::physical_extent_pixels(5, 5)
         .ok_or("shell3-font-physical-size-unavailable")?;
     let alpha = build_shell3_alpha_atlas(height)?;
     alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?;
@@ -219,7 +219,7 @@ pub(crate) async fn grid_glyph(scale: u32, ch: char) -> Result<Vec<u8>, &'static
             continue;
         }
         match reply.wait().await {
-            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy") =>
+            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy" | "microfont-start-glyph-busy" | "virgl-offscreen-busy") =>
                 Timer::after(Duration::from_millis(20)).await,
             result => return result,
         }
@@ -228,7 +228,7 @@ pub(crate) async fn grid_glyph(scale: u32, ch: char) -> Result<Vec<u8>, &'static
 
 fn grid_glyph_blocking(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
     let font = FONT.get().ok_or("shell3-font-not-ready")?;
-    let height = crate::intel::physical_extent_pixels(5 * scale, 5 * scale)
+    let height = crate::ui4::physical_extent_pixels(5 * scale, 5 * scale)
         .ok_or("grid-font-physical-size")?.1;
     let width = (height * 6 + 5) / 11;
     let mut result = Vec::with_capacity(8 + (width * height * 4) as usize);

@@ -1,7 +1,10 @@
 //! Small virgl wire encoder recovered from the former gfx backend.
-//! UI4 composition plus triangles from the existing font and sprite APIs.
+//! UI4 composition, native line coverage, and fenced offscreen pixel transfers.
 use super::*;
 use alloc::vec::Vec;
+#[path = "coverage.rs"]
+pub(crate) mod coverage;
+pub(super) mod blit;
 const PIPE_PRIM_TRIANGLES: u32 = 4;
 
 const PIPE_CLEAR_COLOR0: u32 = 1 << 2;
@@ -522,6 +525,17 @@ struct ResourceCommand {
     padding: u32,
 }
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct TransferHost3d {
+    hdr: CtrlHdr,
+    box_: [u32; 6],
+    offset: u64,
+    id: u32,
+    level: u32,
+    stride: u32,
+    layer_stride: u32,
+}
+#[repr(C)]
 #[derive(Clone, Copy)]
 struct Submit {
     hdr: CtrlHdr,
@@ -530,6 +544,55 @@ struct Submit {
 }
 
 impl VirtioGpuLogo {
+    /// A fenced transfer makes the renderer's pixels CPU-visible before the
+    /// backing is detached. Failed retirement retains the backing for safety.
+    fn readback_rgba(&mut self, id: u32, width: u32, height: u32, serial: u64) -> Result<Vec<u8>, &'static str> {
+        let stride = width.checked_mul(4).ok_or("virgl-readback-size")?;
+        let bytes = (stride as usize).checked_mul(height as usize).ok_or("virgl-readback-size")?;
+        if width == 0 || height == 0 || bytes > 64 * 1024 * 1024 {
+            return Err("virgl-readback-size");
+        }
+        let backing = DmaRegion::alloc(bytes, 4096).ok_or("virgl-readback-alloc")?;
+        unsafe { core::ptr::write_bytes(backing.virt(), 0, bytes); }
+        backing.flush();
+        if !self.resource_attach_backing(id, &backing) {
+            core::mem::forget(backing);
+            return Err("virgl-readback-attach");
+        }
+        let transfer = TransferHost3d {
+            hdr: CtrlHdr { type_: 0x206, flags: 1, fence_id: serial, ctx_id: CONTEXT, ..Default::default() },
+            box_: [0, 0, 0, width, height, 1],
+            id, stride, ..Default::default()
+        };
+        if !self.ctrl_submit_bytes(as_bytes(&transfer)) {
+            core::mem::forget(backing);
+            return Err("virgl-readback-transfer");
+        }
+        let response = unsafe { core::ptr::read_unaligned(self.resp.virt().cast::<CtrlHdr>()) };
+        if response.flags & 1 == 0 || response.fence_id != serial {
+            self.failed = true;
+            core::mem::forget(backing);
+            return Err("virgl-readback-fence");
+        }
+        backing.flush();
+        let pixels = unsafe { core::slice::from_raw_parts(backing.virt(), bytes) }.to_vec();
+        if !self.ctrl_submit_bytes(as_bytes(&ResourceCommand {
+            hdr: CtrlHdr { type_: 0x107, ..Default::default() }, id, padding: 0,
+        })) {
+            core::mem::forget(backing);
+            return Err("virgl-readback-detach");
+        }
+        Ok(pixels)
+    }
+
+    fn unref_resource(&mut self, id: u32) -> bool {
+        self.ctrl_submit_bytes(as_bytes(&ResourceCommand {
+            hdr: CtrlHdr { type_: 0x203, ctx_id: CONTEXT, ..Default::default() }, id, padding: 0,
+        })) && self.ctrl_submit_bytes(as_bytes(&ResourceCommand {
+            hdr: CtrlHdr { type_: 0x102, ..Default::default() }, id, padding: 0,
+        }))
+    }
+
     fn create_3d(
         &mut self,
         id: u32,
@@ -930,7 +993,13 @@ impl Compositor {
         encode_set_framebuffer(&mut commands, target);
         encode_set_viewport(&mut commands, self.width, self.height);
         encode_set_scissor(&mut commands, 0, 0, self.width, self.height);
+        // Offscreen clients share this context and may have changed its state.
+        encode_bind_object(&mut commands, VIRGL_OBJECT_VERTEX_ELEMENTS, 11);
+        encode_bind_object(&mut commands, VIRGL_OBJECT_RASTERIZER, 32);
+        encode_bind_object(&mut commands, VIRGL_OBJECT_DSA, 31);
+        encode_bind_shader(&mut commands, 20, PIPE_SHADER_VERTEX);
         encode_bind_shader(&mut commands, 21, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut commands, 20, 21);
         encode_bind_object(&mut commands, VIRGL_OBJECT_BLEND, 30);
         encode_bind_sampler_states(&mut commands, PIPE_SHADER_FRAGMENT, 0, &[26]);
         encode_clear_color(

@@ -46,11 +46,14 @@ impl ReadyQueue {
     }
 }
 static START_GLYPH:GlyphSlot=GlyphSlot(OnceLock::new());
+struct WarmLock(Mutex<()>);
+impl WarmLock {fn try_lock(&self)->Option<std::sync::MutexGuard<'_,()>> {self.0.try_lock().ok()}}
+static START_GLYPH_WARM:WarmLock=WarmLock(Mutex::new(()));
 static START_GLYPH_READY:ReadyQueue=ReadyQueue {generation:AtomicU32::new(0),waker:Mutex::new(None)};
 static COMPLETE_DURING_WAIT:AtomicBool=AtomicBool::new(false);
 static FAIL_PRODUCTION:AtomicBool=AtomicBool::new(false);
 static PRODUCTIONS:AtomicUsize=AtomicUsize::new(0);
-mod intel {
+mod ui4 {
     pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {
         assert_eq!((w,h),(50,50));Some((500,500))
     }
@@ -86,6 +89,13 @@ impl Wake for WakeCount {fn wake(self:Arc<Self>){self.0.fetch_add(1,Ordering::Re
     assert!(button.as_mut().poll(&mut cx).is_ready());
     assert_eq!(PRODUCTIONS.load(Ordering::Relaxed),1);
 }
+#[test] fn concurrent_warm_attempt_defers_without_producing_a_second_mask() {
+    let held=START_GLYPH_WARM.try_lock().unwrap();
+    assert_eq!(warm_start_glyph(),Err("microfont-start-glyph-busy"));
+    assert!(START_GLYPH.get().is_none());assert_eq!(PRODUCTIONS.load(Ordering::Relaxed),0);
+    drop(held);warm_start_glyph().unwrap();warm_start_glyph().unwrap();
+    assert_eq!(PRODUCTIONS.load(Ordering::Relaxed),1);
+}
 #[test] fn button_centers_original_mask_without_resampling_or_copying() {
     let glyph=OwnedGlyphMask {width:3,height:2,em_height_px:500,pixels:vec![1,2,3,4,5,6]};
     let (w,h)=start_button_extent(glyph.width,glyph.height,2).unwrap();
@@ -115,6 +125,7 @@ def main():
         # The production slot is process-lifetime, so each handoff scenario starts cold.
         for name in ("publication_wakes_button_and_is_retained_for_late_consumers",
                      "completion_before_wait_registration_does_not_lose_readiness",
+                     "concurrent_warm_attempt_defers_without_producing_a_second_mask",
                      "button_centers_original_mask_without_resampling_or_copying"):
             subprocess.run([str(executable), "--exact", name], check=True)
 

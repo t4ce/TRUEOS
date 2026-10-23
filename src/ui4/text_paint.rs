@@ -163,11 +163,14 @@ impl RgbaPaintPlan {
                             stats.cpu_pixels += pixels;
                         } else {
                             for chunk in fills.chunks(128) {
-                                retire(
-                                    crate::intel::queue_guc_bcs0_rgba_fills(surface, chunk),
-                                    poisoned,
-                                )
-                                .await?;
+                                if crate::virtio_gpu_logo::output_dimensions().is_some() {
+                                    crate::virtio_gpu_logo::fill_rgba(surface, chunk).await?;
+                                } else {
+                                    retire(
+                                        crate::intel::queue_guc_bcs0_rgba_fills(surface, chunk),
+                                        poisoned,
+                                    ).await?;
+                                }
                                 stats.fill_batches += 1;
                             }
                             stats.gpu_pixels += pixels;
@@ -211,8 +214,12 @@ async fn paint_rgba_copies(
         stats.cpu_pixels += pixels;
     } else {
         for chunk in copies.chunks(128) {
-            retire(crate::intel::queue_guc_bcs0_legacy_rgba_copies(surface, chunk), poisoned)
-                .await?;
+            if crate::virtio_gpu_logo::output_dimensions().is_some() {
+                crate::virtio_gpu_logo::copy_rgba(surface, chunk).await?;
+            } else {
+                retire(crate::intel::queue_guc_bcs0_legacy_rgba_copies(surface, chunk), poisoned)
+                    .await?;
+            }
             stats.copy_batches += 1;
         }
         stats.gpu_pixels += pixels;

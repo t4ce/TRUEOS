@@ -47,10 +47,12 @@ static BUILDS:AtomicUsize=AtomicUsize::new(0);
 static ALLOCATIONS:AtomicUsize=AtomicUsize::new(0);
 static FLUSH_FAILS:AtomicBool=AtomicBool::new(false);
 static ALLOCATION_FAILS:AtomicBool=AtomicBool::new(false);
-mod intel {
+mod ui4 {
     pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {
         assert_eq!((w,h),(5,5));Some((21,21))
     }
+}
+mod intel {
     #[derive(Clone,Copy,Debug,PartialEq,Eq)]
     pub struct GucBcs0RgbaSurface {pub phys:u64,pub gpu:u64,pub bytes:usize,pub width:u32,pub height:u32,pub pitch_bytes:u32}
     #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -81,6 +83,10 @@ mod r {
     }
     pub mod services {
         pub mod microfont_mask_service {
+            pub struct OwnedGlyphMask {pub width:u32,pub pixels:Vec<u8>}
+            pub fn build_single_glyph_mask(_:char,_:u32)->Result<OwnedGlyphMask,&'static str> {
+                panic!("single-glyph grid production is outside this shared-cell test")
+            }
             pub struct OwnedAlphaAtlas {pub em_height_px:u32,pub line_width_px:f32,
                 pub glyph_width:u32,pub glyph_height:u32,pub gutter_px:u32,zero:Vec<u8>,half:Vec<u8>,full:Vec<u8>,horizontal:Vec<u8>,left_heavy:Vec<u8>,junction:Vec<u8>,question:Vec<u8>}
             impl OwnedAlphaAtlas {

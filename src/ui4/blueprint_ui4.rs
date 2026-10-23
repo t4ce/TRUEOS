@@ -2489,7 +2489,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_output_dimensions() -> u64 {
     pack_u32_pair(width, height)
 }
 
-/// Convert millimetres using the active output's EDID metrics; zero means unavailable.
+/// Convert millimetres using active output metrics; zero means unavailable.
 pub extern "C" fn trueos_cabi_ui4_scene_physical_extent_v1(width_mm: u32, height_mm: u32) -> u64 {
     if width_mm == 0 || height_mm == 0 { return 0; }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
@@ -2499,7 +2499,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_physical_extent_v1(width_mm: u32, height
         );
         return if status == trueos_vm::vmcall::STATUS_OK { extent } else { 0 };
     }
-    crate::intel::physical_extent_pixels(width_mm, height_mm)
+    crate::ui4::physical_extent_pixels(width_mm, height_mm)
         .map(|(w, h)| pack_u32_pair(w, h)).unwrap_or(0)
 }
 

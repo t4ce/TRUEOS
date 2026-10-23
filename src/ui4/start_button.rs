@@ -135,13 +135,13 @@ fn initialize_start_button(glyph: &'static OwnedGlyphMask) -> Result<ActiveStart
     let (screen_width, screen_height) =
         crate::ui4::output_dimensions().ok_or("scanout-unavailable")?;
     let (corner_radius, _) =
-        crate::intel::physical_extent_pixels(BUTTON_CORNER_RADIUS_MM, BUTTON_CORNER_RADIUS_MM)
+        crate::ui4::physical_extent_pixels(BUTTON_CORNER_RADIUS_MM, BUTTON_CORNER_RADIUS_MM)
             .unwrap_or((BUTTON_CORNER_RADIUS_MM, BUTTON_CORNER_RADIUS_MM));
     let (glyph_padding, _) =
-        crate::intel::physical_extent_pixels(BUTTON_GLYPH_PADDING_MM, BUTTON_GLYPH_PADDING_MM)
+        crate::ui4::physical_extent_pixels(BUTTON_GLYPH_PADDING_MM, BUTTON_GLYPH_PADDING_MM)
             .unwrap_or((BUTTON_GLYPH_PADDING_MM, BUTTON_GLYPH_PADDING_MM));
     let (reveal_cap_x, reveal_cap_y) =
-        crate::intel::physical_extent_pixels(REVEAL_CAP_MM, REVEAL_CAP_MM)
+        crate::ui4::physical_extent_pixels(REVEAL_CAP_MM, REVEAL_CAP_MM)
             .unwrap_or((REVEAL_CAP_MM, REVEAL_CAP_MM));
 
     let (width, height) = start_button_extent(glyph.width, glyph.height, glyph_padding)

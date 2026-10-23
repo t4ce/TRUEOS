@@ -6,6 +6,11 @@ import tempfile
 from test_text_blit import SOURCE, ROOT
 
 ADAPTER = r'''
+mod virtio_gpu_logo {
+ pub fn output_dimensions()->Option<(u32,u32)> {None}
+ pub async fn copy_rgba(_:crate::intel::GucBcs0RgbaSurface,_:&[crate::intel::GucBcs0RgbaCopy])->Result<(),&'static str> {panic!("unexpected emulator copy")}
+ pub async fn fill_rgba(_:crate::intel::GucBcs0RgbaSurface,_:&[crate::intel::GucBcs0RgbaFill])->Result<(),&'static str> {panic!("unexpected emulator fill")}
+}
 extern crate self as trueos_time;
 use std::future::Future;
 pub struct Duration;impl Duration {pub fn from_millis(_:u64)->Self{Self}}
@@ -47,7 +52,13 @@ pub fn poll_guc_bcs0_rgba_copies(_:GucBcs0CopySubmission)->GucBcs0CopyCompletion
 }
 '''
 TESTS = r'''
-use ui4::text_paint::PaintPlan;
+// Convert the test's compact reference masks into owned immutable RGBA cells.
+// Production uses only RgbaPaintPlan; these buffers retain every source address.
+struct PaintPlan { plan: ui4::text_paint::RgbaPaintPlan, _sources: Vec<Vec<u8>> }
+impl PaintPlan {
+ fn new(glyphs:Vec<GucBcs0MonoGlyph>)->Self {let mut sources=Vec::new();let plan=rgba_plan(&glyphs,&mut sources);Self{plan,_sources:sources}}
+ async fn paint(&self,s:GucBcs0RgbaSurface,p:&mut bool)->Result<ui4::text_paint::PaintStats,&'static str> {self.plan.paint(s,p).await}
+}
 fn reference(pixels:&mut [u8],s:GucBcs0RgbaSurface,glyphs:&[GucBcs0MonoGlyph]) {
     for g in glyphs {for y in 0..g.height as usize {for x in 0..g.width as usize {
         let color=if g.mask[y*2+x/8] & (0x80>>(x%8))!=0 {g.foreground}else{g.background};
@@ -61,7 +72,7 @@ fn blank(x:u32,y:u32)->GucBcs0MonoGlyph {GucBcs0MonoGlyph{x,y,width:6,height:11,
     let glyphs:Vec<_>=(0..512).map(|i|blank(i%128*6,i/128*11)).collect();
     let mut expected=pixels.clone();reference(&mut expected,s,&glyphs);
     let mut poisoned=false;let stats=run(PaintPlan::new(glyphs).paint(s,&mut poisoned)).unwrap();
-    assert_eq!(pixels,expected);assert!(!poisoned);assert_eq!(stats.mono_batches,0);assert_eq!(stats.fill_batches,1);
+    assert_eq!(pixels,expected);assert!(!poisoned);assert_eq!(stats.copy_batches,0);assert_eq!(stats.fill_batches,1);
     assert_eq!(stats.gpu_pixels,512*6*11);assert_eq!(stats.cpu_pixels,0);
 }
 #[test]fn mixed_masks_clipping_and_overlaps_keep_exact_order(){
@@ -90,7 +101,7 @@ fn blank(x:u32,y:u32)->GucBcs0MonoGlyph {GucBcs0MonoGlyph{x,y,width:6,height:11,
     let mut glyphs=vec![glyph(6,11)];glyphs.extend((0..128).map(|i|blank(i*6,22)));glyphs.push(glyph(6,11));
     let mut expected=pixels.clone();reference(&mut expected,s,&glyphs);
     let mut poisoned=false;let stats=run(PaintPlan::new(glyphs).paint(s,&mut poisoned)).unwrap();
-    assert_eq!(pixels,expected);assert_eq!(stats.cpu_pixels,132);assert_eq!(stats.fill_batches,1);assert_eq!(stats.mono_batches,0);
+    assert_eq!(pixels,expected);assert_eq!(stats.cpu_pixels,132);assert_eq!(stats.fill_batches,1);assert_eq!(stats.copy_batches,0);
 }
 #[test]fn invalid_later_cell_and_pinned_destination_write_nothing(){
     reset();let mut pixels=vec![0x59;128*16];let s=surface(&mut pixels,32,16,128);let before=pixels.clone();
@@ -106,7 +117,7 @@ fn blank(x:u32,y:u32)->GucBcs0MonoGlyph {GucBcs0MonoGlyph{x,y,width:6,height:11,
     }
     let mut expected=pixels.clone();reference(&mut expected,s,&glyphs);
     let mut poisoned=false;let stats=run(PaintPlan::new(glyphs).paint(s,&mut poisoned)).unwrap();
-    assert_eq!(pixels,expected);assert_eq!(stats.mono_batches,1);assert_eq!(stats.fill_batches,0);assert_eq!(stats.cpu_pixels,0);
+    assert_eq!(pixels,expected);assert_eq!(stats.copy_batches,1);assert_eq!(stats.fill_batches,0);assert_eq!(stats.cpu_pixels,0);
 }
 #[test]fn rejected_admission_is_retryable_but_uncertain_writes_pin_destination(){
     for mode in [1,2,3] {reset();MODE.store(mode,std::sync::atomic::Ordering::SeqCst);

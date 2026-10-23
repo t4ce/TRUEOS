@@ -1,15 +1,32 @@
 # Virgl UI4 smoke test
 
-The emulator backend presents ordinary UI4 CPU frames, immediate text stamps,
-solid quads and uploaded sprites through virgl. It reuses the existing frame
-broker, font tessellator and input routing. The host GPU paints and composites;
-there is no Mesa guest port or software rasterizer.
+The emulator backend presents ordinary UI4 frames, text stamps, solid quads and
+uploaded sprites through virgl. It reuses the frame broker and input routing.
+Microfont uses its canonical line definitions: the CPU places the source lines,
+and virgl renders native lines and points into a retained coverage mask. Glyphs
+are neither converted to triangles nor replaced by the hex bitmap font.
+
+The virtual display uses 96 DPI (5 mm = 19 pixels, 50 mm = 189 pixels), independent
+of QEMU window scaling. Native displays retain their EDID sizing. Masks are
+produced at the requested size and copied into UI4 frames at 1:1 pixel size.
+Virgl's fenced offscreen copy/fill operations provide the emulator equivalent
+of the native BCS0 text blits; the compositor uploads the resulting pixels.
 
 Build without deploying to the physical rig or publishing a release:
 
 ```sh
 make iso START_BAREMETAL_LOG=0 PUBLISH_RELEASE_SMB=0 RELEASE_BUMP_CNT=0
 ```
+
+Verify the home button, open Shell3 through it, and check keyboard-rendered text:
+
+```sh
+python3 tools/qemu/verify-virgl.py --microfont-smoke --timeout 40
+```
+
+This saves `home-button.png`, `shell-microfont.png`, and `shell-help.png` alongside
+the serial and renderer logs. It checks actual pixel changes and host renderer
+errors, in addition to font initialization records.
 
 Boot, open the graphical shell, check its startup message and capture the GL
 output:

@@ -6,10 +6,35 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 use crate::{pci, wait};
 
 mod virgl;
+mod requests;
+pub(crate) use virgl::blit::{copy_rgba, fill_rgba};
+pub(crate) use virgl::coverage::{NativeMaskGeometry, NativeMaskVertex, render_coverage_mask};
 
 static EMULATOR_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static EMULATOR_BACKGROUND: AtomicU64 = AtomicU64::new(0);
 static QUARANTINE_GPU_DMA: AtomicU8 = AtomicU8::new(0);
+static START_GLYPH_WARM: AtomicU8 = AtomicU8::new(0);
+
+fn queue_start_glyph_warmup() {
+    if START_GLYPH_WARM.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return;
+    }
+    // Glyph production waits for offscreen retirement. It must run on a
+    // blocking worker, never on the display task that services that request.
+    let job = alloc::boxed::Box::new(|| {
+        match crate::r::services::microfont_mask_service::warm_start_glyph() {
+            Ok(()) => START_GLYPH_WARM.store(2, Ordering::Release),
+            Err(reason) => {
+                START_GLYPH_WARM.store(0, Ordering::Release);
+                crate::log_warn!(target: "gfx"; "virgl-ui4: start glyph warm deferred reason={}\n", reason);
+            }
+        }
+    });
+    if let Err(job) = crate::r::blocking::try_spawn_blocking_job_with_purpose(job, "microfont-start") {
+        drop(job);
+        START_GLYPH_WARM.store(0, Ordering::Release);
+    }
+}
 
 pub(crate) fn set_background_color(r: u8, g: u8, b: u8) -> bool {
     if output_dimensions().is_none() {
@@ -1234,13 +1259,21 @@ async fn fallback_logo_service_task() {
 
     if present() {
         if let Some(mut ui) = EmulatorUi::init() {
+            if ui.compositor.is_some() { requests::start(); }
+            let mut next_font_warm_ms = 0;
             loop {
                 if ui.gpu.failed {
+                    requests::stop();
                     EMULATOR_OUTPUT.store(0, Ordering::Release);
                     crate::log_error!(target: "gfx"; "virgl-ui4: device failed; DMA retained, submissions stopped\n");
                     loop {
                         Timer::after(EmbassyDuration::from_secs(60)).await;
                     }
+                }
+                let now_ms = trueos_time::Instant::now().as_millis();
+                if requests::available() && now_ms >= next_font_warm_ms {
+                    queue_start_glyph_warmup();
+                    next_font_warm_ms = now_ms.saturating_add(1_000);
                 }
                 let old_stamp = (ui.stamped_generation, ui.stamp_deadline_ms);
                 ui.service_live_update_stamp();
@@ -1250,6 +1283,7 @@ async fn fallback_logo_service_task() {
                     }
                 }
                 if let Some(compositor) = ui.compositor.as_mut() {
+                    requests::service(compositor, &mut ui.gpu);
                     compositor.tick(&mut ui.gpu);
                 }
                 Timer::after(EmbassyDuration::from_millis(COMPOSITOR_POLL_MS)).await;

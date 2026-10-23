@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import struct
@@ -124,6 +125,97 @@ def verify_interaction(command, vnc_path, output, timeout):
     print(f'Software cursor and selection passed: bounds={bounds}, erased_pixels={changed}', flush=True)
 
 
+def verify_microfont(command, vnc_path, output, timeout, serial, until):
+    """Open Shell3 through the Microfont home button and exercise its text."""
+    from PIL import Image, ImageChops, ImageDraw
+
+    def logs():
+        return serial.read_text(errors='replace')
+
+    def capture(name):
+        path = output / name
+        capture_vnc(vnc_path, path, timeout)
+        return Image.open(path).convert('RGB')
+
+    def move(axis, value):
+        command('input-send-event', {'events': [
+            {'type': 'rel', 'data': {'axis': axis, 'value': value}}]})
+        time.sleep(.2)
+
+    def click():
+        for down in (True, False):
+            command('input-send-event', {'events': [
+                {'type': 'btn', 'data': {'down': down, 'button': 'left'}}]})
+            time.sleep(.2)
+
+    until(lambda: 'microfont-start-glyph: ready' in logs())
+    until(lambda: 'ui4/start-button: service online' in logs())
+    before = capture('microfont-before.png')
+    width, height = before.size
+
+    def move_to(x, y):
+        # Boot HID integrates relative counts as 1/1024 of the screen extent.
+        # Clamp to the top-left first so previous pointer state is irrelevant.
+        for axis, value in [('x', -1024), ('y', -1024),
+                            ('x', round(x * 1024 / max(1, width - 1))),
+                            ('y', round(y * 1024 / max(1, height - 1)))]:
+            move(axis, value)
+
+    move_to(50, (height - 1) / 2)
+    time.sleep(.5)  # Hover reveals the faded button and holds it visible.
+    home = capture('home-button.png')
+    match = re.search(r'ui4/start-button: initialized[^\n]*extent=(\d+)x(\d+)', logs())
+    home_width = int(match[1]) if match else min(256, width // 4)
+    if not ImageChops.difference(before, home).crop((0, 0, home_width, height)).getbbox():
+        raise RuntimeError('Home button did not appear on hover; see home-button.png')
+
+    click()
+    click()  # UI4 may consume the first click to select the interaction frame.
+    until(lambda: 'ui4/input: desktop shell launch requested' in logs())
+    until(lambda: 'shell3-font: ready' in logs())
+    shell_bounds = None
+
+    def shell_presented():
+        nonlocal shell_bounds
+        image = capture('shell-microfont.png')
+        diff = ImageChops.difference(home, image)
+        # Exclude the home button, its fading edge and the mouse sprite.
+        ImageDraw.Draw(diff).rectangle((0, 0, home_width + 40, height), fill=0)
+        bounds = diff.getbbox()
+        if bounds is None:
+            return False
+        changed = sum(pixel != 0 for pixel in diff.convert('L').tobytes())
+        if bounds[2] - bounds[0] > 200 and bounds[3] - bounds[1] > 100 and changed > 1000:
+            shell_bounds = bounds
+            return True
+        return False
+
+    until(shell_presented)
+    print(f'Microfont home button and Shell3 frame passed: shell_bounds={shell_bounds}', flush=True)
+
+    # Select inside the visible shell before sending an informational command.
+    left, top, right, bottom = shell_bounds
+    move_to((left + right) // 2, (top + bottom) // 2)
+    click()
+    time.sleep(.5)
+    text_before = capture('shell-before-help.png')
+    for key in ('h', 'e', 'l', 'p', 'ret'):
+        command('send-key', {'keys': [{'type': 'qcode', 'data': key}], 'hold-time': 50})
+        time.sleep(.15)
+
+    def shell_text_changed():
+        image = capture('shell-help.png')
+        diff = ImageChops.difference(text_before, image).crop(
+            (left + 10, top + 10, right - 10, bottom - 10))
+        bounds = diff.getbbox()
+        # Text must change across several glyphs; a blinking caret is too small.
+        return bounds is not None and bounds[2] - bounds[0] > 30 and sum(
+            pixel != 0 for pixel in diff.convert('L').tobytes()) > 40
+
+    until(shell_text_changed)
+    print('Shell3 keyboard input changed Microfont text pixels (help)', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--command', action='append', default=[])
@@ -132,10 +224,12 @@ def main():
     parser.add_argument('--settle', type=float, default=2)
     parser.add_argument('--output', type=Path, default=ROOT / 'bld/emulator-logs/virgl-verify')
     parser.add_argument('--keep-running', action='store_true')
-    parser.add_argument('--interaction-smoke', action='store_true', help='Verify the software cursor and selection outline on the idle desktop')
+    smoke = parser.add_mutually_exclusive_group()
+    smoke.add_argument('--interaction-smoke', action='store_true', help='Verify the software cursor and selection outline on the idle desktop')
+    smoke.add_argument('--microfont-smoke', action='store_true', help='Verify the Microfont home button, Shell3 frame and keyboard text through QMP')
     args = parser.parse_args()
-    if args.interaction_smoke and args.command:
-        parser.error("--interaction-smoke requires an idle desktop; omit --command")
+    if (args.interaction_smoke or args.microfont_smoke) and args.command:
+        parser.error("Smoke tests require an idle desktop; omit --command")
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     serial = args.output / 'serial.log'
@@ -224,10 +318,15 @@ def main():
         if not any(high > low for low, high in Image.open(screenshot).getextrema()):
             raise RuntimeError(f'Scanout is a uniform color; see {screenshot}')
         if args.interaction_smoke:
-            until(lambda: 'hid mouse 0627:0001 ready' in serial.read_text(errors='replace'))
+            # USB Info records may be filtered before reaching UART. The
+            # interaction check proves HID readiness by actual pixel changes.
+            until(lambda: 'ui4/input: service online' in serial.read_text(errors='replace'))
             if 'interaction=slot4-software hardware_cursor=disabled' not in observed:
                 raise RuntimeError('Expected software interaction plane with hardware cursor disabled')
             verify_interaction(command, vnc_path, args.output, args.timeout)
+        if args.microfont_smoke:
+            until(lambda: 'ui4/input: service online' in serial.read_text(errors='replace'))
+            verify_microfont(command, vnc_path, args.output, args.timeout, serial, until)
         host_errors = (args.output / 'qemu.log').read_text(errors='replace')
         if any(marker in host_errors.lower() for marker in ['context error', 'illegal resource', 'failed to complete framebuffer']):
             raise RuntimeError(f'Host renderer rejected work; see {args.output / "qemu.log"}')

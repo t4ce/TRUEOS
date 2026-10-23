@@ -1,4 +1,4 @@
-//! BCS0 raster adapter for text_area. All transfers have separate allocations;
+//! BCS0/virgl raster adapter for text_area. Transfers have separate allocations;
 //! backing is retained through retirement and quarantined on uncertain work.
 use super::text_area::{
     CellCopy, CellRect, CellWrite, RasterBudget, RasterLayout, RasterReservation, TextArea,
@@ -119,20 +119,24 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         // Destination ring cell sizes equal the source unless there is no
         // overlap (font change), so rgba_copy's pixel conversion is shared.
         if !copies.is_empty() {
-            let queued = crate::intel::queue_guc_bcs0_rgba_copies(next.surface(), &copies);
-            // Persist both owners' state before an await. Cancellation can
-            // drop next locally and later drop self through its Show owner.
-            self.unretired = submission_may_be_live(&queued);
-            if let Err(error) = retire(queued, poisoned, &mut next.unretired).await {
-                if *poisoned {
-                    self.quarantine();
-                    next.quarantine();
-                } else {
-                    self.unretired = false;
+            if crate::virtio_gpu_logo::output_dimensions().is_some() {
+                crate::virtio_gpu_logo::copy_rgba(next.surface(), &copies).await?;
+            } else {
+                let queued = crate::intel::queue_guc_bcs0_rgba_copies(next.surface(), &copies);
+                // Persist both owners' state before an await. Cancellation can
+                // drop next locally and later drop self through its Show owner.
+                self.unretired = submission_may_be_live(&queued);
+                if let Err(error) = retire(queued, poisoned, &mut next.unretired).await {
+                    if *poisoned {
+                        self.quarantine();
+                        next.quarantine();
+                    } else {
+                        self.unretired = false;
+                    }
+                    return Err(error);
                 }
-                return Err(error);
+                self.unretired = false;
             }
-            self.unretired = false;
         }
         next.resize_copies = copies.len();
         *self = next;
@@ -153,8 +157,11 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         if self.unretired || *poisoned {
             return Err("text-area-backing-pinned");
         }
-        let update = self
-            .cells
+        // Stage emulator metadata with its owned-pixel request. Cancellation
+        // may discard a readback, so only successful painting commits cells.
+        let mut staged = crate::virtio_gpu_logo::output_dimensions().is_some()
+            .then(|| self.cells.clone());
+        let update = staged.as_mut().unwrap_or(&mut self.cells)
             .update(view, revision, produce)
             .ok_or("text-area-view")?;
         let layout = self.layout();
@@ -186,7 +193,15 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             cpu_glyphs: if cpu_paint { copies.len() } else { 0 },
             copy_batches: batches,
         };
+        if staged.is_some() { self.invalidate(); }
         for chunk in copies.chunks(128).filter(|_| !cpu_paint) {
+            if staged.is_some() {
+                if let Err(error) = crate::virtio_gpu_logo::copy_rgba(self.surface(), chunk).await {
+                    self.invalidate();
+                    return Err(error);
+                }
+                continue;
+            }
             let queued = crate::intel::queue_guc_bcs0_legacy_rgba_copies(self.surface(), chunk);
             if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
                 self.invalidate();
@@ -196,6 +211,7 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
                 return Err(error);
             }
         }
+        if let Some(cells) = staged { self.cells = cells; }
         super::text_blit::report(
             "cache-glyph-copy",
             super::text_blit::copy_pixels(&copies),
@@ -270,6 +286,10 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         }
         // Stay below BCS0's 160-copy admission limit, including ring wraps.
         for chunk in copies.chunks(128) {
+            if crate::virtio_gpu_logo::output_dimensions().is_some() {
+                crate::virtio_gpu_logo::copy_rgba(destination, chunk).await?;
+                continue;
+            }
             let queued = crate::intel::queue_guc_bcs0_rgba_copies(destination, chunk);
             if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
                 if *poisoned {

@@ -1,4 +1,6 @@
-//! One boot-lifetime geometry upload and one reusable, color-free R8 atlas.
+//! Native line/quad geometry and one reusable, color-free R8 atlas. Intel
+//! retains its boot-lifetime geometry; virgl consumes CPU-decoded raster seeds
+//! as native line/point/quad primitives, with no glyph tessellation.
 //! Consumers execute while the atlas is locked; no asynchronous mask reader may
 //! survive the callback. Width/size invalidate pixels, never resident geometry.
 use crate::{
@@ -406,10 +408,120 @@ fn upload_line_glyph(resident: &mut ResidentGlyphs, ch: char, slot: usize) -> Re
     Ok(())
 }
 
+/// Decode the same raster-line and raster-quad seeds for the emulator. CPU
+/// work is limited to coordinate transforms and semantic endpoint/join data;
+/// lines remain native GPU lines and joins remain native points.
+fn native_mask_geometry(
+    config: AtlasConfig, width: u32, height: u32, single: Option<char>,
+) -> Result<crate::virtio_gpu_logo::NativeMaskGeometry, &'static str> {
+    use crate::virtio_gpu_logo::{NativeMaskGeometry, NativeMaskVertex};
+    use microfont::raster_line::{Boundary, Point};
+    let mut geometry = NativeMaskGeometry { lines: Vec::new(), points: Vec::new(),
+        quads: Vec::new(), line_width_px: config.line_width_px };
+    let radius = config.line_width_px * 0.5;
+    let (cell_width, cell_height) = config.cell_extent();
+    let pixel = |slot: usize, at: [f32; 2]| -> [f32; 2] {
+        [(slot % ATLAS_COLUMNS as usize) as f32 * cell_width as f32
+            + at[0] * config.scale() + config.gutter() as f32,
+         (slot / ATLAS_COLUMNS as usize) as f32 * cell_height as f32
+            + at[1] * config.scale() + config.gutter() as f32]
+    };
+    let vertex = |at: [f32; 2], data: [f32; 4], style: [f32; 4]| NativeMaskVertex {
+        position: [at[0] * 2.0 / width as f32 - 1.0,
+            at[1] * 2.0 / height as f32 - 1.0, 0.0, 1.0],
+        geometry: data, style,
+    };
+    let point = |slot: usize, at: Point| pixel(slot, [at.x() as f32 + 0.5, at.y() as f32 + 0.5]);
+    let direction = |a: [f32; 2], b: [f32; 2]| -> Option<[f32; 2]> {
+        let delta = [b[0] - a[0], b[1] - a[1]];
+        let length = libm::sqrtf(delta[0] * delta[0] + delta[1] * delta[1]);
+        (length > 1e-6).then(|| [delta[0] / length, delta[1] / length])
+    };
+    let glyphs: Vec<_> = if let Some(ch) = single { alloc::vec![(ch, 0)] } else {
+        (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
+            .filter(|&ch| is_extra_line(ch)))
+            .filter_map(|ch| glyph_slot(ch).map(|slot| (ch, slot))).collect()
+    };
+    for (ch, slot) in glyphs {
+        let Some(strips) = microfont::raster_line::glyph_strips(ch) else { continue; };
+        for strip in strips {
+            let points: Vec<_> = strip.iter_points().map(|p| point(slot, p)).collect();
+            for segment in points.windows(2) {
+                let Some(inward) = direction(segment[0], segment[1]) else { continue; };
+                let data = [segment[0][0], segment[0][1], inward[0], inward[1]];
+                let style = [radius, 1.0, 0.0, 0.0];
+                geometry.lines.extend(segment.iter().map(|&at| vertex(at, data, style)));
+            }
+            // A point's shader clips the disc to the added outer half only;
+            // this leaves the original native line body coverage untouched.
+            for (end, boundary) in [(0, strip.start), (points.len() - 1, strip.end)] {
+                if boundary != Boundary::End { continue; }
+                let neighbor = if end == 0 { points.iter().copied().find(|&p| p != points[end]) }
+                    else { points.iter().rev().copied().find(|&p| p != points[end]) };
+                if let Some(inward) = neighbor.and_then(|p| direction(points[end], p)) {
+                    geometry.points.push(vertex(points[end],
+                        [points[end][0], points[end][1], inward[0], inward[1]],
+                        [radius, 2.0, 0.0, 0.0]));
+                }
+            }
+            let mut join = |previous: [f32; 2], at: [f32; 2], next: [f32; 2]| {
+                let (Some(incoming), Some(outgoing)) = (direction(previous, at), direction(at, next)) else { return; };
+                let turn = incoming[0] * outgoing[1] - incoming[1] * outgoing[0];
+                if turn.abs() <= 1e-6 { return; }
+                let side = if turn > 0.0 { 1.0 } else { -1.0 };
+                let mut a = [incoming[1] * radius * side, -incoming[0] * radius * side];
+                let mut b = [outgoing[1] * radius * side, -outgoing[0] * radius * side];
+                if a[0] * b[1] - a[1] * b[0] > 0.0 { core::mem::swap(&mut a, &mut b); }
+                // Match the native mask recipe: bevel ordinary corners and
+                // use an exact circular sector only at sharp exterior tips.
+                let mode = if a[0] * b[0] + a[1] * b[1] < -1e-6 { 4.0 } else { 3.0 };
+                geometry.points.push(vertex(at, [at[0], at[1], a[0], a[1]],
+                    [radius, mode, b[0], b[1]]));
+            };
+            for triple in points.windows(3) { join(triple[0], triple[1], triple[2]); }
+            if points.len() >= 4 && points.first() == points.last()
+                && strip.start == Boundary::Junction && strip.end == Boundary::Junction {
+                join(points[points.len() - 2], points[0], points[1]);
+            }
+        }
+    }
+    if single.is_none() {
+        let mut quad = |slot: usize, corners: [[f32; 2]; 4]| {
+            geometry.quads.extend(corners.map(|at| vertex(pixel(slot, at), [0.0; 4], [0.0; 4])));
+        };
+        for (i, &(ch, _)) in microfont::BOX_DRAW_SYMBOLS.iter().enumerate() {
+            if let Some(quads) = microfont::raster_quad::boxdraw_quad_slice(ch) {
+                for q in quads { quad(BOX_START + i, q.vertices); }
+            }
+        }
+        for (i, &(ch, _)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
+            if let Some(quads) = microfont::raster_quad::block_quad_slice(ch) {
+                for q in quads {
+                    let [l, t] = q.top_left.map(f32::from);
+                    let [r, b] = q.bottom_right.map(f32::from);
+                    quad(BLOCK_START + i, [[l, t], [r, t], [r, b], [l, b]]);
+                }
+            }
+        }
+        for code in 0x2800..=0x28ff {
+            for q in microfont::raster_quad::braille_quad_slice(char::from_u32(code).unwrap()).unwrap() {
+                let [l, t] = q.top_left.map(f32::from);
+                let [r, b] = q.bottom_right.map(f32::from);
+                quad(BRAILLE_START + (code - 0x2800) as usize, [[l, t], [r, t], [r, b], [l, b]]);
+            }
+        }
+    }
+    Ok(geometry)
+}
+
 
 pub(crate) struct CoverageAtlas {
     geometry: ResidentGlyphs,
     mask: Option<render::ResidentCoverageMask>,
+    /// Virgl produces the same color-free service result using native lines,
+    /// points and quads. Retain its fenced readback under this atlas lock.
+    native_mask: Option<(Vec<u8>, u32, u32, u64)>,
+    native_glyph: Option<char>,
     config: Option<AtlasConfig>,
     generation: u64,
     poisoned: bool,
@@ -435,6 +547,10 @@ static ATLAS: spin::Mutex<Option<CoverageAtlas>> = spin::Mutex::new(None);
 
 impl CoverageAtlas {
     pub(crate) fn surface(&self) -> GpgpuMask8Surface {
+        if let Some((pixels, width, height, phys)) = &self.native_mask {
+            return GpgpuMask8Surface { phys: *phys, bytes: pixels.len(), width: *width,
+                height: *height, pitch_bytes: *width, ..Default::default() };
+        }
         self.mask.as_ref().unwrap().surface()
     }
     /// Atlas rectangle in pixels; absent source glyphs retain an empty slot.
@@ -458,6 +574,20 @@ impl CoverageAtlas {
             return Err("microfont-atlas-quarantined");
         }
         if self.config == Some(config) {
+            return Ok(());
+        }
+        if crate::virtio_gpu_logo::output_dimensions().is_some() {
+            self.config = None;
+            let geometry = native_mask_geometry(config, width, height, self.native_glyph)?;
+            let pixels = crate::virtio_gpu_logo::render_coverage_mask(width, height, geometry)?;
+            let phys = crate::phys::virt_to_phys_checked(pixels.as_ptr())
+                .ok_or("microfont-virgl-mask-address")?;
+            self.native_mask = Some((pixels, width, height, phys));
+            self.config = Some(config);
+            self.generation += 1;
+            crate::log_important!(target: "microfont-mask";
+                "microfont-mask: warm generation={} format=r8 size={}x{} width_px={} backend=virgl-native-lines cpu_bitmap=0 glyph_triangles=0 fenced=1\n",
+                self.generation, width, height, config.line_width_px);
             return Ok(());
         }
         if self
@@ -563,8 +693,12 @@ pub(crate) fn with_warmed_atlas<T>(
     warm_start_glyph()?;
     if guard.is_none() {
         *guard = Some(CoverageAtlas {
-            geometry: upload_glyphs()?,
+            geometry: if crate::virtio_gpu_logo::output_dimensions().is_some() {
+                ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None }
+            } else { upload_glyphs()? },
             mask: None,
+            native_mask: None,
+            native_glyph: None,
             config: None,
             generation: 0,
             poisoned: false,
@@ -578,6 +712,7 @@ pub(crate) fn with_warmed_atlas<T>(
 pub(crate) const START_GLYPH_EM_MM: u32 = 50;
 static START_GLYPH: spin::Once<OwnedGlyphMask> = spin::Once::new();
 static START_GLYPH_READY: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static START_GLYPH_WARM: spin::Mutex<()> = spin::Mutex::new(());
 
 /// Return the service-owned mask as soon as its one-time production completes.
 /// Observe before checking publication so completion cannot race waiter setup.
@@ -592,9 +727,11 @@ pub(crate) async fn wait_for_start_glyph() -> &'static OwnedGlyphMask {
 }
 
 // Called under the atlas service lock, before any regular atlas production.
-fn warm_start_glyph() -> Result<(), &'static str> {
+pub(crate) fn warm_start_glyph() -> Result<(), &'static str> {
     if START_GLYPH.get().is_some() { return Ok(()); }
-    let (_, height) = crate::intel::physical_extent_pixels(START_GLYPH_EM_MM, START_GLYPH_EM_MM)
+    let _warm = START_GLYPH_WARM.try_lock().ok_or("microfont-start-glyph-busy")?;
+    if START_GLYPH.get().is_some() { return Ok(()); }
+    let (_, height) = crate::ui4::physical_extent_pixels(START_GLYPH_EM_MM, START_GLYPH_EM_MM)
         .ok_or("microfont-start-glyph-physical-size-unavailable")?;
     let glyph = build_single_glyph_mask('§', height)?;
     let glyph = START_GLYPH.call_once(|| glyph);
@@ -623,9 +760,12 @@ pub(crate) fn build_single_glyph_mask(ch: char, em_height_px: u32) -> Result<Own
     if !(11..=4000).contains(&em_height_px) { return Err("microfont-single-glyph-size"); }
     let (width, height) = config.cell_extent();
     let mut geometry = ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None };
-    upload_line_glyph(&mut geometry, ch, 0)?;
-    finish_upload(&mut geometry)?;
-    let mut glyph = CoverageAtlas { geometry, mask: None, config: None, generation: 0, poisoned: false };
+    if crate::virtio_gpu_logo::output_dimensions().is_none() {
+        upload_line_glyph(&mut geometry, ch, 0)?;
+        finish_upload(&mut geometry)?;
+    }
+    let mut glyph = CoverageAtlas { geometry, mask: None, native_mask: None,
+        native_glyph: Some(ch), config: None, generation: 0, poisoned: false };
     glyph.warm_extent(config, (width, height))?;
     let surface = glyph.surface();
     let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;

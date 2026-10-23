@@ -1,4 +1,4 @@
-//! CPU or legacy BCS0 copies from Shell3's warmed antialiased glyph cells.
+//! CPU, BCS0 or virgl copies from Shell3's warmed antialiased glyph cells.
 
 use super::{Ui4Surface, rendered_lines};
 use crate::ui4::{
@@ -74,7 +74,15 @@ pub(super) async fn present(
     if clearing {
         crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
     }
-    if clearing {
+    if clearing && crate::virtio_gpu_logo::output_dimensions().is_some() {
+        if let Err(error) = crate::virtio_gpu_logo::fill_rgba(bcs_surface(view), &[
+            crate::intel::GucBcs0RgbaFill { x: 0, y: 0, width: view.width, height: view.height,
+                color: u32::from_le_bytes(super::BACKGROUND) },
+        ]).await {
+            let _ = cancel_frame_buffer(lease);
+            return Err(error);
+        }
+    } else if clearing {
         let submission = match crate::intel::queue_guc_bcs0_rgba_fill(
             bcs_surface(view),
             u32::from_le_bytes(super::BACKGROUND),
@@ -132,6 +140,13 @@ pub(super) async fn present(
             crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
         }
         for chunk in glyphs.chunks(128).filter(|_| !cpu_paint) {
+            if crate::virtio_gpu_logo::output_dimensions().is_some() {
+                if let Err(error) = crate::virtio_gpu_logo::copy_rgba(bcs_surface(view), chunk).await {
+                    let _ = cancel_frame_buffer(lease);
+                    return Err(error);
+                }
+                continue;
+            }
             let submission = match crate::intel::queue_guc_bcs0_legacy_rgba_copies(bcs_surface(view), chunk) {
                 Ok(submission) => submission,
                 Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
@@ -197,9 +212,15 @@ pub(super) async fn present(
     surface.frame_contents[index] = Some(current);
     surface.clear_buffers[index] = false;
     if !terminal_paint && !glyphs.is_empty() && !cpu_paint {
-        crate::log_once!(target: "apps";
-            "shell3/show: bcs0-retired backend=legacy command=xy-src-copy-blt rop=cc colors=metafmt bold=off cpu-rgba-paint=0 staging-frame=0\n"
-        );
+        if crate::virtio_gpu_logo::output_dimensions().is_some() {
+            crate::log_once!(target: "apps";
+                "shell3/show: copy-retired backend=virgl command=resource-copy-region colors=metafmt bold=off cpu-rgba-paint=0\n"
+            );
+        } else {
+            crate::log_once!(target: "apps";
+                "shell3/show: bcs0-retired backend=legacy command=xy-src-copy-blt rop=cc colors=metafmt bold=off cpu-rgba-paint=0 staging-frame=0\n"
+            );
+        }
     }
     if crate::allcaps::text_blit::DIAGNOSTICS {
         let ns = crate::ui4::text_blit::nanos(crate::ui4::text_blit::stamp().wrapping_sub(present_started));

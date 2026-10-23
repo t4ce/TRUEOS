@@ -374,7 +374,7 @@ impl Drop for Show {
 
 fn show_extent(columns: usize, rows: usize, scale: u32) -> Result<(u32, u32), &'static str> {
     let (screen_width, screen_height) =
-        crate::intel::active_scanout_dimensions().ok_or("shell3-show-scanout-unavailable")?;
+        crate::ui4::output_dimensions().ok_or("shell3-show-scanout-unavailable")?;
     let min_width = (super::MIN_COLUMNS as u32)
         .saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
     let min_height =
@@ -403,7 +403,7 @@ fn create_surface(
 ) -> Result<Ui4Surface, &'static str> {
     let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
     let (screen_width, screen_height) =
-        crate::intel::active_scanout_dimensions().ok_or("shell3-show-scanout-unavailable")?;
+        crate::ui4::output_dimensions().ok_or("shell3-show-scanout-unavailable")?;
     let frame = create_surface_frames(width, height, backend)?;
     let session = match begin_additional_window_session(OWNER) {
         Ok(session) => session,

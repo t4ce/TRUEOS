@@ -11,6 +11,8 @@ mod compositor_service;
 mod context_menu;
 mod cursor_frame_inout;
 mod damage;
+mod display_metrics;
+pub(crate) use display_metrics::physical_extent_pixels;
 pub(crate) mod drag_drop;
 pub(crate) mod emulator_paint;
 mod frame_pool;
