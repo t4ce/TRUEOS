@@ -13,7 +13,9 @@ use crate::{
 use alloc::vec::Vec;
 
 pub(crate) const PREVIEW_HEADER_HEIGHT: u32 = 30;
-pub(crate) const ATLAS_COLUMNS: u32 = 16;
+// Twenty columns keep the expanded lowercase line repertoire within the
+// seven-bit X / eight-bit Y join coordinates. Demo sheets choose their own grid.
+pub(crate) const ATLAS_COLUMNS: u32 = 20;
 pub(crate) const LATIN_SLOTS: usize = 95;
 pub(crate) const BOX_START: usize = LATIN_SLOTS;
 pub(crate) const BLOCK_START: usize = BOX_START + 128;
@@ -312,14 +314,14 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
     };
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for (i, &(ch, _)) in microfont::BOX_DRAW_SYMBOLS.iter().enumerate() {
+    for (i, &ch) in microfont::BOX_DRAW_CHARACTERS.iter().enumerate() {
         if let Some(quads) = microfont::raster_quad::boxdraw_quad_slice(ch) {
             for quad in quads {
                 append_quad(&mut vertices, &mut indices, BOX_START + i, quad.vertices);
             }
         }
     }
-    for (i, &(ch, _)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
+    for (i, &ch) in microfont::BLOCK_CHARACTERS.iter().enumerate() {
         if let Some(quads) = microfont::raster_quad::block_quad_slice(ch) {
             for quad in quads {
                 let [l, t] = quad.top_left.map(f32::from);
@@ -393,13 +395,13 @@ fn upload_line_glyph(resident: &mut ResidentGlyphs, ch: char, slot: usize) -> Re
             &vertices,
             &indices,
             Topology::LineStripAdj,
-            endpoint_params(strip, slot),
+            endpoint_params(&strip, slot),
         )?;
     }
     vertices.clear();
     indices.clear();
     for strip in strips {
-        append_strip_joins(&mut vertices, slot, strip);
+        append_strip_joins(&mut vertices, slot, &strip);
     }
     indices.extend(0..vertices.len() as u32);
     let mut params = [0; 16];
@@ -460,12 +462,12 @@ fn native_mask_geometry(
         let mut quad = |slot: usize, corners: [[f32; 2]; 4]| {
             geometry.quads.extend(corners.map(|at| vertex(pixel(slot, at), [0.0; 4], [0.0; 4])));
         };
-        for (i, &(ch, _)) in microfont::BOX_DRAW_SYMBOLS.iter().enumerate() {
+        for (i, &ch) in microfont::BOX_DRAW_CHARACTERS.iter().enumerate() {
             if let Some(quads) = microfont::raster_quad::boxdraw_quad_slice(ch) {
                 for q in quads { quad(BOX_START + i, q.vertices); }
             }
         }
-        for (i, &(ch, _)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
+        for (i, &ch) in microfont::BLOCK_CHARACTERS.iter().enumerate() {
             if let Some(quads) = microfont::raster_quad::block_quad_slice(ch) {
                 for q in quads {
                     let [l, t] = q.top_left.map(f32::from);

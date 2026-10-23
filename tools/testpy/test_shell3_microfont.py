@@ -9,6 +9,7 @@ import re
 import subprocess
 import tempfile
 import test_clip_position3_uv_texture as extract
+from _microfont_build import build_microfont
 ROOT = Path(__file__).resolve().parents[2]
 extract.ROOT = ROOT
 
@@ -380,8 +381,7 @@ fn shared_palette_covers_padding_pan_cells_and_preserves_explicit_styles() {
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-microfont-') as temporary:
         path = Path(temporary)
-        subprocess.run(['rustc', '--edition=2024', '--crate-name', 'microfont', '--crate-type', 'rlib',
-                        str(ROOT / 'vendor/microfont/src/lib.rs'), '-o', str(path / 'libmicrofont.rlib')], check=True)
+        build_microfont(path / 'libmicrofont.rlib')
         (path / 'tests.rs').write_text(source.replace('__ROOT__', str(ROOT)))
         subprocess.run(['rustc', '--edition=2024', '--test', str(path / 'tests.rs'),
                         '--extern', f'microfont={path / "libmicrofont.rlib"}', '-o', str(path / 'tests')], check=True)

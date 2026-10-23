@@ -2,10 +2,11 @@
 """Check the real demo palette's row endpoints, padding and hue distribution."""
 from pathlib import Path
 import re,subprocess,tempfile
+from _microfont_build import build_microfont
 ROOT=Path(__file__).resolve().parents[2]
 def main():
     source=(ROOT/'src/r/services/microfont_line_preview.rs').read_text()
-    constants=source[source.index('const fn cp850_preview_character'):source.index('// Font size means')]
+    constants=source[source.index('const COLUMNS:'):source.index('// Font size means')]
     palette=source[source.index('fn preview_inks()'):]
     tests=r'''
 #[test] fn rows_have_exact_alpha_endpoints_and_transparent_padding() {
@@ -27,22 +28,20 @@ def main():
         assert!(color[..3].contains(&0)&&color[..3].contains(&255));
     }
     assert_eq!(seen.len(),GLYPHS.iter().filter(|ch|!ch.is_whitespace() && !ch.is_control()).count());
-    let expected:Vec<_>=microfont::CP850_SYMBOLS.iter().map(|&(ch,_)|ch)
-        .filter(|&ch|cp850_preview_character(ch)).collect();
-    assert_eq!(&GLYPHS[..CP850_GLYPH_COUNT],expected.as_slice());
-    assert_eq!(CP850_GLYPH_COUNT,132);
-    assert!(GLYPHS[CP850_GLYPH_COUNT..CP850_PADDED].iter().all(|&ch|ch=='\0'));
-    let digits:Vec<_>=microfont::seven_segment::SYMBOLS.iter().map(|&(ch,_)|ch).collect();
-    assert_eq!(&GLYPHS[CP850_PADDED..],digits.as_slice());
-    assert_eq!(ROWS,10);
-    assert!(GLYPHS.contains(&'¿'));
-    assert!(GLYPHS.contains(&'é')); // missing bins must retain a slot
-    assert!(GLYPHS[..CP850_GLYPH_COUNT].iter().all(|&ch|ch as u32>127 && !(0x2500..=0x259f).contains(&(ch as u32))));
+    let expected:Vec<_>=microfont::CP850_CHARACTERS.iter().copied().collect();
+    assert_eq!(GLYPHS.as_slice(),expected.as_slice());
+    assert_eq!(GLYPHS.len(),256);
+    assert_eq!(COLUMNS,16);
+    assert_eq!(ROWS,16);
+    assert_eq!(GLYPHS[0x20],' ');
+    assert_eq!(GLYPHS[0x41],'A');
+    assert_eq!(GLYPHS[0x82],'é'); // missing bins must retain their byte position
+    assert_eq!(GLYPHS[0xff],'\u{a0}');
 }
 '''
     with tempfile.TemporaryDirectory(prefix='microfont-palette-') as tmp:
         tmp=Path(tmp);lib=tmp/'libmicrofont.rlib'
-        subprocess.run(['rustc','--edition=2024','--crate-name','microfont','--crate-type','rlib',str(ROOT/'vendor/microfont/src/lib.rs'),'-o',str(lib)],check=True)
+        build_microfont(lib)
         (tmp/'test.rs').write_text(constants+'\n'+palette+tests)
         subprocess.run(['rustc','--edition=2024','--test','--extern',f'microfont={lib}',str(tmp/'test.rs'),'-o',str(tmp/'tests')],check=True)
         subprocess.run([str(tmp/'tests')],check=True)

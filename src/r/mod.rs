@@ -14,6 +14,7 @@ pub mod kernel_task_domain;
 pub mod keyboard;
 pub mod lz4;
 pub mod media_cabi;
+pub(crate) mod microfont;
 pub mod net;
 pub mod pat;
 pub mod path;

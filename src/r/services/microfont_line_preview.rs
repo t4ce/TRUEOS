@@ -1,4 +1,4 @@
-//! CP850 remainder in byte order; missing line glyphs retain their slots.
+//! Compact CP850 byte table; missing binary line glyphs retain empty cells.
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use embassy_sync::signal::Signal;
 use trueos_time::{Duration, Timer};
@@ -12,41 +12,18 @@ const LINE_WIDTH_PX: f32 =
 const MIN_LINE_WIDTH_PX: f32 = 1.0;
 const WIDTH_STEP_PX: f32 = 0.25;
 const END_CORNER_FRACTION: f32 = 0.5;
-// Derive the next completion sheet from CP850 identities, never from which
-// bins exist. Graphical control identities remain; Basic Latin and quads do not.
-const fn cp850_preview_character(ch: char) -> bool {
-    ch as u32 > 0x7f && !(ch >= '\u{2500}' && ch <= '\u{259f}')
-}
-const CP850_GLYPH_COUNT: usize = {
-    let mut count = 0;
+// Every byte owns one cell, including unfinished binary glyphs. Never filter
+// by glyph availability: adding a bin must not move any other character.
+const COLUMNS: usize = 16;
+const GLYPHS: [char; 256] = {
+    let mut glyphs = ['\0'; 256];
     let mut byte = 0;
-    while byte < microfont::CP850_SYMBOLS.len() {
-        if cp850_preview_character(microfont::CP850_SYMBOLS[byte].0) { count += 1; }
+    while byte < microfont::CP850_CHARACTERS.len() {
+        glyphs[byte] = microfont::CP850_CHARACTERS[byte];
         byte += 1;
-    }
-    count
-};
-const CP850_PADDED: usize = CP850_GLYPH_COUNT.div_ceil(COLUMNS) * COLUMNS;
-const GLYPHS: [char; CP850_PADDED + microfont::seven_segment::SYMBOLS.len()] = {
-    let mut glyphs = ['\0'; CP850_PADDED + microfont::seven_segment::SYMBOLS.len()];
-    let mut byte = 0;
-    let mut slot = 0;
-    while byte < microfont::CP850_SYMBOLS.len() {
-        let ch = microfont::CP850_SYMBOLS[byte].0;
-        if cp850_preview_character(ch) {
-            glyphs[slot] = ch;
-            slot += 1;
-        }
-        byte += 1;
-    }
-    let mut digit = 0;
-    while digit < microfont::seven_segment::SYMBOLS.len() {
-        glyphs[CP850_PADDED + digit] = microfont::seven_segment::SYMBOLS[digit].0;
-        digit += 1;
     }
     glyphs
 };
-const COLUMNS: usize = 16;
 const ROWS: usize = GLYPHS.len().div_ceil(COLUMNS);
 // Font size means the complete eleven-row em cell, including descender space.
 // Use the same EDID-to-active-scanout conversion as gridpaper; no guessed DPI.
@@ -153,7 +130,7 @@ async fn show_once() -> Result<(), &'static str> {
         .filter(|&tag| tag == microfont::raster_line::Boundary::End)
         .count();
     crate::log_important!(target: "microfont-line-preview";
-        "microfont-line-preview: presented window={} frame={} size={}x{} em_height_px={} cells={} slots={} present={} source=line-binary-v1 layout=cp850-minus-basic-box-block+7seg rows={} columns=16 ink_pixels={} size_mm=5 sizing=eleven-row-em tab=5..20mm-step2.5 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 scroll_min_px={} lean_px={} meso_px={} storage=none escape=close\n",
+        "microfont-line-preview: presented window={} frame={} size={}x{} em_height_px={} cells={} slots={} present={} source=line-binary-v1 layout=cp850-16x16 rows={} columns=16 ink_pixels={} size_mm=5 sizing=eleven-row-em tab=5..20mm-step2.5 topology=line-strip-adj geometry_shader=off adjacency_removal=clip line_draws={} line_real_vertices={} adjacency_vertices={} tags=end:{},junction:{} width_px={} join_triangles_total={} join_color=ink source_mask=r8 background=transparent colors=rainbow alpha_rows=255..128 geometry_uploads=1 geometry_reuploads=0 end_corner_fraction={} aa=native-lines+analytic-patches+analytic-caps samples=1 cap_style=round radius_limit_px={} junction_trimming=off scroll_step_px=0.25 scroll_min_px={} lean_px={} meso_px={} storage=none escape=close\n",
         window.raw(), frame.raw(), width, height, glyph_height, GLYPHS.len(), GLYPHS.len(), present, ROWS, lines, strips.len(), real_vertices, 2 * strips.len(), ends, 2 * strips.len() - ends, LINE_WIDTH_PX, join_triangles, END_CORNER_FRACTION, LINE_WIDTH_PX * END_CORNER_FRACTION, MIN_LINE_WIDTH_PX, microfont::FontShape::Lean.line_width_px(), microfont::FontShape::Meso.line_width_px());
     while !ui4::window_is_closed(OWNER, window) {
         let mut wheel = 0i32;

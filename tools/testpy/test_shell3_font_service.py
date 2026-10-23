@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from _microfont_build import build_microfont
 ROOT = Path(__file__).resolve().parents[2]
 MOCKS = r'''
 #![allow(dead_code, unused_variables)]
@@ -272,8 +273,7 @@ fn pixels(copy:intel::GucBcs0RgbaCopy)->Vec<[u8;4]> {
 def main():
     with tempfile.TemporaryDirectory(prefix='shell3-font-service-') as temporary:
         path = Path(temporary)
-        subprocess.run(['rustc', '--edition=2024', '--crate-name', 'microfont', '--crate-type', 'rlib',
-                        str(ROOT / 'vendor/microfont/src/lib.rs'), '-o', str(path / 'libmicrofont.rlib')], check=True)
+        build_microfont(path / 'libmicrofont.rlib')
         (path / 'tests.rs').write_text((MOCKS + TESTS).replace('__ROOT__', str(ROOT)))
         subprocess.run(['rustc', '--edition=2024', '--test', str(path / 'tests.rs'),
                         '--extern', f'microfont={path / "libmicrofont.rlib"}', '-o', str(path / 'tests')], check=True)

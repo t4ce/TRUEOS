@@ -187,6 +187,10 @@ pub extern "C" fn kmain() -> ! {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
 
+    // Font decompression needs the heap; every later console or UI renderer
+    // observes the installed bundle, including the first framebuffer text.
+    r::microfont::init().expect("initialize embedded MicroFont bundle");
+
     match app_db::init_bsp() {
         Ok(count) => crate::log_info!(
             target: "apps";

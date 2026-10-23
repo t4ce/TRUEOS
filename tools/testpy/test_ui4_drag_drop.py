@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import test_clip_position3_uv_texture as extract
 
+from _microfont_build import build_microfont
 ROOT = Path(__file__).resolve().parents[2]
 extract.ROOT = ROOT
 
@@ -51,7 +52,10 @@ fn push_overlay_rect(out:&mut Slot4Rects,x:u32,y:u32,width:u32,height:u32,_:crat
         path=Path(directory)
         (path/'spin.rs').write_text("pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T>{pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<'_,T>{self.0.lock().unwrap()}}")
         for name, file in [('spin',path/'spin.rs'),('microfont',ROOT/'vendor/microfont/src/lib.rs')]:
-            subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
+            if name == 'microfont':
+                build_microfont(path / 'libmicrofont.rlib')
+            else:
+                subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
         (path/'tests.rs').write_text(source)
         subprocess.run(['rustc','--edition=2024','--test',str(path/'tests.rs'),'-o',str(path/'tests'),'--extern',f'spin={path}/libspin.rlib','--extern',f'microfont={path}/libmicrofont.rlib'],check=True)
         subprocess.run([str(path/'tests'),'--test-threads=1'],check=True)

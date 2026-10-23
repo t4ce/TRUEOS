@@ -117,10 +117,10 @@ fn paint_once(frame: FrameHandle) -> PaintResult {
     // warmed atlas as the line specimen, sampled at its original 4x size.
     let columns = 31;
     let mut glyphs = alloc::vec!['\0';columns*26];
-    for (index, &(ch, _)) in microfont::BOX_DRAW_SYMBOLS.iter().enumerate() {
+    for (index, &ch) in microfont::BOX_DRAW_CHARACTERS.iter().enumerate() {
         glyphs[(index / 16) * columns + (index % 16) * 2] = ch;
     }
-    for (index, &(ch, _)) in microfont::BLOCK_SYMBOLS.iter().enumerate() {
+    for (index, &ch) in microfont::BLOCK_CHARACTERS.iter().enumerate() {
         glyphs[(8 + index / 16) * columns + (index % 16) * 2] = ch;
     }
     for index in 0..256 {

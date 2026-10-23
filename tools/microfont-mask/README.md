@@ -17,18 +17,24 @@ must not be retained by asynchronous readers. The source is zero outside ink,
 ends, and join edges. Native AA coverage reaches R8 through white RGB and
 SRC_ALPHA blending. Overlapping coverage follows the existing source-over rule.
 
-The default is 96x176 pixels per glyph, with an 8px line. The 16x16 sheet stores:
+Atlas dimensions and default scale follow the supported repertoire. The internal
+atlas uses 20 columns to keep packed line-join coordinates within their seven-bit
+X / eight-bit Y bounds; the CP850 demo independently uses 16 columns and 16 rows.
+The quad shader derives the column count from the target width and physical cell
+pitch, including one-column standalone masks. The atlas stores:
 
 | Slots | Source |
 | --- | --- |
 | 0–94 | Basic Latin U+0020–U+007E, authored line bins and the `|`/`/` strips |
 | 95–222 | Box Drawing U+2500–U+257F, quads |
 | 223–254 | Block Elements U+2580–U+259F, quads |
-| 255 | Unused, clear |
+| 255 onward | Extra line characters, including shared lowercase compositions |
+| After extra line characters | All 256 Braille patterns |
 
 Missing line bins and the four unsupported rounded box corners stay empty.
 New bins enter through the existing discovery step in `make iso`; runtime source
-geometry is immutable. The mask uses 4,325,376 bytes at the default scale.
+geometry is immutable. Mask dimensions and storage follow `AtlasConfig` and
+`SLOT_COUNT` rather than a fixed byte count.
 
 `AtlasConfig` controls uniform glyph scale and pixel line width. Width is rounded
 to the native 1/128px step. Scale is 1–23; width must be 1px through the scale in

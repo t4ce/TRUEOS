@@ -1,8 +1,8 @@
 {
-  "source_sha256": "2a6b5683df33724c8dc7c884a0ac275f214e05139da05ce517d0ea109b6563b4",
-  "rust_sha256": "dc6f33a17f396666b7593d9ced2eb99e630ab06846e47616c88a4b54be83c3c0",
+  "source_sha256": "644e9b33156378be5ce3250c51c87203a16f231188ba556652dded66332004af",
+  "rust_sha256": "0b5eba21d52ad74bcb2f6edc9ff879030046dd37e81f6e83d0d1e2851a8bca08",
   "device_id": "0x4680",
-  "vs_bytes": 2032,
+  "vs_bytes": 2344,
   "ps_bytes": 2392,
   "vs_state": {
     "ver": 12,

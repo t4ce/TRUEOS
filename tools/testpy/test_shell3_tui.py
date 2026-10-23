@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import test_clip_position3_uv_texture as extract
 import shell3_history_support as history_support
+from _microfont_build import build_microfont
 ROOT = Path(__file__).resolve().parents[2]
 extract.ROOT = ROOT
 
@@ -622,7 +623,10 @@ fn submit_app_prompt(&mut self)->bool {false}
         dependency_args = history_support.dependencies(path)
         (path/'spin.rs').write_text('pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T> {pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<\'_,T>{self.0.lock().unwrap()}pub fn try_lock(&self)->Option<std::sync::MutexGuard<\'_,T>>{self.0.try_lock().ok()}}')
         for name, file in [('spin', path/'spin.rs'), ('trueos_terminal', ROOT/'crates/trueos-terminal/src/lib.rs'), ('microfont', ROOT/'vendor/microfont/src/lib.rs')]:
-            subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
+            if name == 'microfont':
+                build_microfont(path / 'libmicrofont.rlib')
+            else:
+                subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
         tui_source=(ROOT/'src/shell3/tui.rs').read_text().replace('mod remote;', f'#[path="{ROOT}/src/shell3/tui/remote.rs"] mod remote;')
         (path/'tui.rs').write_text(tui_source+'\npub(crate) fn registry_unlocked_for_test()->bool { ROUTES.try_lock().is_some() }\n')
         (path/'test.rs').write_text(source.replace(str(ROOT/'src/shell3/tui.rs'),str(path/'tui.rs')))

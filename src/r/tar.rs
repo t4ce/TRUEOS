@@ -254,13 +254,30 @@ pub fn unpack(
     Err(Error::Invalid)
 }
 
-/// Decode one regular member from a bounded tar/LZ4 bundle on the CPU.
-pub fn decode_single_lz4(input: &[u8], max_bytes: usize) -> Result<Vec<u8>, Error> {
+fn decode_single_lz4_entry(input: &[u8], max_bytes: usize) -> Result<Entry, Error> {
     let tar_limit = max_bytes.checked_add(8192).ok_or(Error::Limit)?;
     let tar = super::lz4::decompress_frame_cpu(input, tar_limit).map_err(|_| Error::Invalid)?;
     let mut entries = unpack(&tar, 1, max_bytes, max_bytes)?;
     if entries.len() != 1 {
         return Err(Error::Invalid);
     }
-    Ok(entries.remove(0).bytes)
+    Ok(entries.remove(0))
+}
+
+/// Decode one regular member from a bounded tar/LZ4 bundle on the CPU.
+pub fn decode_single_lz4(input: &[u8], max_bytes: usize) -> Result<Vec<u8>, Error> {
+    Ok(decode_single_lz4_entry(input, max_bytes)?.bytes)
+}
+
+/// Decode one regular member, requiring its canonical asset name as well.
+pub fn decode_named_single_lz4(
+    input: &[u8],
+    max_bytes: usize,
+    expected_name: &str,
+) -> Result<Vec<u8>, Error> {
+    let entry = decode_single_lz4_entry(input, max_bytes)?;
+    if entry.name != expected_name {
+        return Err(Error::Invalid);
+    }
+    Ok(entry.bytes)
 }

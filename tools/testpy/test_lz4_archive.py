@@ -214,6 +214,8 @@ fn main() {{
     let tar=r::tar::pack(&entries,8192).unwrap();
     let frame=r::lz4::compress_frame_cpu(&tar);
     assert_eq!(r::tar::decode_single_lz4(&frame,11).unwrap(),b"ELF fixture");
+    assert_eq!(r::tar::decode_named_single_lz4(&frame,11,"module.elf").unwrap(),b"ELF fixture");
+    assert!(r::tar::decode_named_single_lz4(&frame,11,"microfont.bin").is_err());
     assert!(r::tar::decode_single_lz4(&frame,10).is_err());
     let tar=r::tar::pack(&[entries[0],r::tar::SourceEntry{{name:"other",..entries[0]}}],8192).unwrap();
     assert!(r::tar::decode_single_lz4(&r::lz4::compress_frame_cpu(&tar),100).is_err());
