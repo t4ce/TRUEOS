@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/download_locked_package.sh"
 
 if [[ "$#" -ne 1 || -z "$1" ]]; then
   echo "usage: $0 INSTALL_ROOT" >&2
@@ -12,10 +13,7 @@ mkdir -p "${package_root}"
 
 while read -r name sha512 url; do
   package_path="${package_root}/${name}.deb"
-  curl --fail --location --silent --show-error --retry 3 \
-    --connect-timeout 15 --max-time 300 \
-    --output "${package_path}" "${url}"
-  printf '%s  %s\n' "${sha512}" "${package_path}" | sha512sum --check --status
+  download_locked_package sha512 "${sha512}" "${url}" "${package_path}"
   dpkg-deb --extract "${package_path}" "${install_root}"
 done <<'PACKAGES'
 clang-21 464dcf96c2532fe7e8520f5518a2b34cd9caf40865fb426d33663308e8b5d2e2fbdfc5d1f16fee1ec3d4bbfd06f7a2cd67068640b5abece6c1e6acab563db915 http://azure.archive.ubuntu.com/ubuntu/pool/universe/l/llvm-toolchain-21/clang-21_21.1.8-6ubuntu1_amd64.deb

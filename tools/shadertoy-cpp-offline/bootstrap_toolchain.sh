@@ -3,6 +3,7 @@ set -euo pipefail
 
 tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trueos_root="$(cd "${tool_dir}/../.." && pwd)"
+source "${trueos_root}/tools/intel-gpu-bakery/download_locked_package.sh"
 install_root="${trueos_root}/bld/shadertoy-cpp-toolchain/root"
 package_root="${trueos_root}/bld/shadertoy-cpp-toolchain/packages"
 mkdir -p "${install_root}" "${package_root}"
@@ -19,14 +20,8 @@ download_and_extract() {
   local relative_path="$4"
   local archive="${package_root}/${package}_${version}_amd64.deb"
 
-  curl --fail --location --silent --show-error --retry 3 \
-    --connect-timeout 15 --max-time 300 \
-    --output "${archive}" \
-    "http://de.archive.ubuntu.com/ubuntu/${relative_path}"
-  printf '%s  %s\n' "${sha256}" "${archive}" | sha256sum --check --status || {
-    echo "toolchain: checksum mismatch for ${package} ${version}" >&2
-    exit 1
-  }
+  download_locked_package sha256 "${sha256}" \
+    "https://de.archive.ubuntu.com/ubuntu/${relative_path}" "${archive}"
 
   local actual_package actual_version
   actual_package="$(dpkg-deb -f "${archive}" Package)"
