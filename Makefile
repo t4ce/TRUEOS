@@ -202,11 +202,13 @@ microfont-line-end-shader:
 	python3 tools/microfont-line-end-bake/bake.py --ensure-current
 	python3 tools/microfont-line-end-bake/bake.py --mask --ensure-current
 
-.PHONY: microfont-line-glyphs
-microfont-line-glyphs:
-	python3 vendor/microfont/tools/generate_line_glyphs.py
+MICROFONT_FEATURES ?= hex,raster
+MICROFONT_BUNDLE ?= bld/microfont/microfont.tar.lz4
+.PHONY: microfont-bundle
+microfont-bundle:
+	python3 tools/microfont-pack/build.py --features "$(MICROFONT_FEATURES)" --trueos --output "$(MICROFONT_BUNDLE)"
 
-kernel: microfont-line-glyphs microfont-line-end-shader $(if $(filter 1,$(ENABLE_BUILDINS)),buildins) empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
+kernel: microfont-line-end-shader $(if $(filter 1,$(ENABLE_BUILDINS)),buildins) empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
 	TRUEOS_BLUEPRINTS_DIR="$(abspath $(BLUEPRINTS_DIR))" TRUEOS_ENABLE_BUILDINS=$(ENABLE_BUILDINS) TRUEOS_REQUIRE_BUILDINS=$(ENABLE_BUILDINS) cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 	$(MAKE) --no-print-directory INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
 
