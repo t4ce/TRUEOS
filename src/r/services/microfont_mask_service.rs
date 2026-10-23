@@ -1,6 +1,6 @@
 //! Native line/quad geometry and one reusable, color-free R8 atlas. Intel
 //! retains its boot-lifetime geometry; virgl consumes CPU-decoded raster seeds
-//! as native line/point/quad primitives, with no glyph tessellation.
+//! as native lines and analytically clipped points, with no glyph tessellation.
 //! Consumers execute while the atlas is locked; no asynchronous mask reader may
 //! survive the callback. Width/size invalidate pixels, never resident geometry.
 use crate::{
@@ -409,13 +409,13 @@ fn upload_line_glyph(resident: &mut ResidentGlyphs, ch: char, slot: usize) -> Re
 }
 
 /// Decode the same raster-line and raster-quad seeds for the emulator. CPU
-/// work is limited to coordinate transforms and semantic endpoint/join data;
-/// lines remain native GPU lines and joins remain native points.
+/// work is limited to coordinate transforms. For this virgl diagnostic,
+/// strokes use only native line bodies, without endpoint or join patches.
 fn native_mask_geometry(
     config: AtlasConfig, width: u32, height: u32, single: Option<char>,
 ) -> Result<crate::virtio_gpu_logo::NativeMaskGeometry, &'static str> {
     use crate::virtio_gpu_logo::{NativeMaskGeometry, NativeMaskVertex};
-    use microfont::raster_line::{Boundary, Point};
+    use microfont::raster_line::Point;
     let mut geometry = NativeMaskGeometry { lines: Vec::new(), points: Vec::new(),
         quads: Vec::new(), line_width_px: config.line_width_px };
     let radius = config.line_width_px * 0.5;
@@ -452,37 +452,8 @@ fn native_mask_geometry(
                 let style = [radius, 1.0, 0.0, 0.0];
                 geometry.lines.extend(segment.iter().map(|&at| vertex(at, data, style)));
             }
-            // A point's shader clips the disc to the added outer half only;
-            // this leaves the original native line body coverage untouched.
-            for (end, boundary) in [(0, strip.start), (points.len() - 1, strip.end)] {
-                if boundary != Boundary::End { continue; }
-                let neighbor = if end == 0 { points.iter().copied().find(|&p| p != points[end]) }
-                    else { points.iter().rev().copied().find(|&p| p != points[end]) };
-                if let Some(inward) = neighbor.and_then(|p| direction(points[end], p)) {
-                    geometry.points.push(vertex(points[end],
-                        [points[end][0], points[end][1], inward[0], inward[1]],
-                        [radius, 2.0, 0.0, 0.0]));
-                }
-            }
-            let mut join = |previous: [f32; 2], at: [f32; 2], next: [f32; 2]| {
-                let (Some(incoming), Some(outgoing)) = (direction(previous, at), direction(at, next)) else { return; };
-                let turn = incoming[0] * outgoing[1] - incoming[1] * outgoing[0];
-                if turn.abs() <= 1e-6 { return; }
-                let side = if turn > 0.0 { 1.0 } else { -1.0 };
-                let mut a = [incoming[1] * radius * side, -incoming[0] * radius * side];
-                let mut b = [outgoing[1] * radius * side, -outgoing[0] * radius * side];
-                if a[0] * b[1] - a[1] * b[0] > 0.0 { core::mem::swap(&mut a, &mut b); }
-                // Match the native mask recipe: bevel ordinary corners and
-                // use an exact circular sector only at sharp exterior tips.
-                let mode = if a[0] * b[0] + a[1] * b[1] < -1e-6 { 4.0 } else { 3.0 };
-                geometry.points.push(vertex(at, [at[0], at[1], a[0], a[1]],
-                    [radius, mode, b[0], b[1]]));
-            };
-            for triple in points.windows(3) { join(triple[0], triple[1], triple[2]); }
-            if points.len() >= 4 && points.first() == points.last()
-                && strip.start == Boundary::Junction && strip.end == Boundary::Junction {
-                join(points[points.len() - 2], points[0], points[1]);
-            }
+            // Virgl diagnostic: draw only the seed line bodies. Omit the
+            // supplemental endpoint caps and bevel/circular join patches.
         }
     }
     if single.is_none() {

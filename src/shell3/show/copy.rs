@@ -74,16 +74,17 @@ pub(super) async fn present(
     // Sparse fresh-frame painting requires a known background. If a later
     // chunk fails, the next attempt must clear any partially painted pixels.
     surface.clear_buffers[index] = true;
-    if clearing {
+    let emulator = crate::virtio_gpu_logo::output_dimensions().is_some();
+    if clearing && !emulator {
         crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
     }
-    if clearing && crate::virtio_gpu_logo::output_dimensions().is_some() {
-        if let Err(error) = crate::virtio_gpu_logo::fill_rgba(bcs_surface(view), &[
+    if clearing && emulator {
+        if !unsafe { crate::ui4::text_blit::fill(bcs_surface(view), &[
             crate::intel::GucBcs0RgbaFill { x: 0, y: 0, width: view.width, height: view.height,
                 color: u32::from_le_bytes(super::BACKGROUND) },
-        ]).await {
+        ]) } {
             let _ = cancel_frame_buffer(lease);
-            return Err(error);
+            return Err("shell3-show-emulator-clear");
         }
     } else if clearing {
         let submission = match crate::intel::queue_guc_bcs0_rgba_fill(
@@ -134,8 +135,8 @@ pub(super) async fn present(
                 crate::ui4::text_blit::nanos(crate::ui4::text_blit::stamp().wrapping_sub(paint_started)));
         }
     } else {
-        // Both sinks copy exactly the same warmed RGBA cells. Small writes retain
-        // the existing measured CPU allowance; larger writes use legacy BLT.
+        // Both sinks copy exactly the same warmed RGBA cells. QEMU stays local
+        // until window upload; Intel retains its measured CPU/BLT allowance.
         cpu_paint = !*poisoned && unsafe {
             crate::ui4::text_blit::try_glyph_copy(bcs_surface(view), &glyphs)
         };
@@ -205,7 +206,7 @@ pub(super) async fn present(
             return Err(error);
         }
     }
-    if !cpu_paint {
+    if !cpu_paint && !emulator {
         crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
     }
     if publish_frame_buffer(lease).is_err() {

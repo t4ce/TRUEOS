@@ -1,5 +1,6 @@
 //! Small synchronous operations on exclusively owned, fully retired RGBA8.
-//! BCS0 remains the large-work path. Selection never bypasses its owner proofs.
+//! BCS0 remains the large-work path on Intel. QEMU's guest-backed text stays
+//! CPU-local until UI4 uploads the published window once for composition.
 use crate::intel::{
     DmaFlushRows, GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaFill, GucBcs0RgbaSurface,
 };
@@ -217,7 +218,8 @@ pub(crate) fn glyph_copy_on_cpu(s: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy
     let half_row = copies
         .first()
         .map_or(0, |c| s.width as usize * c.height as usize / 2);
-    pixels != 0 && pixels <= crate::allcaps::text_blit::CPU_MONO_MAX_PIXELS.min(half_row)
+    pixels != 0 && (crate::virtio_gpu_logo::output_dimensions().is_some()
+        || pixels <= crate::allcaps::text_blit::CPU_MONO_MAX_PIXELS.min(half_row))
 }
 pub(crate) unsafe fn try_glyph_copy(s: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy]) -> bool {
     glyph_copy_on_cpu(s, copies) && unsafe { copy(s, copies) }
@@ -230,9 +232,9 @@ pub(crate) unsafe fn try_copy(
 ) -> bool {
     let pixels = copy_pixels(copies);
     pixels != 0
-        && pixels
+        && (crate::virtio_gpu_logo::output_dimensions().is_some() || pixels
             <= crate::allcaps::text_blit::CPU_COPY_MAX_PIXELS
-                .min(s.width as usize * row_height as usize / 2)
+                .min(s.width as usize * row_height as usize / 2))
         && unsafe { copy(s, copies) }
 }
 pub(crate) fn report(kind: &str, pixels: usize, cpu: bool, batches: usize, start: u64) {

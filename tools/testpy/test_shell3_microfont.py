@@ -47,6 +47,7 @@ macro_rules! log_info {($($t:tt)*)=>{}}
 pub(crate) use log_info;
 mod allcaps {pub mod text_blit {pub const CPU_MONO_MAX_PIXELS:usize=1024;pub const CPU_COPY_MAX_PIXELS:usize=1024;pub const DIAGNOSTICS:bool=false;}}
 mod time {pub fn tsc_hz()->u64 {1_000_000_000}}
+mod virtio_gpu_logo {pub fn output_dimensions()->Option<(u32,u32)> {None}}
 mod phys {pub fn phys_to_virt(v:usize)->usize {v}}
 mod percpu {pub fn current_slot()->u32 {0}}
 mod ui4 {

@@ -51,8 +51,9 @@ pub unsafe fn try_mono(d:crate::intel::GucBcs0RgbaSurface,g:&[crate::intel::GucB
 }
 pub unsafe fn try_glyph_copy(d:crate::intel::GucBcs0RgbaSurface,c:&[crate::intel::GucBcs0RgbaCopy])->bool { unsafe { try_copy(d,c,1) } }
 pub unsafe fn try_copy(d:crate::intel::GucBcs0RgbaSurface,c:&[crate::intel::GucBcs0RgbaCopy],_:u32)->bool {
- crate::intel::state(|s| {if !s.cpu_enabled {return false;}s.events.push("cpu-copy".into());for c in c {let src=s.memory[&c.source.phys].clone();let dst=s.memory.get_mut(&d.phys).unwrap();for y in 0..c.height {for x in 0..c.width {dst[((c.destination_y+y)*d.width+c.destination_x+x) as usize]=src[((c.source_y+y)*c.source.width+c.source_x+x) as usize];}}}true})
+ crate::intel::state(|s| {if !s.cpu_enabled && !s.emulator {return false;}s.events.push("cpu-copy".into());for c in c {let src=s.memory[&c.source.phys].clone();let dst=s.memory.get_mut(&d.phys).unwrap();for y in 0..c.height {for x in 0..c.width {dst[((c.destination_y+y)*d.width+c.destination_x+x) as usize]=src[((c.source_y+y)*c.source.width+c.source_x+x) as usize];}}}true})
 }
+pub unsafe fn copy(d:crate::intel::GucBcs0RgbaSurface,c:&[crate::intel::GucBcs0RgbaCopy])->bool {unsafe {try_copy(d,c,1)}}
 pub fn report(_: &str,_:usize,_:bool,_:usize,_:u64) {}
 }
 #[path="__TRUEOS_ROOT__/src/ui4/text_area.rs"] pub mod text_area;
@@ -197,17 +198,17 @@ fn rgba(w:CellWrite<u32>,l:RasterLayout)->Result<intel::GucBcs0RgbaCopy,&'static
 
 #[test]fn emulator_copy_render_resize_and_viewport_preserve_cells() {
  intel::reset();intel::state(|s|s.emulator=true);let v=rect(-3,-2,13,7);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(layout(v),&b).unwrap();let mut p=false;
- let work=run(a.render_rgba(v,1,value,rgba,&mut p)).unwrap();assert!(work.copy_batches>0);assert!(!p);
+ let work=run(a.render_rgba(v,1,value,rgba,&mut p)).unwrap();assert_eq!(work.copy_batches,0);assert_eq!(work.cpu_glyphs,work.painted);assert!(!p);
  let same=run(a.render_rgba(v,1,|_,_|panic!("emulator cells reused"),rgba,&mut p)).unwrap();assert_eq!(same.painted,0);
  let v2=rect(-3,-2,19,11);assert!(run(a.resize(layout(v2),v2,&b,&mut p)).unwrap());run(a.render_rgba(v2,1,value,rgba,&mut p)).unwrap();
  let d=dest(19,11);run(a.copy_view(v2,d.surface(),(0,0),&mut p)).unwrap();
- intel::state(|s|{assert!(s.events.iter().any(|e|e=="virgl-copy"));assert!(!s.events.iter().any(|e|e=="legacy-copy"));for y in 0..11 {for x in 0..19 {assert_eq!(s.memory[&d.surface().phys][y*19+x],value(v2.x+x as i64,v2.y+y as i64));}}});drop(a);assert_eq!(b.used(),0);assert!(!p);
+ intel::state(|s|{assert!(!s.events.iter().any(|e|e=="virgl-copy"));assert!(!s.events.iter().any(|e|e=="legacy-copy"));for y in 0..11 {for x in 0..19 {assert_eq!(s.memory[&d.surface().phys][y*19+x],value(v2.x+x as i64,v2.y+y as i64));}}});drop(a);assert_eq!(b.used(),0);assert!(!p);
 }
-#[test]fn cancelled_emulator_render_rebuilds_without_pinning_original_backing() {
+#[test]fn emulator_render_completes_without_yield_or_quarantine() {
  intel::reset();intel::state(|s|s.emulator=true);let v=rect(0,0,13,7);let b=RasterBudget::new(2*1024*1024);let mut a=BcsTextArea::new(layout(v),&b).unwrap();let mut p=false;
- {let mut f=Box::pin(a.render_rgba(v,1,value,rgba,&mut p));assert!(matches!(f.as_mut().poll(&mut context()),Poll::Pending));drop(f);}
- assert!(!p);assert_eq!(run(a.render_rgba(v,1,value,rgba,&mut p)).unwrap().painted,315);
- drop(a);assert_eq!(b.used(),0);assert!(!intel::state(|s|s.events.iter().any(|e|e.starts_with("quarantine"))));
+ {let mut f=Box::pin(a.render_rgba(v,1,value,rgba,&mut p));assert!(matches!(f.as_mut().poll(&mut context()),Poll::Ready(Ok(_))));}
+ assert!(!p);assert_eq!(run(a.render_rgba(v,1,|_,_|panic!("reuse"),rgba,&mut p)).unwrap().painted,0);
+ drop(a);assert_eq!(b.used(),0);assert!(!intel::state(|s|s.events.iter().any(|e|e.starts_with("quarantine") || e=="virgl-copy")));
 }
 
 '''

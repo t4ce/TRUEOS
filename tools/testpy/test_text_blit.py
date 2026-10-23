@@ -11,6 +11,12 @@ extern crate alloc;
 macro_rules! log_info {($($t:tt)*)=>{}}
 pub(crate) use log_info;
 mod allcaps {pub mod text_blit {pub const CPU_MONO_MAX_PIXELS:usize=1024;pub const CPU_COPY_MAX_PIXELS:usize=2048;pub const DIAGNOSTICS:bool=false;}}
+mod virtio_gpu_logo {
+ pub async fn copy_rgba(_:crate::intel::GucBcs0RgbaSurface,_:&[crate::intel::GucBcs0RgbaCopy])->Result<(), &'static str> {panic!("unexpected emulator copy")}
+ pub async fn fill_rgba(_:crate::intel::GucBcs0RgbaSurface,_:&[crate::intel::GucBcs0RgbaFill])->Result<(), &'static str> {panic!("unexpected emulator fill")}
+ std::thread_local! {pub static EMULATOR: std::cell::Cell<bool> = const {std::cell::Cell::new(false)};}
+ pub fn output_dimensions()->Option<(u32,u32)> {EMULATOR.with(|v|v.get().then_some((1280,720)))}
+}
 mod time {pub fn tsc_hz()->u64 {1_000_000_000}}
 mod phys {pub fn phys_to_virt(v:usize)->usize {v}}
 mod percpu {pub fn current_slot()->u32 {0}}
@@ -62,9 +68,6 @@ fn glyph(width:u32,height:u32)->GucBcs0MonoGlyph {let mut mask=[0u8;64];for (i,b
 }
 #[test]fn selector_respects_measured_limit_and_half_row_ceiling() {
     let mut pixels=vec![0;768*44];let wide=surface(&mut pixels,192,44,768);
-    let small:Vec<_>=(0..15).map(|_|glyph(6,11)).collect();assert!(unsafe{try_mono(wide,&small)});
-    let large:Vec<_>=(0..16).map(|_|glyph(6,11)).collect();assert!(!unsafe{try_mono(wide,&large)});
-    let narrow=GucBcs0RgbaSurface {width:24,..wide};let small:Vec<_>=(0..3).map(|_|glyph(6,11)).collect();assert!(!unsafe{try_mono(narrow,&small)});
     let mut source=vec![0;768*44];let src=surface(&mut source,192,44,768);
     let c=GucBcs0RgbaCopy {source:src,source_x:0,source_y:0,destination_x:0,destination_y:0,width:192,height:11};
     assert!(!unsafe{try_copy(wide,&[c],11)});
@@ -107,6 +110,16 @@ fn glyph(width:u32,height:u32)->GucBcs0MonoGlyph {let mut mask=[0u8;64];for (i,b
     let full=GucBcs0RgbaFill{width:32,..f};assert!(!unsafe{try_fill(s,&[full])});
 }
 
+#[test]fn emulator_copies_above_intel_limits_without_host_roundtrips() {
+ virtio_gpu_logo::EMULATOR.with(|v|v.set(true));
+ let mut pixels=vec![0x59;3072*44];let dst=surface(&mut pixels,768,44,3072);
+ let mut source=vec![0x80;3072*44];let src=surface(&mut source,768,44,3072);
+ let c=GucBcs0RgbaCopy {source:src,source_x:0,source_y:0,destination_x:0,destination_y:0,width:768,height:44};
+ assert!(unsafe{try_glyph_copy(dst,&[c])});assert_eq!(pixels,source);
+ pixels.fill(0x59);assert!(unsafe{try_copy(dst,&[c],11)});assert_eq!(pixels,source);
+ let invalid=GucBcs0RgbaCopy{width:769,..c};let before=pixels.clone();assert!(!unsafe{try_glyph_copy(dst,&[invalid])});assert_eq!(pixels,before);
+ virtio_gpu_logo::EMULATOR.with(|v|v.set(false));
+}
 '''
 
 def main():

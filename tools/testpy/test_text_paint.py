@@ -6,11 +6,6 @@ import tempfile
 from test_text_blit import SOURCE, ROOT
 
 ADAPTER = r'''
-mod virtio_gpu_logo {
- pub fn output_dimensions()->Option<(u32,u32)> {None}
- pub async fn copy_rgba(_:crate::intel::GucBcs0RgbaSurface,_:&[crate::intel::GucBcs0RgbaCopy])->Result<(),&'static str> {panic!("unexpected emulator copy")}
- pub async fn fill_rgba(_:crate::intel::GucBcs0RgbaSurface,_:&[crate::intel::GucBcs0RgbaFill])->Result<(),&'static str> {panic!("unexpected emulator fill")}
-}
 extern crate self as trueos_time;
 use std::future::Future;
 pub struct Duration;impl Duration {pub fn from_millis(_:u64)->Self{Self}}
@@ -24,7 +19,7 @@ static MONO:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0
 static COPIES:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
 static FILLS:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
 static FLUSHES:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
-fn reset(){for counter in [&MODE,&MONO,&FILLS,&COPIES,&FLUSHES]{counter.store(0,std::sync::atomic::Ordering::SeqCst);}}
+fn reset(){crate::virtio_gpu_logo::EMULATOR.with(|v|v.set(false));for counter in [&MODE,&MONO,&FILLS,&COPIES,&FLUSHES]{counter.store(0,std::sync::atomic::Ordering::SeqCst);}}
 '''
 GPU = r'''
 pub const GUC_BCS0_MONO_MAX_GLYPHS:usize=64;
@@ -167,6 +162,18 @@ fn rgba_plan(glyphs:&[GucBcs0MonoGlyph], sources:&mut Vec<Vec<u8>>)->ui4::text_p
  for mode in [1,2,3] {reset();MODE.store(mode,std::sync::atomic::Ordering::SeqCst);let mut pixels=vec![0x59;3072*22];let s=surface(&mut pixels,768,22,3072);let glyphs:Vec<_>=(0..128).map(|i|{let mut g=glyph(6,11);g.x=i*6;g}).collect();let mut sources=Vec::new();let plan=rgba_plan(&glyphs,&mut sources);let mut p=false;assert!(run(plan.paint(s,&mut p)).is_err());assert_eq!(p,mode!=1);if mode==1 {MODE.store(0,std::sync::atomic::Ordering::SeqCst);assert!(run(plan.paint(s,&mut p)).is_ok());}}
 }
 
+#[test]fn emulator_large_terminal_paint_is_local_pixel_exact_and_never_submits() {
+ reset();virtio_gpu_logo::EMULATOR.with(|v|v.set(true));
+ let mut pixels=vec![0x59;3072*22];let s=surface(&mut pixels,768,22,3072);
+ let glyphs:Vec<_>=(0..256).map(|i|{let mut g=if i%3==0 {blank((i%128)*6,(i/128)*11)} else {let mut g=glyph(6,11);g.x=(i%128)*6;g.y=(i/128)*11;g};g.foreground=0xff806040;g}).collect();
+ let mut expected=pixels.clone();reference(&mut expected,s,&glyphs);
+ let mut sources=Vec::new();let plan=rgba_plan(&glyphs,&mut sources);let mut p=false;
+ MODE.store(2,std::sync::atomic::Ordering::SeqCst); // Any GPU admission would fail.
+ let stats=run(plan.paint(s,&mut p)).unwrap();assert_eq!(pixels,expected);assert!(!p);
+ assert_eq!(stats.gpu_pixels,0);assert_eq!(stats.copy_batches,0);assert_eq!(stats.fill_batches,0);assert_eq!(stats.cpu_pixels,256*66);
+ for counter in [&COPIES,&FILLS,&FLUSHES] {assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst),0);}
+ virtio_gpu_logo::EMULATOR.with(|v|v.set(false));
+}
 '''
 
 def main():

@@ -138,6 +138,16 @@ impl RgbaPaintPlan {
             return Err("text-paint-bounds");
         }
         let mut stats = PaintStats::default();
+        // The emulator presents CPU-backed frames. Copy the already warmed
+        // cells locally instead of uploading, fencing and reading back each
+        // run merely to make those same guest pixels CPU-visible again.
+        if crate::virtio_gpu_logo::output_dimensions().is_some() {
+            if !self.copies.is_empty() && !unsafe { super::text_blit::copy(surface, &self.copies) } {
+                return Err("text-paint-emulator-copy");
+            }
+            stats.cpu_pixels = super::text_blit::copy_pixels(&self.copies);
+            return Ok(stats);
+        }
         // Preserve the source stream when fill fragmentation would introduce
         // more submissions. No pixel masks are reconstructed for this fallback.
         let batches = self.batches(surface);

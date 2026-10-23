@@ -120,7 +120,11 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         // overlap (font change), so rgba_copy's pixel conversion is shared.
         if !copies.is_empty() {
             if crate::virtio_gpu_logo::output_dimensions().is_some() {
-                crate::virtio_gpu_logo::copy_rgba(next.surface(), &copies).await?;
+                // Distinct retired allocations; preserve the ring overlap
+                // locally without a host upload/readback on every resize.
+                if !unsafe { super::text_blit::copy(next.surface(), &copies) } {
+                    return Err("text-area-emulator-resize-copy");
+                }
             } else {
                 let queued = crate::intel::queue_guc_bcs0_rgba_copies(next.surface(), &copies);
                 // Persist both owners' state before an await. Cancellation can
