@@ -41,6 +41,7 @@ jobs:
       TRUEOS_BLUEPRINTS_REV: f78b0e87ebb6f40c970bfbb17087984acbca5a04
       # Published TRUEOS-compatible RbGB; the Blueprint gitlink is unpublished.
       TRUEOS_RBGB_REV: 702bfbba8897e49ae90bec0d4229862e9c4e48aa
+      TRUEOS_RUST_SRC_REV: c399451b5455a61f58936c9080cf96f5ad4cb7ef
       TRUEOS_MICROGAMES_REV: 24a88ca8cea2f1fafd6ec6e199e865e52df499b9
       TRUEOS_PICASSO_REV: bf187f06dbd3b3d62fa985121f75048092e3e501
 
@@ -131,9 +132,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install nightly \
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "${channel}" \
             --profile minimal \
             --component rust-src,rustfmt,clippy,llvm-tools-preview
+
+      - name: Install pinned TRUEOS standard-library sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Stock rust-src has no TRUEOS filesystem/platform implementation.
+          # Fetch only source files from the matching port, excluding binaries.
+          source_dir=bld/trueos-rust-src
+          git init "${source_dir}"
+          git -C "${source_dir}" remote add origin \
+            https://github.com/t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10.git
+          git -C "${source_dir}" sparse-checkout init --cone
+          git -C "${source_dir}" sparse-checkout set lib/rustlib/src/rust/library
+          git -C "${source_dir}" fetch --depth 1 --filter=blob:none origin "${TRUEOS_RUST_SRC_REV}"
+          GIT_LFS_SKIP_SMUDGE=1 git -C "${source_dir}" checkout --detach FETCH_HEAD
+          test "$(git -C "${source_dir}" rev-parse HEAD)" = "${TRUEOS_RUST_SRC_REV}"
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          sysroot=$(rustc +"${channel}" --print sysroot)
+          cp -a "${source_dir}/lib/rustlib/src/rust/library/." \
+            "${sysroot}/lib/rustlib/src/rust/library/"
 
       - name: Checkout Blueprint build-ins
         shell: bash
