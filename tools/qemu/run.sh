@@ -9,6 +9,16 @@ QEMU_SMP="${QEMU_SMP:-14}"
 QEMU_NIC_DEVICE="${QEMU_NIC_DEVICE:-virtio-net-pci,disable-modern=off}"
 QEMU_SERIAL="${QEMU_SERIAL:-tcp:127.0.0.1:5555,server,nowait}"
 QEMU_DISPLAY="${QEMU_DISPLAY:-sdl,gl=on}"
+# SDL2 otherwise prefers X11 even inside a Wayland session. Its XWayland
+# relative-pointer path can cancel mouse motion, making the guest cursor
+# move slightly and spring back. Use the native backend when available,
+# while retaining an explicit host override through the clean environment.
+QEMU_SDL_ENV=()
+if [[ -n "${SDL_VIDEODRIVER:-}" ]]; then
+    QEMU_SDL_ENV+=("SDL_VIDEODRIVER=${SDL_VIDEODRIVER}")
+elif [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+    QEMU_SDL_ENV+=("SDL_VIDEODRIVER=wayland")
+fi
 QEMU_GPU="${QEMU_GPU:-virtio-gpu-gl-pci,xres=1920,yres=1080}"
 QEMU_DEBUG_LOG="${QEMU_DEBUG_LOG:-bld/qemu.log}"
 
@@ -53,6 +63,7 @@ exec env -i \
     "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}" \
     "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}" \
     "XAUTHORITY=${XAUTHORITY:-}" \
+    "${QEMU_SDL_ENV[@]}" \
     "${QEMU_BIN}" -no-shutdown \
     "${QEMU_DEBUG_ARGS[@]}" \
     "$@" \

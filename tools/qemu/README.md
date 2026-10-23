@@ -68,6 +68,11 @@ so events reach the supported USB devices. The virtio hardware cursor is explici
 hidden. UI4 software cursors, selection outlines, dock guides and menus use
 the existing slot-4 (fifth-plane) builder and render above all window textures.
 
+In a Wayland session the runner selects SDL's native Wayland backend to avoid
+XWayland relative-mouse cancellation (a cursor that moves briefly and springs
+back). An explicit `SDL_VIDEODRIVER` overrides this choice and is passed through
+the runner's clean environment. X11 sessions retain SDL's normal selection.
+
 The first milestone covers the graphical Shell2 terminal and image viewer,
 window positioning, opacity and broker transitions. Retained font scenes,
 font backbuffers, Picasso/Cubes shaders and compute are
