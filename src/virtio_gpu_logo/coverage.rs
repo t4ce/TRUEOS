@@ -1,4 +1,4 @@
-//! Native line/point/quad coverage from Microfont's CPU-decoded raster seeds.
+//! Native line/point coverage from Microfont's CPU-decoded raster seeds.
 //! The guest never tessellates strokes: Gallium rasterizes lines and points,
 //! and the fragment shader supplies their one-pixel inward coverage fringe.
 use super::*;
@@ -14,6 +14,7 @@ pub(crate) struct NativeMaskVertex {
 pub(crate) struct NativeMaskGeometry {
     pub(crate) lines: Vec<NativeMaskVertex>,
     pub(crate) points: Vec<NativeMaskVertex>,
+    /// Four canonical seed corners per polygon, evaluated by one native point.
     pub(crate) quads: Vec<NativeMaskVertex>,
     pub(crate) line_width_px: f32,
 }

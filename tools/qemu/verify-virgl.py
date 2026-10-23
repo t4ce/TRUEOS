@@ -138,9 +138,16 @@ def verify_microfont(command, vnc_path, output, timeout, serial, until):
         return Image.open(path).convert('RGB')
 
     def move(axis, value):
-        command('input-send-event', {'events': [
-            {'type': 'rel', 'data': {'axis': axis, 'value': value}}]})
-        time.sleep(.2)
+        # USB boot-mouse reports carry signed eight-bit motion. Large host
+        # deltas queue many reports, which can outlive a later opposite move
+        # while font production keeps the guest busy. Drain one bounded step
+        # at a time so a click cannot race an earlier clamp-to-edge request.
+        while value:
+            step = max(-100, min(100, value))
+            command('input-send-event', {'events': [
+                {'type': 'rel', 'data': {'axis': axis, 'value': step}}]})
+            time.sleep(.5)
+            value -= step
 
     def click():
         for down in (True, False):
@@ -153,13 +160,22 @@ def verify_microfont(command, vnc_path, output, timeout, serial, until):
     before = capture('microfont-before.png')
     width, height = before.size
 
+    pointer_counts = None
+
     def move_to(x, y):
+        nonlocal pointer_counts
         # Boot HID integrates relative counts as 1/1024 of the screen extent.
-        # Clamp to the top-left first so previous pointer state is irrelevant.
-        for axis, value in [('x', -1024), ('y', -1024),
-                            ('x', round(x * 1024 / max(1, width - 1))),
-                            ('y', round(y * 1024 / max(1, height - 1)))]:
-            move(axis, value)
+        # Clamp once; subsequent moves start at the last known position rather
+        # than generating another full-screen backlog during shell startup.
+        if pointer_counts is None:
+            move('x', -1024)
+            move('y', -1024)
+            pointer_counts = (0, 0)
+        target = (round(x * 1024 / max(1, width - 1)),
+                  round(y * 1024 / max(1, height - 1)))
+        move('x', target[0] - pointer_counts[0])
+        move('y', target[1] - pointer_counts[1])
+        pointer_counts = target
 
     move_to(50, (height - 1) / 2)
     time.sleep(.5)  # Hover reveals the faded button and holds it visible.

@@ -6,7 +6,10 @@ use crate::ui4::{
     writable_rgba_view,
 };
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 use trueos_time::{Duration, Timer};
+
+static REPORTED_VIRGL_COPY: AtomicBool = AtomicBool::new(false);
 
 pub(super) async fn present(
     surface: &mut Ui4Surface,
@@ -213,9 +216,11 @@ pub(super) async fn present(
     surface.clear_buffers[index] = false;
     if !terminal_paint && !glyphs.is_empty() && !cpu_paint {
         if crate::virtio_gpu_logo::output_dimensions().is_some() {
-            crate::log_once!(target: "apps";
-                "shell3/show: copy-retired backend=virgl command=resource-copy-region colors=metafmt bold=off cpu-rgba-paint=0\n"
-            );
+            if !REPORTED_VIRGL_COPY.swap(true, Ordering::Relaxed) {
+                crate::log_important!(target: "apps";
+                    "shell3/show: copy-retired backend=virgl command=resource-copy-region colors=metafmt bold=off cpu-rgba-paint=0\n"
+                );
+            }
         } else {
             crate::log_once!(target: "apps";
                 "shell3/show: bcs0-retired backend=legacy command=xy-src-copy-blt rop=cc colors=metafmt bold=off cpu-rgba-paint=0 staging-frame=0\n"
