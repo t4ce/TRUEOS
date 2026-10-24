@@ -91,7 +91,7 @@ pub(crate) fn render_drawable_depth_scene(
     // Geometry clears always load the target; only covered fragments are replaced.
     let clear_color = if geometry_clear { None } else { clear_color };
     submit_resident_scene_capture_inner_for_carrier(
-        draws, None, None, &[], clear_color, diagnostics, false, false,
+        draws, None, None, clear_color, diagnostics, false, false,
         ResidentSceneRasterQuality::SingleSample, target.width as usize, target.height as usize,
         ResidentSceneFrameOutput::DirectGpuSurface(target), None, clear_color.is_none(), None,
         Some(submission),

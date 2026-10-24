@@ -21,9 +21,6 @@ common_args=(
 
 single_entry_kernels=(
   alpha_blend_worklist_rgba8
-  glyph_mask_rgba8
-  gradient_rect_worklist_rgba8
-  helio_retained_transform
   sprite_quad_worklist_rgba8
   ui4_compose_layers_rgba8
   ui4_nv12_tile64_to_rgba8_frame
@@ -40,14 +37,3 @@ for kernel in "${single_entry_kernels[@]}"; do
     "$@"
 done
 
-"${python_bin}" -B "${tool_dir}/bake.py" \
-  --source "${kernel_dir}/lab256_multiphase.clcpp" \
-  --artifact-name lab256_multiphase \
-  "${common_args[@]}" \
-  --expect-kernel lab256_step \
-  --expect-kernel lab256_reduce \
-  --expect-kernel lab256_composite \
-  --rust-symbol lab256_step=LAB256_STEP_ADLS_CPP_ABI_CONTRACT \
-  --rust-symbol lab256_reduce=LAB256_REDUCE_ADLS_CPP_ABI_CONTRACT \
-  --rust-symbol lab256_composite=LAB256_COMPOSITE_ADLS_CPP_ABI_CONTRACT \
-  "$@"

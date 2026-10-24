@@ -65,7 +65,7 @@ impl PrintJobState {
         }
     }
 
-    #[cfg(any(feature = "gridpaper", test))]
+    #[cfg(test)]
     pub const fn terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Canceled | Self::OutcomeUnknown)
     }

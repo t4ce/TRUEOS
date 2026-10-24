@@ -136,17 +136,8 @@ TRUEOS_TTSTT_TARGET_DIR ?= tools/trueos-ttstt/target
 INTEL_GPU_BAKERY_DIR := tools/intel-gpu-bakery
 INTEL_GPU_CPP_ARTIFACT_DIR := crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
 INTEL_GPU_CPP_COPY_BIN := $(INTEL_GPU_CPP_ARTIFACT_DIR)/copy_rect_rgba8.bin
-# Legacy glyph-mask and gradient composition are not required in the default kernel.
-INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_COPY_BIN) $(INTEL_GPU_CPP_ARTIFACT_DIR)/glyph_mask_rgba8.bin $(INTEL_GPU_CPP_ARTIFACT_DIR)/gradient_rect_worklist_rgba8.bin,$(wildcard $(INTEL_GPU_CPP_ARTIFACT_DIR)/*.bin))
-# Kokoro GPU kernels belong to the opt-in TTSTT feature, which release does not enable.
-INTEL_GPU_FEATURE_COMMA := ,
-INTEL_GPU_FEATURE_FLAGS = $(subst $(INTEL_GPU_FEATURE_COMMA), ,$(subst =, ,$(CARGO_BUILD_FLAGS)))
-ifeq ($(filter trueos_lumen TRUEOS/trueos_lumen --all-features,$(INTEL_GPU_FEATURE_FLAGS)),)
-INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_ARTIFACT_DIR)/lfm25_q8_project_packed.bin,$(INTEL_GPU_CPP_REQUIRED_BINS))
-endif
-ifeq ($(filter trueos_ttstt TRUEOS/trueos_ttstt --all-features,$(INTEL_GPU_FEATURE_FLAGS)),)
-INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_ARTIFACT_DIR)/kokoro_conv1d_u8_u8.bin $(INTEL_GPU_CPP_ARTIFACT_DIR)/kokoro_qgemm_u8_i8.bin,$(INTEL_GPU_CPP_REQUIRED_BINS))
-endif
+# App-owned shaders arrive with Blueprints; only kernel-owned binaries are linked.
+INTEL_GPU_CPP_REQUIRED_BINS := $(filter-out $(INTEL_GPU_CPP_COPY_BIN) $(INTEL_GPU_CPP_ARTIFACT_DIR)/helio_retained_transform.bin,$(wildcard $(INTEL_GPU_CPP_ARTIFACT_DIR)/*.bin))
 INTEL_GPU_BAKERY_PYTHON ?= python3
 INTEL_GPU_LINKED_ELF ?= $(KERNEL_BIN)
 INTEL_GPU_CPP_PROBE_LOG ?=
@@ -163,7 +154,7 @@ CARGO_EFFECTIVE_FLAGS = $(strip $(CARGO_BUILD_FLAGS))
 
 IMG_SIZE ?= 25G
 
-.PHONY: intel-gpu-bake-lz4-cpp images empty-libs buildins kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-subset-sum-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: intel-gpu-bake-lz4-cpp images empty-libs buildins kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify   intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp  intel-gpu-bake-spirit-cpp  intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -229,20 +220,12 @@ intel-gpu-bake-particle-craft-cpp:
 intel-gpu-bake-shadertoy-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_shadertoy.sh"
 
-intel-gpu-bake-lfm25-q8-packed-cpp:
-	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_lfm25_q8_packed.sh"
 
-intel-gpu-bake-kokoro-conv1d-cpp:
-	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_kokoro_conv1d.sh"
 
-intel-gpu-bake-kokoro-qgemm-cpp:
-	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" bash "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_kokoro_qgemm.sh"
 
 intel-gpu-bake-spirit-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_spirit.sh"
 
-intel-gpu-bake-subset-sum-cpp:
-	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_subset_sum.sh"
 
 intel-gpu-bake-lz4-cpp:
 	PYTHON="$(INTEL_GPU_BAKERY_PYTHON)" bash "$(INTEL_GPU_BAKERY_DIR)/bake_adls_cpp_lz4.sh"
@@ -255,11 +238,7 @@ intel-gpu-bake-cpp-artifacts:
 	$(MAKE) --no-print-directory intel-gpu-bake-audio-visualizer-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-particle-craft-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-shadertoy-cpp
-	$(MAKE) --no-print-directory intel-gpu-bake-lfm25-q8-packed-cpp
-	$(MAKE) --no-print-directory intel-gpu-bake-kokoro-conv1d-cpp
-	$(MAKE) --no-print-directory intel-gpu-bake-kokoro-qgemm-cpp
 	$(MAKE) --no-print-directory intel-gpu-bake-spirit-cpp
-	$(MAKE) --no-print-directory intel-gpu-bake-subset-sum-cpp
 
 intel-gpu-refresh-cpp-artifacts: intel-gpu-bake-cpp-artifacts
 	$(MAKE) --no-print-directory intel-gpu-verify-cpp-artifacts
@@ -283,13 +262,9 @@ lfm25-cpp:
 lfm25-cpp-verify:
 	./tools/lfm2.5-350m/verify_cpp.sh
 
-lfm25-packed-isa-verify:
-	python3 ./tools/lfm2.5-350m/verify_packed_isa.py
 
-lfm25-igpu-packed-verify:
-	./tools/lfm2.5-350m/verify_igpu_packed.sh
 
-intel-gpu-verify-cpp-artifacts: lfm25-packed-isa-verify
+intel-gpu-verify-cpp-artifacts: 
 	python3 tools/shadertoy-cpp-offline/package_blueprint.py --blueprints-root "$(BLUEPRINTS_DIR)" --check
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"
 	$(INTEL_GPU_BAKERY_PYTHON) -B -m unittest discover -s "$(INTEL_GPU_BAKERY_DIR)" -p 'test_*.py'

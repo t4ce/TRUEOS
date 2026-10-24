@@ -230,6 +230,7 @@ pub(crate) fn voxy_headless_pipeline() -> &'static TrianglePipeline { voxy_headl
 // The PS must follow the larger Voxy VS at the next 64-byte code boundary.
 pub(crate) fn voxy_headless_texture_pipeline() -> &'static TrianglePipeline {
     static PIPELINE: spin::Once<TrianglePipeline> = spin::Once::new();
+    if !crate::gpu::app_shaders::present(1) { return voxy_headless_tgl::pipeline(); }
     PIPELINE.call_once(|| {
         let mut pipeline = *voxy_headless_tgl::pipeline();
         pipeline.ps = generated_clip_position3_uv_texture::clip_position3_uv_texture_pipeline().ps;

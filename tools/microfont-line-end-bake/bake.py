@@ -15,7 +15,7 @@ def fingerprint():
     return hashlib.sha256(b''.join(p.read_bytes() for p in [Path(__file__),FRAG,VERT,DUMPER,ROOT/'tools/helio-intel-bake/bake.py',HERE/'pipeline_emitter.py'])).hexdigest()
 def main():
     global FRAG, VERT, OUT, GENERATED
-    parser=argparse.ArgumentParser();parser.add_argument('--ensure-current',action='store_true');parser.add_argument('--mesa-build',type=Path,default=ROOT/'bld/toolchains/microfont-dista-mesa');parser.add_argument('--mask',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--ensure-current',action='store_true');parser.add_argument('--mesa-build',type=Path,default=ROOT/'bld/toolchains/microfont-dista-mesa');parser.add_argument('--mask',action='store_true',default=True);args=parser.parse_args()
     stem='mask' if args.mask else 'line_ends'
     if args.mask:
         FRAG=ROOT/'vendor/microfont/shaders/mask.frag'

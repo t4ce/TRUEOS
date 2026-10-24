@@ -384,7 +384,7 @@ fn init_required_guc_transport(dev: Dev) -> bool {
         .then(|| self::gpgpu::prewarm_direct_rcs_controls_ggtt(dev))
         .unwrap_or_default();
     crate::log!(
-        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} rcs_controls={} system_rcs_control={} font_rcs_control={} execution_rcs_control={} lfm25_rcs_control={} ui4_rcs_control={} codec_rcs_control={} bcs0_control={} control_mapping=boot-exact-once submission_owner=guc fallback=none next=context-register-on-first-submit\n",
+        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} rcs_controls={} system_rcs_control={} font_rcs_control={} execution_rcs_control={} ui4_rcs_control={} codec_rcs_control={} bcs0_control={} control_mapping=boot-exact-once submission_owner=guc fallback=none next=context-register-on-first-submit\n",
         ctb_ready as u8,
         ctb_ready as u8,
         registered as u8,

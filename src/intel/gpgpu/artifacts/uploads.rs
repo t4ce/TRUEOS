@@ -381,6 +381,10 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
 pub(crate) fn reload_known_kernel_artifact(
     name: &str,
 ) -> Result<UploadedKernelArtifact, GpgpuArtifactReloadError> {
+    if name == HELIO_RETAINED_TRANSFORM_KERNEL_NAME {
+        return upload_helio_retained_transform_kernel().ok_or(GpgpuArtifactReloadError::UploadFailed);
+    }
+
     // A first reload may need one allocation; later exact-byte reloads reuse
     // it. Serialize explicit reload callers so two first reloads cannot both
     // observe an empty slot and allocate the same GPU VA concurrently.
