@@ -99,7 +99,7 @@ jobs:
             nasm \
             ocl-icd-libopencl1 \
             ovmf \
-            p7zip-full \
+            lz4 \
             pkg-config \
             python3-cryptography \
             rustup \
@@ -137,6 +137,17 @@ jobs:
             --profile minimal \
             --component rust-src,rustfmt,clippy,llvm-tools-preview
 
+      - name: Checkout pinned TRUEOS standard-library sources
+        uses: actions/checkout@v5
+        with:
+          repository: t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10
+          ref: ${{ env.TRUEOS_RUST_SRC_REV }}
+          path: bld/trueos-rust-src
+          persist-credentials: false
+          fetch-depth: 1
+          lfs: false
+          sparse-checkout: lib/rustlib/src/rust/library
+
       - name: Install pinned TRUEOS standard-library sources
         shell: bash
         run: |
@@ -144,13 +155,6 @@ jobs:
           # Stock rust-src has no TRUEOS filesystem/platform implementation.
           # Fetch only source files from the matching port, excluding binaries.
           source_dir=bld/trueos-rust-src
-          git init "${source_dir}"
-          git -C "${source_dir}" remote add origin \
-            https://github.com/t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10.git
-          git -C "${source_dir}" sparse-checkout init --cone
-          git -C "${source_dir}" sparse-checkout set lib/rustlib/src/rust/library
-          git -C "${source_dir}" fetch --depth 1 --filter=blob:none origin "${TRUEOS_RUST_SRC_REV}"
-          GIT_LFS_SKIP_SMUDGE=1 git -C "${source_dir}" checkout --detach FETCH_HEAD
           test "$(git -C "${source_dir}" rev-parse HEAD)" = "${TRUEOS_RUST_SRC_REV}"
           channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
           sysroot=$(rustc +"${channel}" --print sysroot)
@@ -254,6 +258,7 @@ jobs:
 
           make intel-gpu-bake-cpp-artifacts
           make intel-gpu-verify-cpp-artifacts
+          python3 tools/shadertoy-cpp-offline/test_package_contract_comments.py
           python3 tools/intel-gpu-bakery/test_check_rebuilt_artifacts.py
           python3 tools/intel-gpu-bakery/check_rebuilt_artifacts.py --restore-comments \
             crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
@@ -312,7 +317,7 @@ jobs:
           dist="dist"
           mkdir -p "${dist}"
 
-          cp bld/TrueOS.7z "${dist}/TrueOS-${version}.7z"
+          cp bld/TrueOS.lz4 "${dist}/TrueOS-${version}.lz4"
           cp bld/trueos-release/TRUEOS.provenance.json "${dist}/TRUEOS-${version}.provenance.json"
           if [[ -f bld/trueos-release/TRUEOS.source-files.sha256 ]]; then
             cp bld/trueos-release/TRUEOS.source-files.sha256 "${dist}/TRUEOS-${version}.source-files.sha256"
@@ -320,10 +325,10 @@ jobs:
 
           (
             cd "${dist}"
-            sha256sum TrueOS-${version}.7z TRUEOS-${version}.provenance.json $([[ -f TRUEOS-${version}.source-files.sha256 ]] && printf '%s' TRUEOS-${version}.source-files.sha256) > SHA256SUMS
+            sha256sum TrueOS-${version}.lz4 TRUEOS-${version}.provenance.json $([[ -f TRUEOS-${version}.source-files.sha256 ]] && printf '%s' TRUEOS-${version}.source-files.sha256) > SHA256SUMS
           )
 
-          archive_name="TrueOS-${version}.7z"
+          archive_name="TrueOS-${version}.lz4"
           archive_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v${version}/${archive_name}"
           archive_sha256="$(sha256sum "${dist}/${archive_name}" | cut -d ' ' -f1)"
           record_sha256="$(python3 -c 'import json; print(json.load(open("bld/trueos-release/TRUEOS.provenance.json", encoding="utf-8"))["record_sha256"])')"

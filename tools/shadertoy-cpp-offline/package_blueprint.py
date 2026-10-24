@@ -8,9 +8,12 @@ import argparse
 import hashlib
 import json
 import struct
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools/intel-gpu-bakery"))
+from check_rebuilt_artifacts import comparable
 NAMES = ("mandelbrot", "cube_field", "nguyen", "palette_grid", "cosmic_strands", "protean_clouds")
 # Selector IDs 9..14 share the gallery's authenticated program (8).
 NATIVE_PROGRAMS = {7: ("audio_visualizer", "cpp_audio_visualizer_rgba8"),
@@ -65,7 +68,7 @@ def main():
                 if local.read_bytes() != text.encode():
                     raise SystemExit(f"{name}: editable header differs from baked archive: {relative}")
         contract = ROOT / f"crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/{artifact}.contract.rs"
-        if contract.read_bytes() != parts[5]:
+        if comparable(str(contract), contract.read_bytes()) != comparable(str(contract), parts[5]):
             raise SystemExit(f"{name}: Blueprint contract differs from kernel trust contract")
         output = assets / f"{name}.stpkg"
         if args.check:
