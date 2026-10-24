@@ -1,0 +1,25 @@
+PASS partition 512x512 nodes=127 leaves=64 pending=7 each_pixel_once=1
+PASS recursive 512x512 limit= 64 hash=a8c9cd05a9859ad0 guards=ok
+PASS stack     512x512 limit= 64 hash=a8c9cd05a9859ad0 guards=ok
+PASS parallel  512x512 limit= 64 hash=a8c9cd05a9859ad0 guards=ok
+PASS recursive 512x512 limit=  0 hash=a96777069d622325 guards=ok
+PASS stack     512x512 limit=  0 hash=a96777069d622325 guards=ok
+PASS parallel  512x512 limit=  0 hash=a96777069d622325 guards=ok
+PASS recursive 512x512 limit=  1 hash=e625c75b54422325 guards=ok
+PASS stack     512x512 limit=  1 hash=e625c75b54422325 guards=ok
+PASS parallel  512x512 limit=  1 hash=e625c75b54422325 guards=ok
+PASS recursive   1x  1 limit= 64 hash=ad2aca7747985764 guards=ok
+PASS stack       1x  1 limit= 64 hash=ad2aca7747985764 guards=ok
+PASS recursive  64x 64 limit= 64 hash=9ffbeaf57c48e295 guards=ok
+PASS stack      64x 64 limit= 64 hash=9ffbeaf57c48e295 guards=ok
+PASS recursive  65x  1 limit= 64 hash=fd46e8db31127964 guards=ok
+PASS stack      65x  1 limit= 64 hash=fd46e8db31127964 guards=ok
+PASS recursive   1x 65 limit= 64 hash=fd46e8db31127964 guards=ok
+PASS stack       1x 65 limit= 64 hash=fd46e8db31127964 guards=ok
+PASS recursive  65x 65 limit= 64 hash=a6d3ec7f501892e7 guards=ok
+PASS stack      65x 65 limit= 64 hash=a6d3ec7f501892e7 guards=ok
+PASS recursive 511x509 limit= 64 hash=c9dae861c8b8a033 guards=ok
+PASS stack     511x509 limit= 64 hash=c9dae861c8b8a033 guards=ok
+PASS recursive 512x 17 limit= 64 hash=432dc47bf683aa66 guards=ok
+PASS stack     512x 17 limit= 64 hash=432dc47bf683aa66 guards=ok
+CPU source simulation only: this does not execute the generated EU binaries.

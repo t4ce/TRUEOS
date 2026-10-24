@@ -1,0 +1,15 @@
+$ /usr/bin/ocloc validate -file mandelbrot.bin
+
+Validating : mandelbrot.bin (14480 bytes).
+Validator detected potential problems :
+DeviceBinaryFormat::zebin : Unhandled SHT_NOTE section : .note.intelgt.metrics currently supports only : .note.intelgt.compat.
+DeviceBinaryFormat::zebin::.ze_info : Minor version : 62 is newer than available in decoder : 61
+
+Binary is VALID (decoded successfully).
+Statistics : 
+Binary contains 1 kernels.
+
+Kernel #0 named mandelbrot:
+ * Number of binding table entries 1:
+ * Cross-thread data size 96:
+ * Per-thread data size 96:
