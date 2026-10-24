@@ -137,6 +137,17 @@ jobs:
             --profile minimal \
             --component rust-src,rustfmt,clippy,llvm-tools-preview
 
+      - name: Checkout pinned TRUEOS standard-library sources
+        uses: actions/checkout@v5
+        with:
+          repository: t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10
+          ref: ${{ env.TRUEOS_RUST_SRC_REV }}
+          path: bld/trueos-rust-src
+          persist-credentials: false
+          fetch-depth: 1
+          lfs: false
+          sparse-checkout: lib/rustlib/src/rust/library
+
       - name: Install pinned TRUEOS standard-library sources
         shell: bash
         run: |
@@ -144,13 +155,6 @@ jobs:
           # Stock rust-src has no TRUEOS filesystem/platform implementation.
           # Fetch only source files from the matching port, excluding binaries.
           source_dir=bld/trueos-rust-src
-          git init "${source_dir}"
-          git -C "${source_dir}" remote add origin \
-            https://github.com/t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10.git
-          git -C "${source_dir}" sparse-checkout init --cone
-          git -C "${source_dir}" sparse-checkout set lib/rustlib/src/rust/library
-          git -C "${source_dir}" fetch --depth 1 --filter=blob:none origin "${TRUEOS_RUST_SRC_REV}"
-          GIT_LFS_SKIP_SMUDGE=1 git -C "${source_dir}" checkout --detach FETCH_HEAD
           test "$(git -C "${source_dir}" rev-parse HEAD)" = "${TRUEOS_RUST_SRC_REV}"
           channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
           sysroot=$(rustc +"${channel}" --print sysroot)
