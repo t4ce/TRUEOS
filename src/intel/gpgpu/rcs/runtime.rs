@@ -52,14 +52,6 @@ const EXECUTION_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     map_general_auxiliary: false,
 };
 
-const LFM25_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
-    ring: LFM25_RCS_GPU_VA_RING_BASE,
-    context: LFM25_RCS_GPU_VA_CONTEXT_BASE,
-    batch: LFM25_RCS_GPU_VA_BATCH_BASE,
-    result: LFM25_RCS_GPU_VA_RESULT_BASE,
-    job_slots: 1,
-    map_general_auxiliary: false,
-};
 
 const UI4_COMPOSITOR_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     ring: UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE,
@@ -217,23 +209,6 @@ fn execution_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     Some(state)
 }
 
-fn lfm25_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if !super::gen12_lumen_mocs_ready() || lfm25_rcs_context_is_quarantined() {
-        return None;
-    }
-
-    let mut state_slot = LFM25_RCS_STATE.lock();
-    if !super::gen12_lumen_mocs_ready() || lfm25_rcs_context_is_quarantined() {
-        return None;
-    }
-    if let Some(state) = *state_slot {
-        return Some(state);
-    }
-
-    let state = allocate_direct_rcs_state(LFM25_RCS_GPU_VA)?;
-    *state_slot = Some(state);
-    Some(state)
-}
 
 fn ui4_compositor_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     if ui4_compositor_rcs_context_is_quarantined() {
@@ -389,7 +364,7 @@ fn direct_rcs_ggtt_mapping(gpu_va: DirectRcsGpuVa) -> Option<&'static spin::Once
         DIRECT_RCS_GPU_VA => Some(&DIRECT_RCS_GGTT_MAPPING),
         FONT_RCS_GPU_VA => Some(&FONT_RCS_GGTT_MAPPING),
         EXECUTION_RCS_GPU_VA => Some(&EXECUTION_RCS_GGTT_MAPPING),
-        LFM25_RCS_GPU_VA => Some(&LFM25_RCS_GGTT_MAPPING),
+
         CODEC_RCS_GPU_VA => Some(&CODEC_RCS_GGTT_MAPPING),
         UI4_COMPOSITOR_RCS_GPU_VA => Some(&UI4_COMPOSITOR_RCS_GGTT_MAPPING),
         _ => None,
@@ -401,7 +376,7 @@ fn direct_rcs_mapping_name(gpu_va: DirectRcsGpuVa) -> &'static str {
         DIRECT_RCS_GPU_VA => "system-service",
         FONT_RCS_GPU_VA => "font",
         EXECUTION_RCS_GPU_VA => "execution",
-        LFM25_RCS_GPU_VA => "lfm25",
+
         CODEC_RCS_GPU_VA => "codec",
         UI4_COMPOSITOR_RCS_GPU_VA => "ui4-compositor",
         _ => "invalid",
@@ -415,7 +390,7 @@ fn direct_rcs_control_ggtt_ready(state: DirectRcsState) -> bool {
         DIRECT_RCS_GPU_VA_RING_BASE => &DIRECT_RCS_GGTT_MAPPING,
         FONT_RCS_GPU_VA_RING_BASE => &FONT_RCS_GGTT_MAPPING,
         EXECUTION_RCS_GPU_VA_RING_BASE => &EXECUTION_RCS_GGTT_MAPPING,
-        LFM25_RCS_GPU_VA_RING_BASE => &LFM25_RCS_GGTT_MAPPING,
+
         CODEC_RCS_GPU_VA_RING_BASE => &CODEC_RCS_GGTT_MAPPING,
         UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE => &UI4_COMPOSITOR_RCS_GGTT_MAPPING,
         _ => return false,
@@ -428,7 +403,7 @@ fn quarantine_direct_rcs_mapping_failure(gpu_va: DirectRcsGpuVa, reason: &'stati
         DIRECT_RCS_GPU_VA => quarantine_direct_rcs_context(reason),
         FONT_RCS_GPU_VA => quarantine_font_rcs_context(reason),
         EXECUTION_RCS_GPU_VA => quarantine_execution_rcs_context(reason),
-        LFM25_RCS_GPU_VA => quarantine_lfm25_rcs_context(reason),
+
         CODEC_RCS_GPU_VA => quarantine_direct_rcs_lane(DirectRcsLane::Codec, reason),
         UI4_COMPOSITOR_RCS_GPU_VA => quarantine_ui4_compositor_rcs_context(reason),
         _ => {}
@@ -440,7 +415,6 @@ pub(crate) struct DirectRcsControlGgttPrewarmReport {
     pub(crate) system_service: bool,
     pub(crate) font: bool,
     pub(crate) execution: bool,
-    pub(crate) lfm25: bool,
     pub(crate) ui4_compositor: bool,
     pub(crate) codec: bool,
 }
@@ -452,7 +426,6 @@ impl DirectRcsControlGgttPrewarmReport {
         self.system_service
             && self.font
             && self.execution
-            && self.lfm25
             && self.ui4_compositor
     }
 }
@@ -504,7 +477,6 @@ pub(crate) fn prewarm_direct_rcs_controls_ggtt(
             EXECUTION_RCS_GPU_VA,
             execution_rcs_state_once(dev),
         ),
-        lfm25: prewarm_direct_rcs_control_ggtt(dev, LFM25_RCS_GPU_VA, lfm25_rcs_state_once(dev)),
         ui4_compositor: prewarm_direct_rcs_control_ggtt(
             dev,
             UI4_COMPOSITOR_RCS_GPU_VA,

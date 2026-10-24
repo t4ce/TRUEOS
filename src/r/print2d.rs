@@ -111,115 +111,17 @@ static PRINT_QUEUE: Mutex<PrintQueue> = Mutex::new(PrintQueue::new());
 
 
 
- i64> {
-    let id = next_job_id();
-    {
-        let mut queue = PRINT_QUEUE.lock();
-        if !queue.has_job_capacity() {
-            return Err(ERROR_QUEUE_FULL);
-        }
-        queue.retain_status_capacity();
-        queue.records.push_back(JobRecord {
-            id,
-            owner,
-            state: PrintJobState::Queued,
-        });
-        queue.pending.push_back(PrintJob {
-            id,
-            owner,
-            document,
-            printer_uri,
-        });
-    }
-    crate::log_os::print2d_job_state(id, PrintJobState::Queued.name(), "accepted");
-    Ok(id)
-}
-
- i64> {
-    let id = {
-        // Keep queue capacity and request consumption atomic from the caller's
-        // perspective. A full print queue leaves the Print Screen token
-        // available for the Blueprint to retry on its next cooperative poll.
-        let mut queue = PRINT_QUEUE.lock();
-        if !queue.has_job_capacity() {
-            return Err(ERROR_QUEUE_FULL);
-        }
-        let Some((generation, size, raw)) =
-            crate::r::services::gridpaper_service::consume_print_request(owner, token)
-        else {
-            return Err(ERROR_NOT_OWNER);
-        };
-        let id = next_job_id();
-        queue.retain_status_capacity();
-        queue.records.push_back(JobRecord {
-            id,
-            owner: PrintOwner::Blueprint(owner),
-            state: PrintJobState::Queued,
-        });
-        queue.pending.push_back(PrintJob {
-            id,
-            owner: PrintOwner::Blueprint(owner),
-            document: PrintDocument::GridPaperA4 {
-                generation,
-                size,
-                raw,
-            },
-            printer_uri: None,
-        });
-        id
-    };
-    crate::log_os::print2d_job_state(id, PrintJobState::Queued.name(), "accepted-print-screen");
-    Ok(id)
-}
 
 
 
- i64> {
-    if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw)
-    {
-        return Err(ERROR_INVALID_DOCUMENT);
-    }
-    enqueue(
-        PrintOwner::Blueprint(owner),
-        PrintDocument::GridPaperA4 {
-            generation,
-            size,
-            raw,
-        },
-        Some(printer_uri.to_string()),
-    )
-}
 
- i64> {
-    if !crate::r::services::gridpaper_service::valid_print_snapshot(&raw) {
-        return Err(ERROR_INVALID_DOCUMENT);
-    }
-    enqueue(
-        PrintOwner::Kernel,
-        PrintDocument::GridPaperA4 {
-            generation,
-            size,
-            raw,
-        },
-        None,
-    )
-}
 
- i64> {
-    if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw)
-    {
-        return Err(ERROR_INVALID_DOCUMENT);
-    }
-    enqueue(
-        PrintOwner::Kernel,
-        PrintDocument::GridPaperA4 {
-            generation,
-            size,
-            raw,
-        },
-        Some(printer_uri.to_string()),
-    )
-}
+
+
+
+
+
+
 
 pub(crate) fn take_next_job() -> Option<PrintJob> {
     PRINT_QUEUE.lock().pending.pop_front()

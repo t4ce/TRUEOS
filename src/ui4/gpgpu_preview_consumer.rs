@@ -25,7 +25,6 @@ use super::{
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
 const PREVIEW_WIDTH: u32 = super::DEFAULT_FRAME_WIDTH;
 const PREVIEW_HEIGHT: u32 = super::DEFAULT_FRAME_HEIGHT;
-const LAB256_PREVIEW_SIZE: u32 = 256;
 const PREVIEW_MARGIN: u32 = 64;
 const PREVIEW_Z: i32 = 30;
 const IDLE_POLL_MS: u64 = 20;
@@ -44,7 +43,6 @@ pub(crate) enum GpgpuPreviewPreset {
     Static,
 
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    Lab256,
     CppCloudHighWisps,
     CppAudio,
     CppParticle,
@@ -54,7 +52,7 @@ impl GpgpuPreviewPreset {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Static => "static",
-            Self::Lab256 => "lab256",
+
             Self::CppCloudHighWisps => "cpp-cloud-high-wisps",
             Self::CppAudio => "cpp-audio",
             Self::CppParticle => "cpp-particle",
@@ -77,7 +75,6 @@ impl GpgpuPreviewPreset {
         match self {
             Self::Static => "slot1-direct",
 
-            Self::Lab256 => "slot1-alpha-256x256",
             Self::CppCloudHighWisps | Self::CppAudio | Self::CppParticle => "slot1-direct",
         }
     }
@@ -85,7 +82,7 @@ impl GpgpuPreviewPreset {
 
 const fn preview_extent(preset: GpgpuPreviewPreset) -> (u32, u32) {
     match preset {
-        GpgpuPreviewPreset::Lab256 => (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE),
+
         GpgpuPreviewPreset::CppParticle => (
             crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_WIDTH,
             crate::intel::gpgpu::PARTICLE_CRAFT_FRAME_HEIGHT,
@@ -299,32 +296,6 @@ struct StaticPreviewSurface {
     window: WindowId,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn request_gpgpu_lab256_startup(
-    frame_limit: u64,
-    target_hz: u64,
-) -> Result<u64, &'static str> {
-    if frame_limit == 0 {
-        return Err("frame-limit-must-be-nonzero");
-    }
-    if target_hz == 0 || target_hz > trueos_time::TICK_HZ {
-        return Err("target-hz-out-of-range");
-    }
-    request_gpgpu_preview_start_with_policy(
-        GpgpuPreviewConfig {
-            preset: GpgpuPreviewPreset::Lab256,
-            duration_ms: 0,
-            cadence_ms: 1_000u64.div_ceil(target_hz),
-            publish_every: 1,
-        },
-        PreviewRunPolicy {
-            frame_limit,
-            target_hz,
-            interactive_win_demo: false,
-            refocus_source: None,
-        },
-    )
-}
 
 fn request_gpgpu_preview_start_with_policy(
     config: GpgpuPreviewConfig,
@@ -734,8 +705,7 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
         return Ok(());
     }
     let publish_result = match preview.config.preset {
-        GpgpuPreviewPreset::Lab256
-        | GpgpuPreviewPreset::CppCloudHighWisps
+        GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => match gpu_release {
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
@@ -960,18 +930,7 @@ fn dispatch_preview_kernel(
             release: None,
             error: "static-preset-entered-gpu-dispatch",
         },
-        GpgpuPreviewPreset::Lab256 => {
-            let result = crate::intel::gpgpu::lab256_preview_frame(surface);
-            PreviewDispatchResult {
-                ok: result.ok,
-                submitted: result.submitted,
-                iterations: 3,
-                marker: result.marker,
-                submit_ms: result.submit_ms,
-                release: result.release,
-                error: "lab256-dispatch-failed",
-            }
-        }
+
         GpgpuPreviewPreset::CppCloudHighWisps => {
             let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
             let mode = crate::intel::gpgpu::CPP_DEMO_MODE_CLOUD_HIGH_WISPS;
@@ -1064,14 +1023,14 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "pipe-control+post-marker-exact-surface",
-        GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
+
         GpgpuPreviewPreset::Static => "clflush-mfence-before-publish",
     }
 }
 
 const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
-        GpgpuPreviewPreset::Lab256 => "guc-lab256-three-pass",
+
         GpgpuPreviewPreset::Static => "cpu-static",
 
         GpgpuPreviewPreset::CppCloudHighWisps | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
@@ -1088,13 +1047,12 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
             WindowPlane::Universal(preview_plane_slot(preset) as u8)
         }
 
-        GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
 }
 
 const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
-        GpgpuPreviewPreset::Lab256 => "ui4-alpha-slot1-256x256",
+
         GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
@@ -1780,12 +1738,12 @@ const fn next_serial(serial: u64) -> u64 {
 mod tests {
     use super::{
         FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
-        GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent,
+        GpgpuPreviewPreset, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent,
         preview_frame_create_error_label, preview_plane_slot,
     };
 
     #[test]
-    fn lab256_preview_keeps_artifact_extent() {
+    fn removed_preview() {
         assert_eq!(
             preview_extent(GpgpuPreviewPreset::Lab256),
             (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE)

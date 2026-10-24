@@ -230,43 +230,6 @@ pub(crate) fn allocate_font_instance_rgba8_surface_cleared(
 
 
 
-pub(crate) fn glyph_mask_layers_rgba8_2d_mode(
-    layers: &[GpgpuGlyphMaskLayer],
-    dst: GpgpuRgba8Surface,
-    direct_scanout: bool,
-) -> GpgpuGlyphMaskBatchResult {
-    let mut result = GpgpuGlyphMaskBatchResult {
-        requested_layers: layers.len(),
-        ..GpgpuGlyphMaskBatchResult::default()
-    };
-    if !dst.is_valid() || layers.len() > GLYPH_MASK_BATCH_MAX_LAYERS {
-        return result;
-    }
-    for layer in layers {
-        if !layer.mask.is_valid() || !rect_is_inside_mask(layer.mask, layer.mask_rect) {
-            return result;
-        }
-        let blit = GpgpuGlyphMaskBlit {
-            mask: layer.mask,
-            mask_rect: layer.mask_rect,
-            dst,
-            dst_xy: layer.dst_xy,
-        };
-        if lower_glyph_mask_blit(blit).is_some() {
-            result.active_walkers += 1;
-        }
-    }
-    if result.active_walkers == 0 {
-        result.ok = true;
-        return result;
-    }
-    let (submitted, completed) = submit_glyph_mask_layers_2d(layers, dst, direct_scanout);
-    result.submitted = submitted;
-    result.ok = completed;
-    result.submits = usize::from(submitted);
-    result.release = (completed && direct_scanout).then(|| gpgpu_rgba8_release(dst));
-    result
-}
 
 
 

@@ -158,8 +158,8 @@ fn upload_triangle_shader_pipeline_at(
             code_size_bytes: 0,
         }; 2];
         for (index, code) in [
-            &crate::intel::shader::patch_cube::TESS_CONTROL[..],
-            &crate::intel::shader::patch_cube::TESS_EVAL[..],
+            &crate::intel::shader::patch_cube::tess_control()[..],
+            &crate::intel::shader::patch_cube::tess_eval()[..],
         ]
         .into_iter()
         .enumerate()
@@ -1355,8 +1355,9 @@ const CHURN_FORWARD_MESH_COUNT: usize = trueos_helio_runtime::churn::SHAPE_COUNT
 const CHURN_FORWARD_DRAW_COUNT: usize = trueos_helio_runtime::churn::DRAW_GROUP_COUNT;
 /// The native-matrix shader is not cube-specific. Picasso uses this same
 /// authenticated Helio graphics package with its own immutable PosNormal mesh.
-const PICASSO_RETAINED_FORWARD_ARTIFACT: &[u8] =
-    include_bytes!("../../../picasso/churn-forward.trueos.intel.helio");
+fn picasso_retained_forward_artifact() -> Result<&'static [u8], &'static str> {
+    crate::gpu::app_shaders::bytes(8, 0).ok_or("picasso-app-shaders-missing")
+}
 const CHURN_FORWARD_VERTICES_PER_MESH: usize = 24;
 const CHURN_FORWARD_INDICES_PER_MESH: usize = 36;
 static CHURN_FORWARD_PIPELINE: spin::Mutex<Option<crate::intel::shader::TrianglePipeline>> =
@@ -1364,32 +1365,12 @@ static CHURN_FORWARD_PIPELINE: spin::Mutex<Option<crate::intel::shader::Triangle
 static PICASSO_RETAINED_TEXTURED_PIPELINE: spin::Mutex<
     Option<crate::intel::shader::TrianglePipeline>,
 > = spin::Mutex::new(None);
-const PICASSO_RETAINED_TEXTURED_VS: &[u8] = include_bytes!(
-    "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.vs.simd8.bin"
-);
+fn picasso_retained_textured_vs() -> Result<&'static [u32], &'static str> {
+    crate::gpu::app_shaders::words(10, 0).ok_or("picasso-app-shaders-missing")
+}
 const PICASSO_RETAINED_TEXTURED_PS: &[u32] =
     crate::intel::shader::SAMPLED_TEXTURE_PS_SIMD16_CODE;
-const PICASSO_RETAINED_TEXTURED_PS8: &[u8] = include_bytes!(
-    "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd8.bin"
-);
-const PICASSO_RETAINED_TEXTURED_PS8_WORDS: [u32; 24] = picasso_retained_uv_simd8_words();
 
-const fn picasso_retained_uv_simd8_words() -> [u32; 24] {
-    assert!(PICASSO_RETAINED_TEXTURED_PS8.len() == 96);
-    let mut words = [0; 24];
-    let mut index = 0;
-    while index < words.len() {
-        let offset = index * 4;
-        words[index] = u32::from_le_bytes([
-            PICASSO_RETAINED_TEXTURED_PS8[offset],
-            PICASSO_RETAINED_TEXTURED_PS8[offset + 1],
-            PICASSO_RETAINED_TEXTURED_PS8[offset + 2],
-            PICASSO_RETAINED_TEXTURED_PS8[offset + 3],
-        ]);
-        index += 1;
-    }
-    words
-}
 
 fn bootstrap_churn_meshes()
 -> [trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT] {
@@ -1533,10 +1514,10 @@ fn picasso_retained_textured_pipeline()
     if let Some(pipeline) = *cached {
         return Ok(pipeline);
     }
-    if PICASSO_RETAINED_TEXTURED_VS.len() != 648 || core::mem::size_of_val(PICASSO_RETAINED_TEXTURED_PS) != 160 {
+    if core::mem::size_of_val(picasso_retained_textured_vs()?) != 648 || core::mem::size_of_val(PICASSO_RETAINED_TEXTURED_PS) != 160 {
         return Err("picasso-retained-textured-stage-shape");
     }
-    let ps_offset = crate::intel::align_up(PICASSO_RETAINED_TEXTURED_VS.len(), 64)
+    let ps_offset = crate::intel::align_up(core::mem::size_of_val(picasso_retained_textured_vs()?), 64)
         .and_then(|offset| u32::try_from(offset).ok())
         .ok_or("picasso-retained-textured-stage-layout")?;
     let pipeline = TrianglePipeline {
@@ -1544,7 +1525,7 @@ fn picasso_retained_textured_pipeline()
         // fetched independently, transforms remain GPU-resident, and UV is
         // exported as the sole perspective-interpolated PS attribute.
         vs: TriangleVertexShader {
-            code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_VS)?,
+            code: picasso_retained_textured_vs()?,
             meta: TriangleVertexShaderMetadata {
                 kernel: ShaderKernelMetadata {
                     code_offset_bytes: 0,
@@ -1600,26 +1581,10 @@ fn prepare_picasso_retained_uv_diagnostic(
 ) -> Result<(crate::intel::shader::TrianglePipeline, TriangleFrontEndContract), &'static str> {
     let mut pipeline = picasso_retained_textured_pipeline()?;
     let mut front_end = configure_picasso_retained_uv_diagnostic(draw, picasso_cull_enabled())?;
-    if picasso_uv_pipeline_simd8() {
-        pipeline = picasso_retained_uv_with_simd8_ps(pipeline);
-        front_end.label = "picasso-retained-authored-uv-simd8-diagnostic-tangent48";
-    }
+
     Ok((pipeline, front_end))
 }
 
-fn picasso_retained_uv_with_simd8_ps(
-    mut pipeline: crate::intel::shader::TrianglePipeline,
-) -> crate::intel::shader::TrianglePipeline {
-    // Original companion executable: barycentrics g2/g3, UV setup g4,
-    // SIMD8 sampler0/BTI2 and a SIMD8 RT0 EOT (checked with IGA12p1).
-    // Preserve the old VS and its aligned PS offset704; no per-frame copy
-    // or allocation is needed for this compile-time aligned code array.
-    pipeline.ps.code = &PICASSO_RETAINED_TEXTURED_PS8_WORDS;
-    pipeline.ps.meta.kernel.code_size_bytes = 96;
-    pipeline.ps.meta.kernel.dispatch_mode = crate::intel::shader::DispatchMode::Simd8;
-    pipeline.ps.meta.kernel.grf_start_register = 4;
-    pipeline
-}
 
 #[cfg(test)]
 mod picasso_uv_simd8_tests {
@@ -2290,7 +2255,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     // allocates the persistent GPU seed, instance, compaction, and indirect
     // ranges. Only its synthetic cube geometry is replaced below.
     let mut resident = create_resident_churn_forward_with_admission(
-        PICASSO_RETAINED_FORWARD_ARTIFACT,
+        picasso_retained_forward_artifact()?,
         max_instances,
         &bootstrap_churn_meshes(),
         ChurnHardwareAdmission::ValidatedProduction,
@@ -2302,7 +2267,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     // front so the helmet shell—not its interior—survives rasterization.
     resident.native_vf.front_face_clockwise = true;
     if cube_patch {
-        resident.pipeline = crate::intel::shader::patch_cube::PIPELINE;
+        resident.pipeline = *crate::intel::shader::patch_cube::pipeline();
         resident.native_vf.vf_sgvs_dw1 = 0xE001_4001;
         resident.native_vf.vf_sgvs_2_dw1 = 0xB001_0001;
         resident.native_vf.vf_sgvs_2_dw2 = 2;

@@ -241,49 +241,6 @@ fn direct_rcs_write_copy_rect_payload_at(
     true
 }
 
-fn direct_rcs_write_glyph_mask_payload_at(
-    state: DirectRcsState,
-    payload_offset: usize,
-    params: CopyRectRgba8Params,
-    color_rgba: u32,
-) -> bool {
-    if payload_offset + GLYPH_MASK_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
-        return false;
-    }
-
-    unsafe {
-        let payload = state.batch_virt.add(payload_offset);
-        core::ptr::write_bytes(payload, 0, GLYPH_MASK_INDIRECT_BYTES);
-        let dwords = payload as *mut u32;
-        core::ptr::write_volatile(dwords.add(3), 16);
-        core::ptr::write_volatile(dwords.add(4), 1);
-        core::ptr::write_volatile(dwords.add(5), 1);
-        core::ptr::write_volatile(dwords.add(8), 16);
-        core::ptr::write_volatile(dwords.add(9), 1);
-        core::ptr::write_volatile(dwords.add(10), 1);
-        core::ptr::write_volatile(dwords.add(12), params.src_gpu as u32);
-        core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
-        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.src_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(17), params.dst_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(18), params.src_x);
-        core::ptr::write_volatile(dwords.add(19), params.src_y);
-        core::ptr::write_volatile(dwords.add(20), params.dst_x);
-        core::ptr::write_volatile(dwords.add(21), params.dst_y);
-        core::ptr::write_volatile(dwords.add(22), params.width);
-        core::ptr::write_volatile(dwords.add(23), params.height);
-        core::ptr::write_volatile(dwords.add(24), color_rgba);
-
-        let local_ids = payload.add(GLYPH_MASK_CROSS_THREAD_BYTES) as *mut u16;
-        for lane in 0..16usize {
-            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
-            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
-            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
-        }
-    }
-    true
-}
 
 fn direct_rcs_write_skybox_sample_rgb565_payload_at(
     state: DirectRcsState,

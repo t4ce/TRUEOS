@@ -557,7 +557,6 @@ fn resident_scene_state_warm(
 
 /// One persistent R8 analytical font layer composited after triangle resolve.
 /// The scene renderer submits the complete slice as one GPGPU batch.
-pub(crate) type ResidentSceneCoverageDraw = crate::intel::gpgpu::GpgpuGlyphMaskLayer;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ResidentSceneRasterQuality {
@@ -1229,28 +1228,6 @@ fn prepare_picasso_resident_scene_depth(
 /// UI4-sized 4x triangle scene followed by persistent analytical font masks.
 /// Coverage is composited only after the MSAA resolve, preserving its R8 alpha
 /// steps instead of treating the mask as additional fixed-function samples.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
-    draws: &[ResidentSceneDraw<'_>],
-    coverage_draws: &[ResidentSceneCoverageDraw],
-    clear_rgba: Option<[u8; 4]>,
-    width: u32,
-    height: u32,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(
-        draws,
-        coverage_draws,
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        false,
-        ResidentSceneRasterQuality::Multisample4x,
-        width as usize,
-        height as usize,
-        ResidentSceneFrameOutput::Readback,
-    )
-}
 
 /// Copy a released scratch target. Only an unsubmitted BCS rejection may
 /// use the compute reference. An uncertain retirement retains both buffers.
@@ -1286,75 +1263,10 @@ fn copy_resident_scene_output(
 /// target is copied by BCS, with compute fallback on admission rejection.
 /// An incomplete frame provides no release fence: the caller must retain its
 /// destination lease rather than publish, recycle, or free that allocation.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
-    draws: &[ResidentSceneDraw<'_>],
-    coverage_draws: &[ResidentSceneCoverageDraw],
-    clear_rgba: Option<[u8; 4]>,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(
-        draws,
-        coverage_draws,
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        false,
-        ResidentSceneRasterQuality::Multisample4x,
-        destination.width as usize,
-        destination.height as usize,
-        ResidentSceneFrameOutput::GpuSurface(destination),
-    )
-}
 
 /// GridPaper's complete direct-render operation. Geometry targets the leased
 /// UI4 allocation directly; analytical coverage and cursor rectangles append
 /// their writes before one final scanout release is minted.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_and_rects_direct_to_surface(
-    draws: &[ResidentSceneDraw<'_>],
-    coverage_draws: &[ResidentSceneCoverageDraw],
-    final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
-    clear_rgba: Option<[u8; 4]>,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    diagnostic_logs: bool,
-) -> Result<ResidentSceneFrameResult, &'static str> {
-    let mut result = submit_resident_triangle_scene_capture(
-        draws,
-        coverage_draws,
-        clear_rgba,
-        diagnostic_logs,
-        false,
-        false,
-        ResidentSceneRasterQuality::SingleSample,
-        destination.width as usize,
-        destination.height as usize,
-        ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination),
-    )?;
-    if let Some(error) = result.completion_error() {
-        return Err(error);
-    }
-    let started_ns = crate::chronos::monotonic_nanos();
-    if !final_rects.is_empty() {
-        if !crate::intel::gpgpu::fill_solid_rects_rgba8_scanout(destination, final_rects) {
-            return Err("resident-scene-final-rects");
-        }
-    }
-    let finalizer = crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
-    if !finalizer.ok
-        || !finalizer
-            .release
-            .is_some_and(|release| release.matches(destination.phys, destination.bytes))
-    {
-        return Err("resident-scene-final-release");
-    }
-    result.coverage_us = result
-        .coverage_us
-        .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000);
-    result.release_fence = Some(resident_scene_release(destination));
-    Ok(result)
-}
 
 /// Render an ordered immediate indexed scene directly into one UI4 surface.
 /// The public immediate pipeline has no depth-state descriptor, so draw order
@@ -1370,7 +1282,6 @@ pub(crate) fn render_resident_indexed_scene_frame_premultiplied_direct_to_surfac
         draws,
         None,
         None,
-        &[],
         clear_rgba,
         diagnostic_logs,
         false,
@@ -1397,7 +1308,6 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     submit_resident_triangle_scene_capture(
         draws,
-        &[],
         clear_rgba,
         diagnostic_logs,
         false,
@@ -1430,7 +1340,6 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
         static_draws,
         Some(resident),
         sampled_material,
-        &[],
         clear_rgba,
         diagnostic_logs,
         false,
@@ -3852,7 +3761,6 @@ fn submit_resident_churn_forward_geometry_batched(
 
 fn submit_resident_triangle_scene_capture(
     draws: &[ResidentSceneDraw<'_>],
-    coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
     straight_alpha_output: bool,
@@ -3866,7 +3774,6 @@ fn submit_resident_triangle_scene_capture(
         draws,
         None,
         None,
-        coverage_draws,
         clear_rgba,
         diagnostic_logs,
         straight_alpha_output,
@@ -3882,7 +3789,6 @@ fn submit_resident_scene_capture_inner(
     draws: &[ResidentSceneDraw<'_>],
     native_churn: Option<&ResidentChurnForward>,
     native_sampled_material: Option<ResidentRetainedMaterial<'_>>,
-    coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
     straight_alpha_output: bool,
@@ -3896,7 +3802,6 @@ fn submit_resident_scene_capture_inner(
         draws,
         native_churn,
         native_sampled_material,
-        coverage_draws,
         clear_rgba,
         diagnostic_logs,
         straight_alpha_output,
@@ -3916,7 +3821,6 @@ fn submit_resident_scene_capture_inner_for_carrier(
     draws: &[ResidentSceneDraw<'_>],
     native_churn: Option<&ResidentChurnForward>,
     native_sampled_material: Option<ResidentRetainedMaterial<'_>>,
-    coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
     straight_alpha_output: bool,
@@ -3958,26 +3862,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         // BGRA is supported only by the direct 3D render-target surface state.
         return Err("resident-scene-output-storage-order");
     }
-    for (index, draw) in coverage_draws.iter().enumerate() {
-        if !draw.mask.is_valid() {
-            return Err("resident-coverage-mask-shape");
-        }
-        let draw_end = draw
-            .mask
-            .gpu
-            .checked_add(draw.mask.bytes as u64)
-            .ok_or("resident-coverage-mask-range")?;
-        for other in &coverage_draws[..index] {
-            let other_end = other
-                .mask
-                .gpu
-                .checked_add(other.mask.bytes as u64)
-                .ok_or("resident-coverage-mask-range")?;
-            if draw.mask.gpu < other_end && other.mask.gpu < draw_end {
-                return Err("resident-coverage-mask-va-alias");
-            }
-        }
-    }
+
     let target_pitch = target_width
         .checked_mul(core::mem::size_of::<u32>())
         .ok_or("resident-scene-capture-shape")?;
@@ -4312,24 +4197,10 @@ fn submit_resident_scene_capture_inner_for_carrier(
         };
         let resolved = geometry_complete && msaa_color.is_none();
         let resolve_finished_ns = crate::chronos::monotonic_nanos();
-        let mut completed_coverage_draws = 0usize;
-        let mut coverage_submits = 0usize;
-        let mut coverage_walkers = 0usize;
-        if resolved {
-            let batch = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
-                coverage_draws,
-                output,
-                direct_scanout_output,
-            );
-            coverage_submits = batch.submits;
-            coverage_walkers = batch.active_walkers;
-            if batch.ok && batch.requested_layers == coverage_draws.len() {
-                completed_coverage_draws = coverage_draws.len();
-            }
-        }
-        let coverage_finished_ns = crate::chronos::monotonic_nanos();
-        completed_draws = completed_draws.saturating_add(completed_coverage_draws);
-        let mut frame_complete = resolved && completed_coverage_draws == coverage_draws.len();
+        let coverage_submits = 0usize;
+        let coverage_walkers = 0usize;
+        let coverage_finished_ns = resolve_finished_ns;
+        let mut frame_complete = resolved;
         let present_copy_started_ns = crate::chronos::monotonic_nanos();
         let mut present_copy_performed = false;
         if frame_complete
@@ -4373,8 +4244,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
             Some(ResidentSceneIncompleteStage::Geometry)
         } else if !resolved {
             Some(ResidentSceneIncompleteStage::Resolve)
-        } else if completed_coverage_draws != coverage_draws.len() {
-            Some(ResidentSceneIncompleteStage::Coverage)
+
         } else if present_copy_performed && !frame_complete {
             Some(ResidentSceneIncompleteStage::PresentCopy)
         } else if !frame_complete {
@@ -4411,7 +4281,6 @@ fn submit_resident_scene_capture_inner_for_carrier(
             ResidentSceneFrameOutput::DirectGpuSurface(destination)
                 if frame_complete
                     && msaa_color.is_none()
-                    && coverage_draws.is_empty()
                     && !present_copy_performed =>
             {
                 Some(resident_scene_release(destination))
@@ -4469,7 +4338,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         }
         Ok(ResidentSceneFrameResult {
             completed_draws,
-            requested_draws: geometry_draw_count.saturating_add(coverage_draws.len()),
+            requested_draws: geometry_draw_count,
             changed_pixels,
             presented: false,
             width: target_width as u32,

@@ -2849,6 +2849,16 @@ pub(crate) fn create_shader_module(
     {
         return Err(VgpuError::Unsupported);
     }
+    let app_package = match package_digest {
+        v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_FNV1A64
+        | v::vgpu::SHADER_PACKAGE_VOXY_HEADLESS_TEXTURE_FNV1A64 => Some(1),
+        v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64 => Some(2),
+        v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64 => Some(3),
+        _ => None,
+    };
+    if app_package.is_some_and(|id| !crate::gpu::app_shaders::present(id)) {
+        return Err(VgpuError::Unsupported);
+    }
     if package_digest == v::vgpu::SHADER_PACKAGE_VOXY_FLAT_CLOUD_FNV1A64
         && !crate::intel::voxy_headless_texture_target_active()
     {

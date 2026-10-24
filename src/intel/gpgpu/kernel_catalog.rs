@@ -420,28 +420,11 @@ const _: () = {
 
 
 
-// Keep the native retained-transform Zebin in release images even while the
-// ADL-S compatibility policy parks its submission path.  `.gpgpu_artifacts`
-// is retained by the linker script specifically for dormant, explicitly
-// gated GPU experiments; parking the path must not silently erase its baked
-// provenance from the image.
-const HELIO_RETAINED_TRANSFORM_ADLS_BIN_BYTES: usize =
-    include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.bin").len();
-#[used]
-#[unsafe(link_section = ".gpgpu_artifacts")]
-static HELIO_RETAINED_TRANSFORM_ADLS_BIN_STORAGE: [u8; HELIO_RETAINED_TRANSFORM_ADLS_BIN_BYTES] =
-    *include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.bin");
-pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN: &[u8] =
-    &HELIO_RETAINED_TRANSFORM_ADLS_BIN_STORAGE;
-pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_SPV: &[u8] =
-    embedded_shader::spirv(HELIO_RETAINED_TRANSFORM_ADLS_BIN);
-
-include!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.contract.rs"
-);
-include!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.contract.rs"
-);
+// Retained-transform code is carried by Picasso-based apps, never the kernel.
+pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN: &[u8] = &[];
+pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_SPV: &[u8] = &[];
+include!("kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.contract.rs");
+include!("kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.contract.rs");
 embedded_compute_artifact!(pub(crate) SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN, SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_SPV,
     SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_STORAGE,
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.bin"
@@ -490,8 +473,8 @@ pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256: [u8; 32] =
 const _: () = {
     let contract = HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT;
     assert!(matches!(contract.validate(), Ok(())));
-    assert!(HELIO_RETAINED_TRANSFORM_ADLS_BIN.len() == 206_768);
-    assert!(HELIO_RETAINED_TRANSFORM_ADLS_SPV.len() == 151_324);
+
+
     assert!(contract.target.pci_device_ids.len() == 1);
     assert!(contract.target.pci_device_ids[0] == 0x4680);
     assert!(contract.target.revision_min == 0x0C);

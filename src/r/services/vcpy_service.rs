@@ -34,8 +34,6 @@ pub(crate) fn poll_rgba_copies(
     crate::intel::poll_guc_bcs0_rgba_copies(submission)
 }
 
-/// Copy a released linear RGBA8 source to a destination at (0, 0).
-
 
 #[derive(Clone, Copy)]
 pub(crate) enum RgbaCopyConsumer {

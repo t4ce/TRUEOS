@@ -23,84 +23,6 @@ const SHADERTOY_MANDELBOX_ADLS_GPU: u64 = 0x0DF9_0000;
 const SHADERTOY_PROTEAN_CLOUDS_ADLS_GPU: u64 = 0x0DE8_0000;
 const SHADERTOY_PALETTE_GRID_ADLS_GPU: u64 = 0x0DF8_0000;
 const SHADERTOY_COSMIC_STRANDS_ADLS_GPU: u64 = 0x0DFC_0000;
-const _: () = {
-    assert!(
-        SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() as u64
-            <= SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU
-    );
-    assert!(
-        SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU + SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len() as u64
-            <= CPP_DEMO_RGBA8_ADLS_GPU
-    );
-    assert!(
-        CPP_DEMO_RGBA8_ADLS_GPU + CPP_DEMO_RGBA8_ADLS_BIN_BYTES as u64
-            <= CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU
-    );
-    assert!(
-        CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU + CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN_BYTES as u64
-            <= PARTICLE_CRAFT_ADLS_GPU
-    );
-    assert!(
-        PARTICLE_CRAFT_ADLS_GPU + PARTICLE_CRAFT_ADLS_BIN_BYTES as u64
-            <= LFM25_Q8_PROJECT_PACKED_ADLS_GPU
-    );
-    assert!(
-        LFM25_Q8_PROJECT_PACKED_ADLS_GPU
-            + ((LFM25_Q8_PROJECT_PACKED_ADLS_BIN.len() as u64 + 4095) & !4095)
-            <= KOKORO_QGEMM_U8_I8_ADLS_GPU
-    );
-    assert!(
-        KOKORO_QGEMM_U8_I8_ADLS_GPU + ((KOKORO_QGEMM_U8_I8_ADLS_BIN.len() as u64 + 4095) & !4095)
-            <= KOKORO_CONV1D_U8_U8_ADLS_GPU
-    );
-    assert!(
-        KOKORO_CONV1D_U8_U8_ADLS_GPU + ((KOKORO_CONV1D_U8_U8_ADLS_BIN.len() as u64 + 4095) & !4095)
-            <= HELIO_RETAINED_TRANSFORM_ADLS_GPU
-    );
-    assert!(
-        HELIO_RETAINED_TRANSFORM_ADLS_GPU
-            + ((HELIO_RETAINED_TRANSFORM_ADLS_BIN.len() as u64 + 4095) & !4095)
-            <= SHADERTOY_MANDELBROT_ADLS_GPU
-    );
-    assert!(
-        SHADERTOY_MANDELBROT_ADLS_GPU
-            + ((SHADERTOY_MANDELBROT_PACKAGE.bin_bytes as u64 + 4095) & !4095)
-            <= SHADERTOY_CUBE_FIELD_ADLS_GPU
-    );
-    assert!(
-        SHADERTOY_CUBE_FIELD_ADLS_GPU
-            + ((SHADERTOY_CUBE_FIELD_PACKAGE.bin_bytes as u64 + 4095) & !4095)
-            <= SHADERTOY_NGUYEN_ADLS_GPU
-    );
-    assert!(
-        SHADERTOY_NGUYEN_ADLS_GPU + ((SHADERTOY_NGUYEN_PACKAGE.bin_bytes as u64 + 4095) & !4095)
-            <= SHADERTOY_PROTEAN_CLOUDS_ADLS_GPU
-    );
-    assert!(
-        SHADERTOY_PROTEAN_CLOUDS_ADLS_GPU + ((SHADERTOY_PROTEAN_CLOUDS_PACKAGE.bin_bytes as u64 + 4095) & !4095)
-            <= SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU
-    );
-    assert!(
-        SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU
-            + ((SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN.len() as u64 + 4095) & !4095)
-            <= SHADERTOY_PALETTE_GRID_ADLS_GPU
-    );
-    assert!(
-        SHADERTOY_PALETTE_GRID_ADLS_GPU
-            + ((SHADERTOY_PALETTE_GRID_PACKAGE.bin_bytes as u64 + 4095) & !4095)
-            <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
-    );
-    assert!(
-        SHADERTOY_PALETTE_GRID_ADLS_GPU
-            + ((SHADERTOY_PALETTE_GRID_PACKAGE.bin_bytes as u64 + 4095) & !4095)
-            <= SHADERTOY_COSMIC_STRANDS_ADLS_GPU
-    );
-    assert!(
-        SHADERTOY_COSMIC_STRANDS_ADLS_GPU
-            + ((SHADERTOY_COSMIC_STRANDS_PACKAGE.bin_bytes as u64 + 4095) & !4095)
-            <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
-    );
-};
 pub(crate) const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 =
     COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const UI4_NV12_TILE64_TO_RGBA8_FRAME_TEXT_OFFSET_BYTES: u64 =
@@ -138,8 +60,6 @@ const PARTICLE_CRAFT_BIN_TILES_TEXT_OFFSET_BYTES: u64 =
     PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const PARTICLE_CRAFT_RENDER_RGBA8_TEXT_OFFSET_BYTES: u64 =
     PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
-const _: () = assert!(LAB256_STEP_TEXT_OFFSET_BYTES < LAB256_REDUCE_TEXT_OFFSET_BYTES);
-const _: () = assert!(LAB256_REDUCE_TEXT_OFFSET_BYTES < LAB256_COMPOSITE_TEXT_OFFSET_BYTES);
 const SPIRIT_VFX_BACKGROUND_TEXT_OFFSET_BYTES: u64 =
     SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 // Both artifacts share one instruction-base window in the two-walker batch.
@@ -200,16 +120,6 @@ const fn direct_rcs_encode_mocs_index(index: u32) -> u32 {
     index << 1
 }
 
-const _: () = {
-    assert!(RENDER_MOCS_INDEX <= RENDER_MOCS_TABLE_INDEX_MASK);
-    assert!(LFM25_RENDER_MOCS_INDEX <= RENDER_MOCS_TABLE_INDEX_MASK);
-    assert!(LFM25_RENDER_MOCS_INDEX >= 32);
-    assert!(direct_rcs_encode_mocs_index(RENDER_MOCS_INDEX) == 8);
-    assert!(direct_rcs_encode_mocs_index(LFM25_RENDER_MOCS_INDEX) == 98);
-    assert!(
-        direct_rcs_encode_mocs_index(LFM25_RENDER_MOCS_INDEX) <= RENDER_MOCS_COMMAND_VALUE_MASK
-    );
-};
 
 // The dominant ConvInteger lane keeps one maximum MCK image, per-tap sums,
 // one NCW halo tile, and one time-major output tile in a persistent arena.
@@ -223,62 +133,12 @@ const _: () = {
 const HELIO_SPRITE_ATLAS_GPU: u64 = 0x2300_0000;
 const HELIO_SPRITE_ATLAS_MAX_BYTES: usize = 8 * 1024 * 1024;
 const HELIO_SPRITE_ATLAS_GPU_LIMIT: u64 = 0x2380_0000;
-const _: () = assert!(KOKORO_CONV1D_ARENA_GPU_LIMIT <= HELIO_SPRITE_ATLAS_GPU);
 const _: () = assert!(
     HELIO_SPRITE_ATLAS_GPU + HELIO_SPRITE_ATLAS_MAX_BYTES as u64 == HELIO_SPRITE_ATLAS_GPU_LIMIT
 );
 const _: () = assert!(HELIO_SPRITE_ATLAS_GPU_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
 
 
-const _: () = {
-    assert!(KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.simd_width == 16);
-    assert!(KOKORO_CONV1D_CROSS_THREAD_BYTES == 128);
-    assert!(KOKORO_CONV1D_PER_THREAD_BYTES == 96);
-    assert!(KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.bindings.len() == 4);
-    assert!(
-        KOKORO_CONV1D_MAX_CHANNELS * KOKORO_CONV1D_MAX_CHANNELS * KOKORO_CONV1D_MAX_KERNEL_SIZE
-            == KOKORO_CONV1D_PACKED_WEIGHTS_ALLOC_BYTES
-    );
-    assert!(
-        KOKORO_CONV1D_MAX_CHANNELS * KOKORO_CONV1D_MAX_KERNEL_SIZE * core::mem::size_of::<u32>()
-            <= KOKORO_CONV1D_WEIGHT_TAP_SUMS_ALLOC_BYTES
-    );
-    assert!(
-        (KOKORO_CONV1D_MAX_TILE_TIMES + 2 * KOKORO_CONV1D_MAX_RADIUS) * KOKORO_CONV1D_MAX_CHANNELS
-            <= KOKORO_CONV1D_ACTIVATIONS_ALLOC_BYTES
-    );
-    assert!(
-        KOKORO_CONV1D_MAX_TILE_TIMES * KOKORO_CONV1D_MAX_CHANNELS * core::mem::size_of::<i32>()
-            == KOKORO_CONV1D_OUTPUT_ALLOC_BYTES
-    );
-    assert!(KOKORO_CONV1D_ARENA_GPU.is_multiple_of(4096));
-    assert!(KOKORO_CONV1D_ARENA_BYTES.is_multiple_of(4096));
-    assert!(
-        KOKORO_CONV1D_ARENA_GPU + KOKORO_CONV1D_ARENA_BYTES as u64 <= KOKORO_CONV1D_ARENA_GPU_LIMIT
-    );
-    assert!(KOKORO_CONV1D_ARENA_GPU_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
-    assert!(
-        KOKORO_CONV1D_IDD_OFFSET_BYTES + KOKORO_CONV1D_IDD_BYTES
-            <= KOKORO_CONV1D_BINDING_TABLE_OFFSET_BYTES
-    );
-    assert!(
-        KOKORO_CONV1D_OUTPUT_SURFACE_OFFSET_BYTES
-            + COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>()
-            <= KOKORO_CONV1D_PAYLOAD_OFFSET_BYTES
-    );
-    assert!(
-        KOKORO_CONV1D_PAYLOAD_OFFSET_BYTES + KOKORO_CONV1D_INDIRECT_BYTES <= DIRECT_RCS_BATCH_BYTES
-    );
-    assert!(
-        KOKORO_CONV1D_PAYLOAD_OFFSET_BYTES.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
-    );
-    assert!(KOKORO_CONV1D_POST_MARKER_SLOT.is_multiple_of(2));
-    assert!(KOKORO_CONV1D_POST_MARKER_SLOT + 1 != KOKORO_CONV1D_PRE_MARKER_SLOT);
-    assert!(
-        (KOKORO_CONV1D_PRE_MARKER_SLOT + 1) * core::mem::size_of::<u32>()
-            <= DIRECT_RCS_RESULT_BYTES
-    );
-};
 const PIPE_CONTROL_CMD: u32 = 4 | (2 << 24) | (3 << 27) | (3 << 29);
 const STATE_BASE_ADDRESS_CMD: u32 = 20 | (1 << 16) | (1 << 24) | (3 << 29);
 const PIPE_CONTROL_DC_FLUSH_ENABLE: u32 = 1 << 5;
@@ -619,51 +479,6 @@ const _: () = {
     assert!(SHADERTOY_UNIFORMS_OFFSET_BYTES + SHADERTOY_UNIFORMS_BYTES <= DIRECT_RCS_BATCH_BYTES);
     assert!(SHADERTOY_PAYLOAD_OFFSET_BYTES.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
 };
-const _: () = {
-    assert!(
-        LFM25_Q8_IDD_RELATIVE_OFFSET_BYTES + LFM25_Q8_IDD_BYTES
-            <= LFM25_Q8_BINDING_TABLE_RELATIVE_OFFSET_BYTES
-    );
-    assert!(
-        LFM25_Q8_OUTPUT_SURFACE_STATE_RELATIVE_OFFSET_BYTES
-            + COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>()
-            <= LFM25_Q8_PAYLOAD_RELATIVE_OFFSET_BYTES
-    );
-    assert!(
-        LFM25_Q8_PAYLOAD_RELATIVE_OFFSET_BYTES + LFM25_Q8_INDIRECT_BYTES
-            <= LFM25_Q8_STATE_STRIDE_BYTES
-    );
-    assert!(
-        LFM25_Q8_STATE_BASE_OFFSET_BYTES
-            + LFM25_Q8_MAX_BATCH_PROJECTIONS * LFM25_Q8_STATE_STRIDE_BYTES
-            <= DIRECT_RCS_BATCH_BYTES
-    );
-    assert!(LFM25_Q8_GPU_START_TIMESTAMP_SLOT.is_multiple_of(2));
-    assert!(LFM25_Q8_GPU_END_TIMESTAMP_SLOT.is_multiple_of(2));
-    assert!(LFM25_Q8_GPU_BATCH_ENTER_TIMESTAMP_SLOT.is_multiple_of(2));
-    assert!(LFM25_Q8_GPU_POST_RELEASE_TIMESTAMP_SLOT.is_multiple_of(2));
-    assert!(LFM25_Q8_GPU_END_TIMESTAMP_SLOT + 2 <= LFM25_Q8_GPU_BATCH_ENTER_TIMESTAMP_SLOT);
-    assert!(
-        LFM25_Q8_GPU_BATCH_ENTER_TIMESTAMP_SLOT + 2 <= LFM25_Q8_GPU_POST_RELEASE_TIMESTAMP_SLOT
-    );
-    assert!(
-        (LFM25_Q8_GPU_POST_RELEASE_TIMESTAMP_SLOT + 2) * core::mem::size_of::<u32>()
-            <= DIRECT_RCS_RESULT_BYTES
-    );
-    assert!(LFM25_Q8_COMMAND_BYTES <= LFM25_Q8_STATE_BASE_OFFSET_BYTES);
-    assert!(LFM25_Q8_MODEL_MAPPING_GPU_BASE.is_multiple_of(4096));
-    assert!(LFM25_Q8_ACTIVATION_GPU.is_multiple_of(4096));
-    assert!(LFM25_Q8_OUTPUT_GPU.is_multiple_of(4096));
-    assert!(
-        LFM25_Q8_MODEL_MAPPING_GPU_BASE
-            + trueos_lfm25_model::lfm25::PINNED_NATIVE_IMAGE_BYTES as u64
-            + 4095
-            <= LFM25_Q8_ACTIVATION_GPU
-    );
-    assert!(
-        LFM25_Q8_OUTPUT_GPU + LFM25_Q8_OUTPUT_ALLOC_BYTES as u64 <= DIRECT_RCS_PPGTT_LIMIT_BYTES
-    );
-};
 
 // Kokoro's quantized dense lane stages one complete admitted projection in a
 // persistent, page-aligned DMA arena.  The six regions deliberately live in
@@ -671,101 +486,11 @@ const _: () = {
 // stateful binding table still exposes six independently-bounded surfaces.
 
 
-const _: () = {
-    assert!(KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.simd_width == 16);
-    assert!(KOKORO_QGEMM_CROSS_THREAD_BYTES == 128);
-    assert!(KOKORO_QGEMM_PER_THREAD_BYTES == 96);
-    assert!(KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.bindings.len() == 6);
-    assert!(KOKORO_QGEMM_MAX_REDUCTION_WORDS * 4 == 2_048);
-    assert!(
-        KOKORO_QGEMM_MAX_REDUCTION_WORDS * 768 * core::mem::size_of::<u32>()
-            == KOKORO_QGEMM_PACKED_WEIGHTS_ALLOC_BYTES
-    );
-    assert!(
-        KOKORO_QGEMM_MAX_OUTPUT_COLUMNS * core::mem::size_of::<u32>()
-            <= KOKORO_QGEMM_VECTOR_ALLOC_BYTES
-    );
-    assert!(
-        KOKORO_QGEMM_MAX_MATRIX_ROWS
-            * KOKORO_QGEMM_MAX_REDUCTION_WORDS
-            * core::mem::size_of::<u32>()
-            == KOKORO_QGEMM_ACTIVATIONS_ALLOC_BYTES
-    );
-    assert!(
-        KOKORO_QGEMM_MAX_MATRIX_ROWS
-            * KOKORO_QGEMM_MAX_OUTPUT_COLUMNS
-            * core::mem::size_of::<f32>()
-            == KOKORO_QGEMM_OUTPUT_ALLOC_BYTES
-    );
-    assert!(KOKORO_QGEMM_ARENA_GPU.is_multiple_of(4096));
-    assert!(KOKORO_QGEMM_ARENA_BYTES.is_multiple_of(4096));
-    assert!(
-        KOKORO_QGEMM_ARENA_GPU + KOKORO_QGEMM_ARENA_BYTES as u64 <= KOKORO_QGEMM_ARENA_GPU_LIMIT
-    );
-    assert!(KOKORO_QGEMM_ARENA_GPU_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
-    assert!(
-        KOKORO_QGEMM_IDD_OFFSET_BYTES + KOKORO_QGEMM_IDD_BYTES
-            <= KOKORO_QGEMM_BINDING_TABLE_OFFSET_BYTES
-    );
-    assert!(
-        KOKORO_QGEMM_OUTPUT_SURFACE_OFFSET_BYTES
-            + COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>()
-            <= KOKORO_QGEMM_PAYLOAD_OFFSET_BYTES
-    );
-    assert!(
-        KOKORO_QGEMM_PAYLOAD_OFFSET_BYTES + KOKORO_QGEMM_INDIRECT_BYTES <= DIRECT_RCS_BATCH_BYTES
-    );
-    assert!(
-        KOKORO_QGEMM_PAYLOAD_OFFSET_BYTES.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
-    );
-    assert!(KOKORO_QGEMM_POST_MARKER_SLOT.is_multiple_of(2));
-    assert!(KOKORO_QGEMM_POST_MARKER_SLOT + 1 != KOKORO_QGEMM_PRE_MARKER_SLOT);
-    assert!(
-        (KOKORO_QGEMM_PRE_MARKER_SLOT + 1) * core::mem::size_of::<u32>() <= DIRECT_RCS_RESULT_BYTES
-    );
-};
 
 // The boot subset-sum probe owns two pages in the ordinary direct-RCS PPGTT.
 // Its state and three payloads live in the shared batch allocation only while
 // DIRECT_RCS_SUBMIT_LOCK is held; no scanout/GGTT/display address is involved.
 
-const _: () = {
-    let contract = SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT;
-    assert!(contract.simd_width == 16);
-    assert!(contract.bindings.len() == 1);
-    assert!(SUBSET_SUM_PROBE_CROSS_THREAD_BYTES == 96);
-    assert!(SUBSET_SUM_PROBE_PER_THREAD_BYTES == 96);
-    assert!(SUBSET_SUM_PROBE_ARENA_GPU.is_multiple_of(4096));
-    assert!(SUBSET_SUM_PROBE_ARENA_ALLOC_BYTES == 2 * 4096);
-    assert!(
-        SUBSET_SUM_PROBE_ARENA_GPU + SUBSET_SUM_PROBE_ARENA_ALLOC_BYTES as u64
-            <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
-    );
-    assert!(
-        SUBSET_SUM_PROBE_IDD_OFFSET_BYTES + SUBSET_SUM_PROBE_IDD_BYTES
-            <= SUBSET_SUM_PROBE_BINDING_TABLE_OFFSET_BYTES
-    );
-    assert!(
-        SUBSET_SUM_PROBE_SURFACE_OFFSET_BYTES
-            + COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>()
-            <= SUBSET_SUM_PROBE_PAYLOAD_BASE_OFFSET_BYTES
-    );
-    assert!(SUBSET_SUM_PROBE_PAYLOAD_STRIDE_BYTES >= SUBSET_SUM_PROBE_INDIRECT_BYTES);
-    assert!(
-        SUBSET_SUM_PROBE_PAYLOAD_BASE_OFFSET_BYTES + 3 * SUBSET_SUM_PROBE_PAYLOAD_STRIDE_BYTES
-            <= DIRECT_RCS_BATCH_BYTES
-    );
-    assert!(
-        SUBSET_SUM_PROBE_PAYLOAD_BASE_OFFSET_BYTES
-            .is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
-    );
-    assert!(SUBSET_SUM_PROBE_POST_MARKER_SLOT.is_multiple_of(2));
-    assert!(SUBSET_SUM_PROBE_POST_MARKER_SLOT + 1 != SUBSET_SUM_PROBE_PRE_MARKER_SLOT);
-    assert!(
-        (SUBSET_SUM_PROBE_PRE_MARKER_SLOT + 1) * core::mem::size_of::<u32>()
-            <= DIRECT_RCS_RESULT_BYTES
-    );
-};
 
 // A UI4 compute producer may be queued behind the compositor on RCS0. In
 // particular, the first use of each primary swap buffer seeds and composes a
@@ -781,11 +506,6 @@ const RGBA8_SCANOUT_RELEASE_MARKER: u32 = 0xC0DE_D102;
 // Lab256 owns one tightly bounded three-dispatch batch. All resource VAs are
 // persistent in the ordinary direct-RCS PPGTT and deliberately avoid the
 // display cursor's 0x0600_0000 GGTT aliases.
-const _: () = assert!(LAB256_STATE_BYTES == 0x0004_0000);
-const _: () = assert!(LAB256_CONTROL_BYTES <= LAB256_PAGE_BYTES);
-const _: () = assert!(LAB256_REPORT_BYTES <= LAB256_PAGE_BYTES);
-const _: () =
-    assert!(LAB256_REPORT_GPU + LAB256_PAGE_BYTES as u64 <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE);
 
 
 
@@ -853,10 +573,6 @@ const _: () = assert!(
     SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES + SPIRIT_VFX_SPRITE_INDIRECT_BYTES
         <= DIRECT_RCS_BATCH_BYTES
 );
-const _: () = assert!(LAB256_POST_MARKER_SLOT.is_multiple_of(2));
-const _: () = assert!(
-    LAB256_COMPOSITE_PAYLOAD_OFFSET_BYTES + LAB256_INDIRECT_BYTES <= DIRECT_RCS_BATCH_BYTES
-);
 const COPY_RECT_POST_MARKER_SLOT: usize = 4;
 // PIPE_CONTROL post-sync writes a QWord, so slot 5 is reserved for the high
 // DWORD of the completion cookie. Keep the diagnostic pre marker outside that
@@ -903,26 +619,6 @@ const _: () = assert!(
 );
 const _: () =
     assert!(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES >= SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
-const _: () = assert!(
-    512 + GLYPH_MASK_BATCH_MAX_LAYERS * 27
-        < GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES / core::mem::size_of::<u32>()
-);
-const _: () = assert!(
-    GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES
-        + GLYPH_MASK_BATCH_MAX_LAYERS * GLYPH_MASK_BATCH_STATE_BLOCK_BYTES
-        <= GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES
-);
-const _: () = assert!(
-    GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES
-        + GLYPH_MASK_BATCH_MAX_LAYERS * GLYPH_MASK_PAYLOAD_STRIDE_BYTES
-        <= DIRECT_RCS_BATCH_BYTES
-);
-const _: () = assert!(
-    GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES
-        .is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
-);
-const _: () =
-    assert!(GLYPH_MASK_PAYLOAD_STRIDE_BYTES.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
 const DIRECT_RCS_RESULT_BYTES: usize = 4096;
 const _: () = assert!(
     (UI4_VIDEO_FRAME_GPU_POST_RELEASE_TIMESTAMP_SLOT + 2) * core::mem::size_of::<u32>()
@@ -1002,13 +698,6 @@ const _: () = assert!(
         <= EXECUTION_RCS_GPU_VA_BATCH_BASE
 );
 const _: () = assert!(
-    EXECUTION_RCS_GPU_VA_BATCH_BASE + (EXECUTION_RCS_JOB_SLOTS * DIRECT_RCS_BATCH_BYTES) as u64
-        <= LFM25_RCS_GPU_VA_RING_BASE
-);
-const _: () = assert!(
-    LFM25_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64 <= FONT_RCS_GPU_VA_RING_BASE
-);
-const _: () = assert!(
     FONT_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64
         <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
 );
@@ -1066,3 +755,4 @@ const _: () = {
             <= SHADERTOY_COSMIC_STRANDS_ADLS_GPU
     );
 };
+

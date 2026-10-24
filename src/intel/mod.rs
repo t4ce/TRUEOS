@@ -392,7 +392,6 @@ fn init_required_guc_transport(dev: Dev) -> bool {
         rcs_controls.system_service as u8,
         rcs_controls.font as u8,
         rcs_controls.execution as u8,
-        rcs_controls.lfm25 as u8,
         rcs_controls.ui4_compositor as u8,
         rcs_controls.codec as u8,
         bcs0_control_ready as u8,

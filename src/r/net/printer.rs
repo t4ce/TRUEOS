@@ -304,39 +304,7 @@ pub async fn printer_discovery_task() {
     }
 }
 
- &'static str> {
-    let (generation, size, raw) = match &job.document {
-        PrintDocument::GridPaperA4 {
-            generation,
-            size,
-            raw,
-        } => (*generation, *size, raw.clone()),
-    };
-    print2d::transition(job.id, PrintJobState::Rendering, "gridpaper-a4-100-percent");
-    if !crate::r::services::gridpaper_service::request_print_render(job.id, generation, size, raw) {
-        return Err("render-request-rejected");
-    }
 
-    let deadline = Instant::now() + Duration::from_millis(RENDER_TIMEOUT_MS);
-    loop {
-        if let Some(rendered) =
-            crate::r::services::gridpaper_service::take_print_render_result(job.id)
-        {
-            let frame = rendered.result?;
-            return pwg_raster::encode_gridpaper_a4(
-                size,
-                frame.width,
-                frame.height,
-                frame.rgba_premultiplied.as_slice(),
-            )
-            .map_err(|_| "pwg-raster-encode-failed");
-        }
-        if Instant::now() >= deadline {
-            return Err("render-timeout");
-        }
-        Timer::after(Duration::from_millis(5)).await;
-    }
-}
 
 async fn wait_for_default_printer(job_id: u32) -> PrinterSnapshot {
     loop {

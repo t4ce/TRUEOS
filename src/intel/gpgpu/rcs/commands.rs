@@ -300,7 +300,6 @@ enum DirectRcsLane {
     SystemService,
     Font,
     Execution,
-    Lfm25,
     Codec,
 }
 
@@ -310,7 +309,7 @@ impl DirectRcsLane {
             Self::SystemService => "system-service",
             Self::Font => "font",
             Self::Execution => "execution",
-            Self::Lfm25 => "lfm25",
+
             Self::Codec => "codec",
         }
     }
@@ -414,11 +413,7 @@ fn direct_rcs_submit_batch_on_lane_state(
             &CODEC_RCS_SUBMIT_RUNTIME,
             crate::gpu::vgpu::KernelClient::GpgpuCodec,
         ),
-        DirectRcsLane::Lfm25 => (
-            &LFM25_RCS_CONTEXT_QUARANTINED,
-            &LFM25_RCS_SUBMIT_RUNTIME,
-            crate::gpu::vgpu::KernelClient::Lfm25,
-        ),
+
     };
     if quarantined.load(Ordering::Acquire) {
         if lane == DirectRcsLane::Font {
@@ -490,9 +485,6 @@ fn execution_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&EXECUTION_RCS_CONTEXT_QUARANTINED)
 }
 
-fn lfm25_rcs_context_is_quarantined() -> bool {
-    !direct_rcs_state_reuse_permitted(&LFM25_RCS_CONTEXT_QUARANTINED)
-}
 
 fn ui4_compositor_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&UI4_COMPOSITOR_RCS_CONTEXT_QUARANTINED)
@@ -506,9 +498,6 @@ fn quarantine_font_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Font, reason);
 }
 
-fn quarantine_lfm25_rcs_context(reason: &'static str) {
-    quarantine_direct_rcs_lane(DirectRcsLane::Lfm25, reason);
-}
 
 fn quarantine_ui4_compositor_rcs_context(reason: &'static str) {
     if UI4_COMPOSITOR_RCS_CONTEXT_QUARANTINED
@@ -542,9 +531,7 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
         DirectRcsLane::Codec => {
             (&CODEC_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuCodec)
         }
-        DirectRcsLane::Lfm25 => {
-            (&LFM25_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::Lfm25)
-        }
+
     };
     if quarantined
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -750,7 +737,7 @@ fn direct_rcs_submit_runtime(lane: DirectRcsLane) -> &'static Mutex<DirectRcsSub
         DirectRcsLane::SystemService => &DIRECT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Font => &FONT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
-        DirectRcsLane::Lfm25 => &LFM25_RCS_SUBMIT_RUNTIME,
+
         DirectRcsLane::Codec => &CODEC_RCS_SUBMIT_RUNTIME,
     }
 }
@@ -963,7 +950,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         DirectRcsLane::SystemService => &DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Font => &FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
-        DirectRcsLane::Lfm25 => &LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED,
+
         DirectRcsLane::Codec => &CODEC_RCS_TIMEOUT_POLL_PROBE_LOGGED,
     };
     let log_probe = probe_logged

@@ -85,11 +85,6 @@ const _: () = assert!(patch_cube::CONTRACT_VERSION == 11);
 mod generated_microfont_mask;
 pub(crate) use generated_microfont_mask::{microfont_mask_pipeline, MICROFONT_MASK_VS_PUSH_START_BYTES, MICROFONT_MASK_VS_PUSH_GRFS};
 
-#[path = "../../crates/trueos-shader/generated_microfont_line_ends.rs"]
-mod generated_microfont_line_ends;
-pub(crate) fn microfont_line_end_pipeline() -> &'static TrianglePipeline {
-    generated_microfont_line_ends::microfont_line_end_pipeline()
-}
 
 pub(crate) fn patch_cube_upload_layout(
     after: usize,
@@ -97,11 +92,11 @@ pub(crate) fn patch_cube_upload_layout(
 ) -> Result<([usize; 2], usize), &'static str> {
     let hs = after.checked_add(63).ok_or("tess-code-align")? & !63;
     let hs_end = hs
-        .checked_add(patch_cube::TESS_CONTROL.len() * 4)
+        .checked_add(patch_cube::tess_control().len() * 4)
         .ok_or("tess-code-size")?;
     let ds = hs_end.checked_add(63).ok_or("tess-code-align")? & !63;
     let end = ds
-        .checked_add(patch_cube::TESS_EVAL.len() * 4)
+        .checked_add(patch_cube::tess_eval().len() * 4)
         .ok_or("tess-code-size")?;
     // The state writer starts on a fresh page; reserve its descriptor page.
     let state = end.checked_add(4095).ok_or("tess-state-align")? & !4095;
@@ -227,21 +222,20 @@ pub(crate) fn triangle_pipeline_push_color_note() -> &'static str {
 #[path = "../../crates/trueos-shader/generated_voxy_headless_tgl.rs"]
 mod voxy_headless_tgl;
 const _: () = assert!(voxy_headless_tgl::SOURCE_FNV1A64 == 0x2EAA72CFCA1B1C77);
-pub(crate) fn voxy_headless_pipeline() -> &'static TrianglePipeline { &voxy_headless_tgl::PIPELINE }
+pub(crate) fn voxy_headless_pipeline() -> &'static TrianglePipeline { voxy_headless_tgl::pipeline() }
 
 // A sealed composition of two existing native programs, not a new compiler
 // output: Voxy's unchanged world-camera VS exports its second float4 at VUE
 // slot 2; the Picasso/clip-UV PS samples its first two perspective components.
 // The PS must follow the larger Voxy VS at the next 64-byte code boundary.
-static VOXY_HEADLESS_TEXTURE_PIPELINE: TrianglePipeline = {
-    let mut pipeline = voxy_headless_tgl::PIPELINE;
-    pipeline.ps = generated_clip_position3_uv_texture::clip_position3_uv_texture_pipeline().ps;
-    pipeline.ps.meta.kernel.code_offset_bytes = 576;
-    pipeline
-};
-
 pub(crate) fn voxy_headless_texture_pipeline() -> &'static TrianglePipeline {
-    &VOXY_HEADLESS_TEXTURE_PIPELINE
+    static PIPELINE: spin::Once<TrianglePipeline> = spin::Once::new();
+    PIPELINE.call_once(|| {
+        let mut pipeline = *voxy_headless_tgl::pipeline();
+        pipeline.ps = generated_clip_position3_uv_texture::clip_position3_uv_texture_pipeline().ps;
+        pipeline.ps.meta.kernel.code_offset_bytes = 576;
+        pipeline
+    })
 }
 
 /// The reused sampled PS was compiled for ADL-S, not Tiger Lake.
@@ -268,7 +262,7 @@ pub(crate) fn voxy_figure_pipeline() -> Result<&'static TrianglePipeline, &'stat
     if !crate::intel::voxy_figure_target_active() {
         return Err("voxy-figure-target");
     }
-    Ok(&voxy_figure_gen12::PIPELINE)
+    Ok(voxy_figure_gen12::pipeline())
 }
 
 pub(crate) fn voxy_figure_supports_physical_device(vendor: u16, device: u16, revision: u8) -> bool {
@@ -282,5 +276,5 @@ pub(crate) fn voxy_flat_cloud_pipeline() -> Result<&'static TrianglePipeline, &'
     if !crate::intel::voxy_headless_texture_target_active() {
         return Err("voxy-flat-cloud-target");
     }
-    Ok(&voxy_flat_cloud::PIPELINE)
+    Ok(voxy_flat_cloud::pipeline())
 }

@@ -295,10 +295,13 @@ pub(crate) fn upload_helio_retained_transform_kernel() -> Option<UploadedKernelA
         return Some(upload);
     }
     let dev = super::claimed_device()?;
-    let upload = upload_ppgtt_resident_artifact(
-        dev,
-        HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT,
-        HELIO_RETAINED_TRANSFORM_ADLS_GPU,
+    let bin = crate::gpu::app_shaders::bytes(9, 0)?;
+    let spv = embedded_shader::spirv(bin);
+    let upload = upload_artifact_bytes(
+        dev, HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT,
+        HELIO_RETAINED_TRANSFORM_ADLS_GPU, bin, spv,
+        "app-package", "Blueprint:.trueos.shaders", spv.len(),
+        GpgpuArtifactAddressSpace::CallerPpgtt, None,
     )?;
     *HELIO_RETAINED_TRANSFORM_UPLOAD.lock() = Some(upload);
     Some(upload)

@@ -328,7 +328,12 @@ impl<'a> WindowSessionCloseRequest<'a> {
 
     /// Slightly enlarge and fade a direct plane while its producer retains the
     /// frame ring for a later presentation session.
+    
+
+    pub(crate) const fn transfers_frame_ownership(self) -> bool {
+        self.retire_frames
     }
+}
 
 /// A second producer surface; it has no independent placement or input route.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

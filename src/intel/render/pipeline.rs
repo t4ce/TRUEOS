@@ -2525,7 +2525,7 @@ fn encode_triangle_probe_batch(
     }
     let microfont_mask = core::ptr::eq(pipeline, crate::intel::shader::microfont_mask_pipeline());
     let rounded_line_ends = microfont_mask
-        || core::ptr::eq(pipeline, crate::intel::shader::microfont_line_end_pipeline());
+;
     let adjacency_gs = if clip_adjacency {
         None
     } else {
