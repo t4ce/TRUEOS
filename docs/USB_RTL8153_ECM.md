@@ -43,3 +43,30 @@ and frame preservation. Physical link/traffic validation remains pending.
 
 Protocol reference: Linux's [RTL8153 ECM driver](https://github.com/torvalds/linux/blob/master/drivers/net/usb/r8153_ecm.c)
 uses the [CDC Ethernet class binding](https://github.com/torvalds/linux/blob/master/drivers/net/usb/cdc_ether.c).
+
+## Laptop display diagnostics
+
+The retained text surface now shows a live Yes/No IP-assignment verdict with
+one USB stage underneath. Yes only means the laptop profile address was assigned;
+it does not prove carrier, packet exchange, or an SSH listener. No remains live
+and can change after 30 seconds. Stage publication is synchronous, including
+before the background display task starts. Controller discovery cannot replace
+NIC progress once an RTL8153 has been found.
+
+On the next laptop boot, record the final USB line:
+
+- `USB service not started`: the USB service has not reached its entry point.
+- `xHCI: ...`: controller admission, mapping, initialization, or discovery.
+- `USB discovered: waiting for RTL8153`: enumeration ran, but the adapter has
+  not reached the RTL8153 dispatcher.
+- `RTL8153: ...` / `ECM: ...`: adapter open or the named configuration operation.
+- `ECM ready: waiting for carrier`: network registration succeeded; no carrier
+  notification has been observed yet.
+- `USB Ethernet: carrier up`: carrier notification arrived. Check the IP verdict,
+  then test ARP/ping and SSH at the configured laptop address `192.168.178.50`.
+- `USB Ethernet: transport failed`: a pipe failed; detailed errors remain in logs.
+
+This instrumentation has host coverage and a successful kernel cargo check;
+it has not been validated on the laptop. It does not fix or establish the cause
+of the current USB failure. Keep UI4, sprite animation, and Wi-Fi work deferred
+until the USB NIC can carry a working SSH session.

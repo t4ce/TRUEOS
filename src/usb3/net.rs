@@ -17,11 +17,13 @@ pub(super) async fn maybe_start(
     if (info.vendor_id(), info.product_id()) != (0x0bda, 0x8153) {
         return false;
     }
+    stage("RTL8153 found: ECM descriptors");
     let Some(target) = info
         .configurations()
         .iter()
         .find_map(|config| cdc::target(&config.raw))
     else {
+        stage("RTL8153: no ECM descriptors");
         crate::log!(
             "usb-net: RTL8153 ctrl={} slot={} no valid ECM descriptors; not claimed\n",
             controller,
@@ -29,27 +31,39 @@ pub(super) async fn maybe_start(
         );
         return true;
     };
+    stage("RTL8153: opening device");
     match host.open_device(info).await {
         Ok(device) => match usb_rtl8153_worker_task(device, target, controller, *spawner) {
             Ok(task) => spawner.spawn(task),
-            Err(err) => crate::log!(
-                "usb-net: worker spawn failed ctrl={} slot={} err={:?}\n",
+            Err(err) => {
+                stage("ECM: worker spawn failed");
+                crate::log!(
+                    "usb-net: worker spawn failed ctrl={} slot={} err={:?}\n",
+                    controller,
+                    info.id(),
+                    err
+                );
+            }
+        },
+        Err(err) => {
+            stage("RTL8153: open failed");
+            crate::log!(
+                "usb-net: open failed ctrl={} slot={} err={:?}\n",
                 controller,
                 info.id(),
                 err
-            ),
-        },
-        Err(err) => crate::log!(
-            "usb-net: open failed ctrl={} slot={} err={:?}\n",
-            controller,
-            info.id(),
-            err
-        ),
+            );
+        }
     }
     true
 }
 
+fn stage(text: &'static str) {
+    crate::r::services::microfont_log_service::usb_stage(text);
+}
+
 fn fail(shared: &Shared, pipe: &str) {
+    stage("USB Ethernet: transport failed");
     let mut state = shared.lock();
     state.failed = true;
     state.link = crate::net::device::LinkState::down();
@@ -62,23 +76,28 @@ async fn initialize(
     device: &mut crabusb::Device,
     t: cdc::EcmTarget,
 ) -> Result<[u8; 6], &'static str> {
+    stage("ECM: set configuration");
     device
         .set_configuration(t.configuration)
         .await
         .map_err(|_| "set configuration")?;
+    stage("ECM: read MAC string");
     let mac_text = device
         .string_descriptor(t.mac_index)
         .await
         .map_err(|_| "read MAC string")?;
     let mac = cdc::mac(&mac_text).ok_or("invalid MAC string")?;
+    stage("ECM: claim control interface");
     device
         .claim_interface(t.control, t.control_alt)
         .await
         .map_err(|_| "claim control interface")?;
+    stage("ECM: claim data interface");
     device
         .claim_interface(t.data, t.data_alt)
         .await
         .map_err(|_| "claim data interface")?;
+    stage("ECM: set packet filter");
     // Directed, broadcast and all multicast (ARP, DHCP, IPv6 discovery).
     device
         .control_out(
@@ -107,21 +126,26 @@ async fn usb_rtl8153_worker_task(
     let mac = match initialize(&mut device, t).await {
         Ok(mac) => mac,
         Err(stage) => {
+            self::stage(stage);
             crate::log!("usb-net: init failed ctrl={} slot={} stage={}\n", controller, slot, stage);
             return;
         }
     };
+    stage("ECM: open endpoints");
     let (Ok(mut rx), Ok(mut tx), Ok(mut status)) =
         (device.endpoint(t.bulk_in), device.endpoint(t.bulk_out), device.endpoint(t.notification))
     else {
+        stage("ECM: endpoint open failed");
         crate::log!("usb-net: endpoint open failed ctrl={} slot={}\n", controller, slot);
         return;
     };
+    stage("ECM: register network device");
     let nic = UsbNic::new(mac);
     let shared = nic.shared.clone();
     let index = match crate::net::register_usb_nic(nic) {
         Ok(index) => index,
         Err(err) => {
+            stage("ECM: registration failed");
             crate::log!("usb-net: register failed reason={}\n", err);
             return;
         }
@@ -148,6 +172,8 @@ async fn usb_rtl8153_worker_task(
         t.notification,
         mac
     );
+
+    stage("ECM ready: waiting for carrier");
 
     // Each wait retains its DMA buffer until completion. No timer/select drops a
     // pending USB future. A failed pipe marks the shared NIC down; other pending
@@ -236,6 +262,11 @@ async fn usb_rtl8153_worker_task(
             match buffer[1] {
                 0 if payload == 0 => {
                     let up = u16::from_le_bytes([buffer[2], buffer[3]]) != 0;
+                    stage(if up {
+                        "USB Ethernet: carrier up"
+                    } else {
+                        "USB Ethernet: carrier down"
+                    });
                     let mut state = shared.lock();
                     if state.failed {
                         break;

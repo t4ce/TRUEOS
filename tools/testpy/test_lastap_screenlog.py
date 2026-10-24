@@ -70,7 +70,7 @@ RING_TESTS = r'''
 PEN_TESTS = r'''
 #[cfg(test)] mod tests {
     use super::*;
-    #[test] fn boot_has_no_blank_state_and_nic_callback_freezes_without_executor() {
+    #[test] fn boot_and_usb_progress_update_without_executor() {
         let pixels = Box::leak(vec![BG; 127 * 91].into_boxed_slice());
         let surface = Surface { phys: 0x1000, gpu: 0xE0000000,
             virt: pixels.as_mut_ptr() as usize, byte_len: pixels.len()*4,
@@ -82,7 +82,15 @@ PEN_TESTS = r'''
         assert_ne!(&pixels[..], &initial[..]);
         let assigned = pixels.to_vec();
         assignment_changed(false);
-        assert_eq!(&pixels[..], &assigned[..]);
+        assert_ne!(&pixels[..], &assigned[..]);
+        let unassigned = pixels.to_vec();
+        usb_stage("ECM: read MAC string");
+        assert_ne!(&pixels[..], &unassigned[..]);
+        let nic_progress = pixels.to_vec();
+        usb_controller_stage("xHCI: another controller");
+        assert_eq!(&pixels[..], &nic_progress[..]);
+        assignment_changed(true);
+        assert_ne!(&pixels[..], &unassigned[..]);
         crate::intel::take_flushes();
     }
     #[test] fn verdict_is_centered_fourfold_and_only_one_line() {
@@ -168,9 +176,9 @@ def main():
     assert 'microfont_log_boot_surface' in display and 'screenlog::owns_plane' in display
     assert 'Timer::after' in service and 'from_millis(PERIOD_MS)' in service
     assert 'spin_loop' not in service and 'PAGE:' not in service
-    assert 'copy_for_screen' not in service and 'paint_verdict(surface, assigned)' in service
-    assert 'ASSIGNMENT_WAIT_MS: u64 = 30_000' in service
-    print('PASS: regular E-core-preferred placement, existing log ring, bounded task, native/UI4 handoff intact', flush=True)
+    assert 'copy_for_screen' not in service and 'fn paint_verdict' in service
+    assert 'ASSIGNMENT_WAIT_MS' not in service and 'fn usb_stage' in service
+    print('PASS: regular E-core-preferred placement, existing log ring, live USB status, native/UI4 handoff intact', flush=True)
     start = log.index('pub mod logtotcp {') + len('pub mod logtotcp {')
     end = log.index('    #[trueos_executor::task]', start)
     ring = log[start:end]
@@ -217,7 +225,7 @@ microfont = "=3.7.8"
         (work / 'lib.rs').write_text(harness)
         env = dict(os.environ, RUSTUP_TOOLCHAIN='stable', RUST_MIN_STACK=str(16*1024*1024))
         subprocess.run(['cargo', 'test', '--offline', '--lib', '--manifest-path', str(work / 'Cargo.toml'), '--', '--test-threads=1'], cwd=work, env=env, check=True)
-    print('PASS: actual ring, unreserved background selector and centered 4x Yes/No renderer tested (not a full kernel build)', flush=True)
+    print('PASS: actual ring, unreserved background selector and live USB stage and centered 4x Yes/No renderer tested (not a full kernel build)', flush=True)
 
 if __name__ == '__main__':
     main()
