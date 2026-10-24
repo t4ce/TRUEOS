@@ -402,11 +402,3 @@ fn ui4_compositor_sprite_quad_desc_buffer_once() -> Option<GpgpuRectWorklistDesc
     *guard = Some(buffer);
     Some(buffer)
 }
-fn rect_is_inside_mask(surface: GpgpuMask8Surface, rect: GpgpuRect) -> bool {
-    if rect.is_empty() || rect.x < 0 || rect.y < 0 {
-        return false;
-    }
-    let x2 = rect.x as i64 + rect.width as i64;
-    let y2 = rect.y as i64 + rect.height as i64;
-    x2 <= surface.width as i64 && y2 <= surface.height as i64
-}

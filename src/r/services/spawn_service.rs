@@ -1511,9 +1511,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &SHELL3_TCP_STARTED,
         spawn_shell3_tcp,
     ),
-    // The current Gridpaper Blueprint still submits snapshots to this
-    // consumer, which owns the corresponding UI4 presentation.
-    
     TaskSpec::enabled_gated(
         "sh3srv",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
@@ -1626,10 +1623,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOS_SPIRIT_STARTED,
         spawn_trueos_spirit_workers,
     ),
-    // Spirit owns one retained Gridpaper pool lease. The response worker
-    // waits for its paired Lilly keyboard and UI4 presentation internally,
-    // types through the ordinary input route, and hides without releasing the
-    // resident scene between replies.
     
     TaskSpec::enabled_gated(
         "mouse-motion-service",

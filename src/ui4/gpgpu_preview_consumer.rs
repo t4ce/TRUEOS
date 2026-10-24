@@ -1743,12 +1743,6 @@ mod tests {
     };
 
     #[test]
-    fn removed_preview() {
-        assert_eq!(
-            preview_extent(GpgpuPreviewPreset::Lab256),
-            (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE)
-        );
-    }
 
     #[test]
     fn cpp_modes_share_the_resizable_slot1_application_surface() {

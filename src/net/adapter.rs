@@ -21,6 +21,10 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use super::tcp_tx_queue::TcpTxQueue;
 
+#[path = "poll_cadence.rs"]
+mod poll_cadence;
+use poll_cadence::RxPollCadence;
+
 // Internal netbench (kernel-side) ------------------------------------------------
 //
 // `bench.net` via vnet is convenient but it copies payload bytes multiple times:
@@ -5579,15 +5583,26 @@ pub async fn net_poll_task(index: usize) {
         const STALL_WARN_MS: u64 = 100;
 
         let mut loop_count = 0u64;
+        let frame_counts = || {
+            (
+                NET_RX_FRAMES_AT.get(index).map_or(0, |count| count.load(Ordering::Relaxed)),
+                NET_TX_FRAMES_AT.get(index).map_or(0, |count| count.load(Ordering::Relaxed)),
+            )
+        };
+        let mut cadence = RxPollCadence::new(NET_POLL_IDLE_SOFTCAP_US, frame_counts());
         loop {
             loop_count = loop_count.saturating_add(1);
             let loop_started_ms = trueos_time::Instant::now().as_millis();
 
             let poll_started_ms = trueos_time::Instant::now().as_millis();
             let busy = crate::net::poll_at(index);
-            let poll_finished_ms = trueos_time::Instant::now().as_millis();
+            let poll_finished = trueos_time::Instant::now();
+            let poll_finished_ms = poll_finished.as_millis();
             let poll_elapsed_ms = poll_finished_ms.saturating_sub(poll_started_ms);
-            let requested_sleep_us = if busy { 0 } else { NET_POLL_IDLE_SOFTCAP_US };
+            // A single empty RX poll does not mean an interactive stream is
+            // idle. Outbound video also keeps the input/control receive path
+            // responsive between frames without speeding up unrelated NICs.
+            let requested_sleep_us = cadence.sleep_us(poll_finished.as_micros(), busy, frame_counts());
 
             let trace_loop = loop_count <= TRACE_EARLY_LOOPS
                 || loop_count.is_multiple_of(TRACE_EVERY_LOOPS);

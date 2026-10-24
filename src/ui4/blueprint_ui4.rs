@@ -6066,8 +6066,8 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
     }
 
-    // Shell2's immediate scene is a clear plus a handful of frame-owned solid
-    // rectangles (background runs, underlines/hover, and cursor). Flatten
+    // A solid-only Blueprint scene is a clear plus frame-owned solid
+    // rectangles. Flatten
     // their overwrite order into disjoint rectangles and use the alpha
     // compositor's source-free SOLID mode. The former path paid general UV,
     // sampling, and arbitrary-quad setup for every decoration.

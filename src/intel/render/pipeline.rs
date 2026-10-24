@@ -2531,6 +2531,9 @@ fn encode_triangle_probe_batch(
     } else {
         batch_mode.adjacency_geometry_shader()
     };
+    if adjacency_gs.is_some_and(|shader| shader.code.is_empty()) {
+        return Err("app-adjacency-shaders-missing");
+    }
     if adjacency_gs.is_some()
         && !device_supports_adjacency_geometry_shader(warm.device_id, warm.revision_id)
     {

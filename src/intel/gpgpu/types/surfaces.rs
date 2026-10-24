@@ -468,37 +468,10 @@ impl GpgpuMask8Surface {
 
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuGlyphMaskBlit {
-    pub(crate) mask: GpgpuMask8Surface,
-    pub(crate) mask_rect: GpgpuRect,
-    pub(crate) dst: GpgpuRgba8Surface,
-    pub(crate) dst_xy: GpgpuPoint,
-}
 
 /// One independently positioned/colorized persistent R8 coverage layer.
 /// The destination is supplied once for the complete scene-level batch.
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuGlyphMaskLayer {
-    pub(crate) mask: GpgpuMask8Surface,
-    pub(crate) mask_rect: GpgpuRect,
-    pub(crate) dst_xy: GpgpuPoint,
-    pub(crate) color_rgba: u32,
-}
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuGlyphMaskBatchResult {
-    pub(crate) ok: bool,
-    /// True once the command buffer reached the hardware submission boundary.
-    /// An incomplete submitted batch must not be replayed over the same target.
-    pub(crate) submitted: bool,
-    pub(crate) requested_layers: usize,
-    pub(crate) active_walkers: usize,
-    pub(crate) submits: usize,
-    /// Exact destination ownership minted from the final cache-draining
-    /// completion packet when this batch targets direct scanout.
-    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
-}
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuSubmitStats {

@@ -63,7 +63,6 @@ pub mod probes {
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     /// One small, non-display Collapse5/merge arithmetic probe is started by
     /// the boot task registry and verified word-for-word after RCS retirement.
-    pub const INTEL_SUBSET_SUM_BOOT_PROBE: bool = true;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
 

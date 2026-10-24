@@ -3,7 +3,7 @@ extern crate alloc;
 pub(crate) mod app_shaders;
 mod gpu { pub(crate) use crate::app_shaders; }
 #[allow(dead_code, unfulfilled_lint_expectations)]
-mod metadata {
+pub(crate) mod metadata {
     include!(concat!(env!("OUT_DIR"), "/types.rs"));
     pub(crate) mod patch { include!(concat!(env!("OUT_DIR"), "/patch.rs")); }
     pub(crate) mod world { include!(concat!(env!("OUT_DIR"), "/world.rs")); }
@@ -12,8 +12,43 @@ mod metadata {
     pub(crate) mod pbr { include!(concat!(env!("OUT_DIR"), "/pbr.rs")); }
     pub(crate) mod maxpix { include!(concat!(env!("OUT_DIR"), "/maxpix.rs")); }
     pub(crate) mod adjacency { include!(concat!(env!("OUT_DIR"), "/adjacency.rs")); }
+    pub(crate) mod triangle { include!(concat!(env!("OUT_DIR"), "/triangle.rs")); }
+    pub(crate) mod mask { include!(concat!(env!("OUT_DIR"), "/mask.rs")); }
+    pub(crate) use patch as patch_cube;
+    pub(crate) fn triangle_pipeline() -> &'static TrianglePipeline { triangle::triangle_pipeline() }
+    pub(crate) fn triangle_pipeline_simd16() -> &'static TrianglePipeline { triangle::triangle_pipeline_simd16() }
+    pub(crate) fn line_adjacency_geometry_shader() -> &'static AdjacencyGeometryShader { adjacency::line_adjacency_geometry_shader() }
+    pub(crate) fn triangle_adjacency_geometry_shader() -> &'static AdjacencyGeometryShader { adjacency::triangle_adjacency_geometry_shader() }
+    include!(concat!(env!("OUT_DIR"), "/patch_layout.rs"));
 }
 
+
+mod intel {
+    pub(crate) use crate::metadata as shader;
+    pub(crate) const WARM_ALIGN: usize = 4096;
+    pub(crate) fn align_up(value: usize, alignment: usize) -> Option<usize> {
+        value.checked_add(alignment-1).map(|value| value & !(alignment-1))
+    }
+    pub(crate) fn dma_flush(_: *mut u8, _: usize) {}
+}
+#[allow(dead_code)]
+mod upload {
+    struct RenderWarmState { draw_state_virt: *mut u8, draw_state_len: usize, device_id: u16 }
+    include!(concat!(env!("OUT_DIR"), "/upload.rs"));
+    pub(crate) fn boot_font_without_app_shaders() {
+        assert!(!crate::app_shaders::present(7));
+        let pipeline = crate::metadata::mask::microfont_mask_pipeline();
+        let mut memory=vec![0u32; 65536];
+        let warm=RenderWarmState { draw_state_virt:memory.as_mut_ptr().cast(), draw_state_len:memory.len()*4, device_id:0x4680 };
+        let layout=upload_triangle_shader_pipeline_at(warm, pipeline, None, 0x1000, false).unwrap();
+        assert_eq!(layout.line_adjacency_gs.code_size_bytes, 0);
+        assert_eq!(layout.triangle_adjacency_gs.code_size_bytes, 0);
+        let offset=layout.vs.code_offset_bytes as usize / 4;
+        assert_eq!(&memory[offset..offset+pipeline.vs.code.len()], pipeline.vs.code);
+        let offset=layout.ps.code_offset_bytes as usize / 4;
+        assert_eq!(&memory[offset..offset+pipeline.ps.code.len()], pipeline.ps.code);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -25,6 +60,7 @@ mod tests {
     }
     #[test]
     fn downloaded_bundles_populate_aligned_shared_storage_once() {
+        crate::upload::boot_font_without_app_shaders();
         for owner in ["Cubes", "TRUEOS-Picasso", "voxy"] {
             let package = bundle(owner);
             app_shaders::register_blueprint_elf(&elf(&package)).unwrap();

@@ -1,10 +1,9 @@
-//! Temporary, direct-to-Spirit GPU diagnostics.
+//! Direct-to-Spirit GPU diagnostics, toggled globally with UI4 F9.
 //!
-//! The logger is deliberately a lease rather than a persistent Spirit mode.
-//! A producer has to keep renewing its bounded lease and only the exact most
-//! recent generation may release it.  The Spirit worker consumes
-//! [`active_snapshot`] and can therefore fall back to Lilly without a cleanup
-//! message when a producer disappears.
+//! F9 holds the monitor until the next toggle. Programmatic requests remain
+//! bounded leases; only the exact most recent generation may release one.
+//! The Spirit worker consumes [`active_snapshot`] and resumes Lilly when the
+//! monitor is disabled or a temporary lease expires.
 
 use alloc::vec::Vec;
 
@@ -84,8 +83,8 @@ pub(crate) struct GpuLoggerStatus {
     pub(crate) sample: GpuLoggerSample,
 }
 
-/// Immutable worker-side view.  Obtaining one also performs expiry, so an
-/// abandoned producer can never permanently replace the normal Spirit image.
+/// Immutable worker-side view. Obtaining one also expires temporary leases.
+/// remaining_ms is zero for the user-controlled F9 mode.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ActiveSnapshot {
     pub(crate) source: GpuLoggerSource,
@@ -98,7 +97,8 @@ pub(crate) struct ActiveSnapshot {
 struct ActiveLease {
     source: GpuLoggerSource,
     generation: u64,
-    expires_at_ms: u64,
+    /// None denotes the user-controlled F9 mode.
+    expires_at_ms: Option<u64>,
     sample: GpuLoggerSample,
 }
 
@@ -140,7 +140,7 @@ impl GpuLoggerState {
     fn expire_at(&mut self, now_ms: u64) {
         if self
             .active
-            .is_some_and(|active| now_ms >= active.expires_at_ms)
+            .is_some_and(|active| active.expires_at_ms.is_some_and(|end| now_ms >= end))
         {
             self.active = None;
         }
@@ -164,12 +164,12 @@ impl GpuLoggerState {
             return Err(BusyStatus {
                 active_source: active.source,
                 active_generation: active.generation,
-                remaining_ms: active.expires_at_ms.saturating_sub(now_ms),
+                remaining_ms: active.expires_at_ms.map_or(0, |end| end.saturating_sub(now_ms)),
             });
         }
 
         let generation = self.next_generation();
-        let expires_at_ms = now_ms.saturating_add(ttl_ms.clamp(MIN_TTL_MS, MAX_TTL_MS));
+        let expires_at_ms = Some(now_ms.saturating_add(ttl_ms.clamp(MIN_TTL_MS, MAX_TTL_MS)));
         let sample = self
             .active
             .filter(|active| active.source == source)
@@ -182,6 +182,21 @@ impl GpuLoggerState {
             sample,
         });
         Ok(GpuLoggerLease { generation, source })
+    }
+
+    fn toggle_at(&mut self, now_ms: u64) -> bool {
+        self.expire_at(now_ms);
+        if self.active.take().is_some() {
+            return false;
+        }
+        let generation = self.next_generation();
+        self.active = Some(ActiveLease {
+            source: GpuLoggerSource::Helio,
+            generation,
+            expires_at_ms: None,
+            sample: self.latest_sample(GpuLoggerSource::Helio),
+        });
+        true
     }
 
     fn release_at(&mut self, lease: GpuLoggerLease, now_ms: u64) -> bool {
@@ -230,7 +245,7 @@ impl GpuLoggerState {
         self.active.map(|active| ActiveSnapshot {
             source: active.source,
             generation: active.generation,
-            remaining_ms: active.expires_at_ms.saturating_sub(now_ms),
+            remaining_ms: active.expires_at_ms.map_or(0, |end| end.saturating_sub(now_ms)),
             sample: active.sample,
         })
     }
@@ -263,6 +278,12 @@ pub(crate) fn request(source: GpuLoggerSource, ttl_ms: u64) -> Result<GpuLoggerL
     GPU_LOGGER.lock().request_at(source, ttl_ms, now_ms())
 }
 
+/// Toggle the user-controlled monitor. Returns true while enabled. A zero
+/// remaining_ms in its snapshot means it stays visible until switched off.
+pub(crate) fn toggle() -> bool {
+    GPU_LOGGER.lock().toggle_at(now_ms())
+}
+
 /// Release only the exact current generation.
 pub(crate) fn release(lease: GpuLoggerLease) -> bool {
     GPU_LOGGER.lock().release_at(lease, now_ms())
@@ -287,7 +308,7 @@ pub(crate) fn status() -> GpuLoggerStatus {
 }
 
 /// Read the newest complete sample independently of the visual lease. This
-/// lets Shell2 inspect baseline producer cadence without enabling the Spirit
+/// lets diagnostics inspect baseline producer cadence without enabling the Spirit
 /// override and perturbing the shared GPU lane it is measuring.
 pub(crate) fn latest_sample(source: GpuLoggerSource) -> GpuLoggerSample {
     GPU_LOGGER.lock().latest_sample(source)
@@ -784,6 +805,36 @@ mod tests {
         assert!(state.release_at(lease, 102));
         assert!(!state.status_at(103).active);
         assert_eq!(state.latest_sample(GpuLoggerSource::Helio), sample());
+    }
+
+    #[test]
+    fn user_toggle_stays_enabled_and_tracks_samples_until_switched_off() {
+        let mut state = GpuLoggerState::new();
+        assert!(!state.status_at(0).active);
+        assert!(!state.publish_at(GpuLoggerSource::Helio, sample(), 1));
+        assert!(state.toggle_at(2));
+        let opened = state.active_snapshot_at(MAX_TTL_MS + 10).unwrap();
+        assert_eq!(opened.sample, sample());
+        assert_eq!(opened.remaining_ms, 0);
+        let updated = GpuLoggerSample { frame_index: 74, ..sample() };
+        assert!(state.publish_at(GpuLoggerSource::Helio, updated, MAX_TTL_MS + 11));
+        assert_eq!(state.status_at(MAX_TTL_MS + 12).sample, updated);
+        assert!(!state.toggle_at(MAX_TTL_MS + 13));
+        assert!(state.active_snapshot_at(MAX_TTL_MS + 14).is_none());
+        assert!(state.toggle_at(MAX_TTL_MS + 15));
+        assert_ne!(state.status_at(MAX_TTL_MS + 16).generation, opened.generation);
+        assert_eq!(state.status_at(MAX_TTL_MS + 17).sample, updated);
+    }
+
+    #[test]
+    fn user_can_close_a_temporary_lease_without_its_token() {
+        let mut state = GpuLoggerState::new();
+        let lease = state.request_at(GpuLoggerSource::Helio, 1_000, 0).unwrap();
+        assert!(!state.toggle_at(1));
+        assert!(!state.status_at(2).active);
+        assert!(state.toggle_at(3));
+        assert!(!state.release_at(lease, 4));
+        assert!(state.status_at(5).active);
     }
 
     #[test]

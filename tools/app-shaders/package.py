@@ -38,6 +38,9 @@ def decode(data):
 
 
 def publications(repos):
+    loader = (ROOT / "src/hv/mod.rs").read_text()
+    launch = loader[loader.index("fn prepare_blueprint_launch_on_lane("):loader.index("pub fn stage_blueprint_launch(")]
+    assert launch.index("enter_host_alloc_domain_current_cpu") < launch.index("register_blueprint_elf(") < launch.index("drop(host_alloc_guard)"), "app shader intake must run in the Blueprint host-allocation loader boundary"
     records = []
     trust = (ROOT / "src/gpu/app_shader_trust.rs").read_text()
     for owner, repo in OWNERS.items():
