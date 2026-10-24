@@ -22,10 +22,11 @@ fn upload_triangle_shader_pipeline_at(
     let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
     let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
     let line_gs_shader = crate::intel::shader::line_adjacency_geometry_shader();
-    let mut line_gs =
-        stage_range("line-adjacency-gs", line_gs_shader.meta.kernel, line_gs_shader.code)?;
+    let mut line_gs = optional_stage_range(
+        "line-adjacency-gs", line_gs_shader.meta.kernel, line_gs_shader.code,
+    )?;
     let triangle_gs_shader = crate::intel::shader::triangle_adjacency_geometry_shader();
-    let mut triangle_gs = stage_range(
+    let mut triangle_gs = optional_stage_range(
         "triangle-adjacency-gs",
         triangle_gs_shader.meta.kernel,
         triangle_gs_shader.code,
@@ -380,6 +381,21 @@ fn specialize_uploaded_triangle_ps_color(
 struct StageUploadRange {
     code_offset_bytes: usize,
     code_size_bytes: usize,
+}
+
+// Normal kernel font/triangle draws must not require app-owned adjacency ISA.
+// A requested adjacency draw is rejected by the encoder until its app package
+// exists; absent optional stages occupy no upload storage.
+fn optional_stage_range(
+    stage_name: &'static str,
+    meta: crate::intel::shader::ShaderKernelMetadata,
+    code: &'static [u32],
+) -> Result<StageUploadRange, &'static str> {
+    if code.is_empty() {
+        Ok(StageUploadRange { code_offset_bytes: 0, code_size_bytes: 0 })
+    } else {
+        stage_range(stage_name, meta, code)
+    }
 }
 
 fn stage_range(
@@ -1579,50 +1595,13 @@ fn picasso_retained_textured_pipeline()
 fn prepare_picasso_retained_uv_diagnostic(
     draw: &mut TriangleDrawPrep,
 ) -> Result<(crate::intel::shader::TrianglePipeline, TriangleFrontEndContract), &'static str> {
-    let mut pipeline = picasso_retained_textured_pipeline()?;
-    let mut front_end = configure_picasso_retained_uv_diagnostic(draw, picasso_cull_enabled())?;
+    let pipeline = picasso_retained_textured_pipeline()?;
+    let front_end = configure_picasso_retained_uv_diagnostic(draw, picasso_cull_enabled())?;
 
     Ok((pipeline, front_end))
 }
 
 
-#[cfg(test)]
-mod picasso_uv_simd8_tests {
-    use super::*;
-
-    #[test]
-    fn uv_diagnostic_simd8_keeps_the_vertex_and_fragment_binding_contract() {
-        let original = picasso_retained_textured_pipeline().unwrap();
-        let changed = picasso_retained_uv_with_simd8_ps(original);
-        assert_eq!(changed.vs.code, original.vs.code);
-        assert_eq!(format!("{:?}", changed.vs.meta), format!("{:?}", original.vs.meta));
-        assert_eq!(changed.ps.meta.kernel.code_offset_bytes, 704);
-        assert_eq!(changed.ps.meta.kernel.code_alignment_bytes, 64);
-        assert_eq!(changed.ps.meta.kernel.ksp_offset_bytes, 0);
-        assert_eq!(changed.ps.meta.kernel.code_size_bytes, 96);
-        assert_eq!(changed.ps.meta.kernel.dispatch_mode, crate::intel::shader::DispatchMode::Simd8);
-        assert_eq!(changed.ps.meta.kernel.grf_start_register, 4);
-        assert_eq!(changed.ps.meta.kernel.binding_table_entry_count, 3);
-        assert_eq!(changed.ps.meta.kernel.sampler_count, 1);
-        assert_eq!(changed.ps.meta.num_varying_inputs, 1);
-        assert!(changed.ps.meta.uses_vmask);
-        let bytes: Vec<u8> = changed
-            .ps
-            .code
-            .iter()
-            .flat_map(|word| word.to_le_bytes())
-            .collect();
-        assert_eq!(bytes, PICASSO_RETAINED_TEXTURED_PS8);
-        // The cached ordinary UV mode remains the original SIMD16 pipeline.
-        let ordinary = picasso_retained_textured_pipeline().unwrap();
-        assert_eq!(ordinary.ps.code, original.ps.code);
-        assert_eq!(
-            ordinary.ps.meta.kernel.dispatch_mode,
-            crate::intel::shader::DispatchMode::Simd16
-        );
-        assert_eq!(ordinary.ps.meta.kernel.grf_start_register, 6);
-    }
-}
 
 fn configure_picasso_retained_uv_diagnostic(
     draw: &mut TriangleDrawPrep,

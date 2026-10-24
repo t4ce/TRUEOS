@@ -102,13 +102,12 @@ complete indirect block before setting explicit fields.
 Do not add `-O0` casually. With the pinned stack it removes stateful BTIs and
 buffer-address records and therefore changes the runtime ABI.
 
-## Subset-sum boot probe
+## App-owned rendering packages
 
-`subset_sum_collapse5_merge10.clcpp` supplies the bounded once-per-boot
-Collapse5 tree probe. `make intel-gpu-bake-subset-sum-cpp` refreshes its
-artifact quartet, and the production aggregate includes that target. Runtime
-admission remains hash-, target-, and ABI-bound before the three ordered RCS
-walkers may touch their two-page non-display arena.
+Optional Picasso/Cubes/Voxy ISA is loaded from SHA-256 authenticated Blueprint
+sections, not embedded by this bakery. See
+[`tools/app-shaders/README.md`](../app-shaders/README.md). The retired glyph-mask,
+gradient, Lab256, LFM/Kokoro GPU and subset-sum publications are removed.
 
 ## Related architecture
 

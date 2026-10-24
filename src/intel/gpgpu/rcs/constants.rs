@@ -502,9 +502,6 @@ const UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS: u64 = 1_000;
 const RGBA8_SCANOUT_RELEASE_MARKER_SLOT: usize = 34;
 const RGBA8_SCANOUT_RELEASE_MARKER: u32 = 0xC0DE_D102;
 
-// Lab256 owns one tightly bounded three-dispatch batch. All resource VAs are
-// persistent in the ordinary direct-RCS PPGTT and deliberately avoid the
-// display cursor's 0x0600_0000 GGTT aliases.
 
 
 

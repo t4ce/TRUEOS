@@ -66,21 +66,11 @@ pub(crate) fn picasso_uv_pipeline_enabled() -> bool {
     PICASSO_SHADER_PIPELINE.load(Ordering::Acquire) != 0
 }
 
-pub(crate) fn set_picasso_uv_simd8_pipeline() {
-    PICASSO_SHADER_PIPELINE.store(2, Ordering::Release);
-    crate::log_important!(target: "render";
-        "picasso-pipeline-view: pipeline=authored-uv-simd8 applies=next-encoded-pbr-draw\n",
-    );
-}
 
-pub(crate) fn picasso_uv_pipeline_simd8() -> bool {
-    PICASSO_SHADER_PIPELINE.load(Ordering::Acquire) == 2
-}
 
 pub(crate) fn picasso_pipeline_name() -> &'static str {
     match PICASSO_SHADER_PIPELINE.load(Ordering::Acquire) {
         1 => "authored-uv",
-        2 => "authored-uv-simd8",
         _ => "pbr",
     }
 }

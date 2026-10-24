@@ -280,6 +280,7 @@ intel-gpu-verify-copy-cpp-hardware-log:
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_probe_log.py" "$(INTEL_GPU_CPP_PROBE_LOG)"
 
 intel-gpu-verify-linked-copy:
+	python3 tools/app-shaders/package.py --kernel-elf "$(INTEL_GPU_LINKED_ELF)"
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(INTEL_GPU_LINKED_ELF)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" $(foreach bin,$(INTEL_GPU_CPP_REQUIRED_BINS),--required-bin "$(bin)")
 
 intel-gpu-verify-linked-copy-cpp:

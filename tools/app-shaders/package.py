@@ -6,6 +6,9 @@ import hashlib
 import json
 import re
 import struct
+import subprocess
+import tarfile
+import io
 
 ROOT = Path(__file__).resolve().parents[2]
 OWNERS = {"voxy": "voxy", "picasso": "TRUEOS-Picasso", "cubes": "Cubes"}
@@ -57,10 +60,46 @@ def publications(repos):
     return records
 
 
+def blueprint_packages(path):
+    image = path.read_bytes()
+    if image[:4] == b"TRBP":
+        flags = struct.unpack_from("<H", image, 6)[0] & 255
+        length = struct.unpack_from("<I", image, 16)[0]
+        image = image[24:24+length]
+        if flags == 3:
+            decoded = subprocess.run(["lz4", "-d", "-c"], input=image, capture_output=True, check=True).stdout
+            with tarfile.open(fileobj=io.BytesIO(decoded)) as archive:
+                image = archive.extractfile("module.elf").read()
+        elif flags != 1:
+            raise ValueError("unsupported Blueprint payload")
+    header = struct.unpack_from("<16sHHIQQQIHHHHHH", image)
+    assert header[0][:6] == b"\x7fELF\x02\x01"
+    table, stride, count, names_index = header[6], header[11], header[12], header[13]
+    assert stride == 64
+    names_header = struct.unpack_from("<IIQQQQIIQQ", image, table + stride * names_index)
+    names = image[names_header[4]:names_header[4]+names_header[5]]
+    packages = []
+    for index in range(count):
+        section = struct.unpack_from("<IIQQQQIIQQ", image, table + stride * index)
+        name = names[section[0]:].split(b"\0", 1)[0]
+        if name != b".trueos.shaders":
+            continue
+        assert section[2] & 2 == 0, "shader package must be non-ALLOC guest metadata"
+        payload = image[section[4]:section[4]+section[5]]
+        while payload:
+            length = 16 + struct.unpack_from("<I", payload, 12)[0]
+            package = payload[:length]
+            identity, _ = decode(package)
+            packages.append((identity, package))
+            payload = payload[length:]
+    return packages
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repos", type=Path, default=ROOT.parent)
     parser.add_argument("--kernel-elf", type=Path)
+    parser.add_argument("--blueprint", type=Path, action="append", default=[])
     args = parser.parse_args()
     records = publications(args.repos)
     if args.kernel_elf:
@@ -69,6 +108,13 @@ def main():
             assert package not in image, f"app package linked in kernel: {record['name']}"
             for _, stage in stages:
                 assert stage not in image, f"app shader linked in kernel: {record['name']}"
+    trusted = {r[0]["id"]: r[1] for r in records}
+    for path in args.blueprint:
+        carried = blueprint_packages(path)
+        assert carried, f"no app shader packages in {path}"
+        for identity, package in carried:
+            assert package == trusted[identity], f"shader package differs: {path} id={identity}"
+        print(f"{path.name}: verified non-ALLOC app shader IDs {[identity for identity, _ in carried]}")
     print(f"Verified {len(records)} app packages: hashes, stage data, owner bundles" +
           (", no app shader payloads in kernel" if args.kernel_elf else ""))
 

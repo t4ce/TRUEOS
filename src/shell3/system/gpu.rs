@@ -9,7 +9,7 @@ fn usage(io: &Output) {
     Output::line(io, "gpu material pbr|base|normal|uv|solid");
     Output::line(io, "gpu depth on|off (Picasso diagnostic)");
     Output::line(io, "gpu cull on|off (Picasso diagnostic)");
-    Output::line(io, "gpu pipeline pbr|uv|uv8 (Picasso diagnostic)");
+    Output::line(io, "gpu pipeline pbr|uv (Picasso diagnostic)");
     Output::line(io, "gpu capture vue (one Picasso draw)");
 }
 
@@ -22,13 +22,6 @@ pub(super) fn execute(io: &Output, rest: &str) {
             Output::line(
                 io,
                 "gpu: one Picasso pre-clip vertex capture armed; summary goes to the render log",
-            );
-        }
-        (Some(cmd), Some("uv8"), None) if cmd.eq_ignore_ascii_case("pipeline") => {
-            crate::intel::render::set_picasso_uv_simd8_pipeline();
-            Output::line(
-                io,
-                "gpu: Picasso authored-UV SIMD8 PS selected with current mesh buffers",
             );
         }
         (Some(cmd), Some("pbr"), None) if cmd.eq_ignore_ascii_case("pipeline") => {

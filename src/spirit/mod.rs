@@ -426,8 +426,7 @@ pub(crate) fn write_cpu<R>(
 ///
 /// The `gpu` field is its permanent display alias; Spirit's execution PPGTT
 /// maps the same physical pages for GPGPU access. Spirit VFX writes
-/// premultiplied B,G,R,A bytes explicitly, so colored layers do not rely on
-/// the grayscale-only accident of the original Lab256 producer.
+/// premultiplied B,G,R,A bytes explicitly for colored layers.
 fn gpgpu_bgra_target(
     lease: SpiritFrameLease,
 ) -> Result<crate::intel::gpgpu::GpgpuRgba8Surface, SpiritSubmitError> {
