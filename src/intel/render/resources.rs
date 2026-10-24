@@ -1367,9 +1367,8 @@ static PICASSO_RETAINED_TEXTURED_PIPELINE: spin::Mutex<
 const PICASSO_RETAINED_TEXTURED_VS: &[u8] = include_bytes!(
     "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.vs.simd8.bin"
 );
-const PICASSO_RETAINED_TEXTURED_PS: &[u8] = include_bytes!(
-    "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin"
-);
+const PICASSO_RETAINED_TEXTURED_PS: &[u32] =
+    crate::intel::shader::SAMPLED_TEXTURE_PS_SIMD16_CODE;
 const PICASSO_RETAINED_TEXTURED_PS8: &[u8] = include_bytes!(
     "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd8.bin"
 );
@@ -1534,7 +1533,7 @@ fn picasso_retained_textured_pipeline()
     if let Some(pipeline) = *cached {
         return Ok(pipeline);
     }
-    if PICASSO_RETAINED_TEXTURED_VS.len() != 648 || PICASSO_RETAINED_TEXTURED_PS.len() != 160 {
+    if PICASSO_RETAINED_TEXTURED_VS.len() != 648 || core::mem::size_of_val(PICASSO_RETAINED_TEXTURED_PS) != 160 {
         return Err("picasso-retained-textured-stage-shape");
     }
     let ps_offset = crate::intel::align_up(PICASSO_RETAINED_TEXTURED_VS.len(), 64)
@@ -1564,7 +1563,7 @@ fn picasso_retained_textured_pipeline()
             },
         },
         ps: TrianglePixelShader {
-            code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_PS)?,
+            code: PICASSO_RETAINED_TEXTURED_PS,
             meta: TrianglePixelShaderMetadata {
                 kernel: ShaderKernelMetadata {
                     code_offset_bytes: ps_offset,

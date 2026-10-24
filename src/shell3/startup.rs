@@ -3,8 +3,7 @@
 use alloc::{string::String, vec::Vec};
 
 pub(crate) enum Startup {
-    #[cfg(feature = "gridpaper")]
-    Script { launch_script: String },
+    
     Blueprint {
         archive: String,
         bytes: Vec<u8>,
@@ -15,12 +14,7 @@ pub(crate) enum Startup {
 impl Startup {
     pub(super) fn launch(self, shell: &mut super::Shell3) {
         match self {
-            #[cfg(feature = "gridpaper")]
-            Self::Script { .. } => super::MatrixSlots::echo(
-                shell.active_matrix_slot.as_deref(),
-                shell.active_matrix_lifetime,
-                "Blueprint startup is disabled in the kernel baseline".into(),
-            ),
+            
             Self::Blueprint {
                 archive,
                 bytes,

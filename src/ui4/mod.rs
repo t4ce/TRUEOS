@@ -12,7 +12,7 @@ mod context_menu;
 mod cursor_frame_inout;
 mod damage;
 mod display_metrics;
-pub(crate) use display_metrics::physical_extent_pixels;
+pub(crate) use display_metrics::{physical_extent_pixels, physical_extent_pixels_fraction};
 pub(crate) mod drag_drop;
 pub(crate) mod emulator_paint;
 mod frame_pool;
@@ -84,8 +84,7 @@ pub(crate) use context_menu::{
     ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES, clear_window_menu as clear_window_context_menu,
     register_window_menu as register_window_context_menu,
 };
-#[cfg(feature = "gridpaper")]
-pub(crate) use context_menu::{ContextMenuError, ContextMenuRequest};
+
 pub(crate) use cursor_frame_inout::{
     CursorFrameError, CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId,
     Ui4CursorIcon, Ui4CursorImage, Ui4CursorSource, Ui4CursorStep, center_snapped_frame_for_source, cursor_image_for_source, cursor_presentation_for_source,
@@ -110,8 +109,7 @@ pub(crate) use gpgpu_svg_probe_consumer::gpgpu_svg_probe_consumer_service_task;
 pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
-#[cfg(feature = "gridpaper")]
-pub(crate) use input_broker::show_context_menu;
+
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4PointerEvent,
     Ui4ResizeEvent, Ui4VisualRect, focused_keyboard_state, reselect_window_for_cursor,

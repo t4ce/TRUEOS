@@ -257,13 +257,15 @@ fn glyphs_for_update(
     reveals: &[super::super::update::StripReveal],
     cached: &[bool; 2],
 ) -> Result<(), &'static str> {
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
+        .ok_or("shell3-font-physical-size-unavailable")?;
     let row = match update.row {
         super::super::SpecialRows::TitleRow => 0,
         super::super::SpecialRows::StatusRow => 1,
         super::super::SpecialRows::PromtRow => 2,
         super::super::SpecialRows::MatrixRow(index) => index as u32 + 3,
     };
-    let y = row * microfont::FHEIGHT as u32 * scale;
+    let y = row * cell_height;
     if y >= view.height {
         return Ok(());
     }
@@ -273,7 +275,7 @@ fn glyphs_for_update(
         let Some(x) = update
             .offset
             .checked_add(column)
-            .and_then(|c| c.checked_mul(microfont::FWIDTH * scale as usize))
+            .and_then(|c| c.checked_mul(cell_width as usize))
             .and_then(|x| u32::try_from(x).ok())
         else {
             break;
@@ -287,8 +289,8 @@ fn glyphs_for_update(
             && cell_column >= input.start && input.spans.iter().any(|span| span.contains(&(cell_column - input.start)))) {
             continue;
         }
-        let width = (microfont::FWIDTH as u32 * scale).min(view.width - x);
-        let height = (microfont::FHEIGHT as u32 * scale).min(view.height - y);
+        let width = (cell_width).min(view.width - x);
+        let height = (cell_height).min(view.height - y);
         output.push(glyph_for_cell(
             x,
             y,
@@ -309,10 +311,12 @@ pub(super) fn glyph_for_cell(
     cell: (char, Option<super::super::RgbaColor>),
     scale: u32,
 ) -> Result<crate::intel::GucBcs0RgbaCopy, &'static str> {
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
+        .ok_or("shell3-font-physical-size-unavailable")?;
     let mut copy = crate::r::services::shell3_font_service::glyph(
         cell.0,
-        microfont::FWIDTH as u32 * scale,
-        microfont::FHEIGHT as u32 * scale,
+        cell_width,
+        cell_height,
         cell.1.unwrap_or(super::FOREGROUND).rgba(),
         cell.1.and_then(super::super::RgbaColor::background).unwrap_or(super::BACKGROUND),
         cell.1.is_some_and(super::super::RgbaColor::underline),

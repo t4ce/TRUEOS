@@ -2,21 +2,12 @@ pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> 
     *COPY_RECT_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn subset_sum_collapse5_merge10_upload_status() -> Option<UploadedKernelArtifact> {
-    *SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD.lock()
-}
 
-pub(crate) fn gradient_rect_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD.lock()
-}
 
 pub(crate) fn alpha_blend_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *ALPHA_BLEND_WORKLIST_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn glyph_mask_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *GLYPH_MASK_RGBA8_UPLOAD.lock()
-}
 
 pub(crate) fn sprite_quad_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD.lock()
@@ -39,17 +30,8 @@ pub(crate) fn cpp_audio_visualizer_rgba8_upload_status() -> Option<UploadedKerne
 }
 
 
-pub(crate) fn lfm25_q8_project_packed_upload_status() -> Option<UploadedKernelArtifact> {
-    *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock()
-}
 
-pub(crate) fn kokoro_qgemm_u8_i8_upload_status() -> Option<UploadedKernelArtifact> {
-    *KOKORO_QGEMM_U8_I8_UPLOAD.lock()
-}
 
-pub(crate) fn kokoro_conv1d_u8_u8_upload_status() -> Option<UploadedKernelArtifact> {
-    *KOKORO_CONV1D_U8_U8_UPLOAD.lock()
-}
 
 
 
@@ -71,41 +53,7 @@ pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> 
     Some(upload)
 }
 
-pub(crate) fn upload_subset_sum_collapse5_merge10_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD.lock() {
-        return Some(upload);
-    }
-    let dev = super::claimed_device()?;
-    let upload = upload_artifact(
-        dev,
-        SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_ARTIFACT,
-        SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU,
-    )?;
-    *SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
 
-pub(crate) fn upload_gradient_rect_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: gradient-rect-worklist-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        GRADIENT_RECT_WORKLIST_RGBA8_ADLS_GPU,
-    )?;
-    *GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
 
 pub(crate) fn upload_alpha_blend_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *ALPHA_BLEND_WORKLIST_RGBA8_UPLOAD.lock() {
@@ -129,23 +77,6 @@ pub(crate) fn upload_alpha_blend_worklist_rgba8_kernel() -> Option<UploadedKerne
     Some(upload)
 }
 
-pub(crate) fn upload_glyph_mask_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *GLYPH_MASK_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: glyph-mask-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(dev, GLYPH_MASK_RGBA8_ADLS_ARTIFACT, GLYPH_MASK_RGBA8_ADLS_GPU)?;
-    *GLYPH_MASK_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
 
 pub(crate) fn upload_ui4_nv12_tile64_to_rgba8_frame_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *UI4_NV12_TILE64_TO_RGBA8_FRAME_UPLOAD.lock() {
@@ -356,65 +287,8 @@ pub(crate) fn upload_particle_craft_kernel() -> Option<UploadedKernelArtifact> {
     *PARTICLE_CRAFT_UPLOAD.lock()
 }
 
-pub(crate) fn upload_lfm25_q8_project_packed_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock() {
-        return Some(upload);
-    }
 
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: lfm25-q8-project-packed upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
 
-    let upload = upload_artifact(
-        dev,
-        LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT,
-        LFM25_Q8_PROJECT_PACKED_ADLS_GPU,
-    )?;
-    *LFM25_Q8_PROJECT_PACKED_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_kokoro_qgemm_u8_i8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *KOKORO_QGEMM_U8_I8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: kokoro-qgemm-u8-i8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload =
-        upload_artifact(dev, KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT, KOKORO_QGEMM_U8_I8_ADLS_GPU)?;
-    *KOKORO_QGEMM_U8_I8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_kokoro_conv1d_u8_u8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *KOKORO_CONV1D_U8_U8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: kokoro-conv1d-u8-u8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload =
-        upload_artifact(dev, KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT, KOKORO_CONV1D_U8_U8_ADLS_GPU)?;
-    *KOKORO_CONV1D_U8_U8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
 
 pub(crate) fn upload_helio_retained_transform_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *HELIO_RETAINED_TRANSFORM_UPLOAD.lock() {
@@ -430,19 +304,6 @@ pub(crate) fn upload_helio_retained_transform_kernel() -> Option<UploadedKernelA
     Some(upload)
 }
 
-pub(crate) fn upload_lab256_multiphase_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *LAB256_MULTIPHASE_UPLOAD.lock() {
-        return Some(upload);
-    }
-    let dev = super::claimed_device()?;
-    let upload = upload_ppgtt_resident_artifact(
-        dev,
-        LAB256_MULTIPHASE_ADLS_ARTIFACT,
-        LAB256_MULTIPHASE_ADLS_GPU,
-    )?;
-    *LAB256_MULTIPHASE_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
 
 pub(crate) fn upload_spirit_vfx_background_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD.lock() {
@@ -497,9 +358,7 @@ struct GpgpuKnownArtifactSlot {
 
 const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     COPY_RECT_RGBA8_KERNEL_NAME,
-    GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
     ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
-    GLYPH_MASK_RGBA8_KERNEL_NAME,
     SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
     UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
     SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
@@ -511,12 +370,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     SHADERTOY_PALETTE_GRID_KERNEL_NAME,
     SHADERTOY_COSMIC_STRANDS_KERNEL_NAME,
     PARTICLE_CRAFT_KERNEL_NAME,
-    LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
-    KOKORO_QGEMM_U8_I8_KERNEL_NAME,
-    KOKORO_CONV1D_U8_U8_KERNEL_NAME,
-    SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME,
     HELIO_RETAINED_TRANSFORM_KERNEL_NAME,
-    LAB256_MULTIPHASE_KERNEL_NAME,
     SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME,
     SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME,
 ];
@@ -576,7 +430,6 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
     match name {
         COPY_RECT_RGBA8_KERNEL_NAME
         | ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME
-        | GLYPH_MASK_RGBA8_KERNEL_NAME
         | UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME
         | SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME
         | UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME
@@ -590,12 +443,7 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         | SHADERTOY_COSMIC_STRANDS_KERNEL_NAME
         | CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME
         | PARTICLE_CRAFT_KERNEL_NAME
-        | LFM25_Q8_PROJECT_PACKED_KERNEL_NAME
-        | KOKORO_QGEMM_U8_I8_KERNEL_NAME
-        | KOKORO_CONV1D_U8_U8_KERNEL_NAME
-        | SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME
         | HELIO_RETAINED_TRANSFORM_KERNEL_NAME
-        | LAB256_MULTIPHASE_KERNEL_NAME
         | SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME
         | SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME => GpgpuArtifactAddressSpace::CallerPpgtt,
         _ => GpgpuArtifactAddressSpace::GlobalGgtt,
@@ -621,32 +469,20 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             gpu: COPY_RECT_RGBA8_ADLS_GPU,
             upload: &COPY_RECT_RGBA8_UPLOAD,
         }),
-        GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,
-            gpu: GRADIENT_RECT_WORKLIST_RGBA8_ADLS_GPU,
-            upload: &GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD,
-        }),
+
         ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: ALPHA_BLEND_WORKLIST_RGBA8_ADLS_ARTIFACT,
             gpu: ALPHA_BLEND_WORKLIST_RGBA8_ADLS_GPU,
             upload: &ALPHA_BLEND_WORKLIST_RGBA8_UPLOAD,
         }),
-        GLYPH_MASK_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: GLYPH_MASK_RGBA8_ADLS_ARTIFACT,
-            gpu: GLYPH_MASK_RGBA8_ADLS_GPU,
-            upload: &GLYPH_MASK_RGBA8_UPLOAD,
-        }),
+
 
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: HELIO_RETAINED_TRANSFORM_ADLS_ARTIFACT,
             gpu: HELIO_RETAINED_TRANSFORM_ADLS_GPU,
             upload: &HELIO_RETAINED_TRANSFORM_UPLOAD,
         }),
-        LAB256_MULTIPHASE_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: LAB256_MULTIPHASE_ADLS_ARTIFACT,
-            gpu: LAB256_MULTIPHASE_ADLS_GPU,
-            upload: &LAB256_MULTIPHASE_UPLOAD,
-        }),
+
         SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_ARTIFACT,
             gpu: SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU,
@@ -687,26 +523,10 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             gpu: PARTICLE_CRAFT_ADLS_GPU,
             upload: &PARTICLE_CRAFT_UPLOAD,
         }),
-        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: LFM25_Q8_PROJECT_PACKED_ADLS_ARTIFACT,
-            gpu: LFM25_Q8_PROJECT_PACKED_ADLS_GPU,
-            upload: &LFM25_Q8_PROJECT_PACKED_UPLOAD,
-        }),
-        KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT,
-            gpu: KOKORO_QGEMM_U8_I8_ADLS_GPU,
-            upload: &KOKORO_QGEMM_U8_I8_UPLOAD,
-        }),
-        KOKORO_CONV1D_U8_U8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT,
-            gpu: KOKORO_CONV1D_U8_U8_ADLS_GPU,
-            upload: &KOKORO_CONV1D_U8_U8_UPLOAD,
-        }),
-        SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_ARTIFACT,
-            gpu: SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU,
-            upload: &SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD,
-        }),
+
+
+
+
 
         _ => None,
     }

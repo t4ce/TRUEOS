@@ -90,17 +90,13 @@ pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
 pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 mode:window,arg1 x/y,payload w/h -> rc [+ mode1 serial]
 pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window,arg1 close flags -> rc
-#[cfg(feature = "gridpaper")]
-pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 instance:scale,payload fixed page -> rc
-#[cfg(feature = "gridpaper")]
-pub const OP_BP_GRIDPAPER_CLOSE: u32 = 0xBA; // arg0 instance, detach calling VM's producer -> rc
-#[cfg(feature = "gridpaper")]
-pub const OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT: u32 = 0xBB; // arg0 instance,payload CSS-like text color programs -> rc
+ // arg0 generation,arg1 instance:scale,payload fixed page -> rc
+ // arg0 instance, detach calling VM's producer -> rc
+ // arg0 instance,payload CSS-like text color programs -> rc
 pub const OP_BP_PRINTER_SNAPSHOT_READ: u32 = 0xBC; // arg0 offset, arg1 cap -> IPP printer registry
 pub const OP_BP_PRINT2D_SUBMIT: u32 = 0xBD; // arg0 document kind,arg1 subject,payload compact document -> job/rc
 pub const OP_BP_PRINT2D_STATUS: u32 = 0xBE; // arg0 job id -> PrintJobState/rc
-#[cfg(feature = "gridpaper")]
-pub const OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE: u32 = 0xBF; // arg0 instance, focused Print Screen request token
+ // arg0 instance, focused Print Screen request token
 pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_BEGIN: u32 = 0xC0; // arg0 window,arg1 width/height -> rc
 pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_CHUNK: u32 = 0xC1; // arg0 window,arg1 byte offset,payload RGB565 -> rc
 pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_FINISH: u32 = 0xC2; // arg0 window -> rc
@@ -227,8 +223,7 @@ pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5; // arg0 mode:wind
 pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output width:height
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7; // arg0 offset, arg1 cap -> USB inventory snapshot
 pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8; // arg0 window,arg1 cap -> selected combo/keyboard routes
-#[cfg(feature = "gridpaper")]
-pub const OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT: u32 = 0xF9; // arg0 instance -> page image + release
+ // arg0 instance -> page image + release
 pub const OP_BP_ARCHIVE_PACK_START: u32 = 0xFA; // arg0 source len,payload source+archive paths -> operation id/rc
 pub const OP_BP_ARCHIVE_UNPACK_START: u32 = 0xFB; // arg0 archive len,payload archive+destination paths -> operation id/rc
 pub const OP_BP_ARCHIVE_STATUS: u32 = 0xFC; // arg0 operation id -> pending/ready/rc
@@ -3404,95 +3399,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
 
-        #[cfg(feature = "gridpaper")]
-        OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let rc = if arg1 & crate::r::services::gridpaper_service::SIZED_SNAPSHOT_VMCALL_MARKER
-                != 0
-            {
-                let instance_id = ((arg1 >> 32) & 0x7fff_ffff) as u32;
-                let rows = ((arg1 >> 24) & 0xff) as u32;
-                let columns = ((arg1 >> 16) & 0xff) as u32;
-                let scale_percent = (arg1 & 0xffff) as u32;
-                crate::r::services::gridpaper_service::submit_sized_snapshot_for_owner(
-                    vm_id,
-                    instance_id,
-                    arg0,
-                    scale_percent,
-                    columns,
-                    rows,
-                    payload,
-                )
-            } else {
-                let instance_id = (arg1 >> 32) as u32;
-                let scale_percent = arg1 as u32;
-                crate::r::services::gridpaper_service::submit_snapshot_for_owner(
-                    vm_id,
-                    instance_id,
-                    arg0,
-                    scale_percent,
-                    payload,
-                )
-            };
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        #[cfg(feature = "gridpaper")]
-        OP_BP_GRIDPAPER_SNAPSHOT_CHECKPOINT => {
-            let Some(page) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let out = unsafe {
-                &mut (&mut (*page).payload)[..crate::r::services::gridpaper_service::PAGE_BYTES]
-            };
-            let rc = crate::r::services::gridpaper_service::checkpoint_snapshot_for_owner(
-                vm_id,
-                arg0 as u32,
-                out,
-            );
-            let len = if rc == 0 {
-                crate::r::services::gridpaper_service::PAGE_BYTES as u32
-            } else {
-                0
-            };
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len);
-            DispatchOutcome::Resume
-        }
-        #[cfg(feature = "gridpaper")]
-        OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let rc = crate::r::services::gridpaper_service::submit_text_animations_for_owner(
-                vm_id,
-                arg0 as u32,
-                payload,
-            );
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        #[cfg(feature = "gridpaper")]
-        OP_BP_GRIDPAPER_CLOSE => {
-            let rc = crate::r::services::gridpaper_service::close_owner(vm_id, arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        #[cfg(feature = "gridpaper")]
-        OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE => {
-            let packed = crate::r::services::gridpaper_service::take_print_request_for_owner(
-                vm_id,
-                arg0 as u32,
-            )
-            .map(|(token, _generation)| u64::from(token))
-            .unwrap_or(0);
-            write_response(vm_id, seq, STATUS_OK, packed, 0);
-            DispatchOutcome::Resume
-        }
+        
+        
+        
+        
+        
         OP_BP_PRINT2D_SUBMIT => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);

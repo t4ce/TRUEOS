@@ -11,13 +11,24 @@ HARNESS = r'''
 mod intel {
     std::thread_local! {pub static EXTENT:std::cell::Cell<Option<(u32,u32)>>=const {std::cell::Cell::new(None)};}
     pub fn physical_extent_pixels(_:u32,_:u32)->Option<(u32,u32)> {EXTENT.get()}
+    pub fn physical_extent_pixels_fraction(_:u32,_:u32,_:u32)->Option<(u32,u32)> {EXTENT.get()}
 }
 mod virtio_gpu_logo {
     std::thread_local! {pub static OUTPUT:std::cell::Cell<Option<(u32,u32)>>=const {std::cell::Cell::new(None)};}
     pub fn output_dimensions()->Option<(u32,u32)> {OUTPUT.get()}
 }
 #[path=__SOURCE__] mod display_metrics;
-use display_metrics::physical_extent_pixels;
+use display_metrics::{physical_extent_pixels,physical_extent_pixels_fraction};
+#[test] fn fractional_em_size_preserves_native_policy_and_virtual_rounding() {
+    assert_eq!(physical_extent_pixels_fraction(15,15,2),None);
+    virtio_gpu_logo::OUTPUT.set(Some((1920,1080)));
+    assert_eq!(physical_extent_pixels_fraction(15,15,2),Some((28,28)));
+    assert_eq!(physical_extent_pixels_fraction(30,30,4),Some((28,28)));
+    assert_eq!(physical_extent_pixels_fraction(0,15,2),None);
+    assert_eq!(physical_extent_pixels_fraction(15,15,0),None);
+    intel::EXTENT.set(Some((32,32)));
+    assert_eq!(physical_extent_pixels_fraction(15,15,2),Some((32,32)));
+}
 #[test] fn native_edid_result_keeps_priority_over_virtual_policy() {
     intel::EXTENT.set(Some((53,71)));
     virtio_gpu_logo::OUTPUT.set(Some((1920,1080)));

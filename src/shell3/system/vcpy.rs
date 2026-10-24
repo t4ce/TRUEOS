@@ -56,8 +56,7 @@ fn execute(io: &Output, rest: &str) {
             );
             for (name, consumer) in [
                 ("font-clear", crate::r::services::vcpy_service::RgbaFillConsumer::Font),
-                #[cfg(feature = "gridpaper")]
-                ("gridpaper-clear", crate::r::services::vcpy_service::RgbaFillConsumer::Gridpaper),
+                
                 ("ui4-base", crate::r::services::vcpy_service::RgbaFillConsumer::Ui4),
             ] {
                 let [fills, bytes, fallbacks, failures] =

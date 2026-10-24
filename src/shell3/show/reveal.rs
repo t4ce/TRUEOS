@@ -19,7 +19,7 @@ impl StripCache {
         }
         if slot.is_none() {
             let Some(layout) = RasterLayout::fit(view,
-                (microfont::FWIDTH as u32 * scale, microfont::FHEIGHT as u32 * scale),
+                crate::r::services::shell3_font_service::cell_extent(scale).ok_or("shell3-font-physical-size-unavailable")?,
                 0, crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES) else { return Ok(false); };
             let Some(raster) = BcsTextArea::new(layout, budget) else { return Ok(false); };
             *slot = Some(Self { raster, cells: RenderedLine::new(), scale, revision: 0 });
@@ -36,10 +36,12 @@ impl StripCache {
     }
     pub async fn copy(&mut self, input: &StripReveal, destination: crate::intel::GucBcs0RgbaSurface,
         poisoned: &mut bool) -> Result<(), &'static str> {
+        let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(self.scale)
+            .ok_or("shell3-font-physical-size-unavailable")?;
         let views: alloc::vec::Vec<_> = input.spans.iter().map(|span| {
             (CellRect { x: span.start as i64, y: 0, columns: span.len() as u32, rows: 1 },
-             (((input.start + span.start) * microfont::FWIDTH * self.scale as usize) as u32,
-              (input.row * microfont::FHEIGHT * self.scale as usize) as u32))
+             (((input.start + span.start) * cell_width as usize) as u32,
+              (input.row * cell_height as usize) as u32))
         }).collect();
         self.raster.copy_views(&views, destination, poisoned).await?;
         Ok(())

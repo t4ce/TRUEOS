@@ -68,7 +68,7 @@ use super::{
 
 '''
     generated += words("CLIP_POSITION3_UV_VS_CODE", vs) + "\n"
-    generated += words("SAMPLED_TEXTURE_PS_SIMD16_CODE", ps) + "\n"
+    generated += words("SAMPLED_TEXTURE_PS_SIMD16_CODE", ps).replace("static ", "pub(super) static ", 1) + "\n"
     generated += f'''static CLIP_POSITION3_UV_TEXTURE_PIPELINE: TrianglePipeline = TrianglePipeline {{
     vs: TriangleVertexShader {{
         code: &CLIP_POSITION3_UV_VS_CODE,

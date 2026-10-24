@@ -8,8 +8,7 @@ pub(super) enum Stage {
     Hull = 2,
     NativeDrain = 3,
     Archive = 4,
-    #[cfg(feature = "gridpaper")]
-    Gridpaper = 5,
+    
     Media = 6,
     Ui4 = 7,
     Input = 8,

@@ -488,7 +488,7 @@ fn expected_lines()->usize {
 #[test] fn shell3_snapshot_keeps_one_fixed_native_mask_independent_of_demo() {
     reset(0);
     let fixed=build_shell3_alpha_atlas(19).unwrap();
-    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,3.5);
+    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,4.0);
     assert_eq!((fixed.glyph_width,fixed.glyph_height,fixed.gutter_px),(23,31,6));
     let a=fixed.glyph('A').unwrap().to_vec();
     assert!(a.iter().all(|&coverage|coverage==128));
@@ -505,12 +505,12 @@ fn expected_lines()->usize {
         let state=STATE.lock().unwrap();
         assert_eq!(state.renders,1);
         assert_eq!(state.params[0][8],0); // box/block body shares this submission
-        assert!(state.params.iter().all(|p|f32::from_bits(p[13])==3.5));
+        assert!(state.params.iter().all(|p|f32::from_bits(p[13])==4.0));
     }
     with_warmed_atlas(AtlasConfig {glyph_height_px:Some(38),line_width_px:8.0,
         ..AtlasConfig::default()},|_|Ok(())).unwrap();
     assert_eq!(fixed.glyph('A').unwrap(),a);
-    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,3.5);
+    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,4.0);
     let state=STATE.lock().unwrap();assert_eq!(state.uploads,uploads);assert_eq!(state.renders,2);
     assert!(fixed.glyphs().any(|(ch,_)|ch=='§'));
 }

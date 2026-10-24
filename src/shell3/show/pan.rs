@@ -35,7 +35,7 @@ impl PanBuffer {
         };
         let Some(layout) = RasterLayout::fit(
             view,
-            (microfont::FWIDTH as u32 * scale, microfont::FHEIGHT as u32 * scale),
+            crate::r::services::shell3_font_service::cell_extent(scale).ok_or("shell3-font-physical-size-unavailable")?,
             crate::allcaps::shell3::PANBUFFER_GUARD_CELLS,
             crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES,
         ) else {
@@ -118,7 +118,7 @@ impl PanBuffer {
     ) -> Result<(), &'static str> {
         let copies = self
             .raster
-            .copy_view(self.view, destination, (0, 3 * microfont::FHEIGHT as u32 * scale), poisoned)
+            .copy_view(self.view, destination, (0, 3 * crate::r::services::shell3_font_service::cell_extent(scale).ok_or("shell3-font-physical-size-unavailable")?.1), poisoned)
             .await?;
         crate::log_info!(target: "apps";
             "shell3/pan: copy_retired rectangles={} destination={}x{}\n",

@@ -1061,7 +1061,7 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
                         super::update::MATRIX_BACKGROUND
                     }
                 } else {
-                    [0, 0, 0, 255]
+                    super::update::MATRIX_BACKGROUND
                 };
                 row.iter()
                     .enumerate()
@@ -1245,10 +1245,11 @@ pub(super) fn pointer(
             return;
         };
         let (cols, rows) = route.screen.dimensions();
+        let Some((cell_width, cell_height)) = crate::r::services::shell3_font_service::cell_extent(scale) else { return; };
         let col =
-            (event.local_x.max(0) as usize / (microfont::FWIDTH * scale as usize)).min(cols - 1);
+            (event.local_x.max(0) as usize / (cell_width as usize)).min(cols - 1);
         let row =
-            (event.local_y.max(0) as usize / (microfont::FHEIGHT * scale as usize)).min(rows - 1);
+            (event.local_y.max(0) as usize / (cell_height as usize)).min(rows - 1);
         let mut bytes = Vec::new();
         for (mask, button) in [
             (1, trueos_terminal::MouseButton::Left),

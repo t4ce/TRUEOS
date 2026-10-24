@@ -82,6 +82,22 @@ impl Show {
         self.font_scale = super::service::microfont_scale();
     }
 
+    /// Resolve the first frame and grid from the same physical character cell.
+    pub(crate) fn initial_grid(&mut self, columns: usize, rows: usize) -> Result<(usize, usize), &'static str> {
+        let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(self.font_scale)
+            .ok_or("shell3-font-physical-size-unavailable")?;
+        let requested = show_extent(columns, rows, self.font_scale)?;
+        let extent = if let Some(mut geometry) = self.initial_geometry {
+            let (screen_width, screen_height) = crate::ui4::output_dimensions()
+                .ok_or("shell3-show-scanout-unavailable")?;
+            geometry.width = geometry.width.max(super::MIN_COLUMNS as u32 * cell_width).min(screen_width);
+            geometry.height = geometry.height.max(super::MIN_ROWS as u32 * cell_height).min(screen_height);
+            self.initial_geometry = Some(geometry);
+            (geometry.width, geometry.height)
+        } else { requested };
+        Ok(((extent.0 / cell_width) as usize, (extent.1 / cell_height) as usize))
+    }
+
     pub(crate) const fn font_scale(&self) -> u32 {
         self.font_scale
     }
@@ -92,6 +108,8 @@ impl Show {
         columns: usize,
         rows: usize,
     ) -> Result<(u32, u32), &'static str> {
+        let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
+            .ok_or("shell3-font-physical-size-unavailable")?;
         let (width, height) = self
             .surface
             .as_ref()
@@ -99,8 +117,8 @@ impl Show {
             .map(Ok)
             .unwrap_or_else(|| show_extent(columns, rows, self.font_scale))?;
         let extent = (
-            width.max(super::MIN_COLUMNS as u32 * microfont::FWIDTH as u32 * scale),
-            height.max(super::MIN_ROWS as u32 * microfont::FHEIGHT as u32 * scale),
+            width.max((super::MIN_COLUMNS as u32).saturating_mul(cell_width)),
+            height.max((super::MIN_ROWS as u32).saturating_mul(cell_height)),
         );
         if let Some(surface) = self.surface.as_mut() {
             if extent != (width, height) {
@@ -375,24 +393,18 @@ impl Drop for Show {
 fn show_extent(columns: usize, rows: usize, scale: u32) -> Result<(u32, u32), &'static str> {
     let (screen_width, screen_height) =
         crate::ui4::output_dimensions().ok_or("shell3-show-scanout-unavailable")?;
-    let min_width = (super::MIN_COLUMNS as u32)
-        .saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
-    let min_height =
-        (super::MIN_ROWS as u32).saturating_mul((microfont::FHEIGHT as u32).saturating_mul(scale));
-    if screen_width < min_width || screen_height < min_height {
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
+        .ok_or("shell3-font-physical-size-unavailable")?;
+    let available_columns = screen_width / cell_width;
+    let available_rows = screen_height / cell_height;
+    if available_columns < super::MIN_COLUMNS as u32 || available_rows < super::MIN_ROWS as u32 {
         return Err("shell3-show-invalid-extent");
     }
-    let width = u32::try_from(columns)
-        .unwrap_or(u32::MAX)
-        .max(super::MIN_COLUMNS as u32)
-        .saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale))
-        .min(screen_width);
-    let height = u32::try_from(rows)
-        .unwrap_or(u32::MAX)
-        .max(super::MIN_ROWS as u32)
-        .saturating_mul((microfont::FHEIGHT as u32).saturating_mul(scale))
-        .min(screen_height);
-    Ok((width, height))
+    let columns = u32::try_from(columns).unwrap_or(u32::MAX)
+        .max(super::MIN_COLUMNS as u32).min(available_columns);
+    let rows = u32::try_from(rows).unwrap_or(u32::MAX)
+        .max(super::MIN_ROWS as u32).min(available_rows);
+    Ok((columns * cell_width, rows * cell_height))
 }
 
 fn create_surface(
@@ -481,6 +493,7 @@ fn damage_for_segments(
     height: u32,
     scale: u32,
 ) -> Option<DamageRect> {
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)?;
     segments
         .iter()
         .filter_map(|segment| {
@@ -492,12 +505,12 @@ fn damage_for_segments(
             };
             let x = u32::try_from(segment.offset)
                 .ok()?
-                .saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
-            let y = (row as u32).saturating_mul((microfont::FHEIGHT as u32).saturating_mul(scale));
+                .saturating_mul(cell_width);
+            let y = (row as u32).saturating_mul(cell_height);
             let columns = segment.remove.max(segment.text.chars().count());
             let patch_width = u32::try_from(columns)
                 .ok()?
-                .saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
+                .saturating_mul(cell_width);
             if patch_width == 0 || x >= width || y >= height {
                 return None;
             }
@@ -505,7 +518,7 @@ fn damage_for_segments(
                 x,
                 y,
                 patch_width.min(width - x),
-                ((microfont::FHEIGHT as u32).saturating_mul(scale)).min(height - y),
+                (cell_height).min(height - y),
             ))
         })
         .reduce(DamageRect::union)

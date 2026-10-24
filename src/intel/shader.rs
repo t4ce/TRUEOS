@@ -139,6 +139,9 @@ mod patch_cube_tests;
 mod generated_adjacency_gs;
 #[path = "../../crates/trueos-shader/generated_clip_position3_uv_texture.rs"]
 mod generated_clip_position3_uv_texture;
+// Picasso and the clip-position pipeline use the same sampled fragment ISA.
+pub(crate) const SAMPLED_TEXTURE_PS_SIMD16_CODE: &[u32] =
+    &generated_clip_position3_uv_texture::SAMPLED_TEXTURE_PS_SIMD16_CODE;
 #[path = "../../crates/trueos-shader/generated_triangle.rs"]
 mod generated_triangle;
 #[path = "../../picasso/picasso-retained-pbr-forward/pipeline.rs"]

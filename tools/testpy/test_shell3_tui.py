@@ -38,6 +38,7 @@ fn echo_output(lease:&shell2::MatrixSlotLease,line:String) {if shell2::matrix_sl
 fn drop_lease(lease:&shell2::MatrixSlotLease)->bool {shell2::free_name(lease.name());true}
 fn drop_slot(name:Option<&str>)->bool {if let Some(name)=name {shell2::free_name(name);}true}}
 mod r {
+pub mod services {pub mod shell3_font_service {pub fn cell_extent(s:u32)->Option<(u32,u32)>{Some((6*s,11*s))}}}
 pub mod input_timing {
     pub struct Site;
     impl Site {pub const fn new(_: &str)->Self {Self} pub fn record(&self,_:u64) {}}
@@ -188,6 +189,19 @@ fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::Matrix
     assert_eq!(tui::claim(&competing,28),Some(false),"launch preparation cannot release another Blueprint owner");
     assert_eq!(tui::claim(&next,27),Some(true));
     tui::detach(f.id);tui::detach(other.id);
+}
+#[test] fn blueprint_default_background_matches_matrix_and_preserves_explicit_colors() {
+    let (f,t)=session("blueprint-palette",1,20,5);
+    assert_eq!(tui::claim(&t,1),Some(true));
+    let output=b"\\x1b[?25l\\x1b[2Jdefault\\x1b[40mB\\x1b[46mS\\x1b[49mD";
+    assert_eq!(tui::write(&t,1,output),Some(output.len()));
+    let rows=tui::snapshot(f.id,Some("blueprint-palette")).unwrap();
+    for row in &rows {for cell in row {if !matches!(cell.0,'B'|'S') {
+        assert_eq!(cell.1.unwrap().background(),Some(update::MATRIX_BACKGROUND));
+    }}}
+    assert_eq!(rows[0][7].1.unwrap().background(),Some([0,0,0,255]));
+    assert_eq!(rows[0][8].1.unwrap().background(),Some([17,168,205,255]));
+    tui::detach(f.id);
 }
 #[test] fn failed_claim_reason_is_static_unlocked_and_bounded_per_run() {
     hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
@@ -515,7 +529,7 @@ fn submit_app_prompt(&mut self)->bool {false}
     assert!(tui::select_for_navigation(f,"native-palette"));assert!(tui::snapshot(f.id,Some("native-palette")).is_none());
     tui::request(f,"native-palette").unwrap();assert_eq!(tui::snapshot(f.id,Some("native-palette")).unwrap(),rows);
     let (vm_frontend,vm_target)=session("vm-palette",15,12,5);tui::claim(&vm_target,15);
-    tui::write(&vm_target,15,b"\x1b[?25lVM");let rows=tui::snapshot(vm_frontend.id,Some("vm-palette")).unwrap();assert_eq!(rows[0][0].1.unwrap().background(),Some([0,0,0,255]));
+    tui::write(&vm_target,15,b"\x1b[?25lVM");let rows=tui::snapshot(vm_frontend.id,Some("vm-palette")).unwrap();assert_eq!(rows[0][0].1.unwrap().background(),Some(update::MATRIX_BACKGROUND));
 }
 #[test] fn restored_system_helpers_color_three_control_rows_and_use_default_body() {
     for (index,name) in ["cry","disc","ram","smp","net","gpu","tlb","vcpy"].iter().enumerate() {

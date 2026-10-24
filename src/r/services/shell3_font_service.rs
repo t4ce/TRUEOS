@@ -11,6 +11,18 @@ use crate::intel::{GucBcs0RgbaCopy, GucBcs0RgbaSurface, gpgpu::GpgpuOwnedRgba8Su
 
 const PAGE_COLUMNS: u32 = 8;
 const PAGE_ROWS: u32 = 8;
+pub(crate) const DEFAULT_UI4_FONT_SCALE: u32 = 2;
+
+/// Scale 2 is Shell3's default 7.5mm em; other scale values retain relative zoom.
+/// This is shared by the font source, frame, paint, scrolling and hit testing.
+pub(crate) fn cell_extent(scale: u32) -> Option<(u32, u32)> {
+    let numerator = 15u32.checked_mul(scale)?;
+    let (_, height) = crate::ui4::physical_extent_pixels_fraction(
+        numerator, numerator, 2 * DEFAULT_UI4_FONT_SCALE)?;
+    let width = height.checked_mul(microfont::FWIDTH as u32)?
+        .checked_add(microfont::FHEIGHT as u32 / 2)? / microfont::FHEIGHT as u32;
+    (width != 0 && height != 0).then_some((width, height))
+}
 static FONT: spin::Once<Font> = spin::Once::new();
 static PREPARING: AtomicBool = AtomicBool::new(false);
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, Result<(), &'static str>>;
@@ -76,7 +88,7 @@ pub(crate) async fn prepare() -> Result<(), &'static str> {
 
 fn prepare_once() -> Result<(), &'static str> {
     if FONT.get().is_some() { return Ok(()); }
-    let (_, height) = crate::ui4::physical_extent_pixels(5, 5)
+    let (_, height) = cell_extent(DEFAULT_UI4_FONT_SCALE)
         .ok_or("shell3-font-physical-size-unavailable")?;
     let alpha = build_shell3_alpha_atlas(height)?;
     alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?;
@@ -84,7 +96,7 @@ fn prepare_once() -> Result<(), &'static str> {
     let line_width_px = alpha.line_width_px;
     FONT.call_once(|| Font { alpha, cache: spin::Mutex::new(CellCache::default()) });
     crate::log_important!(target: "microfont-mask";
-        "shell3-font: ready format=r8 em_mm=5 em_height_px={} width_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=unchanged missing_glyph=red-question-mark\n",
+        "shell3-font: ready format=r8 em_mm=7.5 em_height_px={} width_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=physical-cells missing_glyph=red-question-mark\n",
         height, line_width_px, glyphs);
     Ok(())
 }
@@ -244,7 +256,7 @@ fn grid_glyph_blocking(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
             }
         }
     };
-    if scale == 1 {
+    if height == font.alpha.em_height_px {
         let atlas = &font.alpha;
         emit(atlas.glyph(ch).or_else(|| atlas.glyph('?')).ok_or("grid-font-glyph")?,
             atlas.glyph_width, atlas.gutter_px);

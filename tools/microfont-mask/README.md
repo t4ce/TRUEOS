@@ -60,6 +60,13 @@ pixels, keeping strokes within their cells. Identical normalized configuration
 reuses the mask without GPU submission. Width changes redraw the same allocation;
 size changes replace the mask allocation while retaining all geometry.
 
+Shell3's UI4 default uses a 7.5mm em with 4px strokes. Its frame, painting,
+scrolling and pointer mapping share the same physical cell dimensions. At the
+virtual output's 96 DPI this is a 15x28px cell, making the default 100-column,
+25-row frame 1500x700px; smaller outputs fit fewer whole cells. Native displays
+use their EDID density. Font-scale controls zoom relative to this default.
+Gridpape retains its separate 5mm size steps.
+
 `stamp_preview` is the current CPU sink. Both existing UI4 specimens copy their
 cells from this atlas, with the quad specimen retaining its 24x44 display size.
 It accepts straight RGB/opacity plus a premultiplied background, producing

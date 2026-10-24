@@ -49,8 +49,11 @@ static ALLOCATIONS:AtomicUsize=AtomicUsize::new(0);
 static FLUSH_FAILS:AtomicBool=AtomicBool::new(false);
 static ALLOCATION_FAILS:AtomicBool=AtomicBool::new(false);
 mod ui4 {
+    pub fn physical_extent_pixels_fraction(w:u32,h:u32,d:u32)->Option<(u32,u32)> {
+        assert_eq!((w,h,d),(30,30,4));Some((21,21))
+    }
     pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {
-        assert_eq!((w,h),(5,5));Some((21,21))
+        assert_eq!(w,h);Some((w*14/5,h*14/5))
     }
 }
 mod intel {
@@ -80,7 +83,7 @@ mod intel {
 mod r {
     pub mod blocking {
         pub fn try_spawn_blocking_job_with_purpose(job:Box<dyn FnOnce()+Send>,purpose:&str)
-            ->Result<(),Box<dyn FnOnce()+Send>> {assert_eq!(purpose,"shell3-font");job();Ok(())}
+            ->Result<(),Box<dyn FnOnce()+Send>> {assert!(["shell3-font","grid-font"].contains(&purpose));job();Ok(())}
     }
     pub mod services {
         pub mod microfont_mask_service {
@@ -99,20 +102,20 @@ mod r {
                 }
             }
             pub fn build_shell3_alpha_atlas(height:u32)->Result<OwnedAlphaAtlas,&'static str> {
-                assert_eq!(height,21);crate::BUILDS.fetch_add(1,crate::Ordering::SeqCst);
-                let glyph_width=24;let glyph_height=33;let len=glyph_width*glyph_height;
+                assert!([14,21].contains(&height));crate::BUILDS.fetch_add(1,crate::Ordering::SeqCst);
+                let glyph_width=((height*6).div_ceil(11)+12) as usize;let glyph_height=(height+12) as usize;let len=glyph_width*glyph_height;
                 let raster = |ch| {
                     let bits=microfont::glyph_cell_pixels(ch);
                     (0..len).map(|i| {
-                        let x=i%24;let y=i/24;
+                        let x=i%glyph_width;let y=i/glyph_width;
                         if x<6||y<6 {return 0;}
                         let sx=((2*(x-6)+1)*11)/(2*height as usize);
                         let sy=((2*(y-6)+1)*11)/(2*height as usize);
                         if sx<6&&sy<11&&bits&(1u128<<(65-sy*6-sx))!=0 {255}else{0}
                     }).collect::<Vec<u8>>()
                 };
-                Ok(OwnedAlphaAtlas {em_height_px:height,line_width_px:3.5,glyph_width:glyph_width as u32,
-                    glyph_height:glyph_height as u32,gutter_px:6,zero:vec![0;len],half:vec![128;len],full:vec![255;len],horizontal:raster('─'),left_heavy:raster('╾'),junction:raster('┤'),question:(0..len).map(|i|if i%24<12 {255}else{0}).collect()})
+                Ok(OwnedAlphaAtlas {em_height_px:height,line_width_px:4.0,glyph_width:glyph_width as u32,
+                    glyph_height:glyph_height as u32,gutter_px:6,zero:vec![0;len],half:vec![128;len],full:vec![255;len],horizontal:raster('─'),left_heavy:raster('╾'),junction:raster('┤'),question:(0..len).map(|i|if i%glyph_width<glyph_width/2 {255}else{0}).collect()})
             }
         }
         #[path="__ROOT__/src/r/services/shell3_font_service.rs"]pub mod shell3_font_service;
@@ -132,6 +135,15 @@ fn pixels(copy:intel::GucBcs0RgbaCopy)->Vec<[u8;4]> {
         let at=copy.source.phys as usize+(copy.source_y+y)as usize*copy.source.pitch_bytes as usize+(copy.source_x+x)as usize*4;
         unsafe {core::ptr::read_unaligned(at as *const [u8;4])}
     })).collect()
+}
+#[test]fn z_grid_five_mm_base_does_not_crop_the_new_shell3_seven_point_five_mm_atlas() {
+    ready();
+    let data=run(r::services::shell3_font_service::grid_glyph(1,'─')).unwrap();
+    let width=u32::from_le_bytes(data[..4].try_into().unwrap());
+    let height=u32::from_le_bytes(data[4..8].try_into().unwrap());
+    assert_eq!((width,height),(8,14));
+    let painted:Vec<_>=(0..height).filter(|&y|data[8+(y*width*4) as usize]==0).collect();
+    assert_eq!(painted,[6,7]);
 }
 #[test]fn preparation_produces_one_retained_alpha_atlas_for_all_consumers() {
     ready();ready();ready();

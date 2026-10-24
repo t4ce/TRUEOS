@@ -83,8 +83,7 @@ fn paint_segment(
         super::super::SpecialRows::PromtRow => 2,
         super::super::SpecialRows::MatrixRow(index) => index + 3,
     };
-    let cell_width = (microfont::FWIDTH as u32).checked_mul(scale).ok_or(())?;
-    let cell_height = (microfont::FHEIGHT as u32).checked_mul(scale).ok_or(())?;
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale).ok_or(())?;
     let y = u32::try_from(row).ok().and_then(|row| row.checked_mul(cell_height)).ok_or(())?;
     if y >= view.height {
         return Ok(());

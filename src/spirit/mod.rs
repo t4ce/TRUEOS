@@ -25,8 +25,7 @@ mod intel_cursor;
 mod lilly;
 mod lilly_cursor;
 pub(crate) mod lilly_protocol;
-#[cfg(feature = "gridpaper")]
-mod response_window;
+
 #[allow(dead_code)]
 #[path = "Spirit_VFX.rs"]
 pub(crate) mod spirit_vfx;
@@ -34,8 +33,7 @@ mod window_selection;
 
 #[allow(unused_imports)]
 pub(crate) use lilly_protocol::{LillyEmotion, enqueue_emotion_words, enqueue_emotions};
-#[cfg(feature = "gridpaper")]
-pub(crate) use response_window::{enqueue_reasoning_response, spirit_response_window_service_task};
+
 pub(crate) use window_selection::spirit_window_selection_task;
 
 /// Architectural pipe/fence capacity kept for later activation.
@@ -1879,7 +1877,6 @@ const fn pipe_name(id: SpiritFenceId) -> &'static str {
     }
 }
 
-#[cfg(not(feature = "gridpaper"))]
 pub(crate) fn enqueue_reasoning_response(_turn: u64, _text: &str) -> bool {
     false
 }

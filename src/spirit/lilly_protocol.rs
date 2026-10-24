@@ -734,10 +734,7 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             return next_idle_animation(*LAST_RGBA.lock());
         };
         log_drained_package(&package, ring_remaining);
-        #[cfg(feature = "gridpaper")]
-        if let Some(text) = package.text.as_deref() {
-            super::response_window::enqueue_package_text(text);
-        }
+        
         let Some(gesture) = package.gesture else {
             // Text has reached the response presenter. Keep draining so a
             // later gesture in the same reader turn can flow normally.

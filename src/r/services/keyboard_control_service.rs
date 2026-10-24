@@ -287,12 +287,7 @@ impl KeyboardControlStation {
         Ok(())
     }
 
-    #[cfg(feature = "gridpaper")]
-    fn cancel_program(
-        &mut self,
-        principal: KeyboardControlPrincipal,
-        handle: u64,
-    ) -> Result<(), KeyboardControlError> {
+     KeyboardControlError> {
         let index = self.index(principal, handle)?;
         let keyboard = &mut self.keyboards[index];
         keyboard.commands.clear();
@@ -539,11 +534,7 @@ pub(crate) fn keyboard_is_idle(
     Ok(keyboard.active.is_none() && keyboard.commands.is_empty())
 }
 
-#[cfg(feature = "gridpaper")]
-pub(crate) fn cancel_program(
-    principal: KeyboardControlPrincipal,
-    handle: u64,
-) -> Result<(), KeyboardControlError> {
+ KeyboardControlError> {
     STATION.lock().cancel_program(principal, handle)
 }
 

@@ -1,22 +1,11 @@
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
-pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME: &str = "subset_sum_collapse5_merge10";
-pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/subset_sum_collapse5_merge10.clcpp");
-pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/subset_sum_collapse5_merge10.clcpp";
 pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/copy_rect_rgba8.clcpp");
 pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
     "src/intel/gpgpu/kernels/copy_rect_rgba8.clcpp";
-pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME: &str = "gradient_rect_worklist_rgba8";
-pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/gradient_rect_worklist_rgba8.clcpp");
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME: &str = "alpha_blend_worklist_rgba8";
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/alpha_blend_worklist_rgba8.clcpp");
-pub(crate) const GLYPH_MASK_RGBA8_KERNEL_NAME: &str = "glyph_mask_rgba8";
-pub(crate) const GLYPH_MASK_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/glyph_mask_rgba8.clcpp");
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME: &str =
     "ui4_nv12_tile64_to_rgba8_frame";
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE: &str =
@@ -56,29 +45,11 @@ pub(crate) const PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME: &str = "particle_craft_bi
 pub(crate) const PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME: &str = "particle_craft_render_rgba8";
 pub(crate) const PARTICLE_CRAFT_SOURCE_PATH: &str =
     "../TRUEOS-Blueprints/apps/shadertoy/assets/particle_craft/kernel.clcpp";
-pub(crate) const LFM25_Q8_PROJECT_PACKED_KERNEL_NAME: &str = "lfm25_q8_project_packed";
-pub(crate) const LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/lfm25_q8_project_packed.clcpp");
-pub(crate) const LFM25_Q8_PROJECT_PACKED_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/lfm25_q8_project_packed.clcpp";
-pub(crate) const KOKORO_QGEMM_U8_I8_KERNEL_NAME: &str = "kokoro_qgemm_u8_i8";
-pub(crate) const KOKORO_QGEMM_U8_I8_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/kokoro_qgemm_u8_i8.clcpp");
-pub(crate) const KOKORO_QGEMM_U8_I8_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/kokoro_qgemm_u8_i8.clcpp";
-pub(crate) const KOKORO_CONV1D_U8_U8_KERNEL_NAME: &str = "kokoro_conv1d_u8_u8";
-pub(crate) const KOKORO_CONV1D_U8_U8_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/kokoro_conv1d_u8_u8.clcpp");
-pub(crate) const KOKORO_CONV1D_U8_U8_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/kokoro_conv1d_u8_u8.clcpp";
 pub(crate) const HELIO_RETAINED_TRANSFORM_KERNEL_NAME: &str = "helio_retained_transform";
 pub(crate) const HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE: &str =
     include_str!("kernels/helio_retained_transform.clcpp");
 pub(crate) const HELIO_RETAINED_TRANSFORM_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/helio_retained_transform.clcpp";
-pub(crate) const LAB256_MULTIPHASE_KERNEL_NAME: &str = "lab256_multiphase";
-pub(crate) const LAB256_MULTIPHASE_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/lab256_multiphase.clcpp");
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME: &str = "spirit_vfx_background_rgba8";
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.clcpp");
@@ -92,15 +63,11 @@ pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_SOURCE_PATH: &str =
 
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
-        SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME => {
-            Some(SUBSET_SUM_COLLAPSE5_MERGE10_OPENCL_SOURCE)
-        }
+
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_OPENCL_SOURCE),
-        GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
-            Some(GRADIENT_RECT_WORKLIST_RGBA8_OPENCL_SOURCE)
-        }
+
         ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => Some(ALPHA_BLEND_WORKLIST_RGBA8_OPENCL_SOURCE),
-        GLYPH_MASK_RGBA8_KERNEL_NAME => Some(GLYPH_MASK_RGBA8_OPENCL_SOURCE),
+
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some(UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE)
         }
@@ -114,12 +81,11 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         | PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME
         | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => None,
 
-        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_OPENCL_SOURCE),
-        KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(KOKORO_QGEMM_U8_I8_OPENCL_SOURCE),
-        KOKORO_CONV1D_U8_U8_KERNEL_NAME => Some(KOKORO_CONV1D_U8_U8_OPENCL_SOURCE),
+
+
 
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE),
-        LAB256_MULTIPHASE_KERNEL_NAME => Some(LAB256_MULTIPHASE_OPENCL_SOURCE),
+
         SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_BACKGROUND_RGBA8_OPENCL_SOURCE),
         SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_SPRITE_RGBA8_OPENCL_SOURCE),
         _ => None,
@@ -128,15 +94,13 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
 
 pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
     match name {
-        SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME => Some(SUBSET_SUM_COLLAPSE5_MERGE10_SOURCE_PATH),
+
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_SOURCE_PATH),
-        GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/gradient_rect_worklist_rgba8.clcpp")
-        }
+
         ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/alpha_blend_worklist_rgba8.clcpp")
         }
-        GLYPH_MASK_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/glyph_mask_rgba8.clcpp"),
+
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_nv12_tile64_to_rgba8_frame.clcpp")
         }
@@ -162,14 +126,11 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         | PARTICLE_CRAFT_BIN_TILES_KERNEL_NAME
         | PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME => Some(PARTICLE_CRAFT_SOURCE_PATH),
 
-        LFM25_Q8_PROJECT_PACKED_KERNEL_NAME => Some(LFM25_Q8_PROJECT_PACKED_SOURCE_PATH),
-        KOKORO_QGEMM_U8_I8_KERNEL_NAME => Some(KOKORO_QGEMM_U8_I8_SOURCE_PATH),
-        KOKORO_CONV1D_U8_U8_KERNEL_NAME => Some(KOKORO_CONV1D_U8_U8_SOURCE_PATH),
+
+
 
         HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_SOURCE_PATH),
-        LAB256_MULTIPHASE_KERNEL_NAME => {
-            Some("crates/trueos-shader/gpgpu/kernels/lab256_multiphase.clcpp")
-        }
+
         SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_BACKGROUND_RGBA8_SOURCE_PATH),
         SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_SPRITE_RGBA8_SOURCE_PATH),
         _ => None,
@@ -177,30 +138,21 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
 }
 
 include!("kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.contract.rs");
+
 include!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/gradient_rect_worklist_rgba8.contract.rs");
+
+
 include!("kernels/artifacts/adls/cpp/helio_retained_transform.contract.rs");
-include!("kernels/artifacts/adls/cpp/lab256_multiphase.contract.rs");
+
 include!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.contract.rs");
 include!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.contract.rs");
-pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
-pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/copy_rect_rgba8.spv");
-pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.bin");
-pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.spv");
-pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN_SHA256: [u8; 32] =
-    SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () =
-    assert!(matches!(SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN.len() == 13_320);
-const _: () = assert!(SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_SPV.len() == 6_488);
+embedded_compute_artifact!(pub(crate) COPY_RECT_RGBA8_ADLS_BIN, COPY_RECT_RGBA8_ADLS_SPV,
+    COPY_RECT_RGBA8_ADLS_BIN_STORAGE,
+    "kernels/artifacts/adls/cpp/copy_rect_rgba8.bin"
+);
+
 const _: () = assert!(matches!(COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () = assert!(COPY_RECT_RGBA8_ADLS_BIN.len() == 11_328);
 const _: () = assert!(COPY_RECT_RGBA8_ADLS_SPV.len() == 4_788);
@@ -274,31 +226,25 @@ const _: () = {
         scalar += 1;
     }
 };
-pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/gradient_rect_worklist_rgba8.bin");
-pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/gradient_rect_worklist_rgba8.spv");
 
-pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.bin");
-pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.spv");
-pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.bin");
-pub(crate) const GLYPH_MASK_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.spv");
-pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.bin");
-pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.spv");
-pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.bin");
-pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.spv");
-pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.bin");
-pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.spv");
+
+embedded_compute_artifact!(pub(crate) ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN, ALPHA_BLEND_WORKLIST_RGBA8_ADLS_SPV,
+    ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN_STORAGE,
+    "kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.bin"
+);
+
+embedded_compute_artifact!(pub(crate) UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN, UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV,
+    UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_STORAGE,
+    "kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.bin"
+);
+embedded_compute_artifact!(pub(crate) SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN, SPRITE_QUAD_WORKLIST_RGBA8_ADLS_SPV,
+    SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_STORAGE,
+    "kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.bin"
+);
+embedded_compute_artifact!(pub(crate) UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN, UI4_COMPOSE_LAYERS_RGBA8_ADLS_SPV,
+    UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN_STORAGE,
+    "kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.bin"
+);
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.contract.rs"
 );
@@ -468,138 +414,12 @@ const _: () = {
     assert!(render.payload_args[2].offset_bytes == 64);
     assert!(render.payload_args[3].offset_bytes == 72);
 };
-include!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lfm25_q8_project_packed.contract.rs"
-);
-pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lfm25_q8_project_packed.bin"
-);
-pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lfm25_q8_project_packed.spv"
-);
-pub(crate) const LFM25_Q8_PROJECT_PACKED_ADLS_BIN_SHA256: [u8; 32] =
-    LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(LFM25_Q8_PROJECT_PACKED_ADLS_BIN.len() == 23_432);
-const _: () = assert!(LFM25_Q8_PROJECT_PACKED_ADLS_SPV.len() == 14_740);
-const _: () = {
-    let contract = LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT;
-    assert!(contract.target.pci_device_ids.len() == 1);
-    assert!(contract.target.pci_device_ids[0] == 0x4680);
-    assert!(contract.target.revision_min == 0x0C);
-    assert!(contract.target.revision_max == 0x0C);
-    assert!(contract.entry_offset == 64);
-    assert!(contract.entry_size == 3_856);
-    assert!(contract.simd_width == 16);
-    assert!(contract.grf_count == 128);
-    assert!(contract.scratch_bytes == 0);
-    assert!(contract.slm_bytes == 0);
-    assert!(contract.cross_thread_data_bytes == 96);
-    assert!(contract.per_thread_data_bytes == 96);
-    assert!(contract.bindings.len() == 3);
-    assert!(contract.bindings[0].arg_index == 0 && contract.bindings[0].bti == 0);
-    assert!(contract.bindings[1].arg_index == 1 && contract.bindings[1].bti == 1);
-    assert!(contract.bindings[2].arg_index == 2 && contract.bindings[2].bti == 2);
-    assert!(contract.payload_args.len() == 6);
-    assert!(contract.payload_args[0].offset_bytes == 48);
-    assert!(contract.payload_args[1].offset_bytes == 56);
-    assert!(contract.payload_args[2].offset_bytes == 64);
-    assert!(contract.payload_args[3].offset_bytes == 72);
-    assert!(contract.payload_args[4].offset_bytes == 76);
-    assert!(contract.payload_args[5].offset_bytes == 80);
-};
-include!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_qgemm_u8_i8.contract.rs"
-);
-pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_qgemm_u8_i8.bin"
-);
-pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_qgemm_u8_i8.spv"
-);
-pub(crate) const KOKORO_QGEMM_U8_I8_ADLS_BIN_SHA256: [u8; 32] =
-    KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(KOKORO_QGEMM_U8_I8_ADLS_BIN.len() == 24_032);
-const _: () = assert!(KOKORO_QGEMM_U8_I8_ADLS_SPV.len() == 10_212);
-const _: () = {
-    let contract = KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT;
-    assert!(contract.target.pci_device_ids.len() == 1);
-    assert!(contract.target.pci_device_ids[0] == 0x4680);
-    assert!(contract.target.revision_min == 0x0C);
-    assert!(contract.target.revision_max == 0x0C);
-    assert!(contract.entry_offset == 64);
-    assert!(contract.entry_size == 5_592);
-    assert!(contract.simd_width == 16);
-    assert!(contract.grf_count == 128);
-    assert!(contract.scratch_bytes == 0);
-    assert!(contract.slm_bytes == 0);
-    assert!(contract.cross_thread_data_bytes == 128);
-    assert!(contract.per_thread_data_bytes == 96);
-    assert!(contract.bindings.len() == 6);
-    assert!(contract.payload_args.len() == 14);
-    let mut pointer = 0;
-    while pointer < 6 {
-        assert!(contract.bindings[pointer].arg_index as usize == pointer);
-        assert!(contract.bindings[pointer].bti as usize == pointer);
-        assert!(contract.payload_args[pointer].offset_bytes == 48 + pointer as u32 * 8);
-        pointer += 1;
-    }
-    let mut scalar = 6;
-    while scalar < contract.payload_args.len() {
-        assert!(contract.payload_args[scalar].arg_index as usize == scalar);
-        assert!(contract.payload_args[scalar].offset_bytes == 72 + scalar as u32 * 4);
-        assert!(contract.payload_args[scalar].size_bytes == 4);
-        assert!(matches!(contract.payload_args[scalar].kind, GpgpuArtifactArgKind::ByValue));
-        scalar += 1;
-    }
-};
-include!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_conv1d_u8_u8.contract.rs"
-);
-pub(crate) const KOKORO_CONV1D_U8_U8_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_conv1d_u8_u8.bin"
-);
-pub(crate) const KOKORO_CONV1D_U8_U8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/kokoro_conv1d_u8_u8.spv"
-);
-pub(crate) const KOKORO_CONV1D_U8_U8_ADLS_BIN_SHA256: [u8; 32] =
-    KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-const _: () = assert!(KOKORO_CONV1D_U8_U8_ADLS_BIN.len() == 29_480);
-const _: () = assert!(KOKORO_CONV1D_U8_U8_ADLS_SPV.len() == 15_124);
-const _: () = {
-    let contract = KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT;
-    assert!(contract.target.pci_device_ids.len() == 1);
-    assert!(contract.target.pci_device_ids[0] == 0x4680);
-    assert!(contract.target.revision_min == 0x0C);
-    assert!(contract.target.revision_max == 0x0C);
-    assert!(contract.entry_offset == 64);
-    assert!(contract.entry_size == 6_056);
-    assert!(contract.simd_width == 16);
-    assert!(contract.grf_count == 128);
-    assert!(contract.scratch_bytes == 0);
-    assert!(contract.slm_bytes == 0);
-    assert!(contract.cross_thread_data_bytes == 128);
-    assert!(contract.per_thread_data_bytes == 96);
-    assert!(contract.bindings.len() == 4);
-    assert!(contract.payload_args.len() == 16);
-    let mut pointer = 0;
-    while pointer < 4 {
-        assert!(contract.bindings[pointer].arg_index as usize == pointer);
-        assert!(contract.bindings[pointer].bti as usize == pointer);
-        assert!(contract.payload_args[pointer].offset_bytes == 48 + pointer as u32 * 8);
-        pointer += 1;
-    }
-    let mut scalar = 4;
-    while scalar < contract.payload_args.len() {
-        assert!(contract.payload_args[scalar].arg_index as usize == scalar);
-        assert!(contract.payload_args[scalar].offset_bytes == 64 + scalar as u32 * 4);
-        assert!(contract.payload_args[scalar].size_bytes == 4);
-        assert!(matches!(contract.payload_args[scalar].kind, GpgpuArtifactArgKind::ByValue));
-        scalar += 1;
-    }
-};
+
+
+
+
+
+
 // Keep the native retained-transform Zebin in release images even while the
 // ADL-S compatibility policy parks its submission path.  `.gpgpu_artifacts`
 // is retained by the linker script specifically for dormant, explicitly
@@ -614,30 +434,21 @@ static HELIO_RETAINED_TRANSFORM_ADLS_BIN_STORAGE: [u8; HELIO_RETAINED_TRANSFORM_
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN: &[u8] =
     &HELIO_RETAINED_TRANSFORM_ADLS_BIN_STORAGE;
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/helio_retained_transform.spv");
-pub(crate) const LAB256_MULTIPHASE_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lab256_multiphase.bin"
-);
-pub(crate) const LAB256_MULTIPHASE_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lab256_multiphase.spv"
-);
+    embedded_shader::spirv(HELIO_RETAINED_TRANSFORM_ADLS_BIN);
+
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.contract.rs"
 );
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.contract.rs"
 );
-pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
+embedded_compute_artifact!(pub(crate) SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN, SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_SPV,
+    SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_STORAGE,
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.bin"
 );
-pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.spv"
-);
-pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
+embedded_compute_artifact!(pub(crate) SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN, SPIRIT_VFX_SPRITE_RGBA8_ADLS_SPV,
+    SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_STORAGE,
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.bin"
-);
-pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv"
 );
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
@@ -696,8 +507,6 @@ const _: () = {
     assert!(contract.bindings.len() == 16);
     assert!(contract.payload_args.len() == 24);
 };
-pub(crate) const LAB256_MULTIPHASE_ADLS_BIN_SHA256: [u8; 32] =
-    LAB256_STEP_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 
 pub(crate) const SHADERTOY_PROTEAN_CLOUDS_KERNEL_NAME: &str = "shadertoy_protean_clouds";
 include!(

@@ -20,11 +20,27 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
     Some((virtual_axis_pixels(width_mm)?, virtual_axis_pixels(height_mm)?))
 }
 
+/// Fractional millimeters use the same native EDID/virtual-output policy.
+pub(crate) fn physical_extent_pixels_fraction(width: u32, height: u32, denominator: u32) -> Option<(u32, u32)> {
+    if width == 0 || height == 0 || denominator == 0 { return None; }
+    if let Some(extent) = crate::intel::physical_extent_pixels_fraction(width, height, denominator) {
+        return Some(extent);
+    }
+    crate::virtio_gpu_logo::output_dimensions()?;
+    Some((virtual_axis_pixels_fraction(width, denominator)?, virtual_axis_pixels_fraction(height, denominator)?))
+}
+
 fn virtual_axis_pixels(millimeters: u32) -> Option<u32> {
+    virtual_axis_pixels_fraction(millimeters, 1)
+}
+
+fn virtual_axis_pixels_fraction(numerator_mm: u32, denominator: u32) -> Option<u32> {
+    if denominator == 0 { return None; }
     // 25.4 mm per inch, with nearest-pixel rounding and checked conversion.
     // Keep the fractional millimeter in integer arithmetic so axes agree.
-    let numerator = u64::from(millimeters).checked_mul(VIRTUAL_DESKTOP_DPI * 10)?;
-    let pixels = u32::try_from(numerator.checked_add(127)? / 254).ok()?;
+    let numerator = u64::from(numerator_mm).checked_mul(VIRTUAL_DESKTOP_DPI * 10)?;
+    let divisor = u64::from(denominator).checked_mul(254)?;
+    let pixels = u32::try_from(numerator.checked_add(divisor / 2)? / divisor).ok()?;
     (pixels != 0).then_some(pixels)
 }
 

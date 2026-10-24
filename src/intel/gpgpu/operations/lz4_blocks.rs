@@ -2,11 +2,8 @@
 include!(
     "../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_blocks.contract.rs"
 );
-const LZ4_BLOCKS_BIN: &[u8] = include_bytes!(
+embedded_compute_artifact!(LZ4_BLOCKS_BIN, LZ4_BLOCKS_SPV, LZ4_BLOCKS_BIN_STORAGE,
     "../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_blocks.bin"
-);
-const LZ4_BLOCKS_SPV: &[u8] = include_bytes!(
-    "../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_blocks.spv"
 );
 const LZ4_BLOCKS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
     "lz4_blocks",
@@ -15,10 +12,13 @@ const LZ4_BLOCKS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted
     &LZ4_BLOCKS_ADLS_CPP_ABI_CONTRACT,
 );
 include!("../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_decode_cooperative.contract.rs");
+embedded_compute_artifact!(LZ4_DECODE_BIN, LZ4_DECODE_SPV, LZ4_DECODE_BIN_STORAGE,
+    "../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_decode_cooperative.bin"
+);
 const LZ4_DECODE_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
     "lz4_decode_cooperative",
-    include_bytes!("../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_decode_cooperative.bin"),
-    include_bytes!("../../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/lz4_decode_cooperative.spv"),
+    LZ4_DECODE_BIN,
+    LZ4_DECODE_SPV,
     &LZ4_DECODE_COOPERATIVE_ADLS_CPP_ABI_CONTRACT,
 );
 const CODEC_RCS_GPU_VA_RING_BASE: u64 = 0x0860_0000;

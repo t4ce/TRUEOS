@@ -12,7 +12,7 @@ pub(crate) const TRIANGLE_PIPELINE_PS_EOT_NOTE: &str = "trueos ps launch probe t
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const TRIANGLE_PIPELINE_PUSH_COLOR_NOTE: &str = "mesa-intel-vulkan push-color target=gfx125 ps_variant=simd8 push_bytes=16 source=crates/trueos-shader/xe_lp_shader_bake/push_color.frag host_verified=1";
 
-static TRIANGLE_VS_CODE: [u32; 36] = [
+pub(super) static TRIANGLE_VS_CODE: [u32; 36] = [
     0x00030061, 0x77054220, 0x00000000, 0x00000000, 0x00030061, 0x78054220, 0x00000000, 0x00000000,
     0x00030061, 0x79054220, 0x00000000, 0x00000000, 0x00030061, 0x7A054220, 0x00000000, 0x00000000,
     0x80030061, 0x7F050220, 0x00460105, 0x00000000, 0x617B0061, 0x00100200, 0x617C0061, 0x00100300,

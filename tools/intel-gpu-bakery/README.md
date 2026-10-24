@@ -79,6 +79,14 @@ make intel-gpu-verify-copy-cpp-hardware-log \
   INTEL_GPU_CPP_PROBE_LOG=/path/to/copy-rect-probe.log
 ```
 
+Runtime embedding uses one named static allocation per Zebin. SPIR-V slices
+borrow the binary's existing `SHT_ZEBIN_SPIRV` section at compile time; do not
+add separate `include_bytes!` storage for `.spv` files. The committed binary,
+SPIR-V, and ABI hashes stay unchanged. Linked and packaged verification rejects
+repeated Zebins, separate SPIR-V copies, and duplicated shared graphics stages.
+Run `python3 tools/testpy/test_embedded_shaders.py` for the host allocation and
+byte-identity checks.
+
 ## Contract boundary
 
 The generated contract records section and entry ranges, SIMD/GRF counts,

@@ -766,20 +766,24 @@ impl Shell3 {
 
     pub(super) fn configure_window(&mut self, mut geometry: service::WindowGeometry) {
         let scale = service::microfont_scale();
+        let Some((cell_width, cell_height)) = crate::r::services::shell3_font_service::cell_extent(scale) else {
+            self.show.configure_window(geometry);
+            return;
+        };
         geometry.width = geometry
             .width
-            .max(MIN_COLUMNS as u32 * microfont::FWIDTH as u32 * scale);
+            .max(MIN_COLUMNS as u32 * cell_width);
         geometry.height = geometry
             .height
-            .max(MIN_ROWS as u32 * microfont::FHEIGHT as u32 * scale);
+            .max(MIN_ROWS as u32 * cell_height);
         if let Some((width, height)) = crate::ui4::output_dimensions() {
             geometry.width = geometry.width.min(width);
             geometry.height = geometry.height.min(height);
         }
         self.show.configure_window(geometry);
         self.set(
-            (geometry.width / (microfont::FWIDTH as u32 * scale)) as usize,
-            (geometry.height / (microfont::FHEIGHT as u32 * scale)) as usize,
+            (geometry.width / (cell_width)) as usize,
+            (geometry.height / (cell_height)) as usize,
         );
     }
 
@@ -804,12 +808,14 @@ impl Shell3 {
         }
         if self.font_scale_needed() {
             let scale = service::microfont_scale();
+            let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
+                .ok_or("shell3-font-physical-size-unavailable")?;
             let (width, height) = self
                 .show
                 .set_font_scale(scale, self.columns, self.rows_count)?;
             self.set(
-                (width / (microfont::FWIDTH as u32 * scale)) as usize,
-                (height / (microfont::FHEIGHT as u32 * scale)) as usize,
+                (width / (cell_width)) as usize,
+                (height / (cell_height)) as usize,
             );
             self.pending_presentation = None;
             if self.show.resize_needed() {
@@ -819,6 +825,10 @@ impl Shell3 {
                 "sh3srv: microfont scale={}x slot={} extent={}x{} grid={}x{}\n",
                 scale, self.executor_slot, width, height, self.columns, self.rows_count,
             );
+        }
+        if self.show.window().is_none() {
+            let (columns, rows) = self.show.initial_grid(self.columns, self.rows_count)?;
+            if (columns, rows) != (self.columns, self.rows_count) { self.set(columns, rows); }
         }
         loop {
             if self.pending_presentation.is_none() {
@@ -879,9 +889,11 @@ impl Shell3 {
             .show
             .resize_target_extent()
             .ok_or("shell3-show-resize-state")?;
+        let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(self.show.font_scale())
+            .ok_or("shell3-font-physical-size-unavailable")?;
         self.set(
-            (width / (microfont::FWIDTH as u32 * self.show.font_scale())) as usize,
-            (height / (microfont::FHEIGHT as u32 * self.show.font_scale())) as usize,
+            (width / (cell_width)) as usize,
+            (height / (cell_height)) as usize,
         );
         let snapshot = self.capture_update_snapshot();
         let lines = snapshot.rendered_lines();

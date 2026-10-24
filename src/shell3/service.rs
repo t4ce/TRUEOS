@@ -15,15 +15,16 @@ static SHELL3_POINTER_EVENTS: spin::Mutex<VecDeque<crate::ui4::Ui4PointerEvent>>
 static SHELL3_RESIZE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4ResizeEvent, 256>> =
     spin::Mutex::new(heapless::Deque::new());
 
-pub(super) const DEFAULT_MICROFONT_SCALE: u32 = 2;
+pub(super) const DEFAULT_MICROFONT_SCALE: u32 =
+    crate::r::services::shell3_font_service::DEFAULT_UI4_FONT_SCALE;
 
 pub(super) fn microfont_scale() -> u32 {
     DEFAULT_MICROFONT_SCALE
 }
 
-pub(crate) fn ui4_cell_extent() -> (i32, i32) {
-    let scale = microfont_scale() as i32;
-    (microfont::FWIDTH as i32 * scale, microfont::FHEIGHT as i32 * scale)
+pub(crate) fn ui4_cell_extent() -> Option<(i32, i32)> {
+    let (width, height) = crate::r::services::shell3_font_service::cell_extent(microfont_scale())?;
+    Some((i32::try_from(width).ok()?, i32::try_from(height).ok()?))
 }
 
 struct ShellOwnership {
@@ -676,16 +677,16 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                             shell.show.font_scale(),
                         );
                     } else {
-                        let scale = shell.show.font_scale() as usize;
+                        let Some((cell_width, cell_height)) = crate::r::services::shell3_font_service::cell_extent(shell.show.font_scale()) else { continue; };
                         let position = (event.local_x >= 0 && event.local_y >= 0).then_some((
-                            event.local_y.max(0) as usize / (microfont::FHEIGHT * scale),
-                            event.local_x.max(0) as usize / (microfont::FWIDTH * scale),
+                            event.local_y.max(0) as usize / (cell_height as usize),
+                            event.local_x.max(0) as usize / (cell_width as usize),
                         ));
                         let matrix_area = event.local_x >= 0
                             && event.local_y >= 0
-                            && event.local_x as usize / (microfont::FWIDTH * scale) < shell.columns
+                            && event.local_x as usize / (cell_width as usize) < shell.columns
                             && (3..shell.rows_count)
-                                .contains(&(event.local_y as usize / (microfont::FHEIGHT * scale)));
+                                .contains(&(event.local_y as usize / (cell_height as usize)));
                         let scrolled = matrix_area
                             && event.wheel != 0
                             && shell.scroll_matrix(-(event.wheel as i32));
@@ -695,8 +696,8 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                             event.buttons_down & 4 != 0,
                             matrix_area,
                             (
-                                (microfont::FWIDTH * scale) as i32,
-                                (microfont::FHEIGHT * scale) as i32,
+                                (cell_width as usize) as i32,
+                                (cell_height as usize) as i32,
                             ),
                         );
                         if shell.handle_controls_pointer(position, event.buttons_pressed & 1 != 0)

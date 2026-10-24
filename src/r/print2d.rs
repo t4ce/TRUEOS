@@ -11,36 +11,27 @@ use alloc::{
     string::String,
 };
 use spin::Mutex;
-#[cfg(feature = "gridpaper")]
-use alloc::{string::ToString, vec::Vec};
-#[cfg(feature = "gridpaper")]
-use core::sync::atomic::{AtomicU32, Ordering};
 
-#[cfg(feature = "gridpaper")]
-pub const DOCUMENT_GRIDPAPER_A4: u32 = 1;
-#[cfg(feature = "gridpaper")]
-pub const DOCUMENT_GRIDPAPER_REQUEST: u32 = 2;
+
+
+
+
 
 pub const ERROR_INVALID_DOCUMENT: i64 = -1;
-#[cfg(feature = "gridpaper")]
-pub const ERROR_QUEUE_FULL: i64 = -2;
+
 pub const ERROR_NOT_OWNER: i64 = -3;
 pub const ERROR_UNKNOWN_JOB: i32 = -4;
 pub const ERROR_TRANSPORT: i64 = -5;
 
-#[cfg(feature = "gridpaper")]
-const QUEUE_CAPACITY: usize = 8;
-#[cfg(feature = "gridpaper")]
-const STATUS_CAPACITY: usize = 64;
+
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]
 pub enum PrintJobState {
-    #[cfg(feature = "gridpaper")]
-    Queued = 1,
+    
     WaitingForPrinter = 2,
-    #[cfg(feature = "gridpaper")]
-    Rendering = 3,
+    
     Connecting = 4,
     Sending = 5,
     Submitted = 6,
@@ -54,18 +45,15 @@ pub enum PrintJobState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PrintOwner {
     Blueprint(u8),
-    #[cfg(feature = "gridpaper")]
-    Kernel,
+    
 }
 
 impl PrintJobState {
     pub const fn name(self) -> &'static str {
         match self {
-            #[cfg(feature = "gridpaper")]
-            Self::Queued => "queued",
+            
             Self::WaitingForPrinter => "waiting-for-printer",
-            #[cfg(feature = "gridpaper")]
-            Self::Rendering => "rendering",
+            
             Self::Connecting => "connecting",
             Self::Sending => "sending",
             Self::Submitted => "submitted",
@@ -83,22 +71,13 @@ impl PrintJobState {
     }
 }
 
-#[cfg(feature = "gridpaper")]
-pub(crate) enum PrintDocument {
-    #[cfg(feature = "gridpaper")]
-    GridPaperA4 {
-        generation: u64,
-        size: crate::r::services::gridpaper_service::GridSize,
-        raw: Vec<u8>,
-    },
-}
+
 
 pub(crate) struct PrintJob {
     pub id: u32,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub owner: PrintOwner,
-    #[cfg(feature = "gridpaper")]
-    pub document: PrintDocument,
+    
     pub printer_uri: Option<String>,
 }
 
@@ -122,48 +101,17 @@ impl PrintQueue {
         }
     }
 
-    #[cfg(feature = "gridpaper")]
-    fn retain_status_capacity(&mut self) {
-        while self.records.len() >= STATUS_CAPACITY {
-            let removable = self
-                .records
-                .iter()
-                .position(|record| record.state.terminal())
-                .unwrap_or(0);
-            let _ = self.records.remove(removable);
-        }
-    }
+    
 
-    #[cfg(feature = "gridpaper")]
-    fn has_job_capacity(&self) -> bool {
-        self.records
-            .iter()
-            .filter(|record| !record.state.terminal())
-            .count()
-            < QUEUE_CAPACITY
-    }
+    
 }
 
-#[cfg(feature = "gridpaper")]
-static NEXT_JOB_ID: AtomicU32 = AtomicU32::new(1);
+
 static PRINT_QUEUE: Mutex<PrintQueue> = Mutex::new(PrintQueue::new());
 
-#[cfg(feature = "gridpaper")]
-fn next_job_id() -> u32 {
-    loop {
-        let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
-        if id != 0 {
-            return id;
-        }
-    }
-}
 
-#[cfg(feature = "gridpaper")]
-fn enqueue(
-    owner: PrintOwner,
-    document: PrintDocument,
-    printer_uri: Option<String>,
-) -> Result<u32, i64> {
+
+ i64> {
     let id = next_job_id();
     {
         let mut queue = PRINT_QUEUE.lock();
@@ -187,8 +135,7 @@ fn enqueue(
     Ok(id)
 }
 
-#[cfg(feature = "gridpaper")]
-fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
+ i64> {
     let id = {
         // Keep queue capacity and request consumption atomic from the caller's
         // perspective. A full print queue leaves the Print Screen token
@@ -225,45 +172,9 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
     Ok(id)
 }
 
-#[cfg(feature = "gridpaper")]
-pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw: &[u8]) -> i64 {
-    let document = match document_kind {
-        DOCUMENT_GRIDPAPER_A4 => {
-            if !crate::r::services::gridpaper_service::valid_print_snapshot(raw) {
-                return ERROR_INVALID_DOCUMENT;
-            }
-            PrintDocument::GridPaperA4 {
-                generation: subject,
-                size: crate::r::services::gridpaper_service::GridSize::FULL,
-                raw: raw.to_vec(),
-            }
-        }
-        DOCUMENT_GRIDPAPER_REQUEST => {
-            if !raw.is_empty() || subject == 0 || subject > u32::MAX as u64 {
-                return ERROR_INVALID_DOCUMENT;
-            }
-            return match enqueue_gridpaper_request(owner, subject as u32) {
-                Ok(id) => i64::from(id),
-                Err(error) => error,
-            };
-        }
-        _ => return ERROR_INVALID_DOCUMENT,
-    };
 
-    match enqueue(PrintOwner::Blueprint(owner), document, None) {
-        Ok(id) => i64::from(id),
-        Err(error) => error,
-    }
-}
 
-#[cfg(feature = "gridpaper")]
-pub(crate) fn submit_gridpaper_to_printer(
-    owner: u8,
-    generation: u64,
-    size: crate::r::services::gridpaper_service::GridSize,
-    raw: Vec<u8>,
-    printer_uri: &str,
-) -> Result<u32, i64> {
+ i64> {
     if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw)
     {
         return Err(ERROR_INVALID_DOCUMENT);
@@ -279,12 +190,7 @@ pub(crate) fn submit_gridpaper_to_printer(
     )
 }
 
-#[cfg(feature = "gridpaper")]
-pub(crate) fn submit_kernel_gridpaper(
-    generation: u64,
-    size: crate::r::services::gridpaper_service::GridSize,
-    raw: Vec<u8>,
-) -> Result<u32, i64> {
+ i64> {
     if !crate::r::services::gridpaper_service::valid_print_snapshot(&raw) {
         return Err(ERROR_INVALID_DOCUMENT);
     }
@@ -299,13 +205,7 @@ pub(crate) fn submit_kernel_gridpaper(
     )
 }
 
-#[cfg(feature = "gridpaper")]
-pub(crate) fn submit_kernel_gridpaper_to_printer(
-    generation: u64,
-    size: crate::r::services::gridpaper_service::GridSize,
-    raw: Vec<u8>,
-    printer_uri: &str,
-) -> Result<u32, i64> {
+ i64> {
     if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw)
     {
         return Err(ERROR_INVALID_DOCUMENT);
@@ -366,7 +266,6 @@ mod tests {
     }
 }
 
-#[cfg(not(feature = "gridpaper"))]
 pub(crate) fn submit_for_owner(_owner: u8, _document_kind: u32, _subject: u64, _raw: &[u8]) -> i64 {
     ERROR_INVALID_DOCUMENT
 }

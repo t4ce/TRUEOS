@@ -52,11 +52,13 @@ mod virtio_gpu_logo {pub fn output_dimensions()->Option<(u32,u32)> {None}}
 mod phys {pub fn phys_to_virt(v:usize)->usize {v}}
 mod percpu {pub fn current_slot()->u32 {0}}
 mod ui4 {
+    pub fn output_dimensions()->Option<(u32,u32)> {crate::intel::active_scanout_dimensions()}
     pub fn set_window_placement(_:u32,_:u32,_:crate::show::Placement)->Result<(),()> { Ok(()) }
     #[path="__ROOT__/src/ui4/text_blit.rs"]pub mod text_blit;
     mod text_blit_bench {pub async fn run_once()->Result<(),&'static str>{Ok(())}}
 }
 mod r {pub mod services {pub mod shell3_font_service {
+    pub fn cell_extent(scale:u32)->Option<(u32,u32)> {Some((6*scale,11*scale))}
     use crate::intel::{GucBcs0RgbaCopy,GucBcs0RgbaSurface};
     type Key=(char,u32,u32,[u8;4],[u8;4],bool);
     static CACHE:std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<Key,Vec<u8>>>>=
@@ -135,7 +137,7 @@ mod show {
                     let mut expanded = pixels.clone();
                     let view = FrameRgbaView { virt: pixels.as_mut_ptr(), byte_len: pixels.len(),
                         width, height, pitch: 512, phys: pixels.as_ptr() as u64, gpu: pixels.as_ptr() as u64 };
-                    let colors = (0..text.chars().count()).map(|i| Some(match i%4 {0=>crate::RgbaColor::Pink,1=>crate::RgbaColor::Green,2=>crate::RgbaColor::Underlined {foreground:crate::RgbaColor::Pink.rgba()},_=>crate::RgbaColor::Terminal {foreground:[255,160,90,255],background:[20,45,60,255],underline:true}})).collect();
+                    let colors = (0..text.chars().count()).map(|i| Some(match i%4 {0=>crate::RgbaColor::Pink,1=>crate::RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false},2=>crate::RgbaColor::Underlined {foreground:crate::RgbaColor::Pink.rgba()},_=>crate::RgbaColor::Terminal {foreground:[255,160,90,255],background:[20,45,60,255],underline:true}})).collect();
                     let update = crate::SegmentUpdate { row, side: crate::StripSide::Left,
                         offset: 1, remove: 8, text: text.into(), colors };
                     super::cpu::paint_segment(view, &update, scale).unwrap();
@@ -207,30 +209,30 @@ mod show {
 }
 #[test]
 fn metadata_survives_layout_and_color_only_changes_redraw() {
-    let green = [MetaFmtStr::new("§A").color(RgbaColor::Green).bold()];
+    let green = [MetaFmtStr::new("§A").color(RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false}).bold()];
     let pink = [MetaFmtStr::new("§A").color(RgbaColor::Pink)];
-    let right = [MetaFmtStr::new("é").color(RgbaColor::Blue)];
+    let right = [MetaFmtStr::new("é").color(RgbaColor::Terminal {foreground:[0,0,255,255],background:crate::update::MATRIX_BACKGROUND,underline:false})];
     let line = update::fit_meta_strips(&green, &right, 6);
-    assert_eq!(line, [('§',Some(RgbaColor::Green)),('A',Some(RgbaColor::Green)),(' ',None),(' ',None),(' ',None),('é',Some(RgbaColor::Blue))]);
+    assert_eq!(line, [('§',Some(RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false})),('A',Some(RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false})),(' ',None),(' ',None),(' ',None),('é',Some(RgbaColor::Terminal {foreground:[0,0,255,255],background:crate::update::MATRIX_BACKGROUND,underline:false}))]);
     let previous = [line, vec![], vec![]];
     let current = [update::fit_meta_strips(&pink, &right, 6), vec![], vec![]];
     let patches = update::diff_rendered_lines(Some(&previous), &current);
     assert_eq!(patches.len(), 1);
     assert_eq!((patches[0].offset, patches[0].remove, patches[0].text.as_str()), (0,2,"§A"));
     assert_eq!(patches[0].colors, [Some(RgbaColor::Pink);2]);
-    let no_bold = [MetaFmtStr::new("§A").color(RgbaColor::Green)];
+    let no_bold = [MetaFmtStr::new("§A").color(RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false})];
     assert_eq!(update::fit_meta_strips(&green, &right, 6), update::fit_meta_strips(&no_bold, &right, 6));
-    let hover = [MetaFmtStr::new("§A").color(RgbaColor::Green).underline()];
+    let hover = [MetaFmtStr::new("§A").color(RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false}).underline()];
     let line=update::fit_meta_strips(&hover,&right,6);
-    assert_eq!(line[0].1.unwrap().rgba(),RgbaColor::Green.rgba());
+    assert_eq!(line[0].1.unwrap().rgba(),RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false}.rgba());
     assert!(line[0].1.unwrap().underline());assert_eq!(line[0].1.unwrap().background(),None);
     assert!(!line[5].1.unwrap().underline());
 }
 #[test]
 fn overflowing_strips_keep_their_own_colors_and_neutral_separator() {
-    let left = [MetaFmtStr::new("§ABC").color(RgbaColor::Green)];
+    let left = [MetaFmtStr::new("§ABC").color(RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false})];
     let right = [MetaFmtStr::new("éXYZ").color(RgbaColor::Pink)];
-    assert_eq!(update::fit_meta_strips(&left, &right, 5), [('§',Some(RgbaColor::Green)),('A',Some(RgbaColor::Green)),('│',None),('é',Some(RgbaColor::Pink)),('X',Some(RgbaColor::Pink))]);
+    assert_eq!(update::fit_meta_strips(&left, &right, 5), [('§',Some(RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false})),('A',Some(RgbaColor::Terminal {foreground:[0,255,0,255],background:crate::update::MATRIX_BACKGROUND,underline:false})),('│',None),('é',Some(RgbaColor::Pink)),('X',Some(RgbaColor::Pink))]);
     assert!(update::fit_meta_strips(&left, &right, 0).is_empty());
 }
 #[test]

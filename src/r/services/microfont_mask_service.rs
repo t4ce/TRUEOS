@@ -888,7 +888,7 @@ static REPORTED_FULL_ATLAS_SIZES: spin::Mutex<alloc::collections::BTreeSet<u32>>
 pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<OwnedAlphaAtlas, &'static str> {
     let config = AtlasConfig {
         glyph_height_px: Some(em_height_px),
-        line_width_px: 3.5,
+        line_width_px: 4.0,
         ..AtlasConfig::default()
     };
     with_warmed_atlas(config, |atlas| {

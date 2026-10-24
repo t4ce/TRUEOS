@@ -8,12 +8,9 @@ use alloc::{vec, vec::Vec};
 
 #[cfg(any(feature = "gridpaper", test))]
 const DPI: u32 = 300;
-#[cfg(feature = "gridpaper")]
-const A4_WIDTH_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_WIDTH_MM * 10;
-#[cfg(feature = "gridpaper")]
-const A4_HEIGHT_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_HEIGHT_MM * 10;
-#[cfg(feature = "gridpaper")]
-const RULER_GUTTER_TENTH_MM: u32 = crate::r::services::gridpaper_service::RULER_GUTTER_MM * 10;
+
+
+
 #[cfg(any(feature = "gridpaper", test))]
 const PAGE_HEADER_BYTES: usize = 1_796;
 #[cfg(any(feature = "gridpaper", test))]
@@ -28,13 +25,7 @@ pub(crate) enum EncodeError {
     TooLarge,
 }
 
-#[cfg(feature = "gridpaper")]
-pub(crate) fn encode_gridpaper_a4(
-    size: crate::r::services::gridpaper_service::GridSize,
-    source_width: u32,
-    source_height: u32,
-    rgba_premultiplied: &[u8],
-) -> Result<Vec<u8>, EncodeError> {
+ EncodeError> {
     let source_pixels = usize::try_from(source_width)
         .ok()
         .and_then(|width| width.checked_mul(source_height as usize))

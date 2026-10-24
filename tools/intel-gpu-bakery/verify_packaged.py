@@ -15,6 +15,7 @@ from verify_linked import (
     LinkedArtifactError,
     verify_linked_image,
     verify_required_artifacts,
+    verify_single_copy_artifacts,
 )
 
 
@@ -115,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             extracted, args.selected_bin
         )
         required = verify_required_artifacts(extracted, args.required_bin)
+        single_copy_count = verify_single_copy_artifacts(extracted, args.selected_bin.parent)
         required_text = ",".join(
             f"{path.name}:{digest}:{count}" for path, digest, count in required
         )
@@ -123,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         f"packaged artifact verified: iso={args.iso} member=/TRUEOS.elf "
         f"runtime_sha256={staged_sha256} iso_member_sha256={iso_sha256} "
         f"selected_sha256={selected_sha256} selected_occurrences={selected_count} "
-        f"required={required_text or 'none'}"
+        f"required={required_text or 'none'} single_copy_artifacts={single_copy_count}"
     )
     return 0
 

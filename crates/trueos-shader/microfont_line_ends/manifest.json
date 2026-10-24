@@ -1,6 +1,6 @@
 {
-  "source_sha256": "f34914566b442c5eb63d769d3783472a0b8b9020bd83cb4f7c6bd440a2d28ac6",
-  "rust_sha256": "a267a91ca93453fe79c97428f4a3c0266ea35e6f93afc508a032f0f9510f3792",
+  "source_sha256": "4776e6ad6efc1a13011fc0c3e5adc5d13ff11a013abb4d238d9797789315a01a",
+  "rust_sha256": "fc4cbcf044edebf22e25ea4ed8b9cf023238324581088756c04940b2fb9ec356",
   "device_id": "0x4680",
   "vs_bytes": 144,
   "ps_bytes": 2024,
