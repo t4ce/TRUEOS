@@ -46,10 +46,9 @@ pub(crate) const PARTICLE_CRAFT_RENDER_RGBA8_KERNEL_NAME: &str = "particle_craft
 pub(crate) const PARTICLE_CRAFT_SOURCE_PATH: &str =
     "../TRUEOS-Blueprints/apps/shadertoy/assets/particle_craft/kernel.clcpp";
 pub(crate) const HELIO_RETAINED_TRANSFORM_KERNEL_NAME: &str = "helio_retained_transform";
-pub(crate) const HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE: &str =
-    include_str!("kernels/helio_retained_transform.clcpp");
+
 pub(crate) const HELIO_RETAINED_TRANSFORM_SOURCE_PATH: &str =
-    "crates/trueos-shader/gpgpu/kernels/helio_retained_transform.clcpp";
+    "Blueprint:Picasso/shaders/trueos/retained-transform-source/helio_retained_transform.clcpp";
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME: &str = "spirit_vfx_background_rgba8";
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.clcpp");
@@ -84,7 +83,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
 
 
 
-        HELIO_RETAINED_TRANSFORM_KERNEL_NAME => Some(HELIO_RETAINED_TRANSFORM_OPENCL_SOURCE),
+
 
         SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_BACKGROUND_RGBA8_OPENCL_SOURCE),
         SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_SPRITE_RGBA8_OPENCL_SOURCE),

@@ -61,7 +61,6 @@ impl WindowOwner {
     /// into the UI4 frame/window model. Keep these assignments in one place so
     /// newly reactivated producers cannot silently collide.
     pub(crate) const VIDEO_PLAYER: Self = Self::KernelApp(2);
-    pub(crate) const GRIDPAPER_SERVICE: Self = Self::KernelApp(4);
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
     pub(crate) const COLOR_PICKER_SERVICE: Self = Self::KernelApp(6);
     pub(crate) const SVG_OUTLINE_PROBE: Self = Self::KernelApp(7);
@@ -77,7 +76,6 @@ impl WindowOwner {
         match self {
             Self::Kernel => "kernel",
             Self::VIDEO_PLAYER => "video-player",
-            Self::GRIDPAPER_SERVICE => "gridpaper-service",
             Self::GPGPU_PREVIEW => "gpgpu-preview",
             Self::COLOR_PICKER_SERVICE => "color-picker-service",
             Self::SVG_OUTLINE_PROBE => "svg-outline-probe",
@@ -4021,7 +4019,7 @@ mod tests {
 
     #[test]
     fn lowest_windows_join_the_stack_while_highest_three_keep_z_order() {
-        let owner = WindowOwner::GRIDPAPER_SERVICE;
+        let owner = WindowOwner::KernelApp(4);
         let mut broker = WindowBroker::new();
         let mut windows = Vec::new();
 
@@ -4046,7 +4044,7 @@ mod tests {
 
     #[test]
     fn focused_window_preserves_the_other_windows_order() {
-        let owner = WindowOwner::GRIDPAPER_SERVICE;
+        let owner = WindowOwner::KernelApp(4);
         let mut broker = WindowBroker::new();
         let session = broker.begin_additional_session(owner).unwrap();
         let windows: Vec<_> = (1..=5).map(|frame| broker.create(
@@ -4061,7 +4059,7 @@ mod tests {
 
     #[test]
     fn closing_a_window_frees_its_lease_plane_for_the_next_claimant() {
-        let owner = WindowOwner::GRIDPAPER_SERVICE;
+        let owner = WindowOwner::KernelApp(4);
         let mut broker = WindowBroker::new();
         let session = broker.begin_additional_session(owner).unwrap();
         let first = broker

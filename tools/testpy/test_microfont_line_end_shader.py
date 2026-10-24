@@ -32,14 +32,6 @@ def main():
         d=Path(d);(d/'tests.rs').write_text('const RENDER_MOCS:u32=4; mod intel {pub mod shader {pub const MICROFONT_MASK_VS_PUSH_START_BYTES:u32=0;pub const MICROFONT_MASK_VS_PUSH_GRFS:u32=2;}}\n'+code+tests)
         subprocess.run(['rustc','--edition=2024','--test',str(d/'tests.rs'),'-o',str(d/'tests')],check=True)
         subprocess.run([str(d/'tests')],check=True)
-    manifest=json.loads((ROOT/'crates/trueos-shader/microfont_line_ends/manifest.json').read_text())
-    p=manifest['ps_state']
-    assert p['push_bytes']==64 and p['grf_start16']==6
-    assert p['uses_src_depth']==p['uses_src_w']==p['uses_vmask']==1
-    assert p['scratch_bytes']==p['num_varying_inputs']==p['sampler_count']==p['computed_depth_mode']==0
-    isa=(ROOT/'crates/trueos-shader/microfont_line_ends/line_ends.ps.iga.txt').read_text()
-    assert '(f1.0)  sendc.rc' in isa and 'render target write SIMD16' in isa
-    subprocess.run(['python3',str(ROOT/'tools/microfont-line-end-bake/bake.py'),'--ensure-current'],check=True)
     subprocess.run(['python3',str(ROOT/'tools/microfont-line-end-bake/bake.py'),'--mask','--ensure-current'],check=True)
     m=json.loads((ROOT/'crates/trueos-shader/microfont_mask/manifest.json').read_text())
     assert m['ps_state']['push_bytes']==64 and m['ps_state']['grf_start16']==6

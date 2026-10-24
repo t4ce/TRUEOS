@@ -35,7 +35,7 @@ fn execute(io: &Output, rest: &str) {
             Output::line(
                 io,
                 format!(
-                    "vcpy: consumer=gridpaper copies={} bytes={} fallbacks={} failures={}",
+                    "vcpy: consumer=resident-scene copies={} bytes={} fallbacks={} failures={}",
                     status.consumer_copies,
                     status.consumer_bytes,
                     status.consumer_fallbacks,

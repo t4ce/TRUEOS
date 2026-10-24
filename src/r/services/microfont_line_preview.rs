@@ -26,7 +26,7 @@ const GLYPHS: [char; 256] = {
 };
 const ROWS: usize = GLYPHS.len().div_ceil(COLUMNS);
 // Font size means the complete eleven-row em cell, including descender space.
-// Use the same EDID-to-active-scanout conversion as gridpaper; no guessed DPI.
+// Use the shared EDID-to-active-scanout conversion; no guessed DPI.
 fn glyph_height_pixels(step: u8) -> Result<u32, &'static str> {
     crate::intel::physical_extent_pixels_fraction(10, u32::from(step) * 5, 2)
         .map(|(_, height)| height)

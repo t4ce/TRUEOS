@@ -1067,7 +1067,7 @@ mod resident_scene_msaa_layout_tests {
     };
 
     #[test]
-    fn gridpaper_extent_uses_matching_tile64_color_and_depth_storage() {
+    fn font_scene_extent_uses_matching_tile64_color_and_depth_storage() {
         let color = resident_scene_msaa_color_layout(810, 1153).unwrap();
         let depth = resident_scene_msaa_depth_layout(810, 1153).unwrap();
         assert_eq!(color, (3328, 1216, 16_187_392));

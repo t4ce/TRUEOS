@@ -45,7 +45,7 @@ pub(crate) async fn spirit_window_selection_task() {
     };
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: window selector online cursor={}:{}:{} kind={} cursor_plane=ui4-slot4 trigger=first-frame-post-surflive selection=direct-ui4-focus/no-click hardware_cur_pos=unchanged mappings=gridpaper:cyber-grid,weather:nebula-smoke,vid:bokeh-field\n",
+        "trueos-spirit: window selector online cursor={}:{}:{} kind={} cursor_plane=ui4-slot4 trigger=first-frame-post-surflive selection=direct-ui4-focus/no-click hardware_cur_pos=unchanged mappings=weather:nebula-smoke,vid:bokeh-field\n",
         source.controller_id,
         source.slot_id,
         source.ep_target,
@@ -202,20 +202,7 @@ fn selection_is_owned(
 
 fn profile_for_window(window: crate::ui4::WindowSnapshot) -> Option<WindowVfxProfile> {
     // Spirit's retained response document has its own cell-zero click and
-    // keyboard choreography. Leave it to that path so the generic Gridpaper
-    // selector cannot race the exact target or replace the current chat VFX.
     
-    if window.owner == crate::ui4::WindowOwner::GRIDPAPER_SERVICE
-        || window
-            .producer_name
-            .eq_ignore_ascii_case("gridpaper-service")
-        || window.producer_name.eq_ignore_ascii_case("gridpaper")
-    {
-        return Some(WindowVfxProfile {
-            app: "gridpaper",
-            effect: SpiritVfxBackgroundEffect::CyberGrid,
-        });
-    }
     if window.owner == crate::ui4::WindowOwner::VIDEO_PLAYER
         || window.producer_name.eq_ignore_ascii_case("video-player")
         || window.producer_name.eq_ignore_ascii_case("vid")

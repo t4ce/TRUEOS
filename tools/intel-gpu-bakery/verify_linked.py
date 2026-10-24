@@ -105,7 +105,7 @@ def verify_single_copy_artifacts(elf: Path, artifact_dir: Path) -> int:
     repo_root = Path(__file__).resolve().parents[2]
     shared_stages = (
         "crates/trueos-shader/host_shader_validation/cache_extract/triangle_vs.bin",
-        "picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin",
+        "crates/trueos-shader/clip_position3_uv_texture/sampled_texture.ps.simd16.bin",
     )
     with elf.open("rb") as image_file:
         with mmap.mmap(image_file.fileno(), 0, access=mmap.ACCESS_READ) as image:

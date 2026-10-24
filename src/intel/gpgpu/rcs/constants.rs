@@ -487,7 +487,6 @@ const _: () = {
 
 
 
-// The boot subset-sum probe owns two pages in the ordinary direct-RCS PPGTT.
 // Its state and three payloads live in the shared batch allocation only while
 // DIRECT_RCS_SUBMIT_LOCK is held; no scanout/GGTT/display address is involved.
 

@@ -77,11 +77,11 @@ pub fn default_printer() -> Option<PrinterSnapshot> {
     PRINTERS
         .lock()
         .iter()
-        .find(|printer| supports_gridpaper_print(printer))
+        .find(|printer| supports_raster_print(printer))
         .cloned()
 }
 
-pub(crate) fn supports_gridpaper_print(printer: &PrinterSnapshot) -> bool {
+pub(crate) fn supports_raster_print(printer: &PrinterSnapshot) -> bool {
     !printer.secure
         && (printer.formats.is_empty()
             || printer
@@ -707,5 +707,5 @@ mod tests {
 }
 
 async fn render_job(_job: &PrintJob) -> Result<Vec<u8>, &'static str> {
-    Err("gridpaper-feature-disabled")
+    Err("print-render-source-unavailable")
 }

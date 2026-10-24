@@ -22,7 +22,7 @@ pub(super) enum Stage {
 }
 const LABELS: [&str; 16] = [
     "offline", "preparing", "hull", "native-drain", "archive-release",
-    "gridpaper-release", "media-release", "ui4-release", "input-release",
+    "reserved", "media-release", "ui4-release", "input-release",
     "vgpu-release", "net-release", "state-release", "wait-queue-release",
     "crash-report", "carrier-release", "filesystem-drain",
 ];

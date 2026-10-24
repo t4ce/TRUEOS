@@ -23,23 +23,16 @@ def main() -> None:
         )[0]
         source = "#![allow(dead_code, unfulfilled_lint_expectations)]\n" + types
         for module in (
-            "generated_triangle", "generated_microfont_line_ends",
+            "generated_triangle",
             "generated_clip_position3_uv_texture",
         ):
             path = ROOT / f"crates/trueos-shader/{module}.rs"
             source += f'#[path = "{path}"] mod {module};\n'
         source += r'''
 #[test]
-fn line_end_and_triangle_share_vertex_storage() {
-    let triangle = generated_triangle::triangle_pipeline().vs.code;
-    let line = generated_microfont_line_ends::microfont_line_end_pipeline().vs.code;
-    assert!(core::ptr::eq(triangle, line));
-    assert_eq!(bytes(line), include_bytes!("@ROOT@/crates/trueos-shader/microfont_line_ends/line_ends.vs.bin"));
-}
-#[test]
 fn shared_sampled_fragment_matches_picasso_binary() {
     let words = &generated_clip_position3_uv_texture::SAMPLED_TEXTURE_PS_SIMD16_CODE;
-    assert_eq!(bytes(words), include_bytes!("@ROOT@/picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin"));
+    assert_eq!(bytes(words), include_bytes!("@ROOT@/crates/trueos-shader/clip_position3_uv_texture/sampled_texture.ps.simd16.bin"));
 }
 fn bytes(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|word| word.to_le_bytes()).collect()

@@ -87,7 +87,7 @@ mod tests {
             assert!((start..start + binary.len()).contains(&(borrowed.as_ptr() as usize)));
             count += 1;
         }
-        assert!(count >= 17);
+        assert_eq!(count, 9);
     }
 
     #[test]

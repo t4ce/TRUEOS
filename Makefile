@@ -265,6 +265,7 @@ lfm25-cpp-verify:
 
 
 intel-gpu-verify-cpp-artifacts: 
+	python3 tools/app-shaders/package.py
 	python3 tools/shadertoy-cpp-offline/package_blueprint.py --blueprints-root "$(BLUEPRINTS_DIR)" --check
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"
 	$(INTEL_GPU_BAKERY_PYTHON) -B -m unittest discover -s "$(INTEL_GPU_BAKERY_DIR)" -p 'test_*.py'
