@@ -27,6 +27,7 @@ The portable MicroFont crate does not need tar or LZ4
 dependencies, an allocator, or a filesystem to read its uncompressed bundle.
 
 For raw line exports from a glyph editor, use `import-lines.py /path/uXXXX.bin`.
+The private start-button export also accepts its named path, `homebutton.bin`.
 It preserves the existing bitmap header and replaces only the line payload.
 If a raw export already overwrote the source record, use
 `import-lines.py --recover-header-from-git /path/uXXXX.bin` to restore its last

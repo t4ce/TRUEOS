@@ -4,9 +4,20 @@
 for the boot lifetime, independently of either preview window. The first request
 uploads the box/block quads, line strips with adjacency, and width-independent
 join recipes. Later requests only change dispatch constants and native line width.
+Rounded box corners also retain the bounded 4–16 curve-quad variants. One
+combined corner batch is selected per render; the other variants are not drawn.
+Each corner has two straight arm quads in addition to the selected curve budget.
+The initial four-corner variant set retains 624 quads (about 45 KiB of vertex
+and index data). Font-size changes select a variant without geometry uploads.
 Endpoint frames, tags and join modes also stay in a retained GPU constant
 buffer. Rebuilds write only width and transform fields; no fixed glyph data
 is staged again.
+
+UI4's start button uses only the private `homebutton.bin` line asset
+(`0x110200`). The service renders its independent 50mm R8 mask once, publishes
+readiness, and retains the pixels for recoloring. Its temporary geometry and
+GPU mask are released after readback; it occupies no shared font-atlas slot.
+Missing or invalid home-button data fails without a Unicode/bitmap/`§` fallback.
 
 `with_warmed_atlas(AtlasConfig, consumer)` ensures the single R8 atlas is ready
 before calling the consumer. `CoverageAtlas::surface()` returns the coverage
@@ -32,7 +43,11 @@ pitch, including one-column standalone masks. The atlas stores:
 | After extra line characters | Extra quad symbols, including `▬` and `■` |
 | After extra quad symbols | All 256 Braille patterns |
 
-Missing line bins and the four unsupported rounded box corners stay empty.
+Missing line bins stay empty. Rounded `╭ ╮ ╯ ╰` tiles use binary kind-6 recipes;
+their one-source-unit stroke matches the existing straight box-drawing tiles.
+Physical display metrics supply the 10mm reference for a 4-at-10mm / 16-at-40mm
+curve floor. Outer-arc pixel error may raise that count, with a hard cap of 16;
+when physical metrics are unavailable it alone supplies the budget.
 Cargo discovers mask-first bins and packs the selected representations into one
 font image. TRUEOS embeds only its tar/LZ4 archive and installs the decoded image
 after heap setup, before font consumers start. Runtime source geometry is

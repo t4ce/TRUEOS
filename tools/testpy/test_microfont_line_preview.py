@@ -67,7 +67,7 @@ mod virtio_gpu_logo {
     }
 }
 mod ui4 {
-    pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert_eq!((w,h),(50,50));Some((213,213))}
+    pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert!(w==h && (h==50 || h==10));Some((w*213/50,h*213/50))}
     #[derive(Clone,Copy)] pub struct FrameHandle;
     pub struct View {pub width:u32,pub height:u32,pub pitch:u32,pub virt:*mut u8}
     pub fn acquire_frame_buffer(_:FrameHandle)->Result<(),()> {Ok(())}
@@ -182,7 +182,7 @@ use services::microfont_mask_service::*;
 #[test] fn virgl_keeps_line_seeds_and_width_without_tessellating() {
     let config=AtlasConfig {glyph_height_px:Some(110),line_width_px:3.5,..AtlasConfig::default()};
     let (width,height)=config.cell_extent();
-    let native=native_mask_geometry(config,width,height,Some('§')).unwrap();
+    let native=native_mask_geometry(config,width,height,Some('§'.into())).unwrap();
     let strips=microfont::raster_line::glyph_strips('§').unwrap();
     let expected:usize=strips.iter().map(|s|s.iter_points().collect::<Vec<_>>().windows(2)
         .filter(|pair|pair[0]!=pair[1]).count()*2).sum();
@@ -206,7 +206,7 @@ use services::microfont_mask_service::*;
     let config=AtlasConfig::default();let (width,height)=config.extent();
     let native=native_mask_geometry(config,width,height,None).unwrap();
     let quads:usize=microfont::raster_quad::GLYPH_CHARACTERS.iter().filter_map(|&ch|
-        microfont::raster_quad::glyph_quads(ch)).map(|q|q.len()).sum();
+        microfont::raster_quad::glyph_quads_with_curve_quads(ch,rounded_quad_budget(config))).map(|q|q.len()).sum();
     assert_eq!(native.quads.len(),4*quads);
     assert!(native.quads.iter().all(|v|v.style==[0.0;4]));
     assert!(native.lines.len()>1000);
@@ -239,11 +239,11 @@ fn expected_lines()->usize {
         .filter(|ch| !(' '..='~').contains(ch) && !('\u{2500}'..='\u{259f}').contains(ch)))
         .filter_map(microfont::raster_line::glyph_strips).map(|s|s.len()).sum()
 }
-#[test] fn start_section_sign_is_retained_once_as_a_single_physical_size_glyph() {
+#[test] fn start_homebutton_is_retained_once_as_a_single_physical_size_glyph() {
     reset(0);
     let cached=START_GLYPH.get().unwrap();
-    assert_eq!((cached.em_height_px,cached.width,cached.height),(213,135,231));
-    assert_eq!(cached.pixels.len(),135*231);
+    assert_eq!((cached.em_height_px,cached.width,cached.height),(213,129,225));
+    assert_eq!(cached.pixels.len(),129*225);
     assert!(cached.pixels.iter().any(|&p|p!=0));
     let pointer=cached.pixels.as_ptr();
     warm_start_glyph().unwrap();warm_start_glyph().unwrap();
@@ -252,6 +252,31 @@ fn expected_lines()->usize {
     with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();
     assert_eq!(START_GLYPH.get().unwrap().pixels.as_ptr(),pointer);
     assert_eq!(STATE.lock().unwrap().renders,1);
+}
+#[test] fn homebutton_renders_its_private_strokes_as_one_independent_mask() {
+    reset(0);
+    let home=microfont::raster_line::home_button_strips().unwrap();
+    let mask=build_home_button_mask(320).unwrap();
+    assert_eq!((mask.width,mask.height),(187,332));
+    let state=STATE.lock().unwrap();
+    assert_eq!(state.uploads,home.len()+1);
+    assert!(state.params.iter().all(|p|f32::from_bits(p[13])==6.0));
+    assert_eq!(state.params.iter().filter(|p|f32::from_bits(p[8])>0.0).count(),home.len());
+    assert_eq!((state.renders,state.allocations,state.mask_releases),(1,1,1));
+    for (vertices,strip) in state.vertices.iter().zip(home) {
+        for (actual,point) in vertices[1..vertices.len()-1].iter().zip(strip.iter_points()) {
+            assert_eq!(&actual[..2],&[point.x() as f32+0.5,point.y() as f32+0.5]);
+        }
+    }
+}
+#[test] fn private_homebutton_uses_the_same_source_on_virgl() {
+    let config=AtlasConfig {glyph_height_px:Some(110),line_width_px:6.0,..AtlasConfig::default()};
+    let (width,height)=config.cell_extent();
+    let geometry=native_mask_geometry(config,width,height,Some(MaskGlyph::HomeButton)).unwrap();
+    let count:usize=microfont::raster_line::home_button_strips().unwrap().iter()
+        .map(|s|s.points.len()-1).sum();
+    assert_eq!(geometry.lines.len(),count*2);
+    assert!(geometry.points.is_empty() && geometry.quads.is_empty());
 }
 #[test] fn standalone_large_glyph_uses_only_its_strips_and_one_small_target() {
     reset(0);
@@ -395,6 +420,48 @@ fn expected_lines()->usize {
         assert_eq!(cell_height,height+12);
     }
 }
+#[test] fn rounded_corners_select_one_retained_variant_without_reuploads() {
+    reset(0);
+    let mut uploads=0;
+    for height in [42,84,42] {
+        let config=AtlasConfig {glyph_height_px:Some(height),..AtlasConfig::default()};
+        with_warmed_atlas(config,|_|Ok(())).unwrap();
+        let state=STATE.lock().unwrap();
+        if uploads==0 {uploads=state.uploads;}
+        assert_eq!(state.uploads,uploads);
+        let corners:Vec<_>=state.params.iter().filter(|p|p[8]==0 && f32::from_bits(p[10])>=4.0).collect();
+        assert_eq!(corners.len(),1);
+        assert_eq!(f32::from_bits(corners[0][10]) as u8,if height==42 {4}else{8});
+        assert_eq!(state.params.iter().filter(|p|p[8]==0 && p[10]==0).count(),1);
+    }
+}
+#[test] fn rounded_single_masks_use_two_arms_plus_the_size_selected_curve() {
+    reset(0);
+    let glyph=build_single_glyph_mask('╭',168).unwrap();
+    assert_eq!(glyph.em_height_px,168);
+    let state=STATE.lock().unwrap();
+    assert_eq!(state.uploads,13); // one immutable mesh for each 4..16 variant
+    assert_eq!(state.params.len(),1);
+    assert_eq!(f32::from_bits(state.params[0][10]),16.0);
+    assert_eq!(state.vertices.last().unwrap().len(),4*(2+16));
+}
+#[test] fn rounded_native_geometry_matches_the_intel_variant_budget_and_cell_edges() {
+    let config=AtlasConfig {glyph_height_px:Some(168),..AtlasConfig::default()};
+    let (width,height)=config.cell_extent();
+    assert_eq!(rounded_quad_budget(config),16);
+    for ch in ['╭','╮','╯','╰'] {
+        let native=native_mask_geometry(config,width,height,Some(ch.into())).unwrap();
+        assert!(native.lines.is_empty() && native.points.is_empty());
+        assert_eq!(native.quads.len(),4*(2+16));
+        let expected=microfont::raster_quad::glyph_quads_with_curve_quads(ch,16).unwrap();
+        for (vertices,quad) in native.quads.chunks_exact(4).zip(expected) {
+            for (vertex,source) in vertices.iter().zip(quad.vertices) {
+                let pixel=[(vertex.position[0]+1.0)*width as f32*0.5,(vertex.position[1]+1.0)*height as f32*0.5];
+                for axis in 0..2 {assert!((pixel[axis]-6.0-source[axis]*(168.0/11.0)).abs()<0.001);}
+            }
+        }
+    }
+}
 #[test] fn physical_sizes_reuse_source_geometry_and_keep_native_width() {
     reset(0);
     let mut uploads = 0;
@@ -415,7 +482,7 @@ fn expected_lines()->usize {
         assert_eq!(state.uploads,uploads);
         assert!(state.params.iter().all(|p| f32::from_bits(p[9])==height as f32));
         assert!(state.params.iter().all(|p| (f32::from_bits(p[12])*11.0-height as f32).abs()<0.0001));
-        assert_eq!(state.params.iter().filter(|p| p[8]==0).count(),1); // shared quad batch
+        assert_eq!(state.params.iter().filter(|p| p[8]==0).count(),2); // static quads + one adaptive corner variant
     }
 }
 #[test] fn shell3_snapshot_keeps_one_fixed_native_mask_independent_of_demo() {
@@ -517,7 +584,7 @@ fn expected_lines()->usize {
         reset(0);
         let config=AtlasConfig {glyph_height_px:Some(110),line_width_px:16.0,..AtlasConfig::default()};
         let (width,height)=config.cell_extent();
-        let native=native_mask_geometry(config,width,height,Some(ch)).unwrap();
+        let native=native_mask_geometry(config,width,height,Some(ch.into())).unwrap();
         assert!(native.lines.is_empty() && native.points.is_empty());
         assert_eq!(native.quads.len(),4);
         let source=microfont::raster_quad::glyph_quads(ch).unwrap().get(0).unwrap();
@@ -673,6 +740,7 @@ def main():
     service=service.replace('static ATLAS:', 'pub(crate) static ATLAS:').replace('fn append_join(', 'pub(crate) fn append_join(').replace('pub(super) fn append_strip_joins(', 'pub(crate) fn append_strip_joins(')
     service=service.replace('pub(super) fn corner_triangle(', 'pub(crate) fn corner_triangle(')
     service=service.replace('fn native_mask_geometry(', 'pub(crate) fn native_mask_geometry(')
+    service=service.replace('fn rounded_quad_budget(', 'pub(crate) fn rounded_quad_budget(')
     service=service.replace('fn endpoint_params(', 'pub(crate) fn endpoint_params(')
     service=service.replace('static START_GLYPH:', 'pub(crate) static START_GLYPH:')
     # The fixture discards production logging, so its partial-coverage counter
@@ -700,7 +768,7 @@ const ROWS:usize=16;
     }
 }
 '''
-    mocks=MOCKS.replace('mod intel {','mod intel { pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert_eq!((w,h),(50,50));Some((213,213))} pub fn physical_extent_pixels_fraction(w:u32,h:u32,d:u32)->Option<(u32,u32)> {Some(((2560*w+300*d)/(600*d),(1440*h+170*d)/(340*d)))}')
+    mocks=MOCKS.replace('mod intel {','mod intel { pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert!(w==h && (h==50 || h==10));Some((w*213/50,h*213/50))} pub fn physical_extent_pixels_fraction(w:u32,h:u32,d:u32)->Option<(u32,u32)> {Some(((2560*w+300*d)/(600*d),(1440*h+170*d)/(340*d)))}')
     source=mocks+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n} mod preview_size {\n'+helpers+helper_tests+'\n}}\n'+TESTS
     with tempfile.TemporaryDirectory(prefix='microfont-mask-test-') as tmp:
         tmp=Path(tmp);lib=tmp/'libmicrofont.rlib'

@@ -1,6 +1,6 @@
 //! Native line/quad geometry and one reusable, color-free R8 atlas. Intel
 //! retains its boot-lifetime geometry; virgl consumes CPU-decoded raster seeds
-//! as native lines and analytically clipped points, with no glyph tessellation.
+//! as native lines, analytically clipped points, and the same rounded-corner quads.
 //! Consumers execute while the atlas is locked; no asynchronous mask reader may
 //! survive the callback. Width/size invalidate pixels, never resident geometry.
 use crate::{
@@ -133,6 +133,13 @@ struct ResidentPrimitive {
     params: [u32; 16],
 }
 impl ResidentPrimitive {
+    // Quad style.z is otherwise unused by the shader: zero means stored quads,
+    // while 4..16 identifies one immutable rounded-corner mesh variant.
+    fn curve_quads(&self) -> u8 {
+        if self.topology == Topology::TriangleList && self.params[8] == 0 {
+            f32::from_bits(self.params[10]) as u8
+        } else { 0 }
+    }
     fn line_width_px(&self, width_px: f32) -> f32 {
         if self.topology != Topology::LineStripAdj { return 0.0; }
         // Retained style.x is the width multiplier; dispatch style.x is the
@@ -160,6 +167,29 @@ fn cell_origin(slot: usize) -> [f32; 2] {
         (slot % ATLAS_COLUMNS as usize) as f32 * 6.0,
         (slot / ATLAS_COLUMNS as usize) as f32 * 11.0,
     ]
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum MaskGlyph {
+    Character(char),
+    HomeButton,
+}
+impl From<char> for MaskGlyph {
+    fn from(ch: char) -> Self { Self::Character(ch) }
+}
+impl MaskGlyph {
+    fn character(self) -> Option<char> {
+        match self { Self::Character(ch) => Some(ch), Self::HomeButton => None }
+    }
+    fn lines(self) -> Option<microfont::raster_line::GlyphStrips> {
+        match self {
+            Self::Character(ch) => microfont::raster_line::glyph_strips(ch),
+            Self::HomeButton => microfont::raster_line::home_button_strips(),
+        }
+    }
+    fn quads(self) -> Option<microfont::raster_quad::BoxDrawQuads> {
+        microfont::raster_quad::glyph_quads(self.character()?)
+    }
 }
 fn upload(
     batches: &mut ResidentGlyphs,
@@ -351,6 +381,7 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     for &ch in microfont::raster_quad::GLYPH_CHARACTERS {
+        if microfont::raster_quad::corner_curve_quads(ch, 0, None).is_some() { continue; }
         let slot = glyph_slot(ch).ok_or("microfont-glyph-slot")?;
         if let Some(quads) = microfont::raster_quad::glyph_quads(ch) {
             for quad in quads {
@@ -361,14 +392,44 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
     upload(&mut resident, &vertices, &indices, Topology::TriangleList, [0; 16])?;
     for ch in (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter()
         .copied().filter(|&ch| is_extra_line(ch))) {
-        upload_line_glyph(&mut resident, ch,
+        upload_line_glyph(&mut resident, ch.into(),
             glyph_slot(ch).ok_or("microfont-glyph-slot")?)?;
     }
+    upload_rounded_glyphs(&mut resident, None)?;
     finish_upload(&mut resident)?;
     crate::log_important!(target:"microfont-mask";
         "microfont-mask: geometry-ready uploads=1 draws={} geometry_bytes={} metadata_bytes={} slots={} cpu_geometry_rebuilds=0 storage=none\n",
         resident.batches.len(),resident.bytes,resident.batches.len()*64,SLOT_COUNT);
     Ok(resident)
+}
+
+fn rounded_quad_budget(config: AtlasConfig) -> u8 {
+    let height = config.glyph_height_px.unwrap_or(config.glyph_scale * 11);
+    let reference = crate::ui4::physical_extent_pixels(10, 10).map(|(_, h)| h);
+    microfont::raster_quad::GLYPH_CHARACTERS.iter().filter_map(|&ch|
+        microfont::raster_quad::corner_curve_quads(ch, height, reference))
+        .max().unwrap_or(microfont::raster_quad::MIN_CURVE_QUADS)
+}
+
+/// Upload the small bounded variant set once. Font size selects one draw;
+/// regular glyph buffers and all variant buffers remain immutable afterwards.
+fn upload_rounded_glyphs(resident: &mut ResidentGlyphs, single: Option<char>) -> Result<(), &'static str> {
+    for count in microfont::raster_quad::MIN_CURVE_QUADS..=microfont::raster_quad::MAX_CURVE_QUADS {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for &ch in microfont::raster_quad::GLYPH_CHARACTERS {
+            if single.is_some_and(|only| only != ch)
+                || microfont::raster_quad::corner_curve_quads(ch, 0, None).is_none() { continue; }
+            let slot = if single.is_some() { 0 } else { glyph_slot(ch).ok_or("microfont-glyph-slot")? };
+            for quad in microfont::raster_quad::glyph_quads_with_curve_quads(ch, count).ok_or("microfont-corner-recipe")? {
+                append_quad(&mut vertices, &mut indices, slot, quad.vertices);
+            }
+        }
+        let mut params = [0; 16];
+        params[10] = (count as f32).to_bits();
+        upload(resident, &vertices, &indices, Topology::TriangleList, params)?;
+    }
+    Ok(())
 }
 
 fn finish_upload(resident: &mut ResidentGlyphs) -> Result<(), &'static str> {
@@ -386,10 +447,10 @@ fn finish_upload(resident: &mut ResidentGlyphs) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn upload_line_glyph(resident: &mut ResidentGlyphs, ch: char, slot: usize) -> Result<(), &'static str> {
+fn upload_line_glyph(resident: &mut ResidentGlyphs, glyph: MaskGlyph, slot: usize) -> Result<(), &'static str> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    let Some(strips) = microfont::raster_line::glyph_strips(ch) else {
+    let Some(strips) = glyph.lines() else {
         return Ok(());
     };
     let at = cell_origin(slot);
@@ -431,7 +492,7 @@ fn upload_line_glyph(resident: &mut ResidentGlyphs, ch: char, slot: usize) -> Re
 /// work is limited to coordinate transforms. For this virgl diagnostic,
 /// strokes use only native line bodies, without endpoint or join patches.
 fn native_mask_geometry(
-    config: AtlasConfig, width: u32, height: u32, single: Option<char>,
+    config: AtlasConfig, width: u32, height: u32, single: Option<MaskGlyph>,
 ) -> Result<crate::virtio_gpu_logo::NativeMaskGeometry, &'static str> {
     use crate::virtio_gpu_logo::{NativeMaskGeometry, NativeMaskVertex};
     use microfont::raster_line::Point;
@@ -459,10 +520,10 @@ fn native_mask_geometry(
     let glyphs: Vec<_> = if let Some(ch) = single { alloc::vec![(ch, 0)] } else {
         (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
             .filter(|&ch| is_extra_line(ch)))
-            .filter_map(|ch| glyph_slot(ch).map(|slot| (ch, slot))).collect()
+            .filter_map(|ch| glyph_slot(ch).map(|slot| (ch.into(), slot))).collect()
     };
     for (ch, slot) in glyphs {
-        let Some(strips) = microfont::raster_line::glyph_strips(ch) else { continue; };
+        let Some(strips) = ch.lines() else { continue; };
         for strip in strips {
             let points: Vec<_> = strip.iter_points().map(|p| point(slot, p)).collect();
             for segment in points.windows(2) {
@@ -477,10 +538,12 @@ fn native_mask_geometry(
     }
     let quads: Vec<_> = if let Some(ch) = single { alloc::vec![(ch, 0)] } else {
         microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
-            .filter_map(|ch| glyph_slot(ch).map(|slot| (ch, slot))).collect()
+            .filter_map(|ch| glyph_slot(ch).map(|slot| (ch.into(), slot))).collect()
     };
+    let budget = rounded_quad_budget(config);
     for (ch, slot) in quads {
-        if let Some(quads) = microfont::raster_quad::glyph_quads(ch) {
+        if let Some(quads) = ch.character().and_then(|ch|
+            microfont::raster_quad::glyph_quads_with_curve_quads(ch, budget)) {
             for quad in quads {
                 geometry.quads.extend(quad.vertices.map(|at|
                     vertex(pixel(slot, at), [0.0; 4], [0.0; 4])));
@@ -497,7 +560,7 @@ pub(crate) struct CoverageAtlas {
     /// Virgl produces the same color-free service result using native lines,
     /// points and quads. Retain its fenced readback under this atlas lock.
     native_mask: Option<(Vec<u8>, u32, u32, u64)>,
-    native_glyph: Option<char>,
+    native_glyph: Option<MaskGlyph>,
     config: Option<AtlasConfig>,
     generation: u64,
     poisoned: bool,
@@ -612,11 +675,13 @@ impl CoverageAtlas {
             }
         }
         constants.flush();
+        let curve_quads = rounded_quad_budget(config);
         let draws: Vec<_> = self
             .geometry
             .batches
             .iter()
             .enumerate()
+            .filter(|(_, batch)| batch.curve_quads() == 0 || batch.curve_quads() == curve_quads)
             .map(|(i, batch)| render::ResidentSceneDraw {
                 mesh: &batch.mesh,
                 depth_flags: None,
@@ -647,8 +712,9 @@ impl CoverageAtlas {
         self.config = Some(config);
         self.generation += 1;
         crate::log_important!(target:"microfont-mask";
-            "microfont-mask: warm generation={} format=r8 size={}x{} bytes={} scale={} width_px={} geometry_uploads=1 geometry_reuploads=0 gpu_body={:?} gpu_target_ready={:?} samples=1\n",
+            "microfont-mask: warm generation={} format=r8 size={}x{} bytes={} scale={} width_px={} corner_curve_quads={} corner_arm_quads=2 geometry_uploads=1 geometry_reuploads=0 gpu_body={:?} gpu_target_ready={:?} samples=1\n",
             self.generation,width,height,self.surface().bytes,config.scale(),config.line_width_px,
+            curve_quads,
             result.gpu_timestamp,result.gpu_target_ready_timestamp);
         Ok(())
     }
@@ -705,11 +771,11 @@ pub(crate) fn warm_start_glyph() -> Result<(), &'static str> {
     if START_GLYPH.get().is_some() { return Ok(()); }
     let (_, height) = crate::ui4::physical_extent_pixels(START_GLYPH_EM_MM, START_GLYPH_EM_MM)
         .ok_or("microfont-start-glyph-physical-size-unavailable")?;
-    let glyph = build_single_glyph_mask('§', height)?;
+    let glyph = build_home_button_mask(height)?;
     let glyph = START_GLYPH.call_once(|| glyph);
     START_GLYPH_READY.notify_all();
     crate::log_important!(target: "microfont-mask";
-        "microfont-start-glyph: ready glyph=U+00A7 em_mm={} em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
+        "microfont-start-glyph: ready glyph=homebutton source=private-line-asset fallback=none em_mm={} em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
         START_GLYPH_EM_MM, glyph.em_height_px, glyph.width, glyph.height, glyph.pixels.len());
     Ok(())
 }
@@ -723,30 +789,43 @@ pub(crate) struct OwnedGlyphMask {
 }
 
 pub(crate) fn build_single_glyph_mask(ch: char, em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
-    if microfont::raster_line::glyph_strips(ch).is_none()
-        && microfont::raster_quad::glyph_quads(ch).is_none()
-    {
-        return Err("microfont-single-glyph-missing");
+    build_single_mask(ch.into(), em_height_px)
+}
+
+pub(crate) fn build_home_button_mask(em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
+    build_single_mask(MaskGlyph::HomeButton, em_height_px)
+}
+
+fn build_single_mask(glyph: MaskGlyph, em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
+    if glyph.lines().is_none() && glyph.quads().is_none() {
+        return Err(match glyph {
+            MaskGlyph::HomeButton => "microfont-homebutton-missing",
+            MaskGlyph::Character(_) => "microfont-single-glyph-missing",
+        });
     }
     // A single glyph can be much larger than a full-atlas cell. Its 6x11
     // geometry and the existing native-line/cap/join shaders remain identical.
-    let config = AtlasConfig { glyph_height_px: Some(em_height_px), line_width_px: 16.0, ..AtlasConfig::default() };
+    let line_width_px = match glyph { MaskGlyph::HomeButton => 6.0, MaskGlyph::Character(_) => 16.0 };
+    let config = AtlasConfig { glyph_height_px: Some(em_height_px), line_width_px, ..AtlasConfig::default() };
     if !(11..=4000).contains(&em_height_px) { return Err("microfont-single-glyph-size"); }
     let (width, height) = config.cell_extent();
     let mut geometry = ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None };
     if crate::virtio_gpu_logo::output_dimensions().is_none() {
-        if let Some(quads) = microfont::raster_quad::glyph_quads(ch) {
+        if let Some(ch) = glyph.character().filter(|&ch|
+            microfont::raster_quad::corner_curve_quads(ch, 0, None).is_some()) {
+            upload_rounded_glyphs(&mut geometry, Some(ch))?;
+        } else if let Some(quads) = glyph.quads() {
             let mut vertices = Vec::new();
             let mut indices = Vec::new();
             for quad in quads { append_quad(&mut vertices, &mut indices, 0, quad.vertices); }
             upload(&mut geometry, &vertices, &indices, Topology::TriangleList, [0; 16])?;
         } else {
-            upload_line_glyph(&mut geometry, ch, 0)?;
+            upload_line_glyph(&mut geometry, glyph, 0)?;
         }
         finish_upload(&mut geometry)?;
     }
     let mut glyph = CoverageAtlas { geometry, mask: None, native_mask: None,
-        native_glyph: Some(ch), config: None, generation: 0, poisoned: false };
+        native_glyph: Some(glyph), config: None, generation: 0, poisoned: false };
     glyph.warm_extent(config, (width, height))?;
     let surface = glyph.surface();
     let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;

@@ -580,7 +580,8 @@ fn raster_glyph(character: char, height: u32) -> Result<Mask, &'static str> {
         }
         return Ok(mask);
     }
-    if let Some(quads) = microfont::raster_quad::glyph_quads(character) {
+    if let Some(quads) = microfont::raster_quad::glyph_quads_at_size(character, height,
+        crate::ui4::physical_extent_pixels(10, 10).map(|(_, h)| h)) {
         for quad in quads {
             raster_quad(
                 &mut mask,
@@ -659,6 +660,19 @@ fn raster_quad(mask: &mut Mask, quad: [[f32; 2]; 4]) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rounded_box_corners_render_from_quads_at_small_and_large_sizes() {
+        for ch in ['╭','╮','╯','╰'] {
+            assert!(super::supported(ch));
+            for height in [19,38,152] {
+                let mask=super::raster_glyph(ch,height).unwrap();
+                assert_eq!(mask.width,(height*6).div_ceil(11));
+                assert_eq!(mask.height,height);
+                assert!(mask.pixels.iter().any(|&p|p!=0));
+                assert!(mask.pixels.iter().any(|&p|p==0));
+            }
+        }
+    }
     use super::*;
     #[test]
     fn physical_steps_round_only_the_final_extent_and_never_enlarge() {

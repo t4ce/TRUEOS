@@ -1,7 +1,7 @@
 //! Always-resident TRUEOS menu button on UI4's interaction plane.
 //!
-//! The frame is kernel-owned rather than a Blueprint. Its physical extent is
-//! follows the service-owned Microfont `§` mask at its warmed physical size.
+//! The frame is kernel-owned rather than a Blueprint. Its physical extent
+//! follows the service-owned private homebutton mask at its warmed physical size.
 //! After the readiness notification, AP1 only recolors the retained coverage
 //! or changes the broker's whole-window opacity.
 
@@ -115,7 +115,7 @@ pub(crate) async fn ui4_start_button_service_task() {
     };
 
     crate::log_info!(target: "ui4/start-button";
-        "ui4/start-button: service online carrier=ap1-ui-core owner=kernel-ui4 plane=slot4-interaction glyph=section-sign font=microfont extent={}x{} em_mm={} edge_cap_mm={} placement=left-or-right-attached drag=secondary/vertical-band select=stock click=primary-release action=shell.bp alpha=half-sine-fast-decay fade_ms={} home_reveal_hold_ms={} states=normal-gray/hover-white/press-green/release-blue\n",
+        "ui4/start-button: service online carrier=ap1-ui-core owner=kernel-ui4 plane=slot4-interaction glyph=homebutton fallback=none font=microfont extent={}x{} em_mm={} edge_cap_mm={} placement=left-or-right-attached drag=secondary/vertical-band select=stock click=primary-release action=shell.bp alpha=half-sine-fast-decay fade_ms={} home_reveal_hold_ms={} states=normal-gray/hover-white/press-green/release-blue\n",
         active.width,
         active.height,
         microfont_mask_service::START_GLYPH_EM_MM,

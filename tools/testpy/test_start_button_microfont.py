@@ -58,8 +58,8 @@ mod ui4 {
         assert_eq!((w,h),(50,50));Some((500,500))
     }
 }
-fn build_single_glyph_mask(ch:char,height:u32)->Result<OwnedGlyphMask,&'static str> {
-    assert_eq!((ch,height),('§',500));PRODUCTIONS.fetch_add(1,Ordering::Relaxed);
+fn build_home_button_mask(height:u32)->Result<OwnedGlyphMask,&'static str> {
+    assert_eq!(height,500);PRODUCTIONS.fetch_add(1,Ordering::Relaxed);
     if FAIL_PRODUCTION.load(Ordering::Relaxed){return Err("production-failed");}
     Ok(OwnedGlyphMask {width:3,height:2,em_height_px:height,pixels:vec![1,2,3,4,5,6]})
 }

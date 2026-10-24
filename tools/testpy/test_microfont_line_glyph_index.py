@@ -38,6 +38,34 @@ def compile_and_run(folder, body):
     subprocess.run([str(output/'check')], check=True)
 
 class GlyphIndex(unittest.TestCase):
+    def test_dotless_i_borrows_only_the_existing_i_body(self):
+        with tempfile.TemporaryDirectory(prefix='line-dotless-i-') as tmp:
+            data = Path(tmp)/'data'
+            shutil.copytree(DATA, data)
+            compile_and_run(data, r'''
+assert_eq!(microfont::CP850_CHARACTERS[0xd5],'ı');
+assert!(raster_line::GLYPH_CHARACTERS.contains(&'ı'));
+let plain=glyph_strips('i').unwrap();
+let body:Vec<_>=plain.iter().filter(|s|s.iter_points().any(|p|p.y()>=4)).collect();
+let dotless=glyph_strips('ı').unwrap();
+assert!(!body.is_empty());
+assert!(plain.len()>body.len());
+assert_eq!(dotless.len(),body.len());
+for (a,b) in body.iter().zip(dotless) {
+    assert_eq!(a.points.as_ptr(),b.points.as_ptr());
+    assert_eq!((a.start,a.end),(b.start,b.end));
+    assert!(a.iter_points().eq(b.iter_points()));
+}
+''')
+            path=data/'u0069.bin'
+            path.write_bytes(path.read_bytes()[:20]+bytes.fromhex('C0 22 42 C0 0A 12'))
+            compile_and_run(data, r'''
+let dotless=glyph_strips('ı').unwrap();
+assert_eq!(dotless.len(),1);
+assert_eq!(dotless.get(0).unwrap().iter_points().map(|p|(p.x(),p.y())).collect::<Vec<_>>(),[(2,4),(2,8)]);
+assert_eq!(glyph_strips('i').unwrap().len(),2);
+''')
+
     def test_cp850_solid_symbols_are_single_filled_quads(self):
         with tempfile.TemporaryDirectory(prefix='cp850-solid-quads-') as tmp:
             root = Path(tmp)

@@ -28,6 +28,7 @@ mod intel {
 }
 mod ui4 {
     pub fn output_dimensions() -> Option<(u32, u32)> { Some((1920, 1080)) }
+    pub fn physical_extent_pixels(_:u32,h:u32)->Option<(u32,u32)> { Some((40,h*4)) }
     pub mod text_blit {
         pub fn stamp() -> u64 {
             static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();

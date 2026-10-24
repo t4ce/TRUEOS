@@ -3,6 +3,7 @@
 
 import io
 import os
+import shutil
 from pathlib import Path
 import struct
 import subprocess
@@ -35,7 +36,9 @@ def entries(data):
 def sources():
     records = {}
     for path in (CRATE / "data/line-v1").rglob("*.bin"):
-        if path.parent.name == "lowercase-toppers":
+        if path.name == "homebutton.bin":
+            identifier = 0x110200
+        elif path.parent.name == "lowercase-toppers":
             identifier = 0x110000 + TOPPERS.index(path.stem)
         elif path.parent.name == "seven-segment":
             identifier = 0x110100 + int(path.stem.removeprefix("segment"))
@@ -123,6 +126,73 @@ class MicrofontBundle(unittest.TestCase):
         self.assertIsNone(image)
         self.assertIn("hex, raster, or both", result.stderr)
 
+    def test_homebutton_is_private_line_only_and_missing_has_no_fallback(self):
+        from test_microfont_line_preview import MOCKS
+        folder = self.work / "without-homebutton"
+        shutil.copytree(CRATE / "data/line-v1", folder)
+        home = folder / "homebutton.bin"
+        original = home.read_bytes()
+        self.assertEqual(original[:20], bytes(16) + bytes([0, 1, 0, 0]))
+        library = build_microfont(self.work / "libhome-present.rlib", ("hex", "raster"))
+        check = self.work / "private-home.rs"
+        check.write_text(r'''
+fn main() {
+    use microfont::{bundle,raster_line,raster_quad};
+    assert!(char::from_u32(bundle::HOME_BUTTON_ID).is_none());
+    let record=bundle::record(bundle::HOME_BUTTON_ID).unwrap();
+    assert_eq!(record.kind(),1);assert_eq!(record.bitmap(),None);
+    let home=raster_line::home_button_strips().unwrap();
+    let raw=raster_line::decode_strips(record.raster()).unwrap();
+    assert_eq!(home.len(),raw.len());assert!(!home.is_empty());
+    for (a,b) in home.iter().zip(raw) {assert_eq!(a.points.as_ptr(),b.points.as_ptr());}
+    for &ch in raster_line::GLYPH_CHARACTERS.iter().chain(raster_quad::GLYPH_CHARACTERS) {
+        assert_ne!(bundle::record(ch as u32).unwrap().raster().as_ptr(),record.raster().as_ptr());
+    }
+}
+''')
+        binary = self.work / "private-home"
+        subprocess.run(["rustc", "--edition=2024", str(check), "--extern", f"microfont={library}",
+                        "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+
+        home.unlink()
+        result, _ = self.run_packer(("raster",), "trueos", output=self.work / "missing-home-trueos",
+                                    source_dir=folder, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("homebutton.bin", result.stderr)
+        self.assertIn("no fallback", result.stderr)
+        library = build_microfont(self.work / "libhome-missing.rlib", ("hex", "raster", "stamp"), source_dir=folder)
+        service = (ROOT / "src/r/services/microfont_mask_service.rs").read_text()
+        service = service.replace('static START_GLYPH:', 'pub(crate) static START_GLYPH:')
+        missing = self.work / "missing-home.rs"
+        missing.write_text(MOCKS + '\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'
+                           + service.replace('//!','//') + r'''
+}}
+fn main() {
+    use services::microfont_mask_service::*;
+    assert!(microfont::raster_line::glyph_strips('§').is_some());
+    assert!(microfont::raster_line::home_button_strips().is_none());
+    assert_eq!(build_home_button_mask(213).err(),Some("microfont-homebutton-missing"));
+    assert_eq!(warm_start_glyph(),Err("microfont-homebutton-missing"));
+    assert!(START_GLYPH.get().is_none());
+    let state=STATE.lock().unwrap();
+    assert_eq!((state.uploads,state.renders,state.allocations),(0,0,0));
+}
+''')
+        binary = self.work / "missing-home"
+        subprocess.run(["rustc", "--edition=2024", "-Adead_code", "-Aunused_imports", "-Aunused_variables",
+                        str(missing), "--extern", f"microfont={library}", "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+
+        # A private home button can never become a bitmap or transformed alias.
+        for name, source in [("bitmap", original[:16] + b'\x01' + original[17:]),
+                             ("alias", original[:17] + b'\x03\0\0' + (ord('§')).to_bytes(4,'little') + b'\x01')]:
+            home.write_bytes(source)
+            result, _ = self.run_packer(("hex", "raster"), source_dir=folder,
+                                        output=self.work / ("bad-home-" + name), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("private line-only asset", result.stderr)
+
     def test_invalid_sources_are_rejected_even_when_the_bad_representation_is_unselected(self):
         stored = sources()
         canonical = stored[ord("A")]
@@ -142,6 +212,14 @@ class MicrofontBundle(unittest.TestCase):
         trailing = bytearray(canonical)
         trailing[17] = 0
         malformed["no raster kind has payload"] = (ord("A"), trailing)
+        corner = stored[ord('╭')]
+        for name, offset, value in [('corner orientation',20,b'\x04'),
+                                    ('corner radius',29,struct.pack('<f',0)),
+                                    ('corner width',33,struct.pack('<f',5)),
+                                    ('corner NaN',21,struct.pack('<f',float('nan')))]:
+            bad = bytearray(corner)
+            bad[offset:offset + len(value)] = value
+            malformed[name] = (ord('╭'),bad)
         for case_index, (name, (identifier, source)) in enumerate(malformed.items()):
             folder = self.work / ("malformed-source-" + str(case_index))
             folder.mkdir()
@@ -209,7 +287,7 @@ class MicrofontBundle(unittest.TestCase):
         raster_at = next(at for at, _ in entries(good) if good[at + 16])
         number("raster points into index", raster_at + 8, 24)
         number("raster extent", raster_at + 12, 0xFFFFFFFF)
-        change("unknown recipe kind", raster_at + 16, b"\x06")
+        change("unknown recipe kind", raster_at + 16, b"\x07")
         line_at = next(at for at, _ in entries(good) if good[at + 16] == 1)
         point = u32(good, line_at + 8) + 1
         change("point reserved bit", point, b"\x80")
@@ -219,6 +297,13 @@ class MicrofontBundle(unittest.TestCase):
         change("quad NaN", u32(good, quad_at + 8), struct.pack("<f", float("nan")))
         change("quad x outside cell", u32(good, quad_at + 8), struct.pack("<f", 7))
         change("quad y outside cell", u32(good, quad_at + 8) + 4, struct.pack("<f", 12))
+        corner_at = next(at for at, _ in entries(good) if good[at + 16] == 6)
+        corner = u32(good, corner_at + 8)
+        change("corner orientation", corner, b"\x04")
+        change("corner radius zero", corner + 9, struct.pack("<f", 0))
+        change("corner width exceeds radius", corner + 13, struct.pack("<f", 5))
+        change("corner outside cell", corner + 1, struct.pack("<f", 0))
+        change("corner NaN", corner + 5, struct.pack("<f", float("nan")))
         alias_at = next(at for at, _ in entries(good) if good[at + 16] == 3)
         alias = u32(good, alias_at + 8)
         number("alias missing source", alias, 0x10FFFF)

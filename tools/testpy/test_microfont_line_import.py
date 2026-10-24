@@ -15,6 +15,21 @@ def record(mask=0, flags=1, kind=0, payload=b""):
 
 
 class LineImport(unittest.TestCase):
+    def test_named_homebutton_import_keeps_it_private_and_line_only(self):
+        with tempfile.TemporaryDirectory(prefix="microfont-import-home-") as tmp:
+            root = Path(tmp)
+            data = root / "data"
+            raw = root / "homebutton.bin"
+            raw.write_bytes(LINES)
+            result = self.run_import(data, raw)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = data / "homebutton.bin"
+            self.assertEqual(target.read_bytes(), record(0, 0, 1, LINES))
+            raw.write_bytes(bytes.fromhex('C0 00 40'))
+            result = self.run_import(data, raw)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(target.read_bytes(), record(0, 0, 1, raw.read_bytes()))
+
     def run_import(self, data, *sources, recover=False, glyph=None):
         args = ["python3", str(IMPORTER), "--data-dir", str(data)]
         if recover:

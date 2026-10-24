@@ -58,7 +58,7 @@ def source_header(data: bytes) -> bytes:
         raise ValueError("unknown bitmap-presence flags")
     if not flags & 1 and mask:
         raise ValueError("bitmap value has no presence flag")
-    if kind > 5:
+    if kind > 6:
         raise ValueError("unknown raster kind")
     if data[18:20] != bytes(2):
         raise ValueError("reserved header bytes must be zero")
@@ -89,7 +89,17 @@ def is_mask_first_source(data: bytes) -> bool:
             return len(payload) == 5 and 1 <= payload[4] <= 5
         if kind == 4:
             return len(payload) == 9 and payload[8] <= 1
-        return bool(payload) and len(payload) % 4 == 0
+        if kind == 5:
+            return bool(payload) and len(payload) % 4 == 0
+        if len(payload) != 17 or payload[0] > 3:
+            return False
+        x, y, radius, width = struct.unpack("<ffff", payload[1:])
+        sx = 1 if payload[0] in (0, 3) else -1
+        sy = 1 if payload[0] < 2 else -1
+        half = width * 0.5
+        return (all(math.isfinite(v) for v in (x, y, radius, width))
+                and radius > half > 0 and half <= x <= 6 - half and half <= y <= 11 - half
+                and 0 < x + sx * radius < 6 and 0 < y + sy * radius < 11)
     except ValueError:
         return False
 
@@ -158,10 +168,13 @@ def _git_header(target: Path) -> bytes:
 
 def plan_import(source: Path, data_dir: Path = DEFAULT_DATA_DIR, *,
                 glyph: int | None = None, recover_header_from_git: bool = False) -> ImportPlan:
-    codepoint = glyph_from_filename(source) if glyph is None else glyph
-    if not 0 <= codepoint <= 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
-        raise ValueError(f"U+{codepoint:X} is not a Unicode scalar")
-    target = (data_dir / f"u{codepoint:04X}.bin").resolve()
+    if glyph is None and source.name == "homebutton.bin":
+        target = (data_dir / "homebutton.bin").resolve()
+    else:
+        codepoint = glyph_from_filename(source) if glyph is None else glyph
+        if not 0 <= codepoint <= 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+            raise ValueError(f"U+{codepoint:X} is not a Unicode scalar")
+        target = (data_dir / f"u{codepoint:04X}.bin").resolve()
     raw = source.read_bytes()
     if is_mask_first_source(raw):
         raise ValueError(f"{source}: input is already a mask-first glyph source; provide raw line strips")
