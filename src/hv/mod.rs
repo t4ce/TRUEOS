@@ -2958,6 +2958,8 @@ fn prepare_blueprint_launch_on_lane(
         return Err(AllocString::from("only ELF REL blueprints are supported for app-vm launch"));
     }
 
+    crate::gpu::app_shaders::register_blueprint_elf(unpacked_bytes.as_slice())
+        .map_err(|err| alloc::format!("Safety-Guard with SHA256: app shader admission rejected: {}", err))?;
     let imports = crate::hv::blueprint::elf_imports(unpacked_bytes.as_slice()).unwrap_or_default();
     let lifecycle_protocol = import_name_has(imports.as_slice(), "trueos_cabi_lifecycle_poll")
         && import_name_has(imports.as_slice(), "trueos_cabi_lifecycle_ready")

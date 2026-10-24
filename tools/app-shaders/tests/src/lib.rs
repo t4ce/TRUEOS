@@ -27,8 +27,8 @@ mod tests {
     fn downloaded_bundles_populate_aligned_shared_storage_once() {
         for owner in ["Cubes", "TRUEOS-Picasso", "voxy"] {
             let package = bundle(owner);
-            app_shaders::register_section(&package).unwrap();
-            app_shaders::register_section(&package).unwrap();
+            app_shaders::register_blueprint_elf(&elf(&package)).unwrap();
+            app_shaders::register_blueprint_elf(&elf(&package)).unwrap();
         }
         for id in 1..=10 { assert!(app_shaders::present(id)); }
         let cube = app_shaders::words(4, 0).unwrap();
@@ -59,11 +59,41 @@ mod tests {
         assert_eq!(crate::metadata::adjacency::triangle_adjacency_geometry_shader().code.len(), 128);
 
     }
+    fn elf(package: &[u8]) -> Vec<u8> {
+        // Minimal ELF64 REL with the real app-owned section and a string table.
+        let names = b"\0.trueos.shaders\0.shstrtab\0";
+        let data_offset = 64 + names.len();
+        let table_offset = (data_offset + package.len() + 7) & !7;
+        let mut image = vec![0u8; table_offset + 3 * 64];
+        image[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        image[16..18].copy_from_slice(&1u16.to_le_bytes());
+        image[18..20].copy_from_slice(&62u16.to_le_bytes());
+        image[20..24].copy_from_slice(&1u32.to_le_bytes());
+        image[40..48].copy_from_slice(&(table_offset as u64).to_le_bytes());
+        image[52..54].copy_from_slice(&64u16.to_le_bytes());
+        image[58..60].copy_from_slice(&64u16.to_le_bytes());
+        image[60..62].copy_from_slice(&3u16.to_le_bytes());
+        image[62..64].copy_from_slice(&2u16.to_le_bytes());
+        image[64..64+names.len()].copy_from_slice(names);
+        image[data_offset..data_offset+package.len()].copy_from_slice(package);
+        for (index, name, kind, offset, len) in [
+            (1, 1u32, 1u32, data_offset, package.len()),
+            (2, 17u32, 3u32, 64, names.len()),
+        ] {
+            let start=table_offset+index*64;
+            image[start..start+4].copy_from_slice(&name.to_le_bytes());
+            image[start+4..start+8].copy_from_slice(&kind.to_le_bytes());
+            image[start+24..start+32].copy_from_slice(&(offset as u64).to_le_bytes());
+            image[start+32..start+40].copy_from_slice(&(len as u64).to_le_bytes());
+        }
+        image
+    }
     #[test]
     fn rejects_corrupt_unknown_and_truncated_downloads() {
+        assert_eq!(app_shaders::register_blueprint_elf(b"not ELF"), Err("app-shader-elf"));
         let mut package = bundle("Cubes");
         *package.last_mut().unwrap() ^= 1;
-        assert_eq!(app_shaders::register_section(&package), Err("app-shader-sha256-mismatch"));
+        assert_eq!(app_shaders::register_blueprint_elf(&elf(&package)), Err("app-shader-sha256-mismatch"));
         let package = bundle("Cubes");
         assert_eq!(app_shaders::register_section(&package[..package.len()-1]), Err("app-shader-truncated"));
         let mut package = bundle("Cubes");

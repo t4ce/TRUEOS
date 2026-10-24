@@ -106,3 +106,18 @@ pub(crate) fn register_section(mut section: &[u8]) -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+/// Intake runs in the loader's host allocation domain before guest relocation
+/// or execution. Shader sections are packaging data, not guest allocations.
+pub(crate) fn register_blueprint_elf(bytes: &[u8]) -> Result<(), &'static str> {
+    use object::{Object, ObjectSection};
+    let file = object::read::elf::ElfFile64::<object::Endianness>::parse(bytes)
+        .map_err(|_| "app-shader-elf")?;
+    for section in file.sections() {
+        if section.name().ok() == Some(".trueos.shaders") {
+            let data = section.data().map_err(|_| "app-shader-elf-section")?;
+            register_section(data)?;
+        }
+    }
+    Ok(())
+}
