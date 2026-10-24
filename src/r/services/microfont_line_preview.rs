@@ -1,4 +1,4 @@
-//! Compact CP850 byte table; missing binary line glyphs retain empty cells.
+//! Compact CP850 byte table; missing binary raster glyphs retain empty cells.
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use embassy_sync::signal::Signal;
 use trueos_time::{Duration, Timer};
@@ -108,7 +108,8 @@ async fn show_once() -> Result<(), &'static str> {
     }
     let present = GLYPHS
         .iter()
-        .filter(|&&glyph| microfont::raster_line::glyph_strips(glyph).is_some())
+        .filter(|&&glyph| microfont::raster_line::glyph_strips(glyph).is_some()
+            || microfont::raster_quad::glyph_quads(glyph).is_some())
         .count();
     let strips: Vec<_> = GLYPHS
         .iter()

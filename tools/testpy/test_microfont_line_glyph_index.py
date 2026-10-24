@@ -38,6 +38,32 @@ def compile_and_run(folder, body):
     subprocess.run([str(output/'check')], check=True)
 
 class GlyphIndex(unittest.TestCase):
+    def test_cp850_solid_symbols_are_single_filled_quads(self):
+        with tempfile.TemporaryDirectory(prefix='cp850-solid-quads-') as tmp:
+            root = Path(tmp)
+            data = root/'data'
+            shutil.copytree(DATA, data)
+            compile_and_run(data, r'''
+use microfont::raster_quad::{glyph_quads,GLYPH_CHARACTERS};
+assert_eq!(microfont::CP850_CHARACTERS[0x16],'▬');
+assert_eq!(microfont::CP850_CHARACTERS[0xfe],'■');
+for (ch,top,bottom,reference) in [('▬',4.0,7.0,'━'),('■',2.0,7.0,'■')] {
+    assert!(GLYPH_CHARACTERS.contains(&ch));
+    assert!(glyph_strips(ch).is_none());
+    let quads=glyph_quads(ch).unwrap();
+    assert_eq!(quads.len(),1);
+    let quad=quads.get(0).unwrap();
+    assert_eq!(quad.vertices,[[0.0,top],[6.0,top],[6.0,bottom],[0.0,bottom]]);
+    let mut pixels=0u128;
+    for y in top as usize..bottom as usize {
+        for x in 0..6 { pixels |= 1u128 << (65-y*6-x); }
+    }
+    assert_eq!(pixels,microfont::bundle::bitmap(reference).unwrap());
+}
+// Raster additions leave the independently authored bitmap fields intact.
+assert_eq!(microfont::bundle::bitmap('▬'),Some(0));
+''')
+
     def test_lowercase_grid_matches_unicode_and_covers_cp850(self):
         marks = '\u0308\u0301\u0300\u0302\u030a\u0303'
         expected = {}

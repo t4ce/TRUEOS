@@ -57,7 +57,7 @@ edition = "2024"
 [dependencies]
 spin = "0.10"
 libm = "0.2"
-microfont = { path = __MICROFONT__, features = ["raster", "han"] }
+microfont = { path = __MICROFONT__, features = ["raster"] }
 '''
         (path / "Cargo.toml").write_text(manifest.replace(
             "__MICROFONT__", json.dumps(str(ROOT / "vendor/microfont"))))

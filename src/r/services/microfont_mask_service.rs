@@ -32,13 +32,27 @@ const fn extra_count() -> usize {
     }
     count
 }
-pub(crate) const BRAILLE_START: usize = EXTRA_START + extra_count();
+const EXTRA_QUAD_START: usize = EXTRA_START + extra_count();
+const fn is_extra_quad(ch: char) -> bool {
+    !(' ' <= ch && ch <= '~') && !('\u{2500}' <= ch && ch <= '\u{259f}')
+        && !('\u{2800}' <= ch && ch <= '\u{28ff}')
+}
+const fn extra_quad_count() -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while i < microfont::raster_quad::GLYPH_CHARACTERS.len() {
+        if is_extra_quad(microfont::raster_quad::GLYPH_CHARACTERS[i]) { count += 1; }
+        i += 1;
+    }
+    count
+}
+pub(crate) const BRAILLE_START: usize = EXTRA_QUAD_START + extra_quad_count();
 pub(crate) const SLOT_COUNT: usize = BRAILLE_START + 256;
 pub(crate) const ATLAS_ROWS: u32 = SLOT_COUNT.div_ceil(ATLAS_COLUMNS as usize) as u32;
-// Only line slots use packed joins; Braille quads follow them in the atlas.
+// Only line slots use packed joins; extra quads and Braille follow them.
 // Join recipes use seven bits of X and eight bits of Y. Reject overflow
 // explicitly rather than silently changing the shape of a future glyph.
-const _: () = assert!(ATLAS_COLUMNS * 6 <= 128 && (BRAILLE_START as u32).div_ceil(ATLAS_COLUMNS) * 11 <= 256);
+const _: () = assert!(ATLAS_COLUMNS * 6 <= 128 && (EXTRA_QUAD_START as u32).div_ceil(ATLAS_COLUMNS) * 11 <= 256);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AtlasConfig {
@@ -80,8 +94,12 @@ impl AtlasConfig {
         self.glyph_height_px.map_or(self.glyph_scale as f32, |h| h as f32 / 11.0)
     }
     fn gutter(self) -> u32 {
-        if self.glyph_height_px.is_some() { (libm::ceilf(self.line_width_px * 0.5) as u32 + 1).max(6) }
-        else { 0 }
+        if self.glyph_height_px.is_none() { return 0; }
+        let half_width = self.line_width_px * 0.5;
+        // The closest lattice centre is half a source pixel inside the cell.
+        // Reserve the larger dot's overhang plus the native half-pixel cap.
+        let dot_overhang = half_width * core::f32::consts::SQRT_2 - self.scale() * 0.5 + 0.5;
+        (libm::ceilf((half_width + 1.0).max(dot_overhang)) as u32).max(6)
     }
     pub(crate) fn cell_extent(self) -> (u32, u32) {
         let height = self.glyph_height_px.unwrap_or(11 * self.glyph_scale);
@@ -102,7 +120,10 @@ pub(crate) fn glyph_slot(ch: char) -> Option<usize> {
         '\u{2800}'..='\u{28ff}' => Some(BRAILLE_START + ch as usize - 0x2800),
         _ => microfont::raster_line::GLYPH_CHARACTERS.iter()
             .copied().filter(|&candidate| is_extra_line(candidate))
-            .position(|candidate| candidate == ch).map(|index| EXTRA_START + index),
+            .position(|candidate| candidate == ch).map(|index| EXTRA_START + index)
+            .or_else(|| microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
+                .filter(|&candidate| is_extra_quad(candidate))
+                .position(|candidate| candidate == ch).map(|index| EXTRA_QUAD_START + index)),
     }
 }
 
@@ -110,6 +131,14 @@ struct ResidentPrimitive {
     mesh: render::ResidentTriangleMesh,
     topology: Topology,
     params: [u32; 16],
+}
+impl ResidentPrimitive {
+    fn line_width_px(&self, width_px: f32) -> f32 {
+        if self.topology != Topology::LineStripAdj { return 0.0; }
+        // Retained style.x is the width multiplier; dispatch style.x is the
+        // resulting half-width. Quantize once for both native and analytic AA.
+        libm::roundf(width_px * f32::from_bits(self.params[8]) * 128.0) / 128.0
+    }
 }
 struct ResidentGlyphs {
     batches: Vec<ResidentPrimitive>,
@@ -177,27 +206,34 @@ fn endpoint_params(strip: &microfont::raster_line::Strip, slot: usize) -> [u32; 
                 .rev()
                 .find_map(|i| strip.point(i).filter(|v| *v != at))
         };
-        if let Some(next) = neighbor {
+        let direction = if let Some(next) = neighbor {
             let d = [
                 next.x() as f32 - at.x() as f32,
                 next.y() as f32 - at.y() as f32,
             ];
             let len = libm::sqrtf(d[0] * d[0] + d[1] * d[1]);
-            p[offset..offset + 4].copy_from_slice(&[
-                origin[0] + at.x() as f32 + 0.5,
-                origin[1] + at.y() as f32 + 0.5,
-                d[0] / len,
-                d[1] / len,
-            ]);
-            p[if start { 10 } else { 11 }] = if (if start { strip.start } else { strip.end }) == End
-            {
-                1.0
-            } else {
-                0.0
-            };
-        }
+            [d[0] / len, d[1] / len]
+        } else {
+            // Coincident-point dots use a horizontal frame for the same caps.
+            if start { [1.0, 0.0] } else { [-1.0, 0.0] }
+        };
+        p[offset..offset + 4].copy_from_slice(&[
+            origin[0] + at.x() as f32 + 0.5,
+            origin[1] + at.y() as f32 + 0.5,
+            direction[0],
+            direction[1],
+        ]);
+        p[if start { 10 } else { 11 }] = if (if start { strip.start } else { strip.end }) == End
+        {
+            1.0
+        } else {
+            0.0
+        };
     }
-    p[8] = 1.0; // line mode; replaced by half-width on each dispatch
+    // Fixed dot diameter: sqrt(2) times the line width, doubling its area.
+    p[8] = if strip.points.iter().all(|p| *p == strip.points[0]) {
+        core::f32::consts::SQRT_2
+    } else { 1.0 }; // width multiplier; replaced by half-width on dispatch
     p.map(f32::to_bits)
 }
 
@@ -314,34 +350,12 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
     };
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for (i, &ch) in microfont::BOX_DRAW_CHARACTERS.iter().enumerate() {
-        if let Some(quads) = microfont::raster_quad::boxdraw_quad_slice(ch) {
+    for &ch in microfont::raster_quad::GLYPH_CHARACTERS {
+        let slot = glyph_slot(ch).ok_or("microfont-glyph-slot")?;
+        if let Some(quads) = microfont::raster_quad::glyph_quads(ch) {
             for quad in quads {
-                append_quad(&mut vertices, &mut indices, BOX_START + i, quad.vertices);
+                append_quad(&mut vertices, &mut indices, slot, quad.vertices);
             }
-        }
-    }
-    for (i, &ch) in microfont::BLOCK_CHARACTERS.iter().enumerate() {
-        if let Some(quads) = microfont::raster_quad::block_quad_slice(ch) {
-            for quad in quads {
-                let [l, t] = quad.top_left.map(f32::from);
-                let [r, b] = quad.bottom_right.map(f32::from);
-                append_quad(
-                    &mut vertices,
-                    &mut indices,
-                    BLOCK_START + i,
-                    [[l, t], [r, t], [r, b], [l, b]],
-                );
-            }
-        }
-    }
-    for code in 0x2800..=0x28ff {
-        let ch = char::from_u32(code).unwrap();
-        for quad in microfont::raster_quad::braille_quad_slice(ch).unwrap() {
-            let [l, t] = quad.top_left.map(f32::from);
-            let [r, b] = quad.bottom_right.map(f32::from);
-            append_quad(&mut vertices, &mut indices, BRAILLE_START + (code - 0x2800) as usize,
-                [[l, t], [r, t], [r, b], [l, b]]);
         }
     }
     upload(&mut resident, &vertices, &indices, Topology::TriangleList, [0; 16])?;
@@ -382,11 +396,14 @@ fn upload_line_glyph(resident: &mut ResidentGlyphs, ch: char, slot: usize) -> Re
     for strip in strips {
         vertices.clear();
         indices.clear();
+        let dot = strip.points.iter().all(|p| *p == strip.points[0]);
         for i in 0..strip.points.len() + 2 {
             let [x, y, z] = strip.adjacency_vertex(i).ok_or("microfont-adjacency")?;
             // Z is a resident VS recipe marker, not a seed-data change.
             // Identify real endpoints by index, including coincident points.
             let z = if i == 1 { 0.25 } else if i == strip.points.len() { 0.75 } else { z };
+            // Dots need a footprint even when their boundary is a Junction.
+            let z = if dot && (i == 1 || i == strip.points.len()) { z + 1.0 } else { z };
             vertices.push([at[0] + x + 0.5, at[1] + y + 0.5, z]);
         }
         indices.extend(0..vertices.len() as u32);
@@ -458,29 +475,15 @@ fn native_mask_geometry(
             // supplemental endpoint caps and bevel/circular join patches.
         }
     }
-    if single.is_none() {
-        let mut quad = |slot: usize, corners: [[f32; 2]; 4]| {
-            geometry.quads.extend(corners.map(|at| vertex(pixel(slot, at), [0.0; 4], [0.0; 4])));
-        };
-        for (i, &ch) in microfont::BOX_DRAW_CHARACTERS.iter().enumerate() {
-            if let Some(quads) = microfont::raster_quad::boxdraw_quad_slice(ch) {
-                for q in quads { quad(BOX_START + i, q.vertices); }
-            }
-        }
-        for (i, &ch) in microfont::BLOCK_CHARACTERS.iter().enumerate() {
-            if let Some(quads) = microfont::raster_quad::block_quad_slice(ch) {
-                for q in quads {
-                    let [l, t] = q.top_left.map(f32::from);
-                    let [r, b] = q.bottom_right.map(f32::from);
-                    quad(BLOCK_START + i, [[l, t], [r, t], [r, b], [l, b]]);
-                }
-            }
-        }
-        for code in 0x2800..=0x28ff {
-            for q in microfont::raster_quad::braille_quad_slice(char::from_u32(code).unwrap()).unwrap() {
-                let [l, t] = q.top_left.map(f32::from);
-                let [r, b] = q.bottom_right.map(f32::from);
-                quad(BRAILLE_START + (code - 0x2800) as usize, [[l, t], [r, t], [r, b], [l, b]]);
+    let quads: Vec<_> = if let Some(ch) = single { alloc::vec![(ch, 0)] } else {
+        microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
+            .filter_map(|ch| glyph_slot(ch).map(|slot| (ch, slot))).collect()
+    };
+    for (ch, slot) in quads {
+        if let Some(quads) = microfont::raster_quad::glyph_quads(ch) {
+            for quad in quads {
+                geometry.quads.extend(quad.vertices.map(|at|
+                    vertex(pixel(slot, at), [0.0; 4], [0.0; 4])));
             }
         }
     }
@@ -598,7 +601,7 @@ impl CoverageAtlas {
             }
             if batch.topology == Topology::LineStripAdj
                 && !constants
-                    .write(i * 64 + 32, &(config.line_width_px * 0.5).to_bits().to_le_bytes())
+                    .write(i * 64 + 32, &(batch.line_width_px(config.line_width_px) * 0.5).to_bits().to_le_bytes())
             {
                 return Err("microfont-constants-width");
             }
@@ -625,11 +628,7 @@ impl CoverageAtlas {
                 viewport_translation_px: [0.0; 2],
                 topology: batch.topology,
                 point_width_px: 0,
-                line_width_px: if batch.topology == Topology::LineStripAdj {
-                    config.line_width_px
-                } else {
-                    0.0
-                },
+                line_width_px: batch.line_width_px(config.line_width_px),
                 clip_adjacency: batch.topology == Topology::LineStripAdj,
             })
             .collect();
@@ -724,7 +723,9 @@ pub(crate) struct OwnedGlyphMask {
 }
 
 pub(crate) fn build_single_glyph_mask(ch: char, em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
-    if microfont::raster_line::glyph_strips(ch).is_none() {
+    if microfont::raster_line::glyph_strips(ch).is_none()
+        && microfont::raster_quad::glyph_quads(ch).is_none()
+    {
         return Err("microfont-single-glyph-missing");
     }
     // A single glyph can be much larger than a full-atlas cell. Its 6x11
@@ -734,7 +735,14 @@ pub(crate) fn build_single_glyph_mask(ch: char, em_height_px: u32) -> Result<Own
     let (width, height) = config.cell_extent();
     let mut geometry = ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None };
     if crate::virtio_gpu_logo::output_dimensions().is_none() {
-        upload_line_glyph(&mut geometry, ch, 0)?;
+        if let Some(quads) = microfont::raster_quad::glyph_quads(ch) {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            for quad in quads { append_quad(&mut vertices, &mut indices, 0, quad.vertices); }
+            upload(&mut geometry, &vertices, &indices, Topology::TriangleList, [0; 16])?;
+        } else {
+            upload_line_glyph(&mut geometry, ch, 0)?;
+        }
         finish_upload(&mut geometry)?;
     }
     let mut glyph = CoverageAtlas { geometry, mask: None, native_mask: None,
@@ -770,9 +778,10 @@ pub(crate) struct OwnedAlphaAtlas {
 }
 impl OwnedAlphaAtlas {
     pub(crate) fn glyph(&self, ch: char) -> Option<&[u8]> {
-        // Unminted line slots stay blank for the demo, but are absent to font
-        // consumers so they can apply their missing-glyph policy.
+        // Unminted raster slots stay blank for the demo, but are absent to
+        // font consumers so they can apply their missing-glyph policy.
         if ch != ' ' && microfont::raster_line::glyph_strips(ch).is_none()
+            && microfont::raster_quad::glyph_quads(ch).is_none()
             && !('\u{2500}'..='\u{259f}').contains(&ch)
             && !('\u{2800}'..='\u{28ff}').contains(&ch) {
             return None;
@@ -785,6 +794,8 @@ impl OwnedAlphaAtlas {
         (' '..='~').chain('\u{2500}'..='\u{259f}').chain('\u{2800}'..='\u{28ff}')
             .chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
                 .filter(|&ch| is_extra_line(ch)))
+            .chain(microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
+                .filter(|&ch| is_extra_quad(ch)))
             .filter_map(|ch| self.glyph(ch).map(|pixels| (ch, pixels)))
     }
 }

@@ -545,9 +545,7 @@ fn blend(destination: &mut [u8], color: [u8; 4], coverage: u8) {
 fn supported(character: char) -> bool {
     character == ' '
         || microfont::raster_line::glyph_strips(character).is_some()
-        || microfont::raster_quad::boxdraw_quad_slice(character).is_some()
-        || microfont::raster_quad::block_quad_slice(character).is_some()
-        || microfont::raster_quad::braille_quad_slice(character).is_some()
+        || microfont::raster_quad::glyph_quads(character).is_some()
 }
 
 fn raster_glyph(character: char, height: u32) -> Result<Mask, &'static str> {
@@ -582,23 +580,13 @@ fn raster_glyph(character: char, height: u32) -> Result<Mask, &'static str> {
         }
         return Ok(mask);
     }
-    if let Some(quads) = microfont::raster_quad::boxdraw_quad_slice(character) {
+    if let Some(quads) = microfont::raster_quad::glyph_quads(character) {
         for quad in quads {
             raster_quad(
                 &mut mask,
                 quad.vertices
                     .map(|point| [point[0] * scale, point[1] * scale]),
             );
-        }
-        return Ok(mask);
-    }
-    if let Some(quads) = microfont::raster_quad::block_quad_slice(character)
-        .or_else(|| microfont::raster_quad::braille_quad_slice(character))
-    {
-        for quad in quads {
-            let [left, top] = quad.top_left.map(|value| value as f32 * scale);
-            let [right, bottom] = quad.bottom_right.map(|value| value as f32 * scale);
-            raster_quad(&mut mask, [[left, top], [right, top], [right, bottom], [left, bottom]]);
         }
         return Ok(mask);
     }
@@ -706,6 +694,20 @@ mod tests {
                 .iter()
                 .all(|&value| value == 255)
         );
+    }
+    #[test]
+    fn standalone_quad_symbols_render_without_missing_glyph_fallback() {
+        for (character, top, bottom) in [('▬', 4, 7), ('■', 2, 7)] {
+            assert!(supported(character));
+            assert!(microfont::raster_line::glyph_strips(character).is_none());
+            assert_eq!(microfont::raster_quad::glyph_quads(character).unwrap().len(), 1);
+            let mask = raster_glyph(character, 11).unwrap();
+            assert_eq!((mask.width, mask.height), (6, 11));
+            for (y, row) in mask.pixels.chunks_exact(6).enumerate() {
+                let expected = if (top..bottom).contains(&y) { 255 } else { 0 };
+                assert!(row.iter().all(|&coverage| coverage == expected));
+            }
+        }
     }
     #[test]
     fn byte_budget_evicts_old_masks_without_invalidating_prepared_readers() {

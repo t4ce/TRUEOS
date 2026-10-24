@@ -29,7 +29,8 @@ pitch, including one-column standalone masks. The atlas stores:
 | 95–222 | Box Drawing U+2500–U+257F, quads |
 | 223–254 | Block Elements U+2580–U+259F, quads |
 | 255 onward | Extra line characters, including shared lowercase compositions |
-| After extra line characters | All 256 Braille patterns |
+| After extra line characters | Extra quad symbols, including `▬` and `■` |
+| After extra quad symbols | All 256 Braille patterns |
 
 Missing line bins and the four unsupported rounded box corners stay empty.
 Cargo discovers mask-first bins and packs the selected representations into one

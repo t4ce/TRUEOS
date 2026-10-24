@@ -47,6 +47,30 @@ vec2 source_pixel(vec2 at) {return at;}
 '''
     tests = r'''
 int main() {
+    for (float width : {3.5f,7.0f,8.0f,9.0f}) {
+        // Production dots use sqrt(2) diameter, quantized to native U11.7.
+        float r=std::round(width*std::sqrt(2.0f)*128)/256;
+        vec2 at(100,100);
+        p.start_point_direction=vec4(100,100,1,0);
+        p.end_point_direction=vec4(100,100,-1,0);
+        for (float start : {0.0f,1.0f}) for (float end : {0.0f,1.0f}) {
+            p.style=vec4(r,0,start,end);
+            assert(length(extend({at,1.25f})-vec2(100-r,100))==0);
+            assert(length(extend({at,1.75f})-vec2(100+r,100))==0);
+            for (float marker : {0.0f,0.5f,1.0f})
+                assert(length(extend({at,marker})-at)==0);
+            for (int x=-16;x<=16;x++) for (int y=-16;y<=16;y++) {
+                vec2 d(x*r/16,y*r/16);
+                gl_FragCoord.xy=vec2(100+d.x,100+d.y);
+                float side=clamp(r-abs(d.y),0,1);
+                float actual=std::min(side,std::min(end_coverage(p.start_point_direction,start),
+                                                   end_coverage(p.end_point_direction,end)));
+                float expected=((d.x<0 && start!=0) || (d.x>0 && end!=0))
+                    ? clamp(r-length(d),0,1) : side;
+                assert(abs(actual-expected)<0.00001f);
+            }
+        }
+    }
     for (float width : {7.0f,8.0f,9.0f}) {
         float r=width/2;
         for (int angle=0;angle<360;angle++) {
@@ -84,7 +108,7 @@ int main() {
         (tmp / 'test.cpp').write_text(code)
         subprocess.run(['c++', '-std=c++17', str(tmp / 'test.cpp'), '-o', str(tmp / 'test')], check=True)
         subprocess.run([str(tmp / 'test')], check=True)
-    print('Production cap math: all 360 angles, three widths, endpoint/index/junction checks passed.')
+    print('Production cap math: round/square dots, all cap tags, 360 angles and endpoint/index/junction checks passed.')
 
 if __name__ == '__main__':
     main()

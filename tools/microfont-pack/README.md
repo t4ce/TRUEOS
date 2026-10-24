@@ -25,3 +25,9 @@ Other targets embed the uncompressed file directly.
 
 The portable MicroFont crate does not need tar or LZ4
 dependencies, an allocator, or a filesystem to read its uncompressed bundle.
+
+For raw line exports from a glyph editor, use `import-lines.py /path/uXXXX.bin`.
+It preserves the existing bitmap header and replaces only the line payload.
+If a raw export already overwrote the source record, use
+`import-lines.py --recover-header-from-git /path/uXXXX.bin` to restore its last
+committed bitmap header. See the [source-format guide](../../vendor/microfont/data/line-v1/README.md).

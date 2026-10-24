@@ -61,7 +61,7 @@ mod virtio_gpu_logo {
     }
     pub fn render_coverage_mask(w:u32,h:u32,geometry:NativeMaskGeometry)->Result<Vec<u8>,&'static str> {
         assert!(output_dimensions().is_some());
-        assert!(!geometry.lines.is_empty());
+        assert!(!geometry.lines.is_empty() || !geometry.quads.is_empty());
         crate::STATE.lock().unwrap().renders+=1;
         Ok(vec![128;w as usize*h as usize])
     }
@@ -147,7 +147,10 @@ mod intel {
                 assert_eq!(d.rgba,[255;4]);assert!(d.depth_flags.is_none());assert!(d.sampled_texture.is_none());
                 assert_eq!(f[14],1.0/mask.width as f32);assert_eq!(f[15],1.0/mask.height as f32);
                 assert_eq!(d.clip_adjacency,d.topology==ResidentScenePrimitiveTopology::LineStripAdj);
-                if d.clip_adjacency {assert_eq!(d.line_width_px,f[13]);assert_eq!(f[8],f[13]/2.0);}
+                if d.clip_adjacency {
+                    assert_eq!(f[8],d.line_width_px/2.0);
+                    assert!(d.line_width_px==f[13] || d.line_width_px==(f[13]*std::f32::consts::SQRT_2*128.0).round()/128.0);
+                }
                 s.params.push(p);
             }
             if s.fault==2 {return Err("render-busy");}
@@ -155,7 +158,10 @@ mod intel {
             let columns=crate::services::microfont_mask_service::ATLAS_COLUMNS as usize;
             let scale=mask.width/(columns as u32*6);
             let height=f32::from_bits(s.params[0][9]) as u32;
-            let gutter=((f32::from_bits(s.params[0][13])*0.5).ceil() as u32+1).max(6);
+            let half_width=f32::from_bits(s.params[0][13])*0.5;
+            let source_scale=f32::from_bits(s.params[0][12]);
+            let dot_overhang=half_width*std::f32::consts::SQRT_2-source_scale*0.5+0.5;
+            let gutter=((half_width+1.0).max(dot_overhang).ceil() as u32).max(6);
             let (cell_width,cell_height)=if height==0 {(6*scale,11*scale)}
                 else {((height*6+10)/11+2*gutter,height+2*gutter)};
             // Synthetic coverage tests the actual copy/tint sink independently
@@ -199,13 +205,9 @@ use services::microfont_mask_service::*;
 #[test] fn virgl_native_quads_preserve_all_canonical_box_block_braille_seeds() {
     let config=AtlasConfig::default();let (width,height)=config.extent();
     let native=native_mask_geometry(config,width,height,None).unwrap();
-    let boxes:usize=microfont::BOX_DRAW_CHARACTERS.iter().filter_map(|&ch|
-        microfont::raster_quad::boxdraw_quad_slice(ch)).map(|q|q.len()).sum();
-    let blocks:usize=microfont::BLOCK_CHARACTERS.iter().filter_map(|&ch|
-        microfont::raster_quad::block_quad_slice(ch)).map(|q|q.len()).sum();
-    let braille:usize=('\u{2800}'..='\u{28ff}').map(|ch|
-        microfont::raster_quad::braille_quad_slice(ch).unwrap().len()).sum();
-    assert_eq!(native.quads.len(),4*(boxes+blocks+braille));
+    let quads:usize=microfont::raster_quad::GLYPH_CHARACTERS.iter().filter_map(|&ch|
+        microfont::raster_quad::glyph_quads(ch)).map(|q|q.len()).sum();
+    assert_eq!(native.quads.len(),4*quads);
     assert!(native.quads.iter().all(|v|v.style==[0.0;4]));
     assert!(native.lines.len()>1000);
     assert!(native.lines.iter().chain(native.points.iter()).chain(native.quads.iter())
@@ -269,7 +271,13 @@ fn expected_lines()->usize {
     let extras:Vec<_>=microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
         .filter(|ch| !(' '..='~').contains(ch) && !('\u{2500}'..='\u{259f}').contains(ch))
         .map(|ch|glyph_slot(ch).unwrap()).collect();
-    assert_eq!(extras,(255..BRAILLE_START).collect::<Vec<_>>());
+    let quad_start=255+extras.len();
+    assert_eq!(extras,(255..quad_start).collect::<Vec<_>>());
+    let quad_extras:Vec<_>=microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
+        .filter(|ch| !(' '..='~').contains(ch) && !('\u{2500}'..='\u{259f}').contains(ch)
+            && !('\u{2800}'..='\u{28ff}').contains(ch))
+        .map(|ch|glyph_slot(ch).unwrap()).collect();
+    assert_eq!(quad_extras,(quad_start..BRAILLE_START).collect::<Vec<_>>());
     assert!(glyph_slot('§').unwrap()>=255);
     assert_eq!(glyph_slot('\u{2800}'),Some(BRAILLE_START));
     assert_eq!(glyph_slot('\u{28ff}'),Some(SLOT_COUNT-1));
@@ -281,20 +289,72 @@ fn expected_lines()->usize {
     for (vertices,params) in state.vertices.iter().zip(&state.params) {
         if f32::from_bits(params[8])<=0.0 {continue;}
         let last=vertices.len()-2;
-        assert_eq!(vertices[1][2],0.25);
-        assert_eq!(vertices[last][2],0.75);
+        let dot=vertices.iter().all(|v|v[..2]==vertices[1][..2]);
+        assert_eq!(vertices[1][2],if dot {1.25}else{0.25});
+        assert_eq!(vertices[last][2],if dot {1.75}else{0.75});
         for point in &vertices[2..last] {assert_eq!(point[2],0.5);}
         for (index,offset) in [(1,0),(last,4)] {
-            // Coincident-point strips have no tangent or endpoint cap recipe.
-            if params[offset+2..offset+4] == [0,0] {
-                assert!(vertices.iter().all(|v| v[..2] == vertices[index][..2]));
-                assert_eq!(params[if index == 1 {10} else {11}],0);
-                continue;
-            }
             assert_eq!(vertices[index][0],f32::from_bits(params[offset]));
             assert_eq!(vertices[index][1],f32::from_bits(params[offset+1]));
         }
     }
+}
+#[test] fn coincident_dots_keep_centres_cap_tags_and_finite_opposite_frames() {
+    use microfont::raster_line::{Boundary::{End,Junction},Point,Strip};
+    static DOT:[Point;2]=[Point::new(2,2),Point::new(2,2)];
+    for start in [End,Junction] {for end in [End,Junction] {
+        let strip=Strip::new(&DOT,start,end);
+        let p=endpoint_params(&strip,0).map(f32::from_bits);
+        assert_eq!(&p[..8],&[2.5,2.5,1.0,0.0,2.5,2.5,-1.0,0.0]);
+        assert_eq!(p[8],std::f32::consts::SQRT_2);
+        assert_eq!(p[10],if start==End {1.0}else{0.0});
+        assert_eq!(p[11],if end==End {1.0}else{0.0});
+    }}
+    for ch in ['ä','Ä'] {
+        let strips=microfont::raster_line::glyph_strips(ch).unwrap();
+        let dots:Vec<_>=strips.iter().filter(|s|s.points.iter().all(|p|*p==s.points[0])).collect();
+        assert_eq!(dots.len(),2);
+        for dot in dots {
+            let p=endpoint_params(&dot,glyph_slot(ch).unwrap()).map(f32::from_bits);
+            assert_eq!(&p[..2],&p[4..6]);
+            assert_eq!(&p[2..4],&[1.0,0.0]);assert_eq!(&p[6..8],&[-1.0,0.0]);
+            assert_eq!(&p[10..12],&[1.0,1.0]);
+        }
+    }
+    // The current i dot is a short nonzero stroke with its own tangent.
+    assert!(microfont::raster_line::glyph_strips('i').unwrap().iter()
+        .all(|s|s.points.iter().any(|p|*p!=s.points[0])));
+}
+#[test] fn dot_diameter_tracks_sqrt_two_with_matching_native_and_analytic_widths() {
+    reset(0);
+    let mut uploads=0;
+    for width in [3.5,7.0,8.0,9.0,32.0] {
+        with_warmed_atlas(AtlasConfig {glyph_height_px:Some(19),line_width_px:width,
+            ..AtlasConfig::default()},|_|Ok(())).unwrap();
+        let state=STATE.lock().unwrap();
+        if uploads==0 {uploads=state.uploads;}
+        assert_eq!(state.uploads,uploads);
+        let mut dots=0;
+        for (vertices,params) in state.vertices.iter().zip(&state.params) {
+            let p=params.map(f32::from_bits);
+            if p[8]<=0.0 {continue;}
+            let expected=if vertices[1][2]==1.25 {
+                dots+=1;(width*std::f32::consts::SQRT_2*128.0).round()/128.0
+            } else {width};
+            assert_eq!(p[8]*2.0,expected);
+            assert_eq!(p[13],width); // Cell layout and joins use the stroke width.
+        }
+        assert!(dots>0);
+    }
+}
+#[test] fn physical_gutters_contain_the_larger_dots_at_the_cell_edge() {
+    for height in [11,19,38,110] {for width in [3.5,8.0,9.0,16.0,32.0] {
+        let config=AtlasConfig {glyph_height_px:Some(height),line_width_px:width,
+            ..AtlasConfig::default()};
+        let radius=(width*std::f32::consts::SQRT_2*128.0).round()/256.0;
+        let gutter=(config.cell_extent().1-height)/2;
+        assert!(gutter as f32+(height as f32/11.0)*0.5>=radius+0.5-0.004);
+    }}
 }
 #[test] fn geometry_is_uploaded_once_and_same_config_never_redraws() {
     reset(0);for _ in 0..3 {with_warmed_atlas(AtlasConfig::default(),|_|Ok(())).unwrap();}
@@ -401,6 +461,79 @@ fn expected_lines()->usize {
             assert_eq!([vertices[0][0]-origin[0],vertices[0][1]-origin[1]],quad.top_left.map(f32::from));
             assert_eq!([vertices[2][0]-origin[0],vertices[2][1]-origin[1]],quad.bottom_right.map(f32::from));
         }
+    }
+}
+#[test] fn cp850_standalone_quads_have_slots_uploads_and_snapshot_reads() {
+    reset(0);
+    with_warmed_atlas(AtlasConfig::default(),|atlas| {
+        for ch in ['▬','■'] {assert!(atlas.glyph_rect(ch).is_some());}
+        Ok(())
+    }).unwrap();
+    let state=STATE.lock().unwrap();
+    for ch in ['▬','■'] {
+        assert!(microfont::raster_line::glyph_strips(ch).is_none());
+        assert!(microfont::raster_quad::GLYPH_CHARACTERS.contains(&ch));
+        let slot=glyph_slot(ch).unwrap();
+        assert!(slot>=255 && slot<BRAILLE_START);
+        let quads=microfont::raster_quad::glyph_quads(ch).unwrap();
+        assert_eq!(quads.len(),1);
+        let actual=state.vertices[0].chunks_exact(4)
+            .filter(|v|(-v[0][2]-1.0) as usize==slot).collect::<Vec<_>>();
+        assert_eq!(actual.len(),1);
+        let origin=[(slot%ATLAS_COLUMNS as usize) as f32*6.0,(slot/ATLAS_COLUMNS as usize) as f32*11.0];
+        for (point,expected) in actual[0].iter().zip(quads.get(0).unwrap().vertices) {
+            assert_eq!([point[0]-origin[0],point[1]-origin[1]],expected);
+        }
+    }
+    assert_ne!(glyph_slot('▬'),glyph_slot('■'));
+    drop(state);
+    let snapshot=build_shell3_alpha_atlas(19).unwrap();
+    for ch in ['▬','■'] {
+        assert_eq!(snapshot.glyph(ch).unwrap().len(),(snapshot.glyph_width*snapshot.glyph_height) as usize);
+        assert_eq!(snapshot.glyphs().filter(|&(candidate,_)|candidate==ch).count(),1);
+    }
+}
+#[test] fn cp850_standalone_quads_build_single_intel_masks_without_lines() {
+    for ch in ['▬','■'] {
+        reset(0);
+        let glyph=build_single_glyph_mask(ch,110).unwrap();
+        assert_eq!((glyph.width,glyph.height,glyph.em_height_px),(78,128,110));
+        assert!(glyph.pixels.iter().any(|&p|p!=0));
+        let state=STATE.lock().unwrap();
+        assert_eq!((state.uploads,state.renders,state.allocations),(1,1,1));
+        assert_eq!(state.vertices.len(),1);
+        assert_eq!(state.vertices[0].len(),4);
+        assert_eq!(state.params.len(),1);
+        assert_eq!(f32::from_bits(state.params[0][8]),0.0);
+        for (point,expected) in state.vertices[0].iter()
+            .zip(microfont::raster_quad::glyph_quads(ch).unwrap().get(0).unwrap().vertices)
+        {
+            assert_eq!(*point,[expected[0],expected[1],-1.0]);
+        }
+    }
+}
+#[test] fn cp850_standalone_quads_build_single_virgl_masks_and_preserve_corners() {
+    for ch in ['▬','■'] {
+        reset(0);
+        let config=AtlasConfig {glyph_height_px:Some(110),line_width_px:16.0,..AtlasConfig::default()};
+        let (width,height)=config.cell_extent();
+        let native=native_mask_geometry(config,width,height,Some(ch)).unwrap();
+        assert!(native.lines.is_empty() && native.points.is_empty());
+        assert_eq!(native.quads.len(),4);
+        let source=microfont::raster_quad::glyph_quads(ch).unwrap().get(0).unwrap();
+        for (vertex,point) in native.quads.iter().zip(source.vertices) {
+            let actual=[(vertex.position[0]+1.0)*width as f32/2.0,
+                (vertex.position[1]+1.0)*height as f32/2.0];
+            let expected=point.map(|v|v*10.0+9.0);
+            for k in 0..2 {assert!((actual[k]-expected[k]).abs()<0.001);}
+        }
+        virtio_gpu_logo::EMULATOR.store(true,std::sync::atomic::Ordering::Relaxed);
+        let glyph=build_single_glyph_mask(ch,110).unwrap();
+        virtio_gpu_logo::EMULATOR.store(false,std::sync::atomic::Ordering::Relaxed);
+        assert_eq!((glyph.width,glyph.height),(width,height));
+        assert!(glyph.pixels.iter().any(|&p|p!=0));
+        let state=STATE.lock().unwrap();
+        assert_eq!((state.uploads,state.allocations,state.renders),(0,0,1));
     }
 }
 #[test] fn quad_vertices_keep_explicit_owning_cell_at_exact_boundaries() {
@@ -540,6 +673,7 @@ def main():
     service=service.replace('static ATLAS:', 'pub(crate) static ATLAS:').replace('fn append_join(', 'pub(crate) fn append_join(').replace('pub(super) fn append_strip_joins(', 'pub(crate) fn append_strip_joins(')
     service=service.replace('pub(super) fn corner_triangle(', 'pub(crate) fn corner_triangle(')
     service=service.replace('fn native_mask_geometry(', 'pub(crate) fn native_mask_geometry(')
+    service=service.replace('fn endpoint_params(', 'pub(crate) fn endpoint_params(')
     service=service.replace('static START_GLYPH:', 'pub(crate) static START_GLYPH:')
     # The fixture discards production logging, so its partial-coverage counter
     # has no reader. Keep the counter in production, where the log consumes it.
