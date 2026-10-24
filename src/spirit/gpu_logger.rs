@@ -912,7 +912,9 @@ mod tests {
                 sample: sample(),
             },
         );
-        assert_eq!(&pixels[0..4], &[BACKGROUND.b, BACKGROUND.g, BACKGROUND.r, 0xFF]);
+        // The panel's cyan rail overwrites the first four columns.
+        assert_eq!(&pixels[0..4], &[CYAN.b, CYAN.g, CYAN.r, 0xFF]);
+        assert_eq!(&pixels[16..20], &[BACKGROUND.b, BACKGROUND.g, BACKGROUND.r, 0xFF]);
         for y in 0..PANEL_DIM as usize {
             for x in 0..PANEL_DIM as usize {
                 assert_eq!(pixels[y * pitch + x * 4 + 3], 0xFF);
