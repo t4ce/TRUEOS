@@ -99,7 +99,7 @@ jobs:
             nasm \
             ocl-icd-libopencl1 \
             ovmf \
-            p7zip-full \
+            lz4 \
             pkg-config \
             python3-cryptography \
             rustup \
@@ -317,7 +317,7 @@ jobs:
           dist="dist"
           mkdir -p "${dist}"
 
-          cp bld/TrueOS.7z "${dist}/TrueOS-${version}.7z"
+          cp bld/TrueOS.lz4 "${dist}/TrueOS-${version}.lz4"
           cp bld/trueos-release/TRUEOS.provenance.json "${dist}/TRUEOS-${version}.provenance.json"
           if [[ -f bld/trueos-release/TRUEOS.source-files.sha256 ]]; then
             cp bld/trueos-release/TRUEOS.source-files.sha256 "${dist}/TRUEOS-${version}.source-files.sha256"
@@ -325,10 +325,10 @@ jobs:
 
           (
             cd "${dist}"
-            sha256sum TrueOS-${version}.7z TRUEOS-${version}.provenance.json $([[ -f TRUEOS-${version}.source-files.sha256 ]] && printf '%s' TRUEOS-${version}.source-files.sha256) > SHA256SUMS
+            sha256sum TrueOS-${version}.lz4 TRUEOS-${version}.provenance.json $([[ -f TRUEOS-${version}.source-files.sha256 ]] && printf '%s' TRUEOS-${version}.source-files.sha256) > SHA256SUMS
           )
 
-          archive_name="TrueOS-${version}.7z"
+          archive_name="TrueOS-${version}.lz4"
           archive_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v${version}/${archive_name}"
           archive_sha256="$(sha256sum "${dist}/${archive_name}" | cut -d ' ' -f1)"
           record_sha256="$(python3 -c 'import json; print(json.load(open("bld/trueos-release/TRUEOS.provenance.json", encoding="utf-8"))["record_sha256"])')"
