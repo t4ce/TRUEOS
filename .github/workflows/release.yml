@@ -258,6 +258,7 @@ jobs:
 
           make intel-gpu-bake-cpp-artifacts
           make intel-gpu-verify-cpp-artifacts
+          python3 tools/shadertoy-cpp-offline/test_package_contract_comments.py
           python3 tools/intel-gpu-bakery/test_check_rebuilt_artifacts.py
           python3 tools/intel-gpu-bakery/check_rebuilt_artifacts.py --restore-comments \
             crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp
