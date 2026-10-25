@@ -18,7 +18,6 @@ def main():
     pullbot = (BLUEPRINTS / "buildins/appstore/src/pullbot.rs").read_text()
     pullbot = pullbot[:pullbot.index("pub fn report")]
     startup = (ROOT / "src/shell3/startup.rs").read_text()
-    startup = startup[:startup.index("/// Preserve ordinary kernel progress")]
     service = (ROOT / "src/shell3/service.rs").read_text()
     admission = extract.item("src/shell3/service.rs", "WindowGeometry")
     admission += extract.item("src/shell3/service.rs", "WindowSpawn")

@@ -16,11 +16,18 @@ pub(crate) struct DragPreview {
 }
 
 fn preview(label: &str) -> Arc<DragPreview> {
-    let text: alloc::string::String = label.chars().take(48).collect();
-    let width = (text.chars().count().max(1) * microfont::FWIDTH) as u32;
-    let height = microfont::FHEIGHT as u32;
+    // Apps compose their own labels, including optional text frames. Keep
+    // multiline rasterization bounded independently of the payload format.
+    let lines: Vec<alloc::string::String> = label.split('\n').take(8)
+        .map(|line| line.chars().take(48).collect()).collect();
+    let width = (lines.iter().map(|line| line.chars().count()).max().unwrap_or(1).max(1)
+        * microfont::FWIDTH) as u32;
+    let height = (lines.len().max(1) * microfont::FHEIGHT) as u32;
     let mut pixels = vec![0u8; width as usize * height as usize];
-    let _ = microfont::stamp_text(&mut pixels, width as usize, height as usize, 0, 0, &text, 1u8);
+    for (row, text) in lines.iter().enumerate() {
+        let _ = microfont::stamp_text(&mut pixels, width as usize, height as usize,
+            0, (row * microfont::FHEIGHT) as i32, text, 1u8);
+    }
     let mut runs = Vec::new();
     for (y, row) in pixels.chunks_exact(width as usize).enumerate() {
         let mut x = 0;
@@ -86,7 +93,7 @@ impl Registry {
     ) -> Result<i32, i32> {
         if label.is_empty()
             || label.len() > MAX_LABEL_BYTES
-            || label.chars().any(char::is_control)
+            || label.chars().any(|ch| ch.is_control() && ch != '\n')
             || data.len() > MAX_PAYLOAD_BYTES
         {
             return Err(-1);
@@ -344,7 +351,7 @@ mod tests {
     fn owner_shutdown_and_limits_do_not_leave_previews_or_unbounded_mailboxes() {
         let mut r = Registry::new();
         assert_eq!(
-            r.begin(WindowOwner::Vm(1), frame(1, 1), source(1), 1, "bad\nlabel", b""),
+            r.begin(WindowOwner::Vm(1), frame(1, 1), source(1), 1, "bad\tlabel", b""),
             Err(-1)
         );
         assert_eq!(
@@ -393,6 +400,20 @@ mod tests {
                 .all(|&(x, y, len)| len > 0 && x + len <= p.width && y < p.height)
         );
         assert_eq!(preview(&"x".repeat(100)).width, 48 * microfont::FWIDTH as u32);
+    }
+
+    #[test]
+    fn multiline_app_labels_keep_their_frame_and_payload() {
+        let mut r = Registry::new();
+        let label = "┌────┐\n│file│\n└────┘";
+        r.begin(WindowOwner::Vm(1), frame(1, 1), source(1), 7, label, b"opaque").unwrap();
+        let p = &r.drags[0].preview;
+        assert_eq!(p.width, 6 * microfont::FWIDTH as u32);
+        assert_eq!(p.height, 3 * microfont::FHEIGHT as u32);
+        assert!(p.runs.iter().any(|&(_, y, _)| y >= 2 * microfont::FHEIGHT as u32));
+        assert_eq!(r.drags[0].kind, 7);
+        assert_eq!(r.drags[0].data, b"opaque");
+        assert_eq!(preview(&"x\n".repeat(100)).height, 8 * microfont::FHEIGHT as u32);
     }
 
     #[test]

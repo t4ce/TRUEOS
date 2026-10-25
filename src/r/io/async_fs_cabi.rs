@@ -30,13 +30,15 @@ const DIR_LIST_HEADER_BYTES: usize = 12;
 /// input stream. `vFile:` is deliberately not a TrueOSFS pathname.
 const VMX_LAUNCH_SCRIPT_VFILE: &str = "vFile:launch";
 const STARTUP_MANIFEST_VFILE: &str = "vFile:startup";
+/// Repeatable live terminal presentation, independent of the app's renderer.
+const TERMINAL_FRONTEND_VFILE: &str = "vFile:terminal-frontend";
 /// Write a downloaded archive pathname here to import it into volatile AppDB.
 /// Completion acknowledges the import; this operation never launches a VM.
 pub(crate) fn is_virtual_write(path: &str) -> bool { path == "vFile:appdb-install" }
 
 
 pub(crate) fn is_virtual_read(path: &str) -> bool {
-    matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE)
+    matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE | TERMINAL_FRONTEND_VFILE)
         || path.starts_with("vFile:microfont-grid/")
 }
 const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
@@ -455,6 +457,21 @@ fn start_inner(owner: u32, kind: RequestKind) -> i32 {
 }
 
 pub(crate) fn start_read(owner: u32, path: String) -> i32 {
+    if path == TERMINAL_FRONTEND_VFILE {
+        let vm = owner & !0x8000_0000;
+        if owner & 0x8000_0000 == 0 || vm > u8::MAX as u32 {
+            return FS_ERR_NOT_FOUND;
+        }
+        let presentation = if crate::shell3::tui::window_for_vm(vm as u8).is_some() {
+            "ui4"
+        } else if crate::hv::blueprint_console_target(vm as u8)
+            .and_then(|target| crate::shell3::tui::frontend_for_target(&target)).is_some() {
+            "remote"
+        } else {
+            "detached"
+        };
+        return start_completed_read(owner, presentation.as_bytes().to_vec());
+    }
     if path == STARTUP_MANIFEST_VFILE {
         return start_completed_read(owner, crate::r::restart::startup_manifest().to_vec());
     }
