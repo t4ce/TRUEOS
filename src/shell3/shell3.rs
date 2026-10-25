@@ -1,6 +1,8 @@
 mod admin;
 #[path = "system/gpu.rs"]
 mod gpu;
+#[path = "system/font.rs"]
+mod font;
 mod helper;
 mod lifecycle;
 mod os;
@@ -1088,7 +1090,9 @@ impl Shell3 {
         if let Some(app) = tui::take_native_launch(self.tui_frontend) {
             self.select_queued_app(app);
         }
-        if let Some(destination) = tlb::take_return(self.tui_frontend) {
+        if let Some(destination) = tlb::take_return(self.tui_frontend)
+            .or_else(|| font::take_return(self.tui_frontend))
+        {
             if let Some(lease) = destination.0
                 && matrix_target::matrix_slot_is_live(&lease)
             {
@@ -1486,7 +1490,7 @@ impl Shell3 {
         } else if self.mode == Mode::ADM
             && matches!(
                 text.as_str(),
-                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb"
+                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font"
             )
         {
             let frontend = self.tui_frontend();
@@ -1498,6 +1502,7 @@ impl Shell3 {
                 "net" => system_net::start(frontend),
                 "gpu" => gpu::start(frontend),
                 "vcpy" => vcpy::start(frontend),
+                "font" => font::start(frontend),
                 _ => {
                     let origin = output::DumpTarget(
                         self.active_matrix_slot

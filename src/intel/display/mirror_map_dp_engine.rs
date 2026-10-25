@@ -162,6 +162,11 @@ impl MirrorMapMode {
             _ => destination,
         }
     }
+
+    fn destination_for_source(self, source: usize) -> Option<usize> {
+        (0..MIRROR_PLANE_COUNT)
+            .find(|&destination| self.source_for_destination(destination) == source)
+    }
 }
 
 #[derive(Copy, Clone)]

@@ -139,6 +139,10 @@ pub(super) const ADM_NAMES: &[NameEntry] = &[
         color: RgbaColor::White,
     },
     NameEntry {
+        name: "font",
+        color: RgbaColor::White,
+    },
+    NameEntry {
         name: "env",
         color: RgbaColor::White,
     },

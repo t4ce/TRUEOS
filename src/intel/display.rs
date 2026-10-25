@@ -2734,6 +2734,7 @@ fn pipe_scaler_registers(pipe_slot: usize, scaler_id: usize) -> Option<PipeScale
         (1, 0) => PIPE_SCALER_0_B_CTRL,
         (1, 1) => PIPE_SCALER_1_B_CTRL,
         (2, 0) => PIPE_SCALER_0_C_CTRL,
+        (2, 1) => PIPE_SCALER_1_C_CTRL,
         _ => return None,
     };
     Some(PipeScalerRegisters {

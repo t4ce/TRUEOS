@@ -66,13 +66,13 @@ pub(in crate::intel) const UNI_PLANE_WM_SAGV_OFF: usize = 0xD8;
 pub(in crate::intel) const UNI_PLANE_WM_SAGV_TRANS_OFF: usize = 0xDC;
 pub(in crate::intel) const UNI_PLANE_WM_TRANS_OFF: usize = 0xE8;
 pub(in crate::intel) const UNI_PLANE_BUF_CFG_OFF: usize = 0xFC;
-// Gen9+ pipe scalers. Pipe A/B expose two shared scalers; the address layout
-// is stable through the TGL/ADL display engine used by this driver.
+// TGL/ADL expose two shared scalers on every pipe (Display PRM, PS_CTRL).
 pub(in crate::intel) const PIPE_SCALER_0_A_CTRL: usize = 0x68180;
 pub(in crate::intel) const PIPE_SCALER_1_A_CTRL: usize = 0x68280;
 pub(in crate::intel) const PIPE_SCALER_0_B_CTRL: usize = 0x68980;
 pub(in crate::intel) const PIPE_SCALER_1_B_CTRL: usize = 0x68A80;
 pub(in crate::intel) const PIPE_SCALER_0_C_CTRL: usize = 0x69180;
+pub(in crate::intel) const PIPE_SCALER_1_C_CTRL: usize = 0x69280;
 pub(in crate::intel) const PIPE_SCALER_WIN_POS_FROM_CTRL: usize = 0x10;
 pub(in crate::intel) const PIPE_SCALER_WIN_SIZE_FROM_CTRL: usize = 0x0C;
 pub(in crate::intel) const PIPE_SCALER_VPHASE_FROM_CTRL: usize = 0x08;
