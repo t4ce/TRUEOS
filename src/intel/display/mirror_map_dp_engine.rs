@@ -428,57 +428,132 @@ fn enable_dbuf_s2(dev: crate::intel::Dev) -> Result<u32, WdCaptureError> {
     Ok(saved)
 }
 
-fn clone_plane_contract(
-    dev: crate::intel::Dev,
-    source: PipeInfo,
-    mirror: PipeInfo,
-    source_slot: usize,
-    destination_slot: usize,
-    dbuf_start: u16,
-    dbuf_end: u16,
-) {
-    let src = source.plane(source_slot).base();
-    let dst = mirror.plane(destination_slot).base();
-    let ctl = crate::intel::mmio_read(dev, src + UNI_PLANE_CTL_OFF);
-    crate::intel::mmio_write(dev, dst + UNI_PLANE_CTL_OFF, ctl & !PLANE_CTL_ENABLE);
-    for offset in [
-        UNI_PLANE_STRIDE_OFF,
-        UNI_PLANE_POS_OFF,
-        UNI_PLANE_SIZE_OFF,
-        UNI_PLANE_KEYVAL_OFF,
-        UNI_PLANE_KEYMSK_OFF,
-        UNI_PLANE_KEYMAX_OFF,
-        UNI_PLANE_OFFSET_OFF,
-        UNI_PLANE_AUX_DIST_OFF,
-        UNI_PLANE_AUX_OFFSET_OFF,
-        UNI_PLANE_CUS_CTL_OFF,
-        UNI_PLANE_COLOR_CTL_OFF,
-    ] {
-        crate::intel::mmio_write(dev, dst + offset, crate::intel::mmio_read(dev, src + offset));
+const MIRROR_PLANE_COUNT: usize = 5;
+const MIRROR_SCALER_COUNT: usize = 2;
+const MIRROR_DBUF_RANGES: [(u16, u16); MIRROR_PLANE_COUNT] = [
+    (PLANE_DBUF_S2_SLOT_0_START, PLANE_DBUF_S2_SLOT_0_END),
+    (PLANE_DBUF_S2_SLOT_1_START, PLANE_DBUF_S2_SLOT_1_END),
+    (PLANE_DBUF_S2_SLOT_2_START, PLANE_DBUF_S2_SLOT_2_END),
+    (PLANE_DBUF_S2_SLOT_3_START, PLANE_DBUF_S2_SLOT_3_END),
+    (PLANE_DBUF_S2_SLOT_4_START, PLANE_DBUF_S2_SLOT_4_END),
+];
+// Plane opacity lives in KEYMSK/KEYMAX. Input CSC coefficients belong to the
+// plane's pixel contract; Pipe C's output CSC remains WD's RGB -> YCbCr stage.
+const MIRROR_PLANE_REGISTERS: [usize; 23] = [
+    UNI_PLANE_STRIDE_OFF,
+    UNI_PLANE_POS_OFF,
+    UNI_PLANE_SIZE_OFF,
+    UNI_PLANE_KEYVAL_OFF,
+    UNI_PLANE_KEYMSK_OFF,
+    UNI_PLANE_KEYMAX_OFF,
+    UNI_PLANE_OFFSET_OFF,
+    UNI_PLANE_AUX_DIST_OFF,
+    UNI_PLANE_AUX_OFFSET_OFF,
+    UNI_PLANE_CUS_CTL_OFF,
+    UNI_PLANE_COLOR_CTL_OFF,
+    UNI_PLANE_INPUT_CSC_COEFF_OFF,
+    UNI_PLANE_INPUT_CSC_COEFF_OFF + 4,
+    UNI_PLANE_INPUT_CSC_COEFF_OFF + 8,
+    UNI_PLANE_INPUT_CSC_COEFF_OFF + 12,
+    UNI_PLANE_INPUT_CSC_COEFF_OFF + 16,
+    UNI_PLANE_INPUT_CSC_COEFF_OFF + 20,
+    UNI_PLANE_INPUT_CSC_PREOFF_OFF,
+    UNI_PLANE_INPUT_CSC_PREOFF_OFF + 4,
+    UNI_PLANE_INPUT_CSC_PREOFF_OFF + 8,
+    UNI_PLANE_INPUT_CSC_POSTOFF_OFF,
+    UNI_PLANE_INPUT_CSC_POSTOFF_OFF + 4,
+    UNI_PLANE_INPUT_CSC_POSTOFF_OFF + 8,
+];
+
+#[derive(Copy, Clone)]
+struct MirrorPlaneState {
+    control: u32,
+    registers: [u32; MIRROR_PLANE_REGISTERS.len()],
+    surface: u32,
+}
+
+#[derive(Copy, Clone, Default)]
+struct MirrorScalerState {
+    control: u32,
+    hphase: u32,
+    vphase: u32,
+    window_pos: u32,
+    window_size: u32,
+}
+
+struct MirrorScene {
+    bottom_color: u32,
+    planes: [MirrorPlaneState; MIRROR_PLANE_COUNT],
+    scalers: [MirrorScalerState; MIRROR_SCALER_COUNT],
+}
+
+fn read_mirror_scene(dev: crate::intel::Dev, mode: MirrorMapMode) -> MirrorScene {
+    // The compositor writes scaler, geometry, opacity and SURF under this
+    // lock. Read the whole application-plane scene between those writes,
+    // rather than assembling a frame from a partially programmed transaction.
+    // Slot 4 and the cursor retain their independent presentation owners.
+    let _source_update = UI4_PLANE_SURFACE_FLIP_BATCH.lock();
+    let source = PIPES[SOURCE_PIPE_SLOT];
+    let planes = core::array::from_fn(|destination_slot| {
+        let src = source
+            .plane(mode.source_for_destination(destination_slot))
+            .base();
+        MirrorPlaneState {
+            control: crate::intel::mmio_read(dev, src + UNI_PLANE_CTL_OFF),
+            registers: core::array::from_fn(|index| {
+                crate::intel::mmio_read(dev, src + MIRROR_PLANE_REGISTERS[index])
+            }),
+            // Preserve the existing scanout allocation contract, not a queued
+            // next SURF whose display ownership has not transferred yet.
+            surface: crate::intel::mmio_read(dev, src + UNI_PLANE_SURFLIVE_OFF),
+        }
+    });
+    let scalers = core::array::from_fn(|scaler_id| {
+        let Some(regs) = pipe_scaler_registers(source.slot, scaler_id) else {
+            return MirrorScalerState::default();
+        };
+        let mut control = crate::intel::mmio_read(dev, regs.control);
+        if control & PIPE_SCALER_ENABLE == 0 {
+            return MirrorScalerState::default();
+        }
+        let binding = (control & PIPE_SCALER_BINDING_MASK) >> 25;
+        if binding != 0 {
+            let Some(destination) = mode.destination_for_source(binding as usize - 1) else {
+                return MirrorScalerState::default();
+            };
+            control = (control & !PIPE_SCALER_BINDING_MASK) | pipe_scaler_binding(destination);
+        }
+        MirrorScalerState {
+            control,
+            hphase: crate::intel::mmio_read(dev, regs.hphase),
+            vphase: crate::intel::mmio_read(dev, regs.vphase),
+            window_pos: crate::intel::mmio_read(dev, regs.window_pos),
+            window_size: crate::intel::mmio_read(dev, regs.window_size),
+        }
+    });
+    MirrorScene {
+        bottom_color: crate::intel::mmio_read(
+            dev,
+            SKL_BOTTOM_COLOR_A + source.slot * SKL_BOTTOM_COLOR_PIPE_STRIDE,
+        ),
+        planes,
+        scalers,
     }
-    // COLOR_CTL can enable the programmable input CSC. Mirroring only its
-    // enable/mode bits while leaving Pipe C's coefficient banks at reset does
-    // not reproduce Pipe A's pixel contract.
-    for offset in (UNI_PLANE_INPUT_CSC_COEFF_OFF..=UNI_PLANE_INPUT_CSC_COEFF_OFF + 20).step_by(4) {
-        crate::intel::mmio_write(dev, dst + offset, crate::intel::mmio_read(dev, src + offset));
-    }
-    for offset in (UNI_PLANE_INPUT_CSC_PREOFF_OFF..=UNI_PLANE_INPUT_CSC_PREOFF_OFF + 8).step_by(4) {
-        crate::intel::mmio_write(dev, dst + offset, crate::intel::mmio_read(dev, src + offset));
-    }
-    for offset in (UNI_PLANE_INPUT_CSC_POSTOFF_OFF..=UNI_PLANE_INPUT_CSC_POSTOFF_OFF + 8).step_by(4)
-    {
-        crate::intel::mmio_write(dev, dst + offset, crate::intel::mmio_read(dev, src + offset));
-    }
-    program_plane_watermark_boot_safe(dev, dst, true);
-    let _ = program_plane_buf_cfg(dev, dst, dbuf_start, dbuf_end);
-    crate::intel::mmio_write(dev, dst + UNI_PLANE_CTL_OFF, ctl);
-    // Mirror the allocation actually being scanned out, never Pipe A's queued
-    // next SURF. The write becomes Pipe C's first double-buffered commit.
-    crate::intel::mmio_write(
-        dev,
-        dst + UNI_PLANE_SURF_OFF,
-        crate::intel::mmio_read(dev, src + UNI_PLANE_SURFLIVE_OFF),
-    );
+}
+
+fn program_mirror_scaler(dev: crate::intel::Dev, scaler_id: usize, state: MirrorScalerState) {
+    let Some(regs) = pipe_scaler_registers(MIRROR_PIPE_SLOT, scaler_id) else {
+        return;
+    };
+    // UI4 uses the hardware ROM filter. Phases and the scaler window carry
+    // the destination geometry when PLANE_POS is necessarily zero.
+    crate::intel::mmio_write(dev, regs.control, state.control);
+    crate::intel::mmio_write(dev, regs.vphase, state.vphase);
+    crate::intel::mmio_write(dev, regs.hphase, state.hphase);
+    crate::intel::mmio_write(dev, regs.window_pos, state.window_pos);
+    // PS_WIN_SZ arms every scaler update, including a disable or a change
+    // that leaves the size unchanged (TGL Display PRM, Pipe Scaler sequence).
+    crate::intel::mmio_write(dev, regs.window_size, state.window_size);
 }
 
 fn mirror_cursor(dev: crate::intel::Dev) {
@@ -541,7 +616,7 @@ fn mirror_cursor(dev: crate::intel::Dev) {
 }
 
 fn mirror_live_scene(dev: crate::intel::Dev) {
-    let source = PIPES[SOURCE_PIPE_SLOT];
+    let scene = read_mirror_scene(dev, mirror_map_mode());
     let mirror = PIPES[MIRROR_PIPE_SLOT];
     // UI4's color picker owns Pipe A's programmable bottom color. It can
     // change while WD remains resident, so copy it for every triggered frame
@@ -549,31 +624,38 @@ fn mirror_live_scene(dev: crate::intel::Dev) {
     crate::intel::mmio_write(
         dev,
         SKL_BOTTOM_COLOR_A + mirror.slot * SKL_BOTTOM_COLOR_PIPE_STRIDE,
-        crate::intel::mmio_read(
-            dev,
-            SKL_BOTTOM_COLOR_A + source.slot * SKL_BOTTOM_COLOR_PIPE_STRIDE,
-        ),
+        scene.bottom_color,
     );
-    let ranges = [
-        (PLANE_DBUF_S2_SLOT_0_START, PLANE_DBUF_S2_SLOT_0_END),
-        (PLANE_DBUF_S2_SLOT_1_START, PLANE_DBUF_S2_SLOT_1_END),
-        (PLANE_DBUF_S2_SLOT_2_START, PLANE_DBUF_S2_SLOT_2_END),
-        (PLANE_DBUF_S2_SLOT_3_START, PLANE_DBUF_S2_SLOT_3_END),
-        (PLANE_DBUF_S2_SLOT_4_START, PLANE_DBUF_S2_SLOT_4_END),
-    ];
-    let mode = mirror_map_mode();
-    for (destination_slot, (start, end)) in ranges.into_iter().enumerate() {
-        clone_plane_contract(
+    for (slot, plane) in scene.planes.iter().enumerate() {
+        let dst = mirror.plane(slot).base();
+        crate::intel::mmio_write(
             dev,
-            source,
-            mirror,
-            mode.source_for_destination(destination_slot),
-            destination_slot,
-            start,
-            end,
+            dst + UNI_PLANE_CTL_OFF,
+            plane.control & !PLANE_CTL_ENABLE,
         );
+        for (offset, value) in MIRROR_PLANE_REGISTERS.iter().zip(plane.registers) {
+            crate::intel::mmio_write(dev, dst + offset, value);
+        }
+        crate::intel::mmio_write(dev, dst + UNI_PLANE_CTL_OFF, plane.control);
+    }
+    for (id, scaler) in scene.scalers.into_iter().enumerate() {
+        program_mirror_scaler(dev, id, scaler);
+    }
+    // Stage the complete geometry/scaler contract before arming any plane.
+    // WD's next frame trigger observes the prepared Pipe C scene as a whole.
+    for (slot, plane) in scene.planes.iter().enumerate() {
+        crate::intel::mmio_write(dev, mirror.plane(slot).surf(), plane.surface);
     }
     mirror_cursor(dev);
+}
+
+fn initialize_mirror_planes(dev: crate::intel::Dev) {
+    disable_mirror_planes(dev);
+    for (slot, (start, end)) in MIRROR_DBUF_RANGES.into_iter().enumerate() {
+        let dst = PIPES[MIRROR_PIPE_SLOT].plane(slot).base();
+        program_plane_watermark_boot_safe(dev, dst, true);
+        let _ = program_plane_buf_cfg(dev, dst, start, end);
+    }
 }
 
 fn aligned_capture_layout(width: u32, height: u32) -> Option<(u32, usize)> {
@@ -666,6 +748,7 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
         | PIPE_CHICKEN_PER_PIXEL_ALPHA_BYPASS;
     crate::intel::mmio_write(dev, PIPE_CHICKEN_A + mirror.slot * PIPE_MMIO_STRIDE, chicken);
     let saved_output_color = program_pipe_c_output_bt709_ycbcr(dev);
+    initialize_mirror_planes(dev);
     mirror_live_scene(dev);
 
     // WD timings contain active dimensions only; triggered capture supplies
@@ -780,6 +863,9 @@ fn disable_mirror_planes(dev: crate::intel::Dev) {
         let plane = PIPES[MIRROR_PIPE_SLOT].plane(slot);
         crate::intel::mmio_write(dev, plane.ctl(), 0);
         crate::intel::mmio_write(dev, plane.surf(), 0);
+    }
+    for id in 0..MIRROR_SCALER_COUNT {
+        program_mirror_scaler(dev, id, MirrorScalerState::default());
     }
     let cursor = CURSOR_A_BASE + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE;
     crate::intel::mmio_write(dev, cursor + CURSOR_CTL_OFF, 0);
