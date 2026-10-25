@@ -43,7 +43,8 @@ jobs:
       TRUEOS_RBGB_REV: 702bfbba8897e49ae90bec0d4229862e9c4e48aa
       TRUEOS_RUST_SRC_REV: c399451b5455a61f58936c9080cf96f5ad4cb7ef
       TRUEOS_MICROGAMES_REV: 24a88ca8cea2f1fafd6ec6e199e865e52df499b9
-      TRUEOS_PICASSO_REV: bf187f06dbd3b3d62fa985121f75048092e3e501
+      TRUEOS_PICASSO_REV: d9f4aded95426b72d962ae3f273a260cb8b3f380
+      TRUEOS_CUBES_REV: 870904030d8777f6c5827e3957b4e8c9e0259d69
 
     steps:
       - name: Prepare checkout dependencies
@@ -210,6 +211,8 @@ jobs:
             https://github.com/t4ce/MicroGames.git "${TRUEOS_MICROGAMES_REV}"
           checkout_sibling bld/TRUEOS-Picasso \
             https://github.com/t4ce/TRUEOS-Picasso.git "${TRUEOS_PICASSO_REV}"
+          checkout_sibling bld/Cubes \
+            https://github.com/t4ce/Cubes.git "${TRUEOS_CUBES_REV}"
 
           # The Blueprint workspace's local TRUEOS dependencies expect both
           # repositories to be siblings. Keep the CI checkout itself under the
@@ -257,7 +260,7 @@ jobs:
             --blueprints-root bld/TRUEOS-Blueprints
 
           make intel-gpu-bake-cpp-artifacts
-          make intel-gpu-verify-cpp-artifacts
+          make intel-gpu-verify-cpp-artifacts APP_SHADER_REPOS_DIR=bld
           python3 tools/shadertoy-cpp-offline/test_package_contract_comments.py
           python3 tools/intel-gpu-bakery/test_check_rebuilt_artifacts.py
           python3 tools/intel-gpu-bakery/check_rebuilt_artifacts.py --restore-comments \
@@ -271,6 +274,7 @@ jobs:
             START_BAREMETAL_LOG=0 \
             PUBLISH_RELEASE_SMB=0 \
             BLUEPRINTS_DIR=bld/TRUEOS-Blueprints \
+            APP_SHADER_REPOS_DIR=bld \
             OVMF_BUNDLE_PATH="${{ steps.paths.outputs.ovmf }}" \
             GUC_FW_HOST_PATH="${{ steps.paths.outputs.guc }}" \
             HUC_FW_HOST_PATH="${{ steps.paths.outputs.huc }}"

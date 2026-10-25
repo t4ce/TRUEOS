@@ -61,6 +61,7 @@ HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
 WEAVE_HELLO_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/weave_hello.bp
 WEAVE_HELLO_BP_ISO_REL_PATH ?= EFI/BOOT/apps/weave_hello.bp
 BLUEPRINTS_DIR ?= ../TRUEOS-Blueprints
+APP_SHADER_REPOS_DIR ?= ..
 BUILDIN_MANIFEST := $(BLUEPRINTS_DIR)/buildins.json
 BUILDIN_APP_NAMES := $(shell if [ -f "$(BUILDIN_MANIFEST)" ]; then python3 -c 'import json, sys; print(*json.load(open(sys.argv[1]))["buildins"])' "$(BUILDIN_MANIFEST)" 2>/dev/null; fi)
 BUILDIN_BP_FILES := $(addprefix $(BLUEPRINTS_DIR)/dist/,$(addsuffix .bp,$(BUILDIN_APP_NAMES)))
@@ -265,7 +266,7 @@ lfm25-cpp-verify:
 
 
 intel-gpu-verify-cpp-artifacts: 
-	python3 tools/app-shaders/package.py
+	python3 tools/app-shaders/package.py --repos "$(APP_SHADER_REPOS_DIR)"
 	python3 tools/shadertoy-cpp-offline/package_blueprint.py --blueprints-root "$(BLUEPRINTS_DIR)" --check
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify.py" --artifact-dir "$(INTEL_GPU_CPP_ARTIFACT_DIR)"
 	$(INTEL_GPU_BAKERY_PYTHON) -B -m unittest discover -s "$(INTEL_GPU_BAKERY_DIR)" -p 'test_*.py'
@@ -280,7 +281,7 @@ intel-gpu-verify-copy-cpp-hardware-log:
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_probe_log.py" "$(INTEL_GPU_CPP_PROBE_LOG)"
 
 intel-gpu-verify-linked-copy:
-	python3 tools/app-shaders/package.py --kernel-elf "$(INTEL_GPU_LINKED_ELF)"
+	python3 tools/app-shaders/package.py --repos "$(APP_SHADER_REPOS_DIR)" --kernel-elf "$(INTEL_GPU_LINKED_ELF)"
 	$(INTEL_GPU_BAKERY_PYTHON) -B "$(INTEL_GPU_BAKERY_DIR)/verify_linked.py" --elf "$(INTEL_GPU_LINKED_ELF)" --selected-bin "$(INTEL_GPU_SELECTED_COPY_BIN)" $(foreach bin,$(INTEL_GPU_CPP_REQUIRED_BINS),--required-bin "$(bin)")
 
 intel-gpu-verify-linked-copy-cpp:
