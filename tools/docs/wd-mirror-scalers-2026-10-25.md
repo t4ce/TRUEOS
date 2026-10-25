@@ -78,10 +78,70 @@ python3 tools/testpy/test_rdp_pipeline.py
 
 The five new tests exercise production register collection/programming with
 a mock MMIO bank: simultaneous scalers including Pipe C's second instance,
-all slot permutations, opacity/CSC and live surface preservation, source-lock
+all slot permutations, opacity/CSC and surface contract preservation, source-lock
 boundaries, commit ordering, animation-end cleanup, teardown, and initialization
 without per-frame DBUF/watermark updates.
 
 Raw H.264 streams, strict receiver logs, frame analysis, contact sheets,
 test-owned SSH transcripts, reproduction scripts, build output and deployment
 receipts are under `bld/wd-mirror-20261025/`.
+
+## Follow-up: first selection after a full deselect
+
+The user subsequently reported a remaining transition with three Shell3
+windows: deselect everything, let the scene settle, then select a window.
+The original three `img` open/close cycles did not cover that selection path.
+
+A second consistency bug was demonstrated by a production-MMIO regression:
+the source geometry, opacity and scaler registers describe the latest
+programmed update, but `SURFLIVE` can still name the previous window until
+the physical pipe latches. During plane reassignment, that can combine a new
+composed plane's geometry at 0,0 with the preceding direct window's pixels.
+
+The mirror now copies the corresponding programmed `SURF` address. These
+surfaces are ready for display: the compositor waits for composition work to
+complete before submission, retains prepared source leases in the pending
+frame, and transfers its direct display leases after the physical latch.
+The independent slot-4 producer also flushes its rendered damage before
+publishing `SURF`. This keeps surface and geometry in the same update without
+adding a wait for physical vblank or starving capture on continuous input.
+It remains a snapshot of the programmed scene, rather than an exact physical
+scanout latch. The cursor path retains its existing contract.
+
+The new regression fails against the previous code with the old surface
+address and passes with the corrected one. The focused suite now has 27
+passing checks. The follow-up kernel build, ISO/package checks and physical
+deployment verified runtime ELF SHA-256
+`e044a949fd06b0499220c753cb7bc6c70e20a22ba58455270b3c3fd353c9cce1`.
+
+Two selection captures on the previous image passed strict decoding without
+reproducing the exact reported flash. They exercised exposed Shell3 windows,
+background deselection and focus changes, but could not prove that all other
+cursor associations were absent. This limits any claim of a live before/after
+reproduction of this second report; the failing MMIO test proves the corrected
+inconsistency independently.
+
+After the update, a fresh boot established three test-owned physical Shell3
+windows at 130,100; 730,220; and 430,320, each 1700x800. With only the test
+cursor route active, three strict capture sessions exercised 12 full
+deselect–settle–select cycles: nine alternating focus changes and three
+already-top-window controls. Settling intervals varied between 0.6 and 1.1
+seconds. All 990 frames decoded with zero receiver anomalies, and the native
+origin region was pixel-identical to its initial background throughout all
+three recordings. The actual window bounds and hardware lease changes were
+checked; this was not just repeated selection of an unchanged top plane.
+The three windows remain arranged on the rig, with a final background
+deselect and released buttons, for immediate manual retesting. These clean
+after-tests still do not establish a reproduced before/after result for the
+user's exact intermittent trigger.
+
+The existing RDP viewer's exact FFmpeg flags were also replayed against the
+recorded selection stream. Its 290 decoded frames were pixel-identical to
+frames 40–329 from ordinary offline decoding; the difference was startup GOP
+discard, not a selection-dependent placement difference. No viewer rebuild
+is required for the kernel snapshot change.
+
+Follow-up build logs, before/after MMIO regression output and deployment
+receipts are in `bld/wd-selection-20261025/`. The initial live selection
+captures, scripts and decoder comparison remain alongside the original
+capture artifacts in `bld/wd-mirror-20261025/`.

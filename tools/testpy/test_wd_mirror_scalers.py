@@ -82,6 +82,7 @@ fn mirror_map_mode()->MirrorMapMode {MirrorMapMode::from_raw(MODE.load(Ordering:
         "PIPE_SCALER_WIN_POS_FROM_CTRL", "PIPE_SCALER_WIN_SIZE_FROM_CTRL",
         "PIPE_SCALER_HPHASE_FROM_CTRL", "PIPE_SCALER_VPHASE_FROM_CTRL",
         "UNI_PLANE_WM_0_OFF", "UNI_PLANE_BUF_CFG_OFF", "UNI_PLANE_SURF_OFF",
+        "UNI_PLANE_SURFLIVE_OFF",
     }
     declarations = {}
     while names:
@@ -119,7 +120,7 @@ fn plane(slot:usize) {
     put(p+UNI_PLANE_KEYMAX_OFF,(100+slot as u32)<<24);
     put(p+UNI_PLANE_INPUT_CSC_COEFF_OFF,0x1234_0000|slot as u32);
     put(p+UNI_PLANE_SURFLIVE_OFF,0x1000_0000+slot as u32*0x100000);
-    put(p+UNI_PLANE_SURF_OFF,0x2000_0000+slot as u32*0x100000);
+    put(p+UNI_PLANE_SURF_OFF,0x1000_0000+slot as u32*0x100000);
 }
 fn scaler(id:usize,slot:usize,x:u32,y:u32) {
     let r=pipe_scaler_registers(0,id).unwrap();
@@ -190,6 +191,27 @@ fn animation_end_and_capture_teardown_clear_both_stale_scalers() {
         let r=pipe_scaler_registers(2,id).unwrap();
         assert_eq!(get(r.control),0);assert_eq!(get(r.window_size),0);
     }
+}
+#[test]
+fn selection_reassignment_keeps_geometry_and_surface_in_the_same_commit() {
+    reset();for slot in 0..5 {plane(slot);}
+    let src=PIPES[0].plane(1).base();
+    let dst=PIPES[2].plane(1).base();
+    // A focus change repurposes the old direct slot as a full-output composed
+    // plane at the origin. Its previous window is still in SURFLIVE until
+    // vblank. Mirroring that window with the new geometry creates the jump.
+    put(src+UNI_PLANE_POS_OFF,0);
+    put(src+UNI_PLANE_SIZE_OFF,(1439<<16)|2559);
+    put(src+UNI_PLANE_SURF_OFF,0x3000_0000);
+    mirror_live_scene(intel::Dev);
+    assert_eq!(get(dst+UNI_PLANE_SURF_OFF),0x3000_0000,
+        "new origin geometry must use its ready surface, never the old window in SURFLIVE");
+    assert_eq!(get(dst+UNI_PLANE_SIZE_OFF),(1439<<16)|2559);
+    // Once the physical pipe catches up, the same contract remains valid.
+    put(src+UNI_PLANE_SURFLIVE_OFF,0x3000_0000);
+    mirror_live_scene(intel::Dev);
+    assert_eq!(get(dst+UNI_PLANE_SURF_OFF),0x3000_0000);
+    assert_eq!(get(dst+UNI_PLANE_SIZE_OFF),(1439<<16)|2559);
 }
 #[test]
 fn static_fetch_configuration_is_not_reprogrammed_on_each_capture() {

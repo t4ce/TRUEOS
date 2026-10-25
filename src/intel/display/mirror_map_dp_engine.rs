@@ -503,9 +503,12 @@ fn read_mirror_scene(dev: crate::intel::Dev, mode: MirrorMapMode) -> MirrorScene
             registers: core::array::from_fn(|index| {
                 crate::intel::mmio_read(dev, src + MIRROR_PLANE_REGISTERS[index])
             }),
-            // Preserve the existing scanout allocation contract, not a queued
-            // next SURF whose display ownership has not transferred yet.
-            surface: crate::intel::mmio_read(dev, src + UNI_PLANE_SURFLIVE_OFF),
+            // Geometry, alpha and scaler readback describe the programmed
+            // commit, so take its SURF too. SURFLIVE may still name the prior
+            // window while focus reassignment places a composed plane at 0,0.
+            // Submitted surfaces are already rendered/flushed; UI4 retains
+            // their pending leases until the physical pipe latches them.
+            surface: crate::intel::mmio_read(dev, src + UNI_PLANE_SURF_OFF),
         }
     });
     let scalers = core::array::from_fn(|scaler_id| {
