@@ -75,9 +75,11 @@ pub(crate) async fn ui4_link_service_task() {
     );
     let mut active = None;
     loop {
-        if let Some(request) = OPEN_REQUEST.lock().take() {
+        let request = OPEN_REQUEST.lock().take();
+        if let Some(request) = request {
             if active.is_none() {
-                match open_link(request) {
+                match crate::r::services::shell3_font_service::prepare().await
+                    .and_then(|()| open_link(request)) {
                     Ok(link) => active = Some(link),
                     Err(reason) => crate::log_warn!(target: "ui4/link";
                         "ui4/link: open rejected reason={}\n", reason,
@@ -323,7 +325,8 @@ fn draw_text(pixels: &mut [u8], pitch: usize, x: u32, y: u32, text: &str, color:
         return;
     };
     let mut glyphs = vec![0u8; size];
-    if microfont::stamp_text(&mut glyphs, width, height, 0, 0, text, 1u8).is_err() {
+    if crate::r::services::microfont_mask_service::copy_text_mask(
+        &mut glyphs, width, height, 0, 0, text, microfont::FWIDTH, height).is_err() {
         return;
     }
     for (row, scanline) in glyphs.chunks_exact(width).enumerate() {

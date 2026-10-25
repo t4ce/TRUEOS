@@ -28,7 +28,7 @@ static PREPARING: AtomicBool = AtomicBool::new(false);
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, Result<(), &'static str>>;
 
 struct Font {
-    alpha: OwnedAlphaAtlas,
+    alpha: &'static OwnedAlphaAtlas,
     cache: spin::Mutex<CellCache>,
 }
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
@@ -145,7 +145,7 @@ pub(crate) fn glyph(
     for y in 0..cell_height {
         for x in 0..cell_width {
             let mut coverage = sample_native(
-                &font.alpha, mask, x, y, cell_width, cell_height,
+                font.alpha, mask, x, y, cell_width, cell_height,
             );
             if underline && y * microfont::FHEIGHT as u32 / cell_height == microfont::FHEIGHT as u32 - 1 {
                 coverage = 255;
@@ -190,16 +190,7 @@ pub(crate) fn solid_color(copy: &GucBcs0RgbaCopy) -> Option<u32> {
 
 fn sample_native(atlas: &OwnedAlphaAtlas, mask: &[u8],
     x: u32, y: u32, width: u32, height: u32) -> u8 {
-    // Every glyph uses the same 6x11 cell. Gutters are atlas storage, not
-    // character advance. Round the rasterized width to its covered columns;
-    // ceil would include an unpainted column at fractional cell widths.
-    let content_width = ((atlas.em_height_px * microfont::FWIDTH as u32
-        + microfont::FHEIGHT as u32 / 2) / microfont::FHEIGHT as u32).max(1);
-    let sx = atlas.gutter_px
-        + ((2 * x + 1) * content_width / (2 * width)).min(content_width - 1);
-    let sy = atlas.gutter_px
-        + ((2 * y + 1) * atlas.em_height_px / (2 * height)).min(atlas.em_height_px - 1);
-    mask[(sy.min(atlas.glyph_height - 1) * atlas.glyph_width + sx.min(atlas.glyph_width - 1)) as usize]
+    atlas.sample(mask, x, y, width, height)
 }
 
 fn tint(coverage: u8, foreground: [u8; 4], background: [u8; 4]) -> [u8; 4] {
@@ -213,10 +204,7 @@ fn tint(coverage: u8, foreground: [u8; 4], background: [u8; 4]) -> [u8; 4] {
     pixel
 }
 
-// Native raster masks shared by every Gridpape instance. Full alphabets stop
-// at 4x; larger sizes are produced one character at a time on demand.
-static GRID_ATLASES: spin::Mutex<BTreeMap<u32, OwnedAlphaAtlas>> = spin::Mutex::new(BTreeMap::new());
-
+// Gridpape scales the shared R8 tiles without producing additional alphabets.
 pub(crate) async fn grid_glyph(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
     if !(1..=8).contains(&scale) { return Err("grid-font-scale"); }
     prepare().await?;
@@ -246,35 +234,35 @@ fn grid_glyph_blocking(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
     let mut result = Vec::with_capacity(8 + (width * height * 4) as usize);
     result.extend_from_slice(&width.to_le_bytes());
     result.extend_from_slice(&height.to_le_bytes());
-    let mut emit = |mask: &[u8], stride: u32, gutter: u32| {
-        for y in 0..height {
-            for x in 0..width {
-                let alpha = mask[((y + gutter) * stride + x + gutter) as usize];
-                // Opaque white-backed glyphs can be copied directly by BCS0.
-                let value = 255 - alpha;
-                result.extend_from_slice(&[value, value, value, 255]);
-            }
+    let atlas = font.alpha;
+    let mask = atlas.glyph(ch).or_else(|| atlas.glyph('?')).ok_or("grid-font-glyph")?;
+    for y in 0..height {
+        for x in 0..width {
+            let alpha = sample_native(atlas, mask, x, y, width, height);
+            let value = 255 - alpha;
+            result.extend_from_slice(&[value, value, value, 255]);
         }
-    };
-    if height == font.alpha.em_height_px {
-        let atlas = &font.alpha;
-        emit(atlas.glyph(ch).or_else(|| atlas.glyph('?')).ok_or("grid-font-glyph")?,
-            atlas.glyph_width, atlas.gutter_px);
-    } else if scale <= 4 {
-        let mut atlases = GRID_ATLASES.lock();
-        if !atlases.contains_key(&height) {
-            atlases.insert(height, build_shell3_alpha_atlas(height)?);
-        }
-        let atlas = &atlases[&height];
-        emit(atlas.glyph(ch).or_else(|| atlas.glyph('?')).ok_or("grid-font-glyph")?,
-            atlas.glyph_width, atlas.gutter_px);
-    } else {
-        let glyph = super::microfont_mask_service::build_single_glyph_mask(ch, height)
-            .or_else(|error| if error == "microfont-single-glyph-missing" {
-                super::microfont_mask_service::build_single_glyph_mask('?', height)
-            } else { Err(error) })?;
-        // Single-glyph production currently uses a 16px stroke and a 9px gutter.
-        emit(&glyph.pixels, glyph.width, 9);
     }
     Ok(result)
+}
+
+/// Boot warmup uses the same serialization as lazy Shell3 preparation. Home
+/// publication happens before the full alphabet is submitted by that path.
+#[cfg(not(test))]
+#[trueos_executor::task(pool_size = 1)]
+pub(crate) async fn microfont_warm_task() {
+    loop {
+        match prepare().await {
+            Ok(()) => {
+                super::microfont_log_service::font_ready();
+                crate::ui4::microfont_ready();
+                return;
+            }
+            Err(reason) => {
+                crate::log_warn!(target: "microfont-mask";
+                    "microfont: warm deferred reason={}\n", reason);
+                trueos_time::Timer::after(trueos_time::Duration::from_millis(100)).await;
+            }
+        }
+    }
 }

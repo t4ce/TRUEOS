@@ -852,3 +852,8 @@ pub(crate) fn emulator_acknowledge(window: WindowSnapshot) {
 
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_stream::film::request_capture_film;
+
+/// Repaint text overlays after the shared R8 alphabet is published.
+pub(crate) fn microfont_ready() {
+    input_broker::notify_slot4_visual_change();
+}

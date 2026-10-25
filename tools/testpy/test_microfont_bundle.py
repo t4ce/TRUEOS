@@ -127,7 +127,7 @@ class MicrofontBundle(unittest.TestCase):
         self.assertIn("hex, raster, or both", result.stderr)
 
     def test_homebutton_is_private_line_only_and_missing_has_no_fallback(self):
-        from test_microfont_line_preview import MOCKS
+        from test_microfont_mask_service import MOCKS
         folder = self.work / "without-homebutton"
         shutil.copytree(CRATE / "data/line-v1", folder)
         home = folder / "homebutton.bin"

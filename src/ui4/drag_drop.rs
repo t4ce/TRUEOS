@@ -25,8 +25,9 @@ fn preview(label: &str) -> Arc<DragPreview> {
     let height = (lines.len().max(1) * microfont::FHEIGHT) as u32;
     let mut pixels = vec![0u8; width as usize * height as usize];
     for (row, text) in lines.iter().enumerate() {
-        let _ = microfont::stamp_text(&mut pixels, width as usize, height as usize,
-            0, (row * microfont::FHEIGHT) as i32, text, 1u8);
+        let _ = crate::r::services::microfont_mask_service::copy_text_mask(
+            &mut pixels, width as usize, height as usize, 0, row * microfont::FHEIGHT,
+            text, microfont::FWIDTH, microfont::FHEIGHT);
     }
     let mut runs = Vec::new();
     for (y, row) in pixels.chunks_exact(width as usize).enumerate() {

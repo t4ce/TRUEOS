@@ -1,20 +1,16 @@
-//! Native line/quad geometry and one reusable, color-free R8 atlas. Intel
+//! Native line/quad geometry and one immutable, color-free R8 atlas. Intel
 //! retains its boot-lifetime geometry; virgl consumes CPU-decoded raster seeds
 //! as native lines, analytically clipped points, and the same rounded-corner quads.
 //! Consumers execute while the atlas is locked; no asynchronous mask reader may
-//! survive the callback. Width/size invalidate pixels, never resident geometry.
-use crate::{
-    intel::{
-        gpgpu::GpgpuMask8Surface,
-        render::{self, ResidentScenePrimitiveTopology as Topology},
-    },
-    ui4,
+//! survive the callback. Home warms first; the full alphabet warms once at 2.75px.
+use crate::intel::{
+    gpgpu::GpgpuMask8Surface,
+    render::{self, ResidentScenePrimitiveTopology as Topology},
 };
 use alloc::vec::Vec;
 
-pub(crate) const PREVIEW_HEADER_HEIGHT: u32 = 30;
 // Twenty columns keep the expanded lowercase line repertoire within the
-// seven-bit X / eight-bit Y join coordinates. Demo sheets choose their own grid.
+// seven-bit X / eight-bit Y join coordinates.
 pub(crate) const ATLAS_COLUMNS: u32 = 20;
 pub(crate) const LATIN_SLOTS: usize = 95;
 pub(crate) const BOX_START: usize = LATIN_SLOTS;
@@ -66,7 +62,7 @@ pub(crate) struct AtlasConfig {
 impl Default for AtlasConfig {
     fn default() -> Self {
         Self {
-            // Keep a multiple of four for the 4x quad specimen.
+            // Keep the full geometry within the native atlas limits.
             glyph_scale: (16.min(4096 / (ATLAS_ROWS * 11)) / 4 * 4).max(4),
             glyph_height_px: None,
             line_width_px: 8.0,
@@ -186,9 +182,6 @@ impl MaskGlyph {
             Self::Character(ch) => microfont::raster_line::glyph_strips(ch),
             Self::HomeButton => microfont::raster_line::home_button_strips(),
         }
-    }
-    fn quads(self) -> Option<microfont::raster_quad::BoxDrawQuads> {
-        microfont::raster_quad::glyph_quads(self.character()?)
     }
 }
 fn upload(
@@ -593,6 +586,7 @@ impl CoverageAtlas {
         self.mask.as_ref().unwrap().surface()
     }
     /// Atlas rectangle in pixels; absent source glyphs retain an empty slot.
+    #[cfg(test)]
     pub(crate) fn glyph_rect(&self, ch: char) -> Option<[u32; 4]> {
         let slot = glyph_slot(ch)?;
         let (width, height) = self.config().cell_extent();
@@ -602,6 +596,7 @@ impl CoverageAtlas {
             width, height,
         ])
     }
+    #[cfg(test)]
     pub(crate) fn config(&self) -> AtlasConfig {
         self.config.unwrap()
     }
@@ -720,9 +715,9 @@ impl CoverageAtlas {
     }
 }
 
-/// Owns geometry for the lifetime of the service, independent of preview windows.
+/// Owns geometry for the lifetime of the service.
 /// Repeated identical requests reuse the ready mask without submitting GPU work.
-pub(crate) fn with_warmed_atlas<T>(
+fn with_warmed_atlas<T>(
     config: AtlasConfig,
     consumer: impl FnOnce(&CoverageAtlas) -> Result<T, &'static str>,
 ) -> Result<T, &'static str> {
@@ -788,40 +783,15 @@ pub(crate) struct OwnedGlyphMask {
     pub(crate) pixels: Vec<u8>,
 }
 
-pub(crate) fn build_single_glyph_mask(ch: char, em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
-    build_single_mask(ch.into(), em_height_px)
-}
-
 pub(crate) fn build_home_button_mask(em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
-    build_single_mask(MaskGlyph::HomeButton, em_height_px)
-}
-
-fn build_single_mask(glyph: MaskGlyph, em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
-    if glyph.lines().is_none() && glyph.quads().is_none() {
-        return Err(match glyph {
-            MaskGlyph::HomeButton => "microfont-homebutton-missing",
-            MaskGlyph::Character(_) => "microfont-single-glyph-missing",
-        });
-    }
-    // A single glyph can be much larger than a full-atlas cell. Its 6x11
-    // geometry and the existing native-line/cap/join shaders remain identical.
-    let line_width_px = match glyph { MaskGlyph::HomeButton => 6.0, MaskGlyph::Character(_) => 16.0 };
-    let config = AtlasConfig { glyph_height_px: Some(em_height_px), line_width_px, ..AtlasConfig::default() };
+    let glyph = MaskGlyph::HomeButton;
+    if glyph.lines().is_none() { return Err("microfont-homebutton-missing"); }
+    let config = AtlasConfig { glyph_height_px: Some(em_height_px), line_width_px: 6.0, ..AtlasConfig::default() };
     if !(11..=4000).contains(&em_height_px) { return Err("microfont-single-glyph-size"); }
     let (width, height) = config.cell_extent();
     let mut geometry = ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None };
     if crate::virtio_gpu_logo::output_dimensions().is_none() {
-        if let Some(ch) = glyph.character().filter(|&ch|
-            microfont::raster_quad::corner_curve_quads(ch, 0, None).is_some()) {
-            upload_rounded_glyphs(&mut geometry, Some(ch))?;
-        } else if let Some(quads) = glyph.quads() {
-            let mut vertices = Vec::new();
-            let mut indices = Vec::new();
-            for quad in quads { append_quad(&mut vertices, &mut indices, 0, quad.vertices); }
-            upload(&mut geometry, &vertices, &indices, Topology::TriangleList, [0; 16])?;
-        } else {
-            upload_line_glyph(&mut geometry, glyph, 0)?;
-        }
+        upload_line_glyph(&mut geometry, glyph, 0)?;
         finish_upload(&mut geometry)?;
     }
     let mut glyph = CoverageAtlas { geometry, mask: None, native_mask: None,
@@ -844,8 +814,7 @@ fn build_single_mask(glyph: MaskGlyph, em_height_px: u32) -> Result<OwnedGlyphMa
     Ok(OwnedGlyphMask { width, height, em_height_px, pixels })
 }
 
-/// Immutable service-owned R8 snapshot. Keeping this data alive does not hold
-/// the preview atlas lock; later Tab/width changes cannot replace its pixels.
+/// Immutable service-owned R8 tiles, shared by Shell3 and the UI text sinks.
 /// Glyph rows are tightly packed, including the safe cap overhang gutter.
 pub(crate) struct OwnedAlphaAtlas {
     pub(crate) em_height_px: u32,
@@ -869,6 +838,37 @@ impl OwnedAlphaAtlas {
         let bytes = self.glyph_width as usize * self.glyph_height as usize;
         self.pixels.get(slot * bytes..(slot + 1) * bytes)
     }
+    /// Sample the content cell; gutters never become character advance.
+    pub(crate) fn coverage(&self, ch: char, x: u32, y: u32, width: u32, height: u32) -> u8 {
+        if width == 0 || height == 0 || x >= width || y >= height { return 0; }
+        let Some(mask) = self.glyph(ch).or_else(|| self.glyph('?')) else { return 0; };
+        self.sample(mask, x, y, width, height)
+    }
+    /// Area filtering preserves narrow strokes when a consumer shrinks a tile.
+    pub(crate) fn sample(&self, mask: &[u8], x: u32, y: u32, width: u32, height: u32) -> u8 {
+        if width == 0 || height == 0 || x >= width || y >= height { return 0; }
+        let content_width = ((self.em_height_px * 6 + 5) / 11).max(1);
+        if width == content_width && height == self.em_height_px {
+            return mask[((y + self.gutter_px) * self.glyph_width + x + self.gutter_px) as usize];
+        }
+        let left = u64::from(x) * u64::from(content_width);
+        let right = u64::from(x + 1) * u64::from(content_width);
+        let top = u64::from(y) * u64::from(self.em_height_px);
+        let bottom = u64::from(y + 1) * u64::from(self.em_height_px);
+        let w = u64::from(width);
+        let h = u64::from(height);
+        let mut sum = 0u64;
+        for sy in top / h..bottom.div_ceil(h) {
+            let wy = bottom.min((sy + 1) * h) - top.max(sy * h);
+            for sx in left / w..right.div_ceil(w) {
+                let wx = right.min((sx + 1) * w) - left.max(sx * w);
+                let index = (sy as u32 + self.gutter_px) * self.glyph_width + sx as u32 + self.gutter_px;
+                sum += u64::from(mask[index as usize]) * wx * wy;
+            }
+        }
+        let area = u64::from(content_width) * u64::from(self.em_height_px);
+        ((sum + area / 2) / area) as u8
+    }
     pub(crate) fn glyphs(&self) -> impl Iterator<Item = (char, &[u8])> + '_ {
         (' '..='~').chain('\u{2500}'..='\u{259f}').chain('\u{2800}'..='\u{28ff}')
             .chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
@@ -879,19 +879,25 @@ impl OwnedAlphaAtlas {
     }
 }
 
-/// One native-line/quad render submission and one R8 readback for Shell3's
-/// service lifetime. Resident source geometry is shared with the demo; each
-/// consumer retains its own immutable result after this function returns.
-static REPORTED_FULL_ATLAS_SIZES: spin::Mutex<alloc::collections::BTreeSet<u32>> =
-    spin::Mutex::new(alloc::collections::BTreeSet::new());
+static ALPHA_ATLAS: spin::Once<OwnedAlphaAtlas> = spin::Once::new();
 
-pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<OwnedAlphaAtlas, &'static str> {
+pub(crate) fn ready_atlas() -> Option<&'static OwnedAlphaAtlas> {
+    ALPHA_ATLAS.get()
+}
+
+/// One native line/quad production and R8 readback for every text consumer.
+pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<&'static OwnedAlphaAtlas, &'static str> {
+    if let Some(atlas) = ready_atlas() {
+        return if atlas.em_height_px == em_height_px { Ok(atlas) }
+            else { Err("microfont-atlas-already-sized") };
+    }
     let config = AtlasConfig {
         glyph_height_px: Some(em_height_px),
-        line_width_px: 4.0,
+        line_width_px: 2.75,
         ..AtlasConfig::default()
     };
     with_warmed_atlas(config, |atlas| {
+        if let Some(ready) = ready_atlas() { return Ok(ready); }
         let surface = atlas.surface();
         let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;
         if !crate::intel::dma_flush_strided_row_spans(&[
@@ -915,180 +921,38 @@ pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<OwnedAlphaAt
                 }
             }
         }
-        if REPORTED_FULL_ATLAS_SIZES.lock().insert(em_height_px) {
-            // ONCE severity with per-size deduplication: log_once! would instead
-            // suppress all sizes after the first occurrence at this call site.
-            crate::log_os::log_with_target_level("microfont-mask", crate::log_os::LogLevel::Once,
-                format_args!("microfont-atlas: full em_height_px={} glyph_slots={} gpu_backing_bytes={} retained_cpu_mask_bytes={} total_backing_bytes={} shared_geometry_excluded=1\n",
-                    em_height_px, SLOT_COUNT, surface.bytes, pixels.capacity(),
-                    surface.bytes.saturating_add(pixels.capacity())));
-        }
-        Ok(OwnedAlphaAtlas {
+        crate::log_important!(target: "microfont-mask";
+            "microfont-atlas: full em_height_px={} width_px=2.75 glyph_slots={} format=r8 retained_cpu_mask_bytes={} productions=1\n",
+            em_height_px, SLOT_COUNT, pixels.len());
+        Ok(ALPHA_ATLAS.call_once(|| OwnedAlphaAtlas {
             em_height_px,
             line_width_px: config.line_width_px,
             glyph_width,
             glyph_height,
             gutter_px: config.gutter(),
             pixels,
-        })
+        }))
     })
 }
 
-/// Preview sink only. The cached baseline remains color-free; apply tint and
-/// opacity here exactly once. Output is premultiplied, with optional background.
-pub(crate) fn stamp_preview(
-    frame: ui4::FrameHandle,
-    config: AtlasConfig,
-    glyphs: &[char],
-    columns: usize,
-    display_scale: u32,
-    ink: [u8; 4],
-    background: [u8; 4],
-) -> Result<usize, &'static str> {
-    stamp_preview_colored(frame, config, glyphs, columns, display_scale, &[ink], background)
-}
-
-/// One ink broadcasts to every cell; otherwise provide one straight RGBA ink
-/// per glyph cell. Coverage and opacity are premultiplied exactly once below.
-pub(crate) fn stamp_preview_colored(
-    frame: ui4::FrameHandle,
-    config: AtlasConfig,
-    glyphs: &[char],
-    columns: usize,
-    display_scale: u32,
-    inks: &[[u8; 4]],
-    background: [u8; 4],
-) -> Result<usize, &'static str> {
-    stamp_preview_colored_with_header(frame, config, glyphs, columns, display_scale, inks, background, None)
-}
-
-/// Optional fixed-size status row, separate from the native-line glyphs.
-pub(crate) fn stamp_preview_colored_with_header(
-    frame: ui4::FrameHandle,
-    config: AtlasConfig,
-    glyphs: &[char],
-    columns: usize,
-    display_scale: u32,
-    inks: &[[u8; 4]],
-    background: [u8; 4],
-    header: Option<&str>,
-) -> Result<usize, &'static str> {
-    let header_height = if header.is_some() { PREVIEW_HEADER_HEIGHT } else { 0 };
-    if inks.len() != 1 && inks.len() != glyphs.len() {
-        return Err("microfont-stamp-colors");
+/// Copy coverage from the retained tiles. This never rasterizes or submits GPU
+/// work and is safe in UI and log paths. Callers retain text until warmup ends.
+pub(crate) fn copy_text_mask(pixels: &mut [u8], width: usize, height: usize,
+    x: usize, y: usize, text: &str, cell_width: usize, cell_height: usize) -> Result<(), &'static str> {
+    if width == 0 || height == 0 || cell_width == 0 || cell_height == 0 || width.checked_mul(height).is_none_or(|n| n > pixels.len()) {
+        return Err("microfont-text-shape");
     }
-    with_warmed_atlas(config, |atlas| {
-        let lease = ui4::acquire_frame_buffer(frame).map_err(|_| "frame-busy")?;
-        let result = (|| {
-            let view = ui4::writable_rgba_view(lease).map_err(|_| "frame-view")?;
-            let mask = atlas.surface();
-            let scale = atlas.config().glyph_scale;
-            let (cell_width, cell_height) = if atlas.config().glyph_height_px.is_some() {
-                atlas.config().cell_extent()
-            } else { (6 * display_scale, 11 * display_scale) };
-            if columns == 0
-                || display_scale == 0
-                || (atlas.config().glyph_height_px.is_none() && scale % display_scale != 0)
-                || view.width != columns as u32 * cell_width
-                || view.height != (glyphs.len().div_ceil(columns)) as u32 * cell_height + header_height
-            {
-                return Err("microfont-stamp-shape");
+    let atlas = ready_atlas().ok_or("microfont-not-ready")?;
+    for (column, ch) in text.chars().enumerate() {
+        let Some(left) = column.checked_mul(cell_width).and_then(|v| x.checked_add(v)) else { break; };
+        if left >= width { break; }
+        let Some(mask) = atlas.glyph(ch).or_else(|| atlas.glyph('?')) else { continue; };
+        for row in 0..cell_height.min(height.saturating_sub(y)) {
+            for col in 0..cell_width.min(width - left) {
+                pixels[(y + row) * width + left + col] = atlas.sample(mask, col as u32, row as u32,
+                    cell_width as u32, cell_height as u32);
             }
-            let header_width = view.width.saturating_sub(8) as usize / 2;
-            let header_mask = header.map(|text| {
-                let mut pixels = alloc::vec![0u8; header_width * microfont::FHEIGHT];
-                microfont::stamp_bytes(&mut pixels, header_width, microfont::FHEIGHT,
-                    0, 0, text.as_bytes(), 255u8).map_err(|_| "microfont-header-text")?;
-                Ok::<_, &'static str>(pixels)
-            }).transpose()?;
-            let source = crate::phys::phys_to_virt(mask.phys as usize) as *mut u8;
-            let spans = [
-                crate::intel::DmaFlushRows::new(
-                    source,
-                    mask.width as usize,
-                    mask.pitch_bytes as usize,
-                    mask.height as usize,
-                ),
-                crate::intel::DmaFlushRows::new(
-                    view.virt,
-                    view.width as usize * 4,
-                    view.pitch as usize,
-                    view.height as usize,
-                ),
-            ];
-            if !crate::intel::dma_flush_strided_row_spans(&spans) {
-                return Err("microfont-stamp-cache");
-            }
-            let mut partial = 0usize;
-            let mut nonzero = 0usize;
-            for y in 0..view.height {
-                for x in 0..view.width {
-                    let in_header = y < header_height;
-                    let body_y = y.saturating_sub(header_height);
-                    let cell = (body_y / cell_height) as usize * columns
-                        + (x / cell_width) as usize;
-                    let coverage = glyphs
-                        .get(cell).filter(|_| !in_header)
-                        .and_then(|&ch| atlas.glyph_rect(ch))
-                        .map_or(0, |rect| {
-                            let sx = rect[0]
-                                + ((2 * (x % cell_width) + 1) * rect[2] / (2 * cell_width)).min(rect[2] - 1);
-                            let sy = rect[1]
-                                + ((2 * (body_y % cell_height) + 1) * rect[3] / (2 * cell_height)).min(rect[3] - 1);
-                            unsafe {
-                                core::ptr::read_volatile(
-                                    source.add((sy * mask.pitch_bytes + sx) as usize),
-                                )
-                            }
-                        });
-                    partial += usize::from(coverage != 0 && coverage != 255);
-                    nonzero += usize::from(coverage != 0);
-                    let ink = if inks.len() == 1 { inks[0] }
-                        else { inks.get(cell).copied().unwrap_or([0; 4]) };
-                    let pixel = if in_header {
-                        let hx = x.saturating_sub(4) as usize / 2;
-                        let hy = y.saturating_sub(4) as usize / 2;
-                        let a = if x >= 4 && y >= 4 && hx < header_width && hy < microfont::FHEIGHT {
-                            header_mask.as_ref().unwrap()[hy * header_width + hx]
-                        } else { 0 };
-                        tint_coverage(a, [48, 64, 96, 255], background)
-                    } else { tint_coverage(coverage, ink, background) };
-                    unsafe {
-                        core::ptr::write_unaligned(
-                            view.virt
-                                .add(y as usize * view.pitch as usize + x as usize * 4)
-                                .cast::<u32>(),
-                            u32::from_le_bytes(pixel),
-                        );
-                    }
-                }
-            }
-            if !crate::intel::dma_flush_strided_row_spans(&spans[1..]) {
-                return Err("microfont-stamp-publish-cache");
-            }
-            ui4::mark_frame_buffer_cpu_authored(lease).map_err(|_| "frame-cpu-authored")?;
-            if background[3] == 255 {
-                ui4::mark_frame_buffer_fully_opaque(lease).map_err(|_| "frame-opaque")?;
-            }
-            ui4::publish_frame_buffer(lease).map_err(|_| "frame-publish")?;
-            crate::log_important!(target:"microfont-mask";
-                "microfont-mask: stamp generation={} glyphs={} copies=1 nonzero={} partial={} inks={} background={:?} geometry_uploads=1\n",
-                atlas.generation,glyphs.len(),nonzero,partial,inks.len(),background);
-            Ok(nonzero)
-        })();
-        if result.is_err() {
-            let _ = ui4::cancel_frame_buffer(lease);
         }
-        result
-    })
-}
-
-fn tint_coverage(coverage: u8, ink: [u8; 4], background: [u8; 4]) -> [u8; 4] {
-    let a = (u32::from(coverage) * u32::from(ink[3]) + 127) / 255;
-    let mut out = [0; 4];
-    for k in 0..3 {
-        out[k] = ((u32::from(ink[k]) * a + u32::from(background[k]) * (255 - a) + 127) / 255) as u8;
     }
-    out[3] = (a + (u32::from(background[3]) * (255 - a) + 127) / 255) as u8;
-    out
+    Ok(())
 }

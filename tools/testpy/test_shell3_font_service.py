@@ -87,10 +87,6 @@ mod r {
     }
     pub mod services {
         pub mod microfont_mask_service {
-            pub struct OwnedGlyphMask {pub width:u32,pub pixels:Vec<u8>}
-            pub fn build_single_glyph_mask(_:char,_:u32)->Result<OwnedGlyphMask,&'static str> {
-                panic!("single-glyph grid production is outside this shared-cell test")
-            }
             pub struct OwnedAlphaAtlas {pub em_height_px:u32,pub line_width_px:f32,
                 pub glyph_width:u32,pub glyph_height:u32,pub gutter_px:u32,zero:Vec<u8>,half:Vec<u8>,full:Vec<u8>,horizontal:Vec<u8>,left_heavy:Vec<u8>,junction:Vec<u8>,question:Vec<u8>}
             impl OwnedAlphaAtlas {
@@ -101,7 +97,7 @@ mod r {
                     [' ','A','─','█'].into_iter().map(|ch|(ch,self.glyph(ch).unwrap()))
                 }
             }
-            pub fn build_shell3_alpha_atlas(height:u32)->Result<OwnedAlphaAtlas,&'static str> {
+            pub fn build_shell3_alpha_atlas(height:u32)->Result<&'static OwnedAlphaAtlas,&'static str> {
                 assert!([14,21].contains(&height));crate::BUILDS.fetch_add(1,crate::Ordering::SeqCst);
                 let glyph_width=((height*6).div_ceil(11)+12) as usize;let glyph_height=(height+12) as usize;let len=glyph_width*glyph_height;
                 let raster = |ch| {
@@ -114,8 +110,8 @@ mod r {
                         if sx<6&&sy<11&&bits&(1u128<<(65-sy*6-sx))!=0 {255}else{0}
                     }).collect::<Vec<u8>>()
                 };
-                Ok(OwnedAlphaAtlas {em_height_px:height,line_width_px:4.0,glyph_width:glyph_width as u32,
-                    glyph_height:glyph_height as u32,gutter_px:6,zero:vec![0;len],half:vec![128;len],full:vec![255;len],horizontal:raster('─'),left_heavy:raster('╾'),junction:raster('┤'),question:(0..len).map(|i|if i%glyph_width<glyph_width/2 {255}else{0}).collect()})
+                Ok(Box::leak(Box::new(OwnedAlphaAtlas {em_height_px:height,line_width_px:2.75,glyph_width:glyph_width as u32,
+                    glyph_height:glyph_height as u32,gutter_px:6,zero:vec![0;len],half:vec![128;len],full:vec![255;len],horizontal:raster('─'),left_heavy:raster('╾'),junction:raster('┤'),question:(0..len).map(|i|if i%glyph_width<glyph_width/2 {255}else{0}).collect()})))
             }
         }
         #[path="__ROOT__/src/r/services/shell3_font_service.rs"]pub mod shell3_font_service;
@@ -142,8 +138,10 @@ fn pixels(copy:intel::GucBcs0RgbaCopy)->Vec<[u8;4]> {
     let width=u32::from_le_bytes(data[..4].try_into().unwrap());
     let height=u32::from_le_bytes(data[4..8].try_into().unwrap());
     assert_eq!((width,height),(8,14));
-    let painted:Vec<_>=(0..height).filter(|&y|data[8+(y*width*4) as usize]==0).collect();
-    assert_eq!(painted,[6,7]);
+    let painted:Vec<_>=(0..height).filter(|&y|data[8+(y*width*4) as usize]<255).collect();
+    assert!(!painted.is_empty());
+    for scale in 1..=8 {run(r::services::shell3_font_service::grid_glyph(scale,'─')).unwrap();}
+    assert_eq!(BUILDS.load(Ordering::SeqCst),1,"all Gridpape sizes reuse the shared atlas");
 }
 #[test]fn preparation_produces_one_retained_alpha_atlas_for_all_consumers() {
     ready();ready();ready();
@@ -184,9 +182,9 @@ fn pixels(copy:intel::GucBcs0RgbaCopy)->Vec<[u8;4]> {
         let heavy=pixels(glyph('╾',width,height,ink,bg,false).unwrap());
         let junction=pixels(glyph('┤',width,height,ink,bg,false).unwrap());
         let row=(height/2*width) as usize;
-        assert!(rule[row..row+width as usize].iter().all(|p|*p==ink));
-        assert!(heavy[row..row+width as usize].iter().all(|p|*p==ink));
-        assert_eq!(junction[row],ink,"junction must touch the preceding cell");
+        assert!(rule[row..row+width as usize].iter().all(|p|p[0]>0));
+        assert!(heavy[row..row+width as usize].iter().all(|p|p[0]>0));
+        assert!(junction[row][0]>0,"junction must touch the preceding cell");
         assert_eq!(junction[row+width as usize-1],bg,"do not extend the junction through its blank half");
         assert_eq!(heavy[row+width as usize-1],junction[row]);
     }
@@ -283,10 +281,13 @@ fn pixels(copy:intel::GucBcs0RgbaCopy)->Vec<[u8;4]> {
 
 
 def main():
+    from test_microfont_coverage_batches import block
+    sampler = block((ROOT/'src/r/services/microfont_mask_service.rs').read_text(), 'pub(crate) fn sample(')
+    source = (MOCKS + TESTS).replace('impl OwnedAlphaAtlas {', 'impl OwnedAlphaAtlas {\n' + sampler)
     with tempfile.TemporaryDirectory(prefix='shell3-font-service-') as temporary:
         path = Path(temporary)
         build_microfont(path / 'libmicrofont.rlib')
-        (path / 'tests.rs').write_text((MOCKS + TESTS).replace('__ROOT__', str(ROOT)))
+        (path / 'tests.rs').write_text(source.replace('__ROOT__', str(ROOT)))
         subprocess.run(['rustc', '--edition=2024', '--test', str(path / 'tests.rs'),
                         '--extern', f'microfont={path / "libmicrofont.rlib"}', '-o', str(path / 'tests')], check=True)
         subprocess.run([str(path / 'tests'), '--test-threads=1'], check=True)

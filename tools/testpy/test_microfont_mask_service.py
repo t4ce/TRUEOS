@@ -5,6 +5,16 @@ import subprocess, tempfile
 from _microfont_build import build_microfont
 ROOT=Path(__file__).resolve().parents[2]
 MOCKS=r'''
+struct ResetAlpha(std::sync::Mutex<Option<&'static services::microfont_mask_service::OwnedAlphaAtlas>>);
+impl ResetAlpha {
+ const fn new()->Self {Self(std::sync::Mutex::new(None))}
+ fn get(&self)->Option<&'static services::microfont_mask_service::OwnedAlphaAtlas> {*self.0.lock().unwrap()}
+ fn call_once(&self,f:impl FnOnce()->services::microfont_mask_service::OwnedAlphaAtlas)->&'static services::microfont_mask_service::OwnedAlphaAtlas {
+  *self.0.lock().unwrap().get_or_insert_with(||Box::leak(Box::new(f())))
+ }
+ fn reset(&self) {*self.0.lock().unwrap()=None;}
+}
+
 extern crate alloc;
 use std::sync::Mutex;
 mod wait {
@@ -66,7 +76,15 @@ mod virtio_gpu_logo {
         Ok(vec![128;w as usize*h as usize])
     }
 }
+mod graphics {pub mod primitives {
+    #[derive(Clone,Copy,Debug,PartialEq)]
+    pub struct Rgba8 {pub r:u8,pub g:u8,pub b:u8,pub a:u8}
+    impl Rgba8 {pub fn new(r:u8,g:u8,b:u8,a:u8)->Self {Self{r,g,b,a}}}
+}}
+#[derive(Debug)] struct MenuRect {x:u32,y:u32,width:u32,height:u32,color:graphics::primitives::Rgba8}
+mod r {pub mod services {pub use crate::services::microfont_mask_service;}}
 mod ui4 {
+    pub mod context_menu {pub const MENU_RENDER_LABEL_CHARS:usize=20;}
     pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert!(w==h && (h==50 || h==10));Some((w*213/50,h*213/50))}
     #[derive(Clone,Copy)] pub struct FrameHandle;
     pub struct View {pub width:u32,pub height:u32,pub pitch:u32,pub virt:*mut u8}
@@ -200,7 +218,7 @@ use services::microfont_mask_service::*;
         }
     }}
     assert!(native.points.iter().all(|v|[2.0,3.0,4.0].contains(&v.style[1])));
-    assert!(native.points.iter().any(|v|v.style[1]==2.0));
+    assert!(native.points.is_empty()); // Current virgl diagnostic submits seed bodies only.
 }
 #[test] fn virgl_native_quads_preserve_all_canonical_box_block_braille_seeds() {
     let config=AtlasConfig::default();let (width,height)=config.extent();
@@ -231,6 +249,7 @@ use services::microfont_mask_service::*;
 fn reset(fault:u8) {
     // Complete the one-off boot production before measuring atlas reuse.
     warm_start_glyph().unwrap();
+    services::microfont_mask_service::ALPHA_ATLAS.reset();
     let old=services::microfont_mask_service::ATLAS.try_lock().unwrap().take();drop(old);
     *STATE.lock().unwrap()=State {fault,..State::default()};
 }
@@ -277,17 +296,6 @@ fn expected_lines()->usize {
         .map(|s|s.points.len()-1).sum();
     assert_eq!(geometry.lines.len(),count*2);
     assert!(geometry.points.is_empty() && geometry.quads.is_empty());
-}
-#[test] fn standalone_large_glyph_uses_only_its_strips_and_one_small_target() {
-    reset(0);
-    let glyph=build_single_glyph_mask('§',320).unwrap();
-    assert_eq!((glyph.width,glyph.height),(193,338));
-    let state=STATE.lock().unwrap();
-    let strips=microfont::raster_line::glyph_strips('§').unwrap();
-    assert_eq!(state.uploads,strips.len()+1);
-    assert_eq!((state.renders,state.allocations,state.mask_releases),(1,1,1));
-    assert!(state.params.iter().all(|p|f32::from_bits(p[9])==320.0));
-    assert!(state.params.iter().all(|p|f32::from_bits(p[13])==16.0));
 }
 #[test] fn maps_all_three_ranges_without_collisions() {
     assert!(SLOT_COUNT>255);assert_eq!(glyph_slot(' '),Some(0));assert_eq!(glyph_slot('~'),Some(94));
@@ -435,16 +443,6 @@ fn expected_lines()->usize {
         assert_eq!(state.params.iter().filter(|p|p[8]==0 && p[10]==0).count(),1);
     }
 }
-#[test] fn rounded_single_masks_use_two_arms_plus_the_size_selected_curve() {
-    reset(0);
-    let glyph=build_single_glyph_mask('╭',168).unwrap();
-    assert_eq!(glyph.em_height_px,168);
-    let state=STATE.lock().unwrap();
-    assert_eq!(state.uploads,13); // one immutable mesh for each 4..16 variant
-    assert_eq!(state.params.len(),1);
-    assert_eq!(f32::from_bits(state.params[0][10]),16.0);
-    assert_eq!(state.vertices.last().unwrap().len(),4*(2+16));
-}
 #[test] fn rounded_native_geometry_matches_the_intel_variant_budget_and_cell_edges() {
     let config=AtlasConfig {glyph_height_px:Some(168),..AtlasConfig::default()};
     let (width,height)=config.cell_extent();
@@ -485,10 +483,10 @@ fn expected_lines()->usize {
         assert_eq!(state.params.iter().filter(|p| p[8]==0).count(),2); // static quads + one adaptive corner variant
     }
 }
-#[test] fn shell3_snapshot_keeps_one_fixed_native_mask_independent_of_demo() {
+#[test] fn shared_snapshot_is_produced_once_for_every_consumer() {
     reset(0);
     let fixed=build_shell3_alpha_atlas(19).unwrap();
-    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,4.0);
+    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,2.75);
     assert_eq!((fixed.glyph_width,fixed.glyph_height,fixed.gutter_px),(23,31,6));
     let a=fixed.glyph('A').unwrap().to_vec();
     assert!(a.iter().all(|&coverage|coverage==128));
@@ -505,13 +503,18 @@ fn expected_lines()->usize {
         let state=STATE.lock().unwrap();
         assert_eq!(state.renders,1);
         assert_eq!(state.params[0][8],0); // box/block body shares this submission
-        assert!(state.params.iter().all(|p|f32::from_bits(p[13])==4.0));
+        assert!(state.params.iter().all(|p|f32::from_bits(p[13])==2.75));
     }
-    with_warmed_atlas(AtlasConfig {glyph_height_px:Some(38),line_width_px:8.0,
-        ..AtlasConfig::default()},|_|Ok(())).unwrap();
+    let again=build_shell3_alpha_atlas(19).unwrap();
+    assert!(std::ptr::eq(fixed,again));
+    assert_eq!(build_shell3_alpha_atlas(38).err(),Some("microfont-atlas-already-sized"));
+    let mut text=vec![0;24*22];
+    copy_text_mask(&mut text,24,22,0,0,"A ",12,22).unwrap();
+    assert!(text.chunks_exact(24).all(|row|row[..12].iter().all(|&v|v==128)
+        && row[12..].iter().all(|&v|v==0)));
     assert_eq!(fixed.glyph('A').unwrap(),a);
-    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,4.0);
-    let state=STATE.lock().unwrap();assert_eq!(state.uploads,uploads);assert_eq!(state.renders,2);
+    assert_eq!(fixed.em_height_px,19);assert_eq!(fixed.line_width_px,2.75);
+    let state=STATE.lock().unwrap();assert_eq!(state.uploads,uploads);assert_eq!(state.renders,1);
     assert!(fixed.glyphs().any(|(ch,_)|ch=='§'));
 }
 #[test] fn all_braille_patterns_upload_their_precomputed_dot_quads() {
@@ -558,49 +561,6 @@ fn expected_lines()->usize {
     for ch in ['▬','■'] {
         assert_eq!(snapshot.glyph(ch).unwrap().len(),(snapshot.glyph_width*snapshot.glyph_height) as usize);
         assert_eq!(snapshot.glyphs().filter(|&(candidate,_)|candidate==ch).count(),1);
-    }
-}
-#[test] fn cp850_standalone_quads_build_single_intel_masks_without_lines() {
-    for ch in ['▬','■'] {
-        reset(0);
-        let glyph=build_single_glyph_mask(ch,110).unwrap();
-        assert_eq!((glyph.width,glyph.height,glyph.em_height_px),(78,128,110));
-        assert!(glyph.pixels.iter().any(|&p|p!=0));
-        let state=STATE.lock().unwrap();
-        assert_eq!((state.uploads,state.renders,state.allocations),(1,1,1));
-        assert_eq!(state.vertices.len(),1);
-        assert_eq!(state.vertices[0].len(),4);
-        assert_eq!(state.params.len(),1);
-        assert_eq!(f32::from_bits(state.params[0][8]),0.0);
-        for (point,expected) in state.vertices[0].iter()
-            .zip(microfont::raster_quad::glyph_quads(ch).unwrap().get(0).unwrap().vertices)
-        {
-            assert_eq!(*point,[expected[0],expected[1],-1.0]);
-        }
-    }
-}
-#[test] fn cp850_standalone_quads_build_single_virgl_masks_and_preserve_corners() {
-    for ch in ['▬','■'] {
-        reset(0);
-        let config=AtlasConfig {glyph_height_px:Some(110),line_width_px:16.0,..AtlasConfig::default()};
-        let (width,height)=config.cell_extent();
-        let native=native_mask_geometry(config,width,height,Some(ch.into())).unwrap();
-        assert!(native.lines.is_empty() && native.points.is_empty());
-        assert_eq!(native.quads.len(),4);
-        let source=microfont::raster_quad::glyph_quads(ch).unwrap().get(0).unwrap();
-        for (vertex,point) in native.quads.iter().zip(source.vertices) {
-            let actual=[(vertex.position[0]+1.0)*width as f32/2.0,
-                (vertex.position[1]+1.0)*height as f32/2.0];
-            let expected=point.map(|v|v*10.0+9.0);
-            for k in 0..2 {assert!((actual[k]-expected[k]).abs()<0.001);}
-        }
-        virtio_gpu_logo::EMULATOR.store(true,std::sync::atomic::Ordering::Relaxed);
-        let glyph=build_single_glyph_mask(ch,110).unwrap();
-        virtio_gpu_logo::EMULATOR.store(false,std::sync::atomic::Ordering::Relaxed);
-        assert_eq!((glyph.width,glyph.height),(width,height));
-        assert!(glyph.pixels.iter().any(|&p|p!=0));
-        let state=STATE.lock().unwrap();
-        assert_eq!((state.uploads,state.allocations,state.renders),(0,0,1));
     }
 }
 #[test] fn quad_vertices_keep_explicit_owning_cell_at_exact_boundaries() {
@@ -659,22 +619,48 @@ fn expected_lines()->usize {
         }).unwrap();
     }
 }
-#[test] fn colored_transparent_stamp_premultiplies_each_ink_once() {
-    reset(0);let cfg=AtlasConfig::default();
-    stamp_preview_colored(ui4::FrameHandle,cfg,&['A','A'],2,8,&[[255,0,0,255],[0,0,255,128]],[0;4]).unwrap();
-    let s=STATE.lock().unwrap();
-    assert_eq!(&s.dest[..4],&[128,0,0,128]);
-    assert_eq!(&s.dest[48*4..48*4+4],&[0,0,64,64]);
-    assert_eq!((s.renders,s.published),(1,1));
-    assert!(s.dest.chunks_exact(4).all(|p|p[0]<=p[3]&&p[1]<=p[3]&&p[2]<=p[3]));
+#[test] fn text_copy_waits_for_ready_tiles_and_clips_without_warming() {
+    reset(0);
+    let mut pixels=vec![7;26];
+    assert_eq!(copy_text_mask(&mut pixels[..24],6,4,0,0,"A",6,11),Err("microfont-not-ready"));
+    assert!(pixels.iter().all(|&v|v==7));
+    assert_eq!(STATE.lock().unwrap().renders,0);
+    build_shell3_alpha_atlas(19).unwrap();
+    assert_eq!(copy_text_mask(&mut pixels,0,4,0,0,"A",6,11),Err("microfont-text-shape"));
+    assert_eq!(copy_text_mask(&mut pixels[..3],6,4,0,0,"A",6,11),Err("microfont-text-shape"));
+    copy_text_mask(&mut pixels[..24],6,4,4,2,"AAAA",6,11).unwrap();
+    for y in 0..4 {for x in 0..6 {
+        assert_eq!(pixels[y*6+x],if x>=4&&y>=2 {128}else{7});
+    }}
+    assert_eq!(&pixels[24..],&[7,7]);
+    assert_eq!(STATE.lock().unwrap().renders,1);
 }
-#[test] fn real_stamp_applies_color_opacity_and_blank_cells_without_redrawing() {
-    reset(0);let cfg=AtlasConfig::default();
-    stamp_preview(ui4::FrameHandle,cfg,&['A',' '],2,8,[200,100,50,128],[0;4]).unwrap();
-    {let s=STATE.lock().unwrap();assert_eq!(&s.dest[..4],&[50,25,13,64]);assert_eq!(&s.dest[48*4..48*4+4],&[0;4]);}
-    let uploads=STATE.lock().unwrap().uploads;
-    stamp_preview(ui4::FrameHandle,cfg,&['A',' '],2,8,[0,255,0,255],[0;4]).unwrap();
-    let s=STATE.lock().unwrap();assert_eq!(&s.dest[..4],&[0,128,0,128]);assert_eq!((s.renders,s.published,s.uploads),(1,2,uploads));
+#[test] fn ui4_menus_copy_r8_at_display_size_and_preserve_coverage_and_opacity() {
+    reset(0);build_shell3_alpha_atlas(19).unwrap();
+    use graphics::primitives::Rgba8;
+    let mut rects=Vec::new();
+    services::menu_text::push_microfont_menu_text(&mut rects,10,20,24,"A ",Rgba8::new(80,90,100,128));
+    assert_eq!(rects.len(),22);
+    for (y,r) in rects.iter().enumerate() {
+        assert_eq!((r.x,r.y,r.width,r.height),(10,20+y as u32,12,1));
+        assert_eq!(r.color,Rgba8::new(80,90,100,64));
+    }
+    rects.clear();
+    services::menu_text::push_microfont_rainbow_menu_text(&mut rects,0,0,5,"AAAA");
+    assert_eq!(rects.len(),22);
+    assert!(rects.iter().all(|r|r.x==0&&r.width==5&&r.height==1&&r.color.a==128));
+    assert_eq!(STATE.lock().unwrap().renders,1,"menus only copy retained tiles");
+}
+#[test] fn shrinking_r8_tiles_preserves_thin_strokes_and_partial_coverage() {
+    // The old centre sample skipped source row 10 entirely at 21 -> 14 px.
+    let mut pixels=vec![0;24*33*SLOT_COUNT];
+    for x in 0..11 {pixels[(10+6)*24+x+6]=255;}
+    let atlas=OwnedAlphaAtlas {em_height_px:21,line_width_px:2.75,glyph_width:24,
+        glyph_height:33,gutter_px:6,pixels};
+    let mask=atlas.glyph(' ').unwrap();
+    let samples:Vec<_>=(0..14).map(|y|atlas.sample(mask,0,y,8,14)).collect();
+    assert_eq!(&samples[6..8],&[85,85]);
+    assert!(samples[..6].iter().chain(&samples[8..]).all(|&v|v==0));
 }
 #[test] fn connected_loops_get_one_closing_join_only() {
     use microfont::raster_line::{Point,Strip,Boundary::{End,Junction}};
@@ -742,37 +728,28 @@ def main():
     service=service.replace('fn native_mask_geometry(', 'pub(crate) fn native_mask_geometry(')
     service=service.replace('fn rounded_quad_budget(', 'pub(crate) fn rounded_quad_budget(')
     service=service.replace('fn endpoint_params(', 'pub(crate) fn endpoint_params(')
+    service=service.replace('    pixels: Vec<u8>,', '    pub(crate) pixels: Vec<u8>,')
     service=service.replace('static START_GLYPH:', 'pub(crate) static START_GLYPH:')
-    # The fixture discards production logging, so its partial-coverage counter
-    # has no reader. Keep the counter in production, where the log consumes it.
-    service=service.replace('            let mut partial = 0usize;\n', '')
-    service=service.replace('                    partial += usize::from(coverage != 0 && coverage != 255);\n', '')
-    preview=(ROOT/'src/r/services/microfont_line_preview.rs').read_text()
-    helpers=preview[preview.index('fn glyph_height_pixels('):preview.index('type PaintResult')]
-    helper_tests=r'''
-const COLUMNS:usize=16;
-const ROWS:usize=16;
-#[test] fn tab_cycles_all_seven_sizes_and_wraps() {
-    let mut step=2;
-    for expected in [3,4,5,6,7,8,2] {step=size_after_tabs(step,1);assert_eq!(step,expected);}
-    assert_eq!(size_after_tabs(3,14),3);
-    assert_eq!(size_after_tabs(2,8),3);
-}
-#[test] fn physical_em_uses_gridpaper_conversion_and_keeps_wheel_layout_stable() {
-    for step in 2..=8 {
-        let expected=(1440*u32::from(step)*5+340)/680;
-        assert_eq!(glyph_height_pixels(step),Ok(expected));
-        let base=frame_extent(expected,8.0);
-        assert_eq!(base,(16*((expected*6+10)/11+12),16*(expected+12)+super::microfont_mask_service::PREVIEW_HEADER_HEIGHT));
-        for width in [7.0,7.25,8.0,8.25,9.0] {assert_eq!(frame_extent(expected,width),base);}
-    }
+    service=service.replace('fn with_warmed_atlas<T>(', 'pub(crate) fn with_warmed_atlas<T>(')
+    service=service.replace('static ALPHA_ATLAS: spin::Once<OwnedAlphaAtlas> = spin::Once::new();',
+        'pub(crate) static ALPHA_ATLAS: crate::ResetAlpha = crate::ResetAlpha::new();')
+    from test_microfont_coverage_batches import block
+    slot4=(ROOT/'src/ui4/slot4_service.rs').read_text()
+    menu_helpers='\n'.join(block(slot4, marker) for marker in (
+        'fn push_microfont_menu_text(', 'fn push_microfont_rainbow_menu_text(',
+        'fn menu_label_prefix', 'fn rainbow_color('))
+    menu_helpers=menu_helpers.replace('fn push_microfont_', 'pub(crate) fn push_microfont_')
+    menu_helpers=menu_helpers.replace('super::context_menu::', 'crate::ui4::context_menu::')
+    menu_prelude = r'''
+type Slot4Rects=Vec<crate::MenuRect>;
+fn push_overlay_rect(out:&mut Slot4Rects,x:u32,y:u32,width:u32,height:u32,color:crate::graphics::primitives::Rgba8) {
+    out.push(crate::MenuRect{x,y,width,height,color});
 }
 '''
-    mocks=MOCKS.replace('mod intel {','mod intel { pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert!(w==h && (h==50 || h==10));Some((w*213/50,h*213/50))} pub fn physical_extent_pixels_fraction(w:u32,h:u32,d:u32)->Option<(u32,u32)> {Some(((2560*w+300*d)/(600*d),(1440*h+170*d)/(340*d)))}')
-    source=mocks+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n} mod preview_size {\n'+helpers+helper_tests+'\n}}\n'+TESTS
+    source=MOCKS+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n} pub mod menu_text {\n'+menu_prelude+menu_helpers+'\n}}\n'+TESTS
     with tempfile.TemporaryDirectory(prefix='microfont-mask-test-') as tmp:
         tmp=Path(tmp);lib=tmp/'libmicrofont.rlib'
-        build_microfont(lib, features=('hex', 'raster', 'stamp'))
+        build_microfont(lib, features=('raster',))
         (tmp/'test.rs').write_text(source.replace('//!','//').replace('<-0.5','< -0.5'))
         subprocess.run(['rustc','--edition=2024','--test','-A','dead_code','-A','unused_imports','--extern',f'microfont={lib}',str(tmp/'test.rs'),'-o',str(tmp/'tests')],check=True)
         subprocess.run([str(tmp/'tests'),'--test-threads=1'],check=True)

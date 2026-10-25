@@ -11,10 +11,8 @@ pub(crate) mod image_open_service;
 pub mod keyboard_control_service;
 pub mod media_service;
 mod microfont_line_overlap;
-pub(crate) mod microfont_line_preview;
 pub(crate) mod microfont_log_service;
 pub(crate) mod microfont_mask_service;
-pub(crate) mod microfont_raster_preview;
 pub mod mouse_motion_service;
 
 pub(crate) mod shell3_font_service;

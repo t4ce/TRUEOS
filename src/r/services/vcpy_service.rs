@@ -232,12 +232,12 @@ pub(crate) fn mono_check() -> Result<(), &'static str> {
     glyphs[1].foreground = 0xFFB4_69FF;
     glyphs[1].background = 0xFF20_4080;
     for (glyph, character) in glyphs.iter_mut().zip(['§', 'A']) {
-        let bits = microfont::glyph_pixels(character);
-        for bit in 0..64 {
-            if bits & (1 << (63 - bit)) != 0 {
-                glyph.mask[(bit / 6) * 2] |= 0x80 >> (bit % 6);
+        let atlas = super::microfont_mask_service::ready_atlas().ok_or("microfont-not-ready")?;
+        for y in 0..11 { for x in 0..6 {
+            if atlas.coverage(character, x, y, 6, 11) >= 128 {
+                glyph.mask[y as usize * 2] |= 0x80 >> x;
             }
-        }
+        }}
     }
     let submission = match crate::intel::queue_guc_bcs0_mono_glyphs(
         crate::intel::GucBcs0RgbaSurface {

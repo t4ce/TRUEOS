@@ -70,13 +70,17 @@ RING_TESTS = r'''
 PEN_TESTS = r'''
 #[cfg(test)] mod tests {
     use super::*;
-    #[test] fn boot_and_usb_progress_update_without_executor() {
+    #[test] fn boot_and_usb_progress_replay_when_r8_tiles_become_ready() {
         let pixels = Box::leak(vec![BG; 127 * 91].into_boxed_slice());
         let surface = Surface { phys: 0x1000, gpu: 0xE0000000,
             virt: pixels.as_mut_ptr() as usize, byte_len: pixels.len()*4,
             width: 127, height: 91, pitch_bytes: 127*4 };
+        crate::microfont_mask_service::READY.store(false,std::sync::atomic::Ordering::SeqCst);
         assert!(unsafe { install(surface) });
-        assert!(pixels.iter().any(|&pixel| pixel == FG));
+        assert!(pixels.iter().all(|&pixel|pixel==BG));
+        crate::microfont_mask_service::READY.store(true,std::sync::atomic::Ordering::SeqCst);
+        font_ready();
+        assert!(pixels.iter().any(|&pixel| pixel != BG));
         let initial = pixels.to_vec();
         assignment_changed(true);
         assert_ne!(&pixels[..], &initial[..]);
@@ -109,13 +113,15 @@ PEN_TESTS = r'''
             let top = (height - microfont::FHEIGHT * SCALE) / 2;
             let mut expected = vec![BG; width * height];
             for (column, &byte) in text.iter().enumerate() {
-                let mut glyph = [BG; microfont::FWIDTH * microfont::FHEIGHT];
-                microfont::stamp_bytes(&mut glyph, microfont::FWIDTH, microfont::FHEIGHT,
-                    0, 0, &[byte], FG).unwrap();
                 for y in 0..microfont::FHEIGHT * SCALE {
                     for x in 0..microfont::FWIDTH * SCALE {
                         expected[(top+y)*width + left+column*microfont::FWIDTH*SCALE+x] =
-                            glyph[(y/SCALE)*microfont::FWIDTH+x/SCALE];
+                            {
+                                let a=u32::from(crate::microfont_mask_service::ready_atlas().unwrap().coverage(
+                                    byte as char,x as u32,y as u32,(microfont::FWIDTH*SCALE) as u32,
+                                    (microfont::FHEIGHT*SCALE) as u32));
+                                0xff00_0000 | ((255-a)*0x010101)
+                            };
                     }
                 }
             }
@@ -190,6 +196,20 @@ def main():
     policy = POLICY_HARNESS.replace('__FUNCTIONS__', '\n'.join(functions))
     # Exact production ring prefix; omit only the unrelated asynchronous TCP server.
     harness = '''extern crate alloc;
+// Mock only the already-produced R8 tiles; this suite checks the status sink.
+mod microfont_mask_service {
+    pub static READY:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(true);
+    pub struct Atlas;
+    pub fn ready_atlas()->Option<&'static Atlas> {
+        READY.load(std::sync::atomic::Ordering::SeqCst).then_some(&Atlas)
+    }
+    impl Atlas {
+        pub fn coverage(&self,ch:char,x:u32,y:u32,_:u32,_:u32)->u8 {
+            if ch==' ' {0} else {((ch as u32+x+3*y)%4*85) as u8}
+        }
+    }
+}
+
 mod net { pub mod laptop_profile {
     pub fn assignment_result() -> Option<bool> { None }
 } }
@@ -217,8 +237,8 @@ edition = "2024"
 path = "lib.rs"
 [dependencies]
 spin = "0.10"
-microfont = "=3.7.8"
-''')
+microfont = { path = "__MICROFONT__", default-features = false, features = ["raster"] }
+'''.replace('__MICROFONT__', str(ROOT/'vendor/microfont')))
         (work / 'policy').mkdir()
         (work / 'application_policy.rs').write_text((ROOT / 'src/workers/application_policy.rs').read_text())
         (work / 'service.rs').write_text(service + PEN_TESTS)

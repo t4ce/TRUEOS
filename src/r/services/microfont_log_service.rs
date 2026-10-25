@@ -6,7 +6,6 @@ use spin::Once;
 pub(crate) const PLANE_SLOT: usize = 4;
 const SCALE: usize = 4;
 const PERIOD_MS: u64 = 25;
-const FG: u32 = 0xFF00_0000;
 const BG: u32 = 0xFFFF_FFFF;
 static SURFACE: Once<Surface> = Once::new();
 // Synchronous publication works even before the background executor runs.
@@ -106,6 +105,11 @@ pub(crate) fn usb_controller_stage(stage: &'static str) {
     }
 }
 
+pub(crate) fn font_ready() {
+    let status = STATUS.lock();
+    if let Some(surface) = surface() { repaint(surface, *status); }
+}
+
 fn repaint(surface: Surface, status: (&str, Option<bool>, bool)) {
     unsafe {
         clear_surface(surface);
@@ -157,19 +161,13 @@ fn paint_text(surface: Surface, text: &[u8], scale: usize, top: usize) {
     let height = microfont::FHEIGHT * scale;
     let left = (surface.width as usize - width) / 2;
     for (column, &byte) in text.iter().enumerate() {
-        let mut glyph = [BG; microfont::FWIDTH * microfont::FHEIGHT];
-        let _ = microfont::stamp_bytes(
-            &mut glyph,
-            microfont::FWIDTH,
-            microfont::FHEIGHT,
-            0,
-            0,
-            &[byte],
-            FG,
-        );
+        let Some(atlas) = super::microfont_mask_service::ready_atlas() else { return; };
+        let ch = microfont::glyph_character(byte).unwrap_or(' ');
         for y in 0..height {
             for x in 0..microfont::FWIDTH * scale {
-                let color = glyph[(y / scale) * microfont::FWIDTH + x / scale];
+                let alpha = u32::from(atlas.coverage(ch, x as u32, y as u32,
+                    (microfont::FWIDTH * scale) as u32, height as u32));
+                let color = 0xff00_0000 | ((255 - alpha) * 0x010101);
                 let offset = (top + y) * surface.pitch_bytes as usize
                     + (left + column * microfont::FWIDTH * scale + x) * 4;
                 unsafe {

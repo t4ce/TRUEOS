@@ -45,8 +45,7 @@ define_started_flags!(
     TRUEOSFS_REQUEST_BROKER_STARTED,
     DNS_REQUEST_BROKER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
-    MICROFONT_RASTER_PREVIEW_STARTED,
-    MICROFONT_LINE_PREVIEW_STARTED,
+    MICROFONT_WARM_STARTED,
     SMP_HLT_HISTORY_STARTED,
     RAM_USAGE_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
@@ -313,16 +312,13 @@ fn background_pool_gate() -> bool {
         && crate::workers::has_background_worker_slot()
 }
 
-fn spawn_microfont_raster_preview(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_| super::microfont_raster_preview::microfont_raster_preview_task())
+fn spawn_microfont_warm(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| super::shell3_font_service::microfont_warm_task())
 }
 
-fn spawn_microfont_line_preview(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_| super::microfont_line_preview::microfont_line_preview_task())
-}
-
-fn microfont_raster_preview_gate() -> bool {
-    crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some()
+fn microfont_warm_gate() -> bool {
+    crate::virtio_gpu_logo::output_dimensions().is_some()
+        || (crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some())
 }
 
 #[cfg(feature = "trueos_ttstt")]
@@ -1354,7 +1350,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 71
+const TASK_COUNT: usize = 70
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
@@ -1406,18 +1402,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_blocking_service_lanes,
     ),
     TaskSpec::enabled_gated(
-        "microfont-raster-preview",
+        "microfont-warm",
         crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        microfont_raster_preview_gate,
-        &MICROFONT_RASTER_PREVIEW_STARTED,
-        spawn_microfont_raster_preview,
-    ),
-    TaskSpec::enabled_gated(
-        "microfont-line-preview",
-        crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        microfont_raster_preview_gate,
-        &MICROFONT_LINE_PREVIEW_STARTED,
-        spawn_microfont_line_preview,
+        microfont_warm_gate,
+        &MICROFONT_WARM_STARTED,
+        spawn_microfont_warm,
     ),
     #[cfg(feature = "trueos_ttstt")]
     TaskSpec::configured_gated(

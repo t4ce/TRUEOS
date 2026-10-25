@@ -17,6 +17,22 @@ mod graphics {pub mod primitives {
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Rgba8(u8,u8,u8,u8);
 impl Rgba8 {pub fn new(r:u8,g:u8,b:u8,a:u8)->Self{Self(r,g,b,a)}}
 }}
+mod r {pub mod services {pub mod microfont_mask_service {
+    pub fn copy_text_mask(pixels:&mut [u8],width:usize,height:usize,x:usize,y:usize,
+        text:&str,cell_width:usize,cell_height:usize)->Result<(),&'static str> {
+        // Transport test fixture; the real R8 copy and sampling are tested by
+        // test_microfont_mask_service.py. Keep this harness raster-only too.
+        for (column,ch) in text.chars().enumerate() {
+            if ch==' ' {continue;}
+            for row in y..(y+cell_height).min(height) {
+                for col in x+column*cell_width..(x+(column+1)*cell_width).min(width) {
+                    pixels[row*width+col]=128;
+                }
+            }
+        }
+        Ok(())
+    }
+}}}
 mod shell3 {pub mod tui {pub fn vm_for_window(_:crate::ui4::WindowId)->Option<u8>{None}}}
 mod ui4 {
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]pub enum WindowOwner {Vm(u8),KernelApp(u8)}
@@ -53,7 +69,7 @@ fn push_overlay_rect(out:&mut Slot4Rects,x:u32,y:u32,width:u32,height:u32,_:crat
         (path/'spin.rs').write_text("pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T>{pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<'_,T>{self.0.lock().unwrap()}}")
         for name, file in [('spin',path/'spin.rs'),('microfont',ROOT/'vendor/microfont/src/lib.rs')]:
             if name == 'microfont':
-                build_microfont(path / 'libmicrofont.rlib', features=('hex','stamp'))
+                build_microfont(path / 'libmicrofont.rlib', features=('raster',))
             else:
                 subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
         (path/'tests.rs').write_text(source)

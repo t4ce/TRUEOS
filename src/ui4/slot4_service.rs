@@ -673,36 +673,37 @@ fn push_microfont_menu_text(
     }
 
     let width = usize::try_from(width).ok().unwrap_or(0);
-    let height = microfont::FHEIGHT;
+    let height = microfont::FHEIGHT * 2;
     let Some(pixel_count) = width.checked_mul(height) else {
         return;
     };
     let mut pixels = vec![0u8; pixel_count];
-    if microfont::stamp_text(&mut pixels, width, height, 0, 0, text, 1u8).is_err() {
+    if crate::r::services::microfont_mask_service::copy_text_mask(
+        &mut pixels, width, height, 0, 0, text, microfont::FWIDTH * 2, height).is_err() {
         return;
     }
 
     for (row, scanline) in pixels.chunks_exact(width).take(height).enumerate() {
         let mut col = 0usize;
-        let y = y.saturating_add(u32::try_from(row).unwrap_or(0).saturating_mul(2));
+        let y = y.saturating_add(u32::try_from(row).unwrap_or(0));
         while col < width {
             if scanline[col] == 0 {
                 col = col.saturating_add(1);
                 continue;
             }
+            let coverage = scanline[col];
             let run_start = col;
-            while col < width && scanline[col] != 0 {
+            while col < width && scanline[col] == coverage {
                 col = col.saturating_add(1);
             }
             push_overlay_rect(
                 rects,
-                x.saturating_add(u32::try_from(run_start).unwrap_or(0).saturating_mul(2)),
+                x.saturating_add(u32::try_from(run_start).unwrap_or(0)),
                 y,
-                u32::try_from(col.saturating_sub(run_start))
-                    .unwrap_or(0)
-                    .saturating_mul(2),
-                2,
-                color,
+                u32::try_from(col.saturating_sub(run_start)).unwrap_or(0),
+                1,
+                crate::graphics::primitives::Rgba8::new(color.r, color.g, color.b,
+                    ((u32::from(color.a) * u32::from(coverage) + 127) / 255) as u8),
             );
         }
     }
@@ -721,26 +722,28 @@ fn push_microfont_rainbow_menu_text(
     }
 
     let width = usize::try_from(width).ok().unwrap_or(0);
-    let height = microfont::FHEIGHT;
+    let height = microfont::FHEIGHT * 2;
     let Some(pixel_count) = width.checked_mul(height) else {
         return;
     };
     let mut pixels = vec![0u8; pixel_count];
-    if microfont::stamp_text(&mut pixels, width, height, 0, 0, text, 1u8).is_err() {
+    if crate::r::services::microfont_mask_service::copy_text_mask(
+        &mut pixels, width, height, 0, 0, text, microfont::FWIDTH * 2, height).is_err() {
         return;
     }
 
     let width_u32 = u32::try_from(width).ok().unwrap_or(0);
     for (row, scanline) in pixels.chunks_exact(width).take(height).enumerate() {
         let mut col = 0usize;
-        let y = y.saturating_add(u32::try_from(row).unwrap_or(0).saturating_mul(2));
+        let y = y.saturating_add(u32::try_from(row).unwrap_or(0));
         while col < width {
             if scanline[col] == 0 {
                 col = col.saturating_add(1);
                 continue;
             }
+            let coverage = scanline[col];
             let run_start = col;
-            while col < width && scanline[col] != 0 {
+            while col < width && scanline[col] == coverage {
                 col = col.saturating_add(1);
             }
             let run_width = col.saturating_sub(run_start);
@@ -754,11 +757,11 @@ fn push_microfont_rainbow_menu_text(
             let color = rainbow_color(hue);
             push_overlay_rect(
                 rects,
-                x.saturating_add(u32::try_from(run_start).unwrap_or(0).saturating_mul(2)),
+                x.saturating_add(u32::try_from(run_start).unwrap_or(0)),
                 y,
-                u32::try_from(run_width).unwrap_or(0).saturating_mul(2),
-                2,
-                color,
+                u32::try_from(run_width).unwrap_or(0),
+                1,
+                crate::graphics::primitives::Rgba8::new(color.r, color.g, color.b, coverage),
             );
         }
     }
