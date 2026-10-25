@@ -45,6 +45,7 @@ jobs:
       TRUEOS_MICROGAMES_REV: 24a88ca8cea2f1fafd6ec6e199e865e52df499b9
       TRUEOS_PICASSO_REV: d9f4aded95426b72d962ae3f273a260cb8b3f380
       TRUEOS_CUBES_REV: 870904030d8777f6c5827e3957b4e8c9e0259d69
+      TRUEOS_VOXY_REV: 556ae936b9d7958cc724006a80dd0500d7053ee3
 
     steps:
       - name: Prepare checkout dependencies
@@ -194,8 +195,8 @@ jobs:
           test -f "${rbgb_dir}/Cargo.toml"
           test -f "${blueprints_dir}/buildins/hull/Cargo.toml"
 
-          # The checked Blueprint workspace has path dependencies on these
-          # sibling repositories, even though this release builds only one app.
+          # Provide Blueprint workspace path dependencies and the app-owned
+          # shader publications checked against the kernel trust records.
           checkout_sibling() {
             local directory="$1"
             local repository="$2"
@@ -213,6 +214,11 @@ jobs:
             https://github.com/t4ce/TRUEOS-Picasso.git "${TRUEOS_PICASSO_REV}"
           checkout_sibling bld/Cubes \
             https://github.com/t4ce/Cubes.git "${TRUEOS_CUBES_REV}"
+          checkout_sibling bld/voxy \
+            https://github.com/t4ce/veloren-voxygen.git "${TRUEOS_VOXY_REV}"
+          for owner in TRUEOS-Picasso Cubes voxy; do
+            test -f "bld/${owner}/shaders/trueos/manifest.json"
+          done
 
           # The Blueprint workspace's local TRUEOS dependencies expect both
           # repositories to be siblings. Keep the CI checkout itself under the
