@@ -73,8 +73,6 @@ pub(crate) struct GpgpuSpriteQuadWorklistRun<'a> {
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER: u32 = 1 << 0;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC: u32 = 1 << 1;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_CLEAR: u32 = 1 << 2;
-pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_SOURCE_XRGB: u32 = 1 << 3;
-pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_DEST_XRGB: u32 = 1 << 4;
 
 pub(crate) const SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS: usize = 2_048;
 

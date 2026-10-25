@@ -56,6 +56,7 @@ impl TaskSpec {
         }
     }
 
+    #[cfg(any(feature = "trueos_lumen", feature = "trueos_ttstt"))]
     pub(super) const fn configured_gated(
         enabled: bool,
         name: &'static str,

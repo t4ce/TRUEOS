@@ -78,12 +78,12 @@ test = false
 bench = false
 
 [features]
-default = ["trueos_h264_encode_stream", "trueos_task_profile"]
+default = ["trueos_h264_encode_stream", "trueos_task_profile", "odin-native-gpgpu"]
 trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
-# Runtime-generated native compute is admitted only in an explicit experiment build.
+# Enable runtime-generated native compute for odin.son development.
 odin-native-gpgpu = []
 # Compatibility experiments are excluded from the normal VMX lifecycle.
 # RAM pause/resume does not require checkpoint storage or replication.

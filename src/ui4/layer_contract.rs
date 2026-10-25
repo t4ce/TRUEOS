@@ -9,6 +9,7 @@ pub(super) const REQUIRED_PLANE_MASK: u8 = 0b1111;
 pub(super) const fn layer_opacity(window: u8, layer: u8) -> u8 {
     ((window as u16 * layer as u16 + 127) / 255) as u8
 }
+#[cfg(test)]
 const LEASE_SLOTS: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,6 +24,7 @@ pub(super) type GroupPlan = [Option<LeaseGroup>; 3];
 /// Plan first, mutate later. Insufficient revocable capacity changes nothing.
 /// Input order is physical bottom-to-top order. A newly admitted window goes
 /// on top; an existing dragged window stays put unless focus explicitly raises it.
+#[cfg(test)]
 pub(super) fn claim_group(
     current: GroupPlan,
     requested: LeaseGroup,
@@ -70,6 +72,7 @@ pub(super) fn used(plan: GroupPlan) -> u8 {
     plan.into_iter().flatten().map(|group| group.slots).sum()
 }
 
+#[cfg(test)]
 fn compact(plan: &mut GroupPlan) {
     let mut output = [None; 3];
     for (index, group) in plan.iter().flatten().copied().enumerate() {

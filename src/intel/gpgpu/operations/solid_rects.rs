@@ -107,32 +107,3 @@ pub(crate) fn fill_solid_rects_rgba8_scanout_result(
 ) -> GpgpuWorklistSubmitResult {
     solid_rects_rgba8_result_mode(dst, rects, true)
 }
-
-
-pub(crate) fn fill_solid_rects_rgba8_scanout(
-    dst: GpgpuRgba8Surface,
-    rects: &[GpgpuSolidRect],
-) -> bool {
-    fill_solid_rects_rgba8_mode(dst, rects, true)
-}
-
-fn fill_solid_rects_rgba8_mode(
-    dst: GpgpuRgba8Surface,
-    rects: &[GpgpuSolidRect],
-    direct_scanout: bool,
-) -> bool {
-    const INLINE_RECTS: usize = 16;
-    if rects.len() > INLINE_RECTS {
-        return false;
-    }
-    let Some(descriptors) = lower_solid_rects(dst, rects) else {
-        return false;
-    };
-    if descriptors.is_empty() {
-        return true;
-    }
-    let result = solid_rects_rgba8_result_mode(dst, rects, direct_scanout);
-    result.outcome == GpgpuSubmissionOutcome::Complete
-        && result.stats.descs == descriptors.len()
-        && result.stats.submits == 1
-}

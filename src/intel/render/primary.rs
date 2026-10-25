@@ -568,7 +568,6 @@ enum ResidentSceneRasterQuality {
 enum ResidentSceneIncompleteStage {
     Geometry,
     Resolve,
-    Coverage,
     PresentCopy,
     Unknown,
 }
@@ -578,7 +577,6 @@ impl ResidentSceneIncompleteStage {
         match self {
             Self::Geometry => "resident-scene-geometry-incomplete",
             Self::Resolve => "resident-scene-resolve-incomplete",
-            Self::Coverage => "resident-scene-coverage-incomplete",
             Self::PresentCopy => "resident-scene-present-copy-incomplete",
             Self::Unknown => "resident-scene-incomplete-unknown-stage",
         }

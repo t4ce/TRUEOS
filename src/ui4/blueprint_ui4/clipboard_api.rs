@@ -1,4 +1,6 @@
 //! Clipboard delivery is unavailable in the kernel baseline.
+#![allow(dead_code, unused_variables)]
+
 use super::*;
 
 pub(crate) fn release_owner(owner: WindowOwner) {

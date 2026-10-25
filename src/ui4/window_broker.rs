@@ -798,6 +798,7 @@ impl WindowBroker {
         }
     }
 
+    #[cfg(test)]
     fn group_plan(&self, output: OutputId) -> super::layer_contract::GroupPlan {
         let mut plan = [None; 3];
         let mut next = 0;

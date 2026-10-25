@@ -374,11 +374,6 @@ fn direct_rcs_submit_batch_state(
     direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::SystemService)
 }
 
-
-fn font_rcs_submit_batch_state(dev: super::Dev, state: DirectRcsState) -> DirectRcsSubmissionState {
-    direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Font)
-}
-
 fn execution_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     matches!(
         direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Execution),
@@ -890,38 +885,6 @@ fn direct_rcs_poll_result_slot_timeout_ms(
         DirectRcsLane::SystemService,
     )
 }
-
-fn font_rcs_poll_result_slot_timeout_ms(
-    state: DirectRcsState,
-    slot: usize,
-    expected: u32,
-    timeout_ms: u64,
-) -> u32 {
-    direct_rcs_poll_result_slot_timeout_ms_on_lane(
-        state,
-        slot,
-        expected,
-        timeout_ms,
-        DirectRcsLane::Font,
-    )
-}
-
-fn execution_rcs_poll_result_slot_timeout_ms(
-    state: DirectRcsState,
-    slot: usize,
-    expected: u32,
-    timeout_ms: u64,
-) -> u32 {
-    direct_rcs_poll_result_slot_timeout_ms_on_lane(
-        state,
-        slot,
-        expected,
-        timeout_ms,
-        DirectRcsLane::Execution,
-    )
-}
-
-
 
 fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
     state: DirectRcsState,

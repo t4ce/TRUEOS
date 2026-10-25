@@ -104,7 +104,6 @@ impl<'a> KernelArgLayout<'a> {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum KernelLaunchModel {
-    NdRange1d,
     NdRange2d,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Simd16LaneLoop,
@@ -246,17 +245,6 @@ pub(crate) struct KernelLaunchContract {
 }
 
 impl KernelLaunchContract {
-    pub(crate) const fn nd_range_1d() -> Self {
-        Self {
-            model: KernelLaunchModel::NdRange1d,
-            dimensions: 1,
-            simd_width: 16,
-            descriptors_per_walker: None,
-            pixels_per_lane: None,
-            tile_pixels_per_lane: None,
-            tile_rows: None,
-        }
-    }
 
     pub(crate) const fn nd_range_2d(pixels_per_lane: Option<u32>) -> Self {
         Self {

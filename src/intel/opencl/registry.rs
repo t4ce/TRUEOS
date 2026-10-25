@@ -45,18 +45,12 @@ impl KnownAotKernel {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum KnownKernelRole {
     Copy,
-    WorklistGradient,
     WorklistBlend,
-    Glyph,
     Present,
     Sprite,
     FluidX3d,
     CppDemo,
     CppAudio,
-    Lfm25Q8,
-    KokoroQgemm,
-    KokoroConv1d,
-    SubsetSum,
 }
 
 const ADLS: &str = "adls";
@@ -82,8 +76,6 @@ const RECT_WORKLIST_CONSUMERS: &[&str] = &[
     "font service gradient loops",
     "gpgpu descriptor-worklist probes",
 ];
-const TEXT_RENDER_CONSUMERS: &[&str] = &["intel::init_once upload", "font service text loop"];
-
 
 const ALPHA_BLEND_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("src_xy", 0, 1),
@@ -174,14 +166,6 @@ const COPY_RECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     launch: KernelLaunchContract::nd_range_2d(Some(2)),
     consumers: BOOT_UPLOAD_CONSUMERS,
 };
-
-const DESTINATION_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
-    rw_buf!(0, "dst_rgba", "__global uint*", 0, 8),
-    ro_buf!(1, "descs", "__global const uint*", 1, 10),
-    u32_arg!(2, "dst_pitch_bytes", 12),
-    u32_arg!(3, "desc_base", 13),
-    u32_arg!(4, "desc_count", 14),
-];
 
 const ALPHA_BLEND_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "src_rgba", "__global const uint*", 0, 8),

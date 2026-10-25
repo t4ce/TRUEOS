@@ -144,6 +144,7 @@ fn now_us() -> u64 {
     crate::ui4::text_blit::nanos(crate::ui4::text_blit::stamp()) / 1000
 }
 
+#[cfg(test)]
 pub(crate) fn stats() -> CacheStats {
     CACHE.lock().stats
 }

@@ -566,8 +566,8 @@ fn validate_gen12_lumen_mocs_for_dev(dev: Dev, checkpoint: &str) -> bool {
     accepted
 }
 
-pub(crate) const GEN12_LUMEN_MOCS_INDEX: u32 = self::gt_state::GEN12_LUMEN_MOCS_INDEX;
 
+#[cfg(feature = "trueos_lumen")]
 pub(crate) fn gen12_lumen_mocs_ready() -> bool {
     GEN12_LUMEN_MOCS_READY.load(Ordering::Acquire)
 }

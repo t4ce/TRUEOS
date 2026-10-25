@@ -247,7 +247,6 @@ embedded_compute_artifact!(pub(crate) UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN, UI4_COM
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.contract.rs"
 );
-pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN_BYTES: usize = shadertoy_package::SHADERTOY_CPP_GALLERY_PACKAGE.bin_bytes;
 pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = assert!(matches!(CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));

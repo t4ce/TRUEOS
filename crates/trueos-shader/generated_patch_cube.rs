@@ -4,7 +4,9 @@ pub(crate) const SOURCE_SHA256: &str =
     "1166ee9b78e3e502466cc0737c4e0727d4eefbce3336b43284f6bd342f9ed6d2";
 pub(crate) const CONTRACT_VERSION: u32 = 11;
 const VERTEX: &[u32] = &[];
+#[cfg(test)]
 const TESS_CONTROL: &[u32] = &[];
+#[cfg(test)]
 const TESS_EVAL: &[u32] = &[];
 const FRAGMENT: &[u32] = &[];
 pub(crate) const HS_PACKET: [u32; 9] = [

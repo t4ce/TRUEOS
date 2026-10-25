@@ -37,15 +37,6 @@ impl GpgpuKernelArtifact {
     ) -> Self {
         Self::new(name, contract.target, bin, spv, contract.zebin_sha256, Some(contract))
     }
-
-    const fn multi_entry(
-        name: &'static str,
-        bin: &'static [u8],
-        spv: &'static [u8],
-        first_entry: &'static GpgpuKernelAbiContract,
-    ) -> Self {
-        Self::new(name, first_entry.target, bin, spv, first_entry.zebin_sha256, None)
-    }
 }
 
 #[derive(Copy, Clone, Debug)]

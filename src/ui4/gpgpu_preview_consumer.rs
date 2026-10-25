@@ -35,14 +35,15 @@ const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_DURATION_MS: u64 = 5_000;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_CADENCE_MS: u64 = 33;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY: u32 = 1;
+#[cfg(test)]
 pub(crate) const GPGPU_PREVIEW_MAX_CADENCE_MS: u64 = 60_000;
+#[cfg(test)]
 pub(crate) const GPGPU_PREVIEW_MAX_PUBLISH_EVERY: u32 = 1_024;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuPreviewPreset {
     Static,
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     CppCloudHighWisps,
     CppAudio,
     CppParticle,
@@ -107,6 +108,7 @@ impl GpgpuPreviewConfig {
         publish_every: GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
     };
 
+    #[cfg(test)]
     fn validate(self) -> Result<Self, &'static str> {
         if self.cadence_ms == 0 || self.cadence_ms > GPGPU_PREVIEW_MAX_CADENCE_MS {
             return Err("cadence-ms-out-of-range-1-to-60000");
@@ -294,29 +296,6 @@ struct ActivePreview {
 struct StaticPreviewSurface {
     frame: FrameHandle,
     window: WindowId,
-}
-
-
-fn request_gpgpu_preview_start_with_policy(
-    config: GpgpuPreviewConfig,
-    policy: PreviewRunPolicy,
-) -> Result<u64, &'static str> {
-    let config = config.validate()?;
-    let mut control = PREVIEW_CONTROL.lock();
-
-    let serial = next_serial(control.desired.serial);
-    control.desired = DesiredPreview {
-        serial,
-        running: true,
-        config,
-        policy,
-    };
-    control.status.desired_running = true;
-    control.status.phase = GpgpuPreviewPhase::Starting;
-    control.status.request_serial = serial;
-    control.status.config = config;
-    control.status.last_error = "none";
-    Ok(serial)
 }
 
 #[trueos_executor::task(pool_size = 1)]
