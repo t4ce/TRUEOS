@@ -333,6 +333,10 @@ fn validate_helio_transform_artifact(
     artifact: GpgpuHelioRetainedTransformArtifactMapping,
 ) -> Result<(), GpgpuHelioTransformError> {
     let upload = artifact.upload;
+    let contract = HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT;
+    // The authenticated executable arrives in the app package; the kernel's
+    // embedded BIN is empty. Bound the entry by the admitted upload instead.
+    let entry_end = contract.entry_offset.checked_add(contract.entry_size);
     if artifact.gpu != upload.gpu
         || artifact.phys != upload.phys
         || artifact.bytes != upload.bytes
@@ -340,9 +344,10 @@ fn validate_helio_transform_artifact(
         || artifact.entry_offset != HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.entry_offset
         || upload.name != HELIO_RETAINED_TRANSFORM_KERNEL_NAME
         || upload.gpu != HELIO_RETAINED_TRANSFORM_ADLS_GPU
-        || upload.bytes != HELIO_RETAINED_TRANSFORM_ADLS_BIN.len()
+        || entry_end.is_none_or(|end| end > upload.bytes as u64)
         || upload.bin_sha256 != HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256
         || !upload.verified
+        || upload.address_space != GpgpuArtifactAddressSpace::CallerPpgtt
         || upload.mapped_bytes < upload.bytes
     {
         return Err(GpgpuHelioTransformError::Artifact);
@@ -567,10 +572,11 @@ mod helio_transform_encoder_tests {
             source: HELIO_RETAINED_TRANSFORM_SOURCE_PATH,
             gpu: HELIO_RETAINED_TRANSFORM_ADLS_GPU,
             phys: 0x0200_0000,
-            bytes: HELIO_RETAINED_TRANSFORM_ADLS_BIN.len(),
-            mapped_bytes: HELIO_RETAINED_TRANSFORM_ADLS_BIN
-                .len()
-                .next_multiple_of(4096),
+            bytes: (HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.entry_offset
+                + HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.entry_size) as usize,
+            mapped_bytes: (HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.entry_offset
+                + HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.entry_size)
+                .next_multiple_of(4096) as usize,
             verified: true,
             bin_sha256: HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256,
             device_id: 0x4680,

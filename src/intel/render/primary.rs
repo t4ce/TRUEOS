@@ -1744,7 +1744,13 @@ fn stage_resident_churn_transform_secondary(
         dispatch,
         result_ggtt_gpu,
     )
-    .map_err(|_| "churn-transform-encode")?;
+    .map_err(|error| {
+        crate::log_warn!(target: "render";
+            "resident-scene: transform encode rejected error={:?} secondary={} rows={} draws={} artifact_bytes={} mapped_bytes={}\n",
+            error, secondary_index, dispatch.row_count, dispatch.draw_count,
+            artifact.bytes, artifact.mapped_bytes);
+        "churn-transform-encode"
+    })?;
     Ok(encoded.command_dwords * core::mem::size_of::<u32>())
 }
 

@@ -41,6 +41,48 @@ fn main() {
     fs::write(out.join("patch_layout.rs"), "pub(crate) ".to_string() + &item(&shader, "fn patch_cube_upload_layout")).unwrap();
     println!("cargo:rerun-if-changed={}", root.join("src/intel/render/resources.rs").display());
     println!("cargo:rerun-if-changed={}", root.join("src/intel/shader.rs").display());
+
+    // Exercise the encoder's admission boundary with the same metadata and
+    // app-owned shader bytes used by the kernel, including its empty fallback.
+    let contract_path = "src/intel/gpgpu/kernels/artifacts/adls/cpp/helio_retained_transform.contract.rs";
+    let schema_path = "src/intel/gpgpu/artifacts/contract.rs";
+    let metadata_path = "src/intel/gpgpu/artifacts/metadata.rs";
+    let operation_path = "src/intel/gpgpu/operations/helio_retained_transform.rs";
+    let encoder_path = "src/intel/gpgpu/rcs/helio_retained_transform.rs";
+    let catalog_path = "src/intel/gpgpu/kernel_catalog.rs";
+    let constants_path = "src/intel/gpgpu/rcs/constants.rs";
+    for path in [contract_path, schema_path, metadata_path, operation_path, encoder_path, catalog_path, constants_path] {
+        println!("cargo:rerun-if-changed={}", root.join(path).display());
+    }
+    let schema = fs::read_to_string(root.join(schema_path)).unwrap();
+    let mut transform = schema.split("impl GpgpuKernelAbiContract {").next().unwrap().to_string();
+    transform += &fs::read_to_string(root.join(contract_path)).unwrap();
+    let metadata = fs::read_to_string(root.join(metadata_path)).unwrap();
+    for marker in ["struct UploadedKernelArtifact", "enum GpgpuArtifactAddressSpace"] {
+        transform += "\n#[derive(Copy, Clone, Debug, Eq, PartialEq)]\n";
+        transform += &item(&metadata, marker);
+    }
+    let operation = fs::read_to_string(root.join(operation_path)).unwrap();
+    for marker in ["struct GpgpuHelioRetainedTransformArtifactMapping", "enum GpgpuHelioTransformError"] {
+        transform += "\n#[derive(Copy, Clone, Debug, Eq, PartialEq)]\n";
+        transform += &item(&operation, marker);
+    }
+    let catalog = fs::read_to_string(root.join(catalog_path)).unwrap();
+    for name in ["HELIO_RETAINED_TRANSFORM_KERNEL_NAME", "HELIO_RETAINED_TRANSFORM_SOURCE_PATH",
+        "HELIO_RETAINED_TRANSFORM_ADLS_BIN", "HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256"] {
+        transform += &constant(&catalog, name);
+    }
+    transform += &constant(&fs::read_to_string(root.join(constants_path)).unwrap(), "HELIO_RETAINED_TRANSFORM_ADLS_GPU");
+    transform += &item(&fs::read_to_string(root.join(encoder_path)).unwrap(), "fn validate_helio_transform_artifact");
+    fs::write(out.join("retained_transform.rs"), transform).unwrap();
+}
+
+fn constant(source: &str, name: &str) -> String {
+    let marker = format!("const {name}:");
+    let start = source.find(&marker).unwrap();
+    let value = start + source[start..].find('=').unwrap();
+    let end = value + source[value..].find(';').unwrap() + 1;
+    format!("\n{}\n", &source[start..end])
 }
 
 fn item(source: &str, marker: &str) -> String {

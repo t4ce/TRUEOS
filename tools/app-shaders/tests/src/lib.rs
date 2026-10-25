@@ -51,9 +51,61 @@ mod upload {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
+mod retained_transform {
+    include!(concat!(env!("OUT_DIR"), "/retained_transform.rs"));
+
+    #[test]
+    fn app_owned_transform_passes_encoder_admission_with_empty_embedded_bin() {
+        use sha2::{Digest, Sha256};
+        crate::app_shaders::register_section(&super::tests::bundle("TRUEOS-Picasso")).unwrap();
+        let bin = crate::app_shaders::bytes(9, 0).unwrap();
+        assert!(HELIO_RETAINED_TRANSFORM_ADLS_BIN.is_empty());
+        assert_eq!(bin.len(), 206768);
+        let upload = UploadedKernelArtifact {
+            name: HELIO_RETAINED_TRANSFORM_KERNEL_NAME,
+            target: "adls",
+            source: "app-package",
+            gpu: HELIO_RETAINED_TRANSFORM_ADLS_GPU,
+            phys: 0x0200_0000,
+            bytes: bin.len(),
+            mapped_bytes: bin.len().next_multiple_of(4096),
+            verified: true,
+            bin_sha256: Sha256::digest(bin).into(),
+            device_id: 0x4680,
+            revision_id: 0x0C,
+            abi_schema_version: Some(GPGPU_KERNEL_ABI_SCHEMA_VERSION),
+            address_space: GpgpuArtifactAddressSpace::CallerPpgtt,
+        };
+        let mapping = |upload: UploadedKernelArtifact| GpgpuHelioRetainedTransformArtifactMapping {
+            gpu: upload.gpu,
+            phys: upload.phys,
+            bytes: upload.bytes,
+            mapped_bytes: upload.mapped_bytes,
+            entry_offset: HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT.entry_offset,
+            upload,
+        };
+        assert_eq!(validate_helio_transform_artifact(mapping(upload)), Ok(()));
+        for invalid in [
+            UploadedKernelArtifact { bytes: 0, ..upload },
+            UploadedKernelArtifact { bytes: 4096, ..upload },
+            UploadedKernelArtifact { verified: false, ..upload },
+            UploadedKernelArtifact { bin_sha256: [0; 32], ..upload },
+            UploadedKernelArtifact { mapped_bytes: 4096, ..upload },
+            UploadedKernelArtifact { address_space: GpgpuArtifactAddressSpace::GlobalGgtt, ..upload },
+        ] {
+            assert_eq!(validate_helio_transform_artifact(mapping(invalid)), Err(GpgpuHelioTransformError::Artifact));
+        }
+        let mut inconsistent = mapping(upload);
+        inconsistent.bytes -= 1;
+        assert_eq!(validate_helio_transform_artifact(inconsistent), Err(GpgpuHelioTransformError::Artifact));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::app_shaders;
-    fn bundle(owner: &str) -> Vec<u8> {
+    pub(super) fn bundle(owner: &str) -> Vec<u8> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../..").join(owner).join("shaders/trueos/app-shaders.bundle");
         std::fs::read(path).unwrap()
