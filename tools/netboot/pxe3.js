@@ -8,7 +8,7 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
 const FILES = ["EFI/BOOT/BOOTX64.EFI", "TRUEOS.elf", "EFI/BOOT/tgl_guc_70.bin"];
-const ROOT = path.resolve(__dirname, "../../tgt/usb-release");
+const ROOT = path.resolve(__dirname, "../../tgt/pxe-current");
 
 function json(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8" });
@@ -54,7 +54,8 @@ async function main() {
   }
   if (args.includes("--help")) {
     console.log("Usage: sudo node tools/netboot/pxe3.js [interface] [artifact-directory]");
-    console.log("Defaults: default-route interface, tgt/usb-release. Requires ip and dnsmasq.");
+    console.log("Defaults: default-route interface, tgt/pxe-current. Requires ip and dnsmasq.");
+    console.log("Automatically reloads completed builds; keep this server running alongside Cargo.");
     console.log("Existing LAN DHCP supplies addresses; this serves only IPv4 PXE boot information and TFTP.");
     console.log("The Rust EFI loader uses firmware PXE/TFTP to fetch the remaining files.");
     console.log("--stop stops only PXE servers running this repository's pxe3.js.");
@@ -80,9 +81,42 @@ async function main() {
   fs.chmodSync(root, 0o755);
   fs.mkdirSync(path.join(root, "EFI/BOOT"), { recursive: true, mode: 0o755 });
   for (const name of FILES) {
-    fs.copyFileSync(path.join(source, name), path.join(root, name));
-    fs.chmodSync(path.join(root, name), 0o644);
+    fs.symlinkSync(path.relative(path.dirname(name), path.join("active", name)), path.join(root, name));
   }
+  let fingerprint;
+  let generation = 0;
+  function signature() {
+    return JSON.stringify([fs.realpathSync(source), ...FILES.map((name) => {
+      const stat = fs.statSync(path.join(source, name), { bigint: true });
+      return [stat.ino.toString(), stat.size.toString(), stat.mtimeNs.toString()];
+    })]);
+  }
+  function refresh() {
+    const before = signature();
+    if (before === fingerprint) return;
+    const snapshot = path.join(root, `generation-${++generation}`);
+    fs.mkdirSync(path.join(snapshot, "EFI/BOOT"), { recursive: true, mode: 0o755 });
+    try {
+      for (const name of FILES) {
+        fs.copyFileSync(path.join(source, name), path.join(snapshot, name));
+        fs.chmodSync(path.join(snapshot, name), 0o644);
+      }
+      if (signature() !== before) {
+        fs.rmSync(snapshot, { recursive: true, force: true });
+        return; // Publication changed while copying; retry next tick.
+      }
+      fs.symlinkSync(path.basename(snapshot), path.join(root, "next"));
+      fs.renameSync(path.join(root, "next"), path.join(root, "active"));
+      fingerprint = before;
+      console.log(`PXE files loaded: ${fs.realpathSync(source)}`);
+    } catch (error) {
+      fs.rmSync(snapshot, { recursive: true, force: true });
+      throw error;
+    }
+  }
+  refresh();
+  // Atomic publication switches all three served files together. Retain old
+  // generations for transfers already in progress until the server exits.
   const ip = address.local;
   const dnsmasqArgs = [
     "--conf-file=/dev/null", "--no-daemon", "--port=0",
@@ -103,6 +137,10 @@ async function main() {
   if (check.status !== 0) throw new Error(check.stderr.trim());
   console.log(`TRUEOS IPv4 PXE on ${iface} (${ip}); artifacts: ${source}`);
   console.log("The Rust EFI loader fetches the kernel and firmware over PXE/TFTP.");
+  const watcher = setInterval(() => {
+    try { refresh(); } catch (error) { console.error(`pxe3 reload: ${error.message}`); }
+  }, 100);
+  process.once("exit", () => clearInterval(watcher));
   const child = spawn("dnsmasq", dnsmasqArgs, { stdio: ["ignore", "inherit", "pipe"] });
   // dnsmasq announces the TFTP root after successfully binding its sockets.
   let output = "";
@@ -118,11 +156,13 @@ async function main() {
     process.on(signal, () => child.kill(signal));
   }
   child.once("error", (error) => {
+    clearInterval(watcher);
     console.error(error.message);
     process.exitCode = 1;
     cleanup();
   });
   child.once("exit", (code, signal) => {
+    clearInterval(watcher);
     process.exitCode = code ?? (signal === "SIGINT" || signal === "SIGTERM" ? 0 : 1);
     cleanup();
   });

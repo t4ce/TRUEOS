@@ -34,22 +34,8 @@ class RigCommands(unittest.TestCase):
                     'echo "build $1" >> "$TEST_ROOT/trace"\nexit "${BUILD_STATUS:-0}"\n')
         self.script(self.root / 'tools/rig-reset.sh',
                     'echo reset >> "$TEST_ROOT/trace"\n')
-        self.script(self.bin / 'sudo', 'shift\nif [[ $# != 0 ]]; then exec "$@"; fi\n')
-        self.script(self.bin / 'node', 'echo stop >> "$TEST_ROOT/trace"\n')
-        self.script(self.bin / 'systemctl',
-                    'if [[ $1 == is-active ]]; then test -f "$TEST_ROOT/active"; '
-                    'else rm -f "$TEST_ROOT/active"; fi\n')
-        self.script(self.bin / 'systemd-run', '''
- echo start >> "$TEST_ROOT/trace"
- if [[ ${PXE_FAIL:-0} == 1 ]]; then exit 1; fi
- touch "$TEST_ROOT/active"
- while [[ $# != 0 ]]; do
-     if [[ $1 == --ready-file ]]; then touch "$2"; break; fi
-     shift
- done
-''')
-        for cmd in ('dnsmasq', 'ip'):
-            self.script(self.bin / cmd, 'exit 0\n')
+        for cmd in ('sudo', 'node', 'systemctl', 'systemd-run'):
+            self.script(self.bin / cmd, 'echo unexpected-server-command >> "$TEST_ROOT/trace"; exit 99\n')
         return script
 
     def workflow(self, mode, **env):
@@ -61,22 +47,17 @@ class RigCommands(unittest.TestCase):
     def test_dev_and_reset_once(self):
         result, trace = self.workflow('rigdev')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(trace, ['build --dev', 'stop', 'start', 'reset'])
+        self.assertEqual(trace, ['build --dev', 'reset'])
 
     def test_release_and_reset_once(self):
         result, trace = self.workflow('rigreal')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(trace, ['build --release', 'stop', 'start', 'reset'])
+        self.assertEqual(trace, ['build --release', 'reset'])
 
     def test_failed_build_does_not_touch_server_or_reset(self):
         result, trace = self.workflow('rigdev', BUILD_STATUS='1')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(trace, ['build --dev'])
-
-    def test_failed_pxe_does_not_reset(self):
-        result, trace = self.workflow('rigreal', PXE_FAIL='1')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn('reset', trace)
 
     def test_pxe_ready_and_scoped_stop(self):
         # A private copy ensures --stop cannot match the actual LAN PXE server.
@@ -91,6 +72,7 @@ class RigCommands(unittest.TestCase):
  if [[ $1 == --test ]]; then exit 0; fi
  for arg in "$@"; do
    if [[ $arg == --tftp-root=* ]]; then
+     echo "${arg#*=}" > "$TEST_ROOT/tftp-root"
      echo "dnsmasq-tftp: TFTP root is ${arg#*=}" >&2
    fi
  done
@@ -111,6 +93,14 @@ class RigCommands(unittest.TestCase):
         while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertTrue(ready.exists(), 'PXE never signalled TFTP readiness')
+        served_root = Path((self.root / 'tftp-root').read_text().strip())
+        self.assertEqual((served_root / 'TRUEOS.elf').read_bytes(), b'test artifact')
+        (artifacts / 'TRUEOS.elf').write_bytes(b'updated kernel')
+        deadline = time.monotonic() + 5
+        while (served_root / 'TRUEOS.elf').read_bytes() != b'updated kernel' and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual((served_root / 'TRUEOS.elf').read_bytes(), b'updated kernel')
+        self.assertIsNone(proc.poll(), 'Reload restarted the server')
         # Reap concurrently: stop waits for the old process to disappear from /proc.
         import threading
         waiter = threading.Thread(target=proc.wait)

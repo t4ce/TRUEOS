@@ -45,38 +45,27 @@ cargo rigdev   # dev kernel
 cargo rigreal  # release kernel
 ```
 
-Both commands build the kernel and release EFI loader, stage all three boot
-files, restart this checkout's `pxe3.js` server with the selected staging
-directory, wait for dnsmasq's TFTP readiness message, and invoke
-`tools/rig-reset.sh` once. The ESP32 receives one reset acknowledgement.
-Build or PXE startup failure prevents the reset. Concurrent rig commands are
-rejected. Ordinary `cargo build` does not reset the rig.
+Both commands build the kernel and release EFI loader, publish a complete set
+of boot files via `tgt/pxe-current`, and invoke `tools/rig-reset.sh` once. Build
+or staging failure prevents the reset. Concurrent rig commands are rejected.
+Ordinary `cargo build` does not reset the rig. These commands do not start,
+stop, or restart PXE and do not require sudo.
 
-PXE runs as a system service and remains available after the command exits.
-The command may prompt for sudo authentication after building. It requires
-Node.js, dnsmasq, iproute2, systemd, Python 3, and `flock`. The default-route
-interface is selected unless `TRUEOS_PXE_INTERFACE` is set, for example:
-
-```sh
-TRUEOS_PXE_INTERFACE=enp5s0 cargo rigdev
-```
-
-The printed `journalctl -u ...` command shows the PXE logs. Stop the service
-with `sudo systemctl stop <printed-unit>.service`. A manually started
-`pxe3.js` from this checkout is also stopped before replacement; unrelated
-PXE servers are left running and may need to be stopped if their ports conflict.
+Run the PXE server separately using the instructions below. It automatically
+loads each completed publication, including switches between dev and release.
 The rig must be configured to boot via IPv4 UEFI PXE. A reset acknowledgement
-confirms the packet was sent; it does not verify that the kernel finished booting.
+confirms the packet was sent; it does not verify that the kernel finished booting
+or that a PXE server is running.
 
 ## IPv4 PXE file server
 
-After preparing the files, start the minimal network server with Node.js,
+After preparing the files at least once, start the minimal network server with Node.js,
 `ip` (iproute2), and `dnsmasq` installed:
 
 ```sh
 sudo node tools/netboot/pxe3.js
 # Or select the LAN interface and optionally a different staging directory:
-sudo node tools/netboot/pxe3.js enp3s0 tgt/usb-release
+sudo node tools/netboot/pxe3.js enp3s0
 ```
 
 This uses IPv4 ProxyDHCP alongside the LAN's existing DHCP server and dnsmasq's
@@ -84,7 +73,10 @@ TFTP server. It advertises `EFI/BOOT/BOOTX64.EFI` to x86-64 UEFI PXE clients
 (architecture IDs 7 and 9). Only the three staged files above are copied to a
 temporary TFTP root; no ISO, HTTP, DNS, IPv6, or address leases are served.
 Stop with Ctrl-C. The temporary snapshot is removed when the server exits;
-restart after rebuilding to serve updated files. Use a LAN interface reachable
+completed builds are automatically reloaded without restarting dnsmasq. The
+default `tgt/pxe-current` follows the most recently prepared dev or release
+build. An explicit artifact-directory argument watches only that directory.
+Old transfer snapshots remain until the server exits. Use a LAN interface reachable
 by the client and allow DHCP/PXE UDP 67/4011, TFTP UDP 69, and TFTP transfer
 traffic through the host firewall. Stop other PXE/TFTP servers using those ports.
 
