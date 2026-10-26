@@ -59,6 +59,51 @@ class RigCommands(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(trace, ['build --dev'])
 
+    def prepare_fixture(self):
+        script = self.root / 'tools/trueos-boot/prepare.sh'
+        script.parent.mkdir(parents=True)
+        shutil.copy(ROOT / 'tools/trueos-boot/prepare.sh', script)
+        buildins = self.root / 'buildins'
+        (buildins / 'tools').mkdir(parents=True)
+        (buildins / 'tools/build.py').touch()
+        self.env['TRUEOS_BUILDINS_SOURCE'] = str(buildins)
+        firmware = self.root / 'firmware/i915/tgl_guc_70.bin'
+        firmware.parent.mkdir(parents=True)
+        firmware.write_bytes(b'firmware')
+        self.script(self.bin / 'python3', '''
+echo buildins >> "$TEST_ROOT/trace"
+exit "${BUILDINS_STATUS:-0}"
+''')
+        self.script(self.bin / 'cargo', '''
+test "$TRUEOS_BUILDINS_DIR" = "$TEST_ROOT/tgt/buildins/dev"
+echo "cargo $*" >> "$TEST_ROOT/trace"
+mkdir -p "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release" "$TEST_ROOT/tgt/x86_64-unknown-trueos/debug"
+echo loader > "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release/BOOTX64.efi"
+echo kernel > "$TEST_ROOT/tgt/x86_64-unknown-trueos/debug/TRUEOS"
+''')
+        return script
+
+    def test_preparation_builds_apps_before_embedding_and_publishes_complete_kernel(self):
+        script = self.prepare_fixture()
+        result = subprocess.run(['bash', str(script), '--dev'], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'trace').read_text().splitlines(),
+                         ['buildins', 'cargo build', 'cargo boot'])
+        self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'kernel\n')
+
+    def test_failed_app_build_leaves_the_previous_publication_intact(self):
+        script = self.prepare_fixture()
+        current = self.root / 'tgt/pxe-current'
+        current.mkdir(parents=True)
+        (current / 'TRUEOS.elf').write_bytes(b'previous')
+        result = subprocess.run(['bash', str(script), '--dev'],
+                                env=dict(self.env, BUILDINS_STATUS='1'),
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.root / 'trace').read_text().splitlines(), ['buildins'])
+        self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
+
     def test_pxe_ready_and_scoped_stop(self):
         # A private copy ensures --stop cannot match the actual LAN PXE server.
         pxe = self.root / 'pxe3.js'

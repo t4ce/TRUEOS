@@ -12,6 +12,11 @@ esac
 if [ "$#" -gt 1 ]; then echo "usage: $0 [--release|--dev]" >&2; exit 2; fi
 root=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
+export TRUEOS_BUILDINS_SOURCE=${TRUEOS_BUILDINS_SOURCE:-"$root/../TRUEOS-Buildins"}
+app_profile=release
+if [ "$profile" = debug ]; then app_profile=dev; fi
+export TRUEOS_BUILDINS_DIR="$root/tgt/buildins/$app_profile"
+python3 "$TRUEOS_BUILDINS_SOURCE/tools/build.py" --kernel "$root" --profile "$app_profile" --output "$TRUEOS_BUILDINS_DIR"
 cargo build "${args[@]}"
 cargo boot
 # Publish an immutable complete generation; PXE never observes partial copies.

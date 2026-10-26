@@ -45,11 +45,44 @@ cargo rigdev   # dev kernel
 cargo rigreal  # release kernel
 ```
 
-Both commands build the kernel and release EFI loader, publish a complete set
+Both commands build all apps from the sibling `TRUEOS-Buildins/buildins.json`,
+create and compress an app.db redb image containing their normal Blueprint
+packages, embed that image in the kernel, build the
+release EFI loader, publish a complete set
 of boot files via `tgt/pxe-current`, and invoke `tools/rig-reset.sh` once. Build
 or staging failure prevents the reset. Concurrent rig commands are rejected.
 Ordinary `cargo build` does not reset the rig. These commands do not start,
 stop, or restart PXE and do not require sudo.
+
+The buildins belong to the kernel generation; they have no separate publishing
+step. The small driver in `TRUEOS-Buildins/tools/build.py` uses the pinned Rust
+toolchain, Python 3.11+, `patch`, `nm`, `readelf`, and the host `liblz4` library.
+It keeps the TRUEOS std adaptations in a private sysroot and leaves the installed
+toolchain unchanged. Set `TRUEOS_BUILDINS_SOURCE` to select another source checkout.
+
+Generated app sources, dependency locks, Cargo caches, linked objects, packages,
+database images, and logs live in `tgt/buildins/dev/` or `tgt/buildins/release/`. Dev and release
+caches stay separate. The driver fingerprints each app's last successful Cargo
+dependency graph, including local build dependencies; unchanged apps skip Cargo.
+Changed apps return to Cargo for dependency resolution and compilation, and
+unchanged staged sources retain their timestamps. Only apps whose selected
+objects or archives changed are linked and packaged again. An unchanged package
+retains its bytes and timestamp, so a no-change preparation leaves the kernel
+fresh too. A kernel implementation change does not recompile apps unless their
+shared dependencies changed; ABI changes are checked against their imports.
+
+`app.db` is a normal inspectable redb file with the existing `apps`, `hashes`, and
+`updated` tables. `app.db.lz4` is its embedded form. The host helper and kernel pin
+the same redb version. Boot decompresses the image and opens it in writable RAM;
+it does not rebuild the tables. Downloads still update that RAM database until
+reboot. If the app records and database builder are unchanged, both image files
+retain their bytes and timestamps.
+
+The kernel build verifies that the prepared set matches the current sources and
+contains every configured app. Missing, stale or failed app builds stop the flow
+before the kernel is published or the rig is reset. A direct `cargo build`
+consumes a verified prepared set; use `tools/trueos-boot/prepare.sh --dev` to
+refresh the complete dev generation without resetting the rig.
 
 Run the PXE server separately using the instructions below. It automatically
 loads each completed publication, including switches between dev and release.

@@ -369,22 +369,6 @@ fn module_path_for_source(manifest_dir: &Path, path: &Path) -> Result<String, St
     Ok(module_path)
 }
 
-const MAGIC: &[u8; 8] = b"TAPPDB2\0";
-
-fn build_timestamp() -> u64 {
-    if let Some(value) = env::var_os("SOURCE_DATE_EPOCH") {
-        return value
-            .to_string_lossy()
-            .parse()
-            .expect("SOURCE_DATE_EPOCH must be an unsigned Unix timestamp");
-    }
-
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock precedes the Unix epoch")
-        .as_secs()
-}
-
 fn manifest_names(text: &str) -> Result<Vec<String>, String> {
     let mut quoted = Vec::new();
     let mut rest = text;
@@ -416,85 +400,50 @@ fn manifest_names(text: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-fn write_bundle(
-    out: &Path,
-    build_timestamp: u64,
-    entries: &[(String, Vec<u8>)],
-) -> Result<(), String> {
-    let mut bundle = Vec::new();
-    bundle.extend_from_slice(MAGIC);
-    bundle.extend_from_slice(&build_timestamp.to_le_bytes());
-    bundle.extend_from_slice(
-        &u32::try_from(entries.len())
-            .map_err(|_| String::from("too many build-in apps"))?
-            .to_le_bytes(),
-    );
-    for (name, bytes) in entries {
-        let archive = format!("{name}.bp");
-        let name_len = u16::try_from(archive.len())
-            .map_err(|_| format!("build-in archive name is too long: {archive}"))?;
-        let data_len = u64::try_from(bytes.len())
-            .map_err(|_| format!("build-in archive is too large: {archive}"))?;
-        bundle.extend_from_slice(&name_len.to_le_bytes());
-        bundle.extend_from_slice(&data_len.to_le_bytes());
-        bundle.extend_from_slice(archive.as_bytes());
-        bundle.extend_from_slice(bytes);
-    }
-    fs::write(out, bundle).map_err(|err| format!("write {}: {err}", out.display()))
-}
-
 fn generate_app_buildins() {
-    println!("cargo:rerun-if-env-changed=TRUEOS_BLUEPRINTS_DIR");
-    println!("cargo:rerun-if-env-changed=TRUEOS_REQUIRE_BUILDINS");
-    println!("cargo:rerun-if-env-changed=TRUEOS_ENABLE_BUILDINS");
-    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
-
+    println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_DIR");
+    println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_SOURCE");
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let blueprints_dir = env::var_os("TRUEOS_BLUEPRINTS_DIR")
+    let profile = if env::var("PROFILE").as_deref() == Ok("release") {
+        "release"
+    } else {
+        "dev"
+    };
+    let directory = env::var_os("TRUEOS_BUILDINS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join("../TRUEOS-Blueprints"));
-    let manifest = blueprints_dir.join("buildins.json");
-    let required = env::var_os("TRUEOS_REQUIRE_BUILDINS").is_some_and(|value| value == "1");
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("app-buildins.bin");
-
-    if env::var_os("TRUEOS_ENABLE_BUILDINS").is_none_or(|value| value != "1") {
-        write_bundle(&out, build_timestamp(), &[]).unwrap();
-        println!("cargo:warning=Blueprint build-ins disabled; embedding an empty app.db seed");
-        return;
-    }
-
-    if !manifest.is_file() {
-        if required {
-            panic!("required Blueprint build-in manifest is missing: {}", manifest.display());
-        }
-        println!(
-            "cargo:warning=Blueprint build-ins unavailable at {}; embedding an empty app.db seed",
-            manifest.display()
-        );
-        write_bundle(&out, build_timestamp(), &[]).unwrap();
-        return;
-    }
-
+        .unwrap_or_else(|| manifest_dir.join("tgt/buildins").join(profile));
+    let source = env::var_os("TRUEOS_BUILDINS_SOURCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("../TRUEOS-Buildins"));
+    let checked = std::process::Command::new("python3")
+        .arg(source.join("tools/build.py"))
+        .arg("--check")
+        .arg("--kernel")
+        .arg(&manifest_dir)
+        .arg("--profile")
+        .arg(profile)
+        .arg("--output")
+        .arg(&directory)
+        .output()
+        .expect("verify the prepared builtins");
+    assert!(checked.status.success(), "builtins must be prepared with the kernel: {}", String::from_utf8_lossy(&checked.stderr));
+    print!("{}", String::from_utf8_lossy(&checked.stdout));
+    let manifest = directory.join("buildins.json");
     println!("cargo:rerun-if-changed={}", manifest.display());
-    let text = fs::read_to_string(&manifest)
-        .unwrap_or_else(|err| panic!("read {}: {err}", manifest.display()));
+    let text = fs::read_to_string(&manifest).unwrap_or_else(|err| {
+        panic!("required buildins are not prepared at {}: {err}; run tools/trueos-boot/prepare.sh --{}", manifest.display(), if profile == "dev" { "dev" } else { "release" })
+    });
     let names = manifest_names(&text).unwrap_or_else(|err| panic!("{}: {err}", manifest.display()));
-    let mut entries = Vec::with_capacity(names.len());
-    for name in names {
-        let path = blueprints_dir.join("dist").join(format!("{name}.bp"));
-        println!("cargo:rerun-if-changed={}", path.display());
-        match fs::read(&path) {
-            Ok(bytes) => entries.push((name, bytes)),
-            Err(err) if !required => println!(
-                "cargo:warning=skipping unavailable Blueprint build-in {}: {err}",
-                path.display()
-            ),
-            Err(err) => panic!("required Blueprint build-in {}: {err}", path.display()),
-        }
-    }
-    write_bundle(&out, build_timestamp(), &entries).unwrap();
-    println!(
-        "cargo:warning=embedding {} Blueprint build-in app(s) into app.db seed",
-        entries.len()
-    );
+    let image = directory.join("app.db.lz4");
+    println!("cargo:rerun-if-changed={}", image.display());
+    let bytes = fs::read(&image)
+        .unwrap_or_else(|err| panic!("required app.db image {}: {err}", image.display()));
+    let raw_size = fs::metadata(directory.join("app.db")).expect("prepared redb image").len();
+    assert!(raw_size > 0, "prepared app.db must not be empty");
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    fs::write(out.join("app.db.lz4"), bytes).expect("embed compressed app.db");
+    fs::write(out.join("appdb-seed.rs"), format!(
+        "const APP_DB_IMAGE_LEN: usize = {raw_size};\nconst APP_DB_EXPECTED_APPS: usize = {};\n", names.len()
+    )).expect("generate app.db image metadata");
+    println!("cargo:warning=embedding app.db image with {} buildin app(s)", names.len());
 }
