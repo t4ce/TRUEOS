@@ -19,6 +19,7 @@ const MAX_MODES: u32 = 4096;
 const MAX_HANDLES: usize = 4096;
 const EDID_BLOCK: usize = 128;
 const MAX_EDID_BYTES: usize = 32 * EDID_BLOCK;
+const MAX_PROBES_PER_STAGE: usize = 16;
 const EDID_ACTIVE: Guid = Guid::from_fields(
     0xbd8c1056, 0x9f36, 0x44ec, 0x92, 0xa8, &[0xa6, 0x33, 0x7f, 0x81, 0x79, 0x86],
 );
@@ -41,6 +42,38 @@ pub struct ModeInfo {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EdidSource { Active, Discovered }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeStage { BeforeMode, AfterMode }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeKind { Gop, EdidActiveHandle }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EdidValidation { Unavailable, NullProtocol, NullData, Short, Header, Checksum, Valid }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EdidProbe {
+    pub status: Status,
+    pub size: u32,
+    pub valid: bool,
+    pub validation: EdidValidation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GopProbe {
+    pub stage: ProbeStage,
+    pub kind: ProbeKind,
+    pub handle: usize,
+    pub protocol: usize,
+    pub protocol_status: Status,
+    pub mode: Option<ModeInfo>,
+    pub frame_buffer_base: u64,
+    pub frame_buffer_size: usize,
+    pub same_scanout: bool,
+    pub edid_active: EdidProbe,
+    pub edid_discovered: EdidProbe,
+}
+
 pub struct Output {
     pub framebuffer: Option<Framebuffer>,
     pub before: Option<ModeInfo>,
@@ -54,6 +87,8 @@ pub struct Output {
     /// Owned bytes, copied from the same GOP device after mode selection.
     pub edid: Option<Vec<u8>>,
     pub edid_source: Option<EdidSource>,
+    /// Bounded firmware evidence; does not participate in display selection.
+    pub probes: Vec<GopProbe>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,7 +169,10 @@ unsafe fn find_display(console: Handle, services: Services) -> Result<Display, E
 }
 
 unsafe fn gop_handles(services: Services) -> (Vec<Handle>, u32) {
-    let mut guid = gop::PROTOCOL_GUID;
+    unsafe { protocol_handles(gop::PROTOCOL_GUID, services) }
+}
+
+unsafe fn protocol_handles(mut guid: Guid, services: Services) -> (Vec<Handle>, u32) {
     let mut count = 0usize;
     let mut handles: *mut Handle = ptr::null_mut();
     let status = (services.locate_handle_buffer)(
@@ -221,8 +259,9 @@ unsafe fn configure(display: Display, services: Services) -> Result<Output, Erro
         framebuffer: None, before, after: None, preferred_mode: None,
         set_status: None, queried_modes: 0, query_failures: 0,
         free_failures: display.free_failures, console_gop: display.console,
-        edid: None, edid_source: None,
+        edid: None, edid_source: None, probes: Vec::new(),
     };
+    output.free_failures += unsafe { collect_probes(protocol, ProbeStage::BeforeMode, services, &mut output.probes) };
     // Preserve the firmware's original display metadata before SetMode can
     // replace protocol buffers or change a console/physical-GOP association.
     // The working Limine path likewise captures EDID before changing modes.
@@ -268,6 +307,7 @@ unsafe fn configure(display: Display, services: Services) -> Result<Output, Erro
     // Capture fresh metadata for both successful and rejected mode changes.
     output.after = unsafe { current(protocol) };
     output.framebuffer = unsafe { capture(protocol) };
+    output.free_failures += unsafe { collect_probes(protocol, ProbeStage::AfterMode, services, &mut output.probes) };
     let (mut edid, mut source) = unsafe { read_edid(display.handle, services.handle_protocol) };
     if edid.is_none() && output.framebuffer.is_some() {
         let (aliased_edid, aliased_source, free_failures) = unsafe { alias_edid(protocol, services) };
@@ -282,6 +322,63 @@ unsafe fn configure(display: Display, services: Services) -> Result<Output, Erro
     output.edid = edid;
     output.edid_source = source;
     Ok(output)
+}
+
+unsafe fn probe_edid(handle: Handle, mut guid: Guid, services: Services) -> EdidProbe {
+    let mut raw = ptr::null_mut();
+    let status = (services.handle_protocol)(handle, &mut guid, &mut raw);
+    let mut probe = EdidProbe { status, size: 0, valid: false, validation: EdidValidation::Unavailable };
+    if status.is_error() { return probe; }
+    let Some(protocol) = (unsafe { raw.cast::<EdidProtocol>().as_ref() }) else {
+        probe.validation = EdidValidation::NullProtocol;
+        return probe;
+    };
+    probe.size = protocol.size_of_edid;
+    if protocol.edid.is_null() { probe.validation = EdidValidation::NullData; return probe; }
+    let size = (protocol.size_of_edid as usize).min(MAX_EDID_BYTES);
+    if size < EDID_BLOCK { probe.validation = EdidValidation::Short; return probe; }
+    let data = unsafe { core::slice::from_raw_parts(protocol.edid, size) };
+    if data[..8] != [0, 255, 255, 255, 255, 255, 255, 0] {
+        probe.validation = EdidValidation::Header;
+    } else if validate_edid(data).is_none() {
+        probe.validation = EdidValidation::Checksum;
+    } else {
+        probe.valid = true;
+        probe.validation = EdidValidation::Valid;
+    }
+    probe
+}
+
+unsafe fn collect_probes(
+    selected: *mut gop::Protocol, stage: ProbeStage, services: Services, probes: &mut Vec<GopProbe>,
+) -> u32 {
+    let first = probes.len();
+    let limit = first + MAX_PROBES_PER_STAGE;
+    let mut free_failures = 0;
+    for (guid, kind) in [(gop::PROTOCOL_GUID, ProbeKind::Gop), (EDID_ACTIVE, ProbeKind::EdidActiveHandle)] {
+        let (handles, failed) = unsafe { protocol_handles(guid, services) };
+        free_failures += failed;
+        for handle in handles {
+            if probes.len() >= limit { break; }
+            if probes[first..].iter().any(|probe| probe.handle == handle as usize) { continue; }
+            let mut guid = gop::PROTOCOL_GUID;
+            let mut raw = ptr::null_mut();
+            let protocol_status = (services.handle_protocol)(handle, &mut guid, &mut raw);
+            let protocol = if protocol_status.is_error() { ptr::null_mut() } else { raw.cast::<gop::Protocol>() };
+            let mode = if protocol.is_null() { None } else { unsafe { current(protocol) } };
+            let descriptor = if protocol.is_null() { None } else { unsafe { (*protocol).mode.as_ref() } };
+            let frame_buffer_base = descriptor.map_or(0, |mode| mode.frame_buffer_base);
+            let frame_buffer_size = descriptor.map_or(0, |mode| mode.frame_buffer_size);
+            let same_scanout = !protocol.is_null() && unsafe { same_scanout(selected, protocol) };
+            probes.push(GopProbe {
+                stage, kind, handle: handle as usize, protocol: protocol as usize, protocol_status,
+                mode, frame_buffer_base, frame_buffer_size, same_scanout,
+                edid_active: unsafe { probe_edid(handle, EDID_ACTIVE, services) },
+                edid_discovered: unsafe { probe_edid(handle, EDID_DISCOVERED, services) },
+            });
+        }
+    }
+    free_failures
 }
 
 unsafe fn same_scanout(a: *mut gop::Protocol, b: *mut gop::Protocol) -> bool {
@@ -385,6 +482,7 @@ mod tests {
         edid: Vec<u8>,
         active: EdidProtocol,
         discovered: EdidProtocol,
+        no_gop: bool,
     }
 
     #[repr(C)]
@@ -432,6 +530,7 @@ mod tests {
     extern "efiapi" fn handle(handle: Handle, guid: *mut Guid, raw: *mut *mut c_void) -> Status {
         let mock = unsafe { &mut *handle.cast::<Mock>() };
         let guid = unsafe { *guid };
+        if guid == gop::PROTOCOL_GUID && mock.no_gop { return Status::UNSUPPORTED; }
         let result = if guid == gop::PROTOCOL_GUID { ptr::addr_of_mut!(mock.protocol).cast() }
             else if guid == EDID_ACTIVE { ptr::addr_of_mut!(mock.active).cast() }
             else if guid == EDID_DISCOVERED { ptr::addr_of_mut!(mock.discovered).cast() }
@@ -454,11 +553,14 @@ mod tests {
 
     extern "efiapi" fn list_devices(search: u32, guid: *mut Guid, _: *mut c_void, count: *mut usize, handles_out: *mut *mut Handle) -> Status {
         assert_eq!(search, system::BY_PROTOCOL);
-        assert_eq!(unsafe { *guid }, gop::PROTOCOL_GUID);
+        let guid = unsafe { *guid };
+        assert!(guid == gop::PROTOCOL_GUID || guid == EDID_ACTIVE);
         LOOKUP.with(|lookup| {
             let mut lookup = lookup.borrow_mut();
             let lookup = lookup.as_mut().unwrap();
-            let handles: Vec<Handle> = lookup.devices.iter().map(|device| device.cast()).collect();
+            let handles: Vec<Handle> = lookup.devices.iter()
+                .filter(|device| guid != gop::PROTOCOL_GUID || !unsafe { (***device).no_gop })
+                .map(|device| device.cast()).collect();
             lookup.allocation_len = handles.len();
             lookup.allocation = Box::into_raw(handles.into_boxed_slice()).cast();
             unsafe { *count = lookup.allocation_len; }
@@ -517,6 +619,7 @@ mod tests {
             fail_set: false, invalidate_edid_on_set: false, free_status: Status::SUCCESS, edid: edid(),
             active: EdidProtocol { size_of_edid: 0, edid: ptr::null() },
             discovered: EdidProtocol { size_of_edid: 0, edid: ptr::null() },
+            no_gop: false,
         });
         mock.mode.info = &mut mock.modes[0];
         mock.protocol.mode = &mut *mock.mode;
@@ -559,6 +662,59 @@ mod tests {
         assert!(mock.edid.iter().all(|byte| *byte == 0));
         assert_eq!(output.edid, Some(original));
         assert_eq!(output.edid_source, Some(EdidSource::Active));
+    }
+
+    #[test]
+    fn probes_record_before_after_edid_loss_and_edid_handle_without_gop() {
+        let mut selected = mock(vec![info(1024, 768, 1), info(2560, 1440, 1)]);
+        selected.invalidate_edid_on_set = true;
+        let selected_handle = (&mut *selected as *mut Mock).cast();
+        let mut edid_only = mock(vec![info(1024, 768, 1)]);
+        edid_only.no_gop = true;
+        let edid_handle: Handle = (&mut *edid_only as *mut Mock).cast();
+        let services = lookup_services(vec![&mut *selected, &mut *edid_only]);
+        let display = unsafe { find_display(selected_handle, services) }.unwrap();
+        let output = unsafe { configure(display, services) }.unwrap();
+        assert_eq!(output.probes.len(), 4);
+        let before = output.probes.iter().find(|probe| probe.handle == selected_handle as usize && probe.stage == ProbeStage::BeforeMode).unwrap();
+        assert_eq!(before.mode.unwrap().width, 1024);
+        assert!(before.same_scanout && before.edid_active.valid);
+        assert_eq!(before.edid_active.validation, EdidValidation::Valid);
+        let after = output.probes.iter().find(|probe| probe.handle == selected_handle as usize && probe.stage == ProbeStage::AfterMode).unwrap();
+        assert_eq!(after.mode.unwrap().width, 2560);
+        assert!(!after.edid_active.valid);
+        assert_eq!(after.edid_active.size, 0);
+        for probe in output.probes.iter().filter(|probe| probe.handle == edid_handle as usize) {
+            assert_eq!(probe.kind, ProbeKind::EdidActiveHandle);
+            assert_eq!(probe.protocol_status, Status::UNSUPPORTED);
+            assert_eq!(probe.protocol, 0);
+            assert!(probe.mode.is_none());
+            assert!(!probe.same_scanout);
+            assert!(probe.edid_active.valid);
+        }
+        LOOKUP.with(|lookup| *lookup.borrow_mut() = None);
+    }
+
+    #[test]
+    fn probes_report_capacity_mismatch_and_have_a_fixed_record_bound() {
+        let mut devices: Vec<_> = (0..20).map(|_| mock(vec![info(2560, 1440, 1)])).collect();
+        devices[1].mode.frame_buffer_size += 4096;
+        let selected = (&mut *devices[0] as *mut Mock).cast();
+        let alias = (&mut *devices[1] as *mut Mock).cast::<core::ffi::c_void>() as usize;
+        let pointers = devices.iter_mut().map(|device| &mut **device as *mut Mock).collect();
+        let services = lookup_services(pointers);
+        let display = unsafe { find_display(selected, services) }.unwrap();
+        let output = unsafe { configure(display, services) }.unwrap();
+        assert_eq!(output.probes.len(), MAX_PROBES_PER_STAGE * 2);
+        assert_eq!(output.probes.iter().filter(|probe| probe.stage == ProbeStage::BeforeMode).count(), MAX_PROBES_PER_STAGE);
+        assert_eq!(output.probes.iter().filter(|probe| probe.stage == ProbeStage::AfterMode).count(), MAX_PROBES_PER_STAGE);
+        let alias = output.probes.iter().find(|probe| probe.handle == alias).unwrap();
+        assert_eq!(alias.mode.unwrap().width, 2560);
+        assert_eq!(alias.frame_buffer_base, 0x100000);
+        assert_eq!(alias.frame_buffer_size, 2560 * 1440 * 4 + 4096);
+        assert!(!alias.same_scanout);
+        assert!(alias.edid_active.valid);
+        LOOKUP.with(|lookup| *lookup.borrow_mut() = None);
     }
 
     #[test]
