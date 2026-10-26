@@ -66,7 +66,10 @@ The loader selects the console's 2560×1440 RGB/BGR framebuffer when firmware
 offers it, otherwise retaining a usable firmware mode. It captures EDID from
 the same GOP device and copies it into retained boot responses. The kernel
 uses that monitor data for physical font sizing, including Shell3 text and
-the home button. The loader logs the selected resolution and EDID capture.
+the home button. When EDID is unavailable on an active display, fonts use
+their native 6×11 pixel proportions: 12×22 cells at the default text scale,
+with a proportional home glyph. This keeps the same line/quad R8 production;
+the general millimetre APIs still require measured monitor dimensions.
 
 ## Hardware diagnostics
 
@@ -75,6 +78,12 @@ boot source, file downloads, kernel image size, discovered logical CPU count,
 firmware exit, successfully started CPUs, and entry into the kernel. P cores,
 E cores and SMT threads are enumerated through ACPI MADT and identified by
 their APIC IDs.
+
+The loader also retains a bounded transcript as a boot module. The kernel
+replays it through LogOs between `native-loader-log: begin` and `end`, including
+GOP/EDID probes from before and after mode selection. It remains available in
+the System → TLB → dump output (`trueos/pci/tlb.txt`) after the log ring rolls
+over. No extra PXE file is required.
 
 Secondary processors receive INIT/SIPI, enter 64-bit mode with retained page
 tables and 16 MiB stacks, and wait for the kernel's existing `bootstrap()` call.

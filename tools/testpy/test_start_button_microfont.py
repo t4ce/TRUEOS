@@ -58,6 +58,12 @@ mod ui4 {
         assert_eq!((w,h),(50,50));Some((500,500))
     }
 }
+mod shell3_font_service {
+    pub const DEFAULT_UI4_FONT_SCALE:u32=2;
+    pub fn cell_extent(_:u32)->Option<(u32,u32)> {
+        panic!("the button handoff harness supplies physical display metrics")
+    }
+}
 fn build_home_button_mask(height:u32)->Result<OwnedGlyphMask,&'static str> {
     assert_eq!(height,500);PRODUCTIONS.fetch_add(1,Ordering::Relaxed);
     if FAIL_PRODUCTION.load(Ordering::Relaxed){return Err("production-failed");}
@@ -115,6 +121,8 @@ impl Wake for WakeCount {fn wake(self:Arc<Self>){self.0.fetch_add(1,Ordering::Re
 def main():
     code = HARNESS + item(SERVICE, "OwnedGlyphMask")
     code += constant(SERVICE, "START_GLYPH_EM_MM")
+    code += item(SERVICE, "home_button_em_height").replace(
+        "super::shell3_font_service", "shell3_font_service")
     code += item(SERVICE, "warm_start_glyph") + async_item("wait_for_start_glyph")
     code += item(BUTTON, "start_button_extent") + item(BUTTON, "start_button_glyph_alpha")
     with tempfile.TemporaryDirectory(prefix="trueos-start-button-microfont-") as directory:
