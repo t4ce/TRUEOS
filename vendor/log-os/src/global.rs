@@ -157,6 +157,80 @@ impl<const N: usize> Default for LogOnceState<N> {
     }
 }
 
+/// Per-callsite counter for sampled log records.
+///
+/// Unlike [`LogOnceState`], this deliberately keeps reporting an ongoing
+/// failure. It emits the first `first` observations and then every `every`
+/// observations, so a flood stays visible without obscuring its cause.
+pub struct LogRateLimitState {
+    occurrences: AtomicU64,
+}
+
+impl LogRateLimitState {
+    pub const fn new() -> Self {
+        Self {
+            occurrences: AtomicU64::new(0),
+        }
+    }
+
+    /// Records one occurrence and returns its sampling decision.
+    ///
+    /// `every == 0` is treated as one, which keeps an invalid configuration
+    /// observable instead of silently suppressing all diagnostics.
+    pub fn observe(&self, first: u64, every: u64) -> LogRateLimitObservation {
+        let occurrence = self
+            .occurrences
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let every = every.max(1);
+        let emitted = occurrence <= first || occurrence % every == 0;
+        let suppressed_since_last = if emitted && occurrence > first {
+            let previous_emission = if occurrence.saturating_sub(every) <= first {
+                first
+            } else {
+                occurrence.saturating_sub(every)
+            };
+            occurrence
+                .saturating_sub(previous_emission)
+                .saturating_sub(1)
+        } else {
+            0
+        };
+        LogRateLimitObservation {
+            occurrence,
+            suppressed_since_last,
+            emitted,
+        }
+    }
+}
+
+impl Default for LogRateLimitState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LogRateLimitObservation {
+    occurrence: u64,
+    suppressed_since_last: u64,
+    emitted: bool,
+}
+
+impl LogRateLimitObservation {
+    pub const fn occurrence(self) -> u64 {
+        self.occurrence
+    }
+
+    pub const fn suppressed_since_last(self) -> u64 {
+        self.suppressed_since_last
+    }
+
+    pub const fn should_emit(self) -> bool {
+        self.emitted
+    }
+}
+
 pub trait GlobalLogSink: Sync {
     fn spec(&self) -> GlobalLogSinkSpec;
 
@@ -309,13 +383,21 @@ pub fn log_once_with_area_purpose<D: GlobalLogDispatch, const N: usize>(
             area,
             LogLevel::Warn,
             Some(purpose_for_level(LogLevel::Warn)),
-            format_args!("ONCE site activated twice site=0x{:X} original={}", site.get(), args),
+            format_args!(
+                "ONCE site activated twice site=0x{:X} original={}",
+                site.get(),
+                args
+            ),
         ),
         LogOnceObservation::RegistryFull => dispatch.emit(
             area,
             LogLevel::Warn,
             Some(purpose_for_level(LogLevel::Warn)),
-            format_args!("ONCE registry full site=0x{:X} original={}", site.get(), args),
+            format_args!(
+                "ONCE registry full site=0x{:X} original={}",
+                site.get(),
+                args
+            ),
         ),
         LogOnceObservation::Repeated => {}
     }
@@ -405,7 +487,10 @@ mod tests {
         );
         assert_eq!(LEFT.count.load(Ordering::Relaxed), 1);
         assert_eq!(RIGHT.count.load(Ordering::Relaxed), 1);
-        assert_eq!(LEFT.last_level.load(Ordering::Relaxed), LogLevel::Once as u8 + 1);
+        assert_eq!(
+            LEFT.last_level.load(Ordering::Relaxed),
+            LogLevel::Once as u8 + 1
+        );
 
         assert_eq!(
             log_once_with_area_purpose(
@@ -420,7 +505,10 @@ mod tests {
         );
         assert_eq!(LEFT.count.load(Ordering::Relaxed), 2);
         assert_eq!(RIGHT.count.load(Ordering::Relaxed), 2);
-        assert_eq!(LEFT.last_level.load(Ordering::Relaxed), LogLevel::Warn as u8 + 1);
+        assert_eq!(
+            LEFT.last_level.load(Ordering::Relaxed),
+            LogLevel::Warn as u8 + 1
+        );
 
         assert_eq!(state.observe(site), LogOnceObservation::Repeated);
         assert_eq!(LEFT.count.load(Ordering::Relaxed), 2);
@@ -430,8 +518,14 @@ mod tests {
     #[test]
     fn full_registry_is_reported() {
         let state = LogOnceState::<1>::new();
-        assert_eq!(state.observe(LogSiteId::new(1).unwrap()), LogOnceObservation::First);
-        assert_eq!(state.observe(LogSiteId::new(2).unwrap()), LogOnceObservation::RegistryFull);
+        assert_eq!(
+            state.observe(LogSiteId::new(1).unwrap()),
+            LogOnceObservation::First
+        );
+        assert_eq!(
+            state.observe(LogSiteId::new(2).unwrap()),
+            LogOnceObservation::RegistryFull
+        );
     }
 
     #[test]
@@ -486,6 +580,9 @@ mod tests {
             LogOnceObservation::RegistryFull
         );
         assert_eq!(SINK.count.load(Ordering::Relaxed), 1);
-        assert_eq!(SINK.last_level.load(Ordering::Relaxed), LogLevel::Warn as u8 + 1);
+        assert_eq!(
+            SINK.last_level.load(Ordering::Relaxed),
+            LogLevel::Warn as u8 + 1
+        );
     }
 }

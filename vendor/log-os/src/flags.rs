@@ -346,8 +346,14 @@ mod tests {
             union = union.union(level.set());
             assert_eq!(level.filter().level(), Some(level));
             for &other in LogLevel::ALL {
-                assert_eq!(threshold_up_set(level.filter()).contains(other), other <= level);
-                assert_eq!(threshold_down_set(level.filter()).contains(other), other >= level);
+                assert_eq!(
+                    threshold_up_set(level.filter()).contains(other),
+                    other <= level
+                );
+                assert_eq!(
+                    threshold_down_set(level.filter()).contains(other),
+                    other >= level
+                );
             }
         }
         assert_eq!(union, LogLevelSet::ALL);
@@ -402,15 +408,24 @@ mod tests {
     fn routes_blueprint_aliases_to_blueprint_area() {
         assert_eq!(target_log_area("blueprint"), LogArea::Blueprint);
         assert_eq!(target_log_area("bp"), LogArea::Blueprint);
-        assert_eq!(module_path_log_area("TRUEOS::blueprint::launcher"), LogArea::Blueprint);
+        assert_eq!(
+            module_path_log_area("TRUEOS::blueprint::launcher"),
+            LogArea::Blueprint
+        );
     }
 
     #[test]
     fn routes_opencl_aliases_to_gpgpu_area() {
         assert_eq!(target_log_area("opencl"), LogArea::Gpgpu);
         assert_eq!(target_log_area("intel/opencl"), LogArea::Gpgpu);
-        assert_eq!(module_path_log_area("TRUEOS::intel::opencl"), LogArea::Gpgpu);
-        assert_eq!(module_path_log_area("TRUEOS::intel::opencl::registry"), LogArea::Gpgpu);
+        assert_eq!(
+            module_path_log_area("TRUEOS::intel::opencl"),
+            LogArea::Gpgpu
+        );
+        assert_eq!(
+            module_path_log_area("TRUEOS::intel::opencl::registry"),
+            LogArea::Gpgpu
+        );
     }
 
     #[test]
@@ -421,15 +436,24 @@ mod tests {
     #[test]
     fn routes_crabusb_crates_to_usb_area() {
         assert_eq!(target_log_area("usb_if"), LogArea::Usb);
-        assert_eq!(module_path_log_area("usb_if::descriptor::parser"), LogArea::Usb);
-        assert_eq!(module_path_log_area("crab_usb::backend::kmod"), LogArea::Usb);
+        assert_eq!(
+            module_path_log_area("usb_if::descriptor::parser"),
+            LogArea::Usb
+        );
+        assert_eq!(
+            module_path_log_area("crab_usb::backend::kmod"),
+            LogArea::Usb
+        );
     }
 
     #[test]
     fn routes_media_aliases_to_intel_media_area() {
         assert_eq!(target_log_area("intel-media"), LogArea::IntelMediaNgin);
         assert_eq!(target_log_area("intel/media"), LogArea::IntelMediaNgin);
-        assert_eq!(target_log_area("intel/media-encode"), LogArea::IntelMediaNgin);
+        assert_eq!(
+            target_log_area("intel/media-encode"),
+            LogArea::IntelMediaNgin
+        );
     }
 
     #[test]

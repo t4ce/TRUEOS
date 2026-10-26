@@ -14,6 +14,10 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH");
 
+    if target_os == "trueos" {
+        generate_empty_system_libraries().expect("prepare freestanding system libraries");
+    }
+
     generate_ring_runtime_imports(
         Path::new(&manifest_dir),
         target_os.as_str(),
@@ -25,6 +29,18 @@ fn main() {
     generate_app_buildins();
     generate_development_ssh_identity(Path::new(&manifest_dir))
         .expect("prepare stable development SSH identity");
+}
+
+/// The kernel supplies these ABIs itself; satisfy upstream native-library
+/// declarations without linking the host's libc or unwinder.
+fn generate_empty_system_libraries() -> std::io::Result<()> {
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    for name in ["c", "gcc_s"] {
+        // An archive containing only the global header is a valid empty ar file.
+        fs::write(out_dir.join(format!("lib{name}.a")), b"!<arch>\n")?;
+    }
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    Ok(())
 }
 
 /// Keep the development host identity outside build output so rebuilds and

@@ -1,8 +1,13 @@
 [package]
 name = "log-os"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 publish = false
+
+# This shared bare-metal crate is consumed directly by TRUEOS and Picasso;
+# keep it independently addressable rather than inheriting Blueprint's app
+# workspace (which explicitly excludes `crates/*`).
+[workspace]
 
 [dependencies]
 spin = { version = "0.10", default-features = false, features = ["once"] }

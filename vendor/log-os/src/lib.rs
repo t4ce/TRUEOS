@@ -14,7 +14,8 @@ pub use flags::{
 };
 pub use global::{
     GlobalLogDispatch, GlobalLogRouter, GlobalLogSink, GlobalLogSinkSpec, LogOnceObservation,
-    LogOnceState, LogSiteId, global_log_enabled, global_log_with_target_level,
-    install_global_log_dispatch, log, log_once_with_area_purpose, log_with_area_level,
-    log_with_area_purpose, log_with_target_level, log_with_target_purpose, purpose_for_level,
+    LogOnceState, LogRateLimitObservation, LogRateLimitState, LogSiteId, global_log_enabled,
+    global_log_with_target_level, install_global_log_dispatch, log, log_once_with_area_purpose,
+    log_with_area_level, log_with_area_purpose, log_with_target_level, log_with_target_purpose,
+    purpose_for_level,
 };

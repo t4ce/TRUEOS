@@ -17,7 +17,6 @@ linker = "rust-lld"
 rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
 	"--cfg", "kmod",
-	"-L", "native=bld/empty-libs",
 	"-C", "link-arg=-Tlinker.ld",
 	"-C", "force-frame-pointers=yes"
 ]
@@ -35,7 +34,6 @@ runner = ["sh", "tools/cargo-run.sh"]
 rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
 	"--cfg", "kmod",
-	"-L", "native=bld/empty-libs",
 	"-C", "link-arg=-Tlinker.ld",
 	"-C", "force-frame-pointers=yes"
 ]
