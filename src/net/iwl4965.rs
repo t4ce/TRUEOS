@@ -194,7 +194,7 @@ struct IwlFirmware {
     boot: Vec<u8>,
 }
 
-/// Global WiFi firmware data (set from Limine module or RamFS)
+/// Global WiFi firmware data (set from bootloader module or RamFS)
 static WIFI_FIRMWARE: spin::Mutex<Option<Vec<u8>>> = spin::Mutex::new(None);
 
 

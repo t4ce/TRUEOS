@@ -1,6 +1,6 @@
-//! The small subset of the Limine v6 handoff ABI consumed by the kernel.
+//! Kernel boot handoff supplied by the native TRUEOS UEFI loader.
 //!
-//! This is a compatibility boundary, not a Limine implementation: the UEFI
+//! This module implements the existing kernel request/response ABI. The UEFI
 //! loader supplies the information and the kernel keeps its existing requests.
 //! Every returned pointer addresses retained pages through the HHDM. The arena
 //! must remain identity mapped while this module writes it, and retained after
@@ -539,7 +539,7 @@ impl Handoff {
     }
 }
 
-// These layouts are shared with limine 0.6.5 and the protocol C header.
+// These layouts must match the kernel request/response ABI types.
 const _: () = assert!(mem::size_of::<FileWire>() == 112);
 const _: () = assert!(mem::size_of::<FramebufferWire>() == 64);
 const _: () = assert!(mem::size_of::<MemoryRegion>() == 24);

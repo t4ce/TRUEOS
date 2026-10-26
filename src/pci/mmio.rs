@@ -24,7 +24,7 @@ const PAGE_SIZE: u64 = Size4KiB::SIZE;
 // Dedicated virtual address space for MMIO mappings.
 //
 // Rationale:
-// - Limine typically provides an HHDM direct map that may be backed by huge pages
+// - The TRUEOS loader provides an HHDM direct map that may be backed by huge pages
 //   and/or cacheable mappings.
 // - Attempting to remap the same HHDM pages as uncached can fail (ParentEntryHugePage)
 //   or be ignored (PageAlreadyMapped), leaving devices accessed through cacheable aliases.
@@ -52,7 +52,7 @@ pub enum MapError {
 /// Map an address that may be a physical address or an HHDM address.
 ///
 /// This follows the kernel-side contract:
-/// 1) Translate the address into a physical address via Limine metadata.
+/// 1) Translate the address into a physical address via bootloader handoff metadata.
 /// 2) Explicitly map the physical range before dereferencing.
 pub fn map_limine_addr_exact(addr: u64, size: usize) -> Result<NonNull<u8>, MapError> {
     if size == 0 {

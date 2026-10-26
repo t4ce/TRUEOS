@@ -291,7 +291,7 @@ pub struct EspImage<'a> {
 /// Format the given partition as a minimal FAT32 ESP and write:
 /// - /EFI/BOOT/BOOTX64.EFI
 /// - /TRUEOS.ELF
-/// - /limine.conf
+/// - /limine.conf (legacy configuration; unused by the native loader)
 ///
 /// This intentionally does NOT use the `fatfs` crate; it writes the on-disk structures directly.
 pub async fn format_and_populate_esp_fat32_with_log(
@@ -512,7 +512,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
 
     fn lfn_entry_single(long_name: &str, short_name11: [u8; 11]) -> [u8; 32] {
         // Single LFN entry (supports names up to 13 UTF-16 code units).
-        // This is sufficient for "limine.conf".
+        // This is sufficient for the legacy configuration filename.
         let mut e = [0u8; 32];
         let mut u16s: heapless::Vec<u16, 13> = heapless::Vec::new();
         for w in long_name.encode_utf16() {
@@ -587,7 +587,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
             kernel_start,
             image.kernel_elf.len() as u32,
         ));
-        // Limine expects an exact "limine.conf" filename. This does not fit in pure 8.3,
+        // The legacy configuration filename does not fit in pure 8.3,
         // so emit a single VFAT long filename entry + a short alias.
         let limine_short = name83("LIMINE", "CON");
         push(&lfn_entry_single("limine.conf", limine_short));
@@ -631,8 +631,8 @@ pub async fn format_and_populate_esp_fat32_with_log(
             off += 32;
         }
 
-        // For EFI-booted Limine, <EFI app path>/limine.conf is checked first.
-        // Since BOOTX64.EFI lives in /EFI/BOOT, also place limine.conf here.
+        // Retain the legacy configuration copy beside BOOTX64.EFI.
+        // The native TRUEOS loader currently supplies its own fixed command line.
         let limine_short = name83("LIMINE", "CON");
         let lfn = lfn_entry_single("limine.conf", limine_short);
         dir[off..off + 32].copy_from_slice(&lfn);

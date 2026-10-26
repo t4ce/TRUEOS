@@ -481,7 +481,7 @@ pub unsafe fn runtime_services_reset(reset_type: EfiResetType) {
     let rt = rt_ptr.as_ref();
 
     // rt.reset_system is physical (function pointer).
-    // Convert to virtual via HHDM (assuming Limine provides it and it's executable).
+    // Convert to virtual via HHDM (assuming the bootloader provides it and it's executable).
     let Some(hhdm) = limine::hhdm_offset() else {
         return;
     };

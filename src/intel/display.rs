@@ -1271,7 +1271,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
 }
 
 /// Probe the firmware-captured monitor metadata while the BSP still owns
-/// bring-up. This is read-only: Limine already obtained the EDID through the
+/// bring-up. This is read-only: the TRUEOS loader already obtained the EDID through the
 /// active firmware display path, so probing cannot disturb the live DDI link.
 pub(super) fn log_bsp_display_metrics_probe(dev: crate::intel::Dev) {
     let snapshots = display_pipeline_snapshots_for_dev(dev);

@@ -5,7 +5,7 @@
 //! 2. checkpoint active replicatable VMX applications to TRUEOSFS;
 //! 3. park every AP through an HHDM-resident trampoline and execute VMXOFF;
 //! 4. contain PCI DMA, replace only the kernel PML4 slot, flush the TLB, and jump;
-//! 5. bring the new kernel up from copied immutable Limine boot facts and restore VMs.
+//! 5. bring the new kernel up from copied immutable bootloader handoff facts and restore VMs.
 //!
 //! No candidate-kernel bytes are written to the ESP or TRUEOSFS. Persistent
 //! storage is used only for VM application checkpoints selected by this handoff.

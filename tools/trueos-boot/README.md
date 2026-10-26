@@ -1,9 +1,9 @@
-# Native UEFI boot test
+# TRUEOS native UEFI loader
 
-This experimental Rust loader starts the existing TrueOS kernel directly on
-x86-64 UEFI hardware. It does not load Limine or include Blueprint build-ins.
-The Limine fork is no longer a submodule. The Rust `limine` crate remains as
-the kernel's request/response ABI shared with this loader.
+The TRUEOS Rust loader starts the kernel directly on x86-64 UEFI hardware.
+It provides the kernel request/response handoff, loads firmware modules, and
+starts secondary processors. The Rust `limine` crate supplies the existing
+handoff ABI types shared by the kernel and this loader.
 
 Prepare the release files:
 

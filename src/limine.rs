@@ -12,12 +12,10 @@ pub type EfiSystemTableRequest = request::EfiRequest;
 pub type SmbiosResponse = request::SmbiosResponse;
 pub type SmbiosRequest = request::SmbiosRequest;
 
-/// Experimental, TRUEOS-only Limine boot-protocol extension: an opt-in,
-/// read-only capture of the firmware's HII package lists and current HII
-/// configuration, performed by a patched Limine right before it calls
-/// ExitBootServices(). Not part of the upstream limine-protocol spec, so it
-/// isn't in the `limine` crate; the raw ABI layout is reproduced here to
-/// match `common/protos/limine_trueos_hii.h` in the `t4ce/Limine` fork.
+/// Optional TRUEOS HII capture response in the kernel boot handoff ABI.
+/// Carries read-only firmware HII package lists and configuration when supplied
+/// by a preboot capture provider. The native loader does not populate this
+/// optional response; firmware-table capture is handled separately.
 #[repr(C)]
 pub struct TrueosHiiCaptureResponse {
     pub revision: u64,
@@ -32,7 +30,7 @@ pub struct TrueosHiiCaptureRequest {
     response: core::cell::UnsafeCell<*const TrueosHiiCaptureResponse>,
 }
 
-// Limine writes `response` from a single thread before the kernel's own code
+// The bootloader writes `response` from a single thread before the kernel's own code
 // ever runs; TRUEOS only reads it afterward, so sharing this static is sound.
 unsafe impl Sync for TrueosHiiCaptureRequest {}
 
@@ -300,7 +298,7 @@ pub fn smbios_response() -> Option<&'static SmbiosResponse> {
 
 /// Return the bootloader-provided SMBIOS 3.x and 2.x entry-point addresses.
 ///
-/// Limine may report either address as zero when that entry-point format is not
+/// The handoff may report either address as zero when that entry-point format is not
 /// available. Callers must still validate the entry-point anchor, length and
 /// checksum before trusting the structure-table address it contains.
 pub fn smbios_entry_point_addresses() -> Option<(u64, u64)> {
@@ -308,7 +306,7 @@ pub fn smbios_entry_point_addresses() -> Option<(u64, u64)> {
     Some((resp.entry_64 as u64, resp.entry_32 as u64))
 }
 
-/// Returns true if `phys` lies within any Limine-reported memory map range.
+/// Returns true if `phys` lies within any bootloader-reported memory map range.
 ///
 /// Note: This is a containment check only. It does not imply the region is safe to keep
 /// borrowing forever; treat BOOTLOADER_RECLAIMABLE etc as reclaimable.
@@ -327,7 +325,7 @@ pub fn memmap_contains_phys(phys: u64) -> bool {
 }
 
 /// Returns true when the complete non-empty physical range is contained in one
-/// Limine memory-map entry.
+/// boot handoff memory-map entry.
 pub fn memmap_contains_phys_range(phys: u64, byte_len: usize) -> bool {
     if byte_len == 0 {
         return false;
@@ -350,10 +348,10 @@ pub fn memmap_contains_phys_range(phys: u64, byte_len: usize) -> bool {
 /// Try to interpret an address as something that can be treated as physical memory.
 ///
 /// Accepts:
-/// - A raw physical address present in the Limine memory map
-/// - An HHDM address (HHDM+phys) where `phys` is present in the Limine memory map
+/// - A raw physical address present in the boot memory map
+/// - An HHDM address (HHDM+phys) where `phys` is present in the boot memory map
 ///
-/// This is intended as a practical kernel-side contract for consuming Limine/firmware pointers:
+/// This is intended as a practical kernel-side contract for consuming bootloader/firmware pointers:
 /// turn them into a physical address first, then map explicitly before dereferencing.
 pub fn try_as_phys_addr(addr: u64) -> Option<u64> {
     if memmap_contains_phys(addr) {

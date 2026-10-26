@@ -377,7 +377,7 @@ pub async fn write_gpt_layout_with_log(
 }
 
 /// Create a fresh GPT partition table with:
-/// - Partition 1: ESP (FAT32) for UEFI boot (Limine BOOTX64.EFI, config)
+/// - Partition 1: ESP (FAT32) for UEFI boot (TRUEOS BOOTX64.EFI, config)
 /// - Partition 2: TRUEOS data partition (TRUEOSFS superblock at start)
 ///
 /// Returns the computed on-disk LBA ranges (absolute, on the parent disk).

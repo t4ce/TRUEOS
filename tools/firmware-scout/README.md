@@ -4,7 +4,10 @@
 `ExitBootServices()`, exports the firmware's Human Interface Infrastructure
 (HII) package lists and current HII configuration when those protocols are
 available, publishes the result as a bounded `TRBIOS1` configuration-table
-handoff, and then chainloads Limine from `\\EFI\\BOOT\\LIMINE.EFI`.
+handoff, and then chainloads the preserved TRUEOS loader from `\\EFI\\BOOT\\LIMINE.EFI`.
+
+The backup filename `LIMINE.EFI` is a legacy staging name for the preserved
+loader; it does not identify the loader implementation.
 
 The first cycle is deliberately observational:
 

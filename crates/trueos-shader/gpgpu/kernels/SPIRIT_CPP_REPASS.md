@@ -110,7 +110,7 @@ and their authored palettes into the existing Spirit control panel. `clean`
 restores transparent background plus `Original / clean`.
 
 Idle mode selects `Magic time circle + Aura bloom` transiently. TRUEOS prefers
-NTP and falls back to the Limine boot timestamp; its system timezone is UTC.
+NTP and falls back to the bootloader-provided timestamp; its system timezone is UTC.
 The sprite walker retains smooth 60 Hz animation time in dword 4, while only
 the clock background reads quantized wall time from dword 32.
 All live backgrounds share the single `SPIRIT_BACKGROUND_PRESENT_SCALE` value

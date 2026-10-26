@@ -178,8 +178,8 @@ TOPICS: dict[str, dict[str, Any]] = {
             "runtime_elf": "bld/artifacts/<build-mode>-<build-id>/TRUEOS.elf",
         },
         "workflow": [
-            "Build the runtime artifacts, disk image prerequisites, and Limine bootloader.",
-            "Stage the EFI bootloader, TRUEOS runtime ELF, firmware, and generated Limine configuration; construct bld/trueos.iso and verify the packaged GPU copy.",
+            "Build the runtime artifacts, disk image prerequisites, and native TRUEOS UEFI loader.",
+            "Stage the EFI bootloader, TRUEOS runtime ELF, firmware, and boot configuration; construct bld/trueos.iso and verify the packaged GPU copy.",
             "Create bld/TrueOS.lz4; publish it to the configured SMB release share when PUBLISH_RELEASE_SMB=1 (the default).",
             "When START_BAREMETAL_LOG=1 (the default), asynchronously run testrig-physical-reset-log: it stops an earlier collector, physically resets the rig through the ESP32 reset-button circuit, verifies PXE reads against the newly built bootloader/runtime SHA-256 values by default, then starts and waits for the fresh bare-metal log drain.",
         ],

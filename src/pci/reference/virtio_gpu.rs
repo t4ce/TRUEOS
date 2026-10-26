@@ -1285,13 +1285,13 @@ impl VirtioGpu {
     }
 
     /// Setup complete scanout path
-    /// Uses the Limine framebuffer dimensions for consistency with the compositor
+    /// Uses the bootloader framebuffer dimensions for consistency with the compositor
     pub fn setup_scanout(&mut self) -> Result<(), &'static str> {
         if !self.initialized {
             return Err("GPU not initialized");
         }
 
-        // Use Limine framebuffer dimensions so GPU resource matches compositor
+        // Use bootloader framebuffer dimensions so GPU resource matches compositor
         let (fb_w, fb_h) = crate::framebuffer::get_dimensions();
         if fb_w > 0 && fb_h > 0 {
             crate::serial_println!(

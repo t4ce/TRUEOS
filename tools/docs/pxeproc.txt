@@ -1,9 +1,11 @@
 pxeproc disk boot mode
 
 OS -> Install TRUEOS to disk -> target disk -> Install pxeproc -> Local / Online -> Proceed.
-The ordinary GPT/ESP/TRUEOSFS installer writes pxeproc=1 into the disk's Limine
-command line. A regular reinstall clears the flag; both modes preserve an
-existing compatible TRUEOSFS partition.
+The GPT/ESP/TRUEOSFS installer still writes pxeproc=1 into a legacy boot
+configuration file. The native TRUEOS UEFI loader currently supplies a fixed
+command line and does not read that file, so this installer flag is not yet
+propagated by the native loader. A regular reinstall clears the flag; both
+modes preserve an existing compatible TRUEOSFS partition.
 
 main.rs captures the bootloader flag before services or Spirit start, without
 reading or mounting TRUEOSFS. On a cold boot, the existing Blueprint autostart

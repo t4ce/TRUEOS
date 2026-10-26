@@ -69,7 +69,7 @@ pub fn register_kernel_image(virt_base: usize, phys_base: usize, length: usize) 
     KERNEL_LEN.store(length as u64, Ordering::SeqCst);
 }
 
-/// Capture Limine-provided mapping metadata for later address translation.
+/// Capture bootloader-provided mapping metadata for later address translation.
 pub fn register_memory_metadata() {
     if let Some(hhdm) = crate::limine::hhdm_offset() {
         register_hhdm_base(hhdm as usize);

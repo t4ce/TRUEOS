@@ -13,7 +13,7 @@ core::arch::global_asm!(include_str!("ap_trampoline.S"));
 
 pub const MAX_CPUS: usize = 256;
 pub const STORAGE_PAGES: usize = 16;
-/// Match the Limine handoff's PAT layout, including WC at index 5. Native
+/// Match the kernel handoff PAT layout, including WC at index 5. Native
 /// kernel MMIO mappings select these indices directly on every processor.
 pub const HANDOFF_PAT: u64 = 0x0000_0105_0007_0406;
 // The existing kernel requests 16 MiB stacks; AP workers run the same code.

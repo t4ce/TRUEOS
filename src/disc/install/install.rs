@@ -24,7 +24,7 @@ pub async fn install_bootable_uefi_gpt_mode_with_log(
     // Installed TRUEOS does not need the installer payload on the ESP.
     let esp_bytes_needed = (bootx64_efi.len() as u64)
         .saturating_add(kernel_elf.len() as u64)
-        .saturating_add(64 * 1024) // limine.conf + dir entries
+        .saturating_add(64 * 1024) // legacy configuration + directory entries
         .saturating_add(16 * 1024 * 1024); // slack for FAT tables/rounding
 
     let mut esp_mib = esp_bytes_needed.div_ceil(1024 * 1024);
@@ -133,7 +133,8 @@ pub async fn install_bootable_uefi_gpt_mode_with_log(
         block::register_device(d, dev)
     };
 
-    // Generate an on-disk limine.conf that points to the files we write into the ESP.
+    // Retain the legacy on-disk configuration for the files written into the ESP.
+    // The native TRUEOS loader currently supplies its own fixed command line.
     // Note: we use short 8.3 names in FAT32 to avoid long filename complexity.
     let limine_conf = mode.limine_conf();
 

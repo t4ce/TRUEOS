@@ -41,7 +41,7 @@ pub fn tsc_hz() -> u64 {
 
 /// Best-effort Unix time (seconds since epoch).
 ///
-/// Uses Limine's boot timestamp (wall clock at boot) plus monotonic uptime.
+/// Uses the bootloader-provided timestamp (wall clock at boot) plus monotonic uptime.
 /// Returns `None` if the boot timestamp is unavailable (or 0).
 #[inline]
 pub fn unix_time_seconds() -> Option<u64> {

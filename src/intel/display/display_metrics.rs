@@ -1,6 +1,6 @@
 //! Read-only BSP display metrics gathered from the boot framebuffer EDID.
 //!
-//! Limine obtains this block from the active firmware display path before the
+//! The TRUEOS loader obtains this block from the active firmware display path before the
 //! kernel takes over scanout. Consuming that copy is intentionally preferred
 //! to issuing a second DDC/AUX transaction against a link which is already
 //! live.

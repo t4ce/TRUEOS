@@ -1,6 +1,7 @@
 # Hardware acceptance receipt
 
-The preboot handoff remains a prerequisite. The same boot must still show:
+The preboot handoff remains a prerequisite. `LIMINE.EFI` below is the legacy
+backup filename for the preserved TRUEOS loader. The same boot must still show:
 
 ```text
 TRUEOS FirmwareScout: capture-only HII handoff
