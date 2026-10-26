@@ -99,6 +99,8 @@ pub struct Framebuffer {
 pub struct BootFacts<'a> {
     pub kernel: Blob<'a>,
     pub modules: &'a [Blob<'a>],
+    /// Source of every downloaded file, or None when read from a local volume.
+    pub tftp_server: Option<[u8; 4]>,
     pub kernel_physical_base: u64,
     pub kernel_virtual_base: u64,
     pub framebuffer: Option<Framebuffer>,
@@ -324,13 +326,15 @@ impl Handoff {
         Ok(())
     }
 
-    fn file(&mut self, blob: Blob<'_>) -> Result<u64, Error> {
+    fn file(&mut self, blob: Blob<'_>, tftp_server: Option<[u8; 4]>) -> Result<u64, Error> {
         let address = self.virtual_address(blob.phys)?;
         let path = self.string(blob.path)?;
         let cmdline = self.string(blob.cmdline)?;
         let file = self.store(FileWire {
             revision: 0, address, size: blob.len as u64, path, cmdline,
-            media_type: 0, tftp_ip: 0, tftp_port: 0, partition_index: 0,
+            media_type: if tftp_server.is_some() { 2 } else { 0 },
+            tftp_ip: tftp_server.map_or(0, u32::from_le_bytes),
+            tftp_port: if tftp_server.is_some() { 69 } else { 0 }, partition_index: 0,
             mbr_disk_id: 0, uuids: [0; 48],
         })?;
         self.protect(MemoryRegion {
@@ -345,7 +349,7 @@ impl Handoff {
         self.responses[EXECUTABLE_ADDRESS] = self.store([
             0, facts.kernel_physical_base, facts.kernel_virtual_base,
         ])?.virtual_address;
-        let kernel_file = self.file(facts.kernel)?;
+        let kernel_file = self.file(facts.kernel, facts.tftp_server)?;
         self.responses[EXECUTABLE_FILE] = self.store([0, kernel_file])?.virtual_address;
         let cmdline = self.string(facts.kernel.cmdline)?;
         self.responses[CMDLINE] = self.store([0, cmdline])?.virtual_address;
@@ -353,7 +357,7 @@ impl Handoff {
             facts.modules.len().checked_mul(8).ok_or(Error::ArenaFull)?.max(8), 8,
         )?;
         for (i, module) in facts.modules.iter().enumerate() {
-            let file = self.file(*module)?;
+            let file = self.file(*module, facts.tftp_server)?;
             unsafe { module_array.pointer.cast::<u64>().add(i).write(file); }
         }
         self.responses[MODULES] = self.store([
@@ -548,7 +552,7 @@ mod tests {
     fn facts() -> BootFacts<'static> {
         BootFacts {
             kernel: Blob { phys: 0x800000, len: 12345, path: "/TRUEOS.elf", cmdline: "keyboard=de" },
-            modules: &[], kernel_physical_base: 0x200000,
+            modules: &[], tftp_server: None, kernel_physical_base: 0x200000,
             kernel_virtual_base: 0xffffffff80100000,
             framebuffer: None, rsdp: 0, efi_system_table: 0,
             smbios32: 0, smbios64: 0, timestamp: Some(1234),
@@ -578,8 +582,32 @@ mod tests {
         let file = unsafe { &*((*file_response.add(1)) as *const FileWire) };
         assert_eq!(file.address, 0x800000);
         assert_eq!(file.size, 12345);
+        assert_eq!((file.media_type, file.tftp_ip, file.tftp_port), (0, 0, 0));
         let path = unsafe { core::ffi::CStr::from_ptr(file.path as _) };
         assert_eq!(path.to_bytes(), b"/TRUEOS.elf");
+    }
+
+    #[test]
+    fn downloaded_kernel_and_modules_report_the_tftp_source() {
+        let mut backing = arena();
+        let mut handoff = unsafe { Handoff::new(backing.as_mut_ptr() as u64, backing.len() * 8, 0, 128) }.unwrap();
+        let mut input = facts();
+        let modules = [Blob { phys: 0x900000, len: 4096, path: "/EFI/BOOT/BOOTX64.EFI", cmdline: "trueos.install.bootx64" }];
+        input.modules = &modules;
+        input.tftp_server = Some([192, 168, 1, 20]);
+        handoff.prepare(&input).unwrap();
+        let kernel_response = handoff.responses[EXECUTABLE_FILE] as *const u64;
+        let modules_response = handoff.responses[MODULES] as *const u64;
+        unsafe {
+            let kernel = &*((*kernel_response.add(1)) as *const FileWire);
+            let modules = *modules_response.add(2) as *const u64;
+            let module = &*((*modules) as *const FileWire);
+            for file in [kernel, module] {
+                assert_eq!(file.media_type, 2);
+                assert_eq!(file.tftp_ip.to_le_bytes(), [192, 168, 1, 20]);
+                assert_eq!(file.tftp_port, 69);
+            }
+        }
     }
 
     #[test]

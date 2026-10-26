@@ -76,7 +76,7 @@ fn actual_kernel_loads_and_its_request_section_accepts_the_handoff() {
     }.unwrap();
     handoff.prepare(&handoff::BootFacts {
         kernel: handoff::Blob { phys: bytes.as_ptr() as u64, len: bytes.len(), path: "/TRUEOS.elf", cmdline: "keyboard=de" },
-        modules: &[], kernel_physical_base: loaded.address(), kernel_virtual_base: image.base,
+        modules: &[], tftp_server: None, kernel_physical_base: loaded.address(), kernel_virtual_base: image.base,
         framebuffer: None, rsdp: 0, efi_system_table: 0, smbios32: 0, smbios64: 0,
         timestamp: None, stack_size: 16 * 1024 * 1024, mp_response: 0,
     }).unwrap();

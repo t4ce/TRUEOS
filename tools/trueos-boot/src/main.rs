@@ -7,6 +7,7 @@ extern crate alloc;
 
 mod elf;
 mod handoff;
+mod network;
 mod paging;
 mod smp;
 mod time;
@@ -138,11 +139,11 @@ unsafe fn protocol<T>(handle: Handle, mut guid: Guid) -> Result<*mut T, &'static
 }
 
 unsafe fn read_file(root: *mut file::Protocol, name: &str) -> Result<&'static [u8], &'static str> {
-    let mut path: Vec<u16> = name.encode_utf16().collect();
+    let mut path: Vec<u16> = name.encode_utf16().map(|ch| if ch == b'/' as u16 { b'\\' as u16 } else { ch }).collect();
     path.push(0);
     let mut handle: *mut file::Protocol = ptr::null_mut();
     if ((*root).open)(root, &mut handle, path.as_mut_ptr(), file::MODE_READ, 0).is_error() {
-        return Err("boot file was not found on this USB volume");
+        return Err("boot file was not found on the boot volume");
     }
     let guid = Guid::from_fields(0x09576e92, 0x6d3f, 0x11d2, 0x8e, 0x39, &[0x00,0xa0,0xc9,0x69,0x72,0x3b]);
     let mut info = [0u64; 128];
@@ -167,6 +168,64 @@ unsafe fn read_file(root: *mut file::Protocol, name: &str) -> Result<&'static [u
     }
     ((*handle).close)(handle);
     Ok(core::slice::from_raw_parts(allocation as *const u8, length))
+}
+
+#[derive(Debug)]
+enum FileError {
+    Volume(&'static str),
+    Network(network::Error),
+}
+
+/// Both transports leave file bytes in retained LoaderData pages. Everything
+/// after downloading uses the same ELF parser, mappings and kernel handoff.
+enum BootFiles {
+    Volume(*mut file::Protocol),
+    Network(network::Network),
+}
+
+impl BootFiles {
+    unsafe fn open(device: Handle, bs: *mut BootServices) -> Self {
+        if let Ok(fs) = protocol::<simple_file_system::Protocol>(device, simple_file_system::PROTOCOL_GUID) {
+            let mut root = ptr::null_mut();
+            if ((*fs).open_volume)(fs, &mut root).is_error() || root.is_null() {
+                stop("could not open the boot volume");
+            }
+            log!("Boot source: FAT volume");
+            return Self::Volume(root);
+        }
+        match network::Network::open(device, bs) {
+            Ok(network) => {
+                let [a, b, c, d] = network.server_ipv4();
+                log!("Boot source: PXE/TFTP {a}.{b}.{c}.{d}");
+                Self::Network(network)
+            }
+            Err(error) => {
+                log!("PXE initialization: {error:?}");
+                stop("boot device has no usable FAT volume or IPv4 PXE session");
+            }
+        }
+    }
+
+    unsafe fn read(&self, path: &str) -> Result<&'static [u8], FileError> {
+        log!("Loading {path}");
+        let bytes = match self {
+            Self::Volume(root) => read_file(*root, path).map_err(FileError::Volume),
+            Self::Network(network) => network.read(path, |length| pages(length.div_ceil(PAGE), u32::MAX as u64)).map_err(FileError::Network),
+        }?;
+        log!("Loaded {} bytes", bytes.len());
+        Ok(bytes)
+    }
+
+    fn server_ipv4(&self) -> Option<[u8; 4]> {
+        match self {
+            Self::Volume(_) => None,
+            Self::Network(network) => Some(network.server_ipv4()),
+        }
+    }
+
+    unsafe fn close(self) {
+        if let Self::Volume(root) = self { ((*root).close)(root); }
+    }
 }
 
 unsafe fn framebuffer() -> Option<Framebuffer> {
@@ -294,10 +353,15 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
     core::arch::asm!("mov {}, cr4", out(reg) cr4);
     if cr4 & (1 << 12) != 0 { stop("five-level firmware paging is unsupported"); }
     let loaded = require(protocol::<loaded_image::Protocol>(image_handle, loaded_image::PROTOCOL_GUID));
-    let fs = require(protocol::<simple_file_system::Protocol>((*loaded).device_handle, simple_file_system::PROTOCOL_GUID));
-    let mut root = ptr::null_mut();
-    if ((*fs).open_volume)(fs, &mut root).is_error() { stop("could not open the boot volume"); }
-    let kernel = require(read_file(root, "\\TRUEOS.elf"));
+    let files = BootFiles::open((*loaded).device_handle, bs);
+    let tftp_server = files.server_ipv4();
+    let kernel = match files.read("TRUEOS.elf") {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            log!("Kernel download/read: {error:?}");
+            stop("could not load TRUEOS.elf from the boot device");
+        }
+    };
     let elf = require(elf::parse(kernel));
     log!("ELF loaded: {} bytes; mapped image {} bytes", kernel.len(), elf.size);
     let kernel_phys = require(pages(elf.size.div_ceil(PAGE), u32::MAX as u64));
@@ -306,16 +370,17 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
             (kernel_phys + segment.virtual_address - elf.base) as *mut u8, segment.file_size);
     }
     let mut modules = Vec::new();
-    match read_file(root, "\\EFI\\BOOT\\tgl_guc_70.bin") {
+    match files.read("EFI/BOOT/tgl_guc_70.bin") {
         Ok(bytes) => modules.push(Blob { phys: bytes.as_ptr() as u64, len: bytes.len(),
             path: "/EFI/BOOT/tgl_guc_70.bin", cmdline: "trueos.fw.guc" }),
-        Err(_) => log!("GuC firmware absent: Intel GPU submission may be unavailable"),
+        Err(error) => log!("GuC firmware unavailable ({error:?}): Intel GPU submission may be unavailable"),
     }
-    if let Ok(bytes) = read_file(root, "\\EFI\\BOOT\\BOOTX64.EFI") {
-        modules.push(Blob { phys: bytes.as_ptr() as u64, len: bytes.len(),
-            path: "/EFI/BOOT/BOOTX64.EFI", cmdline: "trueos.install.bootx64" });
+    match files.read("EFI/BOOT/BOOTX64.EFI") {
+        Ok(bytes) => modules.push(Blob { phys: bytes.as_ptr() as u64, len: bytes.len(),
+            path: "/EFI/BOOT/BOOTX64.EFI", cmdline: "trueos.install.bootx64" }),
+        Err(error) => log!("Installer EFI module unavailable: {error:?}"),
     }
-    ((*root).close)(root);
+    files.close();
     let mut rsdp = configuration(st, system::ACPI_20_TABLE_GUID);
     if rsdp == 0 { rsdp = configuration(st, system::ACPI_10_TABLE_GUID); }
     if rsdp == 0 { stop("firmware did not provide ACPI RSDP"); }
@@ -337,7 +402,7 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
     };
     let facts = BootFacts { kernel: Blob { phys: kernel.as_ptr() as u64, len: kernel.len(), path: "/TRUEOS.elf",
             cmdline: "timezone=Europe/Berlin keyboard=de trueos.boot=native-uefi" },
-        modules: &modules, kernel_physical_base: kernel_phys, kernel_virtual_base: elf.base,
+        modules: &modules, tftp_server, kernel_physical_base: kernel_phys, kernel_virtual_base: elf.base,
         framebuffer: DISPLAY, rsdp, efi_system_table: st as u64,
         smbios32: configuration(st, system::SMBIOS_TABLE_GUID), smbios64: configuration(st, system::SMBIOS3_TABLE_GUID),
         timestamp: timestamp(st), stack_size: STACK_BYTES as u64,

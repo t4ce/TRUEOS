@@ -27,6 +27,32 @@ The preparer defaults to release. `--dev` uses the dev kernel and stages
 `cargo boot` builds only the EFI loader; the kernel ELF keeps its normal Cargo
 path. The loader uses the volume it was launched from and reads `\TRUEOS.elf`.
 
+## IPv4 PXE file server
+
+After preparing the files, start the minimal network server with Node.js,
+`ip` (iproute2), and `dnsmasq` installed:
+
+```sh
+sudo node tools/netboot/pxe3.js
+# Or select the LAN interface and optionally a different staging directory:
+sudo node tools/netboot/pxe3.js enp3s0 tgt/usb-release
+```
+
+This uses IPv4 ProxyDHCP alongside the LAN's existing DHCP server and dnsmasq's
+TFTP server. It advertises `EFI/BOOT/BOOTX64.EFI` to x86-64 UEFI PXE clients
+(architecture IDs 7 and 9). Only the three staged files above are copied to a
+temporary TFTP root; no ISO, HTTP, DNS, IPv6, or address leases are served.
+Stop with Ctrl-C. The temporary snapshot is removed when the server exits;
+restart after rebuilding to serve updated files. Use a LAN interface reachable
+by the client and allow DHCP/PXE UDP 67/4011, TFTP UDP 69, and TFTP transfer
+traffic through the host firewall. Stop other PXE/TFTP servers using those ports.
+
+**This is currently file delivery, not a complete native PXE boot.** Firmware
+can fetch the EFI loader, but the loader opens the launch device's UEFI Simple
+File System to read the kernel and GPU firmware. Ordinary PXE does not supply
+that filesystem. The loader needs a network download path before it can boot
+these files end to end over PXE. Use the FAT USB method for the current loader.
+
 ## First hardware test
 
 The loader prints milestones to the GOP framebuffer and COM1, including the
