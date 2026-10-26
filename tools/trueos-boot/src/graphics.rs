@@ -223,6 +223,16 @@ unsafe fn configure(display: Display, services: Services) -> Result<Output, Erro
         free_failures: display.free_failures, console_gop: display.console,
         edid: None, edid_source: None,
     };
+    // Preserve the firmware's original display metadata before SetMode can
+    // replace protocol buffers or change a console/physical-GOP association.
+    // The working Limine path likewise captures EDID before changing modes.
+    let (mut initial_edid, mut initial_source) = unsafe { read_edid(display.handle, services.handle_protocol) };
+    if initial_edid.is_none() && unsafe { capture(protocol) }.is_some() {
+        let (edid, source, free_failures) = unsafe { alias_edid(protocol, services) };
+        initial_edid = edid;
+        initial_source = source;
+        output.free_failures += free_failures;
+    }
     let already_preferred = before.is_some_and(|info| info.width == PREFERRED_WIDTH && info.height == PREFERRED_HEIGHT)
         && unsafe { capture(protocol) }.is_some();
     if already_preferred {
@@ -264,6 +274,10 @@ unsafe fn configure(display: Display, services: Services) -> Result<Output, Erro
         edid = aliased_edid;
         source = aliased_source;
         output.free_failures += free_failures;
+    }
+    if edid.is_none() {
+        edid = initial_edid;
+        source = initial_source;
     }
     output.edid = edid;
     output.edid_source = source;
@@ -366,6 +380,7 @@ mod tests {
         fail_query: Option<u32>,
         short_query: Option<u32>,
         fail_set: bool,
+        invalidate_edid_on_set: bool,
         free_status: Status,
         edid: Vec<u8>,
         active: EdidProtocol,
@@ -395,6 +410,11 @@ mod tests {
         mock.mode.frame_buffer_size = info.pixels_per_scan_line as usize * info.vertical_resolution as usize * 4;
         // Deliberately change the framebuffer to catch stale capture metadata.
         mock.mode.frame_buffer_base = 0x200000;
+        if mock.invalidate_edid_on_set {
+            mock.edid.fill(0);
+            mock.active.size_of_edid = 0;
+            mock.discovered.size_of_edid = 0;
+        }
         Status::SUCCESS
     }
 
@@ -494,7 +514,7 @@ mod tests {
                 size_of_info: mem::size_of::<gop::ModeInformation>(), frame_buffer_base: 0x100000,
                 frame_buffer_size: first.pixels_per_scan_line as usize * first.vertical_resolution as usize * 4 }),
             modes, queries: Vec::new(), sets: Vec::new(), freed: 0, fail_query: None, short_query: None,
-            fail_set: false, free_status: Status::SUCCESS, edid: edid(),
+            fail_set: false, invalidate_edid_on_set: false, free_status: Status::SUCCESS, edid: edid(),
             active: EdidProtocol { size_of_edid: 0, edid: ptr::null() },
             discovered: EdidProtocol { size_of_edid: 0, edid: ptr::null() },
         });
@@ -526,6 +546,19 @@ mod tests {
         assert_eq!((framebuffer.red_mask_shift, framebuffer.blue_mask_shift), (0, 16));
         assert_eq!(output.edid_source, Some(EdidSource::Active));
         assert_eq!(output.edid.as_deref(), Some(mock.edid.as_slice()));
+    }
+
+    #[test]
+    fn original_edid_copy_survives_mode_change_invalidating_firmware_buffer() {
+        let mut mock = mock(vec![info(1024, 768, 1), info(2560, 1440, 1)]);
+        let original = mock.edid.clone();
+        mock.invalidate_edid_on_set = true;
+        let output = unsafe { run(&mut mock) };
+        assert_eq!(output.after.unwrap().width, 2560);
+        assert_eq!(mock.active.size_of_edid, 0);
+        assert!(mock.edid.iter().all(|byte| *byte == 0));
+        assert_eq!(output.edid, Some(original));
+        assert_eq!(output.edid_source, Some(EdidSource::Active));
     }
 
     #[test]
@@ -626,6 +659,22 @@ mod tests {
         let output = unsafe { configure(display, services) }.unwrap();
         assert_eq!(output.edid.unwrap()[21], 60);
         assert!(LOOKUP.with(|lookup| lookup.borrow().as_ref().unwrap().freed));
+        LOOKUP.with(|lookup| *lookup.borrow_mut() = None);
+    }
+
+    #[test]
+    fn original_physical_alias_edid_survives_mode_change_replacing_scanout_metadata() {
+        let mut console = mock(vec![info(1024, 768, 1), info(2560, 1440, 1)]);
+        console.active.size_of_edid = 0;
+        let mut physical = mock(vec![info(1024, 768, 1)]);
+        let original = physical.edid.clone();
+        let services = lookup_services(vec![&mut *console, &mut *physical]);
+        let display = unsafe { find_display((&mut *console as *mut Mock).cast(), services) }.unwrap();
+        let output = unsafe { configure(display, services) }.unwrap();
+        assert_eq!(output.after.unwrap().width, 2560);
+        assert!(!unsafe { same_scanout(&mut console.protocol, &mut physical.protocol) });
+        assert_eq!(output.edid, Some(original));
+        assert_eq!(output.edid_source, Some(EdidSource::Active));
         LOOKUP.with(|lookup| *lookup.borrow_mut() = None);
     }
 

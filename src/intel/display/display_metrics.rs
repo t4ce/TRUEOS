@@ -148,7 +148,7 @@ pub(super) fn log_bsp_display_metrics_probe(active_target: Option<DisplayPipelin
         let edid = framebuffer.edid();
 
         if edid.is_empty() {
-            crate::log_info!(target: "intel/display";
+            crate::log_warn!(target: "intel/display";
                 "intel/display: bsp-display-metrics source=limine-framebuffer-edid status=unavailable reason=firmware-no-active-edid framebuffer={} framebuffer_mode={}x{} pipeline={} ddi={} association={} physical_mm=unknown dpi=unknown pixels_per_cm=unknown\n",
                 index,
                 framebuffer.width,
@@ -193,7 +193,7 @@ pub(super) fn log_bsp_display_metrics_probe(active_target: Option<DisplayPipelin
         };
 
         let Some(physical) = info.physical else {
-            crate::log_info!(target: "intel/display";
+            crate::log_warn!(target: "intel/display";
                 "intel/display: bsp-display-metrics source=limine-framebuffer-edid status=valid-no-physical-size framebuffer={} edid_bytes={} captured_blocks={} declared_blocks={} extension_capture={} checksum=ok edid={}.{} input={} manufacturer={} product=0x{:04X} serial=0x{:08X} manufactured={}/{} name=\"{}\" base_size_cm={}x{} preferred_mode={}x{} density_mode={}x{} density_mode_source={} pipeline={} ddi={} association={} physical_mm=unknown dpi=unknown pixels_per_cm=unknown\n",
                 index,
                 edid.len(),
@@ -313,7 +313,7 @@ fn log_probe_unavailable(active_target: Option<DisplayPipelineTarget>, reason: &
     let ddi = active_target
         .map(|target| target.route.ddi.name())
         .unwrap_or("unresolved");
-    crate::log_info!(target: "intel/display";
+    crate::log_warn!(target: "intel/display";
         "intel/display: bsp-display-metrics source=limine-framebuffer-edid status=unavailable reason={} pipeline={} ddi={} physical_mm=unknown dpi=unknown pixels_per_cm=unknown\n",
         reason,
         pipeline,
