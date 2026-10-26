@@ -1,0 +1,26 @@
+[package]
+name = "trueos-boot"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "BOOTX64"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+r-efi = "=5.3.0"
+font8x8 = { version = "0.3.1", default-features = false, features = ["unicode"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = "thin"
+strip = "symbols"

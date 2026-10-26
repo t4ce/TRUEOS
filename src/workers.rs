@@ -289,6 +289,19 @@ pub fn ap1_ui_core_spawner() -> Option<WorkerSpawner> {
     spawner_for_slot(AP1_UI_SERVICE_SLOT)
 }
 
+/// Cooperative UI and terminal services may share the BSP on a single-CPU
+/// boot. Wait for topology registration before choosing that fallback so a
+/// normally starting AP1 retains its usual service placement.
+///
+/// This does not admit native blocking jobs or compute work to the BSP.
+pub fn ui_service_spawner() -> Option<WorkerSpawner> {
+    ap1_ui_core_spawner().or_else(|| {
+        all_topology_spawners_registered()
+            .then(|| spawner_for_slot(0))
+            .flatten()
+    })
+}
+
 /// The former RDP encoder policy: topology identity, never registration order.
 pub fn last_ap_service_slot() -> Option<u32> {
     if crate::allcaps::hv::CODEX_EXECUTOR_EXPERIMENT_ENABLED {

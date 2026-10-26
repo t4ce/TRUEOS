@@ -65,6 +65,9 @@ bundled linker with the system glibc development files, so GCC and Clang are
 not needed. The font packer also requires `lz4`.
 
 `cargo run` rejects host execution because the kernel ELF requires a bootloader.
+For a native Rust UEFI loader test on physical hardware, prepare the USB files
+with `tools/trueos-boot/prepare.sh --release`; see the
+[native UEFI boot instructions](tools/trueos-boot/README.md).
 See the [QEMU setup and verification guide](tools/qemu/README.md) for booting
 an existing image and firmware requirements.
 

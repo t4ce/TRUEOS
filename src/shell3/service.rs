@@ -1,4 +1,4 @@
-//! AP-local Shell3 instance pool: UI input, presentation, and network terminals.
+//! Executor-local Shell3 instance pool: UI input, presentation, and network terminals.
 
 use alloc::{collections::VecDeque, vec::Vec};
 use trueos_executor::{SpawnError, SpawnToken};
@@ -211,10 +211,11 @@ pub(super) fn appdb_names_snapshot() -> (u64, Vec<alloc::string::String>) {
     (current.generation, current.names.clone())
 }
 
-/// Runtime worker limit: at most half of all discovered AP cores.
+/// Use half the AP topology normally, retaining one terminal owner on small
+/// topologies where services must share AP1 or the BSP.
 pub fn worker_limit() -> usize {
     let ap_cores = crate::workers::topology_core_slot_count().saturating_sub(1);
-    ap_cores / 2
+    (ap_cores / 2).max(1)
 }
 
 /// Queue a fresh Shell3 on the executor selected by the shell distribution policy.
@@ -232,6 +233,12 @@ fn request_shell3_configured(
     startup: Option<crate::shell3::startup::Startup>,
     window: Option<WindowSpawn>,
 ) -> Result<u32, super::Shell3Error> {
+    // GUI font preparation needs a native blocking lane. Without one it
+    // would wait forever inside the same pool task that pumps SSH terminals.
+    // Terminal models use text cells directly and remain available on AP1/BSP.
+    if !crate::workers::has_background_worker_slot() {
+        return Err(super::Shell3Error::NoExecutor);
+    }
     refresh_appdb_names();
     let mut ownership = SHELL_OWNERSHIP.lock();
     if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
@@ -316,19 +323,23 @@ pub(super) fn release_shell_on_executor(slot: u32) {
     }
 }
 
-/// Start one caller-provided worker task on each selected background AP.
+/// Start one caller-provided worker task on each selected executor.
 ///
 /// Uses the kernel's P-core-first worker policy, filling from E/unknown cores.
+/// A small completed topology with no background AP shares its UI service
+/// executor, retaining incoming terminals without changing compute placement.
 /// The task factory receives each stable CPU slot for affinity checking.
 pub fn start<S: Send>(
     mut task: impl FnMut(usize, u32) -> Result<SpawnToken<S>, SpawnError>,
 ) -> Result<usize, SpawnError> {
     let target = worker_limit();
-    if target == 0 {
-        return Ok(0);
+    let mut spawners = crate::workers::pick_background_spawners_with_slots(target);
+    if spawners.is_empty() && crate::workers::all_topology_spawners_registered() {
+        if let Some(spawner) = crate::workers::ui_service_spawner() {
+            let slot = spawner.cpu_slot();
+            spawners.push((slot, crate::workers::core_kind_for_slot(slot), spawner));
+        }
     }
-
-    let spawners = crate::workers::pick_background_spawners_with_slots(target);
 
     // Publish only successfully spawned owners. On a retry after a token
     // capacity error, retain existing owners and skip their stable slots.
@@ -807,7 +818,7 @@ pub fn start_pool() -> Result<usize, SpawnError> {
     refresh_appdb_names();
     let started = start(|worker_id, slot| shell_worker_task(worker_id, slot))?;
     crate::log_info!(target: "service";
-        "shell3: online workers={} ap_total={} policy=half-ap-topology\n",
+        "shell3: online workers={} ap_total={} policy=half-ap-topology-or-shared-service\n",
         started, crate::workers::topology_core_slot_count().saturating_sub(1),
     );
     Ok(started)

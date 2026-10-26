@@ -220,12 +220,12 @@ fn spawn_local<S>(
 }
 
 #[inline]
-fn spawn_on_ap1_ui_core<S: Send>(
+fn spawn_on_ui_core<S: Send>(
     spawner: Spawner,
     task: impl FnOnce(crate::workers::WorkerSpawner) -> Result<SpawnToken<S>, SpawnError>,
 ) -> SpawnAttempt {
-    let _ = spawner; // keep signature stable; this task intentionally targets the AP1 UI core.
-    let Some(ap1_spawner) = crate::workers::ap1_ui_core_spawner() else {
+    let _ = spawner;
+    let Some(ap1_spawner) = crate::workers::ui_service_spawner() else {
         return SpawnAttempt::Skipped;
     };
     match task(ap1_spawner) {
@@ -306,10 +306,12 @@ fn spawn_blocking_service_lanes(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::blocking::blocking_job_dispatcher_task())
 }
 
-// Shell3 still requires the complete worker topology before starting its pool.
-fn background_pool_gate() -> bool {
+// Wait for the boot topology, then retain a shared terminal executor even
+// when there is no AP2 background carrier.
+fn shell3_pool_gate() -> bool {
     crate::workers::all_topology_spawners_registered()
-        && crate::workers::has_background_worker_slot()
+        && (crate::workers::has_background_worker_slot()
+            || crate::workers::ui_service_spawner().is_some())
 }
 
 fn spawn_microfont_warm(spawner: Spawner) -> SpawnAttempt {
@@ -673,7 +675,7 @@ fn spawn_gpu_fault_containment(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
-    let Some(ap1_spawner) = crate::workers::ap1_ui_core_spawner() else {
+    let Some(ap1_spawner) = crate::workers::ui_service_spawner() else {
         return SpawnAttempt::Skipped;
     };
 
@@ -730,33 +732,33 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
 
 
 fn spawn_mouse_motion_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
+    spawn_on_ui_core(spawner, |_ap1_spawner| {
         crate::r::services::mouse_motion_service::mouse_motion_service_task()
     })
 }
 
 fn spawn_keyboard_control_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
+    spawn_on_ui_core(spawner, |_ap1_spawner| {
         crate::r::services::keyboard_control_service::keyboard_control_service_task()
     })
 }
 
 fn spawn_gamepad_control_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
+    spawn_on_ui_core(spawner, |_ap1_spawner| {
         crate::r::services::gamepad_control_service::gamepad_control_service_task()
     })
 }
 
 fn spawn_ui4_input_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |ap1_spawner| crate::ui4::ui4_input_service_task(ap1_spawner))
+    spawn_on_ui_core(spawner, |ap1_spawner| crate::ui4::ui4_input_service_task(ap1_spawner))
 }
 
 fn spawn_ui4_slot4_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_slot4_service_task())
+    spawn_on_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_slot4_service_task())
 }
 
 fn spawn_ui4_start_button_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_start_button_service_task())
+    spawn_on_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_start_button_service_task())
 }
 
 fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -789,11 +791,11 @@ fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ui4_compositor_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_compositor_service_task())
+    spawn_on_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_compositor_service_task())
 }
 
 fn spawn_ui4_color_picker_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_color_picker_service_task())
+    spawn_on_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_color_picker_service_task())
 }
 
 /// LINK owns user configuration state and remains on BSP with the kernel HID
@@ -849,7 +851,7 @@ fn spawn_gpgpu_ui4_svg_probe_consumer_service_task(spawner: Spawner) -> SpawnAtt
 }
 
 fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
+    spawn_on_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
 }
 
 fn spawn_fallback_logo_ui_task(spawner: Spawner) -> SpawnAttempt {
@@ -904,7 +906,7 @@ fn gpu_fault_containment_gate() -> bool {
 fn trueos_spirit_gate() -> bool {
     crate::spirit::hardware_ready()
         && crate::intel::complete_scanout_pipeline_slot().is_some()
-        && crate::workers::ap1_ui_core_spawner().is_some()
+        && crate::workers::ui_service_spawner().is_some()
 }
 
 #[inline]
@@ -912,19 +914,19 @@ fn ui4_compositor_gate() -> bool {
     crate::intel::has_claimed_device()
         && crate::intel::active_scanout_dimensions().is_some()
         && crate::intel::ui4_rgba8_plane_stack_is_ready()
-        && crate::workers::ap1_ui_core_spawner().is_some()
+        && crate::workers::ui_service_spawner().is_some()
 }
 
 #[inline]
 fn ui4_input_gate() -> bool {
     ui4_compositor_gate()
         || (crate::virtio_gpu_logo::output_dimensions().is_some()
-            && crate::workers::ap1_ui_core_spawner().is_some())
+            && crate::workers::ui_service_spawner().is_some())
 }
 
 #[inline]
-fn ap1_ui_core_ready_gate() -> bool {
-    crate::workers::ap1_ui_core_spawner().is_some()
+fn ui_core_ready_gate() -> bool {
+    crate::workers::ui_service_spawner().is_some()
 }
 
 #[inline]
@@ -1502,8 +1504,8 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled_gated(
         "sh3srv",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        background_pool_gate,
+        0,
+        shell3_pool_gate,
         &SH3SRV_STARTED,
         spawn_sh3srv,
     ),
@@ -1616,21 +1618,21 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "mouse-motion-service",
         0,
-        ap1_ui_core_ready_gate,
+        ui_core_ready_gate,
         &MOUSE_MOTION_SERVICE_STARTED,
         spawn_mouse_motion_service_task,
     ),
     TaskSpec::enabled_gated(
         "keyboard-control-service",
         0,
-        ap1_ui_core_ready_gate,
+        ui_core_ready_gate,
         &KEYBOARD_CONTROL_SERVICE_STARTED,
         spawn_keyboard_control_service_task,
     ),
     TaskSpec::enabled_gated(
         "gamepad-control-service",
         0,
-        ap1_ui_core_ready_gate,
+        ui_core_ready_gate,
         &GAMEPAD_CONTROL_SERVICE_STARTED,
         spawn_gamepad_control_service_task,
     ),

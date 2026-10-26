@@ -54,6 +54,7 @@ exclude = [
     "tools/kokoro-native-oracle",
     "tools/remoteai",
     "tools/wgpu-video-mesh",
+    "tools/trueos-boot",
     "vendor/*",
     "vendor/log-os",
     # Cargo matches workspace exclusions against package directories, so this

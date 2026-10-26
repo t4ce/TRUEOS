@@ -3,6 +3,7 @@ target-dir = "tgt"
 target = ".cargo/x86_64-unknown-trueos.json"
 
 [alias]
+boot = ["build", "--manifest-path", "tools/trueos-boot/Cargo.toml", "--target", "x86_64-unknown-uefi", "--release", "--target-dir", "tgt/boot", "--locked"]
 # Explicitly opt into the experimental headless KVM platform. The exact target
 # runner overrides the normal cargo-run guard and receives the freshly built ELF.
 kvm = ["run", "--config", "target.x86_64-unknown-trueos.runner=['sh','tools/kvm/run.sh']"]
