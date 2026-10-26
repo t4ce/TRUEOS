@@ -542,8 +542,8 @@ fn push_drag_preview(
     screen_h: u32,
 ) {
     use crate::graphics::primitives::Rgba8;
-    let width = (preview.width * 2 + 8).min(screen_w);
-    let height = (preview.height * 2 + 8).min(screen_h);
+    let width = (preview.width + 8).min(screen_w);
+    let height = (preview.height + 8).min(screen_h);
     let x = cursor_x
         .saturating_add(16)
         .min(screen_w.saturating_sub(width));
@@ -551,17 +551,17 @@ fn push_drag_preview(
         .saturating_add(16)
         .min(screen_h.saturating_sub(height));
     push_overlay_rect(rects, x, y, width, height, Rgba8::new(22, 25, 33, 230));
-    for &(col, row, len) in &preview.runs {
-        let px = x + 4 + col * 2;
-        let py = y + 4 + row * 2;
+    for &(col, row, len, coverage) in &preview.runs {
+        let px = x + 4 + col;
+        let py = y + 4 + row;
         if px < screen_w && py < screen_h {
             push_overlay_rect(
                 rects,
                 px,
                 py,
-                (len * 2).min(screen_w - px),
-                2.min(screen_h - py),
-                Rgba8::new(255, 255, 255, 255),
+                len.min(screen_w - px),
+                1,
+                Rgba8::new(255, 255, 255, coverage),
             );
         }
     }

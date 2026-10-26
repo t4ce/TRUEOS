@@ -11,23 +11,28 @@ const MAX_DROPS: usize = 32;
 pub(crate) struct DragPreview {
     pub width: u32,
     pub height: u32,
-    /// MicroFont row runs, rasterized once when the app publishes its label.
-    pub runs: Vec<(u32, u32, u32)>,
+    /// Native atlas row runs (x, y, length, coverage), cached at final size.
+    pub runs: Vec<(u32, u32, u32, u8)>,
 }
 
-fn preview(label: &str) -> Arc<DragPreview> {
+// Keep the small overlay's existing 12×22 cell size without first reducing
+// native coverage to a 6×11 binary bitmap and then enlarging it.
+const PREVIEW_CELL_WIDTH: usize = microfont::FWIDTH * 2;
+const PREVIEW_CELL_HEIGHT: usize = microfont::FHEIGHT * 2;
+
+fn preview(label: &str) -> Option<Arc<DragPreview>> {
     // Apps compose their own labels, including optional text frames. Keep
     // multiline rasterization bounded independently of the payload format.
     let lines: Vec<alloc::string::String> = label.split('\n').take(8)
         .map(|line| line.chars().take(48).collect()).collect();
     let width = (lines.iter().map(|line| line.chars().count()).max().unwrap_or(1).max(1)
-        * microfont::FWIDTH) as u32;
-    let height = (lines.len().max(1) * microfont::FHEIGHT) as u32;
+        * PREVIEW_CELL_WIDTH) as u32;
+    let height = (lines.len().max(1) * PREVIEW_CELL_HEIGHT) as u32;
     let mut pixels = vec![0u8; width as usize * height as usize];
     for (row, text) in lines.iter().enumerate() {
-        let _ = crate::r::services::microfont_mask_service::copy_text_mask(
-            &mut pixels, width as usize, height as usize, 0, row * microfont::FHEIGHT,
-            text, microfont::FWIDTH, microfont::FHEIGHT);
+        crate::r::services::microfont_mask_service::copy_text_mask(
+            &mut pixels, width as usize, height as usize, 0, row * PREVIEW_CELL_HEIGHT,
+            text, PREVIEW_CELL_WIDTH, PREVIEW_CELL_HEIGHT).ok()?;
     }
     let mut runs = Vec::new();
     for (y, row) in pixels.chunks_exact(width as usize).enumerate() {
@@ -38,17 +43,18 @@ fn preview(label: &str) -> Arc<DragPreview> {
                 continue;
             }
             let start = x;
-            while x < row.len() && row[x] != 0 {
+            let coverage = row[x];
+            while x < row.len() && row[x] == coverage {
                 x += 1;
             }
-            runs.push((start as u32, y as u32, (x - start) as u32));
+            runs.push((start as u32, y as u32, (x - start) as u32, coverage));
         }
     }
-    Arc::new(DragPreview {
+    Some(Arc::new(DragPreview {
         width,
         height,
         runs,
-    })
+    }))
 }
 
 struct Drag {
@@ -105,6 +111,9 @@ impl Registry {
         {
             return Err(-5);
         }
+        // If the shared atlas is unavailable, reject the floating preview so
+        // the app retains its normal terminal preview. No alternate font.
+        let preview = preview(label).ok_or(-5)?;
         self.next_token = self.next_token.checked_add(1).ok_or(-4)?;
         let token = self.next_token;
         self.drags.push(Drag {
@@ -112,7 +121,7 @@ impl Registry {
             producer,
             origin,
             source,
-            preview: preview(label),
+            preview,
             kind,
             data: data.to_vec(),
         });
@@ -392,15 +401,16 @@ mod tests {
     }
     #[test]
     fn preview_is_cached_as_microfont_runs_with_bounded_width() {
-        let p = preview("hello");
+        let p = preview("hello").unwrap();
         assert!(!p.runs.is_empty());
-        assert_eq!(p.width, 5 * microfont::FWIDTH as u32);
+        assert!(p.runs.iter().any(|&(_, _, _, coverage)| coverage < 255));
+        assert_eq!(p.width, 5 * PREVIEW_CELL_WIDTH as u32);
         assert!(
             p.runs
                 .iter()
-                .all(|&(x, y, len)| len > 0 && x + len <= p.width && y < p.height)
+                .all(|&(x, y, len, coverage)| len > 0 && coverage > 0 && x + len <= p.width && y < p.height)
         );
-        assert_eq!(preview(&"x".repeat(100)).width, 48 * microfont::FWIDTH as u32);
+        assert_eq!(preview(&"x".repeat(100)).unwrap().width, 48 * PREVIEW_CELL_WIDTH as u32);
     }
 
     #[test]
@@ -409,12 +419,12 @@ mod tests {
         let label = "┌────┐\n│file│\n└────┘";
         r.begin(WindowOwner::Vm(1), frame(1, 1), source(1), 7, label, b"opaque").unwrap();
         let p = &r.drags[0].preview;
-        assert_eq!(p.width, 6 * microfont::FWIDTH as u32);
-        assert_eq!(p.height, 3 * microfont::FHEIGHT as u32);
-        assert!(p.runs.iter().any(|&(_, y, _)| y >= 2 * microfont::FHEIGHT as u32));
+        assert_eq!(p.width, 6 * PREVIEW_CELL_WIDTH as u32);
+        assert_eq!(p.height, 3 * PREVIEW_CELL_HEIGHT as u32);
+        assert!(p.runs.iter().any(|&(_, y, _, _)| y >= 2 * PREVIEW_CELL_HEIGHT as u32));
         assert_eq!(r.drags[0].kind, 7);
         assert_eq!(r.drags[0].data, b"opaque");
-        assert_eq!(preview(&"x\n".repeat(100)).height, 8 * microfont::FHEIGHT as u32);
+        assert_eq!(preview(&"x\n".repeat(100)).unwrap().height, 8 * PREVIEW_CELL_HEIGHT as u32);
     }
 
     #[test]
