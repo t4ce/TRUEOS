@@ -1,6 +1,5 @@
-//! Run from the repository root without invoking the UEFI target:
-//! rustc --edition 2024 --test tools/trueos-boot/tests/host.rs -C linker=tools/rust-host-ld -o /tmp/trueos-boot-tests
-//! /tmp/trueos-boot-tests
+//! Run from the repository root with tools/trueos-boot/test.sh, which supplies
+//! host-built r-efi protocol definitions and the bundled Rust linker.
 //! Set TRUEOS_TEST_KERNEL to exercise a different compiled kernel ELF.
 
 extern crate alloc;
@@ -9,6 +8,8 @@ extern crate alloc;
 mod elf;
 #[path = "../src/handoff.rs"]
 mod handoff;
+#[path = "../src/graphics.rs"]
+mod graphics;
 #[path = "../src/paging.rs"]
 mod paging;
 #[path = "../src/time.rs"]
@@ -77,7 +78,7 @@ fn actual_kernel_loads_and_its_request_section_accepts_the_handoff() {
     handoff.prepare(&handoff::BootFacts {
         kernel: handoff::Blob { phys: bytes.as_ptr() as u64, len: bytes.len(), path: "/TRUEOS.elf", cmdline: "keyboard=de" },
         modules: &[], tftp_server: None, kernel_physical_base: loaded.address(), kernel_virtual_base: image.base,
-        framebuffer: None, rsdp: 0, efi_system_table: 0, smbios32: 0, smbios64: 0,
+        framebuffer: None, framebuffer_edid: &[], rsdp: 0, efi_system_table: 0, smbios32: 0, smbios64: 0,
         timestamp: None, stack_size: 16 * 1024 * 1024, mp_response: 0,
     }).unwrap();
     let report = unsafe {

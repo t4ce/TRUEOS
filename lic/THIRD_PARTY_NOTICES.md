@@ -9,8 +9,6 @@ Known third-party/provenance areas include:
 
 - `vendor/`: vendored Rust crates and external projects, with their license
   files preserved inside each vendored package.
-- `.limine/` and `vendor/limine/`: Limine bootloader material, governed by the
-  Limine licenses and notices included in those directories.
 - Intel processor microcode update binaries, if bundled with a TRUEOS image or
   boot medium, must remain unmodified and are governed by Intel's microcode
   license. See `licenses/intel-microcode.txt`.

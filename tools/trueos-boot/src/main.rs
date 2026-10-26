@@ -6,6 +6,7 @@
 extern crate alloc;
 
 mod elf;
+mod graphics;
 mod handoff;
 mod network;
 mod paging;
@@ -16,7 +17,7 @@ use alloc::vec::Vec;
 use core::{alloc::{GlobalAlloc, Layout}, ffi::c_void, fmt::{self, Write}, mem, ptr};
 use core::sync::atomic::{AtomicPtr, Ordering};
 use font8x8::{UnicodeFonts, BASIC_FONTS};
-use r_efi::{base::{Guid, Handle, Status}, protocols::{file, graphics_output as gop, loaded_image, simple_file_system}, system::{self, BootServices, SystemTable}};
+use r_efi::{base::{Guid, Handle, Status}, protocols::{file, loaded_image, simple_file_system}, system::{self, BootServices, SystemTable}};
 use handoff::{Blob, BootFacts, Framebuffer, Handoff, MemoryRegion};
 
 const PAGE: usize = 4096;
@@ -170,10 +171,18 @@ unsafe fn read_file(root: *mut file::Protocol, name: &str) -> Result<&'static [u
     Ok(core::slice::from_raw_parts(allocation as *const u8, length))
 }
 
-#[derive(Debug)]
 enum FileError {
     Volume(&'static str),
     Network(network::Error),
+}
+
+impl fmt::Display for FileError {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Volume(reason) => out.write_str(reason),
+            Self::Network(error) => write!(out, "{error:?}"),
+        }
+    }
 }
 
 /// Both transports leave file bytes in retained LoaderData pages. Everything
@@ -224,30 +233,17 @@ impl BootFiles {
     }
 
     unsafe fn close(self) {
-        if let Self::Volume(root) = self { ((*root).close)(root); }
+        match self {
+            Self::Volume(root) => { ((*root).close)(root); }
+            Self::Network(network) => {
+                if let Err(error) = network.finish() {
+                    log!("PXE shutdown: {error:?}");
+                    stop("could not stop firmware networking before kernel handoff");
+                }
+                log!("PXE downloads complete; firmware network stopped");
+            }
+        }
     }
-}
-
-unsafe fn framebuffer() -> Option<Framebuffer> {
-    let bs = BOOT_SERVICES.load(Ordering::Acquire);
-    let mut guid = gop::PROTOCOL_GUID;
-    let mut raw = ptr::null_mut();
-    if ((*bs).locate_protocol)(&mut guid, ptr::null_mut(), &mut raw).is_error() || raw.is_null() { return None; }
-    let protocol = raw.cast::<gop::Protocol>();
-    let mode = (*protocol).mode;
-    if mode.is_null() || (*mode).info.is_null() { return None; }
-    let info = &*(*mode).info;
-    let (red, green, blue) = match info.pixel_format {
-        gop::PIXEL_RED_GREEN_BLUE_RESERVED_8_BIT_PER_COLOR => (0, 8, 16),
-        gop::PIXEL_BLUE_GREEN_RED_RESERVED_8_BIT_PER_COLOR => (16, 8, 0),
-        _ => return None,
-    };
-    let needed = (info.pixels_per_scan_line as usize).checked_mul(info.vertical_resolution as usize)?.checked_mul(4)?;
-    if needed > (*mode).frame_buffer_size || info.horizontal_resolution > info.pixels_per_scan_line { return None; }
-    Some(Framebuffer { phys: (*mode).frame_buffer_base, width: info.horizontal_resolution as u64,
-        height: info.vertical_resolution as u64, pitch: info.pixels_per_scan_line as u64 * 4,
-        bpp: 32, red_mask_size: 8, red_mask_shift: red,
-        green_mask_size: 8, green_mask_shift: green, blue_mask_size: 8, blue_mask_shift: blue })
 }
 
 unsafe fn configuration(st: *mut SystemTable, guid: Guid) -> u64 {
@@ -347,8 +343,33 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
     BOOT_SERVICES.store(bs, Ordering::Release);
     initialize_serial();
     ((*bs).set_watchdog_timer)(0, 0, 0, ptr::null_mut());
-    DISPLAY = framebuffer();
+    let boot_display = graphics::initialize(st);
+    DISPLAY = boot_display.as_ref().ok().and_then(|display| display.framebuffer);
     log!("TRUEOS native UEFI loader v0.1");
+    match &boot_display {
+        Ok(display) => {
+            if let Some(before) = display.before {
+                log!("Firmware display: {}x{}; console GOP {}", before.width, before.height, display.console_gop);
+            }
+            if let Some(after) = display.after {
+                log!("Selected display: {}x{}; mode {}; pitch {} pixels", after.width, after.height, after.index, after.stride);
+            }
+            if display.framebuffer.is_none() { log!("No usable RGB/BGR linear framebuffer"); }
+            if let Some(status) = display.set_status.filter(|status| status.is_error()) {
+                log!("Preferred display mode rejected: {status:?}; retaining firmware mode");
+            } else if display.preferred_mode.is_none() {
+                log!("2560x1440 RGB/BGR mode unavailable; retaining firmware mode");
+            }
+            if display.query_failures != 0 || display.free_failures != 0 {
+                log!("GOP queries: {}; query failures {}; free failures {}", display.queried_modes, display.query_failures, display.free_failures);
+            }
+            match &display.edid {
+                Some(edid) => log!("Monitor EDID: {} bytes; source {:?}", edid.len(), display.edid_source),
+                None => log!("Monitor EDID unavailable; physical font sizing needs display metadata"),
+            }
+        }
+        Err(error) => log!("Display initialization: {error:?}"),
+    }
     let cr4: u64;
     core::arch::asm!("mov {}, cr4", out(reg) cr4);
     if cr4 & (1 << 12) != 0 { stop("five-level firmware paging is unsupported"); }
@@ -358,7 +379,7 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
     let kernel = match files.read("TRUEOS.elf") {
         Ok(bytes) => bytes,
         Err(error) => {
-            log!("Kernel download/read: {error:?}");
+            log!("Kernel download/read: {error}");
             stop("could not load TRUEOS.elf from the boot device");
         }
     };
@@ -373,12 +394,12 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
     match files.read("EFI/BOOT/tgl_guc_70.bin") {
         Ok(bytes) => modules.push(Blob { phys: bytes.as_ptr() as u64, len: bytes.len(),
             path: "/EFI/BOOT/tgl_guc_70.bin", cmdline: "trueos.fw.guc" }),
-        Err(error) => log!("GuC firmware unavailable ({error:?}): Intel GPU submission may be unavailable"),
+        Err(error) => log!("GuC firmware unavailable ({error}): Intel GPU submission may be unavailable"),
     }
     match files.read("EFI/BOOT/BOOTX64.EFI") {
         Ok(bytes) => modules.push(Blob { phys: bytes.as_ptr() as u64, len: bytes.len(),
             path: "/EFI/BOOT/BOOTX64.EFI", cmdline: "trueos.install.bootx64" }),
-        Err(error) => log!("Installer EFI module unavailable: {error:?}"),
+        Err(error) => log!("Installer EFI module unavailable: {error}"),
     }
     files.close();
     let mut rsdp = configuration(st, system::ACPI_20_TABLE_GUID);
@@ -403,12 +424,14 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
     let facts = BootFacts { kernel: Blob { phys: kernel.as_ptr() as u64, len: kernel.len(), path: "/TRUEOS.elf",
             cmdline: "timezone=Europe/Berlin keyboard=de trueos.boot=native-uefi" },
         modules: &modules, tftp_server, kernel_physical_base: kernel_phys, kernel_virtual_base: elf.base,
-        framebuffer: DISPLAY, rsdp, efi_system_table: st as u64,
+        framebuffer: DISPLAY, framebuffer_edid: boot_display.as_ref().ok().and_then(|display| display.edid.as_deref()).unwrap_or(&[]),
+        rsdp, efi_system_table: st as u64,
         smbios32: configuration(st, system::SMBIOS_TABLE_GUID), smbios64: configuration(st, system::SMBIOS3_TABLE_GUID),
         timestamp: timestamp(st), stack_size: STACK_BYTES as u64,
         mp_response: mp.as_ref().map_or(0, |m| paging::HHDM + m.response_phys()),
     };
     if handoff.prepare(&facts).is_err() { stop("could not encode kernel boot responses"); }
+    drop(boot_display); // The retained arena now owns the EDID handed to the kernel.
     if mp.is_none() {
         let response = match single_cpu(&mut handoff, &topology) {
             Ok(response) => response, Err(_) => stop("could not encode BSP identity"),

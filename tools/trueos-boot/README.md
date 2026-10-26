@@ -2,6 +2,8 @@
 
 This experimental Rust loader starts the existing TrueOS kernel directly on
 x86-64 UEFI hardware. It does not load Limine or include Blueprint build-ins.
+The Limine fork is no longer a submodule. The Rust `limine` crate remains as
+the kernel's request/response ABI shared with this loader.
 
 Prepare the release files:
 
@@ -25,7 +27,7 @@ boot files available for comparison and recovery. The preparer writes only to
 The preparer defaults to release. `--dev` uses the dev kernel and stages
 `tgt/usb-debug/`.
 `cargo boot` builds only the EFI loader; the kernel ELF keeps its normal Cargo
-path. The loader uses the volume it was launched from and reads `\TRUEOS.elf`.
+path. When launched from FAT, the loader reads `\TRUEOS.elf` from that volume.
 
 ## IPv4 PXE file server
 
@@ -47,18 +49,32 @@ restart after rebuilding to serve updated files. Use a LAN interface reachable
 by the client and allow DHCP/PXE UDP 67/4011, TFTP UDP 69, and TFTP transfer
 traffic through the host firewall. Stop other PXE/TFTP servers using those ports.
 
-**This is currently file delivery, not a complete native PXE boot.** Firmware
-can fetch the EFI loader, but the loader opens the launch device's UEFI Simple
-File System to read the kernel and GPU firmware. Ordinary PXE does not supply
-that filesystem. The loader needs a network download path before it can boot
-these files end to end over PXE. Use the FAT USB method for the current loader.
+Select **IPv4 UEFI PXE** in the test rig's boot menu. Firmware downloads
+`EFI/BOOT/BOOTX64.EFI`; the Rust loader reuses that boot device's PXE Base Code
+protocol to fetch `TRUEOS.elf`, the GuC firmware and its own installer-module
+copy over TFTP. It prefers the PXE/ProxyDHCP reply's boot server over the LAN's
+address-lease server. No Rust network stack, C compiler, ISO or disk image is
+needed. The same prepared directory works for both PXE and the FAT USB copy.
 
-## First hardware test
+All downloads finish before firmware boot services end. The loader stops the
+firmware PXE session, retains the downloaded files for the kernel, and uses the
+same ELF loading, CPU startup and handoff path as USB. This implementation uses
+the firmware's active IPv4 PXE session; IPv6 PXE and HTTP Boot are not supported.
+This path has booted the physical test rig through to the running kernel.
+
+The loader selects the console's 2560×1440 RGB/BGR framebuffer when firmware
+offers it, otherwise retaining a usable firmware mode. It captures EDID from
+the same GOP device and copies it into retained boot responses. The kernel
+uses that monitor data for physical font sizing, including Shell3 text and
+the home button. The loader logs the selected resolution and EDID capture.
+
+## Hardware diagnostics
 
 The loader prints milestones to the GOP framebuffer and COM1, including the
-kernel image size, discovered logical CPU count, firmware exit, successfully
-started CPUs, and entry into the kernel. P cores, E cores and SMT threads are
-enumerated through ACPI MADT and identified by their APIC IDs.
+boot source, file downloads, kernel image size, discovered logical CPU count,
+firmware exit, successfully started CPUs, and entry into the kernel. P cores,
+E cores and SMT threads are enumerated through ACPI MADT and identified by
+their APIC IDs.
 
 Secondary processors receive INIT/SIPI, enter 64-bit mode with retained page
 tables and 16 MiB stacks, and wait for the kernel's existing `bootstrap()` call.
@@ -77,8 +93,9 @@ its own CPU-slot limit. The HII capture extension is not supplied by this loader
 yet; the existing FirmwareScout code is available for a later integration.
 
 Host tests validate the real ELF, request layouts, page tables, memory ownership,
-RTC conversion and CPU enumeration. Compilation and host tests do not establish
-that firmware handoff or processor startup works on physical hardware.
+RTC conversion, CPU enumeration, PXE protocol calls, boot-server selection,
+network error handling, display mode selection, EDID retention and physical
+font sizing. Firmware and display changes still need testing on the rig.
 
 After preparing the release files, run those checks with:
 

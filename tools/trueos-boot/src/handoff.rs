@@ -104,6 +104,9 @@ pub struct BootFacts<'a> {
     pub kernel_physical_base: u64,
     pub kernel_virtual_base: u64,
     pub framebuffer: Option<Framebuffer>,
+    /// Monitor data captured from the protocol on this framebuffer's GOP device.
+    /// prepare() copies it into the retained arena before firmware can free it.
+    pub framebuffer_edid: &'a [u8],
     /// These firmware addresses are physical; responses report HHDM pointers.
     pub rsdp: u64,
     pub efi_system_table: u64,
@@ -365,6 +368,9 @@ impl Handoff {
         ])?.virtual_address;
         if let Some(framebuffer) = facts.framebuffer {
             let address = self.virtual_address(framebuffer.phys)?;
+            // Reserve a non-null pointer even for an empty Rust slice.
+            let edid = self.allocate_bytes(facts.framebuffer_edid.len().max(1), 1)?;
+            unsafe { ptr::copy_nonoverlapping(facts.framebuffer_edid.as_ptr(), edid.pointer, facts.framebuffer_edid.len()); }
             let framebuffer_wire = self.store(FramebufferWire {
                 address, width: framebuffer.width, height: framebuffer.height,
                 pitch: framebuffer.pitch, bpp: framebuffer.bpp, memory_model: 1,
@@ -374,9 +380,8 @@ impl Handoff {
                 green_mask_shift: framebuffer.green_mask_shift,
                 blue_mask_size: framebuffer.blue_mask_size,
                 blue_mask_shift: framebuffer.blue_mask_shift,
-                // Even an empty Rust slice requires a non-null base pointer.
-                reserved: [0; 7], edid_size: 0,
-                edid: self.virtual_address(self.arena_phys)?,
+                reserved: [0; 7], edid_size: facts.framebuffer_edid.len() as u64,
+                edid: edid.virtual_address,
             })?;
             let framebuffer_array = self.store([framebuffer_wire.virtual_address])?;
             self.responses[FRAMEBUFFERS] = self.store([
@@ -554,7 +559,7 @@ mod tests {
             kernel: Blob { phys: 0x800000, len: 12345, path: "/TRUEOS.elf", cmdline: "keyboard=de" },
             modules: &[], tftp_server: None, kernel_physical_base: 0x200000,
             kernel_virtual_base: 0xffffffff80100000,
-            framebuffer: None, rsdp: 0, efi_system_table: 0,
+            framebuffer: None, framebuffer_edid: &[], rsdp: 0, efi_system_table: 0,
             smbios32: 0, smbios64: 0, timestamp: Some(1234),
             stack_size: 16 * 1024 * 1024, mp_response: 0,
         }
@@ -607,6 +612,37 @@ mod tests {
                 assert_eq!(file.tftp_ip.to_le_bytes(), [192, 168, 1, 20]);
                 assert_eq!(file.tftp_port, 69);
             }
+        }
+    }
+
+    #[test]
+    fn framebuffer_edid_is_copied_into_retained_handoff_storage() {
+        let mut backing = arena();
+        let mut handoff = unsafe { Handoff::new(backing.as_mut_ptr() as u64, backing.len() * 8, 0, 128) }.unwrap();
+        let mut edid = [0u8; 128];
+        edid[..8].copy_from_slice(&[0, 255, 255, 255, 255, 255, 255, 0]);
+        edid[21] = 60;
+        edid[22] = 34;
+        edid[127] = 0u8.wrapping_sub(edid[..127].iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let original = edid;
+        let mut input = facts();
+        input.framebuffer = Some(Framebuffer {
+            phys: 0xc0000000, width: 2560, height: 1440, pitch: 2560 * 4, bpp: 32,
+            red_mask_size: 8, red_mask_shift: 16, green_mask_size: 8, green_mask_shift: 8,
+            blue_mask_size: 8, blue_mask_shift: 0,
+        });
+        input.framebuffer_edid = &edid;
+        handoff.prepare(&input).unwrap();
+        edid.fill(0); // Firmware's original buffer is no longer needed.
+        unsafe {
+            let response = handoff.responses[FRAMEBUFFERS] as *const u64;
+            let pointers = *response.add(2) as *const u64;
+            let framebuffer = &*((*pointers) as *const FramebufferWire);
+            assert_eq!((framebuffer.width, framebuffer.height), (2560, 1440));
+            assert_eq!(framebuffer.edid_size, 128);
+            let retained = core::slice::from_raw_parts(framebuffer.edid as *const u8, 128);
+            assert_eq!(retained, &original);
+            assert!((backing.as_ptr() as usize..backing.as_ptr() as usize + backing.len() * 8).contains(&(retained.as_ptr() as usize)));
         }
     }
 

@@ -23,7 +23,7 @@ function main() {
     console.log("Usage: sudo node tools/netboot/pxe3.js [interface] [artifact-directory]");
     console.log("Defaults: default-route interface, tgt/usb-release. Requires ip and dnsmasq.");
     console.log("Existing LAN DHCP supplies addresses; this serves only IPv4 PXE boot information and TFTP.");
-    console.log("The Rust EFI loader uses firmware PXE/TFTP to fetch the remaining files; physical PXE testing is pending.");
+    console.log("The Rust EFI loader uses firmware PXE/TFTP to fetch the remaining files.");
     return;
   }
   if (args.length > 2) throw new Error("Use --help for usage");
@@ -68,7 +68,7 @@ function main() {
   if (check.error) throw check.error;
   if (check.status !== 0) throw new Error(check.stderr.trim());
   console.log(`TRUEOS IPv4 PXE on ${iface} (${ip}); artifacts: ${source}`);
-  console.log("The Rust EFI loader fetches the kernel and firmware over PXE/TFTP; physical PXE testing is pending.");
+  console.log("The Rust EFI loader fetches the kernel and firmware over PXE/TFTP.");
   const child = spawn("dnsmasq", dnsmasqArgs, { stdio: "inherit" });
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => child.kill(signal));
