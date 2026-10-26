@@ -83,6 +83,10 @@ mod graphics {pub mod primitives {
 }}
 #[derive(Debug)] struct MenuRect {x:u32,y:u32,width:u32,height:u32,color:graphics::primitives::Rgba8}
 mod r {pub mod services {pub use crate::services::microfont_mask_service;}}
+mod shell3_font_service {
+    pub const DEFAULT_UI4_FONT_SCALE:u32=2;
+    pub fn cell_extent(_:u32)->Option<(u32,u32)> {panic!("this GPU harness supplies physical font metrics")}
+}
 mod ui4 {
     pub mod context_menu {pub const MENU_RENDER_LABEL_CHARS:usize=20;}
     pub fn physical_extent_pixels(w:u32,h:u32)->Option<(u32,u32)> {assert!(w==h && (h==50 || h==10));Some((w*213/50,h*213/50))}
@@ -746,7 +750,7 @@ fn push_overlay_rect(out:&mut Slot4Rects,x:u32,y:u32,width:u32,height:u32,color:
     out.push(crate::MenuRect{x,y,width,height,color});
 }
 '''
-    source=MOCKS+'\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n} pub mod menu_text {\n'+menu_prelude+menu_helpers+'\n}}\n'+TESTS
+    source=MOCKS+'\nmod services { use crate::shell3_font_service; pub mod microfont_mask_service { use crate::{libm,spin};\n'+service+'\n} pub mod menu_text {\n'+menu_prelude+menu_helpers+'\n}}\n'+TESTS
     with tempfile.TemporaryDirectory(prefix='microfont-mask-test-') as tmp:
         tmp=Path(tmp);lib=tmp/'libmicrofont.rlib'
         build_microfont(lib, features=('raster',))

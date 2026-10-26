@@ -165,7 +165,7 @@ fn main() {
         service = (ROOT / "src/r/services/microfont_mask_service.rs").read_text()
         service = service.replace('static START_GLYPH:', 'pub(crate) static START_GLYPH:')
         missing = self.work / "missing-home.rs"
-        missing.write_text(MOCKS + '\nmod services { pub mod microfont_mask_service { use crate::{libm,spin};\n'
+        missing.write_text(MOCKS + '\nmod services { use crate::shell3_font_service; pub mod microfont_mask_service { use crate::{libm,spin};\n'
                            + service.replace('//!','//') + r'''
 }}
 fn main() {

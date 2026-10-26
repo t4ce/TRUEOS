@@ -49,6 +49,7 @@ static ALLOCATIONS:AtomicUsize=AtomicUsize::new(0);
 static FLUSH_FAILS:AtomicBool=AtomicBool::new(false);
 static ALLOCATION_FAILS:AtomicBool=AtomicBool::new(false);
 mod ui4 {
+    pub fn output_dimensions()->Option<(u32,u32)> {Some((1920,1080))}
     pub fn physical_extent_pixels_fraction(w:u32,h:u32,d:u32)->Option<(u32,u32)> {
         assert_eq!((w,h,d),(30,30,4));Some((21,21))
     }

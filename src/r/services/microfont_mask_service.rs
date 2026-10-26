@@ -747,6 +747,18 @@ static START_GLYPH: spin::Once<OwnedGlyphMask> = spin::Once::new();
 static START_GLYPH_READY: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static START_GLYPH_WARM: spin::Mutex<()> = spin::Mutex::new(());
 
+/// Keep the home glyph proportional to the default text em when firmware has
+/// no physical monitor size. This sizes only font masks, not millimetre APIs.
+pub(crate) fn home_button_em_height() -> Option<u32> {
+    if let Some((_, height)) = crate::ui4::physical_extent_pixels(START_GLYPH_EM_MM, START_GLYPH_EM_MM) {
+        return Some(height);
+    }
+    let (_, text_height) = super::shell3_font_service::cell_extent(
+        super::shell3_font_service::DEFAULT_UI4_FONT_SCALE)?;
+    // 50mm / 7.5mm = 20/3; round the scaled pixel height once.
+    text_height.checked_mul(20)?.checked_add(1).map(|height| height / 3)
+}
+
 /// Return the service-owned mask as soon as its one-time production completes.
 /// Observe before checking publication so completion cannot race waiter setup.
 pub(crate) async fn wait_for_start_glyph() -> &'static OwnedGlyphMask {
@@ -764,7 +776,7 @@ pub(crate) fn warm_start_glyph() -> Result<(), &'static str> {
     if START_GLYPH.get().is_some() { return Ok(()); }
     let _warm = START_GLYPH_WARM.try_lock().ok_or("microfont-start-glyph-busy")?;
     if START_GLYPH.get().is_some() { return Ok(()); }
-    let (_, height) = crate::ui4::physical_extent_pixels(START_GLYPH_EM_MM, START_GLYPH_EM_MM)
+    let height = home_button_em_height()
         .ok_or("microfont-start-glyph-physical-size-unavailable")?;
     let glyph = build_home_button_mask(height)?;
     let glyph = START_GLYPH.call_once(|| glyph);

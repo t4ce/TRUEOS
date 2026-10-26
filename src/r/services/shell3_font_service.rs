@@ -13,12 +13,18 @@ const PAGE_COLUMNS: u32 = 8;
 const PAGE_ROWS: u32 = 8;
 pub(crate) const DEFAULT_UI4_FONT_SCALE: u32 = 2;
 
-/// Scale 2 is Shell3's default 7.5mm em; other scale values retain relative zoom.
+/// Scale 2 uses a 7.5mm em when physical display size is known, otherwise the
+/// font's 11-row em at twice its native pixel size. Other scales retain zoom.
 /// This is shared by the font source, frame, paint, scrolling and hit testing.
 pub(crate) fn cell_extent(scale: u32) -> Option<(u32, u32)> {
     let numerator = 15u32.checked_mul(scale)?;
-    let (_, height) = crate::ui4::physical_extent_pixels_fraction(
-        numerator, numerator, 2 * DEFAULT_UI4_FONT_SCALE)?;
+    let height = if let Some((_, height)) = crate::ui4::physical_extent_pixels_fraction(
+        numerator, numerator, 2 * DEFAULT_UI4_FONT_SCALE) {
+        height
+    } else {
+        crate::ui4::output_dimensions()?;
+        (microfont::FHEIGHT as u32).checked_mul(scale)?
+    };
     let width = height.checked_mul(microfont::FWIDTH as u32)?
         .checked_add(microfont::FHEIGHT as u32 / 2)? / microfont::FHEIGHT as u32;
     (width != 0 && height != 0).then_some((width, height))

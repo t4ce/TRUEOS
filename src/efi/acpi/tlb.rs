@@ -3270,6 +3270,9 @@ fn append_nic_driver_snapshots(out: &mut String) {
 
 pub(crate) async fn build_dump_text() -> String {
     let mut out = String::new();
+    if let Some(text) = crate::boot_log::text() {
+        writeln!(out, "=== Native UEFI Loader Log ===\n{text}").unwrap();
+    }
 
     writeln!(out, "TRUEOS TLB UNDER-THE-HOOD DUMP v2").unwrap();
     writeln!(

@@ -23,6 +23,7 @@ mod blueprint_net_broker;
 #[path = "hv/blueprint/blueprint_net_wire.rs"]
 mod blueprint_net_wire;
 mod blueprint_shims;
+mod boot_log;
 #[path = "Chronos.rs"]
 mod chronos;
 mod cpu;
@@ -179,6 +180,7 @@ pub extern "C" fn kmain() -> ! {
     if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
+    boot_log::replay();
 
     // Font decompression needs the heap; every later console or UI renderer
     // observes the installed bundle, including the first framebuffer text.

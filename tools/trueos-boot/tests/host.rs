@@ -4,6 +4,8 @@
 
 extern crate alloc;
 
+#[path = "../src/bootlog.rs"]
+mod bootlog;
 #[path = "../src/elf.rs"]
 mod elf;
 #[path = "../src/handoff.rs"]

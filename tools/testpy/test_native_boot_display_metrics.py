@@ -65,6 +65,7 @@ mod intel {
 }
 mod virtio_gpu_logo {pub fn output_dimensions()->Option<(u32,u32)> {None}}
 mod ui4 {
+    pub fn output_dimensions()->Option<(u32,u32)> {crate::intel::MODE.get()}
     #[path=__UI4_METRICS__] mod display_metrics;
     pub(crate) use display_metrics::{physical_extent_pixels,physical_extent_pixels_fraction};
 }
@@ -85,15 +86,18 @@ fn monitor_edid()->[u8;128] {
     checksum(&mut edid);edid
 }
 use r::services::shell3_font_service::cell_extent;
+use r::services::microfont_mask_service::home_button_em_height;
 
 #[test] fn retained_boot_edid_enables_shell_text_and_home_glyph_sizing() {
     limine::install(&[]);
-    assert_eq!(cell_extent(2),None,"the former loader handoff prevents atlas production");
+    assert_eq!(cell_extent(2),Some((12,22)),"native pixel em permits line/quad atlas production");
+    assert_eq!(home_button_em_height(),Some(147));
     assert_eq!(ui4::physical_extent_pixels(START_GLYPH_EM_MM,START_GLYPH_EM_MM),None);
     limine::install(&monitor_edid());
     assert_eq!(cell_extent(2),Some((17,32)),"7.5 mm Shell3 em at the active 1440p mode");
     assert_eq!(ui4::physical_extent_pixels(START_GLYPH_EM_MM,START_GLYPH_EM_MM),Some((213,212)),
         "the private home glyph's 50 mm sizing gate is now available");
+    assert_eq!(home_button_em_height(),Some(212));
 }
 
 #[test] fn font_density_uses_current_scanout_not_the_edid_preferred_pixel_count() {
@@ -104,16 +108,32 @@ use r::services::shell3_font_service::cell_extent;
     assert_eq!(cell_extent(2),Some((17,32)));
     intel::MODE.set(None);
     assert_eq!(cell_extent(2),None,"an EDID alone cannot make an absent display ready");
+    assert_eq!(home_button_em_height(),None);
 }
 
-#[test] fn corrupt_or_size_free_edid_keeps_native_sizing_unavailable() {
+#[test] fn corrupt_or_size_free_edid_uses_font_pixels_without_inventing_physical_metrics() {
     let mut edid=monitor_edid();edid[40]^=1;
     limine::install(&edid);
-    assert_eq!(cell_extent(2),None,"a corrupt EDID must not supply physical dimensions");
+    assert_eq!(ui4::physical_extent_pixels(50,50),None);
+    assert_eq!(cell_extent(2),Some((12,22)));
+    assert_eq!(home_button_em_height(),Some(147));
     let mut edid=monitor_edid();
     edid[21]=0;edid[22]=0;edid[66..69].fill(0);checksum(&mut edid);
     limine::install(&edid);
-    assert_eq!(cell_extent(2),None,"native displays retain the validated physical-size policy");
+    assert_eq!(ui4::physical_extent_pixels(50,50),None);
+    assert_eq!(cell_extent(2),Some((12,22)));
+    assert_eq!(home_button_em_height(),Some(147));
+}
+
+#[test] fn native_pixel_font_zoom_and_display_readiness_remain_checked() {
+    limine::install(&[]);
+    assert_eq!(cell_extent(1),Some((6,11)));
+    assert_eq!(cell_extent(4),Some((24,44)));
+    assert_eq!(cell_extent(0),None);
+    assert_eq!(cell_extent(u32::MAX),None);
+    intel::MODE.set(None);
+    assert_eq!(cell_extent(2),None);
+    assert_eq!(home_button_em_height(),None);
 }
 
 #[test] fn detailed_timing_and_centimeter_dimensions_both_restore_font_sizing() {
@@ -137,6 +157,9 @@ def main():
     source += '\nmod r {pub mod services {pub mod shell3_font_service {\n'
     source += constant('src/r/services/shell3_font_service.rs', 'DEFAULT_UI4_FONT_SCALE')
     source += item('src/r/services/shell3_font_service.rs', 'cell_extent')
+    source += '\n}\npub mod microfont_mask_service {\n'
+    source += constant('src/r/services/microfont_mask_service.rs', 'START_GLYPH_EM_MM')
+    source += item('src/r/services/microfont_mask_service.rs', 'home_button_em_height')
     source += '\n}}}\n' + TESTS
     with tempfile.TemporaryDirectory(prefix='trueos-native-boot-display-') as directory:
         work = Path(directory)

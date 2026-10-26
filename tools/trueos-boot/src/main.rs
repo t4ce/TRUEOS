@@ -5,6 +5,8 @@
 
 extern crate alloc;
 
+#[allow(dead_code)]
+mod bootlog;
 mod elf;
 mod graphics;
 mod handoff;
@@ -29,6 +31,7 @@ static mut SYSTEM_TABLE: *mut SystemTable = ptr::null_mut();
 static mut DISPLAY: Option<Framebuffer> = None;
 static mut SCREEN_ROW: usize = 0;
 static mut SCREEN_COLUMN: usize = 0;
+static mut LOADER_LOG: bootlog::BootLog = bootlog::BootLog::new();
 
 struct FirmwareAllocator;
 #[global_allocator]
@@ -59,6 +62,7 @@ struct Console;
 impl Write for Console {
     fn write_str(&mut self, value: &str) -> fmt::Result {
         unsafe {
+            (&mut *ptr::addr_of_mut!(LOADER_LOG)).append(value);
             for byte in value.bytes() {
                 // Bounded polling keeps absent serial hardware from blocking USB boot.
                 for _ in 0..1000 {
@@ -367,6 +371,7 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
                 Some(edid) => log!("Monitor EDID: {} bytes; source {:?}", edid.len(), display.edid_source),
                 None => log!("Monitor EDID unavailable; physical font sizing needs display metadata"),
             }
+            for probe in &display.probes { log!("Display probe: {probe:?}"); }
         }
         Err(error) => log!("Display initialization: {error:?}"),
     }
@@ -421,6 +426,10 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
         },
         _ => { log!("SMP memory unavailable; using BSP"); None }
     };
+    // Retain the original buffer: later firmware-exit and CPU-start messages
+    // update its length prefix after these fixed-size responses are prepared.
+    modules.push(Blob { phys: ptr::addr_of!(LOADER_LOG) as u64, len: bootlog::WIRE_BYTES,
+        path: "/trueos-boot.log", cmdline: "trueos.boot.log" });
     let facts = BootFacts { kernel: Blob { phys: kernel.as_ptr() as u64, len: kernel.len(), path: "/TRUEOS.elf",
             cmdline: "timezone=Europe/Berlin keyboard=de trueos.boot=native-uefi" },
         modules: &modules, tftp_server, kernel_physical_base: kernel_phys, kernel_virtual_base: elf.base,

@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../TRUEOS-Buildins"
+		}
+	],
+	"settings": {}
+}
