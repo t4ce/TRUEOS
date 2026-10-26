@@ -155,9 +155,9 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
                     }
                 }
                 let script = app.pullbot_script()?;
-                let bytes = crate::app_db::get("appstore.bp")?
+                let bytes = crate::app_db::get("apps.bp")?
                     .ok_or_else(|| String::from("Appstore builtin unavailable"))?;
-                let mut request = crate::hv::launcher::LaunchRequest::new("appstore.bp".into(), bytes);
+                let mut request = crate::hv::launcher::LaunchRequest::new("apps.bp".into(), bytes);
                 request.script = Some(script);
                 crate::hv::launcher::enqueue(request, None).map(|_| ())
             })();

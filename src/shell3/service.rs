@@ -119,10 +119,10 @@ pub(super) fn launch_appstore(
     {
         return Err("apps: invalid appstore selector".into());
     }
-    let store = crate::app_db::get("appstore.bp")?
-        .ok_or_else(|| alloc::string::String::from("apps: appstore.bp is missing from AppDB"))?;
+    let store = crate::app_db::get("apps.bp")?
+        .ok_or_else(|| alloc::string::String::from("apps: apps.bp is missing from AppDB"))?;
     launch_bytes_with_script(
-        "appstore.bp".into(),
+        "apps.bp".into(),
         store,
         frontend,
         Some(alloc::format!("pull {selector}\n")),

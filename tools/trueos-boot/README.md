@@ -29,6 +29,45 @@ The preparer defaults to release. `--dev` uses the dev kernel and stages
 `cargo boot` builds only the EFI loader; the kernel ELF keeps its normal Cargo
 path. When launched from FAT, the loader reads `\TRUEOS.elf` from that volume.
 
+## Build and reboot the rig
+
+Install the repository's Cargo commands once per checkout:
+
+```sh
+tools/install-rig-commands.sh
+```
+
+The installer links `cargo-rigdev` and `cargo-rigreal` into `$CARGO_HOME/bin`
+(default `~/.cargo/bin`), which must be on PATH. Then run:
+
+```sh
+cargo rigdev   # dev kernel
+cargo rigreal  # release kernel
+```
+
+Both commands build the kernel and release EFI loader, stage all three boot
+files, restart this checkout's `pxe3.js` server with the selected staging
+directory, wait for dnsmasq's TFTP readiness message, and invoke
+`tools/rig-reset.sh` once. The ESP32 receives one reset acknowledgement.
+Build or PXE startup failure prevents the reset. Concurrent rig commands are
+rejected. Ordinary `cargo build` does not reset the rig.
+
+PXE runs as a system service and remains available after the command exits.
+The command may prompt for sudo authentication after building. It requires
+Node.js, dnsmasq, iproute2, systemd, Python 3, and `flock`. The default-route
+interface is selected unless `TRUEOS_PXE_INTERFACE` is set, for example:
+
+```sh
+TRUEOS_PXE_INTERFACE=enp5s0 cargo rigdev
+```
+
+The printed `journalctl -u ...` command shows the PXE logs. Stop the service
+with `sudo systemctl stop <printed-unit>.service`. A manually started
+`pxe3.js` from this checkout is also stopped before replacement; unrelated
+PXE servers are left running and may need to be stopped if their ports conflict.
+The rig must be configured to boot via IPv4 UEFI PXE. A reset acknowledgement
+confirms the packet was sent; it does not verify that the kernel finished booting.
+
 ## IPv4 PXE file server
 
 After preparing the files, start the minimal network server with Node.js,
