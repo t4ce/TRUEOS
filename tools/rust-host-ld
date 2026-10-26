@@ -1,0 +1,21 @@
+#!/bin/bash
+# Link Ubuntu x86-64 build scripts and proc macros using Rust's bundled LLD.
+# The -ld suffix tells rustc this is a linker, so no C compiler driver is needed.
+set -eu
+
+sysroot=$("${RUSTC:-rustc}" --print sysroot)
+libdir=/usr/lib/x86_64-linux-gnu
+args=()
+shared=0
+for arg in "$@"; do
+    case "$arg" in
+        -lgcc_s) args+=(-l:libgcc_s.so.1) ;;
+        -shared) shared=1; args+=("$arg") ;;
+        *) args+=("$arg") ;;
+    esac
+done
+if [ "$shared" = 0 ]; then
+    args=("$libdir/Scrt1.o" "${args[@]}" --dynamic-linker=/lib64/ld-linux-x86-64.so.2)
+fi
+exec "$sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld" \
+    -flavor gnu -L "$libdir" "${args[@]}"

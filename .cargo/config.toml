@@ -12,6 +12,10 @@ build-std = ["core", "compiler_builtins", "alloc", "panic_abort"]
 build-std-features = ["compiler-builtins-mem"]
 json-target-spec = true
 
+[target.x86_64-unknown-linux-gnu]
+# Host build scripts and proc macros need glibc, but no C compiler driver.
+linker = "tools/rust-host-ld"
+
 [target.'.cargo/x86_64-unknown-trueos.json']
 linker = "rust-lld"
 rustflags = [

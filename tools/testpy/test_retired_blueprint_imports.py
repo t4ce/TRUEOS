@@ -62,6 +62,21 @@ fn retired_imports_fail_prebind_and_never_reach_the_return_zero_fallback() {
     assert_eq!(FALLBACKS.with(|n| n.get()), 0);
 }
 #[test]
+fn ring_imports_fail_prebind_and_never_reach_the_return_zero_fallback() {
+    FALLBACKS.with(|n| n.set(0));
+    for name in [
+        "ring_core_0_17_14__aes_nohw_set_encrypt_key",
+        "ring_core_0_17_14__gcm_init_clmul",
+        "ring_core_0_17_14__x25519_public_from_private",
+        "ring_core_future_version__crypto_function",
+    ] {
+        let reason = prebind::prebind_import_error(name).expect(name);
+        assert!(reason.contains("Ring crypto"), "{name}: {reason}");
+        assert_eq!(resolve_import(name), None, "{name}");
+    }
+    assert_eq!(FALLBACKS.with(|n| n.get()), 0);
+}
+#[test]
 fn live_imports_and_existing_unsupported_unix_policy_keep_their_behavior() {
     FALLBACKS.with(|n| n.set(0));
     assert_eq!(resolve_import("memcpy"), Some(123));

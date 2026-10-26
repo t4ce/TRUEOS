@@ -5,6 +5,7 @@ edition = "2024"
 license-file = "../../LICENSE"
 
 [dependencies]
-ring = { version = "=0.17.14", default-features = false }
-getrandom_02 = { package = "getrandom", version = "0.2", default-features = false, features = ["custom"] }
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "zeroize"] }
+# Enable expanded AES key cleanup even when built independently of the kernel.
+aes = { version = "0.8", default-features = false, features = ["zeroize"] }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }

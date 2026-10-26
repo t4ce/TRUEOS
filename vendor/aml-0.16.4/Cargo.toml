@@ -39,7 +39,7 @@ version = "1"
 default-features = false
 
 [dependencies.log-os]
-path = "../../../TRUEOS-Blueprints/crates/log-os"
+path = "../log-os"
 package = "log-os"
 
 [dependencies.spinning_top]

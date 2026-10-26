@@ -57,12 +57,16 @@ hardware—not a thin proof of concept around a boot screen.
 
 ## Start here
 
-For kernel development, use `make kernel`. To build a bootable image locally,
-use `make iso START_BAREMETAL_LOG=0 PUBLISH_RELEASE_SMB=0 RELEASE_BUMP_CNT=0`,
-then boot it with `tools/qemu/run.sh iso -snapshot`. See the
-[QEMU setup and verification guide](tools/qemu/README.md) for firmware requirements.
-`cargo run` builds the kernel but rejects host execution with these instructions;
-the kernel ELF requires a bootloader.
+Build the kernel with `cargo build --release`. The ELF is written to
+`tgt/x86_64-unknown-trueos/release/TRUEOS`; Blueprint build-ins are disabled by
+default. Rustup installs the pinned minimal nightly toolchain and `rust-src`
+from `rust-toolchain.toml`. On x86-64 Ubuntu, host build scripts use Rust's
+bundled linker with the system glibc development files, so GCC and Clang are
+not needed. The font packer also requires `lz4`.
+
+`cargo run` rejects host execution because the kernel ELF requires a bootloader.
+See the [QEMU setup and verification guide](tools/qemu/README.md) for booting
+an existing image and firmware requirements.
 
 For experimental headless kernel bring-up without QEMU or an ISO, use
 `cargo kvm`. The [direct KVM launcher](tools/kvm/README.md) boots Cargo's exact

@@ -54,6 +54,11 @@ pub(crate) fn prebind_import_readiness(name: &str, filesystem_independent: bool)
 }
 
 pub(crate) fn retired_import_error(name: &str) -> Option<&'static str> {
+    if name.starts_with("ring_core_") {
+        return Some(
+            "retired Ring crypto import; rebuild the Blueprint with a RustCrypto backend",
+        );
+    }
     match name {
         "_Unwind_RaiseException"
         | "sys_alloc_words"

@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::{string::String, vec::Vec};
 use core::str;
 
-use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, Tag, UnboundKey};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce, Tag, aead::AeadInPlace};
 use zeroize::Zeroizing;
 
 pub const USERNAME_MIN_BYTES: usize = 3;
@@ -211,13 +211,12 @@ pub fn seal(
         }
     }
 
-    let unbound =
-        UnboundKey::new(&AES_256_GCM, recovery_key).map_err(|_| StoreError::CryptoUnavailable)?;
-    let key = LessSafeKey::new(unbound);
+    let key = Aes256Gcm::new_from_slice(recovery_key)
+        .map_err(|_| StoreError::CryptoUnavailable)?;
     let tag = key
-        .seal_in_place_separate_tag(
-            Nonce::assume_unique_for_key(nonce),
-            Aad::from(header.as_slice()),
+        .encrypt_in_place_detached(
+            Nonce::from_slice(&nonce),
+            header.as_slice(),
             plaintext.as_mut_slice(),
         )
         .map_err(|_| StoreError::CryptoUnavailable)?;
@@ -295,20 +294,18 @@ pub fn open(
     let nonce: [u8; NONCE_BYTES] = envelope[36..48]
         .try_into()
         .map_err(|_| StoreError::InvalidEnvelope)?;
-    let tag = Tag::try_from(&envelope[HEADER_BYTES + plaintext_bytes..])
-        .map_err(|_| StoreError::InvalidEnvelope)?;
+    // Envelope length validation above guarantees an exact 16-byte tag.
+    let tag = Tag::from_slice(&envelope[HEADER_BYTES + plaintext_bytes..]);
     let mut plaintext =
         Zeroizing::new(envelope[HEADER_BYTES..HEADER_BYTES + plaintext_bytes].to_vec());
 
-    let unbound =
-        UnboundKey::new(&AES_256_GCM, recovery_key).map_err(|_| StoreError::CryptoUnavailable)?;
-    let key = LessSafeKey::new(unbound);
-    key.open_in_place_separate_tag(
-        Nonce::assume_unique_for_key(nonce),
-        Aad::from(&envelope[..HEADER_BYTES]),
-        tag,
+    let key = Aes256Gcm::new_from_slice(recovery_key)
+        .map_err(|_| StoreError::CryptoUnavailable)?;
+    key.decrypt_in_place_detached(
+        Nonce::from_slice(&nonce),
+        &envelope[..HEADER_BYTES],
         plaintext.as_mut_slice(),
-        0..,
+        tag,
     )
     .map_err(|_| StoreError::AuthenticationFailed)?;
 
@@ -401,6 +398,45 @@ mod tests {
             last_accepted_step: Some(42),
             ssh_public_keys: Vec::new(),
         }
+    }
+
+    // Fixtures use the original envelope layout, independently encrypted with
+    // Python cryptography 46.0.5 / OpenSSL AESGCM: key = [0x11; 32], nonce =
+    // [0x22; 12], AAD = the 144-byte header, plaintext = credential() above
+    // (version 2 additionally includes the two public keys used in its test).
+    // Fixed expected bytes catch an incompatible cipher or serialization change
+    // that an encrypt/decrypt round trip using one backend would miss.
+    fn fixture(hex: &str) -> Vec<u8> {
+        let hex: Vec<u8> = hex.bytes().filter(|byte| !byte.is_ascii_whitespace()).collect();
+        assert_eq!(hex.len() % 2, 0);
+        hex.chunks_exact(2)
+            .map(|pair| u8::from_str_radix(str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn legacy_envelope_matches_independent_aes256_gcm_fixture() {
+        let expected = fixture(include_str!("../tests/fixtures/credential-v1.hex"));
+        let key = [0x11; RECOVERY_KEY_BYTES];
+        let envelope = seal("root", &key, 7, [0x22; NONCE_BYTES], &credential()).unwrap();
+        assert_eq!(envelope.as_slice(), expected.as_slice());
+        let opened = open("root", &key, &expected).unwrap();
+        assert_eq!(opened.generation, 7);
+        assert_eq!(opened.credential.signing_seed.as_slice(), &[6; SIGNING_SEED_BYTES]);
+        assert!(opened.credential.ssh_public_keys.is_empty());
+    }
+
+    #[test]
+    fn ssh_envelope_matches_independent_aes256_gcm_fixture() {
+        let expected = fixture(include_str!("../tests/fixtures/credential-v2.hex"));
+        let key = [0x11; RECOVERY_KEY_BYTES];
+        let mut credential = credential();
+        credential.ssh_public_keys = alloc::vec![[0x33; 32], [0x44; 32]];
+        let envelope = seal("root", &key, 2, [0x22; NONCE_BYTES], &credential).unwrap();
+        assert_eq!(envelope.as_slice(), expected.as_slice());
+        let opened = open("root", &key, &expected).unwrap();
+        assert_eq!(opened.generation, 2);
+        assert_eq!(opened.credential.ssh_public_keys, credential.ssh_public_keys);
     }
 
     #[test]

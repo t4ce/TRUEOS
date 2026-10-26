@@ -55,6 +55,7 @@ exclude = [
     "tools/remoteai",
     "tools/wgpu-video-mesh",
     "vendor/*",
+    "vendor/log-os",
     # Cargo matches workspace exclusions against package directories, so this
     # nested package needs its own entry.
     "vendor/CrabUSB/usb-host",
@@ -151,7 +152,6 @@ tinyaudio = { path = "vendor/tinyaudio", default-features = false }
 alsa = { version = "0.11.0", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
-ring = { version = "=0.17.14", default-features = false }
 chacha20poly1305 = { version = "0.10.1", default-features = false }
 webpki-roots = { version = "1.0.7", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
@@ -233,7 +233,6 @@ crc32fast = { path = "vendor/crc32fast-1.5.0" }
 embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
 lazy_static = { path = "vendor/lazy_static-1.5.0" }
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
-ring = { path = "vendor/ring-0.17.14" }
 mio = { path = "vendor/mio-1.2.0" }
 smoltcp = { path = "vendor/smoltcp-0.13.1" }
 zune-core = { path = "vendor/zune-core-0.5.1" }

@@ -10,7 +10,6 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 // Modules
-mod aes_ni;
 mod ai;
 mod allcaps;
 mod allocators;
@@ -154,10 +153,6 @@ pub extern "C" fn kmain() -> ! {
         cpu::enable_sse();
     }
     log_os::init_global_dispatch();
-    // Blueprint modules may import Ring's prefixed native implementation
-    // symbols directly. Keep the Rust crate linked; build.rs retains and
-    // publishes the native routines through the runtime import resolver.
-    core::hint::black_box(&ring::digest::SHA256);
     disc::install::pxeproc::init_boot_mode();
     live_update::log_boot_mode();
     crate::log_info!(
@@ -173,8 +168,6 @@ pub extern "C" fn kmain() -> ! {
         crate::log_os::flags::SHELL2_RENDER_DIAG_PROFILE_ENABLED as u8,
     );
     exceptions::init();
-    // Keep the IDT live before the CPUID-gated instruction KAT executes.
-    let _ = aes_ni::boot_probe_once();
     if crate::log_os::flags::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
     }

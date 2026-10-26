@@ -5,10 +5,10 @@ cat >&2 <<'EOF'
 TRUEOS is a bare-metal kernel. cargo run cannot execute it on the host.
 
 Build the kernel:
-  make kernel
+  cargo build --release
 
-Build a bootable ISO without publishing or starting the physical-rig log drain:
-  make iso START_BAREMETAL_LOG=0 PUBLISH_RELEASE_SMB=0 RELEASE_BUMP_CNT=0
+Kernel ELF:
+  tgt/x86_64-unknown-trueos/release/TRUEOS
 
 Boot the built ISO in QEMU:
   tools/qemu/run.sh iso -snapshot
