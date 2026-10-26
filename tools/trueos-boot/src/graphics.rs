@@ -267,7 +267,7 @@ unsafe fn configure(display: Display, services: Services) -> Result<Output, Erro
     // The working Limine path likewise captures EDID before changing modes.
     let (mut initial_edid, mut initial_source) = unsafe { read_edid(display.handle, services.handle_protocol) };
     if initial_edid.is_none() && unsafe { capture(protocol) }.is_some() {
-        let (edid, source, free_failures) = unsafe { alias_edid(protocol, services) };
+        let (edid, source, free_failures) = unsafe { alias_edid(protocol, display.handle, services) };
         initial_edid = edid;
         initial_source = source;
         output.free_failures += free_failures;
@@ -310,7 +310,7 @@ unsafe fn configure(display: Display, services: Services) -> Result<Output, Erro
     output.free_failures += unsafe { collect_probes(protocol, ProbeStage::AfterMode, services, &mut output.probes) };
     let (mut edid, mut source) = unsafe { read_edid(display.handle, services.handle_protocol) };
     if edid.is_none() && output.framebuffer.is_some() {
-        let (aliased_edid, aliased_source, free_failures) = unsafe { alias_edid(protocol, services) };
+        let (aliased_edid, aliased_source, free_failures) = unsafe { alias_edid(protocol, display.handle, services) };
         edid = aliased_edid;
         source = aliased_source;
         output.free_failures += free_failures;
@@ -390,16 +390,18 @@ unsafe fn same_scanout(a: *mut gop::Protocol, b: *mut gop::Protocol) -> bool {
 }
 
 /// ConSplitter can expose a virtual GOP with the same linear framebuffer as
-/// its physical child, while EDID lives only on the child's handle. Accept
-/// that association only when one physical GOP matches exactly, even if a
+/// its physical child, or share its exact interface, while EDID lives only on
+/// the child's handle. Exclude the selected handle rather than its interface.
+/// Accept that association only when one physical GOP matches exactly, even if a
 /// second matching output has no EDID of its own.
-unsafe fn alias_edid(protocol: *mut gop::Protocol, services: Services) -> (Option<Vec<u8>>, Option<EdidSource>, u32) {
+unsafe fn alias_edid(protocol: *mut gop::Protocol, selected_handle: Handle, services: Services) -> (Option<Vec<u8>>, Option<EdidSource>, u32) {
     let (handles, free_failures) = unsafe { gop_handles(services) };
     let mut matched: Option<(*mut gop::Protocol, Vec<u8>, EdidSource)> = None;
     let mut matching_protocol = None;
     for handle in handles {
+        if handle == selected_handle { continue; }
         let Some(candidate) = (unsafe { gop_on(handle, services) }) else { continue; };
-        if candidate == protocol || !unsafe { same_scanout(protocol, candidate) } { continue; }
+        if !unsafe { same_scanout(protocol, candidate) } { continue; }
         if matching_protocol.is_some_and(|previous| previous != candidate) {
             return (None, None, free_failures);
         }
@@ -483,6 +485,7 @@ mod tests {
         active: EdidProtocol,
         discovered: EdidProtocol,
         no_gop: bool,
+        gop_alias: *mut gop::Protocol,
     }
 
     #[repr(C)]
@@ -531,7 +534,10 @@ mod tests {
         let mock = unsafe { &mut *handle.cast::<Mock>() };
         let guid = unsafe { *guid };
         if guid == gop::PROTOCOL_GUID && mock.no_gop { return Status::UNSUPPORTED; }
-        let result = if guid == gop::PROTOCOL_GUID { ptr::addr_of_mut!(mock.protocol).cast() }
+        let result = if guid == gop::PROTOCOL_GUID {
+            if mock.gop_alias.is_null() { ptr::addr_of_mut!(mock.protocol).cast() }
+            else { mock.gop_alias.cast() }
+        }
             else if guid == EDID_ACTIVE { ptr::addr_of_mut!(mock.active).cast() }
             else if guid == EDID_DISCOVERED { ptr::addr_of_mut!(mock.discovered).cast() }
             else { return Status::UNSUPPORTED; };
@@ -619,7 +625,7 @@ mod tests {
             fail_set: false, invalidate_edid_on_set: false, free_status: Status::SUCCESS, edid: edid(),
             active: EdidProtocol { size_of_edid: 0, edid: ptr::null() },
             discovered: EdidProtocol { size_of_edid: 0, edid: ptr::null() },
-            no_gop: false,
+            no_gop: false, gop_alias: ptr::null_mut(),
         });
         mock.mode.info = &mut mock.modes[0];
         mock.protocol.mode = &mut *mock.mode;
@@ -815,6 +821,44 @@ mod tests {
         let output = unsafe { configure(display, services) }.unwrap();
         assert_eq!(output.edid.unwrap()[21], 60);
         assert!(LOOKUP.with(|lookup| lookup.borrow().as_ref().unwrap().freed));
+        LOOKUP.with(|lookup| *lookup.borrow_mut() = None);
+    }
+
+    #[test]
+    fn console_sharing_physical_gop_interface_reads_edid_from_owning_handle() {
+        for invalidate_on_set in [false, true] {
+            let mut physical = mock(vec![info(1024, 768, 1), info(2560, 1440, 1)]);
+            physical.invalidate_edid_on_set = invalidate_on_set;
+            let original = physical.edid.clone();
+            let mut console = mock(vec![info(1024, 768, 1)]);
+            console.active.size_of_edid = 0;
+            console.gop_alias = ptr::addr_of_mut!(physical.protocol);
+            // Firmware enumerates only the physical owner, while ConsoleOutHandle
+            // returns that same GOP interface without exposing EDID on the console.
+            let services = lookup_services(vec![&mut *physical]);
+            let display = unsafe { find_display((&mut *console as *mut Mock).cast(), services) }.unwrap();
+            assert!(display.console);
+            assert_eq!(display.protocol, ptr::addr_of_mut!(physical.protocol));
+            let output = unsafe { configure(display, services) }.unwrap();
+            assert_eq!(output.after.unwrap().width, 2560);
+            assert_eq!(output.edid, Some(original));
+            assert_eq!(output.edid_source, Some(EdidSource::Active));
+            LOOKUP.with(|lookup| *lookup.borrow_mut() = None);
+        }
+    }
+
+    #[test]
+    fn shared_interface_still_rejects_another_gop_with_matching_scanout() {
+        let mut physical = mock(vec![info(2560, 1440, 1)]);
+        let mut clone = mock(vec![info(2560, 1440, 1)]);
+        let mut console = mock(vec![info(2560, 1440, 1)]);
+        console.active.size_of_edid = 0;
+        console.gop_alias = ptr::addr_of_mut!(physical.protocol);
+        let services = lookup_services(vec![&mut *physical, &mut *clone]);
+        let display = unsafe { find_display((&mut *console as *mut Mock).cast(), services) }.unwrap();
+        let output = unsafe { configure(display, services) }.unwrap();
+        assert!(output.framebuffer.is_some());
+        assert!(output.edid.is_none());
         LOOKUP.with(|lookup| *lookup.borrow_mut() = None);
     }
 
