@@ -11,7 +11,7 @@ pub(super) enum Target {
 
 type Entry = (MetaFmtStr, Option<Target>);
 
-const GO2: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
+const GO2: [char; 8] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁'];
 
 fn working_marker() -> char {
     GO2[(crate::chronos::monotonic_nanos() / 100_000_000 % GO2.len() as u64) as usize]
