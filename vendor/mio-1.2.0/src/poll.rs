@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use crate::{event, sys, Events, Interest, Token};
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 unsafe extern "Rust" {
     fn trueos_tokio_platform_log(level: u32, bytes: *const u8, len: usize);
 }
@@ -445,7 +445,7 @@ impl Poll {
     ///
     /// [struct]: #
     pub fn poll(&mut self, events: &mut Events, timeout: Option<Duration>) -> io::Result<()> {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
         {
             use core::sync::atomic::{AtomicU32, Ordering};
             static MIO_POLL_LOG_COUNT: AtomicU32 = AtomicU32::new(0);

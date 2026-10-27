@@ -1,8 +1,8 @@
-#![cfg_attr(any(target_os = "trueos", target_os = "zkvm"), allow(dead_code))]
+#![cfg_attr(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")), allow(dead_code))]
 
 use core::ops::{Deref, DerefMut};
 #[cfg(any(
-    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))),
     target_os = "wasi"
 ))]
 use std::os::fd::AsRawFd;
@@ -112,7 +112,7 @@ impl<T> DerefMut for IoSource<T> {
 }
 
 #[cfg(any(
-    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))),
     target_os = "hermit",
     all(target_os = "wasi", not(target_env = "p1"))
 ))]
@@ -151,7 +151,7 @@ where
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 impl<T> event::Source for IoSource<T> {
     fn register(
         &mut self,

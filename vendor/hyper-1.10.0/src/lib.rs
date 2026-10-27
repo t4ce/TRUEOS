@@ -109,6 +109,8 @@
 extern crate alloc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate self as std;
+#[cfg(feature = "std-compat")]
+extern crate std as real_std;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod any {
@@ -156,7 +158,10 @@ pub mod future {
 // the Blueprint overlay layer.
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod io {
+    #[cfg(not(feature = "std-compat"))]
     pub use trueos_io::*;
+    #[cfg(feature = "std-compat")]
+    pub use crate::real_std::io::*;
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -314,7 +319,12 @@ pub mod thread {
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), feature = "std-compat"))]
+pub mod time {
+    pub use crate::real_std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+}
+
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 pub mod time {
     pub use core::time::Duration;
 

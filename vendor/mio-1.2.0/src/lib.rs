@@ -45,36 +45,46 @@
 #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 compile_error!("This wasm target is unsupported by mio. If using Tokio, disable the net feature.");
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 extern crate alloc;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 extern crate self as std;
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+// The crate remains no_std; legacy consumers explicitly opt into std contracts.
+#[cfg(feature = "std-compat")]
+#[macro_use]
+extern crate std;
+#[cfg(feature = "std-compat")]
+pub mod io {
+    //! Standard I/O boundary for legacy Tokio and terminal consumers.
+    pub use std::io::*;
+}
+
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 pub mod fmt {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use ::core::fmt::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 pub mod io {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use trueos_io::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 pub mod num {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use core::num::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 pub mod ops {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use core::ops::*;
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 pub mod path {
     //! TRUEOS no_std compatibility path vocabulary.
     use alloc::string::String;
@@ -150,7 +160,7 @@ pub mod path {
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 pub mod sync {
     //! TRUEOS no_std compatibility re-exports for existing mio paths.
     pub use alloc::sync::Arc;
@@ -166,16 +176,16 @@ pub mod sync {
 mod macros;
 
 mod interest;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 mod platform;
 mod poll;
 mod sys;
 mod token;
 #[cfg(not(target_os = "wasi"))]
 mod waker;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 mod zkvm_compat;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 mod zkvm_net;
 
 pub mod event;
@@ -198,14 +208,14 @@ pub use waker::Waker;
 
 #[cfg(all(
     unix,
-    not(any(target_os = "trueos", target_os = "zkvm")),
+    not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))),
     feature = "os-ext"
 ))]
 #[cfg_attr(
     docsrs,
     doc(cfg(all(
         unix,
-        not(any(target_os = "trueos", target_os = "zkvm")),
+        not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))),
         feature = "os-ext"
     )))
 )]

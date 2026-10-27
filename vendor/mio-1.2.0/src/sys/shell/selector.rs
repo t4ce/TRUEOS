@@ -6,7 +6,7 @@ use alloc::{
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 use spin::Mutex;
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use trueos_io as io;
 
@@ -168,12 +168,12 @@ impl Selector {
         !events.is_empty()
     }
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
     fn drain_socket_ready(&self, events: &mut Events) -> bool {
         self.drain_socket_ready_timeout(events, Some(Duration::ZERO))
     }
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
     fn drain_socket_ready_timeout(&self, events: &mut Events, timeout: Option<Duration>) -> bool {
         let remaining = events.capacity().saturating_sub(events.len());
         if remaining == 0 {
@@ -195,13 +195,13 @@ impl Selector {
         !events.is_empty()
     }
 
-    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
     fn drain_socket_ready(&self, events: &mut Events) -> bool {
         !events.is_empty()
     }
 }
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 impl Ready {
     fn from_zkvm_bits(bits: u8) -> Self {
         Self {
@@ -215,7 +215,7 @@ impl Ready {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
 cfg_os_ext! {
     impl Selector {
         pub fn register(&self, _: RawFd, _: Token, _: Interest) -> io::Result<()> {
@@ -252,7 +252,7 @@ cfg_any_os_ext! {
 }
 
 cfg_io_source! {
-    #[cfg(any(debug_assertions, any(target_os = "trueos", target_os = "zkvm")))]
+    #[cfg(any(debug_assertions, all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
     impl Selector {
         pub fn id(&self) -> usize {
             self.id
@@ -260,14 +260,14 @@ cfg_io_source! {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
 impl AsFd for Selector {
     fn as_fd(&self) -> BorrowedFd<'_> {
         os_required!()
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
 impl AsRawFd for Selector {
     fn as_raw_fd(&self) -> RawFd {
         os_required!()

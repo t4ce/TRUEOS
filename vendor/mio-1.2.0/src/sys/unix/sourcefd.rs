@@ -1,4 +1,4 @@
-use crate::io;
+use std::io;
 #[cfg(not(target_os = "hermit"))]
 use std::os::fd::RawFd;
 // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
@@ -38,7 +38,7 @@ use crate::{event, Interest, Registry, Token};
     not(all(feature = "os-poll", feature = "net", feature = "os-ext")),
     doc = "```ignore"
 )]
-/// # use core::error::Error;
+/// # use std::error::Error;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// use mio::{Interest, Poll, Token};
 /// #[cfg(unix)]
@@ -74,7 +74,7 @@ use crate::{event, Interest, Registry, Token};
 /// use mio::wasi::SourceFd;
 ///
 /// use std::os::fd::RawFd;
-/// use crate::io;
+/// use std::io;
 ///
 /// # #[allow(dead_code)]
 /// pub struct MyIo {

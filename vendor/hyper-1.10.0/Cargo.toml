@@ -67,6 +67,8 @@ subdirectory = false
 from = "capi/include/hyper.h"
 
 [features]
+# Preserve std I/O contracts only for consumers still using std.
+std-compat = []
 capi = []
 client = [
     "dep:want",

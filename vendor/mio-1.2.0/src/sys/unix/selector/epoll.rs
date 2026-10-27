@@ -1,15 +1,15 @@
-use crate::io;
-#[cfg(debug_assertions)]
-use core::sync::atomic::{AtomicUsize, Ordering};
-use core::time::Duration;
+use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use libc::{EPOLLET, EPOLLIN, EPOLLOUT, EPOLLPRI, EPOLLRDHUP};
 
 use crate::{Interest, Token};
 
 cfg_io_source! {
-    use core::ptr;
+    use std::ptr;
 }
 
 /// Unique id for use as `SelectorId`.
@@ -145,7 +145,7 @@ pub type Event = libc::epoll_event;
 pub type Events = Vec<Event>;
 
 pub mod event {
-    use ::core::fmt;
+    use std::fmt;
 
     use crate::sys::Event;
     use crate::Token;

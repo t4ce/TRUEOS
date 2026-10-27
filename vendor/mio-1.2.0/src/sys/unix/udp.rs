@@ -1,5 +1,5 @@
-use crate::io;
-use core::mem;
+use std::io;
+use std::mem;
 use std::net::{self, SocketAddr};
 #[cfg(not(target_os = "hermit"))]
 use std::os::fd::{AsRawFd, FromRawFd};

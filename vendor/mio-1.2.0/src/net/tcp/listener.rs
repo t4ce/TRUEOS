@@ -21,7 +21,7 @@ use crate::net::TcpStream;
 ))]
 use crate::sys::tcp::set_reuseaddr;
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
 use crate::sys::tcp::{bind, listen, new_for_addr};
 use crate::{event, sys, Interest, Registry, Token};
 
@@ -67,7 +67,7 @@ impl TcpListener {
     /// 4. Calls `listen` on the socket to prepare it to receive new connections.
     #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
     pub fn bind(addr: SocketAddr) -> io::Result<TcpListener> {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
         {
             let _ = addr;
             Err(io::Error::new(
@@ -76,7 +76,7 @@ impl TcpListener {
             ))
         }
 
-        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+        #[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
         {
             let socket = new_for_addr(addr)?;
             #[cfg(any(unix, target_os = "hermit", target_os = "wasi"))]
@@ -315,7 +315,7 @@ impl From<TcpListener> for net::TcpListener {
             {
                 net::TcpListener::from_raw_fd(listener.into_raw_fd())
             }
-            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
             {
                 let _ = listener;
                 panic!("mio zkvm backend cannot convert TcpListener into std yet")

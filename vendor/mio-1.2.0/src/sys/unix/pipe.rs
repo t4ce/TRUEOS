@@ -2,7 +2,7 @@
 //!
 //! See the [`new`] function for documentation.
 
-use crate::io;
+use std::io;
 use std::os::fd::RawFd;
 
 pub(crate) fn new_raw() -> io::Result<[RawFd; 2]> {
@@ -39,6 +39,7 @@ pub(crate) fn new_raw() -> io::Result<[RawFd; 2]> {
         target_os = "watchos",
         target_os = "espidf",
         target_os = "nto",
+        target_os = "trueos",
     ))]
     unsafe {
         // For platforms that don't have `pipe2(2)` we need to manually set the
@@ -65,7 +66,7 @@ pub(crate) fn new_raw() -> io::Result<[RawFd; 2]> {
 
 cfg_os_ext! {
 use std::fs::File;
-use crate::io::{IoSlice, IoSliceMut, Read, Write};
+use std::io::{IoSlice, IoSliceMut, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::process::{ChildStderr, ChildStdin, ChildStdout};
 
@@ -115,7 +116,7 @@ use crate::{event, Interest, Registry, Token};
 /// receiving end.
 ///
 /// ```
-/// use crate::io::{self, Read, Write};
+/// use std::io::{self, Read, Write};
 ///
 /// use mio::{Poll, Events, Interest, Token};
 /// use mio::unix::pipe;
@@ -170,7 +171,7 @@ use crate::{event, Interest, Registry, Token};
 /// Example that receives an event once the `Sender` is dropped.
 ///
 /// ```
-/// # use crate::io;
+/// # use std::io;
 /// #
 /// # use mio::{Poll, Events, Interest, Token};
 /// # use mio::unix::pipe;
@@ -242,10 +243,10 @@ impl Sender {
     /// # Examples
     ///
     /// ```
-    /// # use core::error::Error;
+    /// # use std::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use crate::io;
+    /// use std::io;
     /// use std::os::fd::AsRawFd;
     /// use mio::unix::pipe;
     ///
@@ -427,10 +428,10 @@ impl Receiver {
     /// # Examples
     ///
     /// ```
-    /// # use core::error::Error;
+    /// # use std::error::Error;
     /// #
     /// # fn main() -> Result<(), Box<dyn Error>> {
-    /// use crate::io;
+    /// use std::io;
     /// use std::os::fd::AsRawFd;
     /// use mio::unix::pipe;
     ///

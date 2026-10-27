@@ -76,6 +76,8 @@ features = [
 ]
 
 [features]
+# Legacy consumers; native kernel builds leave this disabled.
+std-compat = ["dep:libc"]
 default = ["log"]
 net = []
 os-ext = [
@@ -146,3 +148,7 @@ check-cfg = [
     "cfg(mio_unsupported_force_poll_poll)",
     "cfg(mio_unsupported_force_waker_pipe)",
 ]
+
+[target.'cfg(any(target_os = "trueos", target_os = "zkvm"))'.dependencies.libc]
+version = "0.2.183"
+optional = true

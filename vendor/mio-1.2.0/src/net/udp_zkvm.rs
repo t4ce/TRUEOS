@@ -164,7 +164,7 @@ impl event::Source for UdpSocket {
     }
 }
 
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
 impl From<UdpSocket> for std::net::UdpSocket {
     fn from(_: UdpSocket) -> Self {
         panic!("mio zkvm backend cannot convert UdpSocket into std yet")

@@ -1,5 +1,5 @@
-use crate::io;
-use core::mem::size_of;
+use std::io;
+use std::mem::size_of;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 pub(crate) fn new_ip_socket(addr: SocketAddr, socket_type: libc::c_int) -> io::Result<libc::c_int> {
@@ -24,6 +24,7 @@ pub(crate) fn new_socket(domain: libc::c_int, socket_type: libc::c_int) -> io::R
         target_os = "openbsd",
         target_os = "solaris",
         target_os = "hermit",
+        target_os = "trueos",
         target_os = "cygwin",
     ))]
     let socket_type = socket_type | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC;

@@ -1,5 +1,5 @@
-use crate::io;
-use core::mem::{size_of, MaybeUninit};
+use std::io;
+use std::mem::{size_of, MaybeUninit};
 use std::net::{self, SocketAddr};
 #[cfg(not(target_os = "hermit"))]
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -73,6 +73,7 @@ pub(crate) fn accept(listener: &net::TcpListener) -> io::Result<(net::TcpStream,
         target_os = "netbsd",
         target_os = "openbsd",
         target_os = "solaris",
+        target_os = "trueos",
         target_os = "cygwin",
     ))]
     let stream = {

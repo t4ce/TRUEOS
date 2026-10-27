@@ -1,11 +1,11 @@
 use crate::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 use crate::path::Path;
 use ::core::fmt;
 use std::net::Shutdown;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::net::{self, SocketAddr};
-#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+#[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
 use std::path::Path;
 
 use crate::io_source::IoSource;

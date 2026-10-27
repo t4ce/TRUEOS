@@ -1,6 +1,6 @@
 //! Both `kqueue(2)` and `epoll(2)` don't need to hold any user space state.
 
-use crate::io;
+use std::io;
 use std::os::fd::RawFd;
 
 use crate::{Interest, Registry, Token};

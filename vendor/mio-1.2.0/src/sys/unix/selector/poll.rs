@@ -3,20 +3,18 @@
 // Permission to use this code has been granted by original author:
 // https://github.com/tokio-rs/mio/pull/1602#issuecomment-1218441031
 
-use ::core::fmt::{Debug, Formatter};
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 #[cfg(not(target_os = "hermit"))]
 use std::os::fd::RawFd;
 // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
 // can use `std::os::fd` and be merged with the above.
-use crate::io;
-use ::core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use core::time::Duration;
-use std::cmp;
 #[cfg(target_os = "hermit")]
 use std::os::hermit::io::RawFd;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
+use std::{cmp, fmt, io};
 
 use crate::sys::unix::waker::Waker as WakerInternal;
 use crate::{Interest, Token};
@@ -152,6 +150,22 @@ impl Debug for PollFd {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum RegistrationMode {
+    /// Raw registrations, such as `SourceFd`, retain their interests until an
+    /// explicit reregister or deregister operation changes them.
+    Persistent,
+    /// Mio-managed `IoSource` registrations emulate edge-triggered delivery.
+    /// `IoSourceState::do_io` rearms them after I/O reaches `WouldBlock`.
+    ManagedOneShot,
+}
+
+impl RegistrationMode {
+    fn disarm_after_event(self) -> bool {
+        matches!(self, Self::ManagedOneShot)
+    }
+}
+
 /// Data associated with a file descriptor in a poller.
 #[derive(Debug, Clone)]
 struct FdData {
@@ -159,6 +173,9 @@ struct FdData {
     poll_fds_index: usize,
     /// The key of the `Event` associated with this file descriptor.
     token: Token,
+    /// Whether the selector retains the interest or waits for Mio-managed I/O
+    /// to rearm it after a `WouldBlock` result.
+    registration_mode: RegistrationMode,
     /// Used to communicate with IoSourceState when we need to internally deregister
     /// based on a closed fd.
     shared_record: Arc<RegistrationRecord>,
@@ -250,8 +267,7 @@ impl SelectorState {
             // We now check whether this poll was performed with descriptors which were pending
             // for removal and filter out any matching.
             let mut pending_removal_guard = self.pending_removal.lock().unwrap();
-            let mut pending_removal =
-                core::mem::replace(pending_removal_guard.as_mut(), Vec::new());
+            let mut pending_removal = std::mem::replace(pending_removal_guard.as_mut(), Vec::new());
             drop(pending_removal_guard);
 
             // Store the events if there were any.
@@ -288,10 +304,13 @@ impl SelectorState {
                             closed_raw_fds.push(poll_fd.fd);
                         }
 
-                        // Remove the interest which just got triggered the IoSourceState's do_io
-                        // wrapper used with this selector will add back the interest using
-                        // reregister.
-                        poll_fd.events &= !poll_fd.revents;
+                        if fd_data.registration_mode.disarm_after_event() {
+                            // Mio-managed `IoSource` registrations emulate edge-triggered
+                            // delivery. Their `do_io` wrapper rearms the interest after the
+                            // operation reaches `WouldBlock`. Raw `SourceFd` registrations
+                            // stay persistent and continue to observe later readiness edges.
+                            poll_fd.events &= !poll_fd.revents;
+                        }
 
                         // Minor optimization to potentially avoid looping n times where n is the
                         // number of input fds (i.e. we might loop between m and n times where m is
@@ -315,7 +334,8 @@ impl SelectorState {
     }
 
     pub fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {
-        self.register_internal(fd, token, interests).map(|_| ())
+        self.register_with_mode(fd, token, interests, RegistrationMode::Persistent)
+            .map(|_| ())
     }
 
     pub fn register_internal(
@@ -323,6 +343,16 @@ impl SelectorState {
         fd: RawFd,
         token: Token,
         interests: Interest,
+    ) -> io::Result<Arc<RegistrationRecord>> {
+        self.register_with_mode(fd, token, interests, RegistrationMode::ManagedOneShot)
+    }
+
+    fn register_with_mode(
+        &self,
+        fd: RawFd,
+        token: Token,
+        interests: Interest,
+        registration_mode: RegistrationMode,
     ) -> io::Result<Arc<RegistrationRecord>> {
         #[cfg(all(debug_assertions, not(target_os = "wasi")))]
         if Some(fd) == self.notify_waker.fd() {
@@ -363,6 +393,7 @@ impl SelectorState {
                 FdData {
                     poll_fds_index,
                     token,
+                    registration_mode,
                     shared_record: record.clone(),
                 },
             );
@@ -587,7 +618,7 @@ pub struct Event {
 pub type Events = Vec<Event>;
 
 pub mod event {
-    use ::core::fmt;
+    use std::fmt;
 
     use crate::sys::Event;
     use crate::Token;

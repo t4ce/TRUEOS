@@ -16,15 +16,15 @@ pub(crate) use self::waker::Waker;
 cfg_net! {
     pub(crate) mod tcp;
     pub(crate) mod udp;
-    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
     pub(crate) mod uds;
 }
 
 cfg_io_source! {
     use crate::io;
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
     use core::sync::atomic::{AtomicUsize, Ordering};
-    #[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
     use std::os::fd::RawFd;
     // TODO: once <https://github.com/rust-lang/rust/issues/126198> is fixed this
     // can use `std::os::fd` and be merged with the above.
@@ -33,15 +33,15 @@ cfg_io_source! {
     #[cfg(windows)]
     use std::os::windows::io::RawSocket;
 
-    #[cfg(any(windows, all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "hermit"))]
+    #[cfg(any(windows, all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))), target_os = "hermit"))]
     use crate::{Registry, Token, Interest};
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
     #[allow(dead_code)]
     static NEXT_SOURCE_ID: AtomicUsize = AtomicUsize::new(1);
 
     pub(crate) struct IoSourceState {
-        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
         source_id: usize,
     }
 
@@ -49,7 +49,7 @@ cfg_io_source! {
     impl IoSourceState {
         pub fn new() -> IoSourceState {
             IoSourceState {
-                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
                 source_id: NEXT_SOURCE_ID.fetch_add(1, Ordering::Relaxed),
             }
         }
@@ -64,7 +64,7 @@ cfg_io_source! {
         }
     }
 
-    #[cfg(any(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))), target_os = "hermit"))]
+    #[cfg(any(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))), target_os = "hermit"))]
     impl IoSourceState {
         pub fn register(
             &mut self,
@@ -91,7 +91,7 @@ cfg_io_source! {
         }
     }
 
-    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
     impl IoSourceState {
         pub fn register(
             &mut self,

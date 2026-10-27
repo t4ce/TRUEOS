@@ -1,14 +1,12 @@
-use crate::io;
-use core::cmp;
-use core::mem;
-use core::mem::MaybeUninit;
-use core::ops::{Deref, DerefMut};
-use core::slice;
-#[cfg(debug_assertions)]
-use core::sync::atomic::{AtomicUsize, Ordering};
-use core::time::Duration;
+use std::mem;
+use std::mem::MaybeUninit;
+use std::ops::{Deref, DerefMut};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
-use std::ptr;
+use std::slice;
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+use std::{cmp, io, ptr};
 
 use crate::Interest;
 use crate::Token;
@@ -252,7 +250,12 @@ impl Selector {
         target_os = "watchos"
     ))]
     pub fn wake(&self, token: Token) -> io::Result<()> {
-        let mut kevent = kevent!(0, libc::EVFILT_USER, libc::EV_ADD | libc::EV_RECEIPT, token.0);
+        let mut kevent = kevent!(
+            0,
+            libc::EVFILT_USER,
+            libc::EV_ADD | libc::EV_RECEIPT,
+            token.0
+        );
         kevent.fflags = libc::NOTE_TRIGGER;
 
         let kq = self.kq.as_raw_fd();
@@ -382,7 +385,7 @@ unsafe impl Send for Events {}
 unsafe impl Sync for Events {}
 
 pub mod event {
-    use ::core::fmt;
+    use std::fmt;
 
     use crate::sys::Event;
     use crate::Token;
@@ -901,4 +904,21 @@ pub(crate) use crate::sys::unix::waker::Waker;
 cfg_io_source! {
     mod stateless_io_source;
     pub(crate) use stateless_io_source::IoSourceState;
+}
+
+#[test]
+#[cfg(feature = "os-ext")]
+fn does_not_register_rw() {
+    use crate::unix::SourceFd;
+    use crate::{Poll, Token};
+
+    let kq = unsafe { libc::kqueue() };
+    let mut kqf = SourceFd(&kq);
+    let poll = Poll::new().unwrap();
+
+    // Registering kqueue fd will fail if write is requested (On anything but
+    // some versions of macOS).
+    poll.registry()
+        .register(&mut kqf, Token(1234), Interest::READABLE)
+        .unwrap();
 }

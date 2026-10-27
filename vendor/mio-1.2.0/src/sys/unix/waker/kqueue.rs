@@ -1,4 +1,4 @@
-use crate::io;
+use std::io;
 
 use crate::sys::Selector;
 use crate::Token;

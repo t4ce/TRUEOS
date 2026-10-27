@@ -1,7 +1,9 @@
+#[cfg(feature = "std-compat")]
+use std::boxed::Box;
 use crate::{Interest, Registry, Token};
 
 use crate::io;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
 use alloc::boxed::Box;
 
 /// An event source that may be registered with [`Registry`].

@@ -772,7 +772,7 @@ impl From<UdpSocket> for net::UdpSocket {
             {
                 net::UdpSocket::from_raw_fd(socket.into_raw_fd())
             }
-            #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+            #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
             {
                 let _ = socket;
                 panic!("mio zkvm backend cannot convert UdpSocket into std yet")
