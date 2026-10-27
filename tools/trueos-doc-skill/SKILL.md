@@ -20,9 +20,19 @@ through `tgt/pxe-current`. The existing `tools/netboot/pxe3.js` process reloads
 that publication automatically. The rig command then invokes one physical
 reset. A failed build prevents publication and reset.
 
+Apps use the Paper object-build flow: normal Cargo builds link with `-r` to
+produce tracked `.o` modules, followed by explicit stripping and the existing
+Blueprint/AppDB packaging. Cargo keeps its normal parallelism. Dev apps and the
+dev kernel compile unoptimized; app dev builds disable LTO and use incremental
+compilation. Debug information is stripped for packaging.
+The rig workflow does not force a single CPU or enter `build-safe.sh`;
+that wrapper remains an explicit diagnostic
+option. Use `CARGO_BUILD_JOBS` to select a different Cargo job count when needed.
+
 Builtins belong to the kernel generation and use the regular AppDB at boot;
-they have no separate Blueprint publication step. Unchanged apps and database
-images remain cached. Query `tools/testpy/trueos-doc topic rig-builds` for paths,
+they have no separate Blueprint publication step. Cargo checks every app on
+each run and reuses fresh artifacts; unchanged packages and database images
+remain cached. Query `tools/testpy/trueos-doc topic rig-builds` for paths,
 incremental behavior, and preparation without a reset. Ordinary `cargo build`
 consumes a verified prepared builtin set and does not reset the rig.
 

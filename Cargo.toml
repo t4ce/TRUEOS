@@ -206,7 +206,6 @@ redb = { version = "=4.4.0", default-features = false, features = ["experimental
 
 [profile.dev]
 panic = "abort"
-opt-level = 1
 
 [profile.release]
 panic = "abort"

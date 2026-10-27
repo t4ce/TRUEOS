@@ -56,13 +56,14 @@ exec "$@"
         script = self.root / 'tools/rig-build.sh'
         script.parent.mkdir()
         shutil.copy(ROOT / 'tools/rig-build.sh', script)
-        shutil.copy(ROOT / 'tools/build-safe.sh', script.parent / 'build-safe.sh')
-        self.setup_scope()
         self.script(self.root / 'tools/trueos-boot/prepare.sh',
-                    'echo "build $1" >> "$TEST_ROOT/trace"\nexit "${BUILD_STATUS:-0}"\n')
+                    'echo "build $1" >> "$TEST_ROOT/trace"\n'
+                    'printf "%s\\0" "${CARGO_BUILD_JOBS-unset}" "${RAYON_NUM_THREADS-unset}" '
+                    '"${TRUEOS_BUILD_SCOPE-unset}" > "$TEST_ROOT/build-env"\n'
+                    'exit "${BUILD_STATUS:-0}"\n')
         self.script(self.root / 'tools/rig-reset.sh',
                     'echo reset >> "$TEST_ROOT/trace"\n')
-        for cmd in ('sudo', 'node', 'systemctl'):
+        for cmd in ('sudo', 'node', 'systemctl', 'systemd-run', 'taskset', 'nice'):
             self.script(self.bin / cmd, 'echo unexpected-server-command >> "$TEST_ROOT/trace"; exit 99\n')
         return script
 
@@ -75,23 +76,35 @@ exec "$@"
     def test_dev_and_reset_once(self):
         result, trace = self.workflow('rigdev')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(trace, ['scope', 'build --dev', 'reset'])
+        self.assertEqual(trace, ['build --dev', 'reset'])
 
     def test_release_and_reset_once(self):
         result, trace = self.workflow('rigreal')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(trace, ['scope', 'build --release', 'reset'])
+        self.assertEqual(trace, ['build --release', 'reset'])
 
     def test_failed_build_does_not_touch_server_or_reset(self):
         result, trace = self.workflow('rigdev', BUILD_STATUS='1')
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(trace, ['scope', 'build --dev'])
+        self.assertEqual(trace, ['build --dev'])
 
-    def test_failed_scope_does_not_build_or_reset(self):
-        result, trace = self.workflow('rigdev', SCOPE_STATUS='42')
+    def test_workflow_preserves_caller_cargo_settings_without_entering_a_scope(self):
+        result, trace = self.workflow('rigdev', CARGO_BUILD_JOBS='7', RAYON_NUM_THREADS='5',
+                                      TRUEOS_BUILD_SCOPE='caller-value')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(trace, ['build --dev', 'reset'])
+        self.assertEqual((self.root / 'build-env').read_bytes().split(b'\0')[:-1],
+                         [b'7', b'5', b'caller-value'])
+
+    def test_explicit_safe_wrapper_failure_does_not_run_its_payload(self):
+        self.setup_scope()
+        payload = self.bin / 'payload'
+        self.script(payload, 'echo unexpected-payload >> "$TEST_ROOT/trace"\n')
+        result = subprocess.run(['bash', str(ROOT / 'tools/build-safe.sh'), str(payload)],
+                                env=dict(self.env, SCOPE_STATUS='42'),
+                                capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 42, result.stderr)
-        self.assertEqual(trace, ['scope'])
-        self.assertFalse((self.root / 'affinity-args').exists())
+        self.assertEqual((self.root / 'trace').read_text().splitlines(), ['scope'])
 
     def test_safe_wrapper_limits_descendants_and_preserves_arguments(self):
         self.setup_scope()
@@ -181,8 +194,6 @@ echo runtime > "$3"
     def test_failed_debug_stripping_preserves_publication_and_prevents_reset(self):
         self.prepare_fixture()
         shutil.copy(ROOT / 'tools/rig-build.sh', self.root / 'tools/rig-build.sh')
-        shutil.copy(ROOT / 'tools/build-safe.sh', self.root / 'tools/build-safe.sh')
-        self.setup_scope()
         self.script(self.root / 'tools/rig-reset.sh', 'echo reset >> "$TEST_ROOT/trace"\n')
         current = self.root / 'tgt/pxe-current'
         current.mkdir(parents=True)
@@ -192,7 +203,7 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['scope', 'buildins', 'cargo build', 'cargo boot', 'strip-debug'])
+                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug'])
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
         self.assertFalse((self.root / 'tgt/usb-debug').exists())
 

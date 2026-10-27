@@ -23,7 +23,6 @@ rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
 	"--cfg", "kmod",
 	"-C", "link-arg=-Tlinker.ld",
-	"-C", "link-arg=--threads=1",
 	"-C", "force-frame-pointers=yes"
 ]
 
@@ -41,7 +40,6 @@ rustflags = [
 	"--cfg", "getrandom_backend=\"custom\"",
 	"--cfg", "kmod",
 	"-C", "link-arg=-Tlinker.ld",
-	"-C", "link-arg=--threads=1",
 	"-C", "force-frame-pointers=yes"
 ]
 

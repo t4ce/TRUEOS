@@ -8,7 +8,7 @@ handoff ABI types shared by the kernel and this loader.
 Prepare the release files:
 
 ```sh
-bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --release
+bash tools/trueos-boot/prepare.sh --release
 ```
 
 Copy the **contents** of `tgt/usb-release/` to the root of the FAT-formatted USB
@@ -27,14 +27,10 @@ boot files available for comparison and recovery. The preparer writes only to
 The preparer defaults to release. `--dev` uses the dev kernel and stages
 `tgt/usb-debug/`.
 
-The build wrapper contains all compiler, linker and host-helper descendants in
-a user systemd scope: memory throttles at 5 GiB with a 6 GiB hard limit, swap is
-disabled, CPU time is capped at one core, and at most 128 tasks may run. It uses
-one Cargo job, one Rayon worker and nice level 15. CPU affinity defaults to the
-first allowed E-core, or the first allowed CPU if E-core information is absent;
-`TRUEOS_BUILD_CPUS` overrides that affinity. If the scope cannot be created, the
-build stops. This requires `systemd-run`, `taskset`, `nice` and Python 3, and
-leaves the system configuration unchanged.
+Preparation uses Cargo's normal parallelism. Set
+`CARGO_BUILD_JOBS` when a particular build needs a different job count.
+For an explicit resource-limited diagnostic run, prefix the preparation command
+with `bash tools/build-safe.sh`; normal rig builds do not use that wrapper.
 
 `cargo boot` builds only the EFI loader; the kernel ELF keeps its normal Cargo
 path. When launched from FAT, the loader reads `\TRUEOS.elf` from that volume.
@@ -63,15 +59,11 @@ of boot files via `tgt/pxe-current`, and invoke `tools/rig-reset.sh` once. Build
 or staging failure prevents the reset. Concurrent rig commands are rejected.
 Ordinary `cargo build` does not reset the rig. These commands do not start,
 stop, or restart PXE and do not require sudo.
-Both rig commands use the same build wrapper and resource limits described above.
 The staged runtime ELF has debug sections removed with the pinned toolchain's
 `rust-objcopy --strip-debug`; the original Cargo ELF retains its debug information.
 The native loader keeps the runtime file below 4 GiB, so keeping host debug
 sections out of that file preserves boot-time DMA memory. PXE and USB receive
 the same stripped runtime image. A stripping failure prevents publication and reset.
-Direct app-driver builds, including `--app` diagnostics, enter that scope
-automatically when no enclosing build scope is present. Read-only `--check`
-does not start a build scope.
 
 The buildins belong to the kernel generation; they have no separate publishing
 step. The small driver in `TRUEOS-Buildins/tools/build.py` uses the pinned Rust
@@ -85,16 +77,23 @@ kernel's current thread backend. The archive also contains sources for the
 native `rustc-min` Blueprint compiler; this builtin workflow does not build or
 execute that compiler.
 
+Each app follows the Paper object-build flow: a normal Cargo build invokes the
+app linker with `-r` to produce the tracked `.o` module. Dev app builds explicitly
+use optimization level 0, disabled LTO, incremental compilation, and 256 codegen
+units; the dev kernel also compiles unoptimized. The driver adapts the target
+and std sources, explicitly strips debug information from the packaged module
+with `objcopy`, and creates the existing Blueprint package and AppDB image from it.
+
 Generated app sources, dependency locks, Cargo caches, linked objects, packages,
-database images, and logs live in `tgt/buildins/dev/` or `tgt/buildins/release/`. Dev and release
-caches stay separate. The driver fingerprints each app's last successful Cargo
-dependency graph, including local build dependencies; unchanged apps skip Cargo.
-Changed apps return to Cargo for dependency resolution and compilation, and
-unchanged staged sources retain their timestamps. Only apps whose selected
-objects or archives changed are linked and packaged again. An unchanged package
-retains its bytes and timestamp, so a no-change preparation leaves the kernel
-fresh too. A kernel implementation change does not recompile apps unless their
-shared dependencies changed; ABI changes are checked against their imports.
+database images, and logs live in `tgt/buildins/dev/` or `tgt/buildins/release/`.
+Dev and release caches stay separate. The driver invokes Cargo for every app on
+each run; Cargo decides which Rust inputs need recompilation. Unchanged staged
+sources retain their timestamps. Packaging runs when the Cargo `.o` content,
+Blueprint flags, or package format changes, and validates the stripped module
+and package hashes before reusing them. Unchanged packages retain their bytes
+and timestamps, so an unchanged AppDB image can be reused too. A kernel
+implementation change does not recompile apps unless their shared inputs
+changed; ABI changes are checked against their imports.
 
 `app.db` is a normal inspectable redb file with the existing `apps`, `hashes`, and
 `updated` tables. `app.db.lz4` is its embedded form. The host helper and kernel pin
@@ -110,7 +109,7 @@ consumes a verified prepared set. Refresh the complete dev generation without
 resetting the rig with:
 
 ```sh
-bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --dev
+bash tools/trueos-boot/prepare.sh --dev
 ```
 
 Run the PXE server separately using the instructions below. It automatically

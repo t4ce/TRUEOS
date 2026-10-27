@@ -310,7 +310,7 @@ TOPICS: dict[str, dict[str, Any]] = {
      'setup': 'tools/install-rig-commands.sh installs the two Cargo command links into CARGO_HOME/bin '
               '(default ~/.cargo/bin); that directory must be on PATH.',
      'workflow': ['Build every app configured by ../TRUEOS-Buildins/buildins.json using the pinned Rust '
-                  'toolchain and the contained build scope.',
+                  'toolchain and normal Cargo builds that link tracked .o modules with -r.',
                   'Create one redb app.db with apps, hashes, and updated tables; compress it to app.db.lz4 '
                   'for embedding in the kernel.',
                   'Build the kernel with the verified complete builtin generation and build the release '
@@ -335,20 +335,26 @@ TOPICS: dict[str, dict[str, Any]] = {
                        'usb_release': 'tgt/usb-release'},
      'appdb': 'Boot decompresses the single embedded image and opens the regular AppDB in writable RAM. '
               'Builtins belong to the kernel generation and have no standalone publication step.',
-     'incremental': ['Dev and release caches are separate. Unchanged app inputs reuse their last successful '
-                     'packages; changed apps return to Cargo for dependency resolution and compilation.',
+     'incremental': ['Dev and release caches are separate. Cargo runs for every app each time and owns '
+                     'Rust dependency freshness; unchanged staged sources retain their timestamps.',
+                     'Packaging is keyed by Cargo .o content, Blueprint flags, and package format. '
+                     'Stripped-module and package hashes are validated before reuse.',
                      'Changed shared app dependencies rebuild affected apps. Kernel implementation changes '
                      'do not recompile apps unless shared inputs changed; ABI imports are checked.',
                      'Unchanged package records and database-builder inputs keep app.db and app.db.lz4 '
                      'bytes and timestamps. Missing, stale, or incomplete app generations stop the build.'],
-     'prepare_without_reset': 'bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --dev',
+     'prepare_without_reset': 'bash tools/trueos-boot/prepare.sh --dev',
      'prepare_note': 'Preparation builds and publishes boot files but omits the reset. Ordinary cargo build '
                      'consumes a verified prepared builtin set and never resets the rig.',
      'pxe': 'The existing PXE server serves tgt/pxe-current; rig builds do not start, stop, or restart it. '
             'Native UEFI PXE uses the prepared files directly.',
-     'containment': 'The build scope uses one allowed E-core by default, a one-core CPU quota, a 6 GiB '
-                    'memory limit, no swap, one Cargo job, and single-threaded linkers. Scope creation '
-                    'failure stops the build.',
+     'cargo': 'Apps use normal Cargo scheduling; CARGO_BUILD_JOBS selects the job count when supplied. '
+              'Dev app builds explicitly use opt-level 0, LTO disabled, incremental compilation, and '
+              '256 codegen units. The dev kernel also compiles unoptimized. The normal linker -r step '
+              'produces the tracked .o module; explicit objcopy debug stripping precedes existing '
+              'Blueprint and AppDB packaging.',
+     'diagnostics': 'Prefix a preparation command with bash tools/build-safe.sh only for an explicitly '
+                    'resource-limited diagnostic run; cargo rigdev/rigreal do not enter that wrapper.',
      'verification': 'A reset acknowledgement confirms the ESP32 packet was sent. Check fresh boot output '
                      'or SSH for boot success. The rig command does not automatically collect logs or '
                      'create a boot-verification receipt.',

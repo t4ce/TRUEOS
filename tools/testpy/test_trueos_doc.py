@@ -113,7 +113,7 @@ const HV_GROUP_1: [NameEntry; 1] = [
                          'tgt/buildins/<dev|release>/app.db.lz4')
         self.assertEqual(data['build_outputs']['uefi'], 'tgt/pxe-current/EFI/BOOT/BOOTX64.EFI')
         self.assertEqual(data['prepare_without_reset'],
-                         'bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --dev')
+                         'bash tools/trueos-boot/prepare.sh --dev')
         self.assertIn('--strip-debug', ' '.join(data['workflow']))
         self.assertIn('automatically reloads', ' '.join(data['workflow']))
         self.assertIn('once', data['workflow'][-1])
