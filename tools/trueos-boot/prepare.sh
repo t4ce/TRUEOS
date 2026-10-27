@@ -27,8 +27,8 @@ if [ "$profile" = debug ]; then bundle_link=rigdev.tar.lz4; fi
 trap 'rm -f -- "$root/tgt/.pxe-current.$$" "$root/tgt/.$bundle_link.$$" "$root/tgt/.TrueOS.tar.lz4.$$"' EXIT
 mkdir -p "$destination/EFI/BOOT"
 cp tgt/boot/x86_64-unknown-uefi/release/BOOTX64.efi "$destination/EFI/BOOT/BOOTX64.EFI"
-# Firmware retains the runtime file below 4 GiB. Keep host debug information in
-# Cargo's original ELF rather than consuming boot-time DMA memory with it.
+# Firmware retains the runtime file below 4 GiB. Normal kernel profiles omit
+# debug data; also remove any introduced by local Cargo profile overrides.
 sysroot=$(rustc --print sysroot)
 LD_LIBRARY_PATH="$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "$sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-objcopy" \

@@ -315,8 +315,9 @@ TOPICS: dict[str, dict[str, Any]] = {
                   'for embedding in the kernel.',
                   'Build the kernel with the verified complete builtin generation and build the release '
                   'native UEFI loader.',
-                  'Use bundled rust-objcopy --strip-debug to stage the runtime ELF; retain the original '
-                  'Cargo ELF and its debug information on the host.',
+                  'Build the dev kernel at opt-level 1 without debug information or symbol tables. '
+                  'Use bundled rust-objcopy --strip-debug to remove any debug data from local profile '
+                  'overrides when staging the runtime ELF.',
                   'Stage BOOTX64.EFI, TRUEOS.elf, and GuC firmware in one immutable tgt/rig-images '
                   'generation and create TrueOS.tar.lz4 from those exact three files before publication.',
                   'Atomically select the complete generation via tgt/pxe-current and update the profile '
@@ -368,7 +369,9 @@ TOPICS: dict[str, dict[str, Any]] = {
             'Native UEFI PXE uses the prepared files directly.',
      'cargo': 'Apps use normal Cargo scheduling; CARGO_BUILD_JOBS selects the job count when supplied. '
               'Dev app builds explicitly use opt-level 0, LTO disabled, incremental compilation, and '
-              '256 codegen units. The dev kernel also compiles unoptimized. The normal linker -r step '
+              '256 codegen units. The dev kernel uses opt-level 1, debug=false, and strip=symbols; '
+              'debug assertions, overflow checks, frame pointers, and incremental compilation remain '
+              'enabled. The normal linker -r step '
               'produces the tracked .o module; explicit objcopy debug stripping precedes existing '
               'Blueprint and AppDB packaging.',
      'release_profile': {

@@ -60,11 +60,14 @@ Build, archive, or staging failure prevents the reset. Concurrent rig commands
 are rejected.
 Ordinary `cargo build` does not reset the rig. These commands do not start,
 stop, or restart PXE and do not require sudo.
-The staged runtime ELF has debug sections removed with the pinned toolchain's
-`rust-objcopy --strip-debug`; the original Cargo ELF retains its debug information.
-The native loader keeps the runtime file below 4 GiB, so keeping host debug
-sections out of that file preserves boot-time DMA memory. PXE and USB receive
-the same stripped runtime image. A stripping failure prevents publication and reset.
+The dev kernel uses optimization level 1, generates no debug information, and
+strips its symbol tables. Runtime logging, debug assertions, overflow checks,
+and frame-pointer backtraces remain enabled. Incremental compilation remains
+enabled for development builds.
+The staged runtime ELF also passes through the pinned toolchain's
+`rust-objcopy --strip-debug` to remove debug data from local profile overrides.
+The native loader keeps that file below 4 GiB. PXE and USB receive the same
+runtime image. A stripping failure prevents publication and reset.
 
 The buildins belong to the kernel generation; they have no separate publishing
 step. The small driver in `TRUEOS-Buildins/tools/build.py` uses the pinned Rust
@@ -81,7 +84,7 @@ execute that compiler.
 Each app follows the Paper object-build flow: a normal Cargo build invokes the
 app linker with `-r` to produce the tracked `.o` module. Dev app builds explicitly
 use optimization level 0, disabled LTO, incremental compilation, and 256 codegen
-units; the dev kernel also compiles unoptimized. The driver adapts the target
+units; the dev kernel uses optimization level 1. The driver adapts the target
 and std sources, explicitly strips debug information from the packaged module
 with `objcopy`, and creates the existing Blueprint package and AppDB image from it.
 

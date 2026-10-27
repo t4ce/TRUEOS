@@ -32,9 +32,12 @@ keeps the separate older ISO bundle at `https://trueos.eu/TrueOS.lz4`.
 
 Apps use the Paper object-build flow: normal Cargo builds link with `-r` to
 produce tracked `.o` modules, followed by explicit stripping and the existing
-Blueprint/AppDB packaging. Cargo keeps its normal parallelism. Dev apps and the
-dev kernel compile unoptimized; app dev builds disable LTO and use incremental
-compilation. `cargo rigreal` applies the shared builtin configuration at
+Blueprint/AppDB packaging. Cargo keeps its normal parallelism. Dev apps compile
+unoptimized, disable LTO, and use incremental compilation. The dev kernel uses
+optimization level 1, generates no debug information, and strips symbol tables.
+Runtime logging, debug assertions,
+overflow checks, frame pointers, and incremental compilation remain enabled.
+`cargo rigreal` applies the shared builtin configuration at
 `TRUEOS-Buildins/tools/release-profile.toml`: full LTO, one codegen unit, aborting
 panics, full host debug information, and incremental compilation. Each app keeps
 its release optimization level: Cargo defaults to 3; Hull and Edit use `"s"`.
