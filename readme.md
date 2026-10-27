@@ -58,21 +58,19 @@ hardware—not a thin proof of concept around a boot screen.
 ## Start here
 
 Prepare the built-in apps, kernel and native UEFI loader with
-`bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --release`.
+`bash tools/trueos-boot/prepare.sh --release`.
 The kernel ELF is written to `tgt/x86_64-unknown-trueos/release/TRUEOS`.
-The build wrapper limits the entire process tree to 6 GiB RAM, no swap and one
-CPU core. An ordinary `cargo build --release` verifies the prepared app image.
-Rustup installs the pinned minimal nightly toolchain and `rust-src`
-from `rust-toolchain.toml`. On x86-64 Ubuntu, host build scripts use Rust's
-bundled linker with the system glibc development files, so GCC and Clang are
-not needed. The font packer also requires `lz4`.
+The download archive is `tgt/rigreal.tar.lz4`. Preparation uses normal Cargo
+parallelism and builds the sibling `TRUEOS-Buildins` into the kernel's AppDB.
+Use the archived [TRUEOS Rust toolchain](https://github.com/t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10)
+identified by `rust-toolchain.toml`; see the
+[build instructions](tools/trueos-boot/README.md) for dependencies and setup.
+An ordinary `cargo build --release` verifies the prepared app image.
 
 `cargo run` rejects host execution because the kernel ELF requires a bootloader.
 For a native Rust UEFI loader test on physical hardware, prepare the USB files
-with the wrapped preparation command above; see the
+with the preparation command above; see the
 [native UEFI boot instructions](tools/trueos-boot/README.md).
-See the [QEMU setup and verification guide](tools/qemu/README.md) for booting
-an existing image and firmware requirements.
 
 For experimental headless kernel bring-up without QEMU or an ISO, use
 `cargo kvm`. The [direct KVM launcher](tools/kvm/README.md) boots Cargo's exact
@@ -81,7 +79,7 @@ It currently provides one CPU and UART output, with no GPU, storage or network.
 
 | If you want to… | Start with… |
 | --- | --- |
-| **Use TRUEOS** | The [latest official cloud release](https://github.com/t4ce/TRUEOS/releases/latest). It contains the supported bootable image, verification material, and launch guidance. |
+| **Use TRUEOS** | The [latest official cloud release](https://github.com/t4ce/TRUEOS/releases/latest): one archive containing the kernel, embedded builtin AppDB, native UEFI loader, and firmware. |
 | **Develop an application** | [TRUEOS-Blueprints](https://github.com/t4ce/TRUEOS-Blueprints), the primary application SDK, catalog, examples, compatibility ports, and Blueprint lifecycle repository. |
 | **Understand the OS** | This repository and the [technical references](#technical-references) below: kernel, drivers, UI4, GPU, media, VM lifecycle, and architecture contracts. |
 | **Extend the platform** | A Blueprint using mediated TRUEOS APIs. Kernel-source modification is not the normal application-development path. |
@@ -285,16 +283,22 @@ Intel acceleration path works on unrelated hardware.
 
 ## Official cloud releases
 
-Download the [latest signed release](https://github.com/t4ce/TRUEOS/releases/latest).
-That is the supported distribution path for users and application developers.
-The release provides the bootable TRUEOS image, QEMU/OVMF launch bundle,
-provenance record, checksums, Ed25519 signatures, public verification key, and
-its own run guidance. The launch bundle boots the real TRUEOS image; it is not
-a hosted reimplementation of the kernel.
+Download the [latest release](https://github.com/t4ce/TRUEOS/releases/latest).
+The **Release** GitHub Actions workflow builds the release profile with the
+archived TRUEOS compiler and `TRUEOS-Buildins`, using the same preparation
+command as local builds. It uploads one file, `TrueOS-0.0.<cnt>.lz4`, containing
+the kernel with its builtin AppDB, the native UEFI loader, and GuC firmware in
+a tar/LZ4 archive. Extract its contents to the USB boot partition as described
+in the [native UEFI boot instructions](tools/trueos-boot/README.md).
 
-Platform implementation and deployment procedures are maintainer concerns and
-are deliberately not part of this README. They are not prerequisites for
-understanding TRUEOS or developing against its Blueprint application model.
+Release notes provide the download link, its SHA256, and the source commit.
+This workflow does not attach signing files, provenance records, source
+bundles, or launch bundles, and it uses the checked-in shader artifacts.
+
+For a new release, commit an unused positive number in `tools/cnt`, push the
+workflow and sources, then select **Actions → Release → Run workflow**.
+The counter is embedded in the kernel and supplies the version, tag, and
+download name. Existing versions stop before building.
 
 ## Honest current boundaries
 

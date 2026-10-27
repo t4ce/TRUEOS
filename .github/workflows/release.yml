@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: trueos-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+        working-directory: TRUEOS
+
+    steps:
+      - name: Check out TRUEOS
+        uses: actions/checkout@v7
+        with:
+          path: TRUEOS
+          submodules: recursive
+
+      - name: Read release counter
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          counter=$(<tools/cnt)
+          if [[ ! "$counter" =~ ^[1-9][0-9]*$ ]]; then
+            echo '::error::tools/cnt must contain a positive integer.'
+            exit 1
+          fi
+          version="0.0.$counter"
+          tag="v$version"
+          existing_tag=$(git ls-remote --tags origin "refs/tags/$tag")
+          if [[ -n "$existing_tag" ]] || gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::$tag already exists. Commit a new tools/cnt before releasing."
+            exit 1
+          fi
+          printf 'version=%s\ntag=%s\nasset=TrueOS-%s.lz4\ncommit=%s\n' \
+            "$version" "$tag" "$version" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out builtins
+        uses: actions/checkout@v7
+        with:
+          repository: t4ce/TRUEOS-Buildins
+          ref: master
+          path: TRUEOS-Buildins
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential binutils patch python3 liblz4-1 lz4 git-lfs
+
+      - name: Check out the TRUEOS Rust toolchain
+        uses: actions/checkout@v7
+        with:
+          repository: t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10
+          ref: main
+          path: TRUEOS-Rust-Toolchain-nightly-2026-07-10
+          lfs: true
+
+      - name: Register the archived toolchain
+        run: |
+          toolchains="$(rustup show home)/toolchains"
+          mkdir -p "$toolchains"
+          ln -s "$GITHUB_WORKSPACE/TRUEOS-Rust-Toolchain-nightly-2026-07-10" \
+            "$toolchains/nightly-2026-07-10-x86_64-unknown-linux-gnu"
+          rustc -vV
+          rustc -vV | grep -Fx 'commit-hash: af3d95584dbddcae597890340995509a7fb47a50'
+
+      - name: Build release kernel, builtins, and archive
+        run: bash tools/trueos-boot/prepare.sh --release
+
+      - name: Prepare the download and release notes
+        env:
+          RELEASE_ASSET: ${{ steps.release.outputs.asset }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          cp -L tgt/rigreal.tar.lz4 "tgt/$RELEASE_ASSET"
+          sha256=$(sha256sum "tgt/$RELEASE_ASSET" | cut -d ' ' -f 1)
+          download="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$RELEASE_ASSET"
+          {
+            printf '## Download\n\n[Download %s](%s)\n\n' "$RELEASE_ASSET" "$download"
+            printf '| item | sha256 |\n| --- | --- |\n| release bundle | `%s` |\n\n' "$sha256"
+            printf 'Source commit: `%s`\n' "$SOURCE_COMMIT"
+          } > tgt/release-notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_ASSET: ${{ steps.release.outputs.asset }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          gh release create "$RELEASE_TAG" "tgt/$RELEASE_ASSET" \
+            --target "$SOURCE_COMMIT" \
+            --title "TRUEOS $RELEASE_VERSION" \
+            --notes-file tgt/release-notes.md

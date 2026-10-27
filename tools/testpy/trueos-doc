@@ -395,6 +395,26 @@ TOPICS: dict[str, dict[str, Any]] = {
                  '../TRUEOS-Buildins/tools/release-profile.toml',
                  'tools/appdb-seed/src/main.rs',
                  'src/app_db.rs']},
+    'cloud-release': {
+        'summary': 'Manual GitHub Actions Release workflow builds the release kernel and builtins and publishes one native tar/LZ4 download.',
+        'workflow': '.github/workflows/release.yml',
+        'invocation': 'With the workflow on the default branch, choose Actions -> Release -> Run workflow.',
+        'version': 'Commit a new positive tools/cnt before each release. Counter N selects version 0.0.N and tag v0.0.N; an existing tag or release fails before compilation.',
+        'checkouts': ['TRUEOS kernel with its infer and MicroFont submodules',
+                      'Current t4ce/TRUEOS-Buildins master',
+                      'Archived t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10 main with Git LFS'],
+        'layout': 'TRUEOS, TRUEOS-Buildins, and the archived toolchain are sibling checkouts; vendor paths require the TRUEOS sibling name.',
+        'prepare': 'bash tools/trueos-boot/prepare.sh --release',
+        'profile': 'release',
+        'reset_rig': False,
+        'asset': 'TrueOS-0.0.N.lz4',
+        'asset_source': 'tgt/rigreal.tar.lz4',
+        'format_topic': 'rig-builds',
+        'release_notes': ['Download link', 'Archive SHA-256', 'Kernel source commit'],
+        'deferred': ['Signing', 'Provenance', 'Extra bundles', 'Shader baking'],
+        'github_sources': 'GitHub automatically adds source-code ZIP and tar downloads; they are not workflow uploads.',
+        'sources': ['.github/workflows/release.yml', 'tools/cnt', 'tools/trueos-boot/prepare.sh', 'tools/trueos-boot/README.md'],
+    },
 }
 
 ALIASES = {'§': 'headjack',
@@ -459,6 +479,9 @@ ALIASES = {'§': 'headjack',
  'live-update': 'rig-builds',
  'update-archive': 'rig-builds',
  'tar-lz4': 'rig-builds',
+ 'release': 'cloud-release',
+ 'github-release': 'cloud-release',
+ 'github-actions': 'cloud-release',
  'ssh': 'rig',
  'shell3': 'shell3',
  'blueprint': 'blueprints',
@@ -549,11 +572,13 @@ def webcamframe_availability(root: Path) -> dict[str, Any]:
 def compact_context(root: Path) -> dict[str, Any]:
     commands = command_registry(root)
     return {
-        "purpose": "Current TRUEOS builtin/kernel rig workflow and Shell3 access.",
+        "purpose": "Current TRUEOS builtin/kernel rig workflow, cloud releases, and Shell3 access.",
         "rig_builds": {
             key: TOPICS["rig-builds"][key]
             for key in ("invocation", "release_invocation", "workflow", "build_outputs", "live_update", "release_profile", "verification")
         },
+        "cloud_release": {key: TOPICS['cloud-release'][key]
+                          for key in ('workflow', 'invocation', 'version', 'asset', 'release_notes')},
         "rig": TOPICS["rig"]["physical"] | {"connect": TOPICS["rig"]["connect"], "terminal": TOPICS["rig"]["terminal"]},
         "shell3": {
             "default_mode": TOPICS["shell3"]["default_mode"],
@@ -575,7 +600,7 @@ def compact_context(root: Path) -> dict[str, Any]:
         },
         "references": {"documents": [item["path"] for item in TOPICS["references"]["documents"]]},
         "next_queries": ["tools/testpy/trueos-doc topic " + name
-                         for name in ("rig-builds", "rig", "shell3", "tui", "logs", "trueosfs-http", "references")],
+                         for name in ("rig-builds", "cloud-release", "rig", "shell3", "tui", "logs", "trueosfs-http", "references")],
     }
 
 

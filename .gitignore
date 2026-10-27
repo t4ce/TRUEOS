@@ -1,3 +1,4 @@
 bld/
 tgt/
 Cargo.lock
+!tools/trueos-boot/Cargo.lock

@@ -165,6 +165,23 @@ The rig must be configured to boot via IPv4 UEFI PXE. A reset acknowledgement
 confirms the packet was sent; it does not verify that the kernel finished booting
 or that a PXE server is running.
 
+## GitHub release
+
+Once [`.github/workflows/release.yml`](../../.github/workflows/release.yml) is on
+the default branch, choose **Actions → Release → Run workflow**. Commit a new
+positive integer in `tools/cnt` before each release: counter `N` produces version
+`0.0.N` and tag `v0.0.N`. An existing tag or release stops the workflow before
+compilation.
+
+The cloud job checks out the kernel, current `TRUEOS-Buildins` `master`, and the
+archived TRUEOS toolchain as siblings. It runs the same
+`bash tools/trueos-boot/prepare.sh --release` without a rig reset and uploads one
+custom asset, `TrueOS-0.0.N.lz4`. This is the native three-file tar/LZ4 archive
+described above, including the builtin AppDB inside `TRUEOS.elf`. Release notes
+contain its download link, SHA-256, and kernel source commit. Signing, provenance,
+extra bundles, and shader baking are deferred. GitHub adds its own source-code
+ZIP and tar downloads automatically.
+
 ## IPv4 PXE file server
 
 After preparing the files at least once, start the minimal network server with Node.js,

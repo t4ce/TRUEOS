@@ -1,12 +1,12 @@
 ---
 name: trueos-docs
-description: Query compact repository-local TRUEOS knowledge for the cargo rigdev/rigreal builtin and kernel workflow, physical-rig SSH access, Shell3 modes and Matrix navigation, terminal UI handoff, logging, TRUEOSFS HTTP, or checked-in architecture references. Do not use for unrelated implementation details.
+description: Query compact repository-local TRUEOS knowledge for cargo rigdev/rigreal, GitHub releases, physical-rig SSH access, Shell3 modes and Matrix navigation, terminal UI handoff, logging, TRUEOSFS HTTP, or checked-in architecture references. Do not use for unrelated implementation details.
 ---
 
 # TRUEOS docs
 
 Run `tools/testpy/trueos-doc` from the TRUEOS repository root before reasoning
-from memory about rig builds or Shell3 access. The command is repository-local;
+from memory about rig builds, GitHub releases, or Shell3 access. The command is repository-local;
 it need not be installed on PATH. An absolute path to the script also works
 from another directory.
 
@@ -51,6 +51,14 @@ each run and reuses fresh artifacts; unchanged packages and database images
 remain cached. Query `tools/testpy/trueos-doc topic rig-builds` for paths,
 incremental behavior, and preparation without a reset. Ordinary `cargo build`
 consumes a verified prepared builtin set and does not reset the rig.
+
+GitHub releases use `.github/workflows/release.yml`: **Actions → Release → Run
+workflow** after committing a new `tools/cnt`. Counter `N` selects `0.0.N` and
+tag `v0.0.N`; an existing tag stops before compilation. The cloud job prepares
+release only, without resetting the rig, and uploads the same native archive as
+`TrueOS-0.0.N.lz4`. Its notes contain the archive SHA-256 and kernel source commit.
+Signing, provenance, extra bundles, and shader baking are deferred. Query
+`tools/testpy/trueos-doc topic cloud-release` for checkout and publication details.
 
 ## Current physical test-rig access
 
