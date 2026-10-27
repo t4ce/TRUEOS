@@ -25,7 +25,12 @@ destination=$(mktemp -d "$root/tgt/rig-images/$profile.XXXXXX")
 trap 'rm -f -- "$root/tgt/.pxe-current.$$"' EXIT
 mkdir -p "$destination/EFI/BOOT"
 cp tgt/boot/x86_64-unknown-uefi/release/BOOTX64.efi "$destination/EFI/BOOT/BOOTX64.EFI"
-cp "tgt/x86_64-unknown-trueos/$profile/TRUEOS" "$destination/TRUEOS.elf"
+# Firmware retains the runtime file below 4 GiB. Keep host debug information in
+# Cargo's original ELF rather than consuming boot-time DMA memory with it.
+sysroot=$(rustc --print sysroot)
+LD_LIBRARY_PATH="$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-objcopy" \
+    --strip-debug "tgt/x86_64-unknown-trueos/$profile/TRUEOS" "$destination/TRUEOS.elf"
 cp firmware/i915/tgl_guc_70.bin "$destination/EFI/BOOT/tgl_guc_70.bin"
 # Preserve the existing USB staging path as well as the shared PXE selection.
 mkdir -p "$root/tgt/usb-$profile/EFI/BOOT"

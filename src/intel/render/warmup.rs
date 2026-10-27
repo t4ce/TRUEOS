@@ -125,8 +125,10 @@ fn init_warm_state_for_boot(dev: crate::intel::Dev) -> RenderWarmState {
         crate::log!("warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
         return warm;
     };
+    // Draw state has both PPGTT and fixed GGTT aliases. Its physical backing
+    // can exceed 4 GiB, but must fit the GGTT's 46-bit PTE address field.
     let Some((draw_state_phys, draw_state_virt)) =
-        crate::dma::alloc(WARM_DRAW_STATE_BYTES, crate::intel::WARM_ALIGN)
+        crate::intel::alloc_ggtt_backing(WARM_DRAW_STATE_BYTES, crate::intel::WARM_ALIGN)
     else {
         let warm = RenderWarmState {
             device_id: dev.device_id,
@@ -162,8 +164,10 @@ fn init_warm_state_for_boot(dev: crate::intel::Dev) -> RenderWarmState {
         crate::log!("warm alloc failed part=draw-state size=0x{:X}\n", WARM_DRAW_STATE_BYTES);
         return warm;
     };
+    // Vertex fetch uses Render0's PPGTT, with no physical-address operand in
+    // the command stream and no fixed GGTT mirror.
     let Some((vertex_phys, vertex_virt)) =
-        crate::dma::alloc(WARM_VERTEX_BYTES, crate::intel::WARM_ALIGN)
+        crate::dma::alloc_ppgtt(WARM_VERTEX_BYTES, crate::intel::WARM_ALIGN)
     else {
         let warm = RenderWarmState {
             device_id: dev.device_id,
@@ -236,8 +240,10 @@ fn init_warm_state_for_boot(dev: crate::intel::Dev) -> RenderWarmState {
         crate::log!("warm alloc failed part=result size=0x{:X}\n", WARM_RESULT_BYTES);
         return warm;
     };
+    // The large scratch target is also dual-mapped. Preserve the GGTT PTE
+    // bound without imposing the unrelated legacy 32-bit DMA ceiling.
     let Some((streamout_phys, streamout_virt)) =
-        crate::dma::alloc(WARM_STREAMOUT_BYTES, crate::intel::WARM_ALIGN)
+        crate::intel::alloc_ggtt_backing(WARM_STREAMOUT_BYTES, crate::intel::WARM_ALIGN)
     else {
         let warm = RenderWarmState {
             device_id: dev.device_id,
@@ -273,7 +279,7 @@ fn init_warm_state_for_boot(dev: crate::intel::Dev) -> RenderWarmState {
         crate::log!("warm alloc failed part=streamout size=0x{:X}\n", WARM_STREAMOUT_BYTES);
         return warm;
     };
-    let (gpgpu_arena_phys, gpgpu_arena_virt, gpgpu_arena_len) = match crate::dma::alloc(
+    let (gpgpu_arena_phys, gpgpu_arena_virt, gpgpu_arena_len) = match crate::dma::alloc_ppgtt(
         GPGPU_TILE_ARENA_BYTES,
         crate::intel::WARM_ALIGN,
     ) {

@@ -139,6 +139,20 @@ mkdir -p "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release" "$TEST_ROOT/tgt/x86_6
 echo loader > "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release/BOOTX64.efi"
 echo kernel > "$TEST_ROOT/tgt/x86_64-unknown-trueos/debug/TRUEOS"
 ''')
+        self.script(self.bin / 'rustc', '''
+test "$*" = "--print sysroot"
+echo "$TEST_ROOT/test sysroot"
+''')
+        self.script(self.root / 'test sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-objcopy', '''
+test "$LD_LIBRARY_PATH" = "$TEST_ROOT/test sysroot/lib:inherited-libraries"
+test "$1" = --strip-debug
+test "$2" = tgt/x86_64-unknown-trueos/debug/TRUEOS
+test "$(cat "$2")" = kernel
+echo strip-debug >> "$TEST_ROOT/trace"
+if [[ ${OBJCOPY_STATUS:-0} != 0 ]]; then exit "$OBJCOPY_STATUS"; fi
+echo runtime > "$3"
+''')
+        self.env['LD_LIBRARY_PATH'] = 'inherited-libraries'
         return script
 
     def test_preparation_builds_apps_before_embedding_and_publishes_complete_kernel(self):
@@ -147,8 +161,10 @@ echo kernel > "$TEST_ROOT/tgt/x86_64-unknown-trueos/debug/TRUEOS"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['buildins', 'cargo build', 'cargo boot'])
-        self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'kernel\n')
+                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug'])
+        self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
+        self.assertEqual((self.root / 'tgt/usb-debug/TRUEOS.elf').read_text(), 'runtime\n')
+        self.assertEqual((self.root / 'tgt/x86_64-unknown-trueos/debug/TRUEOS').read_text(), 'kernel\n')
 
     def test_failed_app_build_leaves_the_previous_publication_intact(self):
         script = self.prepare_fixture()
@@ -161,6 +177,24 @@ echo kernel > "$TEST_ROOT/tgt/x86_64-unknown-trueos/debug/TRUEOS"
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((self.root / 'trace').read_text().splitlines(), ['buildins'])
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
+
+    def test_failed_debug_stripping_preserves_publication_and_prevents_reset(self):
+        self.prepare_fixture()
+        shutil.copy(ROOT / 'tools/rig-build.sh', self.root / 'tools/rig-build.sh')
+        shutil.copy(ROOT / 'tools/build-safe.sh', self.root / 'tools/build-safe.sh')
+        self.setup_scope()
+        self.script(self.root / 'tools/rig-reset.sh', 'echo reset >> "$TEST_ROOT/trace"\n')
+        current = self.root / 'tgt/pxe-current'
+        current.mkdir(parents=True)
+        (current / 'TRUEOS.elf').write_bytes(b'previous')
+        result = subprocess.run(['bash', str(self.root / 'tools/rig-build.sh'), 'rigdev'],
+                                env=dict(self.env, OBJCOPY_STATUS='23'),
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertEqual((self.root / 'trace').read_text().splitlines(),
+                         ['scope', 'buildins', 'cargo build', 'cargo boot', 'strip-debug'])
+        self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
+        self.assertFalse((self.root / 'tgt/usb-debug').exists())
 
     def test_pxe_ready_and_scoped_stop(self):
         # A private copy ensures --stop cannot match the actual LAN PXE server.

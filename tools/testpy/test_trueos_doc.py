@@ -1,160 +1,157 @@
 #!/usr/bin/env python3
-
+"""Validate current read-only documentation without connecting to the rig."""
 from __future__ import annotations
 
 import json
-import subprocess
-import unittest
+import os
 from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+CLI = ROOT / 'tools/testpy/trueos-doc'
 
 
-ROOT = Path(__file__).resolve().parent.parent
-CLI = ROOT / "tools/trueos-doc"
+def invoke(*args: str, cwd: Path | None = None, repo: Path | None = None) -> subprocess.CompletedProcess:
+    env = dict(os.environ, TRUEOS_REPO=str(repo or ROOT))
+    return subprocess.run([str(CLI), *args], cwd=cwd or ROOT, env=env,
+                          capture_output=True, text=True, timeout=10)
 
 
-def run(*args: str, cwd: Path | None = None) -> dict:
-    completed = subprocess.run(
-        [str(CLI), *args],
-        cwd=cwd or ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return json.loads(completed.stdout)
+def run(*args: str, **kwargs) -> dict:
+    completed = invoke(*args, **kwargs)
+    if completed.returncode:
+        raise AssertionError(completed.stderr)
+    response = json.loads(completed.stdout)
+    assert response['ok']
+    return response['data']
 
 
 class TrueosDocTests(unittest.TestCase):
-    def test_context_contains_high_value_navigation_and_rig_facts(self) -> None:
-        data = run()["data"]
-        self.assertEqual(data["shell2"]["default_mode"], "default")
-        self.assertEqual(data["rig"]["shell2_tcp_port"], 4245)
-        self.assertIn("§<slot>§", [item["input"] for item in data["headjack"]])
-        self.assertEqual(data["logs"]["baremetal_latest"], "bld/baremetal-logs/LatestOfThree.logs")
-        self.assertEqual(data["make_iso"]["invocation"], "make iso")
-        self.assertEqual(data["blueprints"]["invocation"], "!cargo bp <appname>")
-        self.assertEqual(data["trueosfs_http"]["base_url"], "http://192.168.178.94")
+    def test_context_uses_current_build_access_and_shell(self) -> None:
+        data = run()
+        self.assertEqual(data['rig_builds']['invocation'], 'cargo rigdev')
+        self.assertEqual(data['rig_builds']['release_invocation'], 'cargo rigreal')
+        self.assertEqual(data['rig_builds']['build_outputs']['published_runtime'],
+                         'tgt/pxe-current/TRUEOS.elf')
+        self.assertEqual(data['rig']['ssh_port'], 22)
+        self.assertTrue(data['rig']['pty_required'])
+        self.assertEqual(data['shell3']['default_mode'], 'CMD')
+        self.assertIn('gpu', data['shell3']['commands']['adm'])
+        self.assertNotIn('make_iso', data)
+        self.assertNotIn('shell2', data)
 
-    def test_live_registry_exposes_schema(self) -> None:
-        data = run("command", "xhci")["data"]
-        self.assertEqual(data["mode"], "cmd")
-        self.assertEqual(data["parameters"]["type"], "object")
-        self.assertIn("command", data["parameters"]["properties"])
+    def test_rig_topic_uses_ssh_with_optional_existing_identity(self) -> None:
+        data = run('topic', 'rig')
+        self.assertEqual(data['physical']['host'], '192.168.178.94')
+        self.assertEqual(data['connect'], 'ssh -tt -p 22 t4ce@192.168.178.94')
+        self.assertNotIn('identity', data['physical'])
+        self.assertIn('only when', data['identity'])
+        self.assertIn('retired', data['retired'])
 
-    def test_probe_command_matches_apps_registry_and_separate_catalog(self) -> None:
-        data = run("command", "probe")["data"]
-        self.assertEqual(data["usage"], "probe [selector]")
-        self.assertIn("https://trueos.eu/probes", data["effect"])
-        self.assertIn("probe", run()["data"]["shell2"]["apps_commands"])
-        registry = (ROOT / "src/shell2/shell2_apps.rs").read_text()
-        self.assertIn('Some("probe") => AppsCommand::Probe', registry)
-        self.assertIn('Self::Probe => "probe"', registry)
-        self.assertNotIn('Some("start")', registry)
+    def test_commands_use_current_shell3_name_groups(self) -> None:
+        gpu = run('command', 'gpu')
+        self.assertEqual(gpu['mode'], 'adm')
+        self.assertEqual(gpu['invocation'], 'gpu')
+        self.assertNotIn('parameters', gpu)
+        self.assertEqual(set(run('command', 'stop')['modes']), {'hv', 'vme'})
+        modes = run('commands')['modes']
+        self.assertEqual(modes['cmd'], [])  # Runtime AppDB/Aka, not a guessed static list.
+        self.assertIn('tui', [entry['name'] for entry in modes['vme']])
+        self.assertEqual({entry['name'] for entry in modes['hv']},
+                         {'status', 'peer', 'probe', 'start', 'stop', 'pause', 'resume', 'kill'})
 
-    def test_shell2_docs_describe_default_once_twice_redesign(self) -> None:
-        shell2 = run("topic", "shell2")["data"]
-        self.assertEqual(shell2["default_mode"], "default")
-        self.assertIn("Default -> Once -> Twice -> Default", shell2["tab"])
-        self.assertNotIn("start", run()["data"]["shell2"]["apps_commands"])
-        self.assertIn("bare id or name", run("command", "online")["data"]["effect"])
+    def test_registry_is_read_from_the_selected_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            (repo / 'Cargo.toml').touch()
+            (repo / 'src/hv').mkdir(parents=True)
+            (repo / 'src/hv/mod.rs').touch()
+            source = repo / 'src/shell3/names.rs'
+            source.parent.mkdir()
+            source.write_text('''
+const HV_GROUP_1: [NameEntry; 1] = [
+    NameEntry { name: "fixtureprobe", color: RgbaColor::White },
+];
+''')
+            data = run('command', 'fixtureprobe', repo=repo)
+            self.assertEqual(data['mode'], 'hv')
+            self.assertEqual(data['source'], 'src/shell3/names.rs::HV_GROUP_1')
+            self.assertEqual(run('commands', '--mode', 'hv', repo=repo)['modes']['hv'][0]['name'],
+                             'fixtureprobe')
 
-    def test_tlb_schema_exposes_hfi_target(self) -> None:
-        data = run("command", "tlb")["data"]
-        targets = data["parameters"]["properties"]["target"]["enum"]
-        self.assertIn("hfi", targets)
+    def test_retired_shell2_commands_return_structured_errors(self) -> None:
+        completed = invoke('command', 'xhci')
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, '')
+        self.assertFalse(json.loads(completed.stderr)['ok'])
+        self.assertEqual(run('topic', 'shell2')['status'], 'retired')
 
-    def test_os_command_carries_live_update_tui_contract(self) -> None:
-        data = run("command", "os")["data"]
-        self.assertEqual(data["invocation"], "os")
-        self.assertIn("Down then Enter", data["live_update"]["selection"][1])
-        self.assertIn("no disk installation", data["live_update"]["effect"])
+    def test_it_runs_outside_the_repository_by_absolute_path(self) -> None:
+        self.assertEqual(run('topic', '§', cwd=Path('/tmp'))['name'], 'headjack')
 
-    def test_shot_command_distinguishes_admission_from_persistence(self) -> None:
-        data = run("command", "shot")["data"]
-        self.assertIn("not PNG persistence", data["acknowledgement"])
-        self.assertIn("do not silently substitute an old file", data["failure_diagnosis"])
+    def test_search_discovers_current_rig_builds_and_access(self) -> None:
+        self.assertEqual(run('search', 'cargo rigdev appdb build')['results'][0]['name'], 'rig-builds')
+        self.assertEqual(run('search', 'testrig ssh shell port')['results'][0]['name'], 'rig')
 
-    def test_it_runs_outside_the_repo_through_its_path(self) -> None:
-        data = run("topic", "§", cwd=Path("/tmp"))["data"]
-        self.assertEqual(data["name"], "headjack")
+    def test_retired_build_queries_redirect_without_retired_instructions(self) -> None:
+        for name in ('make-iso', 'make iso', 'iso', 'redeploy'):
+            with self.subTest(name=name):
+                data = run('topic', name)
+                self.assertEqual(data['name'], 'rig-builds')
+                self.assertEqual(data['invocation'], 'cargo rigdev')
+                encoded = json.dumps(data)
+                self.assertNotIn('make iso', encoded)
+                self.assertNotIn('smb://', encoded)
+                self.assertNotIn('START_BAREMETAL_LOG', encoded)
+        self.assertNotIn('make-iso', run('topics')['topics'])
 
-    def test_search_routes_agent_vocabulary(self) -> None:
-        results = run("search", "testrig shell port")["data"]["results"]
-        self.assertEqual(results[0]["name"], "rig")
+    def test_build_topic_contains_the_single_database_and_native_boot_paths(self) -> None:
+        data = run('topic', 'buildins')
+        self.assertEqual(data['build_outputs']['embedded_database'],
+                         'tgt/buildins/<dev|release>/app.db.lz4')
+        self.assertEqual(data['build_outputs']['uefi'], 'tgt/pxe-current/EFI/BOOT/BOOTX64.EFI')
+        self.assertEqual(data['prepare_without_reset'],
+                         'bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --dev')
+        self.assertIn('--strip-debug', ' '.join(data['workflow']))
+        self.assertIn('automatically reloads', ' '.join(data['workflow']))
+        self.assertIn('once', data['workflow'][-1])
+        self.assertNotIn('receipt', data.get('build_outputs', {}))
+        self.assertEqual(run('topic', 'blueprints')['build_topic'], 'rig-builds')
 
-    def test_logs_topic_explains_filtering_tiers_and_capture_files(self) -> None:
-        data = run("topic", "logfiles")["data"]
-        self.assertEqual(data["name"], "logs")
-        self.assertEqual(data["levels"]["order"][0], "Error")
-        self.assertIn("Never expect it in a logfile", data["filter_invariant"])
-        self.assertEqual(data["captures"]["emulator"]["latest"], "bld/emulator-logs/latest.log")
+    def test_logs_keep_the_actual_bld_capture_location(self) -> None:
+        data = run('topic', 'logfiles')
+        capture = data['captures']['baremetal']
+        self.assertEqual(capture['latest'], 'bld/baremetal-logs/LatestOfThree.logs')
+        self.assertNotIn('orchestration_log', capture)
+        self.assertIn('bld/baremetal-logs', (ROOT / 'tools/baremetal-log-drain.sh').read_text())
+        self.assertIn('do not start', data['build_integration'])
+        self.assertEqual(data['levels']['order'][0], 'Error')
+        self.assertIn('Never expect it in a logfile', data['filter_invariant'])
 
-    def test_make_iso_topic_documents_full_baremetal_redeploy(self) -> None:
-        data = run("topic", "make iso")["data"]
-        self.assertEqual(data["name"], "make-iso")
-        self.assertEqual(data["invocation"], "make iso")
-        self.assertIn("end-to-end bare-metal redeploy", data["summary"])
-        self.assertIn("physically resets the rig", data["workflow"][-1])
-        self.assertEqual(data["verification"]["latest_log"], "bld/baremetal-logs/LatestOfThree.logs")
-        self.assertEqual(data["controls"]["START_BAREMETAL_LOG=0"], "Skip the physical deploy/reset/log-verification dispatch.")
+    def test_references_resolve_to_the_outsourced_document_tree(self) -> None:
+        data = run('topic', 'html')
+        self.assertEqual(len(data['documents']), 5)
+        for document in data['documents']:
+            self.assertTrue(document['path'].startswith('../tools/docs/'))
+            self.assertTrue((ROOT / document['path']).is_file(), document['path'])
 
-    def test_search_discovers_make_iso_for_baremetal_redeploy_vocabulary(self) -> None:
-        results = run("search", "baremetal redeploy iso")["data"]["results"]
-        self.assertEqual(results[0]["name"], "make-iso")
+    def test_trueosfs_http_retains_root_aware_download_contract(self) -> None:
+        data = run('topic', 'filesystem-api')
+        self.assertEqual(data['discovery']['path'], '/')
+        download = next(route for route in data['routes'] if route['path'].startswith('/dl/<root-id>'))
+        self.assertFalse(download['mutation'])
+        self.assertIn('pic', data['screenshot_pull'][0])
+        self.assertIn('do not silently substitute an old file', data['screenshot_pull'][-1])
 
-    def test_blueprints_topic_documents_internal_named_app_publication(self) -> None:
-        data = run("topic", "!cargo bp")["data"]
-        self.assertEqual(data["name"], "blueprints")
-        self.assertEqual(data["repository"], "../TRUEOS-Blueprints")
-        self.assertEqual(data["build_and_publish"]["terminal_invocation"], "cd ../TRUEOS-Blueprints && cargo bp <appname>")
-        self.assertIn("internal/local deployment", data["purpose"])
-        self.assertIn("removes older versions", data["boundaries"][0])
-        self.assertIn("TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH=1", data["boundaries"][-1])
-
-    def test_search_discovers_blueprints_for_cargo_bp_vocabulary(self) -> None:
-        results = run("search", "cargo bp app publish")["data"]["results"]
-        self.assertEqual(results[0]["name"], "blueprints")
-
-    def test_webcamframe_topic_documents_host_storage_and_startability_preflight(self) -> None:
-        data = run("topic", "webcam-frame")["data"]
-        self.assertEqual(data["name"], "webcamframe")
-        self.assertEqual(data["package"], "webcam-frame")
-        self.assertIn("bld/baremetal-logs/film", data["storage"]["explicit_rig_output"])
-        self.assertIn("webcam-frame-current.jpg", data["storage"]["current_film"])
-        self.assertIn("--record", data["recording_control"])
-        self.assertFalse(data["availability"]["shell2_startable"])
-        self.assertEqual(data["availability"]["registered_selectors"], [])
-
-    def test_search_discovers_webcamframe(self) -> None:
-        results = run("search", "webcam camera film")["data"]["results"]
-        self.assertEqual(results[0]["name"], "webcamframe")
-
-    def test_reference_topic_indexes_checked_in_html_facts(self) -> None:
-        data = run("topic", "html")["data"]
-        self.assertEqual(data["name"], "references")
-        paths = {item["path"] for item in data["documents"]}
-        self.assertEqual(
-            paths,
-            {
-                "tools/docs/CompositorUI.html",
-                "tools/docs/execution.html",
-                "tools/docs/intel-uhd770-cpu-reference.html",
-                "tools/docs/depgraph/index.html",
-                "tools/docs/docs/HYPERVISOR_STATE_MACHINE.html",
-            },
-        )
-        for path in paths:
-            self.assertTrue((ROOT / path).is_file(), path)
-
-    def test_trueosfs_http_topic_exposes_root_aware_download_api(self) -> None:
-        data = run("topic", "filesystem-api")["data"]
-        self.assertEqual(data["name"], "trueosfs-http")
-        self.assertEqual(data["discovery"]["path"], "/")
-        download = next(route for route in data["routes"] if route["path"].startswith("/dl/<root-id>"))
-        self.assertFalse(download["mutation"])
-        blob_confirm = next(route for route in data["routes"] if route["path"].startswith("/up-confirm"))
-        self.assertIn("without retransmitting", blob_confirm["effect"])
-        self.assertIn("do not silently substitute an old file", data["screenshot_pull"][-1])
+    def test_webcam_topic_remains_host_only_when_not_registered(self) -> None:
+        data = run('topic', 'webcam-frame')
+        self.assertEqual(data['package'], 'webcam-frame')
+        self.assertEqual(data['availability']['shell3_startable'],
+                         bool(data['availability']['registered_selectors']))
+        self.assertIn('bld/baremetal-logs/film', data['storage']['explicit_rig_output'])
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

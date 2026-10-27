@@ -133,7 +133,9 @@ pub(crate) fn allocate_font_coverage_mask(
     if bytes > DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES {
         return None;
     }
-    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    // Font masks are offscreen PPGTT resources. Preserve low memory for
+    // devices whose DMA addresses really are limited to 32 bits.
+    let (phys, virt) = crate::dma::alloc_ppgtt(bytes, super::WARM_ALIGN)?;
     let Some(gpu) = reserve_font_coverage_gpu_va(bytes) else {
         crate::dma::dealloc(virt, bytes);
         return None;

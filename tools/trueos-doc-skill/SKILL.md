@@ -32,10 +32,10 @@ The physical rig remains at `192.168.178.94`, but its network shell is now
 Shell3 over SSH on port **22**. Shell2 NetTCP on port 4245 is retired; do not
 use `nc` or the old NetTCP commander launcher to connect.
 
-Use the existing local SSH identity `~/.ssh/id_ed25519_trueos`:
+Use the configured local SSH authentication:
 
 ```sh
-ssh -tt -p 22 -i ~/.ssh/id_ed25519_trueos t4ce@192.168.178.94
+ssh -tt -p 22 t4ce@192.168.178.94
 ```
 
 Allocate a real terminal with nonzero dimensions (at least 20 columns and
@@ -43,7 +43,14 @@ Allocate a real terminal with nonzero dimensions (at least 20 columns and
 `tty: true` and set `stty cols 120 rows 40` before connecting if needed.
 Keep host-key verification enabled. If the local system SSH config has
 invalid ownership or permissions, use `ssh -F /dev/null` with the same
-identity and host. SSH host keys and client identity are distinct.
+authentication and host. Supply `-i` only when the selected local key exists;
+do not assume a project-named identity file. SSH host keys and client identity
+are distinct.
+
+Shell3 starts in CMD. One TAB selects System/ADM; a second selects HV.
+System helpers use exact names: type `gpu` to open its TUI. Do not append
+retired command arguments. Select a retained Matrix slot with `§<slot>` and
+Enter, then use `tui` to enter its terminal explicitly.
 
 Start with `tools/testpy/trueos-doc context` for current build and access facts.
 

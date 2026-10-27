@@ -64,6 +64,11 @@ or staging failure prevents the reset. Concurrent rig commands are rejected.
 Ordinary `cargo build` does not reset the rig. These commands do not start,
 stop, or restart PXE and do not require sudo.
 Both rig commands use the same build wrapper and resource limits described above.
+The staged runtime ELF has debug sections removed with the pinned toolchain's
+`rust-objcopy --strip-debug`; the original Cargo ELF retains its debug information.
+The native loader keeps the runtime file below 4 GiB, so keeping host debug
+sections out of that file preserves boot-time DMA memory. PXE and USB receive
+the same stripped runtime image. A stripping failure prevents publication and reset.
 Direct app-driver builds, including `--app` diagnostics, enter that scope
 automatically when no enclosing build scope is present. Read-only `--check`
 does not start a build scope.
