@@ -1,0 +1,35 @@
+digraph "trueos-kokoro-dispatch-v0.1.0" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
+  n0 [label=<<FONT POINT-SIZE="13"><B>trueos-kokoro-dispatch</B></FONT><BR/><FONT POINT-SIZE="12">0.1.0</FONT><BR/><FONT POINT-SIZE="11">/crates/trueos-kokoro/dispatch</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
+  out0 [label=<to trueos-kokoro-aot-v0.1.0.svg<BR/><B>trueos-kokoro-aot</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/aot>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to trueos-kokoro-conv-v0.1.0.svg<BR/><B>trueos-kokoro-conv</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/conv>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  out2 [label=<to trueos-kokoro-duration-v0.1.0.svg<BR/><B>trueos-kokoro-duration</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/duration>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out2 [style=dashed, color="#d19922"];
+  out3 [label=<to trueos-kokoro-exec-v0.1.0.svg<BR/><B>trueos-kokoro-exec</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/exec>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out3 [style=dashed, color="#d19922"];
+  out4 [label=<to trueos-kokoro-f32-v0.1.0.svg<BR/><B>trueos-kokoro-f32</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/f32>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out4 [style=dashed, color="#d19922"];
+  out5 [label=<to trueos-kokoro-gemm-v0.1.0.svg<BR/><B>trueos-kokoro-gemm</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/gemm>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out5 [style=dashed, color="#d19922"];
+  out6 [label=<to trueos-kokoro-layout-v0.1.0.svg<BR/><B>trueos-kokoro-layout</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/layout>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out6 [style=dashed, color="#d19922"];
+  out7 [label=<to trueos-kokoro-lstm-v0.1.0.svg<BR/><B>trueos-kokoro-lstm</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/lstm>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out7 [style=dashed, color="#d19922"];
+  out8 [label=<to trueos-kokoro-memory-v0.1.0.svg<BR/><B>trueos-kokoro-memory</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/memory>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out8 [style=dashed, color="#d19922"];
+  out9 [label=<to trueos-kokoro-resize-v0.1.0.svg<BR/><B>trueos-kokoro-resize</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/resize>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out9 [style=dashed, color="#d19922"];
+  out10 [label=<to trueos-kokoro-scalar-v0.1.0.svg<BR/><B>trueos-kokoro-scalar</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/scalar>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out10 [style=dashed, color="#d19922"];
+  out11 [label=<to trueos-kokoro-stft-v0.1.0.svg<BR/><B>trueos-kokoro-stft</B><BR/>0.1.0<BR/>/crates/trueos-kokoro/stft>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out11 [style=dashed, color="#d19922"];
+  out12 [label=<to trueos-ttstt-cpu-v0.1.0.svg<BR/><B>trueos-ttstt-cpu</B><BR/>0.1.0<BR/>/crates/trueos-ttstt-cpu>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out12 [style=dashed, color="#d19922"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+  // nested two-input leaves: 0
+}

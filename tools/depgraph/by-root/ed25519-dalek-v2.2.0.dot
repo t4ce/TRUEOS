@@ -1,0 +1,69 @@
+digraph "ed25519-dalek-v2.2.0" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
+  n0 [label=<<FONT POINT-SIZE="13"><B>ed25519-dalek</B></FONT><BR/><FONT POINT-SIZE="12">2.2.0</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<FONT POINT-SIZE="13"><B>block-buffer</B></FONT><BR/><FONT POINT-SIZE="12">0.10.4</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n2 [label=<<FONT POINT-SIZE="13"><B>const-oid</B></FONT><BR/><FONT POINT-SIZE="12">0.9.6</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n3 [label=<<FONT POINT-SIZE="13"><B>curve25519-dalek</B></FONT><BR/><FONT POINT-SIZE="12">4.1.3</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n4 [label=<<FONT POINT-SIZE="13"><B>curve25519-dalek-derive</B></FONT><BR/><FONT POINT-SIZE="12">0.1.1</FONT><BR/><FONT POINT-SIZE="11">proc-macro</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n5 [label=<<FONT POINT-SIZE="13"><B>der</B></FONT><BR/><FONT POINT-SIZE="12">0.7.10</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n6 [label=<<FONT POINT-SIZE="13"><B>digest</B></FONT><BR/><FONT POINT-SIZE="12">0.10.7</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n7 [label=<<FONT POINT-SIZE="13"><B>ed25519</B></FONT><BR/><FONT POINT-SIZE="12">2.2.3</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n8 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="13"><B>pem-rfc7468</B></FONT></TD></TR>
+<TR><TD><FONT POINT-SIZE="12">0.7.0</FONT></TD></TR><TR><TD><TABLE BORDER="0" CELLBORDER="0" CELLSPACING="6" CELLPADDING="0"><TR><TD><TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8" COLOR="#9aa8b8" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="11"><B>base64ct</B></FONT> <FONT POINT-SIZE="10">1.8.3</FONT></TD></TR></TABLE></TD></TR></TABLE></TD></TR></TABLE>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n9 [label=<<FONT POINT-SIZE="13"><B>pkcs5</B></FONT><BR/><FONT POINT-SIZE="12">0.7.1</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n10 [label=<<FONT POINT-SIZE="13"><B>pkcs8</B></FONT><BR/><FONT POINT-SIZE="12">0.10.2</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n11 [label=<<FONT POINT-SIZE="13"><B>signature</B></FONT><BR/><FONT POINT-SIZE="12">2.2.0</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n12 [label=<<FONT POINT-SIZE="13"><B>spki</B></FONT><BR/><FONT POINT-SIZE="12">0.7.3</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n3 -> n4;
+  n3 -> n6;
+  n5 -> n2;
+  n5 -> n8;
+  n6 -> n1;
+  n6 -> n2;
+  n7 -> n10;
+  n7 -> n11;
+  n0 -> n3;
+  n0 -> n7;
+  n9 -> n5;
+  n9 -> n12;
+  n10 -> n5;
+  n10 -> n9;
+  n10 -> n12;
+  n11 -> n6;
+  n12 -> n5;
+  out0 [label=<to alsa-v0.11.0.svg<BR/><B>cfg-if</B><BR/>1.0.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n3 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to chacha20poly1305-v0.10.1.svg<BR/><B>generic-array</B><BR/>0.14.7<BR/><B>cpufeatures</B><BR/>0.2.17<BR/><B>subtle</B><BR/>2.6.1<BR/><B>proc-macro2</B><BR/>1.0.107<BR/><B>quote</B><BR/>1.0.47<BR/><B>syn</B><BR/>2.0.119<BR/><B>crypto-common</B><BR/>0.1.7>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n1 -> out1 [style=dashed, color="#d19922"];
+  n3 -> out1 [style=dashed, color="#d19922"];
+  n4 -> out1 [style=dashed, color="#d19922"];
+  n6 -> out1 [style=dashed, color="#d19922"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  out2 [label=<to rand_core-v0.6.4.svg<BR/><B>rand_core</B><BR/>0.6.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n11 -> out2 [style=dashed, color="#d19922"];
+  out3 [label=<to sha2-v0.10.9.svg<BR/><B>sha2</B><BR/>0.10.9>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out3 [style=dashed, color="#d19922"];
+  out4 [label=<to zeroize-v1.9.0.svg<BR/><B>zeroize</B><BR/>1.9.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n3 -> out4 [style=dashed, color="#d19922"];
+  n5 -> out4 [style=dashed, color="#d19922"];
+  n0 -> out4 [style=dashed, color="#d19922"];
+  in5 [label=<from embedded-websocket-v0.9.4.svg<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in5 -> n6 [style=dashed, color="#4b8fc5"];
+  in6 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>der</B><BR/>0.7.10<BR/><B>digest</B><BR/>0.10.7<BR/><B>signature</B><BR/>2.2.0<BR/><B>spki</B><BR/>0.7.3<BR/><B>pem-rfc7468</B><BR/>0.7.0<BR/><B>pkcs8</B><BR/>0.10.2<BR/><B>const-oid</B><BR/>0.9.6<BR/><B>ed25519-dalek</B><BR/>2.2.0<BR/>... 1 more>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in6 -> n2 [style=dashed, color="#4b8fc5"];
+  in6 -> n3 [style=dashed, color="#4b8fc5"];
+  in6 -> n5 [style=dashed, color="#4b8fc5"];
+  in6 -> n6 [style=dashed, color="#4b8fc5"];
+  in6 -> n0 [style=dashed, color="#4b8fc5"];
+  in6 -> n8 [style=dashed, color="#4b8fc5"];
+  in6 -> n10 [style=dashed, color="#4b8fc5"];
+  in6 -> n11 [style=dashed, color="#4b8fc5"];
+  in6 -> n12 [style=dashed, color="#4b8fc5"];
+  in7 [label=<from sha2-v0.10.9.svg<BR/><B>digest</B><BR/>0.10.7>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in7 -> n6 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 1
+  // centered two-input leaves: 0
+  // nested two-input leaves: 0
+}
