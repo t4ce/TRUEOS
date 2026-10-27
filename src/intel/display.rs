@@ -6168,6 +6168,9 @@ fn copy_premultiplied_rgba_tile_into_overlay_clipped(
     if tile.pixels.len() < required {
         return None;
     }
+    if tile.opacity == 0 {
+        return Some((0, 0, 0));
+    }
     let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
     let Some(draw) = intersect_composition_damage(tile_rect, clip)
         .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
@@ -6225,21 +6228,36 @@ fn copy_premultiplied_rgba_tile_into_overlay_clipped(
             let source_g = apply_tile_opacity(g, tile.opacity);
             let source_b = apply_tile_opacity(b, tile.opacity);
             let source_a = apply_tile_opacity(a, tile.opacity);
-            let destination = unsafe { core::ptr::read_volatile(dst_row.add(col)) }.to_le_bytes();
-            let inverse_alpha = u16::from(u8::MAX - source_a);
-            let blend = |source: u8, under: u8| -> u8 {
-                let under = (u16::from(under) * inverse_alpha + 127) / 255;
-                u16::from(source).saturating_add(under).min(255) as u8
+            if source_a == 0 {
+                continue;
+            }
+            let source = [source_r, source_g, source_b, source_a];
+            // This is exclusively owned CPU memory until the completed damage
+            // is flushed for scanout. Opaque pixels need no destination load;
+            // transparent pixels above need neither a load nor a store.
+            let rgba = if source_a == u8::MAX {
+                u32::from_le_bytes(source)
+            } else {
+                let destination = unsafe { core::ptr::read(dst_row.add(col)) }.to_le_bytes();
+                let inverse_alpha = u16::from(u8::MAX - source_a);
+                let blend = |source: u8, under: u8| -> u8 {
+                    let under = (u16::from(under) * inverse_alpha + 127) / 255;
+                    u16::from(source).saturating_add(under).min(255) as u8
+                };
+                u32::from_le_bytes([
+                    blend(source_r, destination[0]),
+                    blend(source_g, destination[1]),
+                    blend(source_b, destination[2]),
+                    blend(source_a, destination[3]),
+                ])
             };
-            let rgba = u32::from_le_bytes([
-                blend(source_r, destination[0]),
-                blend(source_g, destination[1]),
-                blend(source_b, destination[2]),
-                blend(source_a, destination[3]),
-            ]);
             unsafe {
-                core::ptr::write_volatile(dst_row.add(col), rgba);
-                if core::ptr::read_volatile(dst_row.add(col)) != rgba {
+                core::ptr::write(dst_row.add(col), rgba);
+                // Storage readback is a diagnostic contract, never part of an
+                // ordinary sprite update (both compositor callers ignore it).
+                if tile.expected_rgba.is_some()
+                    && core::ptr::read_volatile(dst_row.add(col)) != rgba
+                {
                     storage_mismatches = storage_mismatches.saturating_add(1);
                 }
             }

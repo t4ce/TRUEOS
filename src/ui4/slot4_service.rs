@@ -32,7 +32,6 @@ struct PendingSlot4Present {
     flip: crate::intel::Ui4LiveOverlayFlip,
     rects: Slot4Rects,
     windows: Vec<Slot4WindowStamp>,
-    leases: Vec<super::FrameReadLease>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -76,11 +75,9 @@ pub(crate) async fn ui4_slot4_service_task() {
                 }
                 crate::intel::Ui4LiveOverlayFlipPoll::Complete => {
                     commit_presented_slot4(&mut state, pending.rects, pending.windows);
-                    release_window_leases(&pending.leases);
                     state.consecutive_present_failures = 0;
                 }
                 crate::intel::Ui4LiveOverlayFlipPoll::Failed => {
-                    release_window_leases(&pending.leases);
                     note_present_failure(&mut state, pending.rects.len());
                     visual_dirty = true;
                     next_present = cadence.next_deadline();
@@ -89,6 +86,9 @@ pub(crate) async fn ui4_slot4_service_task() {
         }
 
         if state.pending.is_none() && visual_dirty && now >= next_present {
+            // Anchor the next frame to this submission's start. Advancing the
+            // cadence after rasterization adds its CPU time to every period.
+            next_present = cadence.next_deadline();
             let rects = software_cursor_rects();
             let windows = slot4_windows();
             match queue_slot4(&mut state, &rects, &windows) {
@@ -105,7 +105,6 @@ pub(crate) async fn ui4_slot4_service_task() {
                     visual_dirty = true;
                 }
             }
-            next_present = cadence.next_deadline();
         }
 
         let now = Instant::now();
@@ -114,13 +113,15 @@ pub(crate) async fn ui4_slot4_service_task() {
             visual_dirty = true;
             continue;
         }
-        let present_wait = if visual_dirty {
+        let present_wait = if state.pending.is_none() && visual_dirty {
             next_present.saturating_duration_since(now)
         } else {
             Duration::MAX
         };
         let flip_wait = if state.pending.is_some() {
-            Duration::from_hz(super::INTERACTION_CADENCE_HZ)
+            // Observe the latch promptly without starting another full frame
+            // period after rasterization. Submission remains cadence-limited.
+            Duration::from_millis(1)
         } else {
             Duration::MAX
         };
@@ -174,9 +175,8 @@ fn queue_slot4(
             );
             return Err(());
         }
-        for view in &views {
-            crate::intel::dma_flush(view.virt, view.byte_len);
-        }
+        // These sources are CPU-authored and read by this CPU compositor.
+        // Flushing them here only evicts retained sprites on every cursor move.
         let pixels = views
             .iter()
             .map(|view| unsafe {
@@ -214,18 +214,14 @@ fn queue_slot4(
         )
         .ok_or(())
     })();
-    let flip = match result {
-        Ok(flip) => flip,
-        Err(()) => {
-            release_window_leases(&leases);
-            return Err(());
-        }
-    };
+    // Rasterization is synchronous. Scanout owns the display copy, so producer
+    // buffers no longer need to stay pinned while waiting for its SURFLIVE.
+    release_window_leases(&leases);
+    let flip = result?;
     Ok(Some(PendingSlot4Present {
         flip,
         rects: rects.clone(),
         windows: window_stamps,
-        leases,
     }))
 }
 
