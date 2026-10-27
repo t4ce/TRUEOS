@@ -3,16 +3,16 @@
 set -euo pipefail
 
 if [[ ${1:-} == --help || ${2:-} == --help ]]; then
-    echo "cargo rigdev: dev kernel + native loader + tar/LZ4 update + publish PXE files + one physical reset"
+    echo "cargo rig: dev kernel + native loader + tar/LZ4 update + publish PXE files + one physical reset"
     echo "cargo rigreal: release kernel + native loader + tar/LZ4 update + publish PXE files + one physical reset"
     exit 0
 fi
 case "${1:-}" in
-    rigdev) shift; set -- --dev "$@" ;;
+    rig) shift; set -- --dev "$@" ;;
     rigreal) shift; set -- --release "$@" ;;
 esac
 if [[ $# != 1 || ( $1 != --dev && $1 != --release ) ]]; then
-    echo "usage: cargo rigdev | cargo rigreal" >&2
+    echo "usage: cargo rig | cargo rigreal" >&2
     exit 2
 fi
 root=$(cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)

@@ -43,11 +43,11 @@ Install the repository's Cargo commands once per checkout:
 tools/install-rig-commands.sh
 ```
 
-The installer links `cargo-rigdev` and `cargo-rigreal` into `$CARGO_HOME/bin`
+The installer links `cargo-rig` and `cargo-rigreal` into `$CARGO_HOME/bin`
 (default `~/.cargo/bin`), which must be on PATH. Then run:
 
 ```sh
-cargo rigdev   # dev kernel
+cargo rig   # dev kernel
 cargo rigreal  # release kernel
 ```
 

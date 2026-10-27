@@ -178,6 +178,15 @@ pub(crate) struct WindowPlacement {
 }
 
 impl WindowPlacement {
+    /// Minimum extent for regular broker-managed frame resize requests.
+    fn with_minimum_resize_extent(self) -> Self {
+        Self {
+            width: self.width.max(32),
+            height: self.height.max(32),
+            ..self
+        }
+    }
+
     const fn valid(self) -> bool {
         self.width != 0 && self.height != 0
     }
@@ -2347,6 +2356,13 @@ fn update_window_placement(
     if !placement.valid() {
         return Err(WindowBrokerError::EmptyExtent);
     }
+    let placement = if window.plane.is_application()
+        && (previous.width, previous.height) != (placement.width, placement.height)
+    {
+        placement.with_minimum_resize_extent()
+    } else {
+        placement
+    };
     // A dock request during the opening reveal must hold the real producer
     // geometry, not freeze the transient shrunken/faded projection.
     let previous_presentation = window.replacement_presentation.unwrap_or(previous);
@@ -2609,6 +2625,7 @@ pub(super) fn docked_window_placement(
             height,
             ..previous
         }
+        .with_minimum_resize_extent()
     } else {
         let center_x = i64::from(x).saturating_add(i64::from(width / 2));
         let center_y = i64::from(y).saturating_add(i64::from(height / 2));
@@ -2680,6 +2697,13 @@ fn change_window_dock_record(
                 output_height,
             )
         })
+    };
+    let placement = if window.plane.is_application()
+        && (previous.width, previous.height) != (placement.width, placement.height)
+    {
+        placement.with_minimum_resize_extent()
+    } else {
+        placement
     };
     let notify_resize = window.interaction.resize_on_maximize
         && producer_resize_required(window.interaction, previous, placement);

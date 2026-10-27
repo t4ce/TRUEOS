@@ -1,6 +1,6 @@
 ---
 name: trueos-docs
-description: Query compact repository-local TRUEOS knowledge for cargo rigdev/rigreal, GitHub releases, physical-rig SSH access, Shell3 modes and Matrix navigation, terminal UI handoff, logging, TRUEOSFS HTTP, or checked-in architecture references. Do not use for unrelated implementation details.
+description: Query compact repository-local TRUEOS knowledge for cargo rig/rigreal, GitHub releases, physical-rig SSH access, Shell3 modes and Matrix navigation, terminal UI handoff, logging, TRUEOSFS HTTP, or checked-in architecture references. Do not use for unrelated implementation details.
 ---
 
 # TRUEOS docs
@@ -12,7 +12,7 @@ from another directory.
 
 ## Builtins, kernel, and rig builds
 
-`cargo rigdev` is the working development build and deploy command;
+`cargo rig` is the working development build and deploy command;
 `cargo rigreal` selects release. Both build the configured apps from the sibling
 `TRUEOS-Buildins`, create one redb `app.db`, compress it as `app.db.lz4`, embed it
 in the kernel, build the native UEFI loader, create `TrueOS.tar.lz4`, and

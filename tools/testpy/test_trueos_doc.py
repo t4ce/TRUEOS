@@ -32,7 +32,7 @@ def run(*args: str, **kwargs) -> dict:
 class TrueosDocTests(unittest.TestCase):
     def test_context_uses_current_build_access_and_shell(self) -> None:
         data = run()
-        self.assertEqual(data['rig_builds']['invocation'], 'cargo rigdev')
+        self.assertEqual(data['rig_builds']['invocation'], 'cargo rig')
         self.assertEqual(data['rig_builds']['release_invocation'], 'cargo rigreal')
         self.assertEqual(data['rig_builds']['build_outputs']['published_runtime'],
                          'tgt/pxe-current/TRUEOS.elf')
@@ -93,7 +93,7 @@ const HV_GROUP_1: [NameEntry; 1] = [
         self.assertEqual(run('topic', '§', cwd=Path('/tmp'))['name'], 'headjack')
 
     def test_search_discovers_current_rig_builds_and_access(self) -> None:
-        self.assertEqual(run('search', 'cargo rigdev appdb build')['results'][0]['name'], 'rig-builds')
+        self.assertEqual(run('search', 'cargo rig appdb build')['results'][0]['name'], 'rig-builds')
         self.assertEqual(run('search', 'testrig ssh shell port')['results'][0]['name'], 'rig')
 
     def test_retired_build_queries_redirect_without_retired_instructions(self) -> None:
@@ -101,7 +101,7 @@ const HV_GROUP_1: [NameEntry; 1] = [
             with self.subTest(name=name):
                 data = run('topic', name)
                 self.assertEqual(data['name'], 'rig-builds')
-                self.assertEqual(data['invocation'], 'cargo rigdev')
+                self.assertEqual(data['invocation'], 'cargo rig')
                 encoded = json.dumps(data)
                 self.assertNotIn('make iso', encoded)
                 self.assertNotIn('smb://', encoded)

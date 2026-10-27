@@ -68,7 +68,7 @@ from = "capi/include/hyper.h"
 
 [features]
 # Preserve std I/O contracts only for consumers still using std.
-std-compat = []
+std-compat = ["futures-channel?/std"]
 capi = []
 client = [
     "dep:want",
@@ -94,6 +94,7 @@ http1 = [
     "dep:itoa",
 ]
 http2 = [
+    "dep:tokio",
     "dep:futures-channel",
     "dep:futures-core",
     "dep:h2",
@@ -177,6 +178,12 @@ features = [
     "const_new",
 ]
 optional = true
+
+[dependencies.tokio]
+version = "1"
+features = ["io-util"]
+optional = true
+default-features = false
 
 [dependencies.tracing]
 version = "0.1"

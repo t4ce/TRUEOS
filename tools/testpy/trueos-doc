@@ -165,10 +165,10 @@ TOPICS: dict[str, dict[str, Any]] = {
                          'vendor/log-os/src/flags.rs',
                          'tools/baremetal-log-drain.sh',
                          '../tools/emulator-log-capture.sh'],
-             'build_integration': 'cargo rigdev/rigreal do not start or rotate log collectors. Confirm the drain is '
+             'build_integration': 'cargo rig/rigreal do not start or rotate log collectors. Confirm the drain is '
                                   'running before attributing a capture to the current boot.'},
     "blueprints": {'summary': 'Blueprint packages are the normal AppDB application format. Kernel builtins are built from '
-                              '../TRUEOS-Buildins with cargo rigdev or cargo rigreal.',
+                              '../TRUEOS-Buildins with cargo rig or cargo rigreal.',
                    'repository': '../TRUEOS-Buildins',
                    'build_topic': 'rig-builds',
                    'boundary': 'The standalone TRUEOS-Blueprints publishing repository is separate. It is not required to '
@@ -303,9 +303,9 @@ TOPICS: dict[str, dict[str, Any]] = {
      'sources': ['src/shell3/shell3.rs::set_mode',
                  'src/shell3/shell3.rs::echo_recognized_prompt',
                  'src/shell3/names.rs']},
-    'rig-builds': {'summary': 'Working end-to-end physical rig workflow: cargo rigdev builds builtins and the kernel, '
+    'rig-builds': {'summary': 'Working end-to-end physical rig workflow: cargo rig builds builtins and the kernel, '
                 'publishes native UEFI PXE files, then requests one reset.',
-     'invocation': 'cargo rigdev',
+     'invocation': 'cargo rig',
      'release_invocation': 'cargo rigreal',
      'setup': 'tools/install-rig-commands.sh installs the two Cargo command links into CARGO_HOME/bin '
               '(default ~/.cargo/bin); that directory must be on PATH.',
@@ -384,7 +384,7 @@ TOPICS: dict[str, dict[str, Any]] = {
          'split_debuginfo': 'Keep off for the custom object target; packed debug information is unsupported by its current target specification.',
      },
      'diagnostics': 'Prefix a preparation command with bash tools/build-safe.sh only for an explicitly '
-                    'resource-limited diagnostic run; cargo rigdev/rigreal do not enter that wrapper.',
+                    'resource-limited diagnostic run; cargo rig/rigreal do not enter that wrapper.',
      'verification': 'A reset acknowledgement confirms the ESP32 packet was sent. Check fresh boot output '
                      'or SSH for boot success. The rig command does not automatically collect logs or '
                      'create a boot-verification receipt.',
@@ -473,7 +473,7 @@ ALIASES = {'§': 'headjack',
  'make-iso': 'rig-builds',
  'rigdev': 'rig-builds',
  'rigreal': 'rig-builds',
- 'cargo rigdev': 'rig-builds',
+ 'cargo rig': 'rig-builds',
  'cargo rigreal': 'rig-builds',
  'build': 'rig-builds',
  'buildins': 'rig-builds',

@@ -565,7 +565,7 @@ impl<T> ScopedJoinHandle<'_, T> {
 }
 
 /// Unix-specific extensions.
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 mod unix {
     use super::ScopedJoinHandle;
     use std::os::unix::thread::{JoinHandleExt, RawPthread};

@@ -74,9 +74,43 @@ exec "$@"
         return result, (self.root / 'trace').read_text().splitlines()
 
     def test_dev_and_reset_once(self):
-        result, trace = self.workflow('rigdev')
+        result, trace = self.workflow('rig')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(trace, ['build --dev', 'reset'])
+
+    def test_installer_migrates_the_command_and_cargo_discovers_rig(self):
+        self.setup_workflow()
+        installer = self.root / 'tools/install-rig-commands.sh'
+        shutil.copy(ROOT / 'tools/install-rig-commands.sh', installer)
+        cargo_home = self.root / 'cargo-home'
+        cargo_bin = cargo_home / 'bin'
+        cargo_bin.mkdir(parents=True)
+        legacy = cargo_bin / 'cargo-rigdev'
+        legacy.symlink_to(self.root / 'tools/rig-build.sh')
+        env = dict(self.env, CARGO_HOME=str(cargo_home),
+                   PATH=f'{cargo_bin}:{self.env["PATH"]}')
+        for _ in range(2):
+            result = subprocess.run(['bash', str(installer)], env=env,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(legacy.is_symlink())
+        for name in ('rig', 'rigreal'):
+            self.assertEqual((cargo_bin / f'cargo-{name}').resolve(),
+                             self.root / 'tools/rig-build.sh')
+        result = subprocess.run(['cargo', 'rig', '--help'], env=env, cwd=self.root,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('cargo rig: dev kernel', result.stdout)
+        self.assertFalse((self.root / 'trace').exists())
+
+        # A different checkout's command is outside this installer's migration.
+        foreign = self.root / 'foreign-rig-build.sh'
+        self.script(foreign, 'exit 0\n')
+        legacy.symlink_to(foreign)
+        result = subprocess.run(['bash', str(installer)], env=env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(legacy.resolve(), foreign)
 
     def test_release_and_reset_once(self):
         result, trace = self.workflow('rigreal')
@@ -84,12 +118,12 @@ exec "$@"
         self.assertEqual(trace, ['build --release', 'reset'])
 
     def test_failed_build_does_not_touch_server_or_reset(self):
-        result, trace = self.workflow('rigdev', BUILD_STATUS='1')
+        result, trace = self.workflow('rig', BUILD_STATUS='1')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(trace, ['build --dev'])
 
     def test_workflow_preserves_caller_cargo_settings_without_entering_a_scope(self):
-        result, trace = self.workflow('rigdev', CARGO_BUILD_JOBS='7', RAYON_NUM_THREADS='5',
+        result, trace = self.workflow('rig', CARGO_BUILD_JOBS='7', RAYON_NUM_THREADS='5',
                                       TRUEOS_BUILD_SCOPE='caller-value')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(trace, ['build --dev', 'reset'])
@@ -232,7 +266,7 @@ echo runtime > "$3"
         current = self.root / 'tgt/pxe-current'
         current.mkdir(parents=True)
         (current / 'TRUEOS.elf').write_bytes(b'previous')
-        result = subprocess.run(['bash', str(self.root / 'tools/rig-build.sh'), 'rigdev'],
+        result = subprocess.run(['bash', str(self.root / 'tools/rig-build.sh'), 'rig'],
                                 env=dict(self.env, OBJCOPY_STATUS='23'),
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 23, result.stderr)
@@ -258,7 +292,7 @@ echo runtime > "$3"
         usb = self.root / 'tgt/usb-debug/TRUEOS.elf'
         usb.parent.mkdir()
         usb.write_bytes(b'previous USB kernel')
-        result = subprocess.run(['bash', str(self.root / 'tools/rig-build.sh'), 'rigdev'],
+        result = subprocess.run(['bash', str(self.root / 'tools/rig-build.sh'), 'rig'],
                                 env=dict(self.env, BUNDLE_STATUS='24'),
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 24, result.stderr)
