@@ -19,7 +19,9 @@ impl ResidentDmaBuffer {
             return None;
         }
         let storage_bytes = bytes.checked_add(alignment - 1)? & !(alignment - 1);
-        let (phys, virt) = crate::dma::alloc(storage_bytes, alignment)?;
+        // Consumers map this backing through their own PPGTT. Preserve the
+        // scarce memory below 4 GiB for devices with a 32-bit DMA address limit.
+        let (phys, virt) = crate::dma::alloc_ppgtt(storage_bytes, alignment)?;
         unsafe {
             core::ptr::write_bytes(virt, 0, storage_bytes);
         }
