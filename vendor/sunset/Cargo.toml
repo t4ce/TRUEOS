@@ -123,7 +123,7 @@ version = "0.7"
 optional = true
 
 [dependencies.getrandom]
-version = "0.2"
+version = "=0.4.3"
 
 [dependencies.heapless]
 version = "0.9"

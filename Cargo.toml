@@ -56,6 +56,8 @@ exclude = [
     "tools/wgpu-video-mesh",
     "tools/trueos-boot",
     "vendor/*",
+    "vendor/getrandom-0.4.3",
+    "vendor/rand_core-0.6.4",
     "vendor/log-os",
     # Cargo matches workspace exclusions against package directories, so this
     # nested package needs its own entry.
@@ -135,7 +137,7 @@ bytes = { version = "1.11.1", default-features = false }
 limine = { version = "0.6", default-features = false }
 acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }
 aml = { version = "0.16", default-features = false }
-getrandom_02 = { package = "getrandom", version = "0.2", default-features = false, features = ["custom"] }
+getrandom = { version = "=0.4.3", default-features = false }
 raw-cpuid = { version = "11", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
@@ -216,6 +218,9 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
+getrandom = { path = "vendor/getrandom-0.4.3" }
+rand_core = { path = "vendor/rand_core-0.6.4" }
+ring = { path = "vendor/ring-0.17.14" }
 # Unreleased next still calls itself 0.15.5. Pin the implementation, not the branch.
 x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "78b81025d65a3e899f48a6fded8b27889a09d70b" }
 cordyceps = { path = "vendor/cordyceps-0.3.5" }

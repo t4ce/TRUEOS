@@ -174,17 +174,28 @@ pub fn random_u64() -> Option<u64> {
 }
 
 #[cfg(any(target_os = "none", target_os = "trueos", target_os = "zkvm"))]
-fn trueos_getrandom_02(dest: &mut [u8]) -> Result<(), getrandom_02::Error> {
+#[unsafe(no_mangle)]
+unsafe extern "Rust" fn __getrandom_v03_custom(
+    dest: *mut u8,
+    len: usize,
+) -> Result<(), getrandom::Error> {
+    if len == 0 {
+        return Ok(());
+    }
+    // getrandom may supply uninitialized storage. Initialize it before forming
+    // the byte slice required by the kernel CSPRNG.
+    let dest = unsafe {
+        // SAFETY: the custom-backend contract provides writable storage for len
+        // bytes, exclusively borrowed for this call. The length is nonzero.
+        core::ptr::write_bytes(dest, 0, len);
+        core::slice::from_raw_parts_mut(dest, len)
+    };
     if fill_bytes(dest) {
         Ok(())
     } else {
-        let code = core::num::NonZeroU32::new(getrandom_02::Error::CUSTOM_START + 1).unwrap();
-        Err(getrandom_02::Error::from(code))
+        Err(getrandom::Error::new_custom(1))
     }
 }
-
-#[cfg(any(target_os = "none", target_os = "trueos", target_os = "zkvm"))]
-getrandom_02::register_custom_getrandom!(trueos_getrandom_02);
 
 #[inline]
 const fn mix_seed(a: u64, b: u64) -> u64 {

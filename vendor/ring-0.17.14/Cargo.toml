@@ -177,7 +177,7 @@ std = ["alloc"]
 test_logging = []
 unstable-testing-arm-no-hw = []
 unstable-testing-arm-no-neon = []
-wasm32_unknown_unknown_js = ["getrandom/js"]
+wasm32_unknown_unknown_js = ["getrandom/wasm_js"]
 
 [lib]
 name = "ring"
@@ -244,7 +244,8 @@ version = "1.0.0"
 default-features = false
 
 [dependencies.getrandom]
-version = "0.2.10"
+version = "=0.4.3"
+default-features = false
 
 [dependencies.untrusted]
 version = "0.9"

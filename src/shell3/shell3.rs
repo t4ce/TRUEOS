@@ -90,6 +90,7 @@ pub enum Mode {
 pub enum RgbaColor {
     White = 0xFFFFFFFF,
     Pink = 0xFF69B4FF,
+    Cyan = 0x30E0E2FF,
     BlackTransparent = 0x00000080,
     Underlined {
         foreground: [u8; 4],
@@ -114,6 +115,7 @@ impl RgbaColor {
             | Self::Blinking { foreground, .. } => return foreground,
             Self::White => 0xFFFFFFFF,
             Self::Pink => 0xFF69B4FF,
+            Self::Cyan => 0x30E0E2FF,
             Self::BlackTransparent => 0x00000080,
         };
         [
@@ -2089,7 +2091,7 @@ fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) ->
             runs.push(MetaFmtStr::new(" "));
         }
         if !group.name.is_empty() {
-            runs.push(MetaFmtStr::new(group.name));
+            runs.push(MetaFmtStr::new(group.name).color(RgbaColor::Cyan));
         }
         runs.push(MetaFmtStr::new(names::GROUP_OPEN.to_string()));
         for (index, entry) in group.names.iter().enumerate() {
@@ -2150,7 +2152,7 @@ fn vmx_hash_text(hash: &[u8; 32]) -> String {
 
 fn vmx_title_meta() -> Vec<MetaFmtStr> {
     let group = &names::VME_GROUP;
-    let mut runs = vec![MetaFmtStr::new(group.name).bold()];
+    let mut runs = vec![MetaFmtStr::new(group.name).color(RgbaColor::Cyan).bold()];
     for entry in group.names {
         runs.push(MetaFmtStr::new(" "));
         runs.push(MetaFmtStr::new(entry.name).color(entry.color));
