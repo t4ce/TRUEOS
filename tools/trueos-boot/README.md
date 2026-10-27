@@ -8,7 +8,7 @@ handoff ABI types shared by the kernel and this loader.
 Prepare the release files:
 
 ```sh
-tools/trueos-boot/prepare.sh --release
+bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --release
 ```
 
 Copy the **contents** of `tgt/usb-release/` to the root of the FAT-formatted USB
@@ -26,6 +26,16 @@ boot files available for comparison and recovery. The preparer writes only to
 
 The preparer defaults to release. `--dev` uses the dev kernel and stages
 `tgt/usb-debug/`.
+
+The build wrapper contains all compiler, linker and host-helper descendants in
+a user systemd scope: memory throttles at 5 GiB with a 6 GiB hard limit, swap is
+disabled, CPU time is capped at one core, and at most 128 tasks may run. It uses
+one Cargo job, one Rayon worker and nice level 15. CPU affinity defaults to the
+first allowed E-core, or the first allowed CPU if E-core information is absent;
+`TRUEOS_BUILD_CPUS` overrides that affinity. If the scope cannot be created, the
+build stops. This requires `systemd-run`, `taskset`, `nice` and Python 3, and
+leaves the system configuration unchanged.
+
 `cargo boot` builds only the EFI loader; the kernel ELF keeps its normal Cargo
 path. When launched from FAT, the loader reads `\TRUEOS.elf` from that volume.
 
@@ -53,12 +63,22 @@ of boot files via `tgt/pxe-current`, and invoke `tools/rig-reset.sh` once. Build
 or staging failure prevents the reset. Concurrent rig commands are rejected.
 Ordinary `cargo build` does not reset the rig. These commands do not start,
 stop, or restart PXE and do not require sudo.
+Both rig commands use the same build wrapper and resource limits described above.
+Direct app-driver builds, including `--app` diagnostics, enter that scope
+automatically when no enclosing build scope is present. Read-only `--check`
+does not start a build scope.
 
 The buildins belong to the kernel generation; they have no separate publishing
 step. The small driver in `TRUEOS-Buildins/tools/build.py` uses the pinned Rust
 toolchain, Python 3.11+, `patch`, `nm`, `readelf`, and the host `liblz4` library.
 It keeps the TRUEOS std adaptations in a private sysroot and leaves the installed
 toolchain unchanged. Set `TRUEOS_BUILDINS_SOURCE` to select another source checkout.
+The Linux compiler is the one archived in
+[`TRUEOS-Rust-Toolchain-nightly-2026-07-10`](https://github.com/t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10).
+The private sysroot retains that archive's Blueprint std port and applies the
+kernel's current thread backend. The archive also contains sources for the
+native `rustc-min` Blueprint compiler; this builtin workflow does not build or
+execute that compiler.
 
 Generated app sources, dependency locks, Cargo caches, linked objects, packages,
 database images, and logs live in `tgt/buildins/dev/` or `tgt/buildins/release/`. Dev and release
@@ -81,8 +101,12 @@ retain their bytes and timestamps.
 The kernel build verifies that the prepared set matches the current sources and
 contains every configured app. Missing, stale or failed app builds stop the flow
 before the kernel is published or the rig is reset. A direct `cargo build`
-consumes a verified prepared set; use `tools/trueos-boot/prepare.sh --dev` to
-refresh the complete dev generation without resetting the rig.
+consumes a verified prepared set. Refresh the complete dev generation without
+resetting the rig with:
+
+```sh
+bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --dev
+```
 
 Run the PXE server separately using the instructions below. It automatically
 loads each completed publication, including switches between dev and release.

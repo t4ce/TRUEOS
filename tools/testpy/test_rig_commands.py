@@ -26,15 +26,43 @@ class RigCommands(unittest.TestCase):
         path.write_text('#!/usr/bin/env bash\nset -eu\n' + text)
         path.chmod(0o755)
 
+    def setup_scope(self):
+        # Mock every containment command: these tests never create a real scope
+        # or change the test runner's CPU affinity and process priority.
+        self.env['TRUEOS_BUILD_CPUS'] = '16'
+        self.script(self.bin / 'systemd-run', '''
+printf '%s\\0' "$@" > "$TEST_ROOT/scope-args"
+echo scope >> "$TEST_ROOT/trace"
+if [[ ${SCOPE_STATUS:-0} != 0 ]]; then exit "$SCOPE_STATUS"; fi
+while [[ $# -gt 0 && $1 != -- ]]; do shift; done
+test $# -gt 0
+shift
+exec "$@"
+''')
+        self.script(self.bin / 'taskset', '''
+printf '%s\\0' "$@" > "$TEST_ROOT/affinity-args"
+test "$1" = -c
+shift 2
+exec "$@"
+''')
+        self.script(self.bin / 'nice', '''
+test "$1" = -n
+test "$2" = 15
+shift 2
+exec "$@"
+''')
+
     def setup_workflow(self):
         script = self.root / 'tools/rig-build.sh'
         script.parent.mkdir()
         shutil.copy(ROOT / 'tools/rig-build.sh', script)
+        shutil.copy(ROOT / 'tools/build-safe.sh', script.parent / 'build-safe.sh')
+        self.setup_scope()
         self.script(self.root / 'tools/trueos-boot/prepare.sh',
                     'echo "build $1" >> "$TEST_ROOT/trace"\nexit "${BUILD_STATUS:-0}"\n')
         self.script(self.root / 'tools/rig-reset.sh',
                     'echo reset >> "$TEST_ROOT/trace"\n')
-        for cmd in ('sudo', 'node', 'systemctl', 'systemd-run'):
+        for cmd in ('sudo', 'node', 'systemctl'):
             self.script(self.bin / cmd, 'echo unexpected-server-command >> "$TEST_ROOT/trace"; exit 99\n')
         return script
 
@@ -47,17 +75,47 @@ class RigCommands(unittest.TestCase):
     def test_dev_and_reset_once(self):
         result, trace = self.workflow('rigdev')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(trace, ['build --dev', 'reset'])
+        self.assertEqual(trace, ['scope', 'build --dev', 'reset'])
 
     def test_release_and_reset_once(self):
         result, trace = self.workflow('rigreal')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(trace, ['build --release', 'reset'])
+        self.assertEqual(trace, ['scope', 'build --release', 'reset'])
 
     def test_failed_build_does_not_touch_server_or_reset(self):
         result, trace = self.workflow('rigdev', BUILD_STATUS='1')
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(trace, ['build --dev'])
+        self.assertEqual(trace, ['scope', 'build --dev'])
+
+    def test_failed_scope_does_not_build_or_reset(self):
+        result, trace = self.workflow('rigdev', SCOPE_STATUS='42')
+        self.assertEqual(result.returncode, 42, result.stderr)
+        self.assertEqual(trace, ['scope'])
+        self.assertFalse((self.root / 'affinity-args').exists())
+
+    def test_safe_wrapper_limits_descendants_and_preserves_arguments(self):
+        self.setup_scope()
+        payload = self.bin / 'payload'
+        self.script(payload, '''
+printf '%s\\0' "$CARGO_BUILD_JOBS" "$RAYON_NUM_THREADS" "$TRUEOS_BUILD_SCOPE" "$@" > "$TEST_ROOT/payload-args"
+''')
+        arguments = ['literal $HOME', 'two words', '$(literal)']
+        result = subprocess.run(['bash', str(ROOT / 'tools/build-safe.sh'),
+                                 str(payload), *arguments],
+                                env=dict(self.env, CARGO_BUILD_JOBS='64',
+                                         RAYON_NUM_THREADS='64'),
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        scope = (self.root / 'scope-args').read_bytes().split(b'\0')[:-1]
+        for option in ('--user', '--scope', '--expand-environment=no',
+                       '--property=MemoryHigh=5G', '--property=MemoryMax=6G',
+                       '--property=MemorySwapMax=0', '--property=CPUQuota=100%',
+                       '--property=TasksMax=128'):
+            self.assertIn(option.encode(), scope)
+        self.assertEqual((self.root / 'affinity-args').read_bytes().split(b'\0')[:2],
+                         [b'-c', b'16'])
+        payload_args = (self.root / 'payload-args').read_bytes().split(b'\0')[:-1]
+        self.assertEqual(payload_args, [b'1', b'1', b'1', *(arg.encode() for arg in arguments)])
 
     def prepare_fixture(self):
         script = self.root / 'tools/trueos-boot/prepare.sh'

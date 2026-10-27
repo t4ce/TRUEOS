@@ -18,4 +18,4 @@ if [ "$shared" = 0 ]; then
     args=("$libdir/Scrt1.o" "${args[@]}" --dynamic-linker=/lib64/ld-linux-x86-64.so.2)
 fi
 exec "$sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld" \
-    -flavor gnu -L "$libdir" "${args[@]}"
+    -flavor gnu --threads=1 -L "$libdir" "${args[@]}"

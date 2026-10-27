@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if temporary.exists() {
         fs::remove_file(&temporary)?;
     }
-    let mut database = Database::create(&temporary)?;
+    let mut database = Database::builder().set_cache_size(64 * 1024 * 1024).create(&temporary)?;
     {
         let transaction = database.begin_write()?;
         {

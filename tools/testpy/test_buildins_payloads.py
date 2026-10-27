@@ -60,7 +60,7 @@ fn main() {
     backend.set_len(decoded.len() as u64).unwrap();
     backend.write(0, &decoded).unwrap();
     drop(decoded);
-    let database = Database::builder().create_with_backend(backend).unwrap();
+    let database = Database::builder().set_cache_size(64 * 1024 * 1024).create_with_backend(backend).unwrap();
     {
         let transaction = database.begin_read().unwrap();
         let apps = transaction.open_table(APPS).unwrap();

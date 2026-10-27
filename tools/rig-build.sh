@@ -24,7 +24,7 @@ mkdir -p tgt
 exec 9>tgt/rig-build.lock
 flock -n 9 || { echo "Another rig build is already running." >&2; exit 1; }
 
-bash tools/trueos-boot/prepare.sh "$1"
+bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh "$1"
 
 # PXE runs separately and automatically notices the published files.
 bash tools/rig-reset.sh

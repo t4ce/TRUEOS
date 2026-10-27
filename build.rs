@@ -426,7 +426,11 @@ fn generate_app_buildins() {
         .arg(&directory)
         .output()
         .expect("verify the prepared builtins");
-    assert!(checked.status.success(), "builtins must be prepared with the kernel: {}", String::from_utf8_lossy(&checked.stderr));
+    assert!(
+        checked.status.success(),
+        "builtins must be prepared with the kernel: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
     print!("{}", String::from_utf8_lossy(&checked.stdout));
     let manifest = directory.join("buildins.json");
     println!("cargo:rerun-if-changed={}", manifest.display());

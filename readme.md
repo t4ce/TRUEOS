@@ -57,16 +57,19 @@ hardware—not a thin proof of concept around a boot screen.
 
 ## Start here
 
-Build the kernel with `cargo build --release`. The ELF is written to
-`tgt/x86_64-unknown-trueos/release/TRUEOS`; Blueprint build-ins are disabled by
-default. Rustup installs the pinned minimal nightly toolchain and `rust-src`
+Prepare the built-in apps, kernel and native UEFI loader with
+`bash tools/build-safe.sh bash tools/trueos-boot/prepare.sh --release`.
+The kernel ELF is written to `tgt/x86_64-unknown-trueos/release/TRUEOS`.
+The build wrapper limits the entire process tree to 6 GiB RAM, no swap and one
+CPU core. An ordinary `cargo build --release` verifies the prepared app image.
+Rustup installs the pinned minimal nightly toolchain and `rust-src`
 from `rust-toolchain.toml`. On x86-64 Ubuntu, host build scripts use Rust's
 bundled linker with the system glibc development files, so GCC and Clang are
 not needed. The font packer also requires `lz4`.
 
 `cargo run` rejects host execution because the kernel ELF requires a bootloader.
 For a native Rust UEFI loader test on physical hardware, prepare the USB files
-with `tools/trueos-boot/prepare.sh --release`; see the
+with the wrapped preparation command above; see the
 [native UEFI boot instructions](tools/trueos-boot/README.md).
 See the [QEMU setup and verification guide](tools/qemu/README.md) for booting
 an existing image and firmware requirements.

@@ -7,7 +7,10 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 
-use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, StorageBackend, TableDefinition};
+use redb::{
+    Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, StorageBackend,
+    TableDefinition,
+};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 
@@ -43,28 +46,46 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
         return Err(String::from("app.db image length mismatch"));
     }
     let backend = redb::backends::InMemoryBackend::new();
-    backend.set_len(image.len() as u64)
+    backend
+        .set_len(image.len() as u64)
         .map_err(|err| alloc::format!("allocate app.db image: {err}"))?;
-    backend.write(0, &image)
+    backend
+        .write(0, &image)
         .map_err(|err| alloc::format!("load app.db image: {err}"))?;
     drop(image);
     let database = Database::builder()
+        .set_cache_size(64 * 1024 * 1024)
         .create_with_backend(backend)
         .map_err(|err| alloc::format!("open app.db image: {err}"))?;
     let count = {
-        let read = database.begin_read()
+        let read = database
+            .begin_read()
             .map_err(|err| alloc::format!("begin app.db seed read: {err}"))?;
-        let apps = read.open_table(APPS)
+        let apps = read
+            .open_table(APPS)
             .map_err(|err| alloc::format!("open seeded apps: {err}"))?;
-        let hashes = read.open_table(HASHES)
+        let hashes = read
+            .open_table(HASHES)
             .map_err(|err| alloc::format!("open seeded hashes: {err}"))?;
-        let updated = read.open_table(UPDATED)
+        let updated = read
+            .open_table(UPDATED)
             .map_err(|err| alloc::format!("open seeded dates: {err}"))?;
-        let count = apps.len().map_err(|err| alloc::format!("count seeded apps: {err}"))?;
+        let count = apps
+            .len()
+            .map_err(|err| alloc::format!("count seeded apps: {err}"))?;
         if count != APP_DB_EXPECTED_APPS as u64
-            || hashes.len().map_err(|err| alloc::format!("count seeded hashes: {err}"))? != count
-            || updated.len().map_err(|err| alloc::format!("count seeded dates: {err}"))? != count {
-            return Err(String::from("app.db image does not contain the complete built-in set"));
+            || hashes
+                .len()
+                .map_err(|err| alloc::format!("count seeded hashes: {err}"))?
+                != count
+            || updated
+                .len()
+                .map_err(|err| alloc::format!("count seeded dates: {err}"))?
+                != count
+        {
+            return Err(String::from(
+                "app.db image does not contain the complete built-in set",
+            ));
         }
         count as usize
     };
