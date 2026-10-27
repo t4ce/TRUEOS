@@ -1,7 +1,0 @@
-{
-  "uri": "smb://t4ce@pdjb/home-share/TRUEOS_SITE/apps/alloc_registry.bp\u00a7\u00a735ac4304e7711446944ca965c2aaa28a28e1d6a8764e6a68029d5024be793686",
-  "bytes": 64586,
-  "local_sha256": "35ac4304e7711446944ca965c2aaa28a28e1d6a8764e6a68029d5024be793686",
-  "remote_sha256": "35ac4304e7711446944ca965c2aaa28a28e1d6a8764e6a68029d5024be793686",
-  "readback_verified": true
-}

@@ -1,3 +1,0 @@
-thread_fanout: BEGIN round=0 background=8 scoped=24 elapsed_ms=0
-thread_fanout: TWENTY_LIVE_ADMITTED round=1 background=8 scoped=24 elapsed_ms=64
-failed to spawn thread: Os { code: 11, kind: WouldBlock, message: "trueos errno 11" }

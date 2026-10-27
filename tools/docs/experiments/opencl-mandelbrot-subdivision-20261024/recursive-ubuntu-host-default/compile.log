@@ -1,9 +1,0 @@
-$ /usr/bin/ocloc compile -file /home/t4ce/Repos/TRUEOS/tools/opencl-mandelbrot-study/mandelbrot_tiles.cl -device 0xa780 -revision_id 4 -64 -options '-cl-std=CL1.2 -DRECURSIVE_PROBE=1' -output mandelbrot -output_no_suffix -out_dir /home/t4ce/Repos/TRUEOS/bld/opencl-mandelbrot-recursion/recursive/ubuntu-host/default
-
-Auto-detected target based on 0xa780 device id: adl-s
-
-warning: Stack call has been detected, the private memory size is set to 150B. You can change this size by setting environmental variable IGC_ForcePerThreadPrivateMemorySize to a value in range [1024:20480]. Greater values can affect performance, and lower ones may lead to incorrect results of your program.
-To make sure your program runs correctly you can use StackOverflowDetection feature. See documentation:
-https://github.com/intel/intel-graphics-compiler/tree/master/documentation/igc/StackOverflowDetection/StackOverflowDetection.md
-
-Build succeeded.

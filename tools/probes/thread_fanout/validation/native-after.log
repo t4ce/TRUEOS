@@ -1,8 +1,0 @@
-thread_fanout: BEGIN round=0 background=8 scoped=24 elapsed_ms=0
-thread_fanout: TWENTY_LIVE_ADMITTED round=1 background=8 scoped=24 elapsed_ms=86
-thread_fanout: PASS round=1 background=8 scoped=24 elapsed_ms=135
-thread_fanout: TWENTY_LIVE_ADMITTED round=2 background=8 scoped=24 elapsed_ms=50
-thread_fanout: PASS round=2 background=8 scoped=24 elapsed_ms=79
-thread_fanout: TWENTY_LIVE_ADMITTED round=3 background=8 scoped=24 elapsed_ms=38
-thread_fanout: PASS round=3 background=8 scoped=24 elapsed_ms=62
-thread_fanout: ALL_PASS round=3 background=8 scoped=24 elapsed_ms=280

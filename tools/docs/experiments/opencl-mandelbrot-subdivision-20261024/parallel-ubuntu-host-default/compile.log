@@ -1,4 +1,0 @@
-$ /usr/bin/ocloc compile -file /home/t4ce/Repos/TRUEOS/tools/opencl-mandelbrot-study/mandelbrot_tiles.cl -device 0xa780 -revision_id 4 -64 -options '-cl-std=CL1.2 -DPARALLEL_LEAVES=1' -output mandelbrot -output_no_suffix -out_dir /home/t4ce/Repos/TRUEOS/bld/opencl-mandelbrot-recursion/parallel/ubuntu-host/default
-
-Auto-detected target based on 0xa780 device id: adl-s
-Build succeeded.
