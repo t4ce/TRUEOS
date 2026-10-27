@@ -371,6 +371,15 @@ TOPICS: dict[str, dict[str, Any]] = {
               '256 codegen units. The dev kernel also compiles unoptimized. The normal linker -r step '
               'produces the tracked .o module; explicit objcopy debug stripping precedes existing '
               'Blueprint and AppDB packaging.',
+     'release_profile': {
+         'config': '../TRUEOS-Buildins/tools/release-profile.toml',
+         'settings': {'codegen-units': 1, 'debug': 'full', 'lto': 'fat',
+                      'panic': 'abort', 'split-debuginfo': 'off', 'strip': 'none', 'incremental': True},
+         'scope': 'cargo rigreal applies this shared profile to every builtin; fast dev compilation and the host AppDB helper are unchanged.',
+         'optimization': 'Keep each app release manifest optimization level: Cargo defaults to 3; Hull and Edit retain s.',
+         'packaging': 'Strip debug information and remove the compiler-only .llvmbc and .llvmcmd sections after linking; retain symbols and relocations required by the TRUEOS loader. Do not use strip=symbols.',
+         'split_debuginfo': 'Keep off for the custom object target; packed debug information is unsupported by its current target specification.',
+     },
      'diagnostics': 'Prefix a preparation command with bash tools/build-safe.sh only for an explicitly '
                     'resource-limited diagnostic run; cargo rigdev/rigreal do not enter that wrapper.',
      'verification': 'A reset acknowledgement confirms the ESP32 packet was sent. Check fresh boot output '
@@ -383,6 +392,7 @@ TOPICS: dict[str, dict[str, Any]] = {
                  'tools/netboot/pxe3.js',
                  'tools/rig-reset.sh',
                  '../TRUEOS-Buildins/tools/build.py',
+                 '../TRUEOS-Buildins/tools/release-profile.toml',
                  'tools/appdb-seed/src/main.rs',
                  'src/app_db.rs']},
 }
@@ -542,7 +552,7 @@ def compact_context(root: Path) -> dict[str, Any]:
         "purpose": "Current TRUEOS builtin/kernel rig workflow and Shell3 access.",
         "rig_builds": {
             key: TOPICS["rig-builds"][key]
-            for key in ("invocation", "release_invocation", "workflow", "build_outputs", "live_update", "verification")
+            for key in ("invocation", "release_invocation", "workflow", "build_outputs", "live_update", "release_profile", "verification")
         },
         "rig": TOPICS["rig"]["physical"] | {"connect": TOPICS["rig"]["connect"], "terminal": TOPICS["rig"]["terminal"]},
         "shell3": {

@@ -34,7 +34,13 @@ Apps use the Paper object-build flow: normal Cargo builds link with `-r` to
 produce tracked `.o` modules, followed by explicit stripping and the existing
 Blueprint/AppDB packaging. Cargo keeps its normal parallelism. Dev apps and the
 dev kernel compile unoptimized; app dev builds disable LTO and use incremental
-compilation. Debug information is stripped for packaging.
+compilation. `cargo rigreal` applies the shared builtin configuration at
+`TRUEOS-Buildins/tools/release-profile.toml`: full LTO, one codegen unit, aborting
+panics, full host debug information, and incremental compilation. Each app keeps
+its release optimization level: Cargo defaults to 3; Hull and Edit use `"s"`.
+Packaging strips debug information and removes the compiler-only `.llvmbc` and
+`.llvmcmd` sections; preserve symbols and relocations needed by the loader.
+Split debug information stays off for the custom target.
 The rig workflow does not force a single CPU or enter `build-safe.sh`;
 that wrapper remains an explicit diagnostic
 option. Use `CARGO_BUILD_JOBS` to select a different Cargo job count when needed.

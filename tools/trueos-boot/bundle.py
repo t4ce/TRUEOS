@@ -113,6 +113,7 @@ def create_bundle(directory: Path) -> Path:
             if output.tell() > MAX_DOWNLOAD_BYTES:
                 raise ValueError("compressed update exceeds the live-update download limit")
             output.flush()
+            os.fchmod(output.fileno(), 0o644)
             os.fsync(output.fileno())
         temporary.replace(destination)
         return destination

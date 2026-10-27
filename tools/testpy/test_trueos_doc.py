@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -129,6 +130,13 @@ const HV_GROUP_1: [NameEntry; 1] = [
         self.assertIn('do not start', data['build_integration'])
         self.assertEqual(data['levels']['order'][0], 'Error')
         self.assertIn('Never expect it in a logfile', data['filter_invariant'])
+
+    def test_release_profile_matches_the_shared_builtin_configuration(self) -> None:
+        profile = run('topic', 'rig-builds')['release_profile']
+        source = ROOT / profile['config']
+        actual = tomllib.loads(source.read_text())['profile']['release']
+        self.assertEqual(profile['settings'], actual)
+        self.assertEqual(run()['rig_builds']['release_profile'], profile)
 
     def test_live_update_archive_has_native_members_and_distinct_install_endpoint(self) -> None:
         data = run('topic', 'live-update')

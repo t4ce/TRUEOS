@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -44,7 +45,7 @@ def archive(entries):
     return buffer.getvalue()
 
 
-def main():
+def run_harness():
     members = [("TRUEOS.elf", b"\x7fELFcandidate"),
                ("EFI/BOOT/BOOTX64.EFI", b"MZnative-loader"),
                ("EFI/BOOT/tgl_guc_70.bin", b"native-guc-firmware")]
@@ -70,7 +71,7 @@ mod r {
     pub mod lz4 {
         use std::ffi::c_void;
         pub const MAGIC: [u8; 4] = [4, 34, 77, 24];
-        #[link(name="lz4")]
+        #[link(name="liblz4.so.1", kind="dylib", modifiers="+verbatim")]
         unsafe extern "C" {
             fn LZ4F_createDecompressionContext(context: *mut *mut c_void, version: u32) -> usize;
             fn LZ4F_freeDecompressionContext(context: *mut c_void) -> usize;
@@ -167,5 +168,10 @@ fn complete<T>(future: impl std::future::Future<Output=T>) -> T {
         subprocess.run([str(executable)], env={**os.environ, "TRUEOS_UPDATE_FIXTURES": str(directory)}, check=True)
 
 
+class UpdateBundleTests(unittest.TestCase):
+    def test_native_update_bundle_consumer(self):
+        run_harness()
+
+
 if __name__ == "__main__":
-    main()
+    unittest.main()

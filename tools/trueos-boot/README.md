@@ -85,6 +85,18 @@ units; the dev kernel also compiles unoptimized. The driver adapts the target
 and std sources, explicitly strips debug information from the packaged module
 with `objcopy`, and creates the existing Blueprint package and AppDB image from it.
 
+`cargo rigreal` applies `TRUEOS-Buildins/tools/release-profile.toml` to every
+builtin: full LTO, one codegen unit, aborting panics, full host debug information,
+and incremental compilation. Optimization levels follow each app's release
+manifest: Cargo defaults to level 3, while Hull and Edit retain `"s"`.
+This shared file is the
+release configuration location; it does not change the fast dev profile or the
+host AppDB helper. Packaged modules still use `--strip-debug`: their symbols and
+relocations are required by the TRUEOS loader, so `strip = "symbols"` cannot be
+used. Packaging also removes the compiler-only `.llvmbc` and `.llvmcmd` sections
+left by the relocatable LTO link. Split debug information stays off for the
+custom object target.
+
 Generated app sources, dependency locks, Cargo caches, linked objects, packages,
 database images, and logs live in `tgt/buildins/dev/` or `tgt/buildins/release/`.
 Dev and release caches stay separate. The driver invokes Cargo for every app on
