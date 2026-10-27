@@ -3,6 +3,7 @@
 // Permission to use this code has been granted by original author:
 // https://github.com/tokio-rs/mio/pull/1602#issuecomment-1218441031
 
+use std::{boxed::Box, vec::Vec};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 #[cfg(not(target_os = "hermit"))]

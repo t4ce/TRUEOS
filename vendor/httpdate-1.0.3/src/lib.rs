@@ -23,6 +23,11 @@
 extern crate alloc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate self as std;
+#[cfg(all(
+    any(target_os = "trueos", target_os = "zkvm"),
+    feature = "std-system-time"
+))]
+extern crate std as hostlib;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 use alloc::{format, string::String};
@@ -188,6 +193,6 @@ pub fn parse_http_date(s: &str) -> Result<SystemTime, Error> {
 /// Format a date to be used in a HTTP header field.
 ///
 /// Dates are formatted as IMF-fixdate: `Fri, 15 May 2015 15:34:21 GMT`.
-pub fn fmt_http_date(d: SystemTime) -> String {
-    format!("{}", HttpDate::from(d))
+pub fn fmt_http_date(d: impl Into<HttpDate>) -> String {
+    format!("{}", d.into())
 }

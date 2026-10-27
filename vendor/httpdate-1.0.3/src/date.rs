@@ -132,6 +132,23 @@ impl From<SystemTime> for HttpDate {
     }
 }
 
+// TRUEOS/zkVM consumers use the platform's real `std::time::SystemTime`,
+// while this crate keeps its own small no_std time type for parsing. Bridge
+// at the date boundary so every caller can format platform timestamps using
+// the same epoch-based conversion.
+#[cfg(all(
+    any(target_os = "trueos", target_os = "zkvm"),
+    feature = "std-system-time"
+))]
+impl From<crate::hostlib::time::SystemTime> for HttpDate {
+    fn from(v: crate::hostlib::time::SystemTime) -> HttpDate {
+        let elapsed = v
+            .duration_since(crate::hostlib::time::UNIX_EPOCH)
+            .expect("all times should be after the epoch");
+        HttpDate::from(UNIX_EPOCH + Duration::from_secs(elapsed.as_secs()))
+    }
+}
+
 impl From<HttpDate> for SystemTime {
     fn from(v: HttpDate) -> SystemTime {
         let leap_years =
@@ -160,6 +177,22 @@ impl From<HttpDate> for SystemTime {
             + Duration::from_secs(
                 v.sec as u64 + v.min as u64 * 60 + v.hour as u64 * 3600 + days * 86400,
             )
+    }
+}
+
+// Keep this bridge opt-in so users that only need the no_std timestamp type
+// do not pull the platform standard library into their dependency graph.
+#[cfg(all(
+    any(target_os = "trueos", target_os = "zkvm"),
+    feature = "std-system-time"
+))]
+impl From<HttpDate> for crate::hostlib::time::SystemTime {
+    fn from(v: HttpDate) -> crate::hostlib::time::SystemTime {
+        let elapsed = SystemTime::from(v)
+            .duration_since(UNIX_EPOCH)
+            .expect("all HTTP dates should be after the epoch");
+        crate::hostlib::time::UNIX_EPOCH
+            + crate::hostlib::time::Duration::from_secs(elapsed.as_secs())
     }
 }
 
