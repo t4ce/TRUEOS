@@ -15,10 +15,20 @@ from another directory.
 `cargo rigdev` is the working development build and deploy command;
 `cargo rigreal` selects release. Both build the configured apps from the sibling
 `TRUEOS-Buildins`, create one redb `app.db`, compress it as `app.db.lz4`, embed it
-in the kernel, build the native UEFI loader, and atomically publish boot files
-through `tgt/pxe-current`. The existing `tools/netboot/pxe3.js` process reloads
+in the kernel, build the native UEFI loader, create `TrueOS.tar.lz4`, and
+atomically publish boot files through `tgt/pxe-current`.
+The existing `tools/netboot/pxe3.js` process reloads
 that publication automatically. The rig command then invokes one physical
-reset. A failed build prevents publication and reset.
+reset. A failed build or archive step prevents publication and reset.
+
+The native USTAR/LZ4 archive contains exactly the stripped `TRUEOS.elf`,
+`EFI/BOOT/BOOTX64.EFI`, and `EFI/BOOT/tgl_guc_70.bin`; the kernel already embeds
+the builtin AppDB. Use `tgt/rigdev.tar.lz4` or `tgt/rigreal.tar.lz4` for the
+latest successful profile archive, or `tgt/TrueOS.tar.lz4` for the current PXE
+generation. RAM live update uses `https://trueos.eu/TrueOS.tar.lz4` or the LAN
+URL `http://192.168.178.111:8080/TrueOS.tar.lz4`. Query `topic rig-builds` for
+manual HTTP serving; `pxe3.js` provides only TFTP. Online disk installation
+keeps the separate older ISO bundle at `https://trueos.eu/TrueOS.lz4`.
 
 Apps use the Paper object-build flow: normal Cargo builds link with `-r` to
 produce tracked `.o` modules, followed by explicit stripping and the existing

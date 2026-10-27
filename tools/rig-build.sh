@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build, publish files for the separately running PXE server, and reset the physical rig exactly once.
+# Build, publish native boot files and a live-update archive, then reset the rig once.
 set -euo pipefail
 
 if [[ ${1:-} == --help || ${2:-} == --help ]]; then
-    echo "cargo rigdev: dev kernel + native loader + publish PXE files + one physical reset"
-    echo "cargo rigreal: release kernel + native loader + publish PXE files + one physical reset"
+    echo "cargo rigdev: dev kernel + native loader + tar/LZ4 update + publish PXE files + one physical reset"
+    echo "cargo rigreal: release kernel + native loader + tar/LZ4 update + publish PXE files + one physical reset"
     exit 0
 fi
 case "${1:-}" in

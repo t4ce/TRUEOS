@@ -318,10 +318,12 @@ TOPICS: dict[str, dict[str, Any]] = {
                   'Use bundled rust-objcopy --strip-debug to stage the runtime ELF; retain the original '
                   'Cargo ELF and its debug information on the host.',
                   'Stage BOOTX64.EFI, TRUEOS.elf, and GuC firmware in one immutable tgt/rig-images '
-                  'generation; atomically select it via tgt/pxe-current and stage the same files for USB.',
+                  'generation and create TrueOS.tar.lz4 from those exact three files before publication.',
+                  'Atomically select the complete generation via tgt/pxe-current and update the profile '
+                  'archive link; stage the same boot files for USB.',
                   'The separately running tools/netboot/pxe3.js process automatically reloads the completed '
                   'publication.',
-                  'Invoke tools/rig-reset.sh once; any build, stripping, or staging failure stops before '
+                  'Invoke tools/rig-reset.sh once; any build, stripping, archive, or staging failure stops before '
                   'reset.'],
      'build_outputs': {'builtins_dev': 'tgt/buildins/dev',
                        'builtins_release': 'tgt/buildins/release',
@@ -331,10 +333,26 @@ TOPICS: dict[str, dict[str, Any]] = {
                        'kernel_release_original': 'tgt/x86_64-unknown-trueos/release/TRUEOS',
                        'published_runtime': 'tgt/pxe-current/TRUEOS.elf',
                        'uefi': 'tgt/pxe-current/EFI/BOOT/BOOTX64.EFI',
+                       'live_update_generation': 'tgt/rig-images/<generation>/TrueOS.tar.lz4',
+                       'live_update_dev': 'tgt/rigdev.tar.lz4',
+                       'live_update_release': 'tgt/rigreal.tar.lz4',
+                       'live_update_current': 'tgt/TrueOS.tar.lz4',
                        'usb_dev': 'tgt/usb-debug',
                        'usb_release': 'tgt/usb-release'},
      'appdb': 'Boot decompresses the single embedded image and opens the regular AppDB in writable RAM. '
               'Builtins belong to the kernel generation and have no standalone publication step.',
+     'live_update': {
+         'format': 'USTAR archive inside a standard LZ4 frame',
+         'members': ['TRUEOS.elf', 'EFI/BOOT/BOOTX64.EFI', 'EFI/BOOT/tgl_guc_70.bin'],
+         'kernel': 'The exact stripped PXE/USB kernel ELF, including its embedded builtin AppDB; no separate database or ISO.',
+         'publication': 'Create the archive inside the immutable generation before selection. Failure preserves the previous generation and prevents reset.',
+         'current_link_target': 'pxe-current/TrueOS.tar.lz4',
+         'remote_url': 'https://trueos.eu/TrueOS.tar.lz4',
+         'lan_url': 'http://192.168.178.111:8080/TrueOS.tar.lz4',
+         'manual_http': 'python3 -m http.server 8080 --bind 0.0.0.0 --directory tgt',
+         'serving': 'Run the HTTP command manually from the repository root when needed; rig builds do not launch it. pxe3.js remains TFTP-only.',
+         'online_install': 'Online disk installation keeps the separate https://trueos.eu/TrueOS.lz4 endpoint and its older ISO-containing bundle.',
+     },
      'incremental': ['Dev and release caches are separate. Cargo runs for every app each time and owns '
                      'Rust dependency freshness; unchanged staged sources retain their timestamps.',
                      'Packaging is keyed by Cargo .o content, Blueprint flags, and package format. '
@@ -428,6 +446,9 @@ ALIASES = {'§': 'headjack',
  'buildins': 'rig-builds',
  'builtins': 'rig-builds',
  'appdb': 'apps',
+ 'live-update': 'rig-builds',
+ 'update-archive': 'rig-builds',
+ 'tar-lz4': 'rig-builds',
  'ssh': 'rig',
  'shell3': 'shell3',
  'blueprint': 'blueprints',
@@ -521,7 +542,7 @@ def compact_context(root: Path) -> dict[str, Any]:
         "purpose": "Current TRUEOS builtin/kernel rig workflow and Shell3 access.",
         "rig_builds": {
             key: TOPICS["rig-builds"][key]
-            for key in ("invocation", "release_invocation", "workflow", "build_outputs", "verification")
+            for key in ("invocation", "release_invocation", "workflow", "build_outputs", "live_update", "verification")
         },
         "rig": TOPICS["rig"]["physical"] | {"connect": TOPICS["rig"]["connect"], "terminal": TOPICS["rig"]["terminal"]},
         "shell3": {

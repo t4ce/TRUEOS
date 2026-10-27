@@ -123,7 +123,7 @@ fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str)
         super::os_update::submit_live_update_from_url_to_target(
             spawner,
             target.clone(),
-            super::os_update::LAN_ISO_URL,
+            super::os_update::LAN_UPDATE_URL,
         );
         return;
     }

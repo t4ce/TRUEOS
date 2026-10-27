@@ -130,6 +130,20 @@ const HV_GROUP_1: [NameEntry; 1] = [
         self.assertEqual(data['levels']['order'][0], 'Error')
         self.assertIn('Never expect it in a logfile', data['filter_invariant'])
 
+    def test_live_update_archive_has_native_members_and_distinct_install_endpoint(self) -> None:
+        data = run('topic', 'live-update')
+        update = data['live_update']
+        self.assertEqual(update['members'],
+                         ['TRUEOS.elf', 'EFI/BOOT/BOOTX64.EFI', 'EFI/BOOT/tgl_guc_70.bin'])
+        self.assertEqual(data['build_outputs']['live_update_dev'], 'tgt/rigdev.tar.lz4')
+        self.assertEqual(data['build_outputs']['live_update_release'], 'tgt/rigreal.tar.lz4')
+        self.assertEqual(data['build_outputs']['live_update_current'], 'tgt/TrueOS.tar.lz4')
+        self.assertEqual(update['current_link_target'], 'pxe-current/TrueOS.tar.lz4')
+        self.assertEqual(update['remote_url'], 'https://trueos.eu/TrueOS.tar.lz4')
+        self.assertEqual(update['lan_url'], 'http://192.168.178.111:8080/TrueOS.tar.lz4')
+        self.assertIn('https://trueos.eu/TrueOS.lz4', update['online_install'])
+        self.assertEqual(run()['rig_builds']['live_update'], update)
+
     def test_references_resolve_to_the_outsourced_document_tree(self) -> None:
         data = run('topic', 'html')
         self.assertEqual(len(data['documents']), 5)

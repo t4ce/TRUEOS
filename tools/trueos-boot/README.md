@@ -53,10 +53,11 @@ cargo rigreal  # release kernel
 
 Both commands build all apps from the sibling `TRUEOS-Buildins/buildins.json`,
 create and compress an app.db redb image containing their normal Blueprint
-packages, embed that image in the kernel, build the
-release EFI loader, publish a complete set
-of boot files via `tgt/pxe-current`, and invoke `tools/rig-reset.sh` once. Build
-or staging failure prevents the reset. Concurrent rig commands are rejected.
+packages, embed that image in the kernel, build the release EFI loader, and
+create `TrueOS.tar.lz4` from the prepared native boot files. They publish the
+complete generation via `tgt/pxe-current` and invoke `tools/rig-reset.sh` once.
+Build, archive, or staging failure prevents the reset. Concurrent rig commands
+are rejected.
 Ordinary `cargo build` does not reset the rig. These commands do not start,
 stop, or restart PXE and do not require sudo.
 The staged runtime ELF has debug sections removed with the pinned toolchain's
@@ -101,6 +102,40 @@ the same redb version. Boot decompresses the image and opens it in writable RAM;
 it does not rebuild the tables. Downloads still update that RAM database until
 reboot. If the app records and database builder are unchanged, both image files
 retain their bytes and timestamps.
+
+Each prepared generation contains `TrueOS.tar.lz4`, a standard LZ4 frame around
+a USTAR archive with exactly these files:
+
+```text
+TRUEOS.elf
+EFI/BOOT/BOOTX64.EFI
+EFI/BOOT/tgl_guc_70.bin
+```
+
+The archive uses the same stripped kernel as PXE and USB, including its embedded
+builtins AppDB. It contains no separate database or ISO. It is created inside
+the immutable `tgt/rig-images/<generation>/` directory before publication; a
+failure leaves the previous generation selected. Stable links select the
+latest successful archive:
+
+| Path | Selection |
+| --- | --- |
+| `tgt/rigdev.tar.lz4` | Latest dev generation |
+| `tgt/rigreal.tar.lz4` | Latest release generation |
+| `tgt/TrueOS.tar.lz4` | Current `tgt/pxe-current/TrueOS.tar.lz4` |
+
+RAM live update extracts `TRUEOS.elf` from this native archive. Its online URL
+is `https://trueos.eu/TrueOS.tar.lz4`; the LAN URL is
+`http://192.168.178.111:8080/TrueOS.tar.lz4`. To serve the current archive from
+the development host manually, run this from the repository root:
+
+```sh
+python3 -m http.server 8080 --bind 0.0.0.0 --directory tgt
+```
+
+The rig build does not start this HTTP server. `pxe3.js` continues to serve only
+the three native boot files over TFTP. Online disk installation retains its
+separate `https://trueos.eu/TrueOS.lz4` endpoint and older ISO-containing bundle.
 
 The kernel build verifies that the prepared set matches the current sources and
 contains every configured app. Missing, stale or failed app builds stop the flow

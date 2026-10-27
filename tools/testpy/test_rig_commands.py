@@ -130,7 +130,7 @@ printf '%s\\0' "$CARGO_BUILD_JOBS" "$RAYON_NUM_THREADS" "$TRUEOS_BUILD_SCOPE" "$
         payload_args = (self.root / 'payload-args').read_bytes().split(b'\0')[:-1]
         self.assertEqual(payload_args, [b'1', b'1', b'1', *(arg.encode() for arg in arguments)])
 
-    def prepare_fixture(self):
+    def prepare_fixture(self, profile='debug'):
         script = self.root / 'tools/trueos-boot/prepare.sh'
         script.parent.mkdir(parents=True)
         shutil.copy(ROOT / 'tools/trueos-boot/prepare.sh', script)
@@ -138,19 +138,29 @@ printf '%s\\0' "$CARGO_BUILD_JOBS" "$RAYON_NUM_THREADS" "$TRUEOS_BUILD_SCOPE" "$
         (buildins / 'tools').mkdir(parents=True)
         (buildins / 'tools/build.py').touch()
         self.env['TRUEOS_BUILDINS_SOURCE'] = str(buildins)
+        self.env['TEST_KERNEL_PROFILE'] = profile
+        self.env['TEST_APP_PROFILE'] = 'dev' if profile == 'debug' else 'release'
         firmware = self.root / 'firmware/i915/tgl_guc_70.bin'
         firmware.parent.mkdir(parents=True)
         firmware.write_bytes(b'firmware')
         self.script(self.bin / 'python3', '''
+if [[ $1 == */bundle.py ]]; then
+    echo bundle >> "$TEST_ROOT/trace"
+    test "$(cat "$2/TRUEOS.elf")" = runtime
+    test "$(cat "$2/EFI/BOOT/BOOTX64.EFI")" = loader
+    test "$(cat "$2/EFI/BOOT/tgl_guc_70.bin")" = firmware
+    echo "bundle:$TEST_KERNEL_PROFILE" > "$2/TrueOS.tar.lz4"
+    exit "${BUNDLE_STATUS:-0}"
+fi
 echo buildins >> "$TEST_ROOT/trace"
 exit "${BUILDINS_STATUS:-0}"
 ''')
         self.script(self.bin / 'cargo', '''
-test "$TRUEOS_BUILDINS_DIR" = "$TEST_ROOT/tgt/buildins/dev"
+test "$TRUEOS_BUILDINS_DIR" = "$TEST_ROOT/tgt/buildins/$TEST_APP_PROFILE"
 echo "cargo $*" >> "$TEST_ROOT/trace"
-mkdir -p "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release" "$TEST_ROOT/tgt/x86_64-unknown-trueos/debug"
+mkdir -p "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release" "$TEST_ROOT/tgt/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE"
 echo loader > "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release/BOOTX64.efi"
-echo kernel > "$TEST_ROOT/tgt/x86_64-unknown-trueos/debug/TRUEOS"
+echo kernel > "$TEST_ROOT/tgt/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE/TRUEOS"
 ''')
         self.script(self.bin / 'rustc', '''
 test "$*" = "--print sysroot"
@@ -159,7 +169,7 @@ echo "$TEST_ROOT/test sysroot"
         self.script(self.root / 'test sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-objcopy', '''
 test "$LD_LIBRARY_PATH" = "$TEST_ROOT/test sysroot/lib:inherited-libraries"
 test "$1" = --strip-debug
-test "$2" = tgt/x86_64-unknown-trueos/debug/TRUEOS
+test "$2" = "tgt/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE/TRUEOS"
 test "$(cat "$2")" = kernel
 echo strip-debug >> "$TEST_ROOT/trace"
 if [[ ${OBJCOPY_STATUS:-0} != 0 ]]; then exit "$OBJCOPY_STATUS"; fi
@@ -174,10 +184,34 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug'])
+                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
         self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'tgt/usb-debug/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'tgt/x86_64-unknown-trueos/debug/TRUEOS').read_text(), 'kernel\n')
+        self.assertEqual((self.root / 'tgt/rigdev.tar.lz4').read_text(), 'bundle:debug\n')
+        self.assertEqual((self.root / 'tgt/TrueOS.tar.lz4').resolve(),
+                         (self.root / 'tgt/pxe-current/TrueOS.tar.lz4').resolve())
+
+    def test_dev_and_release_bundles_keep_separate_complete_generations(self):
+        script = self.prepare_fixture()
+        for flag, kernel_profile, app_profile in (('--dev', 'debug', 'dev'),
+                                                  ('--release', 'release', 'release')):
+            self.env.update(TEST_KERNEL_PROFILE=kernel_profile, TEST_APP_PROFILE=app_profile)
+            result = subprocess.run(['bash', str(script), flag], env=self.env,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        dev = self.root / 'tgt/rigdev.tar.lz4'
+        release = self.root / 'tgt/rigreal.tar.lz4'
+        self.assertTrue(dev.is_symlink())
+        self.assertTrue(release.is_symlink())
+        self.assertEqual(dev.read_text(), 'bundle:debug\n')
+        self.assertEqual(release.read_text(), 'bundle:release\n')
+        self.assertNotEqual(dev.resolve().parent, release.resolve().parent)
+        self.assertEqual((self.root / 'tgt/TrueOS.tar.lz4').resolve(), release.resolve())
+        self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
+        self.assertEqual((self.root / 'trace').read_text().splitlines(),
+                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle',
+                          'buildins', 'cargo build --release', 'cargo boot', 'strip-debug', 'bundle'])
 
     def test_failed_app_build_leaves_the_previous_publication_intact(self):
         script = self.prepare_fixture()
@@ -206,6 +240,35 @@ echo runtime > "$3"
                          ['buildins', 'cargo build', 'cargo boot', 'strip-debug'])
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
         self.assertFalse((self.root / 'tgt/usb-debug').exists())
+
+    def test_failed_archive_preserves_the_previous_generation_and_prevents_reset(self):
+        self.prepare_fixture()
+        shutil.copy(ROOT / 'tools/rig-build.sh', self.root / 'tools/rig-build.sh')
+        self.script(self.root / 'tools/rig-reset.sh', 'echo reset >> "$TEST_ROOT/trace"\n')
+        previous = self.root / 'tgt/rig-images/previous'
+        previous.mkdir(parents=True)
+        (previous / 'TRUEOS.elf').write_bytes(b'previous kernel')
+        (previous / 'TrueOS.tar.lz4').write_bytes(b'previous archive')
+        current = self.root / 'tgt/pxe-current'
+        current.symlink_to('rig-images/previous')
+        profile = self.root / 'tgt/rigdev.tar.lz4'
+        profile.symlink_to('rig-images/previous/TrueOS.tar.lz4')
+        latest = self.root / 'tgt/TrueOS.tar.lz4'
+        latest.symlink_to('pxe-current/TrueOS.tar.lz4')
+        usb = self.root / 'tgt/usb-debug/TRUEOS.elf'
+        usb.parent.mkdir()
+        usb.write_bytes(b'previous USB kernel')
+        result = subprocess.run(['bash', str(self.root / 'tools/rig-build.sh'), 'rigdev'],
+                                env=dict(self.env, BUNDLE_STATUS='24'),
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 24, result.stderr)
+        self.assertEqual((self.root / 'trace').read_text().splitlines(),
+                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
+        self.assertEqual(current.resolve(), previous)
+        self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous kernel')
+        self.assertEqual(profile.read_bytes(), b'previous archive')
+        self.assertEqual(latest.read_bytes(), b'previous archive')
+        self.assertEqual(usb.read_bytes(), b'previous USB kernel')
 
     def test_pxe_ready_and_scoped_stop(self):
         # A private copy ensures --stop cannot match the actual LAN PXE server.

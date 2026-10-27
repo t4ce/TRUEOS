@@ -1,14 +1,14 @@
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
-pub(crate) const REMOTE_ISO_URL: &str = "https://trueos.eu/TrueOS.lz4";
-pub(crate) const LAN_ISO_URL: &str = "http://192.168.178.111:8080/trueos.iso";
+pub(crate) const REMOTE_UPDATE_URL: &str = "https://trueos.eu/TrueOS.tar.lz4";
+pub(crate) const LAN_UPDATE_URL: &str = "http://192.168.178.111:8080/TrueOS.tar.lz4";
 
 use crate::shell3::{MatrixTarget, matrix_target_print_line as print_matrix_target_line};
 use crate::shell3::matrix_target_interrupted;
 
 pub(crate) fn submit_live_update_to_target(spawner: &Spawner, target: MatrixTarget) {
-    submit_live_update_from_url_to_target(spawner, target, REMOTE_ISO_URL);
+    submit_live_update_from_url_to_target(spawner, target, REMOTE_UPDATE_URL);
 }
 
 pub(crate) fn submit_live_update_from_url_to_target(
@@ -50,10 +50,10 @@ async fn live_update_command_task(target: MatrixTarget, url: &'static str) {
         log("update live: step=02b/20 readiness-satisfied net=v4; checkpoint storage is conditional");
 
         log(alloc::format!("update live: step=03/20 download-begin {}", url).as_str());
-        let mut payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
+        let payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
             url,
             120_000,
-            128 * 1024 * 1024,
+            crate::update_bundle::MAX_COMPRESSED_BYTES,
         )
         .await
         {
@@ -73,46 +73,23 @@ async fn live_update_command_task(target: MatrixTarget, url: &'static str) {
         )
         .as_str());
 
-        let iso = if payload.starts_with(&crate::r::lz4::MAGIC) {
-            match crate::iso9660::decode_update_bundle(core::mem::take(&mut payload)).await {
-                Ok(iso) => iso,
-                Err(error) => {
-                    log(alloc::format!("update live: extract failed ({:?})", error).as_str());
-                    return;
-                }
-            }
-        } else {
-            core::mem::take(&mut payload)
-        };
-        drop(payload);
-        if !crate::iso9660::looks_like_iso9660(iso.as_slice()) {
-            log("update live: refused (payload is not an ISO9660 image or a tar/LZ4 bundle containing trueos.iso)");
-            return;
-        }
-        log("update live: step=04b/20 ISO9660-verified");
-        if interrupted() {
-            log("update live: interrupted before candidate extraction");
-            return;
-        }
-
-        let kernel = match crate::iso9660::file_slice(iso.as_slice(), "/TRUEOS.elf") {
-            Ok(kernel) if kernel.get(0..4) == Some(b"\x7FELF") => kernel.to_vec(),
-            Ok(_) => {
-                log("update live: refused (TRUEOS.elf has no ELF magic)");
-                return;
-            }
+        let kernel = match crate::update_bundle::kernel_from_archive(payload).await {
+            Ok(kernel) => kernel,
             Err(error) => {
-                log(alloc::format!("update live: ISO missing TRUEOS.elf ({:?})", error).as_str());
+                log(alloc::format!("update live: extract failed ({error})").as_str());
                 return;
             }
         };
+        log("update live: step=04b/20 native-tar-LZ4-verified");
+        if interrupted() {
+            log("update live: interrupted before candidate staging");
+            return;
+        }
         log(alloc::format!(
             "update live: step=05/20 candidate-ELF-extracted bytes={} disk-install=skipped",
             kernel.len(),
         )
         .as_str());
-        drop(iso);
-
         // The download may run on an administration AP, but the swap parks
         // every AP. Hand ownership to the BSP before beginning that protocol.
         let Some(bsp) = crate::workers::spawner_for_slot(0) else {
