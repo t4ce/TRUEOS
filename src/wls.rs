@@ -293,6 +293,16 @@ fn current_blueprint_thread_slot(vm_id: u8, thread_id: u32) -> Option<u32> {
     (BLUEPRINT_THREAD_IDENTITIES.get(index)?.load(Ordering::Acquire) == identity).then_some(slot)
 }
 
+// Tests inspect all admitted identities without installing each one as the
+// current continuation. Runtime TLS lookup uses the installed slot above.
+#[cfg(test)]
+fn wls_blueprint_thread_slot(vm_id: u8, thread_id: u32) -> Option<u32> {
+    let identity = blueprint_thread_identity(vm_id, thread_id)?;
+    BLUEPRINT_THREAD_IDENTITIES.iter()
+        .position(|slot| slot.load(Ordering::Acquire) == identity)
+        .map(|index| (WLS_BLUEPRINT_THREAD_BASE + index) as u32)
+}
+
 #[inline]
 fn wls_host_fallback_slot(cpu_slot: u32) -> u32 {
     if cpu_slot == NO_CPU_SLOT {

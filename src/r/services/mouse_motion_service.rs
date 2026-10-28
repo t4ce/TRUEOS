@@ -47,6 +47,11 @@ const MAX_LABEL_BYTES: usize = 32;
 const MAX_JSON_BYTES: usize = 16 * 1024;
 const MIN_STROKE_MS: u32 = 8;
 const MAX_STROKE_MS: u32 = 30_000;
+// Sampling the resident font does not resize its atlas. Permit physical text
+// sizes beyond the atlas's native em while keeping derived cursor work bounded.
+const MAX_GLYPH_HEIGHT: u16 = 4096;
+const MAX_CURSOR_TEXT_SCALARS: usize = 128;
+const MAX_CURSOR_TEXT_PIXELS: u32 = 16 * 1024 * 1024;
 const TICK_MS: u64 = 8;
 const VCURSOR_SLOT_BASE: u32 = 0x5600_0000;
 
@@ -66,11 +71,14 @@ pub(crate) struct MouseControlCursor {
     pub(crate) slot_id: u32,
 }
 
-/// Color-free runs prepared once from the shared microfont service. The
+/// Color-free text runs prepared once from the shared microfont service. The
 /// software-cursor plane only translates, clips and recolors these on motion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MouseControlGlyph {
-    pub(crate) character: char,
+    pub(crate) text: Arc<str>,
+    /// The leading span uses the cursor's mutable tint; the rest retains the
+    /// metadata's text tint. Runs never cross a character-cell boundary.
+    pub(crate) prefix_width: u16,
     pub(crate) width: u16,
     pub(crate) height: u16,
     pub(crate) runs: Arc<[MouseControlGlyphRun]>,
@@ -87,6 +95,7 @@ pub(crate) struct MouseControlGlyphRun {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MouseControlVisualMetadata {
     pub(crate) color: Option<crate::graphics::primitives::Rgba8>,
+    pub(crate) text_color: Option<crate::graphics::primitives::Rgba8>,
     pub(crate) glyph: Option<Arc<MouseControlGlyph>>,
     pub(crate) visible: bool,
     pub(crate) visual_only: bool,
@@ -96,6 +105,7 @@ impl MouseControlVisualMetadata {
     fn interactive(color: Option<crate::graphics::primitives::Rgba8>) -> Self {
         Self {
             color,
+            text_color: None,
             glyph: None,
             visible: true,
             visual_only: false,
@@ -153,6 +163,7 @@ pub(crate) enum MouseControlError {
     Capacity,
     QueueFull,
     BadJson,
+    Unavailable,
 }
 
 impl MouseControlError {
@@ -164,6 +175,7 @@ impl MouseControlError {
             Self::Capacity => -4,
             Self::QueueFull => -5,
             Self::BadJson => -6,
+            Self::Unavailable => -7,
         }
     }
 }
@@ -561,22 +573,53 @@ pub(crate) fn request_glyph_cursor(
     height_px: u16,
     color: crate::graphics::primitives::Rgba8,
 ) -> Result<MouseControlCursor, MouseControlError> {
+    if character.is_control() || character.is_whitespace() {
+        return Err(MouseControlError::Invalid);
+    }
+    let mut buffer = [0; 4];
+    let text = character.encode_utf8(&mut buffer);
+    cursor_text_dimensions(text, height_px)?;
+    // The single-glyph API keeps its original strict missing-glyph policy.
+    let atlas = super::microfont_mask_service::ready_atlas()
+        .ok_or(MouseControlError::Unavailable)?;
+    atlas.glyph(character).ok_or(MouseControlError::Invalid)?;
+    request_text_cursor(principal, label, text, height_px, 1, color, color)
+}
+
+/// Allocate an immutable text shape on the same non-interactive cursor plane.
+/// Only the leading span follows `set_cursor_visual_color`; the remaining text
+/// keeps its initial tint. Text pixels always come from Paper's resident atlas.
+pub(crate) fn request_text_cursor(
+    principal: MouseControlPrincipal,
+    label: &str,
+    text: &str,
+    height_px: u16,
+    tinted_prefix_chars: usize,
+    prefix_color: crate::graphics::primitives::Rgba8,
+    text_color: crate::graphics::primitives::Rgba8,
+) -> Result<MouseControlCursor, MouseControlError> {
+    let (width, _) = cursor_text_dimensions(text, height_px)?;
+    let count = text.chars().count();
+    if tinted_prefix_chars > count { return Err(MouseControlError::Invalid); }
+    let prefix_width = (usize::from(width) / count * tinted_prefix_chars) as u16;
     let shared = STATION
         .lock()
         .cursors
         .iter()
         .filter_map(|cursor| cursor.visual.glyph.as_ref())
-        .find(|glyph| glyph.character == character && glyph.height == height_px)
+        .find(|glyph| glyph.text.as_ref() == text && glyph.height == height_px
+            && glyph.prefix_width == prefix_width)
         .cloned();
     let glyph = match shared {
         Some(glyph) => glyph,
-        None => Arc::new(prepare_cursor_glyph(character, height_px)?),
+        None => Arc::new(prepare_cursor_text(text, height_px, prefix_width)?),
     };
     STATION.lock().request(
         principal,
         label,
         MouseControlVisualMetadata {
-            color: Some(color),
+            color: Some(prefix_color),
+            text_color: Some(text_color),
             glyph: Some(glyph),
             visible: true,
             visual_only: true,
@@ -584,7 +627,28 @@ pub(crate) fn request_glyph_cursor(
     )
 }
 
-/// Change a mediated cursor's tint without rerasterizing its glyph or changing
+/// Exact fixed-grid run geometry, including spaces. Geometry is available while
+/// the shared boot atlas is still warming, so callers can arrange labels first.
+pub(crate) fn cursor_text_dimensions(
+    text: &str,
+    height_px: u16,
+) -> Result<(u16, u16), MouseControlError> {
+    if !(1..=MAX_GLYPH_HEIGHT).contains(&height_px)
+        || text.is_empty() || text.chars().any(char::is_control) {
+        return Err(MouseControlError::Invalid);
+    }
+    let count = text.chars().count();
+    if count > MAX_CURSOR_TEXT_SCALARS { return Err(MouseControlError::Capacity); }
+    let cell_width = (u32::from(height_px) * 6 + 5) / 11;
+    let width = cell_width.checked_mul(count as u32).ok_or(MouseControlError::Capacity)?;
+    if width > u32::from(u16::MAX)
+        || width * u32::from(height_px) > MAX_CURSOR_TEXT_PIXELS {
+        return Err(MouseControlError::Capacity);
+    }
+    Ok((width as u16, height_px))
+}
+
+/// Change a mediated cursor's leading tint without rerasterizing its shape or changing
 /// its identity, position, input behavior, or queued motion.
 pub(crate) fn set_cursor_visual_color(
     principal: MouseControlPrincipal,
@@ -793,29 +857,57 @@ fn prepare_cursor_glyph(
     character: char,
     height: u16,
 ) -> Result<MouseControlGlyph, MouseControlError> {
-    if !(11..=253).contains(&height) || character.is_control() || character.is_whitespace() {
+    if !(1..=MAX_GLYPH_HEIGHT).contains(&height)
+        || character.is_control()
+        || character.is_whitespace()
+    {
         return Err(MouseControlError::Invalid);
     }
-    let mask = super::hull_font_service::raster_glyph(character, u32::from(height))
-        .map_err(|_| MouseControlError::Invalid)?;
+    let atlas = super::microfont_mask_service::ready_atlas()
+        .ok_or(MouseControlError::Unavailable)?;
+    atlas.glyph(character).ok_or(MouseControlError::Invalid)?;
+    let mut buffer = [0; 4];
+    let text = character.encode_utf8(&mut buffer);
+    let (width, _) = cursor_text_dimensions(text, height)?;
+    prepare_cursor_text(text, height, width)
+}
+
+fn prepare_cursor_text(
+    text: &str,
+    height: u16,
+    prefix_width: u16,
+) -> Result<MouseControlGlyph, MouseControlError> {
+    let (width, _) = cursor_text_dimensions(text, height)?;
+    let cell_width = (u32::from(height) * 6 + 5) / 11;
+    // Paper and Shell3 already warm this immutable R8 alphabet once at boot.
+    // Derive only color-free row runs; never rasterize another glyph or atlas.
+    let atlas = super::microfont_mask_service::ready_atlas()
+        .ok_or(MouseControlError::Unavailable)?;
     let mut runs = AllocVec::new();
-    for y in 0..mask.height as usize {
-        let row = &mask.pixels[y * mask.width as usize..(y + 1) * mask.width as usize];
-        let mut x = 0;
-        while x < row.len() {
-            let coverage = row[x];
-            let from = x;
-            x += 1;
-            while x < row.len() && row[x] == coverage {
-                x += 1;
-            }
-            if coverage != 0 {
-                runs.push(MouseControlGlyphRun {
-                    x: from as u16,
-                    y: y as u16,
-                    width: (x - from) as u16,
-                    coverage,
-                });
+    for (column, character) in text.chars().enumerate() {
+        let mask = atlas.glyph(character).or_else(|| atlas.glyph('?'))
+            .ok_or(MouseControlError::Invalid)?;
+        for y in 0..u32::from(height) {
+            let mut from = 0;
+            let mut coverage = atlas.sample(mask, 0, y, cell_width, u32::from(height));
+            for x in 1..=cell_width {
+                let next = if x < cell_width {
+                    atlas.sample(mask, x, y, cell_width, u32::from(height))
+                } else {
+                    0
+                };
+                if next != coverage || x == cell_width {
+                    if coverage != 0 {
+                        runs.push(MouseControlGlyphRun {
+                            x: (column as u32 * cell_width + from) as u16,
+                            y: y as u16,
+                            width: (x - from) as u16,
+                            coverage,
+                        });
+                    }
+                    from = x;
+                    coverage = next;
+                }
             }
         }
     }
@@ -823,8 +915,9 @@ fn prepare_cursor_glyph(
         return Err(MouseControlError::Invalid);
     }
     Ok(MouseControlGlyph {
-        character,
-        width: mask.width as u16,
+        text: Arc::from(text),
+        prefix_width,
+        width,
         height,
         runs: Arc::from(runs.into_boxed_slice()),
     })
@@ -1016,6 +1109,7 @@ mod visual_cursor_tests {
     fn visual() -> MouseControlVisualMetadata {
         MouseControlVisualMetadata {
             color: Some(Rgba8::new(0, 0, 0, 255)),
+            text_color: None,
             glyph: None,
             visible: true,
             visual_only: true,
@@ -1108,14 +1202,19 @@ mod visual_cursor_tests {
     }
 
     #[test]
-    fn glyph_registration_uses_native_section_sign_geometry() {
-        for height in [11, 16, 48, 253] {
-            let glyph = prepare_cursor_glyph('§', height).unwrap();
-            assert_eq!(glyph.width, (height * 6).div_ceil(11));
-            assert_eq!(glyph.height, height);
-            assert!(glyph.runs.iter().all(|run| run.width != 0 && run.coverage != 0 && run.x + run.width <= glyph.width && run.y < height));
+    fn glyph_registration_requires_the_shared_font_and_rejects_invalid_geometry() {
+        if super::super::microfont_mask_service::ready_atlas().is_none() {
+            assert_eq!(
+                prepare_cursor_glyph('§', 48),
+                Err(MouseControlError::Unavailable)
+            );
         }
-        for (character, height) in [(' ', 16), ('\n', 16), ('§', 0), ('§', 254), ('\u{10ffff}', 16)] {
+        for (character, height) in [
+            (' ', 16),
+            ('\n', 16),
+            ('§', 0),
+            ('§', MAX_GLYPH_HEIGHT + 1),
+        ] {
             assert_eq!(prepare_cursor_glyph(character, height), Err(MouseControlError::Invalid));
         }
     }

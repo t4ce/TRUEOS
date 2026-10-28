@@ -205,6 +205,7 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
+    pub(crate) text_color: Option<crate::graphics::primitives::Rgba8>,
     pub(crate) interactive: bool,
     pub(crate) glyph: Option<Arc<crate::r::services::mouse_motion_service::MouseControlGlyph>>,
     pub(crate) icon: super::Ui4CursorIcon,
@@ -1741,6 +1742,7 @@ impl InputBroker {
                 let _ = visuals.push(Ui4SoftwareCursorVisual {
                     drag_preview: None, x: route.x, y: route.y,
                     color: metadata.as_ref().and_then(|visual| visual.color).unwrap_or(route.color),
+                    text_color: metadata.as_ref().and_then(|visual| visual.text_color),
                     interactive: false,
                     glyph: metadata.and_then(|visual| visual.glyph),
                     icon: super::Ui4CursorIcon::Default, custom_cursor: None,
@@ -1763,6 +1765,7 @@ impl InputBroker {
                 x,
                 y,
                 color: metadata.as_ref().and_then(|visual| visual.color).unwrap_or(route.color),
+                text_color: metadata.as_ref().and_then(|visual| visual.text_color),
                 interactive: true,
                 glyph: metadata.and_then(|visual| visual.glyph),
                 icon,

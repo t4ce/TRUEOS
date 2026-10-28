@@ -12,9 +12,12 @@ use crate::r::services::keyboard_control_service::{
 use crate::ui4::{WindowOwner, WindowSnapshot};
 
 const GREETING: &str = "Hello from TrueOS §";
+pub(super) const GREETING_GRID_SCALE: u32 = 2;
 // 19 x 9 whole 10 mm cells, a 19:9 frame. The greeting fills row zero;
 // wrapping leaves its caret at row one, ready to erase every scalar.
-const SCRIPT: &str = "mode gridpaper\nsize 190x90\nstep 2\nwrap on\n";
+fn launch_script() -> String {
+    alloc::format!("mode gridpaper\nsize 190x90\nstep {}\nwrap on\n", GREETING_GRID_SCALE)
+}
 const POLL_MS: u64 = 16;
 const INPUT_SETTLE_MS: u64 = 48;
 
@@ -128,7 +131,7 @@ async fn exercise(
         }
     };
     let mut request = crate::hv::launcher::LaunchRequest::new("paper.bp".into(), bytes);
-    request.script = Some(SCRIPT.into());
+    request.script = Some(launch_script());
     let receipt = crate::hv::launcher::enqueue(request, Some(Box::new(DemoLaunch)))
         .map_err(|_| "paper-admission")?;
     *target = Some(crate::shell3::MatrixTarget::from_lease(

@@ -512,12 +512,13 @@ fn push_software_cursor_visual(
     screen_h: u32,
 ) {
     if let Some(glyph) = visual.glyph.as_deref() {
-        push_cursor_glyph(
+        push_cursor_text(
             rects,
             visual.x,
             visual.y,
             glyph,
             visual.color,
+            visual.text_color.unwrap_or(visual.color),
             screen_w,
             screen_h,
         );
@@ -565,9 +566,23 @@ fn push_cursor_glyph(
     screen_w: u32,
     screen_h: u32,
 ) {
+    push_cursor_text(rects, cursor_x, cursor_y, glyph, color, color, screen_w, screen_h);
+}
+
+fn push_cursor_text(
+    rects: &mut Slot4Rects,
+    cursor_x: u32,
+    cursor_y: u32,
+    glyph: &crate::r::services::mouse_motion_service::MouseControlGlyph,
+    prefix_color: crate::graphics::primitives::Rgba8,
+    text_color: crate::graphics::primitives::Rgba8,
+    screen_w: u32,
+    screen_h: u32,
+) {
     let origin_x = i64::from(cursor_x) - i64::from(glyph.width / 2);
     let origin_y = i64::from(cursor_y) - i64::from(glyph.height / 2);
     for run in glyph.runs.iter() {
+        let color = if run.x < glyph.prefix_width { prefix_color } else { text_color };
         let y = origin_y + i64::from(run.y);
         if y < 0 || y >= i64::from(screen_h) {
             continue;
@@ -1281,6 +1296,7 @@ mod tests {
             x: 10,
             y: 20,
             color,
+            text_color: None,
             interactive: true,
             glyph: None,
             icon: super::super::Ui4CursorIcon::CellOutline,
@@ -1315,7 +1331,7 @@ mod tests {
     fn glyph_cursor_centers_and_clips_prepared_runs_on_slot_four() {
         use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
         let glyph = MouseControlGlyph {
-            character: '§', width: 4, height: 4,
+            text: Arc::from("§"), prefix_width: 4, width: 4, height: 4,
             runs: Arc::from(alloc::vec![
                 MouseControlGlyphRun { x: 0, y: 0, width: 4, coverage: 255 },
                 MouseControlGlyphRun { x: 0, y: 2, width: 4, coverage: 128 },
@@ -1333,7 +1349,7 @@ mod tests {
     fn glyph_recolor_only_changes_coverage_modulated_tint() {
         use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
         let glyph = MouseControlGlyph {
-            character: '§', width: 2, height: 2,
+            text: Arc::from("§"), prefix_width: 2, width: 2, height: 2,
             runs: Arc::from(alloc::vec![MouseControlGlyphRun { x: 0, y: 0, width: 2, coverage: 128 }].into_boxed_slice()),
         };
         for color in [Rgba8::new(0, 0, 0, 255), Rgba8::new(0, 160, 255, 255),
@@ -1344,6 +1360,43 @@ mod tests {
             assert_eq!(rects.len(), 1);
             assert_eq!(rects[0].color, Rgba8::new(color.r, color.g, color.b, 128));
         }
+    }
+
+    #[test]
+    fn text_cursor_recolor_keeps_nickname_rects_and_damage_outside_it_unchanged() {
+        use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
+        let neutral = Rgba8::new(235, 235, 235, 255);
+        let glyph = MouseControlGlyph {
+            text: Arc::from("§Joker"), prefix_width: 2, width: 12, height: 2,
+            runs: Arc::from(alloc::vec![
+                MouseControlGlyphRun { x: 0, y: 0, width: 2, coverage: 255 },
+                MouseControlGlyphRun { x: 0, y: 1, width: 2, coverage: 128 },
+                MouseControlGlyphRun { x: 2, y: 0, width: 10, coverage: 255 },
+                MouseControlGlyphRun { x: 2, y: 1, width: 10, coverage: 128 },
+            ].into_boxed_slice()),
+        };
+        let mut previous = Slot4Rects::new();
+        push_cursor_text(&mut previous, 200, 100, &glyph,
+            Rgba8::new(0, 0, 0, 255), neutral, 800, 600);
+        let mut current = Slot4Rects::new();
+        push_cursor_text(&mut current, 200, 100, &glyph,
+            Rgba8::new(0, 160, 255, 255), neutral, 800, 600);
+        assert_eq!(previous.len(), current.len());
+        let nickname_left = 200 - u32::from(glyph.width / 2)
+            + u32::from(glyph.prefix_width);
+        let mut nickname_rects = 0;
+        for (old, new) in previous.iter().zip(&current) {
+            if old.x >= nickname_left {
+                nickname_rects += 1;
+                assert!(overlay_rect_eq(old, new));
+                assert_eq!((new.color.r, new.color.g, new.color.b),
+                    (neutral.r, neutral.g, neutral.b));
+            }
+        }
+        assert!(nickname_rects != 0);
+        let damage = changed_rect_damage(&previous, &current);
+        assert!(!damage.is_empty());
+        assert!(damage.rects().iter().all(|rect| rect.x + rect.width <= nickname_left));
     }
 
     #[test]
@@ -1391,6 +1444,7 @@ mod tests {
             x: 1,
             y: 1,
             color: Rgba8::new(0, 0, 0, 0),
+            text_color: None,
             interactive: true,
             glyph: None,
             icon: super::super::Ui4CursorIcon::Custom,

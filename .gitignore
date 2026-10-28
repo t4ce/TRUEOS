@@ -2,3 +2,4 @@ bld/
 tgt/
 Cargo.lock
 !tools/trueos-boot/Cargo.lock
+!tools/testpy/thread_scheduler/Cargo.lock

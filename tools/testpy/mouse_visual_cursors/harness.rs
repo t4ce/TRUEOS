@@ -71,6 +71,8 @@ pub mod usb2 { pub mod hid {
 } }
 
 pub mod intel {
+    pub(crate) use crate::damage::{DamageRect as CompositionDamageRect,
+        DamageRegion as CompositionDamageRegion};
     #[derive(Clone, Copy, Debug)]
     pub struct LiveOverlayRect {pub x:u32,pub y:u32,pub width:u32,pub height:u32,pub color:crate::graphics::primitives::Rgba8}
     impl LiveOverlayRect {pub fn new(x:u32,y:u32,width:u32,height:u32,color:crate::graphics::primitives::Rgba8)->Self {Self{x,y,width,height,color}}}
@@ -86,12 +88,13 @@ pub mod r {
     }
     pub mod keyboard { #[derive(Default)] pub struct TrueosKeyboardOutputEvent {pub controller_id:u32,pub slot_id:u32} }
     pub mod services {
-        pub use crate::{hull_font_service, mouse_motion_service};
+        pub use crate::{microfont_mask_service, mouse_motion_service};
     }
 }
 
-#[path="font.rs"] pub mod hull_font_service;
+#[path="font.rs"] pub mod microfont_mask_service;
 #[path="mouse.rs"] pub mod mouse_motion_service;
+#[path="damage.rs"] mod damage;
 
 #[cfg(test)]
 #[path="render.rs"] mod render;
@@ -116,6 +119,7 @@ pub mod r {
 
     #[test]
     fn matching_glyphs_share_registration_and_metadata_updates_are_quiet() {
+        microfont_mask_service::warm_fixture_atlas();
         let black=Rgba8::new(0,0,0,255);
         let blue=Rgba8::new(0,160,255,255);
         let a=request_glyph_cursor(OWNER,"agent-a",'§',48,black).unwrap();
@@ -141,5 +145,107 @@ pub mod r {
         release_cursor(OWNER,a.handle).unwrap();
         assert!(cursor_visual_metadata(a.slot_id).is_none());
         assert!(cursor_visual_metadata(b.slot_id).is_some());
+    }
+
+    #[test]
+    fn marker_uses_papers_resident_coverage_without_another_atlas_production() {
+        let atlas = microfont_mask_service::warm_fixture_atlas();
+        let source = atlas.glyph('§').unwrap();
+        for height in [1u16, 5, 10, 11, 16, 48, 253, 320] {
+            let cursor = request_glyph_cursor(OWNER, "paper-size", '§', height,
+                Rgba8::new(0,0,0,255)).unwrap();
+            let visual = cursor_visual_metadata(cursor.slot_id).unwrap();
+            let glyph = visual.glyph.unwrap();
+            assert_eq!(u32::from(glyph.width), (u32::from(height) * 6 + 5) / 11);
+            assert_eq!(glyph.height, height);
+            let mut actual = alloc::vec![0; usize::from(glyph.width) * usize::from(height)];
+            for run in glyph.runs.iter() {
+                assert!(run.width != 0 && run.coverage != 0);
+                assert!(run.x + run.width <= glyph.width && run.y < height);
+                for x in run.x..run.x + run.width {
+                    actual[usize::from(run.y) * usize::from(glyph.width) + usize::from(x)] = run.coverage;
+                }
+            }
+            for y in 0..u32::from(height) {
+                for x in 0..u32::from(glyph.width) {
+                    assert_eq!(actual[y as usize * usize::from(glyph.width) + x as usize],
+                        atlas.sample(source, x, y, u32::from(glyph.width), u32::from(height)));
+                }
+            }
+            set_cursor_visual_color(OWNER, cursor.handle, Rgba8::new(0,160,255,255)).unwrap();
+            release_cursor(OWNER, cursor.handle).unwrap();
+        }
+        assert!(core::ptr::eq(atlas, microfont_mask_service::ready_atlas().unwrap()));
+        assert_eq!(microfont_mask_service::fixture_productions(), 1);
+        assert_eq!(request_glyph_cursor(OWNER,"unsupported",'\u{10ffff}',48,
+            Rgba8::new(0,0,0,255)), Err(MouseControlError::Invalid));
+    }
+
+    #[test]
+    fn text_cursor_uses_the_same_resident_cells_and_preserves_its_neutral_name() {
+        let atlas = microfont_mask_service::warm_fixture_atlas();
+        let black = Rgba8::new(0,0,0,255);
+        let neutral = Rgba8::new(235,235,235,255);
+        for text in ["§Galileo XVII", "§Joker", "§🃏"] {
+            for height in [11u16, 38, 44] {
+                let cursor = request_text_cursor(OWNER,"nickname",text,height,1,black,neutral).unwrap();
+                let before = cursor_visual_metadata(cursor.slot_id).unwrap();
+                let glyph = before.glyph.as_ref().unwrap();
+                let (width, measured_height) = cursor_text_dimensions(text,height).unwrap();
+                assert_eq!((glyph.width, glyph.height), (width,measured_height));
+                assert_eq!(glyph.text.as_ref(),text);
+                let cell = (u32::from(height)*6+5)/11;
+                assert_eq!(glyph.prefix_width,u16::try_from(cell).unwrap());
+                assert_eq!(u32::from(width),cell*text.chars().count() as u32);
+                let mut actual = alloc::vec![0; usize::from(width)*usize::from(height)];
+                for run in glyph.runs.iter() {
+                    assert!(run.width != 0 && run.coverage != 0);
+                    assert!(run.x+run.width <= width && run.y < height);
+                    assert!((run.x < glyph.prefix_width) == (run.x+run.width <= glyph.prefix_width));
+                    for x in run.x..run.x+run.width {
+                        actual[usize::from(run.y)*usize::from(width)+usize::from(x)] = run.coverage;
+                    }
+                }
+                for (column,ch) in text.chars().enumerate() {
+                    let mask = atlas.glyph(ch).or_else(||atlas.glyph('?')).unwrap();
+                    for y in 0..u32::from(height) {
+                        for x in 0..cell {
+                            assert_eq!(actual[y as usize*usize::from(width)+column*cell as usize+x as usize],
+                                atlas.sample(mask,x,y,cell,u32::from(height)));
+                        }
+                    }
+                }
+                let same = request_text_cursor(OWNER,"same-name",text,height,1,
+                    Rgba8::new(0,160,255,255),Rgba8::new(200,200,200,255)).unwrap();
+                assert!(alloc::sync::Arc::ptr_eq(glyph,
+                    cursor_visual_metadata(same.slot_id).unwrap().glyph.as_ref().unwrap()));
+                set_cursor_visual_color(OWNER,cursor.handle,Rgba8::new(0,220,120,255)).unwrap();
+                let after = cursor_visual_metadata(cursor.slot_id).unwrap();
+                assert_eq!(after.text_color,Some(neutral));
+                assert!(alloc::sync::Arc::ptr_eq(glyph,after.glyph.as_ref().unwrap()));
+                release_cursor(OWNER,cursor.handle).unwrap();
+                release_cursor(OWNER,same.handle).unwrap();
+            }
+        }
+        assert_eq!(microfont_mask_service::fixture_productions(),1);
+    }
+
+    #[test]
+    fn text_cursor_measurement_is_ready_before_the_atlas_and_bounds_registration() {
+        assert!(microfont_mask_service::ready_atlas().is_none());
+        assert_eq!(cursor_text_dimensions("§Joker",38),Ok((126,38)));
+        assert_eq!(request_text_cursor(OWNER,"cold","§Joker",38,1,
+            Rgba8::new(0,0,0,255),Rgba8::new(235,235,235,255)),Err(MouseControlError::Unavailable));
+        for text in ["", "§line\nbreak", "§\tTab", "§\0Zero"] {
+            assert_eq!(cursor_text_dimensions(text,38),Err(MouseControlError::Invalid));
+        }
+        for height in [0,4097] {
+            assert_eq!(cursor_text_dimensions("§Joker",height),Err(MouseControlError::Invalid));
+        }
+        assert_eq!(cursor_text_dimensions(&"N".repeat(128),38),Ok((2688,38)));
+        assert_eq!(cursor_text_dimensions(&"N".repeat(129),38),Err(MouseControlError::Capacity));
+        assert_eq!(cursor_text_dimensions(&"N".repeat(128),4096),Err(MouseControlError::Capacity));
+        assert_eq!(request_text_cursor(OWNER,"bad-prefix","§Joker",38,7,
+            Rgba8::new(0,0,0,255),Rgba8::new(235,235,235,255)),Err(MouseControlError::Invalid));
     }
 }

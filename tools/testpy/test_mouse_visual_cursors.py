@@ -3,7 +3,7 @@
 
 The kernel does not link as a host test crate. Keep the production mouse
 station and its inline tests, removing only its executor task and clock/
-viewport discovery. Import the actual native font raster, HID injection,
+viewport discovery. Import the actual shared-atlas sampler, HID injection,
 slot-4 glyph drawing and UI4 keyboard/selection routing methods. Hardware
 registries and presentation wakeups are counted by the fixture.
 """
@@ -48,21 +48,29 @@ def main() -> None:
                           "fn viewport_dimensions() -> (u32,u32) { (320,200) }")
     mouse = mouse.replace(block(mouse, "fn uptime_ms()"), "fn uptime_ms() -> u64 { 0 }")
 
-    hull_path = "src/r/services/hull_font_service.rs"
-    hull_source = (ROOT / hull_path).read_text()
-    maximum = re.search(r"^const MAX_EM_HEIGHT:.*?;$", hull_source, re.MULTILINE)
-    assert maximum
-    font = "use alloc::vec::Vec;\n" + maximum.group() + "\n"
-    font += "\n".join(item(hull_path, name)
-                      for name in ("Mask", "raster_glyph", "raster_segment", "raster_quad"))
+    atlas_path = "src/r/services/microfont_mask_service.rs"
+    atlas_source = (ROOT / atlas_path).read_text()
+    constants_start = atlas_source.index("pub(crate) const ATLAS_COLUMNS")
+    constants_end = atlas_source.index("#[derive(Clone, Copy, Debug, PartialEq)]")
+    font = "use alloc::vec::Vec;\n" + atlas_source[constants_start:constants_end]
+    font += "\n".join(item(atlas_path, name)
+                      for name in ("glyph_slot", "OwnedAlphaAtlas", "ready_atlas"))
+    font += block(atlas_source, "impl OwnedAlphaAtlas {") + "\n"
+    atlas_static = re.search(r"^static ALPHA_ATLAS:.*?;$", atlas_source, re.MULTILINE)
+    assert atlas_static
+    font += atlas_static.group() + "\n"
+    font += (FIXTURES / "atlas_fixture.rs").read_text()
 
     slot_path = "src/ui4/slot4_service.rs"
     slot = (ROOT / slot_path).read_text()
     render = "use alloc::sync::Arc;\nuse crate::graphics::primitives::Rgba8;\n"
     render += "type Slot4Rects=alloc::vec::Vec<crate::intel::LiveOverlayRect>;\n"
-    render += item(slot_path, "push_cursor_glyph") + item(slot_path, "push_overlay_rect")
+    for name in ("push_cursor_glyph", "push_cursor_text", "push_overlay_rect",
+                 "changed_rect_damage", "overlay_rect_eq", "add_overlay_rect_damage"):
+        render += item(slot_path, name)
     for name in ("glyph_cursor_centers_and_clips_prepared_runs_on_slot_four",
-                 "glyph_recolor_only_changes_coverage_modulated_tint"):
+                 "glyph_recolor_only_changes_coverage_modulated_tint",
+                 "text_cursor_recolor_keeps_nickname_rects_and_damage_outside_it_unchanged"):
         render += "#[test]\n" + block(slot, f"fn {name}()") + "\n"
 
     broker_path = "src/ui4/input_broker.rs"
@@ -96,6 +104,7 @@ microfont = { path = ''' + json.dumps(str(ROOT / "vendor/microfont")) + ''', def
         hid = item("crates/trueos-v/src/bp_abi.rs", "TrueosHidCursorEvent")
         hid += item("src/usb3/hid/mod.rs", "inject_virtual_cursor_event")
         (work / "src/hid_injection.rs").write_text(hid)
+        (work / "src/damage.rs").write_bytes((ROOT / "src/ui4/damage.rs").read_bytes())
         (work / "src/lib.rs").write_bytes((FIXTURES / "harness.rs").read_bytes())
         build = subprocess.run([
             "cargo", "+" + channel.group(1), "test", "--offline", "--locked",

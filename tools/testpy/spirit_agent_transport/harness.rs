@@ -146,7 +146,8 @@ mod tests {
         AgentSnapshot {
             version: SNAPSHOT_VERSION, epoch: 1, revision: 1, complete: true, connected: true,
             agents: vec![AgentEntry {
-                id: "child-1".into(), parent_id: Some("root".into()), name: None, role: None,
+                id: "child-1".into(), parent_id: Some("root".into()), name: None,
+                nickname: Some("Scout".into()), role: None,
                 lifecycle: Some(AgentLifecycle::Running), runtime: None,
                 waiting_approval: false, waiting_input: false, loaded: true,
             }],

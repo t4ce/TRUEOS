@@ -1,9 +1,10 @@
 //! Instrument Codex application continuations in either placement mode. The wrapped
 //! waker preserves executor identity through will_wake and forwards every wake.
 use crate::r::input_timing::{Site, now_ms};
+use crate::r::blocking::diagnostics::TimingProbe;
 use alloc::{sync::Arc, task::Wake};
 use core::{
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     task::{Context, Waker},
 };
 
@@ -42,9 +43,11 @@ pub(super) struct Timing {
     signal: Arc<Signal>,
     waker: Waker,
     wait: Option<(u64, Option<u64>)>,
+    first_poll: AtomicBool,
+    probe: Option<TimingProbe>,
 }
 impl Timing {
-    pub(super) fn new(cx: &Context<'_>, submitted: u64) -> Self {
+    pub(super) fn new(cx: &Context<'_>, submitted: u64, probe: Option<TimingProbe>) -> Self {
         let signal = Arc::new(Signal {
             ready: AtomicU64::new(submitted.saturating_add(1)),
             executor: spin::Mutex::new(cx.waker().clone()),
@@ -54,6 +57,8 @@ impl Timing {
             signal,
             waker,
             wait: None,
+            first_poll: AtomicBool::new(true),
+            probe,
         }
     }
     pub(super) fn begin_poll(&self, cx: &Context<'_>) {
@@ -65,11 +70,21 @@ impl Timing {
         }
         let ready = self.signal.ready.swap(0, Ordering::Relaxed);
         if ready != 0 {
-            READY.record(now_ms().saturating_sub(ready - 1));
+            let elapsed = now_ms().saturating_sub(ready - 1);
+            if let Some(probe) = self.probe() {
+                probe.polled(elapsed, self.first_poll.swap(false, Ordering::Relaxed));
+            } else {
+                READY.record(elapsed);
+            }
         }
     }
     pub(super) fn waker(&self) -> Waker {
         self.waker.clone()
+    }
+    fn probe(&self) -> Option<&TimingProbe> {
+        // The independent observer owns the output budget for live probes.
+        // Preserve the legacy input-timing site logs when probes are disabled.
+        if crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { self.probe.as_ref() } else { None }
     }
     pub(super) fn begin_wait(&mut self, sleep_ms: Option<u64>) {
         self.wait = Some((now_ms(), sleep_ms));
@@ -77,14 +92,23 @@ impl Timing {
     pub(super) fn resumed(&mut self) {
         if let Some((since, sleep)) = self.wait.take() {
             let elapsed = now_ms().saturating_sub(since);
-            match sleep {
-                Some(requested) => SLEEP.record(elapsed.saturating_sub(requested)),
-                None => WAIT.record(elapsed),
+            if let Some(probe) = self.probe() {
+                probe.parked(elapsed, sleep);
+            } else {
+                match sleep {
+                    Some(requested) => SLEEP.record(elapsed.saturating_sub(requested)),
+                    None => WAIT.record(elapsed),
+                }
             }
         }
     }
-    pub(super) fn ran(since: u64) {
-        SLICE.record(now_ms().saturating_sub(since));
+    pub(super) fn ran(&self, since: u64) {
+        let elapsed = now_ms().saturating_sub(since);
+        if let Some(probe) = self.probe() {
+            probe.ran(elapsed);
+        } else {
+            SLICE.record(elapsed);
+        }
     }
 }
 
@@ -105,7 +129,7 @@ mod tests {
     fn wrapped_wakes_preserve_earliest_readiness_and_forward_every_notification() {
         let count = Arc::new(Counter(AtomicUsize::new(0)));
         let executor = Waker::from(count.clone());
-        let timing = Timing::new(&Context::from_waker(&executor), now_ms());
+        let timing = Timing::new(&Context::from_waker(&executor), now_ms(), None);
         let first = timing.signal.ready.load(Ordering::Relaxed);
         let waker = timing.waker();
         assert!(waker.will_wake(&timing.waker()));

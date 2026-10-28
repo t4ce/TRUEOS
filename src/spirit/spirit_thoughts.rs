@@ -7,13 +7,12 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::{format, string::String, sync::Arc};
 use heapless::Vec;
 use v::spirit_agents::{AgentEntry, AgentLifecycle, AgentRuntime, AgentSnapshot};
 
 const CAPACITY: usize = v::spirit_agents::MAX_AGENTS;
 const SOURCE_CAPACITY: usize = crate::allcaps::hv::VM_ID_LIMIT;
-const MARKER_SIDE: i32 = 16;
 const MARKER_GAP: i32 = 6;
 const SHUTDOWN_DWELL_MS: u64 = 1_200;
 const ORBIT_PERIOD_MS: u64 = 24_000;
@@ -81,6 +80,7 @@ struct Thought {
     owner: Owner,
     epoch: u64,
     agent: AgentEntry,
+    label: Arc<str>,
     appearance: Appearance,
     shutdown_at_ms: Option<u64>,
     resting: Option<Point>,
@@ -94,8 +94,22 @@ impl Thought {
             self.shutdown_at_ms = (appearance == Appearance::Shutdown)
                 .then(|| now_ms.saturating_add(SHUTDOWN_DWELL_MS));
         }
+        if self.agent.nickname != agent.nickname {
+            self.label = Self::label_for_agent(&agent);
+        }
         self.appearance = appearance;
         self.agent = agent;
+    }
+
+    fn label_for_agent(agent: &AgentEntry) -> Arc<str> {
+        match agent
+            .nickname
+            .as_deref()
+            .filter(|name| !name.trim().is_empty() && !name.chars().any(char::is_control))
+        {
+            Some(nickname) => Arc::from(format!("§{nickname}")),
+            None => Arc::from("§"),
+        }
     }
 
     fn visible(&self, now_ms: u64) -> bool {
@@ -242,6 +256,7 @@ impl Thoughts {
                     .push(Thought {
                         owner,
                         epoch: snapshot.epoch,
+                        label: Thought::label_for_agent(&agent),
                         agent,
                         appearance,
                         shutdown_at_ms: (appearance == Appearance::Shutdown)
@@ -267,17 +282,26 @@ impl Thoughts {
     }
 
     fn plan(&mut self, geometry: Geometry, now_ms: u64) -> Vec<Placement, CAPACITY> {
-        let mut occupied = Vec::<Point, CAPACITY>::new();
+        let mut occupied = Vec::<PlacedMarker, CAPACITY>::new();
         let mut slots = [None; CAPACITY];
-        // Keep still-valid resting positions. New agents do not reshuffle old ones.
+        let sizes: [Option<MarkerSize>; CAPACITY] = core::array::from_fn(|index| {
+            self.agents
+                .get(index)
+                .and_then(|thought| geometry.marker.for_label(&thought.label))
+        });
+        // Keep each complete label's still-valid resting rectangle. Changing a
+        // color never rebuilds the label or reshuffles an unrelated agent.
         for (index, thought) in self.agents.iter().enumerate() {
             if self.connected(thought)
                 && thought.visible(now_ms)
+                && let Some(size) = sizes[index]
                 && let Some(point) = thought.resting
-                && geometry.valid_resting(point)
-                && occupied.iter().all(|other| !markers_overlap(point, *other))
+                && geometry.with_marker(size).valid_resting(point)
+                && occupied
+                    .iter()
+                    .all(|other| !size.overlaps_other(point, *other))
             {
-                let _ = occupied.push(point);
+                let _ = occupied.push(PlacedMarker { point, size });
                 slots[index] = Some(point);
             }
         }
@@ -285,37 +309,56 @@ impl Thoughts {
             if slots[index].is_none()
                 && self.connected(thought)
                 && thought.visible(now_ms)
-                && let Some(point) = geometry.find_resting(&occupied)
+                && let Some(size) = sizes[index]
+                && let Some(point) = geometry.with_marker(size).find_resting(&occupied)
             {
-                let _ = occupied.push(point);
+                let _ = occupied.push(PlacedMarker { point, size });
                 slots[index] = Some(point);
             }
         }
-        let running_requested = self
-            .agents
-            .iter()
-            .enumerate()
-            .filter(|(index, thought)| {
-                slots[*index].is_some() && thought.appearance == Appearance::Running
-            })
-            .count();
-        let track = if running_requested == 0 {
-            None
-        } else {
-            let outer_ring = slots
-                .iter()
-                .flatten()
-                .filter_map(|point| geometry.resting_ring(*point))
-                .max()
-                .unwrap_or(0);
-            geometry.track(outer_ring)
-        };
-        let running = running_requested.min(track.map_or(0, Track::capacity));
+        let mut running_entries = Vec::<PlacedMarker, CAPACITY>::new();
+        let mut stationary = Vec::<PlacedMarker, CAPACITY>::new();
+        for (index, thought) in self.agents.iter().enumerate() {
+            let (Some(point), Some(size)) = (slots[index], sizes[index]) else {
+                continue;
+            };
+            let entry = PlacedMarker { point, size };
+            if thought.appearance == Appearance::Running {
+                let _ = running_entries.push(entry);
+            } else {
+                let _ = stationary.push(entry);
+            }
+        }
+        // Prefer moving the whole running group. At an edge, a smaller visible
+        // group can still orbit while the remaining full labels rest safely.
+        // Include those resting runners in the orbit's obstacle envelope too.
+        let mut track = None;
+        let mut running = 0;
+        for count in (1..=running_entries.len()).rev() {
+            let mut obstacles = stationary.clone();
+            for entry in &running_entries[count..] {
+                let _ = obstacles.push(*entry);
+            }
+            let marker =
+                running_entries[..count]
+                    .iter()
+                    .fold(running_entries[0].size, |previous, entry| MarkerSize {
+                        width: previous.width.max(entry.size.width),
+                        height: previous.height.max(entry.size.height),
+                    });
+            if let Some(candidate) = geometry.with_marker(marker).track(&obstacles, count)
+                && candidate.capacity() >= count
+            {
+                track = Some(candidate);
+                running = count;
+                break;
+            }
+        }
         let mut running_slot = 0;
         let mut placements = Vec::new();
         for (index, thought) in self.agents.iter_mut().enumerate() {
             thought.resting = slots[index];
-            let Some(resting) = thought.resting else {
+            let (Some(resting), Some(marker)) = (thought.resting, sizes[index]) else {
                 continue;
             };
             let orbit = if thought.appearance == Appearance::Running && running_slot < running {
@@ -325,7 +368,6 @@ impl Thoughts {
                     track,
                     slot,
                     count: running,
-                    phase_slot: thought.phase_slot,
                 })
             } else {
                 None
@@ -334,7 +376,9 @@ impl Thoughts {
                 owner: thought.owner,
                 epoch: thought.epoch,
                 id: thought.agent.id.clone(),
+                label: thought.label.clone(),
                 color: thought.appearance.rgba(),
+                marker,
                 resting,
                 orbit,
             });
@@ -349,6 +393,78 @@ struct Point {
     y: i32,
 }
 
+/// The centered rectangle of a complete label, including transparent em
+/// margins. Each character uses Paper's already-warmed Shell3 atlas cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MarkerSize {
+    width: u16,
+    height: u16,
+}
+
+impl MarkerSize {
+    fn new(width: u32, height: u32) -> Option<Self> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some(Self {
+            width: width.try_into().ok()?,
+            height: height.try_into().ok()?,
+        })
+    }
+
+    fn for_label(self, label: &str) -> Option<Self> {
+        Self::new(
+            u32::from(self.width).checked_mul(label.chars().count().try_into().ok()?)?,
+            u32::from(self.height),
+        )
+    }
+
+    fn half_width(self) -> i64 {
+        i64::from(self.width.div_ceil(2))
+    }
+
+    fn half_height(self) -> i64 {
+        i64::from(self.height.div_ceil(2))
+    }
+
+    fn spacing_x(self) -> i64 {
+        i64::from(self.width) + i64::from(MARKER_GAP)
+    }
+
+    fn spacing_y(self) -> i64 {
+        i64::from(self.height) + i64::from(MARKER_GAP)
+    }
+
+    fn diagonal_spacing(self, rounding_clearance: i32) -> f64 {
+        let x = self.spacing_x() as f64 + f64::from(rounding_clearance);
+        let y = self.spacing_y() as f64 + f64::from(rounding_clearance);
+        libm::sqrt(x * x + y * y)
+    }
+
+    fn overlaps(self, left: Point, right: Point) -> bool {
+        self.overlaps_other(
+            left,
+            PlacedMarker {
+                point: right,
+                size: self,
+            },
+        )
+    }
+
+    fn overlaps_other(self, point: Point, other: PlacedMarker) -> bool {
+        (i64::from(point.x) - i64::from(other.point.x)).abs()
+            < self.half_width() + other.size.half_width() + i64::from(MARKER_GAP)
+            && (i64::from(point.y) - i64::from(other.point.y)).abs()
+                < self.half_height() + other.size.half_height() + i64::from(MARKER_GAP)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PlacedMarker {
+    point: Point,
+    size: MarkerSize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Geometry {
     screen_width: u32,
@@ -357,18 +473,22 @@ struct Geometry {
     lilly_y: i32,
     lilly_width: u32,
     lilly_height: u32,
+    marker: MarkerSize,
 }
 
 impl Geometry {
+    fn with_marker(self, marker: MarkerSize) -> Self {
+        Self { marker, ..self }
+    }
+
     fn screen_contains(self, point: Point) -> bool {
         if self.screen_width > i32::MAX as u32 || self.screen_height > i32::MAX as u32 {
             return false;
         }
-        let half = i64::from((MARKER_SIDE + 1) / 2);
-        i64::from(point.x) - half >= 0
-            && i64::from(point.y) - half >= 0
-            && i64::from(point.x) + half <= i64::from(self.screen_width)
-            && i64::from(point.y) + half <= i64::from(self.screen_height)
+        i64::from(point.x) - self.marker.half_width() >= 0
+            && i64::from(point.y) - self.marker.half_height() >= 0
+            && i64::from(point.x) + self.marker.half_width() <= i64::from(self.screen_width)
+            && i64::from(point.y) + self.marker.half_height() <= i64::from(self.screen_height)
     }
 
     fn valid_resting(self, point: Point) -> bool {
@@ -386,46 +506,61 @@ impl Geometry {
         let right = left + i64::from(self.lilly_width);
         let bottom = top + i64::from(self.lilly_height);
         (0..CAPACITY).find(|ring| {
-            let half = i64::from((MARKER_SIDE + 1) / 2 + MARKER_GAP)
-                + *ring as i64 * i64::from(MARKER_SIDE + MARKER_GAP);
-            let on_side =
-                (x == left - half || x == right + half) && y >= top - half && y <= bottom + half;
-            let on_edge =
-                (y == top - half || y == bottom + half) && x >= left - half && x <= right + half;
+            let half_x = self.marker.half_width()
+                + i64::from(MARKER_GAP)
+                + *ring as i64 * self.marker.spacing_x();
+            let half_y = self.marker.half_height()
+                + i64::from(MARKER_GAP)
+                + *ring as i64 * self.marker.spacing_y();
+            let on_side = (x == left - half_x || x == right + half_x)
+                && y >= top - half_y
+                && y <= bottom + half_y;
+            let on_edge = (y == top - half_y || y == bottom + half_y)
+                && x >= left - half_x
+                && x <= right + half_x;
             on_side || on_edge
         })
     }
 
-    fn find_resting(self, occupied: &Vec<Point, CAPACITY>) -> Option<Point> {
+    fn find_resting(self, occupied: &Vec<PlacedMarker, CAPACITY>) -> Option<Point> {
         let left = i64::from(self.lilly_x);
         let top = i64::from(self.lilly_y);
         let right = left + i64::from(self.lilly_width);
         let bottom = top + i64::from(self.lilly_height);
-        let step = i64::from(MARKER_SIDE + MARKER_GAP);
         // At most 32 candidates per side: bounded even for malformed huge geometry.
         // Start around the side centers so small groups surround Lilly naturally.
         for ring in 0..CAPACITY {
-            let half = i64::from((MARKER_SIDE + 1) / 2 + MARKER_GAP) + ring as i64 * step;
+            let half_x = self.marker.half_width()
+                + i64::from(MARKER_GAP)
+                + ring as i64 * self.marker.spacing_x();
+            let half_y = self.marker.half_height()
+                + i64::from(MARKER_GAP)
+                + ring as i64 * self.marker.spacing_y();
             for distance in 0..CAPACITY {
                 for sign in [1_i64, -1] {
                     if distance == 0 && sign == -1 {
                         continue;
                     }
-                    let offset = distance as i64 * step * sign;
-                    let center_x = left + i64::from(self.lilly_width) / 2 + offset;
-                    let center_y = top + i64::from(self.lilly_height) / 2 + offset;
+                    let center_x = left
+                        + i64::from(self.lilly_width) / 2
+                        + distance as i64 * self.marker.spacing_x() * sign;
+                    let center_y = top
+                        + i64::from(self.lilly_height) / 2
+                        + distance as i64 * self.marker.spacing_y() * sign;
                     for (x, y) in [
-                        (center_x, top - half),
-                        (right + half, center_y),
-                        (center_x, bottom + half),
-                        (left - half, center_y),
+                        (center_x, top - half_y),
+                        (right + half_x, center_y),
+                        (center_x, bottom + half_y),
+                        (left - half_x, center_y),
                     ] {
                         let (Ok(x), Ok(y)) = (i32::try_from(x), i32::try_from(y)) else {
                             continue;
                         };
                         let point = Point { x, y };
                         if self.resting_ring(point) == Some(ring)
-                            && occupied.iter().all(|other| !markers_overlap(point, *other))
+                            && occupied
+                                .iter()
+                                .all(|other| !self.marker.overlaps_other(point, *other))
                         {
                             return Some(point);
                         }
@@ -436,23 +571,28 @@ impl Geometry {
         None
     }
 
-    fn track(self, outer_ring: usize) -> Option<Track> {
+    fn track(self, stationary: &[PlacedMarker], running_count: usize) -> Option<Track> {
         let center = Point {
             x: i32::try_from(i64::from(self.lilly_x) + i64::from(self.lilly_width) / 2).ok()?,
             y: i32::try_from(i64::from(self.lilly_y) + i64::from(self.lilly_height) / 2).ok()?,
         };
-        let half = f64::from((MARKER_SIDE + 1) / 2 + MARKER_GAP)
-            + outer_ring as f64 * f64::from(MARKER_SIDE + MARKER_GAP);
-        // Clear the entire resting rectangle, including its corners. The orbit
-        // never crosses Lilly or a stationary request/result marker.
-        let rx = f64::from(self.lilly_width) / 2.0 + half;
-        let ry = f64::from(self.lilly_height) / 2.0 + half;
-        let radius = libm::ceil(
-            (libm::sqrt(rx * rx + ry * ry) + f64::from(MARKER_SIDE + MARKER_GAP)).max(
-                core::f64::consts::SQRT_2 * f64::from(MARKER_SIDE + MARKER_GAP)
-                    / (2.0 * libm::sin(core::f64::consts::PI / CAPACITY as f64)),
-            ),
-        ) as i32;
+        // A common circle clears Lilly and every complete stationary label.
+        // Only running labels determine the moving envelope; a long finished
+        // nickname is not silently treated as every other agent's width.
+        let rx = f64::from(self.lilly_width) / 2.0;
+        let ry = f64::from(self.lilly_height) / 2.0;
+        let clearance = self.marker.diagonal_spacing(2);
+        let mut inner_radius = libm::sqrt(rx * rx + ry * ry);
+        for marker in stationary {
+            let dx =
+                (i64::from(marker.point.x) - i64::from(center.x)).abs() + marker.size.half_width();
+            let dy =
+                (i64::from(marker.point.y) - i64::from(center.y)).abs() + marker.size.half_height();
+            inner_radius = inner_radius.max(libm::sqrt((dx * dx + dy * dy) as f64));
+        }
+        let spacing_radius =
+            clearance / (2.0 * libm::sin(core::f64::consts::PI / running_count.max(2) as f64));
+        let radius = libm::ceil((inner_radius + clearance).max(spacing_radius)) as i32;
         let orbit = Orbit { center, radius };
         // Sampling identifies the longest contiguous visible part of the same
         // circle. At a display edge the markers share this arc and reverse
@@ -466,6 +606,7 @@ impl Geometry {
                 orbit,
                 start_step: 0,
                 span_steps: TRACK_STEPS as u16,
+                marker: self.marker,
             });
         }
         let first_hidden = visible.iter().position(|valid| !valid)?;
@@ -491,14 +632,9 @@ impl Geometry {
             orbit,
             start_step: ((best.0 + 1) % TRACK_STEPS) as u16,
             span_steps: (best.1 - 3) as u16,
+            marker: self.marker,
         })
     }
-}
-
-fn markers_overlap(left: Point, right: Point) -> bool {
-    let spacing = i64::from(MARKER_SIDE + MARKER_GAP);
-    (i64::from(left.x) - i64::from(right.x)).abs() < spacing
-        && (i64::from(left.y) - i64::from(right.y)).abs() < spacing
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -526,6 +662,7 @@ struct Track {
     orbit: Orbit,
     start_step: u16,
     span_steps: u16,
+    marker: MarkerSize,
 }
 
 impl Track {
@@ -535,10 +672,7 @@ impl Track {
 
     fn spacing(self) -> f64 {
         // Chord distance is conservative for the square marker envelope.
-        2.0 * libm::asin(
-            core::f64::consts::SQRT_2 * f64::from(MARKER_SIDE + MARKER_GAP + 2)
-                / (2.0 * f64::from(self.orbit.radius)),
-        )
+        2.0 * libm::asin(self.marker.diagonal_spacing(2) / (2.0 * f64::from(self.orbit.radius)))
     }
 
     fn capacity(self) -> usize {
@@ -557,7 +691,6 @@ struct Motion {
     track: Track,
     slot: usize,
     count: usize,
-    phase_slot: usize,
 }
 
 impl Motion {
@@ -567,7 +700,7 @@ impl Motion {
         if self.track.full() {
             let angle = core::f64::consts::TAU
                 * ((now_ms % ORBIT_PERIOD_MS) as f64 / ORBIT_PERIOD_MS as f64
-                    + self.phase_slot as f64 / CAPACITY as f64);
+                    + self.slot as f64 / self.count as f64);
             return (
                 angle,
                 angle + core::f64::consts::FRAC_PI_2,
@@ -641,7 +774,9 @@ struct Placement {
     owner: Owner,
     epoch: u64,
     id: String,
+    label: Arc<str>,
     color: [u8; 4],
+    marker: MarkerSize,
     resting: Point,
     orbit: Option<Motion>,
 }
@@ -692,7 +827,9 @@ mod service {
         owner: Owner,
         epoch: u64,
         id: String,
+        label: Arc<str>,
         cursor: MouseControlCursor,
+        marker: MarkerSize,
         resting: Point,
         orbit: Option<Motion>,
     }
@@ -701,6 +838,8 @@ mod service {
         cursor.owner == placement.owner
             && cursor.epoch == placement.epoch
             && cursor.id == placement.id
+            && cursor.label == placement.label
+            && cursor.marker == placement.marker
     }
 
     fn teleport(point: Point) -> MouseControlCommand {
@@ -742,14 +881,17 @@ mod service {
         loop {
             prune_dead_owners();
             let now_ms = Instant::now().as_millis();
-            let placements = if let Some((
-                screen_width,
-                screen_height,
-                lilly_x,
-                lilly_y,
-                lilly_width,
-                lilly_height,
-            )) = super::super::marker_anchor()
+            // Use Paper's physical-size grid cell, not an independent pixel
+            // size. Missing display metrics or atlas readiness defer glyphs;
+            // the next tick retries after the normal shared-font warmup.
+            let marker = crate::r::services::shell3_font_service::grid_cell_extent(
+                super::super::paper_demo::GREETING_GRID_SCALE,
+            )
+            .and_then(|(width, height)| MarkerSize::new(width, height));
+            let placements = if let (
+                Some(marker),
+                Some((screen_width, screen_height, lilly_x, lilly_y, lilly_width, lilly_height)),
+            ) = (marker, super::super::marker_anchor())
             {
                 THOUGHTS.lock().plan(
                     Geometry {
@@ -759,6 +901,7 @@ mod service {
                         lilly_y,
                         lilly_width,
                         lilly_height,
+                        marker,
                     },
                     now_ms,
                 )
@@ -784,12 +927,14 @@ mod service {
                     Some(index) => index,
                     None => {
                         let [r, g, b, a] = placement.color;
-                        let Ok(cursor) = motion::request_glyph_cursor(
+                        let Ok(cursor) = motion::request_text_cursor(
                             PRINCIPAL,
                             "Spirit/agent",
-                            '§',
-                            MARKER_SIDE as u16,
+                            &placement.label,
+                            placement.marker.height,
+                            1,
                             Rgba8::new(r, g, b, a),
+                            Rgba8::new(255, 255, 255, 255),
                         ) else {
                             continue;
                         };
@@ -798,7 +943,9 @@ mod service {
                                 owner: placement.owner,
                                 epoch: placement.epoch,
                                 id: placement.id.clone(),
+                                label: placement.label.clone(),
                                 cursor,
+                                marker: placement.marker,
                                 resting: Point {
                                     x: i32::MIN,
                                     y: i32::MIN,
@@ -892,6 +1039,7 @@ mod tests {
             id: id.into(),
             parent_id: Some("root".into()),
             name: None,
+            nickname: None,
             role: None,
             lifecycle: Some(lifecycle),
             runtime: None,
@@ -920,6 +1068,15 @@ mod tests {
             lilly_y: y,
             lilly_width: 256,
             lilly_height: 256,
+            marker: MarkerSize::new(16, 16).unwrap(),
+        }
+    }
+
+    fn paper_geometry(x: i32, y: i32, height: u32) -> Geometry {
+        Geometry {
+            // This is Shell3's content-cell aspect ratio, not a square proxy.
+            marker: MarkerSize::new((height * 6 + 5) / 11, height).unwrap(),
+            ..geometry(x, y)
         }
     }
 
@@ -934,22 +1091,31 @@ mod tests {
         for placement in placements {
             let point = point_for(placement, now_ms);
             assert!(
-                geometry.screen_contains(point),
-                "outside screen: {point:?} at {geometry:?}"
+                geometry
+                    .with_marker(placement.marker)
+                    .screen_contains(point),
+                "outside screen: {point:?} at {geometry:?}, label={}",
+                placement.label
             );
-            let half = MARKER_SIDE / 2;
+            let half_x = placement.marker.half_width() as i32;
+            let half_y = placement.marker.half_height() as i32;
             assert!(
-                point.x + half <= geometry.lilly_x
-                    || point.y + half <= geometry.lilly_y
-                    || point.x - half >= geometry.lilly_x + geometry.lilly_width as i32
-                    || point.y - half >= geometry.lilly_y + geometry.lilly_height as i32,
+                point.x + half_x <= geometry.lilly_x
+                    || point.y + half_y <= geometry.lilly_y
+                    || point.x - half_x >= geometry.lilly_x + geometry.lilly_width as i32
+                    || point.y - half_y >= geometry.lilly_y + geometry.lilly_height as i32,
                 "overlaps Lilly: {point:?} at {geometry:?}"
             );
             assert!(
-                points.iter().all(|other| !markers_overlap(point, *other)),
+                points
+                    .iter()
+                    .all(|other| !placement.marker.overlaps_other(point, *other)),
                 "overlapping markers at {point:?} at {geometry:?} time={now_ms}"
             );
-            points.push(point);
+            points.push(PlacedMarker {
+                point,
+                size: placement.marker,
+            });
         }
     }
 
@@ -967,6 +1133,265 @@ mod tests {
             x: coordinate(curve.from.x, curve.control1.x, curve.control2.x, curve.to.x),
             y: coordinate(curve.from.y, curve.control1.y, curve.control2.y, curve.to.y),
         }
+    }
+
+    fn named_agent(id: &str, nickname: &str, lifecycle: AgentLifecycle) -> AgentEntry {
+        let mut entry = agent(id, lifecycle);
+        entry.name = Some(format!("/root/{id}"));
+        entry.nickname = Some(nickname.into());
+        entry
+    }
+
+    fn check_programs(placements: &Vec<Placement, CAPACITY>, geometry: Geometry, now_ms: u64) {
+        let programs: AllocVec<_> = placements
+            .iter()
+            .map(|placement| placement.orbit.map(|motion| motion.curves(now_ms)))
+            .collect();
+        for elapsed in (0..=6_000).step_by(50) {
+            let mut occupied = AllocVec::new();
+            for (placement, program) in placements.iter().zip(&programs) {
+                let mut point = placement.resting;
+                if let Some((from, curves)) = program {
+                    point = *from;
+                    let mut remaining = elapsed;
+                    for curve in curves {
+                        point = curve_point(
+                            *curve,
+                            (f64::from(remaining) / f64::from(curve.duration_ms)).min(1.0),
+                        );
+                        if remaining < curve.duration_ms {
+                            break;
+                        }
+                        remaining -= curve.duration_ms;
+                    }
+                }
+                let bounds = geometry.with_marker(placement.marker);
+                assert!(
+                    bounds.screen_contains(point),
+                    "queued label clips: {} {point:?} {bounds:?}",
+                    placement.label
+                );
+                assert!(
+                    occupied
+                        .iter()
+                        .all(|other| !placement.marker.overlaps_other(point, *other)),
+                    "queued labels overlap: {} {point:?} {bounds:?}",
+                    placement.label
+                );
+                occupied.push(PlacedMarker {
+                    point,
+                    size: placement.marker,
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn nickname_is_one_static_identity_label_while_state_and_orbit_change() {
+        let mut thoughts = Thoughts::new();
+        let layout = paper_geometry(700, 400, 48);
+        let mut identity = None::<Arc<str>>;
+        for (revision, lifecycle, waiting) in [
+            (1, AgentLifecycle::PendingInit, false),
+            (2, AgentLifecycle::Running, false),
+            (3, AgentLifecycle::Running, true),
+            (4, AgentLifecycle::Completed, false),
+        ] {
+            let mut entry = named_agent("task-not-display-name", "Joker", lifecycle);
+            entry.waiting_approval = waiting;
+            thoughts
+                .ingest(OWNER, snapshot(revision, vec![entry]), 0)
+                .unwrap();
+            let plan = thoughts.plan(layout, 3_000);
+            assert_eq!(plan.len(), 1);
+            assert_eq!(plan[0].label.as_ref(), "§Joker");
+            if let Some(original) = identity.as_ref() {
+                assert!(
+                    Arc::ptr_eq(original, &plan[0].label),
+                    "status/color updates must reuse the cached static text"
+                );
+            } else {
+                identity = Some(plan[0].label.clone());
+            }
+            assert_eq!(plan[0].marker.width, layout.marker.width * 6);
+            assert_eq!(plan[0].marker.height, layout.marker.height);
+            assert_eq!(
+                plan[0].orbit.is_some(),
+                lifecycle == AgentLifecycle::Running && !waiting
+            );
+            check_layout(&plan, layout, 3_000);
+        }
+        thoughts
+            .ingest(
+                OWNER,
+                snapshot(
+                    5,
+                    vec![named_agent(
+                        "task-not-display-name",
+                        "Quinn",
+                        AgentLifecycle::Completed,
+                    )],
+                ),
+                0,
+            )
+            .unwrap();
+        let renamed = thoughts.plan(layout, 3_000);
+        assert_eq!(renamed[0].label.as_ref(), "§Quinn");
+        assert!(!Arc::ptr_eq(identity.as_ref().unwrap(), &renamed[0].label));
+        assert_eq!(renamed[0].id, "task-not-display-name");
+    }
+
+    #[test]
+    fn missing_blank_or_control_nicknames_fall_back_to_section_not_task_path() {
+        let mut thoughts = Thoughts::new();
+        let mut entries = vec![agent("missing", AgentLifecycle::Completed)];
+        entries[0].name = Some("/root/do-not-show-this".into());
+        for (index, nickname) in ["", " ", "\t", "Ada\nBlue", "\0"].iter().enumerate() {
+            entries.push(named_agent(
+                &format!("fallback-{index}"),
+                nickname,
+                AgentLifecycle::Completed,
+            ));
+        }
+        thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+        let layout = paper_geometry(700, 400, 48);
+        let plan = thoughts.plan(layout, 0);
+        assert_eq!(plan.len(), 6);
+        assert!(
+            plan.iter()
+                .all(|placement| placement.label.as_ref() == "§"
+                    && placement.marker == layout.marker)
+        );
+        assert_eq!(
+            thoughts.agents[4].agent.nickname.as_deref(),
+            Some("Ada\nBlue"),
+            "display fallback must preserve canonical source metadata"
+        );
+        check_layout(&plan, layout, 0);
+    }
+
+    #[test]
+    fn mixed_nickname_widths_use_complete_nonoverlapping_resting_rectangles() {
+        for (x, y) in [(700, 400), (0, 0), (1664, 0), (0, 824), (1664, 824)] {
+            let mut thoughts = Thoughts::new();
+            let names = [
+                String::from("A"),
+                String::from("Joker"),
+                String::from("Scout"),
+                String::from("Ada Lovelace"),
+                "Z".repeat(96),
+                "é".repeat(48),
+            ];
+            let entries = names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    named_agent(&format!("named-{index}"), name, AgentLifecycle::Completed)
+                })
+                .collect();
+            thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+            let layout = paper_geometry(x, y, 16);
+            let plan = thoughts.plan(layout, 0);
+            assert_eq!(
+                plan.len(),
+                names.len(),
+                "complete labels should fit: {layout:?}"
+            );
+            for placement in &plan {
+                assert_eq!(
+                    usize::from(placement.marker.width),
+                    usize::from(layout.marker.width) * placement.label.chars().count()
+                );
+                assert_eq!(placement.marker.height, layout.marker.height);
+            }
+            check_layout(&plan, layout, 0);
+            let repeat = thoughts.plan(layout, 100);
+            assert!(
+                plan.iter()
+                    .zip(&repeat)
+                    .all(|(before, after)| before.id == after.id
+                        && before.label == after.label
+                        && before.resting == after.resting)
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_nickname_running_labels_queue_whole_text_bounds_at_center_and_edges() {
+        for height in [16, 32, 48] {
+            for (x, y) in [
+                (700, 400),
+                (0, 0),
+                (1664, 0),
+                (0, 824),
+                (1664, 824),
+                (0, 400),
+                (700, 0),
+            ] {
+                let mut thoughts = Thoughts::new();
+                let entries = ["A", "Joker", "Scout"]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, nickname)| {
+                        named_agent(
+                            &format!("runner-{index}"),
+                            nickname,
+                            AgentLifecycle::Running,
+                        )
+                    })
+                    .collect();
+                thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+                let layout = paper_geometry(x, y, height);
+                for now in [0, 3_225, 11_900, 12_000, 18_500, 23_900] {
+                    let plan = thoughts.plan(layout, now);
+                    assert_eq!(plan.len(), 3);
+                    assert!(
+                        plan.iter().any(|placement| placement.orbit.is_some()),
+                        "a nickname group should retain visible movement: {layout:?}"
+                    );
+                    check_layout(&plan, layout, now);
+                    check_programs(&plan, layout, now);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_nickname_is_deferred_until_it_fits_and_relayouts_after_font_resize() {
+        let mut thoughts = Thoughts::new();
+        thoughts
+            .ingest(
+                OWNER,
+                snapshot(
+                    1,
+                    vec![
+                        named_agent("long", &"Z".repeat(96), AgentLifecycle::Completed),
+                        named_agent("short", "Ada", AgentLifecycle::Completed),
+                    ],
+                ),
+                0,
+            )
+            .unwrap();
+        let layout = paper_geometry(700, 400, 48);
+        let plan = thoughts.plan(layout, 0);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].label.as_ref(), "§Ada");
+        assert_eq!(thoughts.agents.len(), 2);
+        let expanded = Geometry {
+            screen_width: 6000,
+            ..layout
+        };
+        let plan = thoughts.plan(expanded, 100);
+        assert_eq!(plan.len(), 2);
+        assert!(
+            plan.iter()
+                .any(|placement| placement.label.as_ref() == format!("§{}", "Z".repeat(96)))
+        );
+        check_layout(&plan, expanded, 100);
+        let resized = paper_geometry(700, 400, 16);
+        let plan = thoughts.plan(resized, 200);
+        assert_eq!(plan.len(), 2);
+        check_layout(&plan, resized, 200);
     }
 
     #[test]
@@ -1338,6 +1763,181 @@ mod tests {
     }
 
     #[test]
+    fn physical_paper_cells_relayout_full_groups_at_edges_without_overlap() {
+        for height in [1, 5, 10, 16, 32, 48, 64, 80, 128] {
+            for (x, y) in [
+                (700, 400),
+                (0, 0),
+                (1664, 0),
+                (0, 824),
+                (1664, 824),
+                (0, 400),
+                (1664, 400),
+                (700, 0),
+                (700, 824),
+            ] {
+                let mut thoughts = Thoughts::new();
+                let entries = (0..CAPACITY)
+                    .map(|index| agent(&format!("child-{index}"), AgentLifecycle::Completed))
+                    .collect();
+                thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+                let initial = paper_geometry(x, y, 16);
+                thoughts.plan(initial, 0);
+                let resized = paper_geometry(x, y, height);
+                let placements = thoughts.plan(resized, 100);
+                assert_eq!(
+                    placements.len(),
+                    CAPACITY,
+                    "32 physical-size markers must fit at {resized:?}"
+                );
+                assert!(placements.iter().all(|placement| {
+                    placement.marker == resized.marker && placement.orbit.is_none()
+                }));
+                check_layout(&placements, resized, 100);
+                let repeated = thoughts.plan(resized, 200);
+                for (left, right) in placements.iter().zip(repeated.iter()) {
+                    assert_eq!(left.id, right.id);
+                    assert_eq!(left.resting, right.resting);
+                    assert_eq!(left.marker, right.marker);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn physical_paper_orbits_and_their_cubic_paths_clear_screen_edges() {
+        for height in [1, 5, 10, 16, 32, 48, 80, 128] {
+            for (x, y) in [
+                (700, 400),
+                (0, 0),
+                (1664, 0),
+                (0, 824),
+                (1664, 824),
+                (0, 400),
+                (1664, 400),
+                (700, 0),
+                (700, 824),
+            ] {
+                let mut thoughts = Thoughts::new();
+                thoughts
+                    .ingest(
+                        OWNER,
+                        snapshot(1, vec![agent("runner", AgentLifecycle::Running)]),
+                        0,
+                    )
+                    .unwrap();
+                let layout = paper_geometry(x, y, height);
+                for now in [0, 3_225, 11_900, 12_000, 18_500, 23_900] {
+                    let placements = thoughts.plan(layout, now);
+                    assert_eq!(placements.len(), 1);
+                    let motion = placements[0]
+                        .orbit
+                        .expect("a single physical-size marker has room for a visible arc");
+                    check_layout(&placements, layout, now);
+                    let (_, curves) = motion.curves(now);
+                    for curve in curves {
+                        for step in 0..=100 {
+                            let point = curve_point(curve, f64::from(step) / 100.0);
+                            assert!(
+                                layout.screen_contains(point),
+                                "physical-size cubic clips: {point:?} {layout:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn physical_paper_running_groups_keep_their_full_queued_envelopes_apart() {
+        for height in [32, 48, 80, 128] {
+            for (x, y) in [(700, 400), (0, 0), (1664, 0), (0, 824), (1664, 824)] {
+                let mut thoughts = Thoughts::new();
+                let entries = (0..CAPACITY)
+                    .map(|index| {
+                        agent(
+                            &format!("child-{index}"),
+                            if index % 4 == 0 {
+                                AgentLifecycle::Completed
+                            } else {
+                                AgentLifecycle::Running
+                            },
+                        )
+                    })
+                    .collect();
+                thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+                let layout = paper_geometry(x, y, height);
+                for now in [0, 3_225, 11_900, 12_000, 18_500, 23_900] {
+                    let placements = thoughts.plan(layout, now);
+                    assert_eq!(placements.len(), CAPACITY);
+                    check_layout(&placements, layout, now);
+                    let programs: AllocVec<_> = placements
+                        .iter()
+                        .map(|placement| placement.orbit.map(|motion| motion.curves(now)))
+                        .collect();
+                    for elapsed in (0..6_000).step_by(100) {
+                        let mut points = AllocVec::new();
+                        for (placement, program) in placements.iter().zip(programs.iter()) {
+                            let mut position = placement.resting;
+                            if let Some((from, curves)) = program {
+                                position = *from;
+                                let mut remaining = elapsed;
+                                for curve in curves {
+                                    position = curve_point(
+                                        *curve,
+                                        (f64::from(remaining) / f64::from(curve.duration_ms))
+                                            .min(1.0),
+                                    );
+                                    if remaining < curve.duration_ms {
+                                        break;
+                                    }
+                                    remaining -= curve.duration_ms;
+                                }
+                            }
+                            assert!(layout.screen_contains(position));
+                            assert!(
+                                points
+                                    .iter()
+                                    .all(|other| !layout.marker.overlaps(position, *other)),
+                                "physical-size queued glyphs overlap at {position:?} \
+                                 {layout:?} now={now} elapsed={elapsed}"
+                            );
+                            points.push(position);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn large_physical_cells_defer_display_pressure_without_losing_agents() {
+        let mut thoughts = Thoughts::new();
+        let entries = (0..CAPACITY)
+            .map(|index| agent(&format!("child-{index}"), AgentLifecycle::Completed))
+            .collect();
+        thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+        let layout = Geometry {
+            screen_width: 340,
+            screen_height: 340,
+            ..paper_geometry(0, 0, 128)
+        };
+        let placements = thoughts.plan(layout, 0);
+        assert!(placements.len() < CAPACITY);
+        check_layout(&placements, layout, 0);
+        assert_eq!(thoughts.agents.len(), CAPACITY);
+        assert_eq!(
+            thoughts.plan(paper_geometry(0, 0, 128), 100).len(),
+            CAPACITY,
+            "restoring display space restores deferred presences"
+        );
+        assert!(MarkerSize::new(0, 40).is_none());
+        assert!(MarkerSize::new(30, 0).is_none());
+        assert!(MarkerSize::new(30, u32::MAX).is_none());
+    }
+
+    #[test]
     fn small_displays_defer_only_the_markers_that_cannot_fit() {
         let mut thoughts = Thoughts::new();
         let entries = (0..CAPACITY)
@@ -1427,7 +2027,7 @@ mod tests {
                         assert!(
                             points
                                 .iter()
-                                .all(|other| !markers_overlap(position, *other)),
+                                .all(|other| !layout.marker.overlaps(position, *other)),
                             "cubic overlap {position:?}, {layout:?}, now={now}, elapsed={elapsed}"
                         );
                         points.push(position);
@@ -1443,64 +2043,80 @@ mod tests {
             return;
         };
         let mut frames = AllocVec::new();
-        for (label, x, y) in [
-            ("center", 700, 400),
-            ("top left", 0, 0),
-            ("top right", 1664, 0),
-            ("bottom left", 0, 824),
-            ("bottom right", 1664, 824),
-            ("left edge", 0, 400),
-            ("right edge", 1664, 400),
-            ("top edge", 700, 0),
-            ("bottom edge", 700, 824),
-        ] {
-            let mut thoughts = Thoughts::new();
-            let entries = (0..CAPACITY)
-                .map(|index| {
-                    let mut entry = agent(
-                        &format!("agent-{index}"),
-                        match index % 8 {
-                            0 => AgentLifecycle::Completed,
-                            1 => AgentLifecycle::Errored,
-                            2 => AgentLifecycle::Interrupted,
-                            3 => AgentLifecycle::PendingInit,
-                            _ => AgentLifecycle::Running,
-                        },
-                    );
-                    entry.waiting_input = index % 8 == 4;
-                    entry
-                })
-                .collect();
-            thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
-            let geometry = geometry(x, y);
-            let placements = thoughts.plan(geometry, 4_000);
-            check_layout(&placements, geometry, 4_000);
-            let markers: AllocVec<_> = placements
-                .iter()
-                .map(|placement| {
-                    let point = point_for(placement, 4_000);
-                    let path: AllocVec<_> = placement
-                        .orbit
-                        .map(|motion| {
-                            let (_, curves) = motion.curves(4_000);
-                            curves
-                                .into_iter()
-                                .flat_map(|curve| {
-                                    (0..=24).map(move |step| {
-                                        let point = curve_point(curve, step as f64 / 24.0);
-                                        [point.x, point.y]
+        for height in [32, 48, 80, 128] {
+            for (label, x, y) in [
+                ("center", 700, 400),
+                ("top left", 0, 0),
+                ("top right", 1664, 0),
+                ("bottom left", 0, 824),
+                ("bottom right", 1664, 824),
+                ("left edge", 0, 400),
+                ("right edge", 1664, 400),
+                ("top edge", 700, 0),
+                ("bottom edge", 700, 824),
+            ] {
+                let mut thoughts = Thoughts::new();
+                let names = [
+                    "Ada",
+                    "Joker",
+                    "Scout",
+                    "Ada Lovelace",
+                    "Quinn",
+                    "Devon",
+                    "River",
+                    "Skye",
+                ];
+                let entries = names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, nickname)| {
+                        let mut entry = agent(
+                            &format!("agent-{index}"),
+                            match index % 8 {
+                                0 => AgentLifecycle::Completed,
+                                1 => AgentLifecycle::Errored,
+                                2 => AgentLifecycle::Interrupted,
+                                3 => AgentLifecycle::PendingInit,
+                                _ => AgentLifecycle::Running,
+                            },
+                        );
+                        entry.nickname = Some((*nickname).into());
+                        entry.waiting_input = index % 8 == 4;
+                        entry
+                    })
+                    .collect();
+                thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+                let geometry = paper_geometry(x, y, height);
+                let placements = thoughts.plan(geometry, 4_000);
+                check_layout(&placements, geometry, 4_000);
+                let markers: AllocVec<_> = placements
+                    .iter()
+                    .map(|placement| {
+                        let point = point_for(placement, 4_000);
+                        let path: AllocVec<_> = placement
+                            .orbit
+                            .map(|motion| {
+                                let (_, curves) = motion.curves(4_000);
+                                curves
+                                    .into_iter()
+                                    .flat_map(|curve| {
+                                        (0..=24).map(move |step| {
+                                            let point = curve_point(curve, step as f64 / 24.0);
+                                            [point.x, point.y]
+                                        })
                                     })
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    serde_json::json!({ "id": placement.id, "position": [point.x, point.y],
-                    "resting": [placement.resting.x, placement.resting.y],
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        serde_json::json!({ "id": placement.id, "label": placement.label.as_ref(),
+                    "marker_size": [placement.marker.width, placement.marker.height],
+                    "position": [point.x, point.y], "resting": [placement.resting.x, placement.resting.y],
                     "color": placement.color, "path": path })
-                })
-                .collect();
-            frames.push(serde_json::json!({ "label": label, "screen": [1920, 1080],
-                "lilly": [x, y, 256, 256], "marker_side": MARKER_SIDE, "markers": markers }));
+                    })
+                    .collect();
+                frames.push(serde_json::json!({ "label": format!("{label}; Paper height {height}px"), "screen": [1920, 1080],
+                "lilly": [x, y, 256, 256], "marker_size": [geometry.marker.width, geometry.marker.height], "markers": markers }));
+            }
         }
         std::fs::write(path, serde_json::to_vec_pretty(&frames).unwrap()).unwrap();
     }

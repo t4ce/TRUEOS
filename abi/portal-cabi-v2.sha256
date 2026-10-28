@@ -31,4 +31,5 @@
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
 # Additive owner-bound Spirit agent snapshot v1; every existing declaration unchanged.
-392995cc0ac332dd1f1dca50ee5a74d251a5324d994a0ba202ededa1a5213629
+# Additive launch-scoped placement and continuation-scoped role/activity v1; all prior signatures verified unchanged.
+45caefc18335381adba6e5438b72c4c07484e0673977f5cf0749d2b3178c5d25

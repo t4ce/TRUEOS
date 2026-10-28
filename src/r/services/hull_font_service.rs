@@ -55,10 +55,10 @@ struct Key {
     height: u32,
     character: char,
 }
-pub(crate) struct Mask {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) pixels: Vec<u8>,
+struct Mask {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
 }
 struct Entry {
     mask: Arc<Mask>,
@@ -549,9 +549,7 @@ fn supported(character: char) -> bool {
         || microfont::raster_quad::glyph_quads(character).is_some()
 }
 
-/// Shared native line/quad glyph rasterization. Cursor registration consumes
-/// this once and retains color-free runs; cursor motion never rasterizes.
-pub(crate) fn raster_glyph(character: char, height: u32) -> Result<Mask, &'static str> {
+fn raster_glyph(character: char, height: u32) -> Result<Mask, &'static str> {
     if height == 0 || height > MAX_EM_HEIGHT {
         return Err("hull-font-glyph-size");
     }

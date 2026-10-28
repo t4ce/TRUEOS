@@ -24,8 +24,16 @@ pub(crate) const POLL_RETURN: usize = 9;
 
 #[path = "abi_breadcrumb.rs"] mod abi_breadcrumb;
 pub(crate) use abi_breadcrumb::{AbiOperation, Guard as AbiGuard};
+#[path = "thread_metrics.rs"] mod thread_metrics;
+
+// Deliberately attributed to admission role and carrier, not the current
+// Tokio activity. A Tokio pool thread can run a scheduler or blocking work.
+// Since-boot totals retain short-lived jobs after their roster entry retires.
+static TIMING_TOTALS: [[thread_metrics::Counters; thread_metrics::ROLE_COUNT]; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
+    [const { [const { thread_metrics::Counters::new() }; thread_metrics::ROLE_COUNT] }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static TIMING_RETIREMENTS: AtomicU64 = AtomicU64::new(0);
 static RECORDS: [Mutex<Vec<Arc<Record>>>; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { Mutex::new(Vec::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
 
@@ -39,6 +47,9 @@ struct Record {
     generation: u64,
     identity: Mutex<(&'static str, usize, heapless::String<31>)>,
     carrier: AtomicUsize,
+    role: AtomicUsize,
+    activity: AtomicUsize,
+    timing: thread_metrics::Counters,
     phase: AtomicUsize,
     since_ms: AtomicU64,
     boundary: AtomicU64,
@@ -64,6 +75,8 @@ impl JobDiagnostic {
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed), generation,
                 identity: Mutex::new(("native", 0, heapless::String::new())),
                 carrier: AtomicUsize::new(usize::MAX), phase: AtomicUsize::new(QUEUED),
+                role: AtomicUsize::new(0), activity: AtomicUsize::new(0),
+                timing: thread_metrics::Counters::new(),
                 since_ms: AtomicU64::new(now_ms()), boundary: AtomicU64::new(0),
                 wait_object: AtomicUsize::new(0), timeout_ms: AtomicU64::new(0),
                 progress_enabled: AtomicUsize::new(0), progress_stage: AtomicUsize::new(POLL_BEGIN),
@@ -102,6 +115,20 @@ impl JobDiagnostic {
         }
     }
 
+    /// Immutable placement hint, set before the first continuation poll.
+    pub(crate) fn role(&self, role: u32) {
+        self.record.role.store(if role < thread_metrics::ROLE_COUNT as u32 { role as usize } else { 0 }, Ordering::Relaxed);
+    }
+
+    /// Runtime activity is diagnostic metadata, never an admission decision.
+    pub(crate) fn activity(&self, activity: u32) -> u32 {
+        self.record.activity.swap(activity as usize, Ordering::Relaxed) as u32
+    }
+
+    pub(crate) fn timing_probe(&self) -> TimingProbe {
+        TimingProbe { record: self.record.clone() }
+    }
+
     pub(crate) fn phase(&self, phase: usize, wait: usize, timeout: u64) {
         // Only the owning task writes. Reports are approximate observations,
         // never synchronization or authority to reclaim guest resources.
@@ -127,6 +154,108 @@ impl JobDiagnostic {
         self.record.progress_stage.store(stage, Ordering::Relaxed);
         self.record.progress_sequence.fetch_add(1, Ordering::Release);
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct TimingProbe {
+    record: Arc<Record>,
+}
+
+impl TimingProbe {
+    fn record(&self, metric: usize, elapsed_ms: u64) {
+        self.record.timing.record(metric, elapsed_ms);
+        let carrier = self.record.carrier.load(Ordering::Relaxed);
+        let role = self.record.role.load(Ordering::Relaxed);
+        if let Some(total) = TIMING_TOTALS.get(carrier).and_then(|roles| roles.get(role)) {
+            total.record(metric, elapsed_ms);
+        }
+    }
+
+    pub(crate) fn polled(&self, elapsed_ms: u64, admission: bool) {
+        self.record(if admission { thread_metrics::ADMISSION } else { thread_metrics::READY }, elapsed_ms);
+    }
+
+    pub(crate) fn ran(&self, elapsed_ms: u64) { self.record(thread_metrics::SLICE, elapsed_ms); }
+
+    pub(crate) fn parked(&self, elapsed_ms: u64, requested_ms: Option<u64>) {
+        self.record(thread_metrics::PARK, elapsed_ms);
+        if let Some(requested) = requested_ms {
+            self.record(thread_metrics::OVERRUN, elapsed_ms.saturating_sub(requested));
+        }
+    }
+}
+
+/// A compact, fixed topology snapshot. Busy rosters are skipped rather than
+/// allowing a stalled bookkeeping lock to stop the independent observer.
+pub(crate) struct CarrierSnapshot {
+    pub active: [bool; crate::allcaps::hv::VM_CPU_SLOT_LIMIT],
+    pub longest_running: Option<usize>,
+    pub busy_rosters: usize,
+}
+
+pub(crate) fn progress_carriers() -> CarrierSnapshot {
+    let mut snapshot = CarrierSnapshot {
+        active: [false; crate::allcaps::hv::VM_CPU_SLOT_LIMIT],
+        longest_running: None, busy_rosters: 0,
+    };
+    let now = now_ms();
+    let mut longest_age = 0;
+    for roster in &RECORDS {
+        let Some(records) = roster.try_lock() else {
+            snapshot.busy_rosters += 1;
+            continue;
+        };
+        for record in records.iter() {
+            if record.progress_enabled.load(Ordering::Acquire) == 0 { continue; }
+            let slot = record.carrier.load(Ordering::Relaxed);
+            let Some(active) = snapshot.active.get_mut(slot) else { continue; };
+            *active = true;
+            if record.phase.load(Ordering::Acquire) == RUNNING {
+                let age = now.saturating_sub(record.progress_since_ms.load(Ordering::Relaxed));
+                if snapshot.longest_running.is_none() || age > longest_age {
+                    longest_age = age;
+                    snapshot.longest_running = Some(slot);
+                }
+            }
+        }
+    }
+    snapshot
+}
+
+/// At most `limit` role/carrier aggregate lines; rotate through populated
+/// buckets so completed startup jobs remain observable with a fixed log cost.
+pub(crate) fn timing_lines(cursor: &mut usize, limit: usize) -> Vec<String> {
+    let capacity = TIMING_TOTALS.len() * thread_metrics::ROLE_COUNT;
+    let mut out = Vec::new();
+    let start = *cursor % capacity;
+    for offset in 0..capacity {
+        if out.len() >= limit { break; }
+        let index = (start + offset) % capacity;
+        let carrier = index / thread_metrics::ROLE_COUNT;
+        let role = index % thread_metrics::ROLE_COUNT;
+        let counters = &TIMING_TOTALS[carrier][role];
+        let admission = counters.metric(thread_metrics::ADMISSION);
+        if admission.count == 0 && counters.retired() == 0 { continue; }
+        out.push(timing_line("codex-progress-timing scope=since-boot", carrier, role, counters));
+        *cursor = (index + 1) % capacity;
+    }
+    out
+}
+
+pub(crate) fn timing_retirements() -> u64 { TIMING_RETIREMENTS.load(Ordering::Relaxed) }
+
+fn timing_line(prefix: &str, carrier: usize, role: usize, counters: &thread_metrics::Counters) -> String {
+    let admission = counters.metric(thread_metrics::ADMISSION);
+    let ready = counters.metric(thread_metrics::READY);
+    let slice = counters.metric(thread_metrics::SLICE);
+    let park = counters.metric(thread_metrics::PARK);
+    let overrun = counters.metric(thread_metrics::OVERRUN);
+    alloc::format!(
+        "{} carrier={} role={} admitted={} retired={} admission_max_ms={} ready_n={} ready_max_ms={} ready_ge10={} ready_ge50={} slice_n={} slice_max_ms={} slice_ge10={} slice_ge50={} park_n={} park_max_ms={} overrun_n={} overrun_max_ms={}",
+        prefix, carrier, thread_metrics::role_name(role as u32), admission.count, counters.retired(), admission.max_ms,
+        ready.count, ready.max_ms, ready.ge10, ready.ge50, slice.count, slice.max_ms, slice.ge10, slice.ge50,
+        park.count, park.max_ms, overrun.count, overrun.max_ms,
+    )
 }
 
 fn progress_stage_name(stage: usize) -> &'static str {
@@ -159,41 +288,92 @@ pub(crate) fn progress_lines(vm_id: u8, limit: usize) -> Vec<String> {
             if out.len() >= limit { break; }
             let phase = record.phase.load(Ordering::Acquire);
             if (phase == RUNNING) != running { continue; }
-            let Some(identity) = record.identity.try_lock() else {
-                out.push(alloc::format!("codex-progress-job vm={} job={} identity=busy", vm_id, record.id));
-                continue;
-            };
-            let sequence = record.progress_sequence.load(Ordering::Acquire);
-            let stage = record.progress_stage.load(Ordering::Relaxed);
-            let age = now.saturating_sub(record.progress_since_ms.load(Ordering::Relaxed));
-            let enabled = record.progress_if.load(Ordering::Relaxed);
-            core::sync::atomic::fence(Ordering::Acquire);
-            if sequence & 1 != 0 || sequence != record.progress_sequence.load(Ordering::Acquire) {
-                out.push(alloc::format!("codex-progress-job vm={} id={} snapshot=changing", vm_id, identity.1));
-                continue;
-            }
-            let abi = record.abi.snapshot();
-            let abi_line = if let Some(abi) = abi {
-                alloc::format!(" abi={} abi_age_ms={} abi_since_ms={} abi_depth={} abi_entered={} abi_exited={} abi_seq={} abi_last={} abi_last_exit_ms={}",
-                    AbiOperation::name(abi.operation),
-                    if abi.operation == 0 { 0 } else { now.saturating_sub(abi.since_ms) },
-                    abi.since_ms, abi.depth, abi.entered, abi.exited, abi.sequence,
-                    AbiOperation::name(abi.last), abi.last_exit_ms)
-            } else { alloc::string::String::from(" abi=changing") };
-            out.push(alloc::format!(
-                "codex-progress-job vm={} gen={} id={} carrier={} stage={} age_ms={} seq={} if={} phase={} wait=0x{:X} name={}{}",
-                vm_id, record.generation, identity.1, record.carrier.load(Ordering::Relaxed),
-                progress_stage_name(stage), age, sequence, enabled, phase,
-                record.wait_object.load(Ordering::Relaxed),
-                if identity.2.is_empty() { "-" } else { identity.2.as_str() }, abi_line,
-            ));
+            out.push(progress_record_line(vm_id, record, now));
         }
+    }
+    out
+}
+
+fn progress_record_line(vm_id: u8, record: &Record, now: u64) -> String {
+    let phase = record.phase.load(Ordering::Acquire);
+    let Some(identity) = record.identity.try_lock() else {
+        return alloc::format!("codex-progress-job vm={} job={} identity=busy", vm_id, record.id);
+    };
+    let sequence = record.progress_sequence.load(Ordering::Acquire);
+    let stage = record.progress_stage.load(Ordering::Relaxed);
+    let age = now.saturating_sub(record.progress_since_ms.load(Ordering::Relaxed));
+    let enabled = record.progress_if.load(Ordering::Relaxed);
+    core::sync::atomic::fence(Ordering::Acquire);
+    if sequence & 1 != 0 || sequence != record.progress_sequence.load(Ordering::Acquire) {
+        return alloc::format!("codex-progress-job vm={} id={} snapshot=changing", vm_id, identity.1);
+    }
+    let abi = record.abi.snapshot();
+    let abi_line = if let Some(abi) = abi {
+        alloc::format!(" abi={} abi_age_ms={} abi_since_ms={} abi_depth={} abi_entered={} abi_exited={} abi_seq={} abi_last={} abi_last_exit_ms={}",
+            AbiOperation::name(abi.operation),
+            if abi.operation == 0 { 0 } else { now.saturating_sub(abi.since_ms) },
+            abi.since_ms, abi.depth, abi.entered, abi.exited, abi.sequence,
+            AbiOperation::name(abi.last), abi.last_exit_ms)
+    } else { alloc::string::String::from(" abi=changing") };
+    let admission = record.timing.metric(thread_metrics::ADMISSION);
+    let ready = record.timing.metric(thread_metrics::READY);
+    let slice = record.timing.metric(thread_metrics::SLICE);
+    let park = record.timing.metric(thread_metrics::PARK);
+    let overrun = record.timing.metric(thread_metrics::OVERRUN);
+    alloc::format!(
+        "codex-progress-job vm={} gen={} id={} carrier={} stage={} age_ms={} seq={} if={} phase={} wait=0x{:X} name={} role={} activity={} admission_ms={} ready_max_ms={} slice_max_ms={} park_max_ms={} overrun_max_ms={}{}",
+        vm_id, record.generation, identity.1, record.carrier.load(Ordering::Relaxed),
+        progress_stage_name(stage), age, sequence, enabled, phase,
+        record.wait_object.load(Ordering::Relaxed),
+        if identity.2.is_empty() { "-" } else { identity.2.as_str() },
+        thread_metrics::role_name(record.role.load(Ordering::Relaxed) as u32),
+        thread_metrics::activity_name(record.activity.load(Ordering::Relaxed) as u32),
+        admission.max_ms, ready.max_ms, slice.max_ms, park.max_ms, overrun.max_ms, abi_line,
+    )
+}
+
+/// Global budget and cursor avoid low VM IDs or sleeping workers monopolizing
+/// reports. Keep the oldest running boundary, then rotate through all jobs.
+pub(crate) fn sample_progress_lines(cursor: &mut u64, limit: usize) -> Vec<String> {
+    if limit == 0 { return Vec::new(); }
+    let mut selected = Vec::new();
+    for (vm_id, roster) in RECORDS.iter().enumerate() {
+        let Some(records) = roster.try_lock() else { continue; };
+        selected.extend(records.iter()
+            .filter(|record| record.progress_enabled.load(Ordering::Acquire) != 0)
+            .map(|record| (vm_id as u8, record.clone())));
+    }
+    selected.sort_unstable_by_key(|(_, record)| record.id);
+    let now = now_ms();
+    let priority = selected.iter()
+        .filter(|(_, record)| record.phase.load(Ordering::Acquire) == RUNNING)
+        .max_by_key(|(_, record)| now.saturating_sub(record.progress_since_ms.load(Ordering::Relaxed)))
+        .map(|(_, record)| record.id);
+    let mut out = Vec::new();
+    if let Some((vm_id, record)) = selected.iter().find(|(_, record)| Some(record.id) == priority) {
+        out.push(progress_record_line(*vm_id, record, now));
+    }
+    let start = selected.partition_point(|(_, record)| record.id <= *cursor);
+    for offset in 0..selected.len() {
+        if out.len() >= limit { break; }
+        let (vm_id, record) = &selected[(start + offset) % selected.len()];
+        if Some(record.id) == priority { continue; }
+        out.push(progress_record_line(*vm_id, record, now));
+        *cursor = record.id;
     }
     out
 }
 
 impl Drop for JobDiagnostic {
     fn drop(&mut self) {
+        if self.record.progress_enabled.load(Ordering::Relaxed) != 0 {
+            self.record.timing.retire();
+            if let Some(total) = TIMING_TOTALS.get(self.record.carrier.load(Ordering::Relaxed))
+                .and_then(|roles| roles.get(self.record.role.load(Ordering::Relaxed))) {
+                total.retire();
+            }
+            TIMING_RETIREMENTS.fetch_add(1, Ordering::Relaxed);
+        }
         crate::allocators::with_host_alloc_domain_strong(|| {
             RECORDS[self.vm_id as usize].lock().retain(|record| record.id != self.record.id);
         });
@@ -239,6 +419,61 @@ pub(crate) fn report(vm_id: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn per_generation_metrics_are_fresh_and_retired_work_remains_in_carrier_totals() {
+        let carrier = 61;
+        let role = 2;
+        let baseline = TIMING_TOTALS[carrier][role].metric(thread_metrics::ADMISSION).count;
+        let retired = TIMING_TOTALS[carrier][role].retired();
+        let job = JobDiagnostic::new(5, 101);
+        job.identify("std-thread", 901, carrier);
+        job.role(role as u32);
+        job.activity(2);
+        job.enable_progress_probe();
+        let probe = job.timing_probe();
+        probe.polled(13, true);
+        probe.polled(47, false);
+        probe.ran(3_000);
+        probe.parked(270, Some(250));
+        let line = progress_lines(5, 1).remove(0);
+        assert!(line.contains("gen=101 id=901 carrier=61"));
+        assert!(line.contains("role=tokio-pool activity=async-scheduler admission_ms=13 ready_max_ms=47 slice_max_ms=3000 park_max_ms=270 overrun_max_ms=20"));
+        drop(job);
+        assert!(progress_lines(5, 1).is_empty());
+        let mut cursor = carrier * thread_metrics::ROLE_COUNT + role;
+        let totals = timing_lines(&mut cursor, 1).remove(0);
+        assert!(totals.contains("scope=since-boot carrier=61 role=tokio-pool"));
+        assert!(totals.contains("ready_max_ms=47 ready_ge10=1 ready_ge50=0"));
+        assert_eq!(TIMING_TOTALS[carrier][role].metric(thread_metrics::ADMISSION).count, baseline + 1);
+        assert_eq!(TIMING_TOTALS[carrier][role].retired(), retired + 1);
+        let next = JobDiagnostic::new(5, 102);
+        next.identify("std-thread", 902, carrier);
+        next.role(role as u32);
+        next.enable_progress_probe();
+        let fresh = progress_lines(5, 1).remove(0);
+        assert!(fresh.contains("gen=102 id=902"));
+        assert!(fresh.contains("admission_ms=0 ready_max_ms=0 slice_max_ms=0 park_max_ms=0 overrun_max_ms=0"));
+    }
+
+    #[test]
+    fn observer_discovers_non_lastap_carriers_without_waiting_for_rosters() {
+        let job = JobDiagnostic::new(6, 201);
+        job.identify("std-thread", 903, 27);
+        job.enable_progress_probe();
+        job.phase(RUNNING, 0, 0);
+        assert!(progress_carriers().active[27]);
+        {
+            let _held = RECORDS[6].lock();
+            let snapshot = progress_carriers();
+            assert!(snapshot.busy_rosters >= 1);
+            assert!(!snapshot.active[27]);
+        }
+        let mut cursor = 0;
+        let lines = sample_progress_lines(&mut cursor, 256);
+        assert!(lines.iter().any(|line| line.contains("gen=201 id=903 carrier=27")));
+        assert!(sample_progress_lines(&mut cursor, 0).is_empty());
+    }
 
     #[test]
     fn progress_probe_prioritizes_running_jobs_and_never_waits_for_identity_locks() {

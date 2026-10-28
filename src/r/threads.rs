@@ -16,11 +16,13 @@ mod context;
 mod stack;
 mod timing;
 mod exit_trace;
+mod placement;
 #[cfg(test)]
 mod tests;
 use crate::r::blocking::{BlockingJobFn, GuestJobOwner};
 use crate::r::blocking::diagnostics;
 use crate::r::kernel_task_domain::{self, KernelTaskDomain};
+use crate::workers::application_policy::{PlacementMode, ThreadPlacement, ThreadRole};
 
 const THREAD_LIMIT: usize = 256;
 const MAX_STACK_BYTES: usize = 64 * 1024 * 1024;
@@ -81,6 +83,9 @@ struct Thread {
     id: usize,
     errno: AtomicI32,
     carrier: u32,
+    workload_role: ThreadRole,
+    child_role_hint: ThreadRole,
+    activity: u32,
     vm_id: Option<u8>,
     job: Option<Job>,
     done: bool,
@@ -124,6 +129,24 @@ pub(crate) fn current_vm_id() -> Option<u8> {
         None
     } else {
         unsafe { (*ptr).vm_id }
+    }
+}
+
+/// The hint belongs to the spawning continuation, never its AP. It is not
+/// inherited by a child, and changing activity never changes placement.
+fn swap_native_scope(activity: bool, value: u32) -> Option<u32> {
+    if (activity && value > 3) || (!activity && ThreadRole::from_raw(value).is_none()) {
+        return None;
+    }
+    let ptr = active();
+    if ptr.is_null() { return None; }
+    let thread = unsafe { &mut *ptr };
+    if activity {
+        let old = core::mem::replace(&mut thread.activity, value);
+        if let Some(owner) = &thread._admission._owner { owner.diagnostic.activity(value); }
+        Some(old)
+    } else {
+        Some(core::mem::replace(&mut thread.child_role_hint, ThreadRole::from_raw(value)?) as u32)
     }
 }
 
@@ -266,7 +289,7 @@ pub(crate) fn wait(queue: &crate::wait::WaitQueue, observed: u32, timeout_ms: u6
     }
     let queue_ptr = queue as *const crate::wait::WaitQueue as usize;
     unsafe { diagnostic_phase(&*active(), diagnostics::WAITING, queue_ptr, timeout_ms); }
-    unsafe { if let Some(timing) = (*active()).timing.as_mut() { timing.begin_wait(None); } }
+    unsafe { if let Some(timing) = (*active()).timing.as_mut() { timing.begin_wait((timeout_ms != 0).then_some(timeout_ms)); } }
     let result = crate::allocators::with_host_alloc_domain_strong(|| {
         alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false))
     });
@@ -360,7 +383,12 @@ impl Future for ThreadTask {
         let thread = &mut **self.get_mut().0;
         progress_boundary(thread, diagnostics::POLL_BEGIN);
         if thread.timed && thread.timing.is_none() {
-            thread.timing = Some(timing::Timing::new(cx, thread.submitted_ms));
+            let probe = thread._admission._owner.as_ref().map(|owner| {
+                owner.diagnostic.role(thread.workload_role as u32);
+                owner.diagnostic.activity(thread.activity);
+                owner.diagnostic.timing_probe()
+            });
+            thread.timing = Some(timing::Timing::new(cx, thread.submitted_ms, probe));
             if crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { thread.exit_trace.configure(thread.vm_id); }
         }
         let timed_waker = thread.timing.as_ref().map(|timing| {
@@ -456,7 +484,7 @@ impl Future for ThreadTask {
                 trace.ended_ms, trace.duration_ms, trace.reason,
                 &trace.frames.addresses[..trace.frames.count], trace.frames.stop);
         }
-        if thread.timed { timing::Timing::ran(run_started); }
+        if let Some(timing) = thread.timing.as_ref() { timing.ran(run_started); }
         if thread.abandoned || !thread.done {
             if let Some(result) = guest_control_boundary(thread) {
                 progress_boundary(thread, diagnostics::POLL_RETURN);
@@ -522,7 +550,8 @@ async fn codex_application_task(thread: ThreadTask) {
     thread.await
 }
 
-fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i32> {
+fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize, role: ThreadRole) -> Result<(), i32> {
+    let submitted_ms = crate::r::input_timing::now_ms();
     if stack > MAX_STACK_BYTES {
         return Err(22);
     }
@@ -530,9 +559,14 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
         .is_some_and(|archive| crate::workers::application_policy::is_codex_archive(&archive));
     let experimental = crate::allcaps::hv::CODEX_EXECUTOR_EXPERIMENT_ENABLED && is_codex;
     let spawner = if experimental {
-        // Fail explicitly if LastAP is unavailable; a silent fallback would
-        // make the placement experiment and its measurements misleading.
-        crate::workers::codex_application_spawner()
+        let vm = vm_id.expect("Codex admission is guest-owned");
+        let generation = crate::hv::vm_run_generation(vm).ok_or(22)?;
+        let plan = placement::admit(vm, generation)?;
+        let selected = plan.policy.carrier(role, crate::workers::codex_application_slot(), plan.background(), plan.ordinal)
+            .ok_or_else(|| admission_rejected(vm_id, id, stack, "codex_placement_unavailable"))?;
+        // Select only registered, eligible carriers before the first poll.
+        // Capacity loss is an explicit failure, never a silent policy fallback.
+        crate::workers::spawner_for_slot(selected)
             .ok_or_else(|| admission_rejected(vm_id, id, stack, "codex_carrier_unavailable"))?
     } else {
         let slots = crate::workers::background_worker_slots()
@@ -557,6 +591,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     if let Some(owner) = &owner {
         if is_codex { owner.diagnostic.enable_progress_probe(); }
         owner.diagnostic.identify(if experimental { "codex-executor-task" } else { "std-thread" }, id, slot as usize);
+        owner.diagnostic.role(role as u32);
     }
     if THREAD_COUNT
         .try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < THREAD_LIMIT).then_some(n + 1))
@@ -587,6 +622,9 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
             id,
             errno: AtomicI32::new(0),
             carrier: slot,
+            workload_role: role,
+            child_role_hint: ThreadRole::Unclassified,
+            activity: if role == ThreadRole::Foreground { 1 } else { 0 },
             vm_id,
             job: None,
             done: false,
@@ -595,7 +633,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
             kill_waker: None,
             wait: None,
             timed: crate::allcaps::hv::INPUT_TIMING_ENABLED && is_codex,
-            submitted_ms: crate::r::input_timing::now_ms(),
+            submitted_ms,
             timing: None,
             exit_trace: exit_trace::State::new(),
             domain: (
@@ -619,8 +657,8 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
         let task = codex_application_task(ThreadTask::new(thread))
             .map_err(|_| admission_rejected(vm_id, id, stack, "executor_pool"))?;
         crate::log_rate_limited!(target: "blueprint"; level: crate::log_os::LogLevel::Info; first: 2; every: 64;
-            "codex-executor: vm={:?} thread={} carrier={} owner=codex task=codex_application_task placement=lastap\n",
-            vm_id, id, slot);
+            "codex-executor: vm={:?} thread={} carrier={} role={} owner=codex task=codex_application_task placement=admission\n",
+            vm_id, id, slot, role as u32);
         spawner.spawn(task);
     } else {
         let task = thread_task(ThreadTask::new(thread))
@@ -660,7 +698,9 @@ pub(crate) fn spawn(
         }
         Ok(())
     } else {
-        submit(stack, Job::Owned(job), vm_id, id)
+        let ptr = active();
+        let role = if ptr.is_null() { ThreadRole::Unclassified } else { unsafe { (*ptr).child_role_hint } };
+        submit(stack, Job::Owned(job), vm_id, id, role)
     }
 }
 
@@ -676,7 +716,72 @@ pub(crate) unsafe fn submit_guest_from_raw(
     if data == 0 || vtable == 0 || id == 0 {
         return 22;
     }
-    submit(stack, Job::GuestRaw { data, vtable }, Some(vm_id), id)
+    let generation = match crate::hv::vm_run_generation(vm_id) { Some(value) => value, None => return 22 };
+    let role = match placement::hull_role(vm_id, generation) { Ok(value) => value, Err(error) => return error };
+    submit(stack, Job::GuestRaw { data, vtable }, Some(vm_id), id, role)
         .err()
         .unwrap_or(0)
+}
+
+/// Host-only control behind the authenticated Hull VMCALL. No caller chooses
+/// an AP number or changes the placement of an already admitted continuation.
+pub(crate) fn hull_thread_control(vm: u8, operation: u64, value: u64) -> Result<u32, i32> {
+    let generation = crate::hv::vm_run_generation(vm).ok_or(22)?;
+    match operation {
+        0 => {
+            let mode = value as u32;
+            let cap = (value >> 32) as u32;
+            let policy = ThreadPlacement::from_raw(mode, cap).ok_or(22)?;
+            let is_codex = crate::hv::app_vm_archive(vm)
+                .is_some_and(|archive| crate::workers::application_policy::is_codex_archive(&archive));
+            if !is_codex || !crate::allcaps::hv::CODEX_EXECUTOR_EXPERIMENT_ENABLED { return Err(95); }
+            let foreground = crate::workers::codex_application_slot()
+                .filter(|slot| crate::workers::spawner_for_slot(*slot).is_some()).ok_or(11)?;
+            // Freeze a topology/profile-selected set for this launch. Later AP
+            // registrations cannot expand or silently change its experiment.
+            let background = if policy.mode == PlacementMode::SingleCarrier {
+                alloc::vec::Vec::new()
+            } else {
+                crate::workers::pick_background_spawners_with_slots(policy.background_cap)
+                    .into_iter().map(|(slot, _, _)| slot).collect::<alloc::vec::Vec<_>>()
+            };
+            if policy.carrier(ThreadRole::Foreground, Some(foreground), &background, 0).is_none()
+                || (policy.mode != PlacementMode::SingleCarrier && policy.carrier(ThreadRole::TokioPool, Some(foreground), &background, 0).is_none()) {
+                return Err(11);
+            }
+            placement::configure(vm, generation, policy, &background)?;
+            crate::log_info!(target: "blueprint";
+                "thread-placement-config vm={} gen={} mode={} background_cap={} background={:?} foreground={} migration=none\n",
+                vm, generation, mode, cap, background, foreground);
+            Ok(0)
+        },
+        1 | 2 if value <= u32::MAX as u64 => placement::swap_hull_scope(vm, generation, operation == 2, value as u32),
+        _ => Err(22),
+    }
+}
+
+fn hull_control(operation: u64, value: u64) -> Option<u32> {
+    let (status, result) = trueos_vm::vmcall::call(crate::hv::vmcall::OP_BP_THREAD_CONTROL_V1, operation, value);
+    (status == crate::hv::vmcall::STATUS_OK && result <= u32::MAX as u64).then_some(result as u32)
+}
+
+pub(crate) fn configure_placement(mode: u32, background_cap: u32) -> i32 {
+    if ThreadPlacement::from_raw(mode, background_cap).is_none() { return 22; }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        // Control failures are positive errno in the response, with STATUS_BAD_ARG.
+        let (status, result) = trueos_vm::vmcall::call(crate::hv::vmcall::OP_BP_THREAD_CONTROL_V1, 0, (mode as u64) | ((background_cap as u64) << 32));
+        return if status == crate::hv::vmcall::STATUS_OK { 0 } else { i32::try_from(result).ok().filter(|rc| *rc > 0).unwrap_or(22) };
+    }
+    // A native continuation already has immutable placement.
+    if current_id().is_some() { return 16; }
+    95
+}
+
+pub(crate) fn swap_scope(activity: bool, value: u32) -> u32 {
+    if (activity && value > 3) || (!activity && ThreadRole::from_raw(value).is_none()) { return u32::MAX; }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        hull_control(if activity { 2 } else { 1 }, value as u64).unwrap_or(u32::MAX)
+    } else {
+        swap_native_scope(activity, value).unwrap_or(u32::MAX)
+    }
 }

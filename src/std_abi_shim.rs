@@ -7676,6 +7676,24 @@ pub extern "C" fn trueos_cabi_thread_available_parallelism() -> usize {
     crate::r::platform::trueos_platform_cpu_count().max(1)
 }
 
+/// Configure this launch's experiment before native thread admission.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_thread_configure_placement_v1(mode: u32, background_cap: u32) -> i32 {
+    crate::r::threads::configure_placement(mode, background_cap)
+}
+
+/// Scoped hint for children spawned by the current logical continuation.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_thread_swap_child_role_v1(role: u32) -> u32 {
+    crate::r::threads::swap_scope(false, role)
+}
+
+/// Diagnostic activity only; it never migrates or reclassifies admission.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_thread_swap_activity_v1(activity: u32) -> u32 {
+    crate::r::threads::swap_scope(true, activity)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_thread_set_name(name: *const c_char) -> c_int {
     let Some(name) = abi_cstr_to_string(name, 4096) else {

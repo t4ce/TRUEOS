@@ -40,6 +40,10 @@ pub struct AgentEntry {
     pub id: String,
     pub parent_id: Option<String>,
     pub name: Option<String>,
+    /// Canonical human nickname, separate from the task path in `name`.
+    /// Optional within v1 so snapshots from older producers still decode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
     pub role: Option<String>,
     pub lifecycle: Option<AgentLifecycle>,
     pub runtime: Option<AgentRuntime>,
@@ -103,6 +107,10 @@ impl AgentSnapshot {
                 .as_ref()
                 .is_some_and(|name| name.len() > MAX_LABEL_BYTES)
                 || agent
+                    .nickname
+                    .as_ref()
+                    .is_some_and(|nickname| nickname.len() > MAX_LABEL_BYTES)
+                || agent
                     .role
                     .as_ref()
                     .is_some_and(|role| role.len() > MAX_LABEL_BYTES)
@@ -148,7 +156,8 @@ mod tests {
             agents: vec![AgentEntry {
                 id: "child-1".into(),
                 parent_id: Some("root".into()),
-                name: Some("worker".into()),
+                name: Some("/root/worker".into()),
+                nickname: Some("Scout".into()),
                 role: None,
                 lifecycle: Some(AgentLifecycle::Running),
                 runtime: Some(AgentRuntime::Active),
@@ -167,6 +176,42 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<AgentSnapshot>(&bytes).unwrap(),
             original
+        );
+    }
+
+    #[test]
+    fn nickname_is_optional_for_older_v1_snapshots_and_separate_from_task_path() {
+        let original = snapshot();
+        let decoded = decode(&encode(&original).unwrap()).unwrap();
+        assert_eq!(decoded.agents[0].name.as_deref(), Some("/root/worker"));
+        assert_eq!(decoded.agents[0].nickname.as_deref(), Some("Scout"));
+        let mut value = serde_json::to_value(&original).unwrap();
+        value["agents"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("nickname");
+        let decoded = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(decoded.agents[0].nickname, None);
+        assert_eq!(decoded.agents[0].name, original.agents[0].name);
+        assert!(
+            serde_json::to_value(&decoded).unwrap()["agents"][0]
+                .as_object()
+                .unwrap()
+                .get("nickname")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn nickname_has_the_same_byte_budget_as_other_labels() {
+        let mut value = snapshot();
+        value.agents[0].nickname = Some("é".repeat(MAX_LABEL_BYTES / 2));
+        assert_eq!(value.validate(), Ok(()));
+        value.agents[0].nickname.as_mut().unwrap().push('a');
+        assert_eq!(value.validate(), Err(SnapshotError::Capacity));
+        assert_eq!(
+            decode(&serde_json::to_vec(&value).unwrap()),
+            Err(SnapshotError::Capacity)
         );
     }
 

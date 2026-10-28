@@ -29,6 +29,17 @@ pub(crate) fn cell_extent(scale: u32) -> Option<(u32, u32)> {
         .checked_add(microfont::FHEIGHT as u32 / 2)? / microfont::FHEIGHT as u32;
     (width != 0 && height != 0).then_some((width, height))
 }
+
+/// Paper's grid text em is one 5-mm cell per scale step. Share its exact
+/// physical conversion and rounded advance with other UI text consumers;
+/// the glyph pixels still come from the one service-lifetime R8 atlas.
+pub(crate) fn grid_cell_extent(scale: u32) -> Option<(u32, u32)> {
+    if !(1..=8).contains(&scale) { return None; }
+    let millimeters = 5 * scale;
+    let height = crate::ui4::physical_extent_pixels(millimeters, millimeters)?.1;
+    let width = height.checked_mul(6)?.checked_add(5)? / 11;
+    (width != 0 && height != 0).then_some((width, height))
+}
 static FONT: spin::Once<Font> = spin::Once::new();
 static PREPARING: AtomicBool = AtomicBool::new(false);
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, Result<(), &'static str>>;
@@ -234,9 +245,7 @@ pub(crate) async fn grid_glyph(scale: u32, ch: char) -> Result<Vec<u8>, &'static
 
 fn grid_glyph_blocking(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
     let font = FONT.get().ok_or("shell3-font-not-ready")?;
-    let height = crate::ui4::physical_extent_pixels(5 * scale, 5 * scale)
-        .ok_or("grid-font-physical-size")?.1;
-    let width = (height * 6 + 5) / 11;
+    let (width, height) = grid_cell_extent(scale).ok_or("grid-font-physical-size")?;
     let mut result = Vec::with_capacity(8 + (width * height * 4) as usize);
     result.extend_from_slice(&width.to_le_bytes());
     result.extend_from_slice(&height.to_le_bytes());

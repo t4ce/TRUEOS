@@ -604,7 +604,6 @@ fn microfont_log_gate() -> bool {
 
 fn codex_progress_gate() -> bool {
     crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED
-        && crate::workers::codex_application_spawner().is_some()
 }
 
 fn spawn_codex_progress(spawner: Spawner) -> SpawnAttempt {

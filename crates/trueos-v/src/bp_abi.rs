@@ -993,6 +993,16 @@ unsafe extern "C" {
     pub fn trueos_cabi_thread_join(handle: usize) -> i32;
     pub fn trueos_cabi_thread_detach(handle: usize) -> i32;
     pub fn trueos_cabi_thread_available_parallelism() -> usize;
+    /// Opt-in per-launch experiment: 0 single, 1 foreground isolated, 2 spread;
+    /// background_cap is 1..=4. Configure before admission; positive errno on failure.
+    pub fn trueos_cabi_thread_configure_placement_v1(mode: u32, background_cap: u32) -> i32;
+    /// Swap the current logical continuation's child-admission hint: 0 general,
+    /// 1 foreground, 2 Tokio pool, 3 dedicated blocking. Returns old hint or MAX.
+    /// Restore the returned hint in the same continuation; hints are not inherited.
+    pub fn trueos_cabi_thread_swap_child_role_v1(role: u32) -> u32;
+    /// Swap diagnostic activity: 0 unknown, 1 foreground, 2 scheduler, 3 blocking.
+    /// Returns the old activity or MAX. Does not affect thread placement.
+    pub fn trueos_cabi_thread_swap_activity_v1(activity: u32) -> u32;
     pub fn trueos_cabi_thread_set_name(name: *const core::ffi::c_char) -> i32;
     pub fn trueos_cabi_wls_current_slot() -> u32;
     pub fn trueos_time_monotonic_nanos() -> u64;

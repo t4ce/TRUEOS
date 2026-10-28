@@ -77,6 +77,27 @@ pub(crate) fn timer_received(slot: usize) {
     observe(slot, |c| &c.timer_received);
 }
 
+/// Preserve the oldest running carrier as evidence, then rotate through every
+/// active carrier within a fixed output budget. The cursor tracks only the
+/// rotating portion so a continuously running carrier cannot starve peers.
+pub(crate) fn sample_carriers(
+    active: &[bool], priority: Option<usize>, cursor: &mut usize, limit: usize,
+) -> alloc::vec::Vec<usize> {
+    let mut selected = alloc::vec::Vec::new();
+    if limit == 0 || active.is_empty() { return selected; }
+    let priority = priority.filter(|slot| active.get(*slot).copied().unwrap_or(false));
+    if let Some(slot) = priority { selected.push(slot); }
+    let start = *cursor % active.len();
+    for offset in 0..active.len() {
+        if selected.len() >= limit { break; }
+        let slot = (start + offset) % active.len();
+        if !active[slot] || Some(slot) == priority { continue; }
+        selected.push(slot);
+        *cursor = (slot + 1) % active.len();
+    }
+    selected
+}
+
 /// Read IF without modifying the interrupt state or CPU flags.
 pub(crate) fn interrupts_enabled() -> bool {
     let flags: u64;
@@ -112,5 +133,21 @@ mod tests {
         // Invalid topology access remains bounded.
         poll_begin(usize::MAX);
         assert_eq!(snapshot(usize::MAX).poll_begin, 0);
+    }
+
+    #[test]
+    fn bounded_carrier_sampling_keeps_stalled_carrier_and_covers_other_aps() {
+        let active = [false, false, true, true, true, true, true, true];
+        let mut cursor = 0;
+        let mut seen = [false; 8];
+        for _ in 0..3 {
+            let sample = sample_carriers(&active, Some(7), &mut cursor, 3);
+            assert_eq!(sample.len(), 3);
+            assert_eq!(sample[0], 7);
+            for slot in sample { seen[slot] = true; }
+        }
+        assert_eq!(seen, active);
+        assert!(sample_carriers(&active, Some(99), &mut cursor, 0).is_empty());
+        assert!(sample_carriers(&[], None, &mut cursor, 4).is_empty());
     }
 }
