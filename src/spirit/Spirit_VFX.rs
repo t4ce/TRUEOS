@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use spin::Mutex;
 use trueos_time::Instant;
 
+#[path = "failed_vfx.rs"]
+mod failed_vfx;
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct SpiritVfxSliderSpec {
     pub(crate) name: &'static str,
@@ -1022,6 +1025,7 @@ static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 
 const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
 const POWER_MODE_VFX_TRANSITION_MS: u64 = 650;
+const TERMINAL_VFX_TRANSITION_MS: u64 = POWER_MODE_VFX_TRANSITION_MS;
 const IDLE_VFX_TRANSITION_MS: u64 = 1_000;
 const REASONING_VFX_TRANSITION_MS: u64 = 2_000;
 const REASONING_VFX_FRAME_SECONDS: f32 = 1.0 / 30.0;
@@ -1034,7 +1038,7 @@ const REASONING_VFX_INTENSITY_TARGET: f32 = 4.0;
 // smallest convenient shared period, so wrapping here is visually exact and
 // retains f32 phase precision across arbitrarily long sessions.
 const REASONING_VFX_PHASE_PERIOD: f32 = 20.0 * core::f32::consts::PI;
-// Aura bloom is Spirit's single global sprite shader for now. The comparison
+// Aura bloom is Spirit's steady global sprite shader. The comparison
 // grid's normalized controls are
 // `[-0.3 -> 0 -> -0.3, +1, -1, -1]`. For Aura bloom those positions map to
 // the kernel's `[radius 9 -> 12 -> 9, strength 2.5, pulse 0, brighten 0]`.
@@ -1102,6 +1106,59 @@ impl SpiritVfxTransition {
     }
 }
 
+/// One procedural background is selected in the render contract. Change its
+/// mode only at zero opacity, using the same fade as the GT power indicator.
+struct TerminalBackgroundVfxState {
+    current: Option<SpiritVfxBackgroundEffect>,
+    requested: Option<SpiritVfxBackgroundEffect>,
+    transition: SpiritVfxTransition,
+}
+
+impl TerminalBackgroundVfxState {
+    const INACTIVE: Self = Self {
+        current: None,
+        requested: None,
+        transition: SpiritVfxTransition::INACTIVE,
+    };
+
+    fn sample(
+        &mut self,
+        status: Option<trueos_terminal::program_status::ProgramStatus>,
+        now_ms: u64,
+    ) -> Option<(SpiritVfxBackgroundEffect, f32)> {
+        use trueos_terminal::program_status::ProgramStatus;
+
+        self.requested = match status {
+            Some(ProgramStatus::Working) => Some(SpiritVfxBackgroundEffect::PixelBurst),
+            Some(ProgramStatus::Blocked(_)) => Some(SpiritVfxBackgroundEffect::WaterRipples),
+            Some(ProgramStatus::Done) => Some(SpiritVfxBackgroundEffect::EnergyRing),
+            _ => None,
+        };
+        if self.current.is_none() {
+            self.current = self.requested;
+            self.transition
+                .set_active(self.current.is_some(), now_ms, TERMINAL_VFX_TRANSITION_MS);
+        } else if self.current == self.requested {
+            // Returning to the outgoing state reverses from its current level.
+            self.transition
+                .set_active(true, now_ms, TERMINAL_VFX_TRANSITION_MS);
+        } else {
+            self.transition
+                .set_active(false, now_ms, TERMINAL_VFX_TRANSITION_MS);
+            if self.transition.level_at(now_ms) <= 0.0 {
+                self.current = self.requested;
+                self.transition.set_active(
+                    self.current.is_some(),
+                    now_ms,
+                    TERMINAL_VFX_TRANSITION_MS,
+                );
+            }
+        }
+        self.current
+            .map(|effect| (effect, self.transition.level_at(now_ms)))
+    }
+}
+
 #[derive(Copy, Clone)]
 struct ReasoningVfxState {
     transition: SpiritVfxTransition,
@@ -1151,6 +1208,10 @@ impl ReasoningVfxState {
 
 static IDLE_VFX_TRANSITION: Mutex<SpiritVfxTransition> = Mutex::new(SpiritVfxTransition::INACTIVE);
 static REASONING_VFX_STATE: Mutex<ReasoningVfxState> = Mutex::new(ReasoningVfxState::INACTIVE);
+static TERMINAL_BACKGROUND_VFX_STATE: Mutex<TerminalBackgroundVfxState> =
+    Mutex::new(TerminalBackgroundVfxState::INACTIVE);
+static FAILED_SPRITE_VFX: Mutex<failed_vfx::FailedVfxEnvelope> =
+    Mutex::new(failed_vfx::FailedVfxEnvelope::INACTIVE);
 static WINDOW_BACKGROUND_VFX: Mutex<Option<SpiritVfxBackgroundEffect>> = Mutex::new(None);
 static POWER_MODE_VFX_TRANSITION: Mutex<SpiritVfxTransition> =
     Mutex::new(SpiritVfxTransition::INACTIVE);
@@ -1173,7 +1234,7 @@ fn receive_power_mode_engine_marker() {
         CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
     }
     crate::log_info!(target: "spirit";
-        "trueos-spirit: GT power marker received marker={} active={} requested_mhz={} actual_mhz={} rp0_mhz={} changed={} source=intel-engine-confirmed async=1 hierarchy=power-mode>reasoning>movement>window>idle>panel vfx={}\n",
+        "trueos-spirit: GT power marker received marker={} active={} requested_mhz={} actual_mhz={} rp0_mhz={} changed={} source=intel-engine-confirmed async=1 hierarchy=power-mode>terminal>reasoning>movement>window>idle>panel vfx={}\n",
         marker.generation,
         marker.active as u8,
         marker.requested_mhz,
@@ -1269,6 +1330,28 @@ pub(super) fn set_idle_vfx(active: bool) {
     CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
 }
 
+/// Play one failed-state burst without changing the saved panel or background
+/// priority. Call on a new failure edge, never on every sample of an error state.
+pub(crate) fn play_failed_vfx() {
+    // Choose once per notification so all fades stay smooth and the discrete
+    // pulse-speed holds share one stable 3–5 second envelope.
+    let duration_ms = failed_vfx::MIN_DURATION_MS
+        + crate::tyche::soft_rng().usize_below(
+            (failed_vfx::MAX_DURATION_MS - failed_vfx::MIN_DURATION_MS + 1) as usize,
+        ) as u64;
+    let now_ms = Instant::now().as_millis();
+    FAILED_SPRITE_VFX
+        .lock()
+        .start(now_ms, duration_ms);
+    if let Err(error) = super::lilly_protocol::schedule_failed_reaction(now_ms, duration_ms) {
+        crate::log_warn!(target: "spirit";
+            "trueos-spirit: failed gesture unavailable error={:?}; VFX remains active\n",
+            error,
+        );
+    }
+    CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
+}
+
 /// Override Spirit's hardware-cursor background for the UI4 frame selected by
 /// her tagged software vCursor. Cursor motion and UI4 focus remain entirely on
 /// slot 4; this state changes only the VFX rendered into Spirit's 256px plane.
@@ -1320,12 +1403,18 @@ pub(crate) fn set_edge_fade_pixels(pixels: f32) -> Result<u64, SpiritVfxControlE
 }
 
 pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
+    // Observe terminal ownership before acquiring any Spirit VFX lock.
+    let terminal_status = crate::shell3::tui::program_status();
     // Spirit consumes only the GT-owned, readback-confirmed marker. The UI4
     // hotkey never writes her VFX state directly.
     receive_power_mode_engine_marker();
     let (revision, panel) = control_panel_snapshot();
     let now = Instant::now();
     let now_ms = now.as_millis();
+    let terminal_background = TERMINAL_BACKGROUND_VFX_STATE
+        .lock()
+        .sample(terminal_status, now_ms)
+        .map(|(effect, level)| transitioned_background(effect, level, [1.0, 1.0, 2.0]));
     let reasoning_active = crate::ai::ai_activity::reasoning_active();
     let (reasoning_level, reasoning_phase, reasoning_speed, reasoning_visible) = {
         let mut state = REASONING_VFX_STATE.lock();
@@ -1342,6 +1431,8 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let power_mode_visible = power_mode_transition.active || power_mode_level > 0.0;
     let (background, background_phase_override) = if power_mode_visible {
         (power_mode_background(power_mode_level), None)
+    } else if let Some(background) = terminal_background {
+        (background, None)
     } else if reasoning_visible {
         (reasoning_background(reasoning_level, reasoning_speed), Some(reasoning_phase))
     } else if move_portal_active {
@@ -1360,10 +1451,30 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     } else {
         (panel.alpha_background, None)
     };
-    let (fx_color_a, fx_color_b) = SpiritVfxEffect::AuraBloom.demo_colors();
+    let failed_parameters = FAILED_SPRITE_VFX.lock().sample(now_ms);
+    let (effect, parameters) = if let Some(normalized) = failed_parameters {
+        let mut parameters = [0.0; 4];
+        for ((value, normalized), spec) in parameters
+            .iter_mut()
+            .zip(normalized)
+            .zip(HIT_FLASH_CONTROLS)
+        {
+            *value = failed_vfx::mapped_parameter(
+                normalized,
+                spec.min,
+                spec.default,
+                spec.max,
+                spec.step,
+            );
+        }
+        (SpiritVfxEffect::HitFlash, parameters)
+    } else {
+        (SpiritVfxEffect::AuraBloom, global_aura_parameters(now_ms))
+    };
+    let (fx_color_a, fx_color_b) = effect.demo_colors();
     let sprite_shader = SpiritVfxSpriteShader {
-        effect: SpiritVfxEffect::AuraBloom,
-        parameters: global_aura_parameters(now_ms),
+        effect,
+        parameters,
         fx_color_a,
         fx_color_b,
     };
@@ -1568,5 +1679,190 @@ const fn hex_nibble(value: u8) -> Option<u8> {
         b'a'..=b'f' => Some(value - b'a' + 10),
         b'A'..=b'F' => Some(value - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod terminal_background_tests {
+    use super::*;
+    use trueos_terminal::program_status::{ProgramStatus, ProgramStatusKind};
+
+    fn assert_background(
+        actual: Option<(SpiritVfxBackgroundEffect, f32)>,
+        effect: SpiritVfxBackgroundEffect,
+        level: f32,
+    ) {
+        let (actual_effect, actual_level) = actual.expect("terminal background");
+        assert_eq!(actual_effect, effect);
+        assert!((actual_level - level).abs() < 0.0001);
+    }
+
+    #[test]
+    fn maps_the_selected_production_grid_cells() {
+        for (status, effect, id) in [
+            (
+                ProgramStatus::Working,
+                SpiritVfxBackgroundEffect::PixelBurst,
+                10,
+            ),
+            (
+                ProgramStatus::Blocked(ProgramStatusKind::Question),
+                SpiritVfxBackgroundEffect::WaterRipples,
+                9,
+            ),
+            (
+                ProgramStatus::Done,
+                SpiritVfxBackgroundEffect::EnergyRing,
+                2,
+            ),
+        ] {
+            let mut state = TerminalBackgroundVfxState::INACTIVE;
+            assert_background(state.sample(Some(status), 0), effect, 0.0);
+            assert_background(
+                state.sample(Some(status), TERMINAL_VFX_TRANSITION_MS),
+                effect,
+                1.0,
+            );
+            assert_eq!(effect as u8, id);
+        }
+    }
+
+    #[test]
+    fn repeated_statuses_do_not_restart_the_fade() {
+        let mut state = TerminalBackgroundVfxState::INACTIVE;
+        let status = Some(ProgramStatus::Working);
+        state.sample(status, 0);
+        state.sample(status, 100);
+        assert_background(
+            state.sample(status, TERMINAL_VFX_TRANSITION_MS / 2),
+            SpiritVfxBackgroundEffect::PixelBurst,
+            0.5,
+        );
+        assert_background(
+            state.sample(status, TERMINAL_VFX_TRANSITION_MS),
+            SpiritVfxBackgroundEffect::PixelBurst,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn changes_modes_only_after_the_outgoing_background_is_transparent() {
+        let mut state = TerminalBackgroundVfxState::INACTIVE;
+        state.sample(Some(ProgramStatus::Working), 0);
+        state.sample(Some(ProgramStatus::Working), 650);
+        let waiting = Some(ProgramStatus::Blocked(ProgramStatusKind::Permission));
+        assert_background(
+            state.sample(waiting, 700),
+            SpiritVfxBackgroundEffect::PixelBurst,
+            1.0,
+        );
+        assert_background(
+            state.sample(waiting, 1025),
+            SpiritVfxBackgroundEffect::PixelBurst,
+            0.5,
+        );
+        assert_background(
+            state.sample(waiting, 1350),
+            SpiritVfxBackgroundEffect::WaterRipples,
+            0.0,
+        );
+        assert_background(
+            state.sample(waiting, 2000),
+            SpiritVfxBackgroundEffect::WaterRipples,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn the_latest_request_wins_without_restarting_the_outgoing_fade() {
+        let mut state = TerminalBackgroundVfxState::INACTIVE;
+        state.sample(Some(ProgramStatus::Working), 0);
+        state.sample(Some(ProgramStatus::Working), 650);
+        state.sample(Some(ProgramStatus::Blocked(ProgramStatusKind::Auth)), 700);
+        state.sample(Some(ProgramStatus::Done), 1000);
+        assert_background(
+            state.sample(Some(ProgramStatus::Done), 1350),
+            SpiritVfxBackgroundEffect::EnergyRing,
+            0.0,
+        );
+        assert_background(
+            state.sample(Some(ProgramStatus::Done), 2000),
+            SpiritVfxBackgroundEffect::EnergyRing,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn returning_to_the_outgoing_state_reverses_smoothly() {
+        let mut state = TerminalBackgroundVfxState::INACTIVE;
+        let working = Some(ProgramStatus::Working);
+        state.sample(working, 0);
+        state.sample(working, 650);
+        let waiting = Some(ProgramStatus::Blocked(ProgramStatusKind::Question));
+        state.sample(waiting, 700);
+        assert_background(
+            state.sample(waiting, 1025),
+            SpiritVfxBackgroundEffect::PixelBurst,
+            0.5,
+        );
+        assert_background(
+            state.sample(working, 1025),
+            SpiritVfxBackgroundEffect::PixelBurst,
+            0.5,
+        );
+        assert_background(
+            state.sample(working, 1350),
+            SpiritVfxBackgroundEffect::PixelBurst,
+            0.75,
+        );
+        assert_background(
+            state.sample(working, 1675),
+            SpiritVfxBackgroundEffect::PixelBurst,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn releasing_activity_fades_out_then_returns_no_override() {
+        let mut state = TerminalBackgroundVfxState::INACTIVE;
+        state.sample(Some(ProgramStatus::Done), 0);
+        state.sample(Some(ProgramStatus::Done), 650);
+        assert_background(
+            state.sample(None, 700),
+            SpiritVfxBackgroundEffect::EnergyRing,
+            1.0,
+        );
+        assert_background(
+            state.sample(None, 1025),
+            SpiritVfxBackgroundEffect::EnergyRing,
+            0.5,
+        );
+        assert_eq!(state.sample(None, 1350), None);
+        assert_eq!(state.sample(None, 2000), None);
+    }
+
+    #[test]
+    fn idle_clear_and_error_do_not_choose_a_new_baseline() {
+        let mut state = TerminalBackgroundVfxState::INACTIVE;
+        for status in [
+            None,
+            Some(ProgramStatus::Idle),
+            Some(ProgramStatus::Clear),
+            Some(ProgramStatus::Error),
+        ] {
+            assert_eq!(state.sample(status, 0), None);
+        }
+    }
+
+    #[test]
+    fn an_invisible_pending_effect_can_be_replaced_without_a_delay() {
+        let mut state = TerminalBackgroundVfxState::INACTIVE;
+        state.sample(Some(ProgramStatus::Working), 0);
+        assert_background(
+            state.sample(Some(ProgramStatus::Done), 0),
+            SpiritVfxBackgroundEffect::EnergyRing,
+            0.0,
+        );
+        assert_eq!(state.sample(None, 0), None);
     }
 }

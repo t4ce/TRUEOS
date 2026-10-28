@@ -32,6 +32,8 @@ const IDLE_UNCROSS_ARMS_TRANSITION: &str = "transition.uncross_arms";
 const AI_REASONING_START_ANIMATION: &str = "agree.firm_nod";
 const AI_REASONING_FINISH_ANIMATION: &str = "idea.finger_up";
 const LUMEN_TALK_ANIMATION: &str = "talk.calm.uncrossed";
+const FAILED_ANIMATION: &str = "angry.fists_clenched";
+const FAILED_FRAME_PERIOD_MS: u16 = 80;
 const IDLE_WINK_VARIANTS: [&str; 5] = [
     "wink.playful",
     "flirt.finger_heart",
@@ -271,6 +273,32 @@ impl LillyScheduledAnimation {
     }
 }
 
+/// A failure gesture joins the ordinary clip sequencer near the middle of its
+/// VFX burst. It never interrupts a clip or outlives the notification that
+/// requested it.
+#[derive(Copy, Clone)]
+struct LillyFailedReaction {
+    ready_ms: u64,
+    expires_ms: u64,
+    scheduled: LillyScheduledAnimation,
+}
+
+impl LillyFailedReaction {
+    fn new(started_ms: u64, duration_ms: u64, scheduled: LillyScheduledAnimation) -> Self {
+        Self {
+            ready_ms: started_ms
+                .saturating_add(duration_ms.saturating_sub(scheduled.boundary_ms) / 2),
+            expires_ms: started_ms.saturating_add(duration_ms),
+            scheduled,
+        }
+    }
+
+    fn can_finish(self, now_ms: u64) -> bool {
+        now_ms < self.expires_ms
+            && self.scheduled.boundary_ms <= self.expires_ms.saturating_sub(now_ms)
+    }
+}
+
 /// Resident idle policy. The steady state is one eyes-open frame; Tyche only
 /// chooses when an existing soft-blink clip runs and when the resident
 /// crossed/uncrossed posture changes.
@@ -493,6 +521,35 @@ static LAST_RGBA: Mutex<SpiritRgba8> = Mutex::new(SpiritRgba8::WHITE);
 static IDLE_STRATEGY: Mutex<Option<LillyIdleStrategy>> = Mutex::new(None);
 static EMOTION_SELECTOR: Mutex<Option<LillyEmotionSelector>> = Mutex::new(None);
 static LUMEN_SPEECH_PLAYING: AtomicBool = AtomicBool::new(false);
+static FAILED_REACTION: Mutex<Option<LillyFailedReaction>> = Mutex::new(None);
+
+/// Schedule one failure gesture against the VFX's already chosen envelope.
+/// A new failure replaces only an unplayed failure gesture; producer packages
+/// and an animation already owned by the renderer remain untouched.
+pub(crate) fn schedule_failed_reaction(
+    started_ms: u64,
+    duration_ms: u64,
+) -> Result<(), LillyProtocolError> {
+    let mut scheduled = resolve(FAILED_ANIMATION, SpiritRgba8::WHITE)?;
+    scheduled.animation.frame_period_ms = FAILED_FRAME_PERIOD_MS;
+    scheduled.boundary_ms = scheduled.animation.cycle_duration_ms();
+    *FAILED_REACTION.lock() = Some(LillyFailedReaction::new(started_ms, duration_ms, scheduled));
+    Ok(())
+}
+
+fn take_failed_reaction(now_ms: u64) -> Option<LillyScheduledAnimation> {
+    let mut pending = FAILED_REACTION.lock();
+    let reaction = (*pending)?;
+    if !reaction.can_finish(now_ms) {
+        *pending = None;
+        return None;
+    }
+    if now_ms < reaction.ready_ms {
+        return None;
+    }
+    *pending = None;
+    Some(reaction.scheduled)
+}
 
 /// Mixer-owned speech state. `true` is published only when Lumen PCM is about
 /// to enter the live audio buffer; `false` follows its final drained sample.
@@ -730,11 +787,23 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             return resolve(LUMEN_TALK_ANIMATION, *LAST_RGBA.lock());
         }
 
+        if let Some(scheduled) = take_failed_reaction(Instant::now().as_millis()) {
+            pause_idle_strategy();
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: failure reaction clip={} frame_period_ms={} duration_ms={} playback=ordinary-clip\n",
+                scheduled.animation.key,
+                scheduled.animation.frame_period_ms,
+                scheduled.boundary_ms,
+            );
+            return Ok(scheduled);
+        }
+
         let Some((package, ring_remaining)) = PACKAGE_RING.lock().pop() else {
             return next_idle_animation(*LAST_RGBA.lock());
         };
         log_drained_package(&package, ring_remaining);
-        
+
         let Some(gesture) = package.gesture else {
             // Text has reached the response presenter. Keep draining so a
             // later gesture in the same reader turn can flow normally.
@@ -863,5 +932,9 @@ const fn idle_transition_key(target_crossed: bool) -> &'static str {
 }
 
 const fn idle_posture_name(crossed: bool) -> &'static str {
-    if crossed { "crossed" } else { "uncrossed" }
+    if crossed {
+        "crossed"
+    } else {
+        "uncrossed"
+    }
 }

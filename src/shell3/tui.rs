@@ -9,6 +9,7 @@ use crate::shell3::{MatrixSlotLease, MatrixTarget};
 use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
+use trueos_terminal::program_status::{ProgramStatus, ProgramStatusParser};
 use trueos_terminal::{Terminal, TerminalColor};
 mod remote;
 pub(crate) use remote::Drain as RemoteDrain;
@@ -40,6 +41,7 @@ struct Route {
     vm: Option<u8>,
     owner: Option<Owner>,
     screen: Terminal,
+    program_status: ProgramStatusParser,
     surface_generation: u64,
     suppressed_text: Option<(u32, u32, u32)>,
     stdout_pending: Vec<u8>,
@@ -47,6 +49,14 @@ struct Route {
 impl Route {
     fn active(&self) -> bool {
         self.owner.is_some() || self.native.as_ref().is_some_and(|n| n.active)
+    }
+
+    fn observe_program_status(&mut self, bytes: &[u8]) -> bool {
+        let mut failed = false;
+        self.program_status.feed(bytes, |status| {
+            failed |= status == ProgramStatus::Error;
+        });
+        failed
     }
 }
 struct Registry {
@@ -85,6 +95,29 @@ impl Registry {
 }
 static ROUTES: Mutex<Registry> = Mutex::new(Registry::new());
 static NEXT_FRONTEND: AtomicU64 = AtomicU64::new(1);
+
+/// Spirit follows live terminal owners, including SSH. Waiting and unread
+/// completions take precedence over ongoing work; idle releases the override.
+pub(crate) fn program_status() -> Option<ProgramStatus> {
+    ROUTES
+        .lock()
+        .routes
+        .iter()
+        .filter(|route| route.owner.is_some())
+        .filter_map(|route| route.program_status.current())
+        .filter(|status| program_status_priority(*status) != 0)
+        .max_by_key(|status| program_status_priority(*status))
+}
+
+fn program_status_priority(status: ProgramStatus) -> u8 {
+    match status {
+        ProgramStatus::Blocked(_) => 3,
+        ProgramStatus::Done => 2,
+        ProgramStatus::Working => 1,
+        ProgramStatus::Idle | ProgramStatus::Clear | ProgramStatus::Error => 0,
+    }
+}
+
 pub(super) fn bind_ui4_window(frontend: u64, window: crate::ui4::WindowId) {
     let mut routes = ROUTES.lock();
     if let Some(entry) = routes
@@ -265,6 +298,7 @@ fn create_route(frontend: Option<Frontend>, target: &MatrixTarget) -> Result<(),
             vm: None,
             owner: None,
             screen: Terminal::new(cols, rows),
+            program_status: ProgramStatusParser::new(),
             surface_generation: 1,
             suppressed_text: None,
             stdout_pending: Vec::new(),
@@ -300,6 +334,7 @@ pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
     {
         route.vm = None;
         route.owner = None;
+        route.program_status.reset();
         changed.push(route.frontend);
     }
     for frontend in changed {
@@ -390,6 +425,7 @@ pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
         }
         let route = &mut routes.routes[index];
         route.screen.reset();
+        route.program_status.reset();
         route.suppressed_text = None;
         route.owner = Some(owner);
         route.surface_generation = route.surface_generation.wrapping_add(1).max(1);
@@ -415,6 +451,7 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
     let frontend = route.frontend;
     let was_owned = route.owner.is_some();
     route.owner = None;
+    route.program_status.reset();
     route.suppressed_text = None;
     if was_owned {
         if let Some((_, output)) = routes
@@ -502,7 +539,7 @@ pub(crate) fn write(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize
 fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
     let run = crate::hv::vm_run_generation(vm)?;
-    let responses = {
+    let (responses, failed) = {
         let mut routes = ROUTES.lock();
         let route = routes
             .routes
@@ -518,7 +555,17 @@ fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
             .find(|entry| Some(entry.0) == frontend)
         {
             let written = output.write_at(bytes, crate::r::input_timing::now_ms());
+            // Observe only accepted bytes, preserving partial writes and the
+            // peer's original stream. SSH bypasses the local cell renderer.
+            let route = routes
+                .routes
+                .iter_mut()
+                .find(|route| route.lease == lease)?;
+            let failed = route.observe_program_status(&bytes[..written]);
             drop(routes);
+            if failed {
+                crate::spirit::spirit_vfx::play_failed_vfx();
+            }
             super::service::notify_work();
             return Some(written);
         }
@@ -527,12 +574,16 @@ fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
             .iter_mut()
             .find(|route| route.lease == lease)?;
         route.screen.feed(bytes);
+        let failed = route.observe_program_status(bytes);
         let responses = route.screen.take_responses();
         if route.screen.take_dirty() {
             routes.changed(frontend);
         }
-        responses
+        (responses, failed)
     };
+    if failed {
+        crate::spirit::spirit_vfx::play_failed_vfx();
+    }
     if !responses.is_empty() {
         crate::hv::blueprint_console_submit_stdin_for_target(vm, target, run, &responses);
     }
@@ -981,6 +1032,7 @@ pub(super) fn detach(frontend: u64) {
             route.frontend = None;
             route.selected = true;
             route.owner = None;
+            route.program_status.reset();
         }
     }
     for (lease, _, _) in native {

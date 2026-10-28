@@ -2,6 +2,8 @@
 
 extern crate alloc;
 
+pub mod program_status;
+
 use alloc::{string::String, vec, vec::Vec};
 
 const TAB_WIDTH: usize = 8;
