@@ -2941,6 +2941,7 @@ fn prepare_blueprint_launch_on_lane(
     vm_id: u8,
     pending: BlueprintPendingLaunchState,
 ) -> Result<(), AllocString> {
+    let prepare_started_ms = lifecycle_now_ms();
     let target = pending.console_target.clone();
     let log = |args: core::fmt::Arguments<'_>| log_blueprint_launch_line(target.as_ref(), args);
     log(format_args!("apps: vm{} preparing {} on AP lane", vm_id, pending.archive.as_str()));
@@ -2951,6 +2952,7 @@ fn prepare_blueprint_launch_on_lane(
     let replicatable_tagged = module.is_replicatable();
     let unpacked_bytes = crate::hv::blueprint::unpack_blueprint(&module)
         .map_err(|err| alloc::format!("app-vm unpack failed: {}", err))?;
+    let unpacked_at_ms = lifecycle_now_ms();
 
     if !unpacked_bytes.starts_with(b"\x7fELF")
         || !matches!(crate::hv::blueprint::elf_type_name(unpacked_bytes.as_slice()), Some("REL"))
@@ -2979,6 +2981,7 @@ fn prepare_blueprint_launch_on_lane(
     let console_surface = pending.console_surface;
     log(format_args!("apps: console surface {:?}", console_surface));
     log_blueprint_memory_profile_info(profile);
+    let inspected_at_ms = lifecycle_now_ms();
 
     // Reserve the guest's large contiguous arenas before decoding and copying
     // embedded assets into the host filesystem. Toolchain Blueprints carry
@@ -2994,6 +2997,7 @@ fn prepare_blueprint_launch_on_lane(
     if memory::prepare_guest_stack_mb_for_vm(vm_id, profile.stack_recommended_mib).is_err() {
         return Err(AllocString::from("app-vm stack profile allocation failed"));
     }
+    let arenas_at_ms = lifecycle_now_ms();
 
     let identity = if let Some(identity) = pending.restored_identity.clone() {
         let Some(slot) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) else {
@@ -3035,6 +3039,7 @@ fn prepare_blueprint_launch_on_lane(
             stats.entries, stats.bytes
         ));
     }
+    let assets_at_ms = lifecycle_now_ms();
     if crate::hv::blueprint::uses_volatile_codex_files(pending.archive.as_str()) {
         log(format_args!(
             "apps: vm{} preparing boot-local Codex files from {}",
@@ -3043,6 +3048,7 @@ fn prepare_blueprint_launch_on_lane(
         crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str())
             .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
     }
+    let files_at_ms = lifecycle_now_ms();
     drop(host_alloc_guard);
 
     if !memory::arm_guest_rel_exec_for_vm(vm_id) {
@@ -3068,11 +3074,19 @@ fn prepare_blueprint_launch_on_lane(
         return Err(alloc::format!("app-vm stage failed: {:?}", err));
     }
     set_blueprint_lifecycle_capability(vm_id, lifecycle_archive.as_str(), replicatable);
+    let prepared_at_ms = lifecycle_now_ms();
 
     crate::log!(
-        "app-vm-run-queue: AP prep ok vm={} stack_mib={}\n",
+        "app-vm-run-queue: AP prep ok vm={} stack_mib={} total_ms={} unpack_ms={} inspect_ms={} arenas_ms={} assets_ms={} files_ms={} stage_ms={}\n",
         vm_id,
-        profile.stack_recommended_mib
+        profile.stack_recommended_mib,
+        prepared_at_ms.saturating_sub(prepare_started_ms),
+        unpacked_at_ms.saturating_sub(prepare_started_ms),
+        inspected_at_ms.saturating_sub(unpacked_at_ms),
+        arenas_at_ms.saturating_sub(inspected_at_ms),
+        assets_at_ms.saturating_sub(arenas_at_ms),
+        files_at_ms.saturating_sub(assets_at_ms),
+        prepared_at_ms.saturating_sub(files_at_ms),
     );
     Ok(())
 }
@@ -3095,6 +3109,23 @@ pub fn stage_blueprint_launch(
     let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
+    // Inspect immutable launch bytes before acquiring terminal/lifecycle locks.
+    let app_fs_root = state.app_fs_root.clone();
+    let mut app_command_passthrough = state
+        .app_args
+        .iter()
+        .any(|arg| arg == BLUEPRINT_VMX_MINISHELL_ARG);
+    let mut trueosfs_scope = false;
+    if let Ok(module) = crate::hv::blueprint::parse_blueprint(state.module_bytes.as_slice()) {
+        trueosfs_scope = module.has_trueosfs_scope();
+        // Preparation already decoded and validated this image. Reuse it here
+        // instead of allocating and decompressing another complete copy.
+        if let Ok(imports) = crate::hv::blueprint::elf_imports(state.unpacked_bytes.as_slice()) {
+            app_command_passthrough |= imports
+                .iter()
+                .any(|import| import.name == "trueos_cabi_shell_attached_read_byte");
+        }
+    }
     let target = {
         let vm = vm_slot(vm_id).ok_or(StartError::UnsupportedVmId)?;
         let _control = vm.lifecycle_control.lock();
@@ -3108,22 +3139,6 @@ pub fn stage_blueprint_launch(
     let Some(launch_script_slot) = BLUEPRINT_VMX_LAUNCH_SCRIPTS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
-    let app_fs_root = state.app_fs_root.clone();
-    let mut app_command_passthrough = state
-        .app_args
-        .iter()
-        .any(|arg| arg == BLUEPRINT_VMX_MINISHELL_ARG);
-    let mut trueosfs_scope = false;
-    if let Ok(module) = crate::hv::blueprint::parse_blueprint(state.module_bytes.as_slice()) {
-        trueosfs_scope = module.has_trueosfs_scope();
-        if let Ok(unpacked) = crate::hv::blueprint::unpack_blueprint(&module)
-            && let Ok(imports) = crate::hv::blueprint::elf_imports(unpacked.as_slice())
-        {
-            app_command_passthrough |= imports
-                .iter()
-                .any(|import| import.name == "trueos_cabi_shell_attached_read_byte");
-        }
-    }
     let local_terminal_handoff =
         blueprint_uses_local_terminal_handoff(console_surface, console_target.as_ref());
     if console_surface.is_terminal() && !local_terminal_handoff {

@@ -12,6 +12,7 @@ use heapless::Vec;
 use v::spirit_agents::{AgentEntry, AgentLifecycle, AgentRuntime, AgentSnapshot};
 
 const CAPACITY: usize = v::spirit_agents::MAX_AGENTS;
+const SOURCE_CAPACITY: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const MARKER_SIDE: i32 = 16;
 const MARKER_GAP: i32 = 6;
 const SHUTDOWN_DWELL_MS: u64 = 1_200;
@@ -112,7 +113,7 @@ struct Source {
 }
 
 struct Thoughts {
-    sources: Vec<Source, CAPACITY>,
+    sources: Vec<Source, SOURCE_CAPACITY>,
     agents: Vec<Thought, CAPACITY>,
 }
 
@@ -125,6 +126,9 @@ impl Thoughts {
     }
 
     fn ingest(&mut self, owner: Owner, snapshot: AgentSnapshot, now_ms: u64) -> Result<(), i32> {
+        if usize::from(owner.vm) >= SOURCE_CAPACITY {
+            return Err(ERROR_INVALID);
+        }
         snapshot.validate().map_err(|error| match error {
             v::spirit_agents::SnapshotError::Invalid => ERROR_INVALID,
             v::spirit_agents::SnapshotError::Capacity => ERROR_CAPACITY,
@@ -142,18 +146,33 @@ impl Thoughts {
         {
             return Err(ERROR_INVALID);
         }
-        let previous = self.sources.iter().position(|source| source.owner == owner);
+        // Exactly one source per VM slot, independently of the global glyph
+        // budget. An empty publisher must not consume an agent's visual slot.
+        let previous = self
+            .sources
+            .iter()
+            .position(|source| source.owner.vm == owner.vm);
         if let Some(index) = previous {
             let source = self.sources[index];
-            if snapshot.epoch < source.epoch
-                || (snapshot.epoch == source.epoch && snapshot.revision < source.revision)
+            if owner.run < source.owner.run {
+                return Err(ERROR_STALE);
+            }
+            if owner != source.owner && !snapshot.complete {
+                return Err(ERROR_INVALID);
+            }
+            if owner == source.owner
+                && (snapshot.epoch < source.epoch
+                    || (snapshot.epoch == source.epoch && snapshot.revision < source.revision))
             {
                 return Err(ERROR_STALE);
             }
-            if snapshot.epoch == source.epoch && snapshot.revision == source.revision {
+            if owner == source.owner
+                && snapshot.epoch == source.epoch
+                && snapshot.revision == source.revision
+            {
                 return Ok(());
             }
-            if snapshot.epoch != source.epoch && !snapshot.complete {
+            if owner == source.owner && snapshot.epoch != source.epoch && !snapshot.complete {
                 return Err(ERROR_INVALID);
             }
         } else if self.sources.is_full() {
@@ -168,8 +187,9 @@ impl Thoughts {
             .agents
             .iter()
             .filter(|thought| {
-                thought.owner != owner
-                    || (thought.epoch == snapshot.epoch
+                thought.owner.vm != owner.vm
+                    || (thought.owner == owner
+                        && thought.epoch == snapshot.epoch
                         && !snapshot.complete
                         && !snapshot
                             .agents
@@ -182,8 +202,9 @@ impl Thoughts {
         }
 
         self.agents.retain(|thought| {
-            thought.owner != owner
-                || (thought.epoch == snapshot.epoch
+            thought.owner.vm != owner.vm
+                || (thought.owner == owner
+                    && thought.epoch == snapshot.epoch
                     && (!snapshot.complete
                         || snapshot
                             .agents
@@ -270,22 +291,26 @@ impl Thoughts {
                 slots[index] = Some(point);
             }
         }
-        let outer_ring = slots
-            .iter()
-            .flatten()
-            .filter_map(|point| geometry.resting_ring(*point))
-            .max()
-            .unwrap_or(0);
-        let track = geometry.track(outer_ring);
-        let running = self
+        let running_requested = self
             .agents
             .iter()
             .enumerate()
             .filter(|(index, thought)| {
                 slots[*index].is_some() && thought.appearance == Appearance::Running
             })
-            .count()
-            .min(track.map_or(0, Track::capacity));
+            .count();
+        let track = if running_requested == 0 {
+            None
+        } else {
+            let outer_ring = slots
+                .iter()
+                .flatten()
+                .filter_map(|point| geometry.resting_ring(*point))
+                .max()
+                .unwrap_or(0);
+            geometry.track(outer_ring)
+        };
+        let running = running_requested.min(track.map_or(0, Track::capacity));
         let mut running_slot = 0;
         let mut placements = Vec::new();
         for (index, thought) in self.agents.iter_mut().enumerate() {
@@ -642,7 +667,7 @@ mod service {
             .ingest(Owner { vm, run }, snapshot, Instant::now().as_millis())
     }
 
-    pub(crate) fn release_owner(vm: u8, run: u64) {
+    fn release_owner(vm: u8, run: u64) {
         THOUGHTS.lock().release(Owner { vm, run });
     }
 
@@ -852,7 +877,7 @@ mod service {
 }
 
 #[cfg(not(test))]
-pub(crate) use service::{ingest, release_owner, spirit_thoughts_task};
+pub(crate) use service::{ingest, spirit_thoughts_task};
 
 #[cfg(test)]
 mod tests {
@@ -1014,7 +1039,7 @@ mod tests {
             )
             .unwrap();
         let other = Owner {
-            vm: OWNER.vm,
+            vm: OWNER.vm + 1,
             run: OWNER.run + 1,
         };
         thoughts
@@ -1097,6 +1122,69 @@ mod tests {
             )
             .unwrap();
         assert_eq!(thoughts.agents.len(), 1);
+    }
+
+    #[test]
+    fn empty_live_publishers_do_not_consume_glyph_capacity() {
+        let mut thoughts = Thoughts::new();
+        for vm in 0..SOURCE_CAPACITY {
+            thoughts
+                .ingest(
+                    Owner {
+                        vm: vm as u8,
+                        run: 1,
+                    },
+                    snapshot(1, vec![]),
+                    0,
+                )
+                .unwrap();
+        }
+        assert_eq!(thoughts.sources.len(), SOURCE_CAPACITY);
+        assert!(thoughts.agents.is_empty());
+        thoughts
+            .ingest(
+                Owner { vm: 1, run: 1 },
+                snapshot(2, vec![agent("real-agent", AgentLifecycle::Running)]),
+                1,
+            )
+            .unwrap();
+        assert_eq!(thoughts.sources.len(), SOURCE_CAPACITY);
+        assert_eq!(thoughts.agents.len(), 1);
+    }
+
+    #[test]
+    fn reused_vm_admission_replaces_old_run_atomically_and_rejects_delayed_old_run() {
+        let mut thoughts = Thoughts::new();
+        let entries = (0..CAPACITY)
+            .map(|index| agent(&format!("old-{index}"), AgentLifecycle::Running))
+            .collect();
+        thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+        let next = Owner {
+            vm: OWNER.vm,
+            run: OWNER.run + 1,
+        };
+        let mut partial = snapshot(1, vec![agent("new", AgentLifecycle::Running)]);
+        partial.complete = false;
+        assert_eq!(
+            thoughts.ingest(next, partial.clone(), 1),
+            Err(ERROR_INVALID)
+        );
+        assert_eq!(thoughts.agents.len(), CAPACITY);
+        partial.complete = true;
+        thoughts.ingest(next, partial, 1).unwrap();
+        assert_eq!(thoughts.sources.len(), 1);
+        assert_eq!(thoughts.agents.len(), 1);
+        assert_eq!(thoughts.agents[0].owner, next);
+        assert_eq!(
+            thoughts.ingest(OWNER, snapshot(9, vec![]), 2),
+            Err(ERROR_STALE)
+        );
+        thoughts.release(OWNER);
+        assert_eq!(
+            thoughts.agents.len(),
+            1,
+            "late cleanup must preserve the new VM run"
+        );
     }
 
     #[test]
@@ -1347,5 +1435,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn export_model_preview_when_requested() {
+        let Ok(path) = std::env::var("TRUEOS_SPIRIT_THOUGHTS_PREVIEW") else {
+            return;
+        };
+        let mut frames = AllocVec::new();
+        for (label, x, y) in [
+            ("center", 700, 400),
+            ("top left", 0, 0),
+            ("top right", 1664, 0),
+            ("bottom left", 0, 824),
+            ("bottom right", 1664, 824),
+            ("left edge", 0, 400),
+            ("right edge", 1664, 400),
+            ("top edge", 700, 0),
+            ("bottom edge", 700, 824),
+        ] {
+            let mut thoughts = Thoughts::new();
+            let entries = (0..CAPACITY)
+                .map(|index| {
+                    let mut entry = agent(
+                        &format!("agent-{index}"),
+                        match index % 8 {
+                            0 => AgentLifecycle::Completed,
+                            1 => AgentLifecycle::Errored,
+                            2 => AgentLifecycle::Interrupted,
+                            3 => AgentLifecycle::PendingInit,
+                            _ => AgentLifecycle::Running,
+                        },
+                    );
+                    entry.waiting_input = index % 8 == 4;
+                    entry
+                })
+                .collect();
+            thoughts.ingest(OWNER, snapshot(1, entries), 0).unwrap();
+            let geometry = geometry(x, y);
+            let placements = thoughts.plan(geometry, 4_000);
+            check_layout(&placements, geometry, 4_000);
+            let markers: AllocVec<_> = placements
+                .iter()
+                .map(|placement| {
+                    let point = point_for(placement, 4_000);
+                    let path: AllocVec<_> = placement
+                        .orbit
+                        .map(|motion| {
+                            let (_, curves) = motion.curves(4_000);
+                            curves
+                                .into_iter()
+                                .flat_map(|curve| {
+                                    (0..=24).map(move |step| {
+                                        let point = curve_point(curve, step as f64 / 24.0);
+                                        [point.x, point.y]
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    serde_json::json!({ "id": placement.id, "position": [point.x, point.y],
+                    "resting": [placement.resting.x, placement.resting.y],
+                    "color": placement.color, "path": path })
+                })
+                .collect();
+            frames.push(serde_json::json!({ "label": label, "screen": [1920, 1080],
+                "lilly": [x, y, 256, 256], "marker_side": MARKER_SIDE, "markers": markers }));
+        }
+        std::fs::write(path, serde_json::to_vec_pretty(&frames).unwrap()).unwrap();
     }
 }

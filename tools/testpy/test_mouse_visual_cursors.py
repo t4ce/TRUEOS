@@ -68,6 +68,7 @@ def main() -> None:
     broker_path = "src/ui4/input_broker.rs"
     broker = (ROOT / broker_path).read_text()
     routing = item(broker_path, "visual_only_cursor")
+    routing += item(broker_path, "normalized_visual_cursor_pixel")
     routing += "impl InputBroker {\n"
     routing += block(broker, "fn keyboard_route_index(") + "\n"
     routing += block(broker, "fn select_frame(") + "\n}\n"

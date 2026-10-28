@@ -49,20 +49,26 @@ pub(crate) fn publish_agent_snapshot_bytes(owner: u8, bytes: &[u8]) -> i32 {
         return -1;
     };
     let state = crate::hv::vm_state(owner);
-    if !state.supported || !state.running || state.stop_requested
+    if !state.supported
+        || !state.running
+        || state.stop_requested
         || crate::hv::blueprint_instance_identity(owner).is_none()
     {
         return -1;
     }
-    let snapshot = match v::spirit_agents::decode(bytes) {
-        Ok(snapshot) => snapshot,
-        Err(v::spirit_agents::SnapshotError::Invalid) => return -3,
-        Err(v::spirit_agents::SnapshotError::Capacity) => return -4,
-    };
-    if crate::hv::vm_run_generation(owner) != Some(run) {
-        return -1;
-    }
-    spirit_thoughts::ingest(owner, run, snapshot).map_or_else(|error| error, |()| 0)
+    // Both Hull dispatch and direct native threads reach this receiver. The
+    // retained strings belong to Spirit, so they must survive caller teardown.
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let snapshot = match v::spirit_agents::decode(bytes) {
+            Ok(snapshot) => snapshot,
+            Err(v::spirit_agents::SnapshotError::Invalid) => return -3,
+            Err(v::spirit_agents::SnapshotError::Capacity) => return -4,
+        };
+        if crate::hv::vm_run_generation(owner) != Some(run) {
+            return -1;
+        }
+        spirit_thoughts::ingest(owner, run, snapshot).map_or_else(|error| error, |()| 0)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -76,9 +82,17 @@ pub unsafe extern "C" fn trueos_cabi_spirit_agents_publish_v1(ptr: *const u8, le
     let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_SPIRIT_AGENTS_PUBLISH_V1, 0, 0, bytes, &mut [],
+            trueos_vm::vmcall::OP_BP_SPIRIT_AGENTS_PUBLISH_V1,
+            0,
+            0,
+            bytes,
+            &mut [],
         );
-        return if status == trueos_vm::vmcall::STATUS_OK { data as i64 as i32 } else { -7 };
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            -7
+        };
     }
     crate::hv::current_guest_execution_context_vm_id()
         .map(|owner| publish_agent_snapshot_bytes(owner, bytes))

@@ -2,8 +2,8 @@
 use alloc::{collections::VecDeque, vec::Vec};
 
 const LIMIT: usize = super::super::tty::OUTPUT_LIMIT;
-// Re-establish Shell3's alternate screen even if the app exited without its guard.
-const RESET: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?7h\x1b[0m\x1b[r\x1b[?25h\x1b[?1049h\x1b[2J\x1b[H";
+// Release any abandoned synchronized frame before restoring Shell3's alternate screen.
+const RESET: &[u8] = b"\x1b[?2026l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?7h\x1b[0m\x1b[r\x1b[?25h\x1b[?1049h\x1b[2J\x1b[H";
 
 pub(super) struct Output {
     bytes: VecDeque<u8>,
@@ -111,6 +111,25 @@ mod tests {
         let mut all = first.bytes; all.extend(final_part.bytes);
         assert_eq!(all, [RESET, b"last app frame", RESET].concat());
         assert!(!output.take(LIMIT, false).repaint);
+    }
+
+    #[test]
+    fn release_closes_an_abandoned_synchronized_frame_before_shell_repaint() {
+        let mut output = Output::new();
+        assert!(output.begin());
+        output.take(LIMIT, true);
+        output.write(b"\x1b[?2026hpartial app frame");
+        output.end();
+
+        let drain = output.take(LIMIT, false);
+        let bytes = core::str::from_utf8(&drain.bytes).unwrap();
+        let frame_start = bytes.find("\x1b[?2026h").unwrap();
+        let frame_end = bytes
+            .rfind("\x1b[?2026l")
+            .expect("release synchronized output");
+        let shell_screen = bytes.rfind("\x1b[?1049h").unwrap();
+        assert!(frame_start < frame_end && frame_end < shell_screen);
+        assert!(drain.repaint && !drain.pending);
     }
 
     #[test]

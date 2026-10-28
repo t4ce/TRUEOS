@@ -14,7 +14,6 @@ fn progress_now_ms() -> u64 {
     crate::r::input_timing::now_ms()
 }
 use spin::Mutex;
-use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const ASYNC_FS_MAX_OPERATIONS: usize = 64;
 const ASYNC_FS_MAX_RESULT_BYTES: u64 = 16 * 1024 * 1024;
@@ -23,7 +22,6 @@ const ASYNC_FS_MAX_RESULT_BYTES: u64 = 16 * 1024 * 1024;
 // listings and virtual results retain the smaller result cap above.
 const ASYNC_FS_MAX_FILE_READ_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const ASYNC_FS_MAX_FILE_WRITE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-const ASYNC_FS_IDLE_MS: u64 = 1;
 const DIR_LIST_MAGIC: [u8; 4] = *b"TDL1";
 const DIR_LIST_HEADER_BYTES: usize = 12;
 /// Reserved async-FS identifier for a host-provided, one-shot VMX minishell
@@ -222,6 +220,7 @@ struct Operation {
 
 static ASYNC_FS_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 static ASYNC_FS_REQUESTS: Mutex<VecDeque<Request>> = Mutex::new(VecDeque::new());
+static ASYNC_FS_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 // Discarding a result does not cancel an already-running filesystem future.
 // Keep its owner visible until that future reaches its commit/abort boundary.
 static ASYNC_FS_ACTIVE_REQUEST: Mutex<Option<(u32, u32)>> = Mutex::new(None);
@@ -278,6 +277,24 @@ fn take_request() -> Option<Request> {
     assert!(active.is_none(), "async filesystem service already processing a request");
     *active = Some((request.owner, request.id));
     Some(request)
+}
+
+async fn next_request() -> Request {
+    loop {
+        // Snapshot before checking for work: an arrival before registration
+        // changes the generation and cannot strand a queued request.
+        let observed = ASYNC_FS_WAIT.observe();
+        if let Some(request) = take_request() {
+            return request;
+        }
+        ASYNC_FS_WAIT.wait_after(observed).await;
+    }
+}
+
+fn notify_request_arrival() {
+    ASYNC_FS_WAIT.notify_one();
+    // The filesystem service and its non-Send block futures belong to BSP.
+    crate::remote_work_wake::wake_cpu_for_remote_work(0);
 }
 
 fn begin_request(request: &Request) -> bool {
@@ -453,6 +470,8 @@ fn start_inner(owner: u32, kind: RequestKind) -> i32 {
         return FS_ERR_NO_SPACE;
     }
     requests.push_back(Request { id, owner, kind });
+    drop(requests);
+    notify_request_arrival();
     id as i32
 }
 
@@ -689,6 +708,8 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
         return FS_ERR_NO_SPACE;
     }
     crate::allocators::with_host_alloc_domain_strong(|| requests.push_back(request));
+    drop(requests);
+    notify_request_arrival();
     0
 }
 
@@ -1314,11 +1335,7 @@ async fn process(request: &Request) -> OperationState {
 #[trueos_executor::task]
 pub async fn service_task() {
     loop {
-        let request = take_request();
-        let Some(request) = request else {
-            Timer::after(EmbassyDuration::from_millis(ASYNC_FS_IDLE_MS)).await;
-            continue;
-        };
+        let request = next_request().await;
 
         if !begin_request(&request) {
             finish_request(&request, None);

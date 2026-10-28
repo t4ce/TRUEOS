@@ -554,13 +554,20 @@ impl InputBroker {
         let Some((width, height)) = crate::ui4::output_dimensions() else {
             return;
         };
-        let raw_x = normalized_to_pixel(event.x, width);
-        let raw_y = normalized_to_pixel(event.y, height);
         let source = Ui4CursorSource::from_event(event);
+        let visual_only = event.flags
+            & crate::r::services::mouse_motion_service::MOUSE_CONTROL_EVENT_FLAG_VISUAL_ONLY != 0
+            || visual_only_cursor(source);
+        let (raw_x, raw_y) = if visual_only {
+            (
+                normalized_visual_cursor_pixel(event.x, width),
+                normalized_visual_cursor_pixel(event.y, height),
+            )
+        } else {
+            (normalized_to_pixel(event.x, width), normalized_to_pixel(event.y, height))
+        };
         let index = self.cursor_index(source, raw_x, raw_y);
-        if event.flags & crate::r::services::mouse_motion_service::MOUSE_CONTROL_EVENT_FLAG_VISUAL_ONLY != 0
-            || visual_only_cursor(source)
-        {
+        if visual_only {
             // These reports use the same mediated HID motion station but own
             // presentation only. Do not hit-test, hover, select, capture or
             // let a keyboard choose this route as its most-recent fallback.
@@ -2533,6 +2540,16 @@ fn normalized_to_pixel(value: f64, extent: u32) -> u32 {
     (value.clamp(0.0, 1.0) * f64::from(last_pixel)) as u32
 }
 
+/// Station-owned visuals originate at integer pixels before HID normalization.
+/// Recover those pixels exactly: truncation can turn `8 / 1919 * 1919` into 7
+/// and consume the glyph's promised screen-edge clearance.
+fn normalized_visual_cursor_pixel(value: f64, extent: u32) -> u32 {
+    if extent == 0 {
+        return 0;
+    }
+    (value.clamp(0.0, 1.0) * f64::from(extent - 1) + 0.5) as u32
+}
+
 fn signed_delta(next: u32, previous: u32) -> i32 {
     i64::from(next)
         .saturating_sub(i64::from(previous))
@@ -3222,6 +3239,32 @@ fn visual_only_cursor(source: Ui4CursorSource) -> bool {
 #[cfg(test)]
 mod visual_only_cursor_tests {
     use super::*;
+
+    #[test]
+    fn normalized_visual_positions_preserve_every_screen_pixel() {
+        for extent in [1_u32, 320, 768, 1080, 1440, 1920, 2560] {
+            for pixel in 0..extent {
+                let normalized = f64::from(pixel) / f64::from(extent.saturating_sub(1).max(1));
+                assert_eq!(normalized_visual_cursor_pixel(normalized, extent), pixel,
+                    "station pixel={pixel} extent={extent}");
+            }
+        }
+        assert_eq!(normalized_visual_cursor_pixel(1.0, 0), 0);
+        assert_eq!(normalized_visual_cursor_pixel(-1.0, 1920), 0);
+        assert_eq!(normalized_visual_cursor_pixel(2.0, 1920), 1919);
+    }
+
+    #[test]
+    fn portrait_and_landscape_glyph_margins_survive_hid_normalization() {
+        for (width, height) in [(1920_u32, 1080_u32), (2560, 1440), (1080, 1920)] {
+            for extent in [width, height] {
+                for center in [8, extent - 8, extent - 1] {
+                    let normalized = f64::from(center) / f64::from(extent - 1);
+                    assert_eq!(normalized_visual_cursor_pixel(normalized, extent), center);
+                }
+            }
+        }
+    }
 
     #[test]
     fn visual_only_route_cannot_be_keyboard_fallback_or_select_a_frame() {

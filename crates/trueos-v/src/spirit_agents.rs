@@ -91,7 +91,7 @@ impl AgentSnapshot {
                 || agent
                     .parent_id
                     .as_deref()
-                    .is_some_and(|parent| !valid_id(parent) || parent == agent.id)
+                    .is_none_or(|parent| !valid_id(parent) || parent == agent.id)
                 || self.agents[..index]
                     .iter()
                     .any(|previous| previous.id == agent.id)
@@ -187,6 +187,9 @@ mod tests {
         value = snapshot();
         value.agents[0].name = Some("a".repeat(MAX_LABEL_BYTES + 1));
         assert_eq!(value.validate(), Err(SnapshotError::Capacity));
+        value = snapshot();
+        value.agents[0].parent_id = None;
+        assert_eq!(value.validate(), Err(SnapshotError::Invalid));
         value = snapshot();
         value.agents[0].parent_id = Some(value.agents[0].id.to_string());
         assert_eq!(value.validate(), Err(SnapshotError::Invalid));

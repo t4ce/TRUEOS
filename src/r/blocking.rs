@@ -349,9 +349,12 @@ async fn service_lane_executor_task(slot: u32, core_kind: u8) {
     );
 
     loop {
+        // Observe before checking the queue so publication between the check
+        // and waiter registration cannot defer accepted work to the timer.
+        let observed = service_lane_wait(slot).observe();
         if service_lane_queue_depth(slot) == 0 {
             service_lane_wait(slot)
-                .wait_for_event_timeout(SERVICE_LANE_IDLE_POLL_MS)
+                .wait_after_timeout(observed, SERVICE_LANE_IDLE_POLL_MS)
                 .await;
             continue;
         }
