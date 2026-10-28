@@ -12,6 +12,7 @@ pub(crate) async fn codex_progress_task() {
     let mut previous_ms = [now_ms(); crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
     let mut carrier_cursor = 0;
     let mut timing_cursor = 0;
+    let mut idle_timing_sweep = diagnostics::TimingSweep::new();
     let mut job_cursor = 0;
     let mut allocator_cursor = 0;
     let mut had_active = false;
@@ -22,11 +23,20 @@ pub(crate) async fn codex_progress_task() {
         let carriers = diagnostics::progress_carriers();
         let active = carriers.active.iter().filter(|active| **active).count();
         let retirements = diagnostics::timing_retirements();
-        // One final sample retains completed startup work; otherwise remain
-        // quiet when no Codex jobs are alive. A busy roster is useful evidence.
-        if active == 0 && !had_active && carriers.busy_rosters == 0 && retirements == previous_retirements { continue; }
-        had_active = active != 0;
+        // Drain every aggregate bucket after retirement, even when more than
+        // four short-lived jobs finish before the observer's first sample.
+        if retirements != previous_retirements || (active == 0 && had_active) {
+            idle_timing_sweep.restart();
+        }
         previous_retirements = retirements;
+        let timing_lines = if active == 0 {
+            idle_timing_sweep.lines(&mut timing_cursor, LINES_PER_CATEGORY)
+        } else {
+            diagnostics::timing_lines(&mut timing_cursor, LINES_PER_CATEGORY)
+        };
+        // An exhausted/empty sweep is silent; a busy roster remains evidence.
+        if active == 0 && !had_active && carriers.busy_rosters == 0 && timing_lines.is_empty() { continue; }
+        had_active = active != 0;
         sample = sample.saturating_add(1);
         let now = now_ms();
         crate::log_info!(target: "blueprint";
@@ -50,7 +60,7 @@ pub(crate) async fn codex_progress_task() {
             previous[slot] = counters;
             previous_ms[slot] = now;
         }
-        for line in diagnostics::timing_lines(&mut timing_cursor, LINES_PER_CATEGORY) {
+        for line in timing_lines {
             crate::log_info!(target: "blueprint"; "{}\n", line);
         }
         for line in diagnostics::sample_progress_lines(&mut job_cursor, LINES_PER_CATEGORY) {

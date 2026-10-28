@@ -1,5 +1,8 @@
 //! Generation-scoped launch policy and Hull spawn scopes. Native spawn scopes
 //! live in each pinned Thread instead; parallel callers never share a hint.
+//! Each VM currently has one initial Hull execution context. Concurrent Hull
+//! vthreads would need authenticated per-vthread scope keys; serializing a
+//! communication page alone would not serialize an entire spawn scope.
 use crate::workers::application_policy::{ThreadPlacement, ThreadRole};
 
 #[derive(Clone, Copy)]

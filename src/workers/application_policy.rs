@@ -8,6 +8,7 @@ pub(crate) fn is_codex_archive(archive: &str) -> bool {
     matches!(
         archive.rsplit('/').next().unwrap_or(archive),
         "codex" | "codex.bp" | "codex-check" | "codex-check.bp"
+            | "codex-runtime-probe" | "codex-runtime-probe.bp"
     )
 }
 
@@ -91,6 +92,7 @@ mod tests {
         assert_eq!(reserved_slot(100, 64), None);
         assert!(is_codex_archive("/apps/codex.bp"));
         assert!(!is_codex_archive("codex-other.bp"));
+        assert!(is_codex_archive("codex-runtime-probe.bp"));
     }
 
     #[test]

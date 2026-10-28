@@ -327,10 +327,6 @@ pub(crate) fn codex_application_slot() -> Option<u32> {
     last_ap_service_slot()
 }
 
-pub(crate) fn codex_application_spawner() -> Option<WorkerSpawner> {
-    spawner_for_slot(codex_application_slot()?)
-}
-
 pub fn background_slot_range() -> core::ops::Range<u32> {
     FIRST_BACKGROUND_SLOT..WORKER_SLOT_LIMIT as u32
 }

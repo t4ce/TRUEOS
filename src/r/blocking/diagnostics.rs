@@ -225,24 +225,41 @@ pub(crate) fn progress_carriers() -> CarrierSnapshot {
 /// At most `limit` role/carrier aggregate lines; rotate through populated
 /// buckets so completed startup jobs remain observable with a fixed log cost.
 pub(crate) fn timing_lines(cursor: &mut usize, limit: usize) -> Vec<String> {
-    let capacity = TIMING_TOTALS.len() * thread_metrics::ROLE_COUNT;
-    let mut out = Vec::new();
-    let start = *cursor % capacity;
-    for offset in 0..capacity {
-        if out.len() >= limit { break; }
-        let index = (start + offset) % capacity;
-        let carrier = index / thread_metrics::ROLE_COUNT;
-        let role = index % thread_metrics::ROLE_COUNT;
-        let counters = &TIMING_TOTALS[carrier][role];
-        let admission = counters.metric(thread_metrics::ADMISSION);
-        if admission.count == 0 && counters.retired() == 0 { continue; }
-        out.push(timing_line("codex-progress-timing scope=since-boot", carrier, role, counters));
-        *cursor = (index + 1) % capacity;
-    }
-    out
+    let mut sweep = TimingSweep::new();
+    sweep.restart();
+    sweep.lines(cursor, limit)
 }
 
-pub(crate) fn timing_retirements() -> u64 { TIMING_RETIREMENTS.load(Ordering::Relaxed) }
+/// A finite pass over all aggregate buckets. Once idle, continue the pass over
+/// subsequent bounded samples instead of exporting only its first four rows.
+pub(crate) struct TimingSweep { remaining: usize }
+
+impl TimingSweep {
+    pub(crate) const fn new() -> Self { Self { remaining: 0 } }
+
+    pub(crate) fn restart(&mut self) {
+        self.remaining = TIMING_TOTALS.len() * thread_metrics::ROLE_COUNT;
+    }
+
+    pub(crate) fn lines(&mut self, cursor: &mut usize, limit: usize) -> Vec<String> {
+        let capacity = TIMING_TOTALS.len() * thread_metrics::ROLE_COUNT;
+        let mut out = Vec::new();
+        while self.remaining != 0 && out.len() < limit {
+            let index = *cursor % capacity;
+            *cursor = (index + 1) % capacity;
+            self.remaining -= 1;
+            let carrier = index / thread_metrics::ROLE_COUNT;
+            let role = index % thread_metrics::ROLE_COUNT;
+            let counters = &TIMING_TOTALS[carrier][role];
+            let admission = counters.metric(thread_metrics::ADMISSION);
+            if admission.count == 0 && counters.retired() == 0 { continue; }
+            out.push(timing_line("codex-progress-timing scope=since-boot", carrier, role, counters));
+        }
+        out
+    }
+}
+
+pub(crate) fn timing_retirements() -> u64 { TIMING_RETIREMENTS.load(Ordering::Acquire) }
 
 fn timing_line(prefix: &str, carrier: usize, role: usize, counters: &thread_metrics::Counters) -> String {
     let admission = counters.metric(thread_metrics::ADMISSION);
@@ -372,7 +389,9 @@ impl Drop for JobDiagnostic {
                 .and_then(|roles| roles.get(self.record.role.load(Ordering::Relaxed))) {
                 total.retire();
             }
-            TIMING_RETIREMENTS.fetch_add(1, Ordering::Relaxed);
+            // Publish the retired bucket before the observer begins its
+            // finite idle sweep, including on weakly ordered carriers.
+            TIMING_RETIREMENTS.fetch_add(1, Ordering::Release);
         }
         crate::allocators::with_host_alloc_domain_strong(|| {
             RECORDS[self.vm_id as usize].lock().retain(|record| record.id != self.record.id);
@@ -419,6 +438,40 @@ pub(crate) fn report(vm_id: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_timing_sweep_exports_more_than_one_sample_then_stops() {
+        for carrier in 52..58 {
+            let job = JobDiagnostic::new(7, 301);
+            job.identify("std-thread", 1000 + carrier, carrier);
+            job.role(3);
+            job.enable_progress_probe();
+            job.timing_probe().polled(1, true);
+            drop(job);
+        }
+        let mut sweep = TimingSweep::new();
+        let mut cursor = 52 * thread_metrics::ROLE_COUNT + 3;
+        assert!(sweep.lines(&mut cursor, 4).is_empty());
+        sweep.restart();
+        assert!(sweep.lines(&mut cursor, 0).is_empty());
+        let mut rows = Vec::new();
+        let mut samples = 0;
+        while sweep.remaining != 0 {
+            let sample = sweep.lines(&mut cursor, 4);
+            assert!(sample.len() <= 4);
+            rows.extend(sample);
+            samples += 1;
+            assert!(samples <= TIMING_TOTALS.len() * thread_metrics::ROLE_COUNT / 4 + 1);
+        }
+        assert!(samples >= 2);
+        for carrier in 52..58 {
+            let marker = alloc::format!("carrier={} role=dedicated-blocking", carrier);
+            assert_eq!(rows.iter().filter(|row| row.contains(&marker)).count(), 1);
+        }
+        for _ in 0..3 { assert!(sweep.lines(&mut cursor, 4).is_empty()); }
+        sweep.restart();
+        assert!(!sweep.lines(&mut cursor, 4).is_empty());
+    }
 
     #[test]
     fn per_generation_metrics_are_fresh_and_retired_work_remains_in_carrier_totals() {

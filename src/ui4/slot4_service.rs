@@ -554,9 +554,7 @@ fn push_software_cursor_visual(
     );
 }
 
-/// A station-owned glyph is another software-cursor shape on slot 4. Reuse
-/// the existing overlay rectangle stream with a centered hotspot; no window,
-/// application renderer, image upload or per-motion rasterization is involved.
+#[cfg(test)]
 fn push_cursor_glyph(
     rects: &mut Slot4Rects,
     cursor_x: u32,
@@ -569,6 +567,9 @@ fn push_cursor_glyph(
     push_cursor_text(rects, cursor_x, cursor_y, glyph, color, color, screen_w, screen_h);
 }
 
+/// Station-owned text is another software-cursor shape on slot 4. Reuse the
+/// overlay rectangle stream with a centered hotspot; no application renderer,
+/// image upload or per-motion rasterization is involved.
 fn push_cursor_text(
     rects: &mut Slot4Rects,
     cursor_x: u32,

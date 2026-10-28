@@ -853,25 +853,6 @@ fn cursor_event_flags(cursor: &CursorRecord, flags: u32) -> u32 {
         }
 }
 
-fn prepare_cursor_glyph(
-    character: char,
-    height: u16,
-) -> Result<MouseControlGlyph, MouseControlError> {
-    if !(1..=MAX_GLYPH_HEIGHT).contains(&height)
-        || character.is_control()
-        || character.is_whitespace()
-    {
-        return Err(MouseControlError::Invalid);
-    }
-    let atlas = super::microfont_mask_service::ready_atlas()
-        .ok_or(MouseControlError::Unavailable)?;
-    atlas.glyph(character).ok_or(MouseControlError::Invalid)?;
-    let mut buffer = [0; 4];
-    let text = character.encode_utf8(&mut buffer);
-    let (width, _) = cursor_text_dimensions(text, height)?;
-    prepare_cursor_text(text, height, width)
-}
-
 fn prepare_cursor_text(
     text: &str,
     height: u16,
@@ -1203,9 +1184,13 @@ mod visual_cursor_tests {
 
     #[test]
     fn glyph_registration_requires_the_shared_font_and_rejects_invalid_geometry() {
+        let request = |character, height| request_glyph_cursor(
+            THOUGHT_CURSOR_PRINCIPAL, "glyph-test", character, height,
+            Rgba8::new(0, 0, 0, 255),
+        );
         if super::super::microfont_mask_service::ready_atlas().is_none() {
             assert_eq!(
-                prepare_cursor_glyph('§', 48),
+                request('§', 48),
                 Err(MouseControlError::Unavailable)
             );
         }
@@ -1215,7 +1200,7 @@ mod visual_cursor_tests {
             ('§', 0),
             ('§', MAX_GLYPH_HEIGHT + 1),
         ] {
-            assert_eq!(prepare_cursor_glyph(character, height), Err(MouseControlError::Invalid));
+            assert_eq!(request(character, height), Err(MouseControlError::Invalid));
         }
     }
 

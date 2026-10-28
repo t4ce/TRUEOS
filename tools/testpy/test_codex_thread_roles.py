@@ -29,6 +29,10 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
 static MODE: AtomicU32 = AtomicU32::new(u32::MAX);
 static CAP: AtomicU32 = AtomicU32::new(0);
+fn find_codex_home() -> std::io::Result<std::path::PathBuf> {
+    std::env::var_os("HARNESS_CODEX_HOME").map(std::path::PathBuf::from)
+        .ok_or_else(|| std::io::Error::other("missing harness profile home"))
+}
 std::thread_local! {
     static ROLE: Cell<u32> = const { Cell::new(0) };
     static ACTIVITY: Cell<u32> = const { Cell::new(0) };
@@ -117,6 +121,9 @@ def main() -> None:
         env = dict(os.environ)
         for key in ["CODEX_TRUEOS_THREAD_PLACEMENT", "CODEX_TRUEOS_BACKGROUND_CARRIERS", "HARNESS_CONFIGURE_ERRNO"]:
             env.pop(key, None)
+        home = directory / "home"
+        home.mkdir()
+        env["HARNESS_CODEX_HOME"] = str(home)
         cases = [
             ({}, ["0", "2"]),
             ({"CODEX_TRUEOS_THREAD_PLACEMENT": "isolated", "CODEX_TRUEOS_BACKGROUND_CARRIERS": "1"}, ["1", "1"]),
@@ -130,7 +137,18 @@ def main() -> None:
         ]
         for settings, arguments in cases:
             subprocess.run([str(executable), *arguments], env=env | settings, check=True)
-        print(f"TRUEOS role/activity FFI: {len(cases)} cases passed")
+        profile_cases = [
+            (b"isolated 2\n", {}, ["1", "2"]),
+            (b"spread 1", {}, ["2", "1"]),
+            (b"single", {"HARNESS_CONFIGURE_ERRNO": "95"}, ["error", "configuration failed"]),
+            (b"invalid profile content", {}, ["error", "trueos-threads.conf"]),
+            (b"invalid profile content", {"CODEX_TRUEOS_THREAD_PLACEMENT": "spread"}, ["2", "2"]),
+            (b"isolated 3", {"CODEX_TRUEOS_BACKGROUND_CARRIERS": "4"}, ["0", "4"]),
+        ]
+        for contents, settings, arguments in profile_cases:
+            (home / "trueos-threads.conf").write_bytes(contents)
+            subprocess.run([str(executable), *arguments], env=env | settings, check=True)
+        print(f"TRUEOS role/activity FFI: {len(cases) + len(profile_cases)} cases passed")
 
 
 if __name__ == "__main__":
