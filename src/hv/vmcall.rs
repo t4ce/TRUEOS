@@ -1145,7 +1145,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let cap = (arg0 as usize).min(PAYLOAD_CAP);
             let rc = unsafe {
-                crate::spirit::dobby_ui::windows(vm_id, &mut (&mut (*page).payload)[..cap])
+                crate::spirit::ui4_interaction::windows(vm_id, &mut (&mut (*page).payload)[..cap])
             };
             let response_len = usize::try_from(rc)
                 .ok()
@@ -1155,12 +1155,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_DOBBY_UI4_FOCUS => {
-            let rc = crate::spirit::dobby_ui::focus(vm_id, arg0);
+            let rc = crate::spirit::ui4_interaction::focus(vm_id, arg0);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_DOBBY_UI4_OBSERVE_PREPARE => {
-            let rc = crate::spirit::dobby_ui::observe_prepare(vm_id);
+            let rc = crate::spirit::ui4_interaction::observe_prepare(vm_id);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -1171,7 +1171,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let cap = (arg0 as usize).min(PAYLOAD_CAP);
             let rc = unsafe {
-                crate::spirit::dobby_ui::observe_metadata(vm_id, &mut (&mut (*page).payload)[..cap])
+                crate::spirit::ui4_interaction::observe_metadata(vm_id, &mut (&mut (*page).payload)[..cap])
             };
             let response_len = usize::try_from(rc)
                 .ok()
@@ -1187,7 +1187,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let cap = (arg1 as usize).min(PAYLOAD_CAP);
             let rc = unsafe {
-                crate::spirit::dobby_ui::observe_read(
+                crate::spirit::ui4_interaction::observe_read(
                     vm_id,
                     arg0 as usize,
                     &mut (&mut (*page).payload)[..cap],
@@ -1202,26 +1202,26 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_DOBBY_UI4_POINTER => {
             let rc = if arg0 >> 32 != 0 || arg1 > u64::from(u32::MAX) {
-                crate::spirit::dobby_ui::ERROR_BAD_INPUT
+                crate::spirit::ui4_interaction::ERROR_BAD_INPUT
             } else {
                 let x = (arg0 & 0xFFFF) as u16;
                 let y = ((arg0 >> 16) & 0xFFFF) as u16;
-                crate::spirit::dobby_ui::pointer(vm_id, x, y, arg1 as u32)
+                crate::spirit::ui4_interaction::pointer(vm_id, x, y, arg1 as u32)
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_DOBBY_UI4_TYPE => {
             let rc = request_payload(vm_id, req_len)
-                .map(|text| crate::spirit::dobby_ui::type_text(vm_id, text))
-                .unwrap_or(crate::spirit::dobby_ui::ERROR_BAD_INPUT);
+                .map(|text| crate::spirit::ui4_interaction::type_text(vm_id, text))
+                .unwrap_or(crate::spirit::ui4_interaction::ERROR_BAD_INPUT);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_DOBBY_UI4_KEY => {
             let rc = u32::try_from(arg0)
-                .map(|key| crate::spirit::dobby_ui::key(vm_id, key))
-                .unwrap_or(crate::spirit::dobby_ui::ERROR_BAD_INPUT);
+                .map(|key| crate::spirit::ui4_interaction::key(vm_id, key))
+                .unwrap_or(crate::spirit::ui4_interaction::ERROR_BAD_INPUT);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

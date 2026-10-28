@@ -1,7 +1,7 @@
-//! Dobby-only UI4 observation and interaction capability.
+//! Owner-bound native UI4 observation and interaction capability.
 //!
 //! This bridge deliberately sits beside Spirit rather than inside shell2 or
-//! Lumen.  It lends Dobby Lilly's already-paired software cursor and virtual
+//! Lumen. It lends live Blueprints Lilly's already-paired software cursor and virtual
 //! keyboard, exposes only generation-checked broker window identifiers, and
 //! keeps captured observations private to the calling Blueprint VM.
 
@@ -32,9 +32,9 @@ const ERROR_TRANSPORT: i32 = v::bp_abi::DOBBY_UI4_ERROR_TRANSPORT;
 
 const INVENTORY_WINDOW_LIMIT: usize = 64;
 const INVENTORY_NAME_BYTES: usize = 96;
-const MAX_DOBBY_TYPE_BYTES: usize = 1_024;
-const MAX_DOBBY_TYPE_SCALARS: usize = 64;
-const DOBBY_KEY_STROKE_MS: u32 = 48;
+const MAX_TYPE_BYTES: usize = 1_024;
+const MAX_TYPE_SCALARS: usize = 64;
+const KEY_STROKE_MS: u32 = 48;
 const IO_RETRY_MS: u64 = 8;
 
 pub(crate) const POINTER_ACTION_MOVE: u32 = v::bp_abi::DOBBY_UI4_POINTER_MOVE;
@@ -66,14 +66,36 @@ pub(crate) const KEY_PAGE_UP: u32 = v::bp_abi::DOBBY_UI4_KEY_PAGE_UP;
 pub(crate) const KEY_PAGE_DOWN: u32 = v::bp_abi::DOBBY_UI4_KEY_PAGE_DOWN;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct BlueprintUiOwner {
+    vm: u8,
+    run: u64,
+    instance: [u8; 16],
+    generation: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct LillyIoReservation {
+    owner: BlueprintUiOwner,
+    sequence: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum LillyIoLease {
     Response,
-    Dobby(u8),
+    Native {
+        sequence: u64,
+        draining: bool,
+    },
+    Blueprint {
+        reservation: LillyIoReservation,
+        draining: bool,
+    },
 }
 
 struct LillyIoState {
     keyboard: Option<KeyboardControlDevice>,
     lease: Option<LillyIoLease>,
+    next_sequence: u64,
 }
 
 impl LillyIoState {
@@ -81,6 +103,83 @@ impl LillyIoState {
         Self {
             keyboard: None,
             lease: None,
+            next_sequence: 0,
+        }
+    }
+
+    fn claim(&mut self, owner: BlueprintUiOwner) -> Result<LillyIoReservation, i32> {
+        if self.keyboard.is_none() {
+            return Err(ERROR_UNAVAILABLE);
+        }
+        if self.lease.is_some() {
+            return Err(ERROR_BUSY);
+        }
+        self.next_sequence = self.next_sequence.wrapping_add(1);
+        let reservation = LillyIoReservation {
+            owner,
+            sequence: self.next_sequence,
+        };
+        self.lease = Some(LillyIoLease::Blueprint {
+            reservation,
+            draining: false,
+        });
+        Ok(reservation)
+    }
+
+    fn finish(&mut self, reservation: LillyIoReservation, draining: bool) {
+        if matches!(self.lease, Some(LillyIoLease::Blueprint { reservation: current, .. }) if current == reservation)
+        {
+            self.lease = draining.then_some(LillyIoLease::Blueprint {
+                reservation,
+                draining: true,
+            });
+        }
+    }
+}
+
+struct LillyIoGuard {
+    reservation: LillyIoReservation,
+    keyboard: KeyboardControlDevice,
+    draining: bool,
+}
+
+impl LillyIoGuard {
+    fn owner(&self) -> BlueprintUiOwner {
+        self.reservation.owner
+    }
+
+    fn require_live(&self) -> Result<(), i32> {
+        (owner_identity(self.owner().vm)? == self.owner())
+            .then_some(())
+            .ok_or(ERROR_DENIED)
+    }
+}
+
+impl Drop for LillyIoGuard {
+    fn drop(&mut self) {
+        LILLY_IO.lock().finish(self.reservation, self.draining);
+    }
+}
+
+/// Automatic window choreography yields to explicit Blueprint work. A drop on
+/// timeout/cancellation still waits for queued input to drain before reuse.
+pub(super) struct NativeIoGuard {
+    sequence: u64,
+}
+
+impl Drop for NativeIoGuard {
+    fn drop(&mut self) {
+        let mut state = LILLY_IO.lock();
+        if state.lease
+            == Some(LillyIoLease::Native {
+                sequence: self.sequence,
+                draining: false,
+            })
+        {
+            state.lease = Some(LillyIoLease::Native {
+                sequence: self.sequence,
+                draining: true,
+            });
         }
     }
 }
@@ -88,10 +187,13 @@ impl LillyIoState {
 static LILLY_IO: Mutex<LillyIoState> = Mutex::new(LillyIoState::new());
 
 struct ObservationCache {
-    owner_instance: [u8; 16],
-    owner_generation: u64,
+    owner: Option<BlueprintUiOwner>,
     window_id: u32,
     placement: Option<WindowPlacement>,
+    broker_placement: Option<WindowPlacement>,
+    broker_presentation: Option<WindowPlacement>,
+    plane: Option<usize>,
+    native_size: Option<[u32; 2]>,
     metadata: Vec<u8>,
     png: Vec<u8>,
 }
@@ -99,20 +201,26 @@ struct ObservationCache {
 impl ObservationCache {
     const fn new() -> Self {
         Self {
-            owner_instance: [0; 16],
-            owner_generation: 0,
+            owner: None,
             window_id: 0,
             placement: None,
+            broker_placement: None,
+            broker_presentation: None,
+            plane: None,
+            native_size: None,
             metadata: Vec::new(),
             png: Vec::new(),
         }
     }
 
     fn clear(&mut self) {
-        self.owner_instance = [0; 16];
-        self.owner_generation = 0;
+        self.owner = None;
         self.window_id = 0;
         self.placement = None;
+        self.broker_placement = None;
+        self.broker_presentation = None;
+        self.plane = None;
+        self.native_size = None;
         self.metadata.clear();
         self.png.clear();
     }
@@ -156,30 +264,56 @@ fn observation_slot(owner: u8) -> Result<&'static Mutex<ObservationCache>, i32> 
     OBSERVATIONS.get(owner as usize).ok_or(ERROR_DENIED)
 }
 
-fn authorized(owner: u8) -> bool {
-    let Some(archive) = crate::hv::app_vm_archive(owner) else {
-        return false;
-    };
-    let leaf = archive
-        .rsplit(|ch| ch == '/' || ch == '\\')
-        .next()
-        .unwrap_or(archive.as_str());
-    leaf.eq_ignore_ascii_case("dobby") || leaf.eq_ignore_ascii_case("dobby.bp")
-}
-
-fn require_authorized(owner: u8) -> Result<(), i32> {
-    authorized(owner).then_some(()).ok_or(ERROR_DENIED)
-}
-
-fn owner_identity(owner: u8) -> Result<([u8; 16], u64), i32> {
+fn owner_identity(owner: u8) -> Result<BlueprintUiOwner, i32> {
+    observation_slot(owner)?;
+    let run = crate::hv::vm_run_generation(owner)
+        .filter(|run| *run != 0)
+        .ok_or(ERROR_DENIED)?;
+    let state = crate::hv::vm_state(owner);
+    if !state.supported || !state.running || state.stop_requested {
+        return Err(ERROR_DENIED);
+    }
     let identity = crate::hv::blueprint_instance_identity(owner).ok_or(ERROR_DENIED)?;
-    Ok((identity.instance, identity.generation))
+    if crate::hv::vm_run_generation(owner) != Some(run) {
+        return Err(ERROR_DENIED);
+    }
+    Ok(BlueprintUiOwner {
+        vm: owner,
+        run,
+        instance: identity.instance,
+        generation: identity.generation,
+    })
 }
 
-fn cache_belongs_to(cache: &ObservationCache, owner: u8) -> bool {
-    owner_identity(owner).is_ok_and(|(instance, generation)| {
-        cache.owner_instance == instance && cache.owner_generation == generation
-    })
+fn cache_belongs_to(cache: &ObservationCache, owner: BlueprintUiOwner) -> bool {
+    cache.owner == Some(owner)
+}
+
+fn cache_matches_window(cache: &ObservationCache, window: WindowSnapshot) -> bool {
+    cache.window_id == window.id.raw()
+        && cache.broker_placement == Some(window.placement)
+        && cache.broker_presentation == Some(window.presentation_placement)
+        && cache.plane == Some(window.plane.slot())
+        && crate::ui4::frame_snapshot(window.frame)
+            .is_ok_and(|frame| cache.native_size == Some([frame.plan.width, frame.plan.height]))
+}
+
+/// A focus change or a moved/resized frame invalidates input coordinates and
+/// typing alike. Ordinary producer repaints may change revision/publish serial
+/// without changing the observed input target or its geometry.
+fn observed_input_window(
+    owner: BlueprintUiOwner,
+) -> Result<(WindowSnapshot, WindowPlacement), i32> {
+    if owner_identity(owner.vm)? != owner {
+        return Err(ERROR_DENIED);
+    }
+    let window = selected_lilly_window()?;
+    let cache = observation_slot(owner.vm)?.lock();
+    if !cache_belongs_to(&cache, owner) || !cache_matches_window(&cache, window) {
+        return Err(ERROR_BAD_STATE);
+    }
+    let placement = cache.placement.ok_or(ERROR_BAD_STATE)?;
+    Ok((window, placement))
 }
 
 fn compact_name(window: WindowSnapshot) -> String {
@@ -240,9 +374,10 @@ fn copy_complete(bytes: &[u8], out: &mut [u8]) -> isize {
 }
 
 pub(crate) fn windows(owner: u8, out: &mut [u8]) -> isize {
-    if let Err(error) = require_authorized(owner) {
-        return error as isize;
-    }
+    let identity = match owner_identity(owner) {
+        Ok(identity) => identity,
+        Err(error) => return error as isize,
+    };
     let all = match live_windows() {
         Ok(windows) => windows,
         Err(error) => return error as isize,
@@ -273,53 +408,72 @@ pub(crate) fn windows(owner: u8, out: &mut [u8]) -> isize {
         Ok(bytes) => bytes,
         Err(_) => return ERROR_UNAVAILABLE as isize,
     };
+    if owner_identity(owner) != Ok(identity) {
+        return ERROR_DENIED as isize;
+    }
     copy_complete(bytes.as_slice(), out)
 }
 
-fn dobby_io_is_idle(keyboard: KeyboardControlDevice) -> bool {
+fn lilly_io_is_idle(keyboard: KeyboardControlDevice) -> bool {
     let cursor_idle = super::lilly_cursor::window_approach_complete().unwrap_or(false);
     let keyboard_idle =
         keyboard_is_idle(KeyboardControlPrincipal::Kernel, keyboard.handle).unwrap_or(false);
     cursor_idle && keyboard_idle
 }
 
-fn reap_dobby_io() {
+fn reap_blueprint_io() {
     let candidate = {
         let state = LILLY_IO.lock();
         match (state.lease, state.keyboard) {
-            (Some(LillyIoLease::Dobby(owner)), Some(keyboard)) => Some((owner, keyboard)),
+            (Some(lease @ LillyIoLease::Blueprint { draining: true, .. }), Some(keyboard))
+            | (Some(lease @ LillyIoLease::Native { draining: true, .. }), Some(keyboard)) => {
+                Some((lease, keyboard))
+            }
             _ => None,
         }
     };
-    let Some((owner, keyboard)) = candidate else {
+    let Some((lease, keyboard)) = candidate else {
         return;
     };
-    if !dobby_io_is_idle(keyboard) {
+    if !lilly_io_is_idle(keyboard) {
         return;
     }
     let mut state = LILLY_IO.lock();
-    if state.lease == Some(LillyIoLease::Dobby(owner)) && state.keyboard == Some(keyboard) {
+    if state.lease == Some(lease) && state.keyboard == Some(keyboard) {
         state.lease = None;
     }
 }
 
-fn claim_dobby_io(owner: u8) -> Result<KeyboardControlDevice, i32> {
-    require_authorized(owner)?;
-    reap_dobby_io();
+pub(super) fn try_acquire_native_io() -> Result<NativeIoGuard, i32> {
+    reap_blueprint_io();
     let mut state = LILLY_IO.lock();
-    let keyboard = state.keyboard.ok_or(ERROR_UNAVAILABLE)?;
+    state.keyboard.ok_or(ERROR_UNAVAILABLE)?;
     if state.lease.is_some() {
         return Err(ERROR_BUSY);
     }
-    state.lease = Some(LillyIoLease::Dobby(owner));
-    Ok(keyboard)
+    state.next_sequence = state.next_sequence.wrapping_add(1);
+    let sequence = state.next_sequence;
+    state.lease = Some(LillyIoLease::Native {
+        sequence,
+        draining: false,
+    });
+    Ok(NativeIoGuard { sequence })
 }
 
-fn release_dobby_io(owner: u8) {
+fn claim_blueprint_io(owner: u8) -> Result<LillyIoGuard, i32> {
+    let identity = owner_identity(owner)?;
+    reap_blueprint_io();
     let mut state = LILLY_IO.lock();
-    if state.lease == Some(LillyIoLease::Dobby(owner)) {
-        state.lease = None;
-    }
+    let keyboard = state.keyboard.ok_or(ERROR_UNAVAILABLE)?;
+    let reservation = state.claim(identity)?;
+    drop(state);
+    let guard = LillyIoGuard {
+        reservation,
+        keyboard,
+        draining: false,
+    };
+    guard.require_live()?;
+    Ok(guard)
 }
 
 pub(super) fn register_lilly_keyboard(keyboard: KeyboardControlDevice) {
@@ -329,7 +483,7 @@ pub(super) fn register_lilly_keyboard(keyboard: KeyboardControlDevice) {
 
 pub(super) async fn acquire_response_io(keyboard: KeyboardControlDevice) {
     loop {
-        reap_dobby_io();
+        reap_blueprint_io();
         {
             let mut state = LILLY_IO.lock();
             if state.keyboard == Some(keyboard) && state.lease.is_none() {
@@ -349,13 +503,14 @@ pub(super) fn release_response_io(keyboard: KeyboardControlDevice) {
 }
 
 pub(crate) fn focus(owner: u8, window_id: u64) -> i32 {
-    let _keyboard = match claim_dobby_io(owner) {
-        Ok(keyboard) => keyboard,
+    let io = match claim_blueprint_io(owner) {
+        Ok(io) => io,
         Err(error) => return error,
     };
     let result = (|| {
         let window = live_window(window_id)?;
         let source = super::lilly_cursor::selection_source().map_err(|_| ERROR_UNAVAILABLE)?;
+        io.require_live()?;
         crate::ui4::select_window_for_cursor(source, window.owner, window.id)
             .map_err(|_| ERROR_BAD_STATE)?;
         if let Ok(slot) = observation_slot(owner) {
@@ -363,17 +518,17 @@ pub(crate) fn focus(owner: u8, window_id: u64) -> i32 {
         }
         Ok::<(), i32>(())
     })();
-    release_dobby_io(owner);
     result.map(|()| 0).unwrap_or_else(|error| error)
 }
 
 pub(crate) fn observe_prepare(owner: u8) -> isize {
-    let _keyboard = match claim_dobby_io(owner) {
-        Ok(keyboard) => keyboard,
+    let io = match claim_blueprint_io(owner) {
+        Ok(io) => io,
         Err(error) => return error as isize,
     };
     let result = (|| {
         let slot = observation_slot(owner)?;
+        io.require_live()?;
         slot.lock().clear();
         let window = selected_lilly_window()?;
         let observation = crate::ui4::capture_compact_window_observation(window)
@@ -401,44 +556,48 @@ pub(crate) fn observe_prepare(owner: u8) -> isize {
         .map_err(|_| ERROR_UNAVAILABLE)?;
         let png_len = isize::try_from(observation.png.len()).map_err(|_| ERROR_UNAVAILABLE)?;
         let mut cache = slot.lock();
-        let (owner_instance, owner_generation) = owner_identity(owner)?;
-        cache.owner_instance = owner_instance;
-        cache.owner_generation = owner_generation;
+        io.require_live()?;
+        cache.owner = Some(io.owner());
         cache.window_id = observation.window_id.raw();
         cache.placement = Some(observation.placement);
+        cache.broker_placement = Some(window.placement);
+        cache.broker_presentation = Some(window.presentation_placement);
+        cache.plane = Some(window.plane.slot());
+        cache.native_size = Some([observation.native_width, observation.native_height]);
         cache.metadata = metadata;
         cache.png = observation.png;
         Ok::<isize, i32>(png_len)
     })();
-    release_dobby_io(owner);
     result.unwrap_or_else(|error| error as isize)
 }
 
 pub(crate) fn observe_metadata(owner: u8, out: &mut [u8]) -> isize {
-    if let Err(error) = require_authorized(owner) {
-        return error as isize;
-    }
+    let identity = match owner_identity(owner) {
+        Ok(identity) => identity,
+        Err(error) => return error as isize,
+    };
     let slot = match observation_slot(owner) {
         Ok(slot) => slot,
         Err(error) => return error as isize,
     };
     let cache = slot.lock();
-    if !cache_belongs_to(&cache, owner) || cache.window_id == 0 || cache.metadata.is_empty() {
+    if !cache_belongs_to(&cache, identity) || cache.window_id == 0 || cache.metadata.is_empty() {
         return ERROR_BAD_STATE as isize;
     }
     copy_complete(cache.metadata.as_slice(), out)
 }
 
 pub(crate) fn observe_read(owner: u8, offset: usize, out: &mut [u8]) -> isize {
-    if let Err(error) = require_authorized(owner) {
-        return error as isize;
-    }
+    let identity = match owner_identity(owner) {
+        Ok(identity) => identity,
+        Err(error) => return error as isize,
+    };
     let slot = match observation_slot(owner) {
         Ok(slot) => slot,
         Err(error) => return error as isize,
     };
     let cache = slot.lock();
-    if !cache_belongs_to(&cache, owner) || cache.window_id == 0 || cache.png.is_empty() {
+    if !cache_belongs_to(&cache, identity) || cache.window_id == 0 || cache.png.is_empty() {
         return ERROR_BAD_STATE as isize;
     }
     if offset > cache.png.len() {
@@ -464,6 +623,14 @@ fn normalized_axis(origin: i32, extent: u32, normalized: u16) -> Result<i32, i32
 }
 
 fn parse_pointer_action(action: u32) -> Result<(u32, u32, u32, u32), i32> {
+    let allowed = POINTER_ACTION_MOVE
+        | POINTER_ACTION_PRIMARY_CLICK
+        | POINTER_BUTTON_MASK
+        | POINTER_CLICK_COUNT_MASK
+        | POINTER_CLICK_DELAY_MASK;
+    if action & !allowed != 0 {
+        return Err(ERROR_BAD_INPUT);
+    }
     let action_code = action & (POINTER_ACTION_MOVE | POINTER_ACTION_PRIMARY_CLICK);
     let click_count = (action & POINTER_CLICK_COUNT_MASK) >> POINTER_CLICK_COUNT_SHIFT;
     let click_count = if click_count == 0 {
@@ -504,27 +671,19 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
     {
         return ERROR_BAD_INPUT;
     }
-    let _keyboard = match claim_dobby_io(owner) {
-        Ok(keyboard) => keyboard,
+    let mut io = match claim_blueprint_io(owner) {
+        Ok(io) => io,
         Err(error) => return error,
     };
     let result = (|| {
-        let window = selected_lilly_window()?;
+        let (window, placement) = observed_input_window(io.owner())?;
         if action == POINTER_ACTION_PRIMARY_CLICK && !window.interaction.receives_input {
             return Err(ERROR_BAD_STATE);
         }
-        let placement = {
-            let cache = observation_slot(owner)?.lock();
-            if cache_belongs_to(&cache, owner) && cache.window_id == window.id.raw() {
-                cache.placement
-            } else {
-                None
-            }
-        }
-        .ok_or(ERROR_BAD_STATE)?;
         let target_x = normalized_axis(placement.x, placement.width, x)?;
         let target_y = normalized_axis(placement.y, placement.height, y)?;
         let source = super::lilly_cursor::selection_source().map_err(|_| ERROR_UNAVAILABLE)?;
+        io.require_live()?;
         crate::ui4::select_window_for_cursor(source, window.owner, window.id)
             .map_err(|_| ERROR_BAD_STATE)?;
         super::lilly_cursor::queue_pointer_action(
@@ -538,24 +697,76 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
         .map_err(|_| ERROR_UNAVAILABLE)?;
         Ok::<(), i32>(())
     })();
-    if result.is_err() {
-        release_dobby_io(owner);
-    }
+    io.draining = result.is_ok();
     result.map(|()| 0).unwrap_or_else(|error| error)
 }
 #[cfg(test)]
 mod tests {
     use super::{
+        BlueprintUiOwner, ERROR_BUSY, KeyboardControlDevice, LillyIoLease, LillyIoState,
         POINTER_ACTION_MOVE, POINTER_ACTION_PRIMARY_CLICK, POINTER_CLICK_COUNT_MASK,
         POINTER_CLICK_COUNT_SHIFT, POINTER_CLICK_DELAY_MASK, POINTER_CLICK_DELAY_SHIFT,
         parse_pointer_action,
     };
 
     #[test]
+    fn exact_reservations_prevent_old_completion_releasing_new_work() {
+        let owner = BlueprintUiOwner {
+            vm: 1,
+            run: 4,
+            instance: [7; 16],
+            generation: 1,
+        };
+        let mut state = LillyIoState::new();
+        state.keyboard = Some(KeyboardControlDevice {
+            handle: 1,
+            slot_id: 4,
+        });
+        let first = state.claim(owner).unwrap();
+        assert_eq!(state.claim(owner), Err(ERROR_BUSY));
+        state.finish(first, false);
+        let second = state.claim(owner).unwrap();
+        assert_ne!(first, second);
+        state.finish(first, false);
+        assert_eq!(state.claim(owner), Err(ERROR_BUSY));
+        state.finish(second, true);
+        assert_eq!(
+            state.lease,
+            Some(LillyIoLease::Blueprint {
+                reservation: second,
+                draining: true
+            })
+        );
+    }
+
+    #[test]
+    fn boot_response_reservation_cannot_be_released_by_blueprint_completion() {
+        let owner = BlueprintUiOwner {
+            vm: 1,
+            run: 4,
+            instance: [7; 16],
+            generation: 1,
+        };
+        let mut state = LillyIoState::new();
+        state.keyboard = Some(KeyboardControlDevice {
+            handle: 1,
+            slot_id: 4,
+        });
+        let first = state.claim(owner).unwrap();
+        state.lease = Some(LillyIoLease::Response);
+        state.finish(first, false);
+        assert_eq!(state.lease, Some(LillyIoLease::Response));
+        assert_eq!(state.claim(owner), Err(ERROR_BUSY));
+    }
+
+    #[test]
     fn parse_pointer_action_handles_click_move_and_button_bits() {
         let click = POINTER_ACTION_PRIMARY_CLICK | (1 << 16);
         let move_without_buttons = POINTER_ACTION_MOVE;
-        assert_eq!(parse_pointer_action(click), Ok((POINTER_ACTION_PRIMARY_CLICK, 1, 1, 100)));
+        assert_eq!(
+            parse_pointer_action(click),
+            Ok((POINTER_ACTION_PRIMARY_CLICK, 1, 1, 100))
+        );
         assert_eq!(
             parse_pointer_action(move_without_buttons),
             Ok((POINTER_ACTION_MOVE, 0, 1, 100))
@@ -567,7 +778,10 @@ mod tests {
         let click = POINTER_ACTION_PRIMARY_CLICK
             | (5u32 << POINTER_CLICK_COUNT_SHIFT)
             | (250u32 << POINTER_CLICK_DELAY_SHIFT);
-        assert_eq!(parse_pointer_action(click), Ok((POINTER_ACTION_PRIMARY_CLICK, 0, 5, 250)));
+        assert_eq!(
+            parse_pointer_action(click),
+            Ok((POINTER_ACTION_PRIMARY_CLICK, 0, 5, 250))
+        );
         assert_eq!(
             parse_pointer_action(
                 POINTER_ACTION_PRIMARY_CLICK | (3u32 << POINTER_CLICK_COUNT_SHIFT)
@@ -598,36 +812,40 @@ mod tests {
 }
 
 pub(crate) fn type_text(owner: u8, bytes: &[u8]) -> i32 {
-    if bytes.is_empty() || bytes.len() > MAX_DOBBY_TYPE_BYTES {
+    if bytes.is_empty() || bytes.len() > MAX_TYPE_BYTES {
         return ERROR_BAD_INPUT;
     }
     let Ok(text) = core::str::from_utf8(bytes) else {
         return ERROR_BAD_INPUT;
     };
     let scalar_count = text.chars().count();
-    if scalar_count == 0 || scalar_count > MAX_DOBBY_TYPE_SCALARS {
+    if scalar_count == 0 || scalar_count > MAX_TYPE_SCALARS {
         return ERROR_BAD_INPUT;
     }
-    let keyboard = match claim_dobby_io(owner) {
-        Ok(keyboard) => keyboard,
+    let mut io = match claim_blueprint_io(owner) {
+        Ok(io) => io,
         Err(error) => return error,
     };
-    if !selected_lilly_window().is_ok_and(|window| window.interaction.receives_input) {
-        release_dobby_io(owner);
-        return ERROR_BAD_STATE;
+    match observed_input_window(io.owner()) {
+        Ok((window, _)) if window.interaction.receives_input => {}
+        Ok(_) => return ERROR_BAD_STATE,
+        Err(error) => return error,
+    }
+    if let Err(error) = io.require_live() {
+        return error;
     }
     match submit_text(
         KeyboardControlPrincipal::Kernel,
-        keyboard.handle,
+        io.keyboard.handle,
         text,
-        DOBBY_KEY_STROKE_MS,
+        KEY_STROKE_MS,
         true,
     ) {
-        Ok(count) if count == scalar_count => 0,
-        _ => {
-            release_dobby_io(owner);
-            ERROR_UNAVAILABLE
+        Ok(count) if count == scalar_count => {
+            io.draining = true;
+            0
         }
+        _ => ERROR_UNAVAILABLE,
     }
 }
 
@@ -655,25 +873,35 @@ pub(crate) fn key(owner: u8, key: u32) -> i32 {
     let Some(key_code) = named_key_usage(key) else {
         return ERROR_BAD_INPUT;
     };
-    let keyboard = match claim_dobby_io(owner) {
-        Ok(keyboard) => keyboard,
+    let mut io = match claim_blueprint_io(owner) {
+        Ok(io) => io,
         Err(error) => return error,
     };
-    if !selected_lilly_window().is_ok_and(|window| window.interaction.receives_input) {
-        release_dobby_io(owner);
-        return ERROR_BAD_STATE;
+    match observed_input_window(io.owner()) {
+        Ok((window, _)) if window.interaction.receives_input => {}
+        Ok(_) => return ERROR_BAD_STATE,
+        Err(error) => return error,
+    }
+    if let Err(error) = io.require_live() {
+        return error;
     }
     let command = KeyboardControlCommand {
         opcode: KEYBOARD_CONTROL_OPCODE_STROKE,
         flags: KEYBOARD_CONTROL_FLAG_CLEAR_QUEUE,
-        duration_ms: DOBBY_KEY_STROKE_MS,
+        duration_ms: KEY_STROKE_MS,
         key_code,
         ..KeyboardControlCommand::default()
     };
-    if submit_command(KeyboardControlPrincipal::Kernel, keyboard.handle, command).is_ok() {
+    if submit_command(
+        KeyboardControlPrincipal::Kernel,
+        io.keyboard.handle,
+        command,
+    )
+    .is_ok()
+    {
+        io.draining = true;
         0
     } else {
-        release_dobby_io(owner);
         ERROR_UNAVAILABLE
     }
 }
@@ -812,7 +1040,7 @@ pub extern "C" fn trueos_cabi_dobby_ui4_pointer(x: u16, y: u16, action: u32) -> 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_dobby_ui4_type(text_ptr: *const u8, text_len: usize) -> i32 {
-    if text_ptr.is_null() || text_len == 0 || text_len > MAX_DOBBY_TYPE_BYTES {
+    if text_ptr.is_null() || text_len == 0 || text_len > MAX_TYPE_BYTES {
         return ERROR_BAD_INPUT;
     }
     let text = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
@@ -834,8 +1062,11 @@ pub unsafe extern "C" fn trueos_cabi_dobby_ui4_type(text_ptr: *const u8, text_le
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_dobby_ui4_key(key_code: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_DOBBY_UI4_KEY, u64::from(key_code), 0);
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_DOBBY_UI4_KEY,
+            u64::from(key_code),
+            0,
+        );
         return guest_result(status, data) as i32;
     }
     current_direct_owner()

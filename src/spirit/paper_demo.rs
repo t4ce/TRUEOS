@@ -47,15 +47,15 @@ impl crate::hv::launcher::LaunchObserver for DemoLaunch {
 }
 
 /// Run before the normal window selector consumes first-presentation events.
-/// This also restores Lilly's keyboard registration for the existing Dobby API.
+/// This also restores Lilly's keyboard registration for the native UI4 interaction API.
 pub(super) async fn run() {
     let result = trueos_time::with_timeout(Duration::from_secs(30), request_keyboard()).await;
     let Ok(keyboard) = result else {
         crate::log_warn!(target: "gfx"; "trueos-spirit: Paper boot skipped reason=keyboard-unavailable\n");
         return;
     };
-    super::dobby_ui::register_lilly_keyboard(keyboard);
-    super::dobby_ui::acquire_response_io(keyboard).await;
+    super::ui4_interaction::register_lilly_keyboard(keyboard);
+    super::ui4_interaction::acquire_response_io(keyboard).await;
     let mut window = None;
     let mut target = None;
     let result = trueos_time::with_timeout(
@@ -78,7 +78,7 @@ pub(super) async fn run() {
     if let Some(target) = target {
         crate::hv::matrix::discard(&target);
     }
-    // Clear any unfinished keyboard program before handing the combo to Dobby.
+    // Clear any unfinished keyboard program before handing the combo to Blueprint callers.
     let _ = keyboard::submit_command(
         KeyboardControlPrincipal::Kernel,
         keyboard.handle,
@@ -90,7 +90,7 @@ pub(super) async fn run() {
         },
     );
     let _ = trueos_time::with_timeout(Duration::from_secs(1), wait_keyboard(keyboard)).await;
-    super::dobby_ui::release_response_io(keyboard);
+    super::ui4_interaction::release_response_io(keyboard);
     match result {
         Ok(Ok(())) => crate::log_info!(target: "gfx";
             "trueos-spirit: Paper boot complete scalars={} backspaces={} path=lilly-cursor+paired-vkeyboard->ui4->paper frame=19x9 action=close\n", GREETING.chars().count(), GREETING.chars().count()),

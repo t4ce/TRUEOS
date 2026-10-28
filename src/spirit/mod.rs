@@ -19,7 +19,7 @@ use embassy_sync::signal::Signal;
 use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer};
 
-pub(crate) mod dobby_ui;
+pub(crate) mod ui4_interaction;
 pub(crate) mod gpu_logger;
 mod intel_cursor;
 mod lilly;

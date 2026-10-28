@@ -91,6 +91,13 @@ pub(crate) async fn spirit_window_selection_task() {
             );
             continue;
         };
+        // Explicit app input owns Lilly's entire paired cursor/keyboard combo.
+        // Do not steal its selection for automatic first-presentation effects.
+        // The guard also protects this choreography across its await points.
+        let _io = match super::ui4_interaction::try_acquire_native_io() {
+            Ok(io) => io,
+            Err(_) => continue,
+        };
         let approach_ms = match super::lilly_cursor::queue_window_approach(
             window.placement.x,
             window.placement.y,
