@@ -49,7 +49,7 @@ pub mod ui4 {
     }
     pub mod context_menu {pub fn dismiss_for_source(_:super::Ui4CursorSource) {}}
     pub mod window_broker {pub fn note_window_focused(_:u8,_:u32)->Result<(),()> {Ok(())}}
-    #[path="routing.rs"] mod routing;
+    mod routing { use super::*; include!("routing.rs"); }
 }
 
 pub mod usb2 { pub mod hid {
@@ -86,10 +86,12 @@ pub mod r {
     }
     pub mod keyboard { #[derive(Default)] pub struct TrueosKeyboardOutputEvent {pub controller_id:u32,pub slot_id:u32} }
     pub mod services {
-        #[path="../../font.rs"] pub mod hull_font_service;
-        #[path="../../mouse.rs"] pub mod mouse_motion_service;
+        pub use crate::{hull_font_service, mouse_motion_service};
     }
 }
+
+#[path="font.rs"] pub mod hull_font_service;
+#[path="mouse.rs"] pub mod mouse_motion_service;
 
 #[cfg(test)]
 #[path="render.rs"] mod render;
