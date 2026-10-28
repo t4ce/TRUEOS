@@ -1591,8 +1591,8 @@ pub(crate) fn build_process_env(
     let archive_stem = safe_archive_stem(archive);
     if uses_volatile_codex_files(archive) {
         vars.insert(String::from("CODEX_STARTUP_TIMING_STDERR"), String::from("1"));
-        // Preserve HOME/CODEX_HOME paths while every private file is served
-        // from the seeded RAM root. Shell3 command sessions own their disk scope.
+        // Keep Codex auth in the persistent app home; scratch, config, cache,
+        // data, and state paths may use boot-local storage.
         for (key, leaf) in [
             ("CODEX_HOME", ".codex"),
             ("TMPDIR", "tmp"),
@@ -1765,6 +1765,9 @@ pub(crate) fn app_fs_root_for_named_instance(
     peer: Option<&str>,
     instance_guid: &str,
 ) -> String {
+    if uses_volatile_codex_files(archive) {
+        return app_fs_root_for_archive(archive, &[]);
+    }
     let name = safe_instance_component(name, "unnamed");
     let instance = match peer {
         Some(peer) => alloc::format!(

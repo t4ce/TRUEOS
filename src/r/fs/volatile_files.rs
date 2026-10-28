@@ -1,5 +1,5 @@
-//! Boot-local app storage, seeded before launch and published only when complete.
-//! Logical paths stay unchanged; unrelated Shell3/workspace paths use the disk.
+//! Codex app storage with a durable `.codex` home and boot-local supporting files.
+//! The logical paths stay unchanged; unrelated paths use the primary disk.
 
 use alloc::{string::String, vec::Vec};
 use embassy_sync::mutex::Mutex as AsyncMutex;
@@ -34,8 +34,20 @@ fn contains(root: &str, path: &str) -> bool {
             .is_some_and(|tail| tail.starts_with('/'))
 }
 
+/// Codex home is the durable user-state boundary for both supported app families.
+/// Match only the subtree root or slash-delimited children, never similarly
+/// prefixed names such as `.codex-backup`.
+fn persistent_path(path: &str) -> bool {
+    ["apps/codex/.codex", "apps/codex-check/.codex"]
+        .into_iter()
+        .any(|root| contains(root, path))
+}
+
 /// `path` must already be normalized and scoped by the app filesystem boundary.
 pub(crate) fn disk_for_path(path: &str) -> Option<block::DeviceHandle> {
+    if persistent_path(path) {
+        return None;
+    }
     let roots = ROOTS.lock();
     if roots.iter().any(|root| contains(root, path)) {
         STORAGE.lock().map(|storage| storage.disk)
@@ -61,6 +73,13 @@ async fn create_home_directories(disk: block::DeviceHandle, home: &str) -> Resul
         if !fs::dir_create_all_async(disk, &alloc::format!("{home}/{leaf}")).await? {
             return Err(FsError::NoSpace);
         }
+    }
+    Ok(())
+}
+
+async fn ensure_durable_codex_home(disk: block::DeviceHandle, root: &str) -> Result<()> {
+    if !fs::dir_create_all_async(disk, &alloc::format!("{root}/.codex")).await? {
+        return Err(FsError::NoSpace);
     }
     Ok(())
 }
@@ -91,11 +110,14 @@ pub(crate) async fn prepare(root: &str) -> Result<SeedStats> {
         .find(|root| contains(root, &home))
         .ok_or(FsError::BadPath)?;
     let _prepare = PREPARE.lock().await;
+    let source = fs::primary_root_handle().ok_or(FsError::NoRoot)?;
+    // Ensure the persistent home exists before any early return or volatile
+    // seeding. Never copy an old `.codex` snapshot into the RAM placeholder.
+    ensure_durable_codex_home(source, root).await?;
     if let Some(disk) = disk_for_path(root) {
         create_home_directories(disk, &home).await?;
         return Ok(SeedStats::default());
     }
-    let source = fs::primary_root_handle().ok_or(FsError::NoRoot)?;
     let existing = *STORAGE.lock();
     let storage = if let Some(storage) = existing {
         storage
@@ -140,6 +162,9 @@ pub(crate) async fn prepare(root: &str) -> Result<SeedStats> {
         }
         for entry in listing.entries {
             let path = alloc::format!("{directory}/{}", entry.name);
+            if persistent_path(&path) {
+                continue;
+            }
             if entry.kind == fs::NodeKind::Directory {
                 if !fs::dir_create_all_async(destination, &path).await? {
                     return Err(FsError::NoSpace);
@@ -193,8 +218,8 @@ pub(crate) async fn prepare(root: &str) -> Result<SeedStats> {
     // The source stays untouched. Only now can normal file operations see RAM.
     ROOTS.lock().push(String::from(root));
     crate::log_info!(target: "filesystem";
-        "codex-files: ready path={} source_disc={} ram_disc={} files={} bytes={} capacity={} persistence=boot-only\n",
-        root, source.id().raw(), destination.id().raw(), stats.files, stats.bytes, CAPACITY_BYTES
+        "codex-files: ready path={} source_disc={} ram_disc={} files={} bytes={} capacity={} persistence=mixed durable_codex_home={}/.codex\n",
+        root, source.id().raw(), destination.id().raw(), stats.files, stats.bytes, CAPACITY_BYTES, root
     );
     Ok(stats)
 }
