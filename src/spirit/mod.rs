@@ -1878,5 +1878,7 @@ const fn pipe_name(id: SpiritFenceId) -> &'static str {
 }
 
 pub(crate) fn enqueue_reasoning_response(_turn: u64, _text: &str) -> bool {
+    // The embedded Paper boot exercise owns its greeting and UI input lifetime.
+    // It is not a general text presenter; report unavailable until one exists.
     false
 }

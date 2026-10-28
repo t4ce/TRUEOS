@@ -32,8 +32,14 @@ const IDLE_UNCROSS_ARMS_TRANSITION: &str = "transition.uncross_arms";
 const AI_REASONING_START_ANIMATION: &str = "agree.firm_nod";
 const AI_REASONING_FINISH_ANIMATION: &str = "idea.finger_up";
 const LUMEN_TALK_ANIMATION: &str = "talk.calm.uncrossed";
-const FAILED_ANIMATION: &str = "angry.fists_clenched";
+const FAILED_ANIMATIONS: [&str; 2] = ["angry.fists_clenched", "reaction.facepalm"];
 const FAILED_FRAME_PERIOD_MS: u16 = 80;
+const RUNNING_ANIMATION: &str = "idea.finger_up";
+const WAITING_ANIMATIONS: [&str; 3] = ["confused.question", "wave.neutral", "wave.excited"];
+const REVIEW_ANIMATION: &str = "gesture.finger_guns";
+const ACTIVITY_GESTURE_AVERAGE_MS: u64 = 15_000;
+const ACTIVITY_GESTURE_WINDOW_MS: u64 = 10_000;
+const ACTIVITY_GESTURE_EXPIRY_MS: u64 = 3_000;
 const IDLE_WINK_VARIANTS: [&str; 5] = [
     "wink.playful",
     "flirt.finger_heart",
@@ -299,6 +305,169 @@ impl LillyFailedReaction {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum LillyActivity {
+    Running,
+    Waiting,
+    Review,
+}
+
+impl LillyActivity {
+    fn from_status(status: Option<trueos_terminal::program_status::ProgramStatus>) -> Option<Self> {
+        use trueos_terminal::program_status::ProgramStatus;
+        match status {
+            Some(ProgramStatus::Working) => Some(Self::Running),
+            Some(ProgramStatus::Blocked(_)) => Some(Self::Waiting),
+            Some(ProgramStatus::Done) => Some(Self::Review),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct LillySuggestedGesture {
+    scheduled: LillyScheduledAnimation,
+    crossed: bool,
+    expires_ms: u64,
+}
+
+/// Activity is only a source of occasional suggestions. It owns neither the
+/// native idle policy nor the producer queue, and never accumulates a backlog.
+struct LillyActivityGestures {
+    rng: crate::tyche::SoftRng,
+    activity: Option<LillyActivity>,
+    next_running_ms: u64,
+    last_waiting_variant: Option<usize>,
+    pending: Option<LillySuggestedGesture>,
+}
+
+impl LillyActivityGestures {
+    fn new() -> Self {
+        Self {
+            rng: crate::tyche::soft_rng(),
+            activity: None,
+            next_running_ms: 0,
+            last_waiting_variant: None,
+            pending: None,
+        }
+    }
+
+    fn observe(
+        &mut self,
+        status: Option<trueos_terminal::program_status::ProgramStatus>,
+        now_ms: u64,
+    ) -> Result<(), LillyProtocolError> {
+        let activity = LillyActivity::from_status(status);
+        if self.activity != activity {
+            self.activity = activity;
+            self.pending = None;
+            match activity {
+                Some(LillyActivity::Running) => self.schedule_next_running(now_ms),
+                Some(activity) => self.suggest(activity, now_ms)?,
+                None => {}
+            }
+        } else if activity == Some(LillyActivity::Running) && now_ms >= self.next_running_ms {
+            self.schedule_next_running(now_ms);
+            self.suggest(LillyActivity::Running, now_ms)?;
+        }
+        Ok(())
+    }
+
+    fn schedule_next_running(&mut self, now_ms: u64) {
+        self.next_running_ms = now_ms.saturating_add(centered_interval_ms(
+            &mut self.rng,
+            ACTIVITY_GESTURE_AVERAGE_MS,
+            ACTIVITY_GESTURE_WINDOW_MS,
+        ));
+    }
+
+    fn suggest(&mut self, activity: LillyActivity, now_ms: u64) -> Result<(), LillyProtocolError> {
+        // An opportunity is not a command: let ordinary presence win half of
+        // the time, even if the terminal reported a new activity state.
+        if self.rng.usize_below(2) != 0 {
+            return Ok(());
+        }
+        let (tag, crossed) = match activity {
+            // This is the sole idea.* clip in the resident catalog, and its
+            // authored start/end pose has crossed arms.
+            LillyActivity::Running => (RUNNING_ANIMATION, true),
+            LillyActivity::Waiting => {
+                let variant = next_distinct_variant(
+                    &mut self.rng,
+                    self.last_waiting_variant,
+                    WAITING_ANIMATIONS.len(),
+                );
+                self.last_waiting_variant = Some(variant);
+                (WAITING_ANIMATIONS[variant], false)
+            }
+            LillyActivity::Review => (REVIEW_ANIMATION, false),
+        };
+        self.pending = Some(LillySuggestedGesture {
+            scheduled: resolve(tag, SpiritRgba8::WHITE)?,
+            crossed,
+            expires_ms: now_ms.saturating_add(ACTIVITY_GESTURE_EXPIRY_MS),
+        });
+        Ok(())
+    }
+
+    fn take(&mut self, now_ms: u64) -> Result<Option<LillyScheduledAnimation>, LillyProtocolError> {
+        let Some(gesture) = self.pending else {
+            return Ok(None);
+        };
+        match admit_gesture(
+            gesture.scheduled,
+            gesture.crossed,
+            gesture.expires_ms,
+            now_ms,
+        )? {
+            LillyGestureAdmission::Expired => {
+                self.pending = None;
+                Ok(None)
+            }
+            LillyGestureAdmission::Prepare(scheduled) => Ok(Some(scheduled)),
+            LillyGestureAdmission::Play(scheduled) => {
+                self.pending = None;
+                Ok(Some(scheduled))
+            }
+        }
+    }
+}
+
+enum LillyGestureAdmission {
+    Expired,
+    Prepare(LillyScheduledAnimation),
+    Play(LillyScheduledAnimation),
+}
+
+/// Reuse the native posture transitions before a suggested clip, accounting
+/// for their duration before admitting either clip. Idle then resumes from the
+/// actual endpoint posture rather than snapping back to an old arm position.
+fn admit_gesture(
+    scheduled: LillyScheduledAnimation,
+    crossed: bool,
+    expires_ms: u64,
+    now_ms: u64,
+) -> Result<LillyGestureAdmission, LillyProtocolError> {
+    if now_ms >= expires_ms || scheduled.boundary_ms > expires_ms.saturating_sub(now_ms) {
+        return Ok(LillyGestureAdmission::Expired);
+    }
+    let mut idle = IDLE_STRATEGY.lock();
+    let idle = idle.get_or_insert_with(|| LillyIdleStrategy::new(Instant::now()));
+    if idle.crossed == crossed {
+        return Ok(LillyGestureAdmission::Play(scheduled));
+    }
+    let preparation = resolve(idle_transition_key(crossed), scheduled.rgba)?;
+    if preparation
+        .boundary_ms
+        .saturating_add(scheduled.boundary_ms)
+        > expires_ms.saturating_sub(now_ms)
+    {
+        return Ok(LillyGestureAdmission::Expired);
+    }
+    idle.pending_crossed = Some(crossed);
+    Ok(LillyGestureAdmission::Prepare(preparation))
+}
+
 /// Resident idle policy. The steady state is one eyes-open frame; Tyche only
 /// chooses when an existing soft-blink clip runs and when the resident
 /// crossed/uncrossed posture changes.
@@ -346,6 +515,17 @@ impl LillyIdleStrategy {
         }
     }
 
+    fn settle_posture(&mut self) {
+        if let Some(crossed) = self.pending_crossed.take() {
+            self.crossed = crossed;
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: idle strategy event=arms-transition-complete posture={}\n",
+                idle_posture_name(self.crossed),
+            );
+        }
+    }
+
     fn resume(&mut self, now: Instant) {
         if self.active {
             return;
@@ -372,14 +552,7 @@ impl LillyIdleStrategy {
     ) -> Result<LillyScheduledAnimation, LillyProtocolError> {
         self.resume(now);
 
-        if let Some(crossed) = self.pending_crossed.take() {
-            self.crossed = crossed;
-            crate::log_info!(
-                target: "gfx";
-                "trueos-spirit: idle strategy event=arms-transition-complete posture={}\n",
-                idle_posture_name(self.crossed),
-            );
-        }
+        self.settle_posture();
 
         if now >= self.next_wink {
             let next_ms =
@@ -522,6 +695,8 @@ static IDLE_STRATEGY: Mutex<Option<LillyIdleStrategy>> = Mutex::new(None);
 static EMOTION_SELECTOR: Mutex<Option<LillyEmotionSelector>> = Mutex::new(None);
 static LUMEN_SPEECH_PLAYING: AtomicBool = AtomicBool::new(false);
 static FAILED_REACTION: Mutex<Option<LillyFailedReaction>> = Mutex::new(None);
+static LAST_FAILED_VARIANT: Mutex<Option<usize>> = Mutex::new(None);
+static ACTIVITY_GESTURES: Mutex<Option<LillyActivityGestures>> = Mutex::new(None);
 
 /// Schedule one failure gesture against the VFX's already chosen envelope.
 /// A new failure replaces only an unplayed failure gesture; producer packages
@@ -530,25 +705,48 @@ pub(crate) fn schedule_failed_reaction(
     started_ms: u64,
     duration_ms: u64,
 ) -> Result<(), LillyProtocolError> {
-    let mut scheduled = resolve(FAILED_ANIMATION, SpiritRgba8::WHITE)?;
+    let variant = {
+        let mut last = LAST_FAILED_VARIANT.lock();
+        let variant = next_distinct_variant(
+            &mut crate::tyche::soft_rng(),
+            *last,
+            FAILED_ANIMATIONS.len(),
+        );
+        *last = Some(variant);
+        variant
+    };
+    let mut scheduled = resolve(FAILED_ANIMATIONS[variant], SpiritRgba8::WHITE)?;
     scheduled.animation.frame_period_ms = FAILED_FRAME_PERIOD_MS;
     scheduled.boundary_ms = scheduled.animation.cycle_duration_ms();
     *FAILED_REACTION.lock() = Some(LillyFailedReaction::new(started_ms, duration_ms, scheduled));
     Ok(())
 }
 
-fn take_failed_reaction(now_ms: u64) -> Option<LillyScheduledAnimation> {
+fn take_failed_reaction(
+    now_ms: u64,
+) -> Result<Option<LillyScheduledAnimation>, LillyProtocolError> {
     let mut pending = FAILED_REACTION.lock();
-    let reaction = (*pending)?;
+    let Some(reaction) = *pending else {
+        return Ok(None);
+    };
     if !reaction.can_finish(now_ms) {
         *pending = None;
-        return None;
+        return Ok(None);
     }
     if now_ms < reaction.ready_ms {
-        return None;
+        return Ok(None);
     }
-    *pending = None;
-    Some(reaction.scheduled)
+    match admit_gesture(reaction.scheduled, false, reaction.expires_ms, now_ms)? {
+        LillyGestureAdmission::Expired => {
+            *pending = None;
+            Ok(None)
+        }
+        LillyGestureAdmission::Prepare(scheduled) => Ok(Some(scheduled)),
+        LillyGestureAdmission::Play(scheduled) => {
+            *pending = None;
+            Ok(Some(scheduled))
+        }
+    }
 }
 
 /// Mixer-owned speech state. `true` is published only when Lumen PCM is about
@@ -635,8 +833,8 @@ pub(crate) fn enqueue_animation(tag: &str, rgba: SpiritRgba8) -> Result<usize, L
     ))
 }
 
-/// Convenience wrapper for text-only packages. The Spirit reader forwards
-/// drained text to its retained on-demand Gridpaper response document.
+/// Convenience wrapper for text-only packages. The reader currently logs and
+/// drains this text; the generic text presenter is not implemented.
 #[allow(dead_code)]
 pub(crate) fn enqueue_text(text: &str) -> Result<usize, LillyProtocolError> {
     enqueue_package(SpiritPackage::new(Some(String::from(text)), None))
@@ -750,12 +948,32 @@ pub(crate) fn stop_after_boundary() -> usize {
 
 /// Resolve the next whole clip at an animation boundary.
 ///
-/// Requests run directly in queue order. With no producer work, one neutral
-/// idle remains alive. This function is deliberately not a per-frame iterator:
-/// the renderer uses the returned schedule for that cheap inner loop, then asks
-/// here again at its next control or clip boundary.
+/// Producer packages run in queue order after native reasoning/speech and the
+/// timed failure cue. Occasional activity suggestions use otherwise free
+/// boundaries before falling back to native idle. This is not a per-frame
+/// iterator: the renderer uses the returned schedule for that cheap inner
+/// loop, then asks here again at its next control or clip boundary.
 #[allow(dead_code)]
 pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolError> {
+    // Snapshot terminal ownership before acquiring any Spirit lock. This is a
+    // natural clip/control boundary, so the preceding posture transition has
+    // also completed, even when higher-priority work is about to take over.
+    let terminal_status = crate::shell3::tui::program_status();
+    let now_ms = Instant::now().as_millis();
+    if let Some(idle) = IDLE_STRATEGY.lock().as_mut() {
+        idle.settle_posture();
+    }
+    {
+        let mut activity = ACTIVITY_GESTURES.lock();
+        let activity = activity.get_or_insert_with(LillyActivityGestures::new);
+        if let Err(error) = activity.observe(terminal_status, now_ms) {
+            crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: activity suggestion unavailable error={:?} action=continue-native-sequencer\n",
+                error,
+            );
+        }
+    }
     loop {
         if let Some(event) = crate::ai::ai_activity::try_take_reasoning_event() {
             pause_idle_strategy();
@@ -787,7 +1005,7 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             return resolve(LUMEN_TALK_ANIMATION, *LAST_RGBA.lock());
         }
 
-        if let Some(scheduled) = take_failed_reaction(Instant::now().as_millis()) {
+        if let Some(scheduled) = take_failed_reaction(Instant::now().as_millis())? {
             pause_idle_strategy();
             crate::log_info!(
                 target: "gfx";
@@ -800,13 +1018,23 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
         }
 
         let Some((package, ring_remaining)) = PACKAGE_RING.lock().pop() else {
+            let scheduled = ACTIVITY_GESTURES
+                .lock()
+                .as_mut()
+                .map(|activity| activity.take(Instant::now().as_millis()))
+                .transpose()?
+                .flatten();
+            if let Some(scheduled) = scheduled {
+                pause_idle_strategy();
+                return Ok(scheduled);
+            }
             return next_idle_animation(*LAST_RGBA.lock());
         };
         log_drained_package(&package, ring_remaining);
 
         let Some(gesture) = package.gesture else {
-            // Text has reached the response presenter. Keep draining so a
-            // later gesture in the same reader turn can flow normally.
+            // Text has been logged; no generic presenter is available. Keep
+            // draining so a later gesture can flow normally in this turn.
             continue;
         };
         pause_idle_strategy();
@@ -833,7 +1061,7 @@ fn log_drained_package(package: &SpiritPackage, ring_remaining: usize) {
         gesture_tag,
         rgba,
         ring_remaining,
-        if package.text.is_some() { "ui4-response" } else { "none" },
+        if package.text.is_some() { "logged" } else { "none" },
         if package.gesture.is_some() { "sequence" } else { "none" },
     );
 }
