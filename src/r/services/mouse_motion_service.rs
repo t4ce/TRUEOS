@@ -5,7 +5,7 @@
 //! policy, clocks animation and is the only control-plane component which
 //! emits those commands into the existing virtual-cursor HID ring.
 
-use alloc::vec::Vec as AllocVec;
+use alloc::{sync::Arc, vec::Vec as AllocVec};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use heapless::{Deque, String, Vec};
@@ -30,9 +30,18 @@ pub const MOUSE_CONTROL_FLAG_CLEAR_QUEUE: u8 = 1 << 0;
 const MOUSE_CONTROL_EVENT_FLAG_STATION: u32 = 1 << 16;
 const MOUSE_CONTROL_EVENT_FLAG_TELEPORT: u32 = 1 << 17;
 const MOUSE_CONTROL_EVENT_FLAG_ANIMATED: u32 = 1 << 18;
+/// A mediated cursor which contributes presentation, never application input.
+/// Keep this on every queued HID event so retirement cannot make stale motion
+/// interactive after its station record has gone away.
+pub(crate) const MOUSE_CONTROL_EVENT_FLAG_VISUAL_ONLY: u32 =
+    crate::usb2::hid::HID_CURSOR_EVENT_FLAG_VISUAL_ONLY;
 
-const MAX_CURSORS: usize = 32;
+// Preserve the existing 32-cursor allowance alongside 32 visual markers owned
+// by the trusted Spirit-thoughts service. Other principals retain their quota.
+const MAX_CURSORS: usize = 64;
 const MAX_CURSORS_PER_PRINCIPAL: usize = 8;
+const MAX_THOUGHT_CURSORS: usize = 32;
+const THOUGHT_CURSOR_PRINCIPAL: MouseControlPrincipal = MouseControlPrincipal::KernelApp(0x53);
 const MAX_COMMANDS_PER_CURSOR: usize = 32;
 const MAX_LABEL_BYTES: usize = 32;
 const MAX_JSON_BYTES: usize = 16 * 1024;
@@ -47,7 +56,6 @@ static NEXT_SLOT: AtomicU32 = AtomicU32::new(1);
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MouseControlPrincipal {
     Kernel,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     KernelApp(u8),
     Vm(u8),
 }
@@ -56,6 +64,43 @@ pub(crate) enum MouseControlPrincipal {
 pub(crate) struct MouseControlCursor {
     pub(crate) handle: u64,
     pub(crate) slot_id: u32,
+}
+
+/// Color-free runs prepared once from the shared microfont service. The
+/// software-cursor plane only translates, clips and recolors these on motion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MouseControlGlyph {
+    pub(crate) character: char,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) runs: Arc<[MouseControlGlyphRun]>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MouseControlGlyphRun {
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+    pub(crate) width: u16,
+    pub(crate) coverage: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MouseControlVisualMetadata {
+    pub(crate) color: Option<crate::graphics::primitives::Rgba8>,
+    pub(crate) glyph: Option<Arc<MouseControlGlyph>>,
+    pub(crate) visible: bool,
+    pub(crate) visual_only: bool,
+}
+
+impl MouseControlVisualMetadata {
+    fn interactive(color: Option<crate::graphics::primitives::Rgba8>) -> Self {
+        Self {
+            color,
+            glyph: None,
+            visible: true,
+            visual_only: false,
+        }
+    }
 }
 
 #[repr(C)]
@@ -136,7 +181,7 @@ struct CursorRecord {
     capability: MouseControlCursor,
     principal: MouseControlPrincipal,
     label: String<MAX_LABEL_BYTES>,
-    visual_color: Option<crate::graphics::primitives::Rgba8>,
+    visual: MouseControlVisualMetadata,
     x: i32,
     y: i32,
     buttons_down: u32,
@@ -159,14 +204,27 @@ impl MouseControlStation {
         &mut self,
         principal: MouseControlPrincipal,
         label: &str,
-        visual_color: Option<crate::graphics::primitives::Rgba8>,
+        visual: MouseControlVisualMetadata,
     ) -> Result<MouseControlCursor, MouseControlError> {
-        if self
+        let trusted_visual = principal == THOUGHT_CURSOR_PRINCIPAL && visual.visual_only;
+        let baseline_cursors = self
             .cursors
             .iter()
-            .filter(|cursor| cursor.principal == principal)
-            .count()
-            >= MAX_CURSORS_PER_PRINCIPAL
+            .filter(|cursor| {
+                !(cursor.principal == THOUGHT_CURSOR_PRINCIPAL && cursor.visual.visual_only)
+            })
+            .count();
+        if (!trusted_visual && baseline_cursors >= MAX_CURSORS - MAX_THOUGHT_CURSORS)
+            || self
+                .cursors
+                .iter()
+                .filter(|cursor| cursor.principal == principal)
+                .count()
+                >= if trusted_visual {
+                    MAX_THOUGHT_CURSORS
+                } else {
+                    MAX_CURSORS_PER_PRINCIPAL
+                }
             || self.cursors.len() >= MAX_CURSORS
         {
             return Err(MouseControlError::Capacity);
@@ -194,7 +252,7 @@ impl MouseControlStation {
                 capability,
                 principal,
                 label: stored_label,
-                visual_color,
+                visual: visual.clone(),
                 x: (width / 2) as i32,
                 y: (height / 2) as i32,
                 buttons_down: 0,
@@ -208,7 +266,7 @@ impl MouseControlStation {
             slot_id,
             principal,
             label,
-            visual_color,
+            visual.color,
         );
         Ok(capability)
     }
@@ -266,6 +324,30 @@ impl MouseControlStation {
         released
     }
 
+    fn set_visual_color(
+        &mut self,
+        principal: MouseControlPrincipal,
+        handle: u64,
+        color: crate::graphics::primitives::Rgba8,
+    ) -> Result<bool, MouseControlError> {
+        let index = self.cursor_index(principal, handle)?;
+        if self.cursors[index].visual.color == Some(color) { return Ok(false); }
+        self.cursors[index].visual.color = Some(color);
+        Ok(true)
+    }
+
+    fn set_visible(
+        &mut self,
+        principal: MouseControlPrincipal,
+        handle: u64,
+        visible: bool,
+    ) -> Result<bool, MouseControlError> {
+        let index = self.cursor_index(principal, handle)?;
+        if self.cursors[index].visual.visible == visible { return Ok(false); }
+        self.cursors[index].visual.visible = visible;
+        Ok(true)
+    }
+
     fn submit(
         &mut self,
         principal: MouseControlPrincipal,
@@ -275,6 +357,7 @@ impl MouseControlStation {
         validate_command(&command)?;
         let index = self.cursor_index(principal, handle)?;
         let cursor = &mut self.cursors[index];
+        validate_cursor_command(cursor, &command)?;
         if command.flags & MOUSE_CONTROL_FLAG_CLEAR_QUEUE != 0 {
             cursor.commands.clear();
             cursor.active = None;
@@ -302,6 +385,9 @@ impl MouseControlStation {
             .first()
             .is_some_and(|command| command.flags & MOUSE_CONTROL_FLAG_CLEAR_QUEUE != 0);
         let cursor = &mut self.cursors[index];
+        for command in commands {
+            validate_cursor_command(cursor, command)?;
+        }
         let available = if clear {
             MAX_COMMANDS_PER_CURSOR
         } else {
@@ -379,7 +465,7 @@ impl MouseControlStation {
                                     cursor.y,
                                     cursor.buttons_down,
                                     command.wheel,
-                                    MOUSE_CONTROL_EVENT_FLAG_STATION,
+                                    cursor_event_flags(cursor, MOUSE_CONTROL_EVENT_FLAG_STATION),
                                 );
                             }
                             break;
@@ -394,8 +480,11 @@ impl MouseControlStation {
                                 y,
                                 cursor.buttons_down,
                                 command.wheel,
-                                MOUSE_CONTROL_EVENT_FLAG_STATION
-                                    | MOUSE_CONTROL_EVENT_FLAG_TELEPORT,
+                                cursor_event_flags(
+                                    cursor,
+                                    MOUSE_CONTROL_EVENT_FLAG_STATION
+                                        | MOUSE_CONTROL_EVENT_FLAG_TELEPORT,
+                                ),
                             );
                         }
                         MOUSE_CONTROL_OPCODE_BUTTONS | MOUSE_CONTROL_OPCODE_WHEEL => {
@@ -405,7 +494,7 @@ impl MouseControlStation {
                                 cursor.y,
                                 cursor.buttons_down,
                                 command.wheel,
-                                MOUSE_CONTROL_EVENT_FLAG_STATION,
+                                cursor_event_flags(cursor, MOUSE_CONTROL_EVENT_FLAG_STATION),
                             );
                         }
                         _ => {}
@@ -435,7 +524,10 @@ impl MouseControlStation {
                     y,
                     cursor.buttons_down,
                     0,
-                    MOUSE_CONTROL_EVENT_FLAG_STATION | MOUSE_CONTROL_EVENT_FLAG_ANIMATED,
+                    cursor_event_flags(
+                        cursor,
+                        MOUSE_CONTROL_EVENT_FLAG_STATION | MOUSE_CONTROL_EVENT_FLAG_ANIMATED,
+                    ),
                 );
             }
             if done {
@@ -452,7 +544,76 @@ pub(crate) fn request_cursor(
     label: &str,
     visual_color: Option<crate::graphics::primitives::Rgba8>,
 ) -> Result<MouseControlCursor, MouseControlError> {
-    STATION.lock().request(principal, label, visual_color)
+    STATION.lock().request(
+        principal,
+        label,
+        MouseControlVisualMetadata::interactive(visual_color),
+    )
+}
+
+/// Allocate a non-interactive glyph in the existing virtual-cursor station.
+/// It accepts ordinary motion programs but cannot inject buttons or wheel,
+/// select frames, acquire keyboard focus, or participate in desktop hover.
+pub(crate) fn request_glyph_cursor(
+    principal: MouseControlPrincipal,
+    label: &str,
+    character: char,
+    height_px: u16,
+    color: crate::graphics::primitives::Rgba8,
+) -> Result<MouseControlCursor, MouseControlError> {
+    let shared = STATION
+        .lock()
+        .cursors
+        .iter()
+        .filter_map(|cursor| cursor.visual.glyph.as_ref())
+        .find(|glyph| glyph.character == character && glyph.height == height_px)
+        .cloned();
+    let glyph = match shared {
+        Some(glyph) => glyph,
+        None => Arc::new(prepare_cursor_glyph(character, height_px)?),
+    };
+    STATION.lock().request(
+        principal,
+        label,
+        MouseControlVisualMetadata {
+            color: Some(color),
+            glyph: Some(glyph),
+            visible: true,
+            visual_only: true,
+        },
+    )
+}
+
+/// Change a mediated cursor's tint without rerasterizing its glyph or changing
+/// its identity, position, input behavior, or queued motion.
+pub(crate) fn set_cursor_visual_color(
+    principal: MouseControlPrincipal,
+    handle: u64,
+    color: crate::graphics::primitives::Rgba8,
+) -> Result<(), MouseControlError> {
+    let changed = STATION.lock().set_visual_color(principal, handle, color)?;
+    if changed { crate::ui4::notify_cursor_visual_change(); }
+    Ok(())
+}
+
+/// Hide presentation while preserving the mediated cursor and its choreography.
+pub(crate) fn set_cursor_visible(
+    principal: MouseControlPrincipal,
+    handle: u64,
+    visible: bool,
+) -> Result<(), MouseControlError> {
+    let changed = STATION.lock().set_visible(principal, handle, visible)?;
+    if changed { crate::ui4::notify_cursor_visual_change(); }
+    Ok(())
+}
+
+pub(crate) fn cursor_visual_metadata(slot_id: u32) -> Option<MouseControlVisualMetadata> {
+    STATION
+        .lock()
+        .cursors
+        .iter()
+        .find(|cursor| cursor.capability.slot_id == slot_id)
+        .map(|cursor| cursor.visual.clone())
 }
 
 /// Resolve presentation metadata for one mediated vCursor without exposing
@@ -463,7 +624,7 @@ pub(crate) fn cursor_visual_color(slot_id: u32) -> Option<crate::graphics::primi
         .cursors
         .iter()
         .find(|cursor| cursor.capability.slot_id == slot_id)
-        .and_then(|cursor| cursor.visual_color)
+        .and_then(|cursor| cursor.visual.color)
 }
 
 pub(crate) fn release_cursor(
@@ -601,6 +762,74 @@ fn validate_command(command: &MouseControlCommand) -> Result<(), MouseControlErr
     }
 }
 
+fn validate_cursor_command(
+    cursor: &CursorRecord,
+    command: &MouseControlCommand,
+) -> Result<(), MouseControlError> {
+    if cursor.visual.visual_only
+        && (command.buttons_set != 0
+            || command.buttons_clear != 0
+            || command.wheel != 0
+            || matches!(
+                command.opcode,
+                MOUSE_CONTROL_OPCODE_BUTTONS | MOUSE_CONTROL_OPCODE_WHEEL
+            ))
+    {
+        return Err(MouseControlError::Denied);
+    }
+    Ok(())
+}
+
+fn cursor_event_flags(cursor: &CursorRecord, flags: u32) -> u32 {
+    flags
+        | if cursor.visual.visual_only {
+            MOUSE_CONTROL_EVENT_FLAG_VISUAL_ONLY
+        } else {
+            0
+        }
+}
+
+fn prepare_cursor_glyph(
+    character: char,
+    height: u16,
+) -> Result<MouseControlGlyph, MouseControlError> {
+    if !(11..=253).contains(&height) || character.is_control() || character.is_whitespace() {
+        return Err(MouseControlError::Invalid);
+    }
+    let mask = super::hull_font_service::raster_glyph(character, u32::from(height))
+        .map_err(|_| MouseControlError::Invalid)?;
+    let mut runs = AllocVec::new();
+    for y in 0..mask.height as usize {
+        let row = &mask.pixels[y * mask.width as usize..(y + 1) * mask.width as usize];
+        let mut x = 0;
+        while x < row.len() {
+            let coverage = row[x];
+            let from = x;
+            x += 1;
+            while x < row.len() && row[x] == coverage {
+                x += 1;
+            }
+            if coverage != 0 {
+                runs.push(MouseControlGlyphRun {
+                    x: from as u16,
+                    y: y as u16,
+                    width: (x - from) as u16,
+                    coverage,
+                });
+            }
+        }
+    }
+    if runs.is_empty() {
+        return Err(MouseControlError::Invalid);
+    }
+    Ok(MouseControlGlyph {
+        character,
+        width: mask.width as u16,
+        height,
+        runs: Arc::from(runs.into_boxed_slice()),
+    })
+}
+
 fn apply_button_sets(cursor: &mut CursorRecord, set: u32, clear: u32) {
     cursor.buttons_down = (cursor.buttons_down | set) & !clear;
 }
@@ -663,7 +892,10 @@ fn evaluate_path(active: ActiveStroke, t: f64) -> (i32, i32) {
 
 fn clamp_position(x: i32, y: i32) -> (i32, i32) {
     let (width, height) = viewport_dimensions();
-    (x.clamp(0, width.saturating_sub(1) as i32), y.clamp(0, height.saturating_sub(1) as i32))
+    (
+        x.clamp(0, width.saturating_sub(1) as i32),
+        y.clamp(0, height.saturating_sub(1) as i32),
+    )
 }
 
 fn emit_cursor(slot_id: u32, x: i32, y: i32, buttons: u32, wheel: i16, flags: u32) {
@@ -707,7 +939,10 @@ fn command_from_json(value: &Value) -> Result<MouseControlCommand, MouseControlE
         "wheel" => MOUSE_CONTROL_OPCODE_WHEEL,
         _ => return Err(MouseControlError::BadJson),
     };
-    if matches!(command.opcode, MOUSE_CONTROL_OPCODE_TELEPORT | MOUSE_CONTROL_OPCODE_STROKE) {
+    if matches!(
+        command.opcode,
+        MOUSE_CONTROL_OPCODE_TELEPORT | MOUSE_CONTROL_OPCODE_STROKE
+    ) {
         command.x = json_i32(object.get("x"))?;
         command.y = json_i32(object.get("y"))?;
     }
@@ -770,5 +1005,128 @@ fn json_u32_optional(value: Option<&Value>) -> Result<u32, MouseControlError> {
         Some(value) => u32::try_from(value.as_u64().ok_or(MouseControlError::BadJson)?)
             .map_err(|_| MouseControlError::BadJson),
         None => Ok(0),
+    }
+}
+
+#[cfg(test)]
+mod visual_cursor_tests {
+    use super::*;
+    use crate::graphics::primitives::Rgba8;
+
+    fn visual() -> MouseControlVisualMetadata {
+        MouseControlVisualMetadata {
+            color: Some(Rgba8::new(0, 0, 0, 255)),
+            glyph: None,
+            visible: true,
+            visual_only: true,
+        }
+    }
+
+    #[test]
+    fn trusted_visual_budget_preserves_all_32_existing_cursors() {
+        let mut station = MouseControlStation::new();
+        for principal in 0..4 {
+            for _ in 0..MAX_CURSORS_PER_PRINCIPAL {
+                station.request(MouseControlPrincipal::Vm(principal), "input", MouseControlVisualMetadata::interactive(None)).unwrap();
+            }
+        }
+        assert_eq!(station.request(MouseControlPrincipal::Vm(4), "overflow", visual()), Err(MouseControlError::Capacity));
+        for _ in 0..MAX_THOUGHT_CURSORS {
+            station.request(THOUGHT_CURSOR_PRINCIPAL, "marker", visual()).unwrap();
+        }
+        assert_eq!(station.cursors.len(), MAX_CURSORS);
+        assert_eq!(station.request(THOUGHT_CURSOR_PRINCIPAL, "overflow", visual()), Err(MouseControlError::Capacity));
+    }
+
+    #[test]
+    fn ordinary_glyph_principals_retain_eight_cursor_limit() {
+        let mut station = MouseControlStation::new();
+        for _ in 0..MAX_CURSORS_PER_PRINCIPAL {
+            station.request(MouseControlPrincipal::Vm(7), "marker", visual()).unwrap();
+        }
+        assert_eq!(station.request(MouseControlPrincipal::Vm(7), "overflow", visual()), Err(MouseControlError::Capacity));
+        assert!(station.request(MouseControlPrincipal::Vm(8), "independent", visual()).is_ok());
+    }
+
+    #[test]
+    fn visual_program_rejects_input_atomically_before_queue_clear() {
+        let mut station = MouseControlStation::new();
+        let cursor = station.request(THOUGHT_CURSOR_PRINCIPAL, "marker", visual()).unwrap();
+        let motion = MouseControlCommand { opcode: MOUSE_CONTROL_OPCODE_TELEPORT, x: 10, y: 20, ..Default::default() };
+        station.submit(THOUGHT_CURSOR_PRINCIPAL, cursor.handle, motion).unwrap();
+        for input in [
+            MouseControlCommand { opcode: MOUSE_CONTROL_OPCODE_BUTTONS, ..Default::default() },
+            MouseControlCommand { opcode: MOUSE_CONTROL_OPCODE_WHEEL, ..Default::default() },
+            MouseControlCommand { buttons_set: 1, ..motion },
+            MouseControlCommand { wheel: 1, ..motion },
+        ] {
+            assert_eq!(station.submit_program(THOUGHT_CURSOR_PRINCIPAL, cursor.handle, &[
+                MouseControlCommand { flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE, ..motion }, input,
+            ]), Err(MouseControlError::Denied));
+            assert_eq!(station.cursors[0].commands.len(), 1);
+        }
+    }
+
+    #[test]
+    fn visual_metadata_updates_preserve_motion_and_authority() {
+        let mut station = MouseControlStation::new();
+        let cursor = station.request(THOUGHT_CURSOR_PRINCIPAL, "marker", visual()).unwrap();
+        station.submit(THOUGHT_CURSOR_PRINCIPAL, cursor.handle, MouseControlCommand {
+            opcode: MOUSE_CONTROL_OPCODE_STROKE, duration_ms: 1_000, x: 20, y: 30, ..Default::default()
+        }).unwrap();
+        let color = Rgba8::new(0, 160, 255, 255);
+        assert_eq!(station.set_visual_color(MouseControlPrincipal::Vm(7), cursor.handle, color), Err(MouseControlError::Denied));
+        assert_eq!(station.set_visible(MouseControlPrincipal::Vm(7), cursor.handle, false), Err(MouseControlError::Denied));
+        station.set_visual_color(THOUGHT_CURSOR_PRINCIPAL, cursor.handle, color).unwrap();
+        station.set_visible(THOUGHT_CURSOR_PRINCIPAL, cursor.handle, false).unwrap();
+        assert_eq!(station.cursors[0].visual.color, Some(color));
+        assert!(!station.cursors[0].visual.visible);
+        assert!(station.cursors[0].visual.visual_only);
+        assert_eq!(station.cursors[0].commands.len(), 1);
+        station.set_visible(THOUGHT_CURSOR_PRINCIPAL, cursor.handle, true).unwrap();
+        assert_eq!(station.cursors[0].commands.len(), 1);
+    }
+
+    #[test]
+    fn visual_motion_uses_existing_stroke_clock_and_tags_every_event() {
+        let mut station = MouseControlStation::new();
+        let cursor = station.request(THOUGHT_CURSOR_PRINCIPAL, "marker", visual()).unwrap();
+        station.submit_program(THOUGHT_CURSOR_PRINCIPAL, cursor.handle, &[
+            MouseControlCommand { opcode: MOUSE_CONTROL_OPCODE_TELEPORT, x: 0, y: 0, ..Default::default() },
+            MouseControlCommand { opcode: MOUSE_CONTROL_OPCODE_STROKE, duration_ms: 100, x: 100, y: 60, ..Default::default() },
+        ]).unwrap();
+        station.tick(0);
+        station.tick(50);
+        assert_eq!((station.cursors[0].x, station.cursors[0].y), (50, 30));
+        station.tick(100);
+        assert_eq!((station.cursors[0].x, station.cursors[0].y), (100, 60));
+        for flags in [MOUSE_CONTROL_EVENT_FLAG_STATION, MOUSE_CONTROL_EVENT_FLAG_TELEPORT, MOUSE_CONTROL_EVENT_FLAG_ANIMATED] {
+            assert_ne!(cursor_event_flags(&station.cursors[0], flags) & MOUSE_CONTROL_EVENT_FLAG_VISUAL_ONLY, 0);
+        }
+        assert_eq!(station.cursors[0].buttons_down, 0);
+        assert!(station.cursors[0].active.is_none());
+    }
+
+    #[test]
+    fn glyph_registration_uses_native_section_sign_geometry() {
+        for height in [11, 16, 48, 253] {
+            let glyph = prepare_cursor_glyph('§', height).unwrap();
+            assert_eq!(glyph.width, (height * 6).div_ceil(11));
+            assert_eq!(glyph.height, height);
+            assert!(glyph.runs.iter().all(|run| run.width != 0 && run.coverage != 0 && run.x + run.width <= glyph.width && run.y < height));
+        }
+        for (character, height) in [(' ', 16), ('\n', 16), ('§', 0), ('§', 254), ('\u{10ffff}', 16)] {
+            assert_eq!(prepare_cursor_glyph(character, height), Err(MouseControlError::Invalid));
+        }
+    }
+
+    #[test]
+    fn cursor_release_drops_registration_and_rejects_foreign_owner() {
+        let mut station = MouseControlStation::new();
+        let cursor = station.request(THOUGHT_CURSOR_PRINCIPAL, "marker", visual()).unwrap();
+        assert_eq!(station.release(MouseControlPrincipal::Vm(2), cursor.handle), Err(MouseControlError::Denied));
+        station.release(THOUGHT_CURSOR_PRINCIPAL, cursor.handle).unwrap();
+        assert!(station.cursors.is_empty());
+        assert_eq!(station.release(THOUGHT_CURSOR_PRINCIPAL, cursor.handle), Err(MouseControlError::NotFound));
     }
 }

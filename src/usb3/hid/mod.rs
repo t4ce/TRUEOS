@@ -25,6 +25,8 @@ const HID_KIND_TABLET: u8 = crate::r::cursor::HID_KIND_TABLET;
 const HID_KIND_VIRTUAL_CURSOR: u8 = crate::r::cursor::HID_KIND_VIRTUAL_CURSOR;
 const CURSOR_EVENT_RING_CAP: usize = crate::allcaps::input::HID_CURSOR_EVENT_RING_CAP;
 pub const HID_CURSOR_EVENT_FLAG_DEVICE_LOST: u32 = 1 << 31;
+/// A station-owned software-cursor visual, without input-device enrollment.
+pub(crate) const HID_CURSOR_EVENT_FLAG_VISUAL_ONLY: u32 = 1 << 19;
 
 const ZERO_CURSOR_EVENT: TrueosHidCursorEvent = TrueosHidCursorEvent {
     t_ms: 0,
@@ -294,18 +296,22 @@ pub(crate) fn inject_virtual_cursor_event(
         y: clamp01(y),
         flags,
     };
-    crate::r::cursor::upsert_snapshot(0, slot_id, 0, HID_KIND_VIRTUAL_CURSOR, x, y, buttons_down);
-    self::hut::upsert_mouse_state(
-        0,
-        slot_id,
-        0,
-        clamp01(x),
-        clamp01(y),
-        buttons_down,
-        self::hut::HidSourceKind::Ai,
-        "ai",
-        true,
-    );
+    if flags & HID_CURSOR_EVENT_FLAG_VISUAL_ONLY == 0 {
+        // Visual-only station cursors share delivery and presentation, not
+        // mouse discovery, input snapshots, combo pairing or their budgets.
+        crate::r::cursor::upsert_snapshot(0, slot_id, 0, HID_KIND_VIRTUAL_CURSOR, x, y, buttons_down);
+        self::hut::upsert_mouse_state(
+            0,
+            slot_id,
+            0,
+            clamp01(x),
+            clamp01(y),
+            buttons_down,
+            self::hut::HidSourceKind::Ai,
+            "ai",
+            true,
+        );
+    }
     push_cursor_event(event);
     notify_cursor_event_ready();
 }

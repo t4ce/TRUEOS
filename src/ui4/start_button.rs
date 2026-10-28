@@ -287,8 +287,9 @@ fn service_start_button(button: &mut ActiveStartButton) {
     let visuals = super::software_cursor_visuals();
     let cursor_inside = visuals
         .iter()
+        .filter(|cursor| cursor.interactive)
         .any(|cursor| point_near_placement(placement, cursor.x, cursor.y, 0, 0));
-    let cursor_near = visuals.iter().any(|cursor| {
+    let cursor_near = visuals.iter().filter(|cursor| cursor.interactive).any(|cursor| {
         point_near_placement(
             placement,
             cursor.x,

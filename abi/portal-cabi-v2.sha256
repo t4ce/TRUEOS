@@ -30,4 +30,5 @@
 # Additive scaled scene backing for winit layers v1. Existing signatures unchanged.
 # Additive native offscreen indexed RGBA8 readback v1; existing signatures unchanged.
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
-6d66d963ad24a3b8fa1753bf5f98f41800c400f14ccff5339362c99d1293dbdd
+# Additive owner-bound Spirit agent snapshot v1; every existing declaration unchanged.
+392995cc0ac332dd1f1dca50ee5a74d251a5324d994a0ba202ededa1a5213629

@@ -643,6 +643,8 @@ pub fn shutdown(reason: &[u8]) -> ! {
 }
 
 pub const OP_BP_VGPU_OFFSCREEN_INDEXED_BATCH_V1: u32 = 0x190;
+/// Versioned, owner-bound agent presentation snapshot for resident Spirit.
+pub const OP_BP_SPIRIT_AGENTS_PUBLISH_V1: u32 = 0x191;
 
 /// Versioned node metadata: kind,u64 size,u64 persistent id,u32 root identity.
 pub const OP_BP_ASYNC_FS_METADATA_START_V1: u32 = 0x231;

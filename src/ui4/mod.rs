@@ -112,7 +112,7 @@ pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
 
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4PointerEvent,
-    Ui4ResizeEvent, Ui4VisualRect, focused_keyboard_state, reselect_window_for_cursor,
+    Ui4ResizeEvent, Ui4VisualRect, focused_keyboard_state, notify_cursor_visual_change, reselect_window_for_cursor,
     select_window_for_cursor, software_cursor_visuals, take_owner_input_events,
     ui4_input_service_task, window_input_routes,
 };

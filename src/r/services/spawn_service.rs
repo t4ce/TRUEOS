@@ -725,6 +725,16 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
                 );
             }
         }
+        match crate::spirit::spirit_thoughts::spirit_thoughts_task() {
+            Ok(token) => ap1_spawner.spawn(token),
+            Err(error) => {
+                crate::log_warn!(
+                    target: "service";
+                    "trueos-spirit: agent marker task spawn failed error={:?}\n",
+                    error,
+                );
+            }
+        }
         SpawnAttempt::Spawned
     }
 }

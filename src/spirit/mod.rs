@@ -26,6 +26,7 @@ mod lilly;
 mod lilly_cursor;
 mod paper_demo;
 pub(crate) mod lilly_protocol;
+pub(crate) mod spirit_thoughts;
 
 #[allow(dead_code)]
 #[path = "Spirit_VFX.rs"]
@@ -36,6 +37,53 @@ mod window_selection;
 pub(crate) use lilly_protocol::{LillyEmotion, enqueue_emotion_words, enqueue_emotions};
 
 pub(crate) use window_selection::spirit_window_selection_task;
+
+pub(super) fn marker_anchor() -> Option<(u32, u32, i32, i32, u32, u32)> {
+    intel_cursor::spirit_cursor_geometry(active_spirit_fence()?.0)
+}
+
+/// Accept a complete or incremental source snapshot from a live Blueprint.
+/// Identity comes from the native execution context, never the payload.
+pub(crate) fn publish_agent_snapshot_bytes(owner: u8, bytes: &[u8]) -> i32 {
+    let Some(run) = crate::hv::vm_run_generation(owner).filter(|run| *run != 0) else {
+        return -1;
+    };
+    let state = crate::hv::vm_state(owner);
+    if !state.supported || !state.running || state.stop_requested
+        || crate::hv::blueprint_instance_identity(owner).is_none()
+    {
+        return -1;
+    }
+    let snapshot = match v::spirit_agents::decode(bytes) {
+        Ok(snapshot) => snapshot,
+        Err(v::spirit_agents::SnapshotError::Invalid) => return -3,
+        Err(v::spirit_agents::SnapshotError::Capacity) => return -4,
+    };
+    if crate::hv::vm_run_generation(owner) != Some(run) {
+        return -1;
+    }
+    spirit_thoughts::ingest(owner, run, snapshot).map_or_else(|error| error, |()| 0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_spirit_agents_publish_v1(ptr: *const u8, len: usize) -> i32 {
+    if len > v::spirit_agents::MAX_SNAPSHOT_BYTES {
+        return -4;
+    }
+    if ptr.is_null() || len == 0 {
+        return -3;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SPIRIT_AGENTS_PUBLISH_V1, 0, 0, bytes, &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK { data as i64 as i32 } else { -7 };
+    }
+    crate::hv::current_guest_execution_context_vm_id()
+        .map(|owner| publish_agent_snapshot_bytes(owner, bytes))
+        .unwrap_or(-1)
+}
 
 /// Architectural pipe/fence capacity kept for later activation.
 pub(crate) const SPIRIT_FENCE_COUNT: usize = 4;

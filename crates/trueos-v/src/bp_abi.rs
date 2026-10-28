@@ -572,6 +572,7 @@ unsafe extern "C" {
         text_len: usize,
     ) -> i32;
     pub fn trueos_cabi_spirit_move(x_normalized: f32, y_normalized: f32) -> i32;
+    pub fn trueos_cabi_spirit_agents_publish_v1(bytes: *const u8, len: usize) -> i32;
     pub fn trueos_cabi_dobby_ui4_windows(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_dobby_ui4_focus(window_id: u64) -> i32;
     pub fn trueos_cabi_dobby_ui4_observe_prepare() -> isize;

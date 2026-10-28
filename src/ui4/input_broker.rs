@@ -19,7 +19,8 @@ use super::{
     OutputId, Ui4CursorSource, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState,
 };
 
-const MAX_CURSOR_ROUTES: usize = 32;
+// Keep the existing input allowance alongside the trusted 32-marker budget.
+const MAX_CURSOR_ROUTES: usize = 64;
 const MAX_OWNER_QUEUES: usize = 64;
 const MAX_OWNER_EVENTS: usize = 256;
 const _: () = assert!(MAX_OWNER_EVENTS >= super::window_broker::MAX_WINDOWS);
@@ -204,6 +205,8 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
+    pub(crate) interactive: bool,
+    pub(crate) glyph: Option<Arc<crate::r::services::mouse_motion_service::MouseControlGlyph>>,
     pub(crate) icon: super::Ui4CursorIcon,
     pub(crate) custom_cursor: Option<Arc<super::Ui4CursorImage>>,
     pub(crate) stepped_cell: Option<Ui4VisualRect>,
@@ -288,6 +291,7 @@ struct CursorRoute {
     keyboard_source: Option<KeyboardSource>,
     selection_serial: u64,
     visible_after_motion: bool,
+    visual_only: bool,
     color: crate::graphics::primitives::Rgba8,
     secondary_anchor: Option<(u32, u32)>,
     secondary_start_placement: Option<WindowPlacement>,
@@ -320,6 +324,7 @@ impl CursorRoute {
             keyboard_source: None,
             selection_serial: 0,
             visible_after_motion: false,
+            visual_only: false,
             color: super::cursor_frame_inout::cursor_color(source),
             secondary_anchor: None,
             secondary_start_placement: None,
@@ -453,6 +458,9 @@ impl InputBroker {
     ) -> bool {
                 let _ = (combo_id, vcursor);
         let source = self.cursors[cursor_index].source;
+        if self.cursors[cursor_index].visual_only || visual_only_cursor(source) {
+            return false;
+        }
         let color = self.cursors[cursor_index].color;
         let change = super::cursor_frame_inout::select_frame(
             next.map(WindowTarget::cursor_frame_key),
@@ -549,8 +557,22 @@ impl InputBroker {
         let raw_x = normalized_to_pixel(event.x, width);
         let raw_y = normalized_to_pixel(event.y, height);
         let source = Ui4CursorSource::from_event(event);
-        let (combo_id, vcursor) = cursor_hut_metadata(source);
         let index = self.cursor_index(source, raw_x, raw_y);
+        if event.flags & crate::r::services::mouse_motion_service::MOUSE_CONTROL_EVENT_FLAG_VISUAL_ONLY != 0
+            || visual_only_cursor(source)
+        {
+            // These reports use the same mediated HID motion station but own
+            // presentation only. Do not hit-test, hover, select, capture or
+            // let a keyboard choose this route as its most-recent fallback.
+            let route = &mut self.cursors[index];
+            route.visual_only = true;
+            route.x = raw_x;
+            route.y = raw_y;
+            route.buttons_down = 0;
+            route.visible_after_motion = true;
+            return;
+        }
+        let (combo_id, vcursor) = cursor_hut_metadata(source);
         let snapped_window = super::center_snapped_frame_for_source(source)
             .and_then(|key| super::window_broker::window_snapshot(key.owner, key.window));
         let (x, y) = snapped_window.map_or((raw_x, raw_y), |window| {
@@ -1511,6 +1533,7 @@ impl InputBroker {
             .iter()
             .enumerate()
             .filter_map(|(index, route)| {
+                if route.visual_only { return None; }
                 if selected_only && !super::cursor_frame_inout::source_selected(route.source) {
                     return None;
                 }
@@ -1532,7 +1555,7 @@ impl InputBroker {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, route)| {
-                    (!selected_only || super::cursor_frame_inout::source_selected(route.source))
+                    (!route.visual_only && (!selected_only || super::cursor_frame_inout::source_selected(route.source)))
                         .then_some((route.selection_serial, index))
                 })
                 .max_by_key(|(serial, _)| *serial)
@@ -1580,6 +1603,7 @@ impl InputBroker {
         let app_focus = super::selected_frame() == Some(target.cursor_frame_key());
         self.cursors
             .iter()
+            .filter(|route| !route.visual_only)
             .filter_map(|route| {
                 let (combo_id, vcursor) = cursor_hut_metadata(route.source);
                 let keyboard = if combo_id != 0 {
@@ -1699,6 +1723,25 @@ impl InputBroker {
             if !route.visible_after_motion {
                 continue;
             }
+            let metadata = (route.source.hid_kind == crate::r::cursor::HID_KIND_VIRTUAL_CURSOR)
+                .then(|| crate::r::services::mouse_motion_service::cursor_visual_metadata(route.source.slot_id))
+                .flatten();
+            if metadata.as_ref().is_some_and(|visual| !visual.visible)
+                || (route.visual_only && metadata.is_none()) {
+                continue;
+            }
+            if route.visual_only {
+                let _ = visuals.push(Ui4SoftwareCursorVisual {
+                    drag_preview: None, x: route.x, y: route.y,
+                    color: metadata.as_ref().and_then(|visual| visual.color).unwrap_or(route.color),
+                    interactive: false,
+                    glyph: metadata.and_then(|visual| visual.glyph),
+                    icon: super::Ui4CursorIcon::Default, custom_cursor: None,
+                    stepped_cell: None, context_menu: None, selection: None,
+                    dock_fields_visible: false, dock_preview: None,
+                });
+                continue;
+            }
             let (x, y, icon, custom_cursor, stepped_cell) = cursor_visual_presentation(route);
             let drag_preview = super::drag_drop::cursor_preview(route.source);
             let selection = route
@@ -1712,7 +1755,9 @@ impl InputBroker {
                 drag_preview,
                 x,
                 y,
-                color: route.color,
+                color: metadata.as_ref().and_then(|visual| visual.color).unwrap_or(route.color),
+                interactive: true,
+                glyph: metadata.and_then(|visual| visual.glyph),
                 icon,
                 custom_cursor,
                 stepped_cell,
@@ -1971,6 +2016,12 @@ pub(super) fn notify_slot4_visual_change() {
     SLOT4_VISUAL_CHANGE.signal(());
 }
 
+/// Presentation-only metadata updates wake the same slot-4 cursor plane as HID
+/// motion, without synthesizing an input report or requiring a moving cursor.
+pub(crate) fn notify_cursor_visual_change() {
+    notify_slot4_visual_change();
+}
+
 pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, MAX_OWNER_EVENTS> {
     let mut out = Vec::new();
     // Deliver final resize state first. Ordinary transitions remain queued if
@@ -2104,6 +2155,7 @@ pub(crate) fn select_window_for_cursor(
     owner: WindowOwner,
     window: WindowId,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
+    if visual_only_cursor(source) { return Err(Ui4ProgrammaticSelectionError::NotReady); }
     let snapshot = super::window_broker::window_snapshot(owner, window)
         .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
     if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
@@ -2135,6 +2187,7 @@ pub(crate) fn reselect_window_for_cursor(
     owner: WindowOwner,
     window: WindowId,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
+    if visual_only_cursor(source) { return Err(Ui4ProgrammaticSelectionError::NotReady); }
     let snapshot = super::window_broker::window_snapshot(owner, window)
         .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
     if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
@@ -2160,6 +2213,7 @@ pub(super) fn select_window_for_cursor_at(
     x: u32,
     y: u32,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
+    if visual_only_cursor(source) { return Err(Ui4ProgrammaticSelectionError::NotReady); }
     let snapshot = super::window_broker::window_snapshot(owner, window)
         .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
     if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
@@ -3157,6 +3211,30 @@ fn window_snapshot_for_target(target: WindowTarget) -> Option<WindowSnapshot> {
         }
     }
     None
+}
+
+fn visual_only_cursor(source: Ui4CursorSource) -> bool {
+    source.hid_kind == crate::r::cursor::HID_KIND_VIRTUAL_CURSOR
+        && crate::r::services::mouse_motion_service::cursor_visual_metadata(source.slot_id)
+            .is_some_and(|metadata| metadata.visual_only)
+}
+
+#[cfg(test)]
+mod visual_only_cursor_tests {
+    use super::*;
+
+    #[test]
+    fn visual_only_route_cannot_be_keyboard_fallback_or_select_a_frame() {
+        let mut broker = InputBroker::new();
+        let source = Ui4CursorSource { controller_id: 0, slot_id: 0x5600_1234,
+            ep_target: 0, hid_kind: crate::r::cursor::HID_KIND_VIRTUAL_CURSOR };
+        let index = broker.cursor_index(source, 10, 10);
+        broker.cursors[index].visual_only = true;
+        let keyboard = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        assert_eq!(broker.keyboard_route_index(&keyboard, 0, false), None);
+        assert_eq!(broker.keyboard_route_index(&keyboard, 7, false), None);
+        assert!(!broker.select_frame(index, None, 0, true));
+    }
 }
 
 fn cursor_hut_metadata(source: Ui4CursorSource) -> (u32, bool) {

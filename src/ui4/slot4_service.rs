@@ -295,7 +295,12 @@ fn add_overlay_rect_damage(
     damage: &mut crate::intel::CompositionDamageRegion,
     rect: &crate::intel::LiveOverlayRect,
 ) {
-    damage.add(crate::intel::CompositionDamageRect::new(rect.x, rect.y, rect.width, rect.height));
+    damage.add(crate::intel::CompositionDamageRect::new(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+    ));
 }
 
 fn slot4_windows() -> Vec<super::WindowSnapshot> {
@@ -382,7 +387,14 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
 
     if let Some(output) = super::OutputId::from_slot(0) {
         for strip in super::selection_strips(output, screen_w, screen_h) {
-            push_overlay_rect(&mut rects, strip.x, strip.y, strip.width, strip.height, strip.color);
+            push_overlay_rect(
+                &mut rects,
+                strip.x,
+                strip.y,
+                strip.width,
+                strip.height,
+                strip.color,
+            );
         }
     }
 
@@ -499,6 +511,18 @@ fn push_software_cursor_visual(
     screen_w: u32,
     screen_h: u32,
 ) {
+    if let Some(glyph) = visual.glyph.as_deref() {
+        push_cursor_glyph(
+            rects,
+            visual.x,
+            visual.y,
+            glyph,
+            visual.color,
+            screen_w,
+            screen_h,
+        );
+        return;
+    }
     match visual.icon {
         super::Ui4CursorIcon::AppOwned => return,
         super::Ui4CursorIcon::Custom => {
@@ -527,6 +551,41 @@ fn push_software_cursor_visual(
         visual.color,
         super::input_broker::software_cursor_scale(),
     );
+}
+
+/// A station-owned glyph is another software-cursor shape on slot 4. Reuse
+/// the existing overlay rectangle stream with a centered hotspot; no window,
+/// application renderer, image upload or per-motion rasterization is involved.
+fn push_cursor_glyph(
+    rects: &mut Slot4Rects,
+    cursor_x: u32,
+    cursor_y: u32,
+    glyph: &crate::r::services::mouse_motion_service::MouseControlGlyph,
+    color: crate::graphics::primitives::Rgba8,
+    screen_w: u32,
+    screen_h: u32,
+) {
+    let origin_x = i64::from(cursor_x) - i64::from(glyph.width / 2);
+    let origin_y = i64::from(cursor_y) - i64::from(glyph.height / 2);
+    for run in glyph.runs.iter() {
+        let y = origin_y + i64::from(run.y);
+        if y < 0 || y >= i64::from(screen_h) {
+            continue;
+        }
+        let left = (origin_x + i64::from(run.x)).max(0);
+        let right = (origin_x + i64::from(run.x) + i64::from(run.width)).min(i64::from(screen_w));
+        let alpha = ((u32::from(color.a) * u32::from(run.coverage) + 127) / 255) as u8;
+        if right > left && alpha != 0 {
+            push_overlay_rect(
+                rects,
+                left as u32,
+                y as u32,
+                (right - left) as u32,
+                1,
+                crate::graphics::primitives::Rgba8::new(color.r, color.g, color.b, alpha),
+            );
+        }
+    }
 }
 
 fn push_drag_preview(
@@ -586,7 +645,14 @@ fn push_custom_cursor_image(
             .saturating_add(i64::from(run.column).saturating_add(i64::from(run.width)))
             .min(i64::from(screen_w));
         if right > left {
-            push_overlay_rect(rects, left as u32, y as u32, (right - left) as u32, 1, run.color);
+            push_overlay_rect(
+                rects,
+                left as u32,
+                y as u32,
+                (right - left) as u32,
+                1,
+                run.color,
+            );
         }
     }
 }
@@ -675,7 +741,17 @@ fn push_microfont_menu_text(
     };
     let mut pixels = vec![0u8; pixel_count];
     if crate::r::services::microfont_mask_service::copy_text_mask(
-        &mut pixels, width, height, 0, 0, text, microfont::FWIDTH * 2, height).is_err() {
+        &mut pixels,
+        width,
+        height,
+        0,
+        0,
+        text,
+        microfont::FWIDTH * 2,
+        height,
+    )
+    .is_err()
+    {
         return;
     }
 
@@ -698,8 +774,12 @@ fn push_microfont_menu_text(
                 y,
                 u32::try_from(col.saturating_sub(run_start)).unwrap_or(0),
                 1,
-                crate::graphics::primitives::Rgba8::new(color.r, color.g, color.b,
-                    ((u32::from(color.a) * u32::from(coverage) + 127) / 255) as u8),
+                crate::graphics::primitives::Rgba8::new(
+                    color.r,
+                    color.g,
+                    color.b,
+                    ((u32::from(color.a) * u32::from(coverage) + 127) / 255) as u8,
+                ),
             );
         }
     }
@@ -724,7 +804,17 @@ fn push_microfont_rainbow_menu_text(
     };
     let mut pixels = vec![0u8; pixel_count];
     if crate::r::services::microfont_mask_service::copy_text_mask(
-        &mut pixels, width, height, 0, 0, text, microfont::FWIDTH * 2, height).is_err() {
+        &mut pixels,
+        width,
+        height,
+        0,
+        0,
+        text,
+        microfont::FWIDTH * 2,
+        height,
+    )
+    .is_err()
+    {
         return;
     }
 
@@ -817,8 +907,30 @@ fn push_software_crosshair(
     let long = SOFTWARE_CURSOR_LONG_PX.saturating_mul(scale);
     let long_before = long / 2;
 
-    push_cursor_rect(rects, x, y, stroke / 2, long_before, stroke, long, screen_w, screen_h, color);
-    push_cursor_rect(rects, x, y, long_before, stroke / 2, long, stroke, screen_w, screen_h, color);
+    push_cursor_rect(
+        rects,
+        x,
+        y,
+        stroke / 2,
+        long_before,
+        stroke,
+        long,
+        screen_w,
+        screen_h,
+        color,
+    );
+    push_cursor_rect(
+        rects,
+        x,
+        y,
+        long_before,
+        stroke / 2,
+        long,
+        stroke,
+        screen_w,
+        screen_h,
+        color,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -993,7 +1105,9 @@ fn push_overlay_rect(
     if width == 0 || height == 0 {
         return;
     }
-    rects.push(crate::intel::LiveOverlayRect::new(x, y, width, height, color));
+    rects.push(crate::intel::LiveOverlayRect::new(
+        x, y, width, height, color,
+    ));
 }
 
 #[cfg(test)]
@@ -1151,7 +1265,10 @@ mod tests {
 
         assert_eq!(rects.len(), expected.len());
         for (rect, (x, y, width, height)) in rects.iter().zip(expected) {
-            assert_eq!((rect.x, rect.y, rect.width, rect.height), (x, y, width, height));
+            assert_eq!(
+                (rect.x, rect.y, rect.width, rect.height),
+                (x, y, width, height)
+            );
             assert_eq!(rect.color, Rgba8::new(255, 0, 0, 255));
         }
     }
@@ -1164,6 +1281,8 @@ mod tests {
             x: 10,
             y: 20,
             color,
+            interactive: true,
+            glyph: None,
             icon: super::super::Ui4CursorIcon::CellOutline,
             custom_cursor: None,
             stepped_cell: Some(super::super::Ui4VisualRect {
@@ -1182,8 +1301,49 @@ mod tests {
 
         assert_eq!(rects.len(), 4);
         assert!(rects.iter().all(|rect| rect.color == color));
-        assert_eq!((rects[0].x, rects[0].y, rects[0].width, rects[0].height), (10, 20, 15, 3));
-        assert_eq!((rects[1].x, rects[1].y, rects[1].width, rects[1].height), (10, 43, 15, 3));
+        assert_eq!(
+            (rects[0].x, rects[0].y, rects[0].width, rects[0].height),
+            (10, 20, 15, 3)
+        );
+        assert_eq!(
+            (rects[1].x, rects[1].y, rects[1].width, rects[1].height),
+            (10, 43, 15, 3)
+        );
+    }
+
+    #[test]
+    fn glyph_cursor_centers_and_clips_prepared_runs_on_slot_four() {
+        use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
+        let glyph = MouseControlGlyph {
+            character: '§', width: 4, height: 4,
+            runs: Arc::from(alloc::vec![
+                MouseControlGlyphRun { x: 0, y: 0, width: 4, coverage: 255 },
+                MouseControlGlyphRun { x: 0, y: 2, width: 4, coverage: 128 },
+                MouseControlGlyphRun { x: 0, y: 3, width: 4, coverage: 255 },
+            ].into_boxed_slice()),
+        };
+        let mut rects = Slot4Rects::new();
+        push_cursor_glyph(&mut rects, 1, 1, &glyph, Rgba8::new(0, 0, 0, 255), 2, 2);
+        assert_eq!(rects.len(), 1);
+        assert_eq!((rects[0].x, rects[0].y, rects[0].width, rects[0].height), (0, 1, 2, 1));
+        assert_eq!(rects[0].color, Rgba8::new(0, 0, 0, 128));
+    }
+
+    #[test]
+    fn glyph_recolor_only_changes_coverage_modulated_tint() {
+        use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
+        let glyph = MouseControlGlyph {
+            character: '§', width: 2, height: 2,
+            runs: Arc::from(alloc::vec![MouseControlGlyphRun { x: 0, y: 0, width: 2, coverage: 128 }].into_boxed_slice()),
+        };
+        for color in [Rgba8::new(0, 0, 0, 255), Rgba8::new(0, 160, 255, 255),
+            Rgba8::new(0, 220, 120, 255), Rgba8::new(255, 0, 0, 255),
+            Rgba8::new(255, 170, 0, 255), Rgba8::new(255, 255, 255, 255)] {
+            let mut rects = Slot4Rects::new();
+            push_cursor_glyph(&mut rects, 5, 5, &glyph, color, 10, 10);
+            assert_eq!(rects.len(), 1);
+            assert_eq!(rects[0].color, Rgba8::new(color.r, color.g, color.b, 128));
+        }
     }
 
     #[test]
@@ -1231,6 +1391,8 @@ mod tests {
             x: 1,
             y: 1,
             color: Rgba8::new(0, 0, 0, 0),
+            interactive: true,
+            glyph: None,
             icon: super::super::Ui4CursorIcon::Custom,
             custom_cursor: Some(image),
             stepped_cell: None,
@@ -1243,21 +1405,38 @@ mod tests {
         push_software_cursor_visual(&mut rects, &visual, 3, 2);
 
         assert_eq!(rects.len(), 2);
-        assert_eq!((rects[0].x, rects[0].y, rects[0].width, rects[0].height), (0, 0, 2, 1));
+        assert_eq!(
+            (rects[0].x, rects[0].y, rects[0].width, rects[0].height),
+            (0, 0, 2, 1)
+        );
         assert_eq!(rects[0].color, red);
-        assert_eq!((rects[1].x, rects[1].y, rects[1].width, rects[1].height), (1, 1, 2, 1));
+        assert_eq!(
+            (rects[1].x, rects[1].y, rects[1].width, rects[1].height),
+            (1, 1, 2, 1)
+        );
         assert_eq!(rects[1].color, green);
     }
 
     #[test]
     fn fat_software_cursor_is_three_times_the_normal_dimensions() {
         let mut rects = Slot4Rects::new();
-        push_software_crosshair(&mut rects, 150, 150, 300, 300, Rgba8::new(255, 0, 0, 255), 3);
+        push_software_crosshair(
+            &mut rects,
+            150,
+            150,
+            300,
+            300,
+            Rgba8::new(255, 0, 0, 255),
+            3,
+        );
 
         let expected = [(143, 110, 15, 81), (110, 143, 81, 15)];
         assert_eq!(rects.len(), expected.len());
         for (rect, (x, y, width, height)) in rects.iter().zip(expected) {
-            assert_eq!((rect.x, rect.y, rect.width, rect.height), (x, y, width, height));
+            assert_eq!(
+                (rect.x, rect.y, rect.width, rect.height),
+                (x, y, width, height)
+            );
         }
     }
 
@@ -1336,6 +1515,9 @@ mod tests {
         );
 
         assert_eq!(rects.len(), 1);
-        assert_eq!((rects[0].x, rects[0].y, rects[0].width, rects[0].height), (4, 7, 23, 1));
+        assert_eq!(
+            (rects[0].x, rects[0].y, rects[0].width, rects[0].height),
+            (4, 7, 23, 1)
+        );
     }
 }

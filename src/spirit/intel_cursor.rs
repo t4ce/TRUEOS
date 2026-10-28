@@ -222,6 +222,7 @@ struct SpiritCursorChannel {
     pending: Option<u8>,
     init_failed: bool,
     visible: bool,
+    applied_position: Option<(i32, i32)>,
 }
 
 impl SpiritCursorChannel {
@@ -232,6 +233,7 @@ impl SpiritCursorChannel {
             pending: None,
             init_failed: false,
             visible: false,
+            applied_position: None,
         }
     }
 }
@@ -349,8 +351,8 @@ pub(super) fn spirit_cursor_move(
     let x = normalized_cursor_to_px(frame.x_normalized, scanout_width);
     let y = normalized_cursor_to_px(frame.y_normalized, scanout_height);
     let regs = cursor_regs(channel_index);
-    let state = SPIRIT_CURSOR_STATE.lock();
-    let channel_state = &state.channels[channel_index];
+    let mut state = SPIRIT_CURSOR_STATE.lock();
+    let channel_state = &mut state.channels[channel_index];
     let armed_surface = channel_state.pending.or_else(|| {
         if channel_state.visible {
             channel_state.front
@@ -373,7 +375,22 @@ pub(super) fn spirit_cursor_move(
             crate::intel::mmio_write(dev, regs.base, base);
         }
     }
+    channel_state.applied_position = Some((x, y));
     Ok((x, y))
+}
+
+/// The position accepted by the hardware-cursor worker, rather than its queued
+/// destination. Software companions follow Spirit only after CUR_POS changes.
+pub(super) fn spirit_cursor_geometry(channel: u8) -> Option<(u32, u32, i32, i32, u32, u32)> {
+    let channel_index = channel_index(channel).ok()?;
+    let (width, height) = pipe_dimensions(channel_index).ok()?;
+    let state = SPIRIT_CURSOR_STATE.lock();
+    let channel = &state.channels[channel_index];
+    if !channel.visible {
+        return None;
+    }
+    let (x, y) = channel.applied_position?;
+    Some((width, height, x, y, SPIRIT_CURSOR_DIM, SPIRIT_CURSOR_DIM))
 }
 
 pub(super) fn spirit_cursor_arm(

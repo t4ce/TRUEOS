@@ -33,6 +33,7 @@ pub mod alsa_compat;
 pub mod borrow;
 pub mod bp_abi;
 pub mod calculator_base;
+pub mod spirit_agents;
 pub mod env;
 pub mod ffi;
 #[doc(hidden)]

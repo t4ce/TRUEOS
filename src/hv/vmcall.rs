@@ -164,6 +164,7 @@ pub const OP_BP_VID_OPEN_V1: u32 = 0x182; // primary-root video path -> queued/r
 pub const OP_BP_VID_OPEN_V2: u32 = 0x183; // disc-qualified TRUEOSFS video path -> queued/rc
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141; // arg0 device,arg1 queue,payload IndexedDrawBatch -> TimelinePoint
 pub const OP_BP_VGPU_OFFSCREEN_INDEXED_BATCH_V1: u32 = 0x190;
+pub const OP_BP_SPIRIT_AGENTS_PUBLISH_V1: u32 = trueos_vm::vmcall::OP_BP_SPIRIT_AGENTS_PUBLISH_V1;
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2: u32 = 0x14C; // arg0 device,arg1 queue,payload IndexedDrawBatchV2 -> TimelinePoint
 pub const OP_BP_VGPU_RETAINED_MESH_CREATE: u32 = 0x14D; // arg0 device,payload RetainedMeshDescriptor -> handle
 pub const OP_BP_VGPU_RETAINED_MESH_DESTROY: u32 = 0x14E; // arg0 device,arg1 mesh -> rc
@@ -1135,6 +1136,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let x = f32::from_bits(arg0 as u32);
             let y = f32::from_bits(arg1 as u32);
             let rc = crate::ai::lumen_service::spirit_move(x, y);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SPIRIT_AGENTS_PUBLISH_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::spirit::publish_agent_snapshot_bytes(vm_id, payload);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
