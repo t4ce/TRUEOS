@@ -195,7 +195,7 @@ pub(super) fn bind_keyboard(keyboard_slot: u32) -> Result<(), &'static str> {
 
 /// Enqueue a real primary-button down/up pair at Lilly's current software
 /// cursor position. The response path calls this only after direct UI4 focus,
-/// so the click reaches Gridpaper cell zero rather than being absorbed.
+/// so the click reaches Paper cell zero rather than being absorbed.
 pub(super) fn queue_primary_click() -> Result<(), MouseControlError> {
     let cursor = register_once()?;
     let program = [
@@ -365,7 +365,11 @@ pub(super) fn queue_window_outline(
     if frame_width == 0 || frame_height == 0 || screen_width == 0 || screen_height == 0 {
         return Err(MouseControlError::Invalid);
     }
-    let cursor = register_once()?;
+    let cursor = {
+        let mut state = LILLY_CURSOR.lock();
+        state.initial_outline_queued = true;
+        state.ensure_cursor()?
+    };
     let (left, right) = clipped_axis(frame_x, frame_width, screen_width);
     let (top, bottom) = clipped_axis(frame_y, frame_height, screen_height);
     let program = [

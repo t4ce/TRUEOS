@@ -52,6 +52,8 @@ pub(crate) async fn spirit_window_selection_task() {
         source.hid_kind,
     );
 
+    super::paper_demo::run().await;
+
     let mut owned_selection: Option<SpiritWindowSelection> = None;
     loop {
         if let Some(selection) = owned_selection
@@ -201,8 +203,6 @@ fn selection_is_owned(
 }
 
 fn profile_for_window(window: crate::ui4::WindowSnapshot) -> Option<WindowVfxProfile> {
-    // Spirit's retained response document has its own cell-zero click and
-    
     if window.owner == crate::ui4::WindowOwner::VIDEO_PLAYER
         || window.producer_name.eq_ignore_ascii_case("video-player")
         || window.producer_name.eq_ignore_ascii_case("vid")

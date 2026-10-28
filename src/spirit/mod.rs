@@ -24,6 +24,7 @@ pub(crate) mod gpu_logger;
 mod intel_cursor;
 mod lilly;
 mod lilly_cursor;
+mod paper_demo;
 pub(crate) mod lilly_protocol;
 
 #[allow(dead_code)]
