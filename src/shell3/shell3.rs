@@ -1306,7 +1306,10 @@ impl Shell3 {
 
     fn launch_named_app(&mut self, text: &str, is_alias: bool) {
         let result = if !is_alias {
-            service::launch_appdb(text, self.tui_frontend())
+            service::launch_appdb(
+                if text == "AppDB" { "apps" } else { text },
+                self.tui_frontend(),
+            )
         } else {
             service::launch_alias(text, self.tui_frontend())
         };
@@ -1465,7 +1468,8 @@ impl Shell3 {
         tui::hold_navigation(self.tui_frontend, true);
         service::notify_work();
         let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
-        let is_app = can_launch && self.appdb_names.iter().any(|name| name == &text);
+        let is_app = can_launch
+            && (text == "AppDB" || self.appdb_names.iter().any(|name| name == &text));
         let is_alias = self.aka_names.iter().any(|name| name == &text);
         if self.mode == Mode::ADM && text == "log" {
             match system_log::start(self.tui_frontend()) {
@@ -2073,7 +2077,10 @@ impl Shell3 {
             Mode::CMD => {
                 CMD_GROUPS
                     .iter()
-                    .any(|group| group.names.iter().any(|entry| matches(entry.name)))
+                    .any(|group| {
+                        matches(group.name)
+                            || group.names.iter().any(|entry| matches(entry.name))
+                    })
                     || self.appdb_names.iter().any(|entry| matches(entry))
             }
             Mode::ADM => ADM_GROUPS
@@ -2101,7 +2108,12 @@ fn mode_title_meta(mode: Mode, _aka_names: &[String], appdb_names: &[String]) ->
             runs.push(MetaFmtStr::new(entry.name).color(entry.color));
         }
         if let Some(entries) = dynamic {
-            for (index, entry) in entries.iter().enumerate() {
+            // The AppDB group name launches the store itself.
+            for (index, entry) in entries
+                .iter()
+                .filter(|entry| entry.as_str() != "apps")
+                .enumerate()
+            {
                 if !group.names.is_empty() || index != 0 {
                     runs.push(MetaFmtStr::new(" "));
                 }

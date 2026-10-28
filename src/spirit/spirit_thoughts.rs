@@ -84,6 +84,7 @@ struct Thought {
     appearance: Appearance,
     shutdown_at_ms: Option<u64>,
     resting: Option<Point>,
+    track_cache: Option<(Geometry, u16, Option<Track>)>,
     phase_slot: usize,
 }
 
@@ -262,6 +263,7 @@ impl Thoughts {
                         shutdown_at_ms: (appearance == Appearance::Shutdown)
                             .then(|| now_ms.saturating_add(SHUTDOWN_DWELL_MS)),
                         resting: None,
+                        track_cache: None,
                         phase_slot,
                     })
                     .map_err(|_| ERROR_CAPACITY)?;
@@ -316,58 +318,48 @@ impl Thoughts {
                 slots[index] = Some(point);
             }
         }
-        let mut running_entries = Vec::<PlacedMarker, CAPACITY>::new();
-        let mut stationary = Vec::<PlacedMarker, CAPACITY>::new();
-        for (index, thought) in self.agents.iter().enumerate() {
-            let (Some(point), Some(size)) = (slots[index], sizes[index]) else {
-                continue;
-            };
-            let entry = PlacedMarker { point, size };
-            if thought.appearance == Appearance::Running {
-                let _ = running_entries.push(entry);
-            } else {
-                let _ = stationary.push(entry);
-            }
-        }
-        // Prefer moving the whole running group. At an edge, a smaller visible
-        // group can still orbit while the remaining full labels rest safely.
-        // Include those resting runners in the orbit's obstacle envelope too.
-        let mut track = None;
-        let mut running = 0;
-        for count in (1..=running_entries.len()).rev() {
-            let mut obstacles = stationary.clone();
-            for entry in &running_entries[count..] {
-                let _ = obstacles.push(*entry);
-            }
-            let marker =
-                running_entries[..count]
-                    .iter()
-                    .fold(running_entries[0].size, |previous, entry| MarkerSize {
-                        width: previous.width.max(entry.size.width),
-                        height: previous.height.max(entry.size.height),
-                    });
-            if let Some(candidate) = geometry.with_marker(marker).track(&obstacles, count)
-                && candidate.capacity() >= count
-            {
-                track = Some(candidate);
-                running = count;
-                break;
-            }
-        }
+        let running = self
+            .agents
+            .iter()
+            .enumerate()
+            .filter(|(index, thought)| {
+                slots[*index].is_some() && thought.appearance == Appearance::Running
+            })
+            .count();
         let mut running_slot = 0;
+        let mut tracks = Vec::<(Geometry, Option<Track>), CAPACITY>::new();
         let mut placements = Vec::new();
         for (index, thought) in self.agents.iter_mut().enumerate() {
             thought.resting = slots[index];
             let (Some(resting), Some(marker)) = (thought.resting, sizes[index]) else {
                 continue;
             };
-            let orbit = if thought.appearance == Appearance::Running && running_slot < running {
+            let orbit = if thought.appearance == Appearance::Running {
                 let slot = running_slot;
                 running_slot += 1;
+                let bounds = geometry.with_marker(marker);
+                let track = if let Some((previous, prefix_width, track)) = thought.track_cache
+                    && previous == bounds
+                    && prefix_width == geometry.marker.width
+                {
+                    track
+                } else {
+                    // Common label widths share this bounded calculation;
+                    // each thought then retains it until geometry changes.
+                    let track = tracks
+                        .iter()
+                        .find(|(previous, _)| *previous == bounds)
+                        .map(|(_, track)| *track)
+                        .unwrap_or_else(|| bounds.track(geometry.marker.width));
+                    let _ = tracks.push((bounds, track));
+                    thought.track_cache = Some((bounds, geometry.marker.width, track));
+                    track
+                };
                 track.map(|track| Motion {
                     track,
                     slot,
                     count: running,
+                    wave_phase: thought.phase_slot,
                 })
             } else {
                 None
@@ -433,22 +425,6 @@ impl MarkerSize {
 
     fn spacing_y(self) -> i64 {
         i64::from(self.height) + i64::from(MARKER_GAP)
-    }
-
-    fn diagonal_spacing(self, rounding_clearance: i32) -> f64 {
-        let x = self.spacing_x() as f64 + f64::from(rounding_clearance);
-        let y = self.spacing_y() as f64 + f64::from(rounding_clearance);
-        libm::sqrt(x * x + y * y)
-    }
-
-    fn overlaps(self, left: Point, right: Point) -> bool {
-        self.overlaps_other(
-            left,
-            PlacedMarker {
-                point: right,
-                size: self,
-            },
-        )
     }
 
     fn overlaps_other(self, point: Point, other: PlacedMarker) -> bool {
@@ -571,43 +547,55 @@ impl Geometry {
         None
     }
 
-    fn track(self, stationary: &[PlacedMarker], running_count: usize) -> Option<Track> {
+    fn track(self, prefix_width: u16) -> Option<Track> {
         let center = Point {
             x: i32::try_from(i64::from(self.lilly_x) + i64::from(self.lilly_width) / 2).ok()?,
             y: i32::try_from(i64::from(self.lilly_y) + i64::from(self.lilly_height) / 2).ok()?,
         };
-        // A common circle clears Lilly and every complete stationary label.
-        // Only running labels determine the moving envelope; a long finished
-        // nickname is not silently treated as every other agent's width.
+        // The leading §, rather than the complete text's center, follows the
+        // circle that just circumscribes Lilly. A longer nickname or another
+        // resting agent must not push this path farther away from her.
         let rx = f64::from(self.lilly_width) / 2.0;
         let ry = f64::from(self.lilly_height) / 2.0;
-        let clearance = self.marker.diagonal_spacing(2);
-        let mut inner_radius = libm::sqrt(rx * rx + ry * ry);
-        for marker in stationary {
-            let dx =
-                (i64::from(marker.point.x) - i64::from(center.x)).abs() + marker.size.half_width();
-            let dy =
-                (i64::from(marker.point.y) - i64::from(center.y)).abs() + marker.size.half_height();
-            inner_radius = inner_radius.max(libm::sqrt((dx * dx + dy * dy) as f64));
-        }
-        let spacing_radius =
-            clearance / (2.0 * libm::sin(core::f64::consts::PI / running_count.max(2) as f64));
-        let radius = libm::ceil((inner_radius + clearance).max(spacing_radius)) as i32;
+        let radius = libm::ceil(libm::sqrt(rx * rx + ry * ry)) as i32;
         let orbit = Orbit { center, radius };
-        // Sampling identifies the longest contiguous visible part of the same
-        // circle. At a display edge the markers share this arc and reverse
-        // together; they never squeeze Lilly or cross one another head-on.
+        let center_offset_x = i32::from(self.marker.width / 2) - i32::from(prefix_width / 2);
+        let label_center = |point: Point| Point {
+            x: point.x.saturating_add(center_offset_x),
+            y: point.y,
+        };
+        // Reserve the entire outward wave when finding the visible arc. Both
+        // ends of its radial envelope must fit even for a very long label.
+        // Moving paths may cross other agents; settled rectangles stay separate.
+        let outer = Orbit {
+            radius: radius + ORBIT_WAVE_PX,
+            ..orbit
+        };
         let mut visible = [false; TRACK_STEPS];
         for (step, valid) in visible.iter_mut().enumerate() {
-            *valid = self.screen_contains(orbit.point(step as f64 * TRACK_STEP_ANGLE));
+            let angle = step as f64 * TRACK_STEP_ANGLE;
+            *valid = self.screen_contains(label_center(orbit.point(angle)))
+                && self.screen_contains(label_center(outer.point(angle)));
         }
+        let make_track = |start_step, span_steps| Track {
+            orbit,
+            start_step,
+            span_steps,
+            center_offset_x,
+            // The cursor station interpolates the submitted cubic. Keeping
+            // both controls inside these bounds also protects the whole curve
+            // at an edge without introducing per-frame geometry checks.
+            min: Point {
+                x: self.marker.half_width() as i32,
+                y: self.marker.half_height() as i32,
+            },
+            max: Point {
+                x: self.screen_width as i32 - self.marker.half_width() as i32,
+                y: self.screen_height as i32 - self.marker.half_height() as i32,
+            },
+        };
         if visible.iter().all(|valid| *valid) {
-            return Some(Track {
-                orbit,
-                start_step: 0,
-                span_steps: TRACK_STEPS as u16,
-                marker: self.marker,
-            });
+            return Some(make_track(0, TRACK_STEPS as u16));
         }
         let first_hidden = visible.iter().position(|valid| !valid)?;
         let mut run = 0;
@@ -623,17 +611,13 @@ impl Geometry {
                 run = 0;
             }
         }
-        // Keep one sample of clearance at either endpoint for rounded cubic
-        // controls and the glyph's centered pixel envelope.
         if best.1 < 5 {
             return None;
         }
-        Some(Track {
-            orbit,
-            start_step: ((best.0 + 1) % TRACK_STEPS) as u16,
-            span_steps: (best.1 - 3) as u16,
-            marker: self.marker,
-        })
+        Some(make_track(
+            ((best.0 + 1) % TRACK_STEPS) as u16,
+            (best.1 - 3) as u16,
+        ))
     }
 }
 
@@ -654,6 +638,7 @@ impl Orbit {
     }
 }
 
+const ORBIT_WAVE_PX: i32 = 8;
 const TRACK_STEPS: usize = 256;
 const TRACK_STEP_ANGLE: f64 = core::f64::consts::TAU / TRACK_STEPS as f64;
 
@@ -662,7 +647,9 @@ struct Track {
     orbit: Orbit,
     start_step: u16,
     span_steps: u16,
-    marker: MarkerSize,
+    center_offset_x: i32,
+    min: Point,
+    max: Point,
 }
 
 impl Track {
@@ -670,19 +657,18 @@ impl Track {
         self.span_steps as usize == TRACK_STEPS
     }
 
-    fn spacing(self) -> f64 {
-        // Chord distance is conservative for the square marker envelope.
-        2.0 * libm::asin(self.marker.diagonal_spacing(2) / (2.0 * f64::from(self.orbit.radius)))
+    fn label_center(self, point: Point) -> Point {
+        Point {
+            x: point.x + self.center_offset_x,
+            y: point.y,
+        }
     }
 
-    fn capacity(self) -> usize {
-        let span = f64::from(self.span_steps) * TRACK_STEP_ANGLE;
-        let available = if self.full() {
-            span / self.spacing()
-        } else {
-            1.0 + span / self.spacing()
-        };
-        (available as usize).min(CAPACITY)
+    fn clamp(self, point: Point) -> Point {
+        Point {
+            x: point.x.clamp(self.min.x, self.max.x),
+            y: point.y.clamp(self.min.y, self.max.y),
+        }
     }
 }
 
@@ -691,36 +677,34 @@ struct Motion {
     track: Track,
     slot: usize,
     count: usize,
+    wave_phase: usize,
 }
 
 impl Motion {
-    /// Current angle and the next common turnaround. The partial-arc train
-    /// reverses as one group, preserving every neighbor's spacing.
+    /// Current angle and next turnaround. At a screen edge each agent uses
+    /// the visible part of its own label's circle, with a stable phase offset.
     fn segment(self, now_ms: u64) -> (f64, f64, u32) {
+        let phase_ms = (now_ms % ORBIT_PERIOD_MS
+            + self.slot as u64 * ORBIT_PERIOD_MS / self.count.max(1) as u64)
+            % ORBIT_PERIOD_MS;
         if self.track.full() {
-            let angle = core::f64::consts::TAU
-                * ((now_ms % ORBIT_PERIOD_MS) as f64 / ORBIT_PERIOD_MS as f64
-                    + self.slot as f64 / self.count as f64);
+            let angle = core::f64::consts::TAU * phase_ms as f64 / ORBIT_PERIOD_MS as f64;
             return (
                 angle,
                 angle + core::f64::consts::FRAC_PI_2,
                 (ORBIT_PERIOD_MS / 4) as u32,
             );
         }
-        let start = f64::from(self.track.start_step) * TRACK_STEP_ANGLE
-            + self.slot as f64 * self.track.spacing();
-        let travel = (f64::from(self.track.span_steps) * TRACK_STEP_ANGLE
-            - self.count.saturating_sub(1) as f64 * self.track.spacing())
-        .max(0.0);
+        let start = f64::from(self.track.start_step) * TRACK_STEP_ANGLE;
+        let travel = f64::from(self.track.span_steps) * TRACK_STEP_ANGLE;
         let half = ORBIT_PERIOD_MS / 2;
-        let phase = now_ms % ORBIT_PERIOD_MS;
-        let (fraction, target, remaining) = if phase < half {
-            (phase as f64 / half as f64, 1.0, half - phase)
+        let (fraction, target, remaining) = if phase_ms < half {
+            (phase_ms as f64 / half as f64, 1.0, half - phase_ms)
         } else {
             (
-                (ORBIT_PERIOD_MS - phase) as f64 / half as f64,
+                (ORBIT_PERIOD_MS - phase_ms) as f64 / half as f64,
                 0.0,
-                ORBIT_PERIOD_MS - phase,
+                ORBIT_PERIOD_MS - phase_ms,
             )
         };
         (
@@ -730,33 +714,66 @@ impl Motion {
         )
     }
 
+    fn radius(self, angle: f64) -> f64 {
+        // A small triangular ripple needs no second sine/cosine evaluation.
+        // This runs only while queueing a curve, never on every cursor frame.
+        // Each stable agent slot offsets its three gentle waves per circuit.
+        let phase = angle * (3.0 / core::f64::consts::TAU)
+            + self.wave_phase as f64 * 0.381_966_011_250_105_1;
+        let fraction = phase - libm::floor(phase);
+        let wave = 1.0 - (2.0 * fraction - 1.0).abs();
+        f64::from(self.track.orbit.radius) + f64::from(ORBIT_WAVE_PX) * wave
+    }
+
+    fn prefix_point(self, angle: f64) -> Point {
+        Orbit {
+            radius: libm::round(self.radius(angle)) as i32,
+            ..self.track.orbit
+        }
+        .point(angle)
+    }
+
+    fn point(self, angle: f64) -> Point {
+        self.track.label_center(self.prefix_point(angle))
+    }
+
     fn curves(self, now_ms: u64) -> (Point, Vec<Curve, 4>) {
-        let (angle, end_angle, duration_ms) = self.segment(now_ms);
-        let count = (libm::ceil((end_angle - angle).abs() / core::f64::consts::FRAC_PI_2) as usize)
-            .clamp(1, 4);
-        let step = (end_angle - angle) / count as f64;
+        let (angle, end_angle, remaining_ms) = self.segment(now_ms);
+        // Four short queued cubics expose the ripple without adding a renderer
+        // or a frame-time task. Partial arcs queue at most the next quarter.
+        let travel = (end_angle - angle).abs().min(core::f64::consts::FRAC_PI_2);
+        let direction = (end_angle - angle).signum();
+        let duration_ms = if (end_angle - angle).abs() > f64::EPSILON {
+            libm::round(f64::from(remaining_ms) * travel / (end_angle - angle).abs()) as u32
+        } else {
+            remaining_ms
+        };
+        let count = (libm::ceil(travel / (core::f64::consts::PI / 8.0)) as usize).clamp(1, 4);
+        let step = direction * travel / count as f64;
         let mut curves = Vec::new();
         for index in 0..count {
             let from_angle = angle + index as f64 * step;
             let to_angle = from_angle + step;
-            let from = self.track.orbit.point(from_angle);
-            let to = self.track.orbit.point(to_angle);
-            let tangent = f64::from(self.track.orbit.radius) * (4.0 / 3.0) * libm::tan(step / 4.0);
+            let from = self.point(from_angle);
+            let to = self.point(to_angle);
+            let tangent = (4.0 / 3.0) * libm::tan(step / 4.0);
+            let tangent_from = tangent * self.radius(from_angle);
+            let tangent_to = tangent * self.radius(to_angle);
             let _ = curves.push(Curve {
                 from,
                 to,
                 duration_ms: (duration_ms / count as u32).max(8),
-                control1: Point {
-                    x: from.x - libm::round(tangent * libm::sin(from_angle)) as i32,
-                    y: from.y + libm::round(tangent * libm::cos(from_angle)) as i32,
-                },
-                control2: Point {
-                    x: to.x + libm::round(tangent * libm::sin(to_angle)) as i32,
-                    y: to.y - libm::round(tangent * libm::cos(to_angle)) as i32,
-                },
+                control1: self.track.clamp(Point {
+                    x: from.x - libm::round(tangent_from * libm::sin(from_angle)) as i32,
+                    y: from.y + libm::round(tangent_from * libm::cos(from_angle)) as i32,
+                }),
+                control2: self.track.clamp(Point {
+                    x: to.x + libm::round(tangent_to * libm::sin(to_angle)) as i32,
+                    y: to.y - libm::round(tangent_to * libm::cos(to_angle)) as i32,
+                }),
             });
         }
-        (self.track.orbit.point(angle), curves)
+        (self.point(angle), curves)
     }
 }
 
@@ -1082,12 +1099,12 @@ mod tests {
 
     fn point_for(placement: &Placement, now_ms: u64) -> Point {
         placement.orbit.map_or(placement.resting, |motion| {
-            motion.track.orbit.point(motion.segment(now_ms).0)
+            motion.point(motion.segment(now_ms).0)
         })
     }
 
     fn check_layout(placements: &Vec<Placement, CAPACITY>, geometry: Geometry, now_ms: u64) {
-        let mut points = AllocVec::new();
+        let mut resting = AllocVec::new();
         for placement in placements {
             let point = point_for(placement, now_ms);
             assert!(
@@ -1097,25 +1114,32 @@ mod tests {
                 "outside screen: {point:?} at {geometry:?}, label={}",
                 placement.label
             );
-            let half_x = placement.marker.half_width() as i32;
-            let half_y = placement.marker.half_height() as i32;
             assert!(
-                point.x + half_x <= geometry.lilly_x
-                    || point.y + half_y <= geometry.lilly_y
-                    || point.x - half_x >= geometry.lilly_x + geometry.lilly_width as i32
-                    || point.y - half_y >= geometry.lilly_y + geometry.lilly_height as i32,
-                "overlaps Lilly: {point:?} at {geometry:?}"
+                geometry
+                    .with_marker(placement.marker)
+                    .valid_resting(placement.resting)
             );
             assert!(
-                points
+                resting
                     .iter()
-                    .all(|other| !placement.marker.overlaps_other(point, *other)),
-                "overlapping markers at {point:?} at {geometry:?} time={now_ms}"
+                    .all(|other| !placement.marker.overlaps_other(placement.resting, *other)),
+                "overlapping resting labels at {:?} at {geometry:?}",
+                placement.resting
             );
-            points.push(PlacedMarker {
-                point,
+            resting.push(PlacedMarker {
+                point: placement.resting,
                 size: placement.marker,
             });
+            if let Some(motion) = placement.orbit {
+                let prefix = motion.prefix_point(motion.segment(now_ms).0);
+                let dx = f64::from(prefix.x - motion.track.orbit.center.x);
+                let dy = f64::from(prefix.y - motion.track.orbit.center.y);
+                let distance = libm::sqrt(dx * dx + dy * dy);
+                assert!(
+                    (distance - f64::from(motion.track.orbit.radius)).abs()
+                        <= f64::from(ORBIT_WAVE_PX + 1)
+                );
+            }
         }
     }
 
@@ -1148,7 +1172,6 @@ mod tests {
             .map(|placement| placement.orbit.map(|motion| motion.curves(now_ms)))
             .collect();
         for elapsed in (0..=6_000).step_by(50) {
-            let mut occupied = AllocVec::new();
             for (placement, program) in placements.iter().zip(&programs) {
                 let mut point = placement.resting;
                 if let Some((from, curves)) = program {
@@ -1171,17 +1194,6 @@ mod tests {
                     "queued label clips: {} {point:?} {bounds:?}",
                     placement.label
                 );
-                assert!(
-                    occupied
-                        .iter()
-                        .all(|other| !placement.marker.overlaps_other(point, *other)),
-                    "queued labels overlap: {} {point:?} {bounds:?}",
-                    placement.label
-                );
-                occupied.push(PlacedMarker {
-                    point,
-                    size: placement.marker,
-                });
             }
         }
     }
@@ -1353,6 +1365,63 @@ mod tests {
                     check_programs(&plan, layout, now);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn section_prefix_uses_lilly_half_diagonal_with_small_stable_agent_waves() {
+        let mut thoughts = Thoughts::new();
+        thoughts
+            .ingest(
+                OWNER,
+                snapshot(
+                    1,
+                    vec![
+                        named_agent("short", "A", AgentLifecycle::Running),
+                        named_agent("long", "A much longer nickname", AgentLifecycle::Running),
+                        named_agent("waiting", "A stationary name", AgentLifecycle::Completed),
+                    ],
+                ),
+                0,
+            )
+            .unwrap();
+        let layout = paper_geometry(700, 400, 16);
+        let plan = thoughts.plan(layout, 0);
+        let first = plan[0].orbit.unwrap();
+        let second = plan[1].orbit.unwrap();
+        assert_eq!(first.track.orbit.radius, 182);
+        assert_eq!(
+            second.track.orbit.radius, 182,
+            "nickname width cannot enlarge §'s orbit"
+        );
+        assert!(second.track.center_offset_x > first.track.center_offset_x);
+        let mut minimum = f64::INFINITY;
+        let mut maximum = f64::NEG_INFINITY;
+        let mut different_waves = false;
+        for step in 0..=256 {
+            let angle = step as f64 * TRACK_STEP_ANGLE;
+            let radius = first.radius(angle);
+            minimum = minimum.min(radius);
+            maximum = maximum.max(radius);
+            different_waves |= (radius - second.radius(angle)).abs() > 1.0;
+            assert!((182.0..=190.0).contains(&radius));
+            let point = first.point(angle);
+            let prefix = first.prefix_point(angle);
+            assert_eq!(point.x - prefix.x, first.track.center_offset_x);
+            assert_eq!(point.y, prefix.y);
+        }
+        assert!(
+            maximum - minimum > 7.0,
+            "the running path must actually ripple"
+        );
+        assert!(
+            different_waves,
+            "each stable agent has its own ripple phase"
+        );
+        assert!((first.radius(0.0) - first.radius(core::f64::consts::TAU)).abs() < 0.000_001);
+        for now in (0..ORBIT_PERIOD_MS).step_by(250) {
+            check_layout(&plan, layout, now);
+            check_programs(&plan, layout, now);
         }
     }
 
@@ -1719,7 +1788,7 @@ mod tests {
     }
 
     #[test]
-    fn full_groups_fit_center_edges_and_corners_without_any_overlap() {
+    fn full_groups_keep_resting_layout_separate_while_orbiting_center_edges_and_corners() {
         for (x, y) in [
             (700, 400),
             (0, 0),
@@ -1850,7 +1919,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_paper_running_groups_keep_their_full_queued_envelopes_apart() {
+    fn physical_paper_running_groups_keep_full_text_on_screen() {
         for height in [32, 48, 80, 128] {
             for (x, y) in [(700, 400), (0, 0), (1664, 0), (0, 824), (1664, 824)] {
                 let mut thoughts = Thoughts::new();
@@ -1872,40 +1941,7 @@ mod tests {
                     let placements = thoughts.plan(layout, now);
                     assert_eq!(placements.len(), CAPACITY);
                     check_layout(&placements, layout, now);
-                    let programs: AllocVec<_> = placements
-                        .iter()
-                        .map(|placement| placement.orbit.map(|motion| motion.curves(now)))
-                        .collect();
-                    for elapsed in (0..6_000).step_by(100) {
-                        let mut points = AllocVec::new();
-                        for (placement, program) in placements.iter().zip(programs.iter()) {
-                            let mut position = placement.resting;
-                            if let Some((from, curves)) = program {
-                                position = *from;
-                                let mut remaining = elapsed;
-                                for curve in curves {
-                                    position = curve_point(
-                                        *curve,
-                                        (f64::from(remaining) / f64::from(curve.duration_ms))
-                                            .min(1.0),
-                                    );
-                                    if remaining < curve.duration_ms {
-                                        break;
-                                    }
-                                    remaining -= curve.duration_ms;
-                                }
-                            }
-                            assert!(layout.screen_contains(position));
-                            assert!(
-                                points
-                                    .iter()
-                                    .all(|other| !layout.marker.overlaps(position, *other)),
-                                "physical-size queued glyphs overlap at {position:?} \
-                                 {layout:?} now={now} elapsed={elapsed}"
-                            );
-                            points.push(position);
-                        }
-                    }
+                    check_programs(&placements, layout, now);
                 }
             }
         }
@@ -1969,7 +2005,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_cubic_paths_fit_actual_screen_and_leave_static_ring_clear() {
+    fn queued_cubic_paths_fit_actual_screen_with_mixed_stationary_agents() {
         for (x, y) in [
             (700, 400),
             (0, 0),
@@ -1998,41 +2034,7 @@ mod tests {
             let layout = geometry(x, y);
             for now in [0, 3_225, 11_900, 12_000, 18_500, 23_900] {
                 let plan = thoughts.plan(layout, now);
-                let programs: AllocVec<_> = plan
-                    .iter()
-                    .map(|placement| placement.orbit.map(|motion| motion.curves(now)))
-                    .collect();
-                for elapsed in (0..6_000).step_by(50) {
-                    let mut points = AllocVec::new();
-                    for (placement, program) in plan.iter().zip(&programs) {
-                        let mut position = placement.resting;
-                        if let Some((from, curves)) = program {
-                            position = *from;
-                            let mut remaining = elapsed;
-                            for curve in curves {
-                                position = curve_point(
-                                    *curve,
-                                    (remaining as f64 / f64::from(curve.duration_ms)).min(1.0),
-                                );
-                                if remaining < curve.duration_ms {
-                                    break;
-                                }
-                                remaining -= curve.duration_ms;
-                            }
-                        }
-                        assert!(
-                            layout.screen_contains(position),
-                            "cubic outside {position:?}, {layout:?}"
-                        );
-                        assert!(
-                            points
-                                .iter()
-                                .all(|other| !layout.marker.overlaps(position, *other)),
-                            "cubic overlap {position:?}, {layout:?}, now={now}, elapsed={elapsed}"
-                        );
-                        points.push(position);
-                    }
-                }
+                check_programs(&plan, layout, now);
             }
         }
     }

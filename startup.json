@@ -2,7 +2,6 @@
   "aliases": [
     { "name": "cub", "blueprint": "cubes.bp" },
     { "name": "td", "blueprint": "termdir" },
-    { "name": "app", "blueprint": "apps.bp" },
     { "name": "cdx", "blueprint": "codex.bp" }
   ],
   "solara": {
