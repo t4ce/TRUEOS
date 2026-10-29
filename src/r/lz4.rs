@@ -175,7 +175,8 @@ pub fn decompress_frame_cpu(input: &[u8], max_output: usize) -> Result<Vec<u8>, 
 fn decompress_frame_cpu_with_progress(
     input: &[u8], max_output: usize, mut progress: impl FnMut(usize, usize),
 ) -> Result<Vec<u8>, Error> {
-    let started_ms = super::codec::codec_now_ms();
+    // This decoder also unpacks the boot font and AppDB before DMA is ready.
+    // Do not read Instant here: time initialization maps ACPI/HPET through DMA.
     let frame = parse(input, max_output)?;
     let mut out = Vec::with_capacity(frame.content_size.unwrap_or(0));
     for (index, block) in frame.blocks.iter().enumerate() {
@@ -209,7 +210,7 @@ fn decompress_frame_cpu_with_progress(
         progress(index + 1, frame.blocks.len());
     }
     verify(&frame, &out)?;
-    crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=cpu input_bytes={} output_bytes={} blocks={} total_ms={}\n", input.len(), out.len(), frame.blocks.len(), super::codec::codec_now_ms().saturating_sub(started_ms));
+    crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=cpu input_bytes={} output_bytes={} blocks={}\n", input.len(), out.len(), frame.blocks.len());
     Ok(out)
 }
 
