@@ -208,8 +208,8 @@ impl Captured {
         self.write_line(
             "TRUEOS native captured commands (UTF-8 lines; no terminal or Unix shell syntax)",
         );
-        self.write_line("help | env | status | ram | smp | net | gpu | exit");
-        self.write_line("Explicit namespaces: adm help/env/ram/smp/net/gpu; hv help/status/peer/probe; cmd help");
+        self.write_line("help | env | status | ram | smp | net | gpu | services | exit");
+        self.write_line("Explicit namespaces: adm help/env/ram/smp/net/gpu/services; hv help/status/peer/probe; cmd help");
         self.write_line(
             "Commands finish after their output is collected. stdin EOF finishes the session.",
         );
@@ -254,6 +254,15 @@ impl Captured {
                 self.write_lines(super::system_net::nic_snapshot(SNAPSHOT_WIDTH, None))
             }
             ["gpu"] | ["adm", "gpu"] => self.write_lines(super::gpu::snapshot(SNAPSHOT_WIDTH)),
+            ["services"] | ["adm", "services"] => {
+                let snapshot = crate::r::services::spawn_service::latest_system_service_snapshot_text();
+                for line in snapshot.lines() {
+                    self.write_line(line);
+                    if self.exit.is_some() {
+                        break;
+                    }
+                }
+            }
             ["exit"] => {
                 self.clear_input();
                 self.stdin_closed = true;

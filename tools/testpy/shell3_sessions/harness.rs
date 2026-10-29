@@ -67,6 +67,14 @@ mod allocators {
     }
 }
 mod r {
+    pub mod services {
+        pub mod spawn_service {
+            pub fn latest_system_service_snapshot_text() -> String {
+                let payload = crate::lines("services").join("\n");
+                format!("trueos system services snapshot v1\n{payload}\nservice\tname\tstarted\nservice\tasync-fs\t1\n")
+            }
+        }
+    }
     pub mod restart {
         pub fn startup_alias_names() -> Vec<String> {
             vec!["codex".into(), "calc".into()]
@@ -335,6 +343,33 @@ mod shell3 {
             assert_eq!(sessions::control(1, handle, 2, 0, 0), 0);
             test.poll(3);
             assert_eq!(test.drain(handle).1, Some(0));
+        }
+
+        #[test]
+        fn services_aliases_return_the_existing_snapshot_without_a_terminal() {
+            let mut test = SessionTest::new();
+            let handle = test.open(b"services\nadm services", (0, 0), false);
+            test.poll(6);
+            let (output, exit) = test.drain(handle);
+            let expected = "trueos system services snapshot v1\nservices: Grüß § λ\nservice\tname\tstarted\nservice\tasync-fs\t1\n";
+            assert_eq!(output, expected.repeat(2));
+            assert_eq!(exit, Some(0));
+            assert_eq!(world().provider_calls, vec!["services", "services"]);
+            assert_eq!(world().tty_created, 0);
+        }
+
+        #[test]
+        fn services_snapshot_obeys_the_existing_capture_output_limit() {
+            let mut test = SessionTest::new();
+            world().provider_payload_bytes = 1024 * 1024;
+            let handle = test.open(b"services\nram", (0, 0), false);
+            test.poll(6);
+            let (output, exit) = test.drain(handle);
+            assert!(output.starts_with("trueos system services snapshot v1\n"));
+            assert!(output.ends_with("error: captured command output exceeded 1 MiB; session stopped.\n"));
+            assert_eq!(exit, Some(1));
+            assert_eq!(world().provider_calls, vec!["services"]);
+            assert_eq!(world().tty_created, 0);
         }
 
         #[test]

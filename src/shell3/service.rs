@@ -4,6 +4,9 @@ use alloc::{collections::VecDeque, vec::Vec};
 use trueos_executor::{SpawnError, SpawnToken};
 use trueos_time::{Duration, Timer};
 
+#[path = "first_presentation.rs"]
+mod first_presentation;
+
 pub(crate) use crate::hv::matrix::AppReceipt as QueuedBlueprint;
 
 const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
@@ -523,22 +526,17 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                         if let Some(window) = window {
                             let result = if presentation.is_ok() {
                                 if let Some(id) = shell.show.window() {
-                                    let mut presented = false;
-                                    for _ in 0..10_000 {
-                                        match crate::ui4::take_window_first_presentation(
-                                            crate::ui4::WindowOwner::SHELL3_SERVICE,
-                                            id,
-                                        ) {
-                                            Ok(true) => {
-                                                presented = true;
-                                                break;
-                                            }
-                                            Ok(false) => {
-                                                Timer::after(Duration::from_millis(1)).await
-                                            }
-                                            Err(_) => break,
-                                        }
-                                    }
+                                    let presented = first_presentation::wait(
+                                        || {
+                                            crate::ui4::take_window_first_presentation(
+                                                crate::ui4::WindowOwner::SHELL3_SERVICE,
+                                                id,
+                                            )
+                                        },
+                                        || command_sessions.poll(),
+                                        || Timer::after(Duration::from_millis(1)),
+                                    )
+                                    .await;
                                     if presented { id.raw() as i64 } else { -3 }
                                 } else {
                                     -3
