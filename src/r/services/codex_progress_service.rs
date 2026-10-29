@@ -34,6 +34,11 @@ pub(crate) async fn codex_progress_task() {
         } else {
             diagnostics::timing_lines(&mut timing_cursor, LINES_PER_CATEGORY)
         };
+        // TCP owners such as App Store can run without a Codex carrier. Keep
+        // their bounded transport counters observable through the idle gate.
+        for line in crate::mio_compat::progress_lines(LINES_PER_CATEGORY) {
+            crate::log_info!(target: "blueprint"; "{}\n", line);
+        }
         // An exhausted/empty sweep is silent; a busy roster remains evidence.
         if active == 0 && !had_active && carriers.busy_rosters == 0 && timing_lines.is_empty() { continue; }
         had_active = active != 0;
@@ -64,9 +69,6 @@ pub(crate) async fn codex_progress_task() {
             crate::log_info!(target: "blueprint"; "{}\n", line);
         }
         for line in diagnostics::sample_progress_lines(&mut job_cursor, LINES_PER_CATEGORY) {
-            crate::log_info!(target: "blueprint"; "{}\n", line);
-        }
-        for line in crate::mio_compat::progress_lines(LINES_PER_CATEGORY) {
             crate::log_info!(target: "blueprint"; "{}\n", line);
         }
         let mut allocator_rows = 0usize;

@@ -40,8 +40,9 @@ fn lines(provider: &'static str) -> Vec<String> {
     let mut state = world();
     state.provider_calls.push(provider);
     vec![format!(
-        "{provider}: Grüß § λ{}",
-        "x".repeat(state.provider_payload_bytes)
+        "{provider}: Grüß § λ{}{}",
+        "🦉".repeat(state.provider_payload_bytes / 4),
+        "x".repeat(state.provider_payload_bytes % 4)
     )]
 }
 
@@ -610,8 +611,10 @@ mod shell3 {
         #[test]
         fn unread_session_output_overflow_reports_an_explicit_error_and_releases_admission() {
             let mut test = SessionTest::new();
-            world().provider_payload_bytes = 200 * 1024;
-            let handle = test.open(b"smp\nsmp\nsmp\nsmp\nsmp\nsmp\n", (0, 0), false);
+            // Put the old full-capacity admission within one failure notice
+            // of the limit. Raw tail clipping here could split an owl scalar.
+            world().provider_payload_bytes = (1024 * 1024 - 8) / 2 - "smp: Grüß § λ\n".len();
+            let handle = test.open(b"smp\nsmp\nsmp\n", (0, 0), false);
             test.poll(10);
             let (output, exit) = test.drain(handle);
             assert!(
