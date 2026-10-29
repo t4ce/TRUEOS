@@ -30,11 +30,13 @@ mod allocators {
     pub fn with_host_alloc_domain_strong<R>(call: impl FnOnce() -> R) -> R { call() }
 }
 mod r {
+    #[allow(dead_code)]
     #[path = @CABI_CODES@] pub mod cabi_codes;
     pub mod input_timing {
         pub static NOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         pub fn now_ms() -> u64 { NOW.load(std::sync::atomic::Ordering::SeqCst) }
     }
+    pub mod services { pub(crate) use crate::codex_input_service; }
 }
 mod hv {
     use std::sync::Mutex;
@@ -73,6 +75,63 @@ mod hv {
 
 #[path = @SOURCE@] mod codex_input_service;
 
+mod async_fs_adapter {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard};
+    use crate::r::cabi_codes::{FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND};
+    enum OperationState { Read(Vec<u8>) }
+    struct Operation { owner: u32, state: OperationState }
+    static OPERATIONS: Mutex<BTreeMap<u32, Operation>> = Mutex::new(BTreeMap::new());
+    static CAPACITY: AtomicUsize = AtomicUsize::new(64);
+    static SEQUENCE: AtomicU32 = AtomicU32::new(1);
+    fn lock_operations() -> MutexGuard<'static, BTreeMap<u32, Operation>> {
+        OPERATIONS.lock().unwrap()
+    }
+    fn start_completed_read_inner(owner: u32, bytes: Vec<u8>) -> i32 {
+        let mut operations = lock_operations();
+        if operations.len() >= CAPACITY.load(Ordering::SeqCst) { return FS_ERR_NO_SPACE; }
+        let id = SEQUENCE.fetch_add(1, Ordering::SeqCst);
+        operations.insert(id, Operation { owner, state: OperationState::Read(bytes) });
+        id as i32
+    }
+    @RESERVED_READ@
+
+    #[test]
+    fn production_async_fs_adapter_reserves_capacity_before_consuming_message() {
+        const OWNER: u32 = 0x8000_0000;
+        const PATH: &str = "vFile:codex-input/new";
+        crate::r::input_timing::NOW.store(10_000, Ordering::SeqCst);
+        {
+            let mut vms = crate::hv::VMS.lock().unwrap();
+            vms[0].run = 10;
+            vms[0].instance = Some([10; 16]);
+        }
+        assert!(start_codex_input_read(OWNER, PATH) > 0);
+        let target = crate::codex_input_service::current_target().unwrap();
+        let text = "accepted whole text\n§ unchanged";
+        crate::codex_input_service::submit(&target, text).unwrap();
+        CAPACITY.store(0, Ordering::SeqCst);
+        assert_eq!(start_codex_input_read(OWNER, PATH), FS_ERR_NO_SPACE);
+        CAPACITY.store(64, Ordering::SeqCst);
+        let id = start_codex_input_read(OWNER, PATH);
+        assert!(id > 0);
+        {
+            let operations = lock_operations();
+            let OperationState::Read(bytes) = &operations.get(&(id as u32)).unwrap().state;
+            assert_eq!(bytes, text.as_bytes());
+        }
+        let id = start_codex_input_read(OWNER, PATH);
+        {
+            let operations = lock_operations();
+            let OperationState::Read(bytes) = &operations.get(&(id as u32)).unwrap().state;
+            assert!(bytes.is_empty());
+        }
+        crate::codex_input_service::read_for_owner(OWNER, "vFile:codex-input/offline").unwrap();
+        crate::r::input_timing::NOW.store(0, Ordering::SeqCst);
+    }
+}
+
 #[test]
 fn public_boundary_requires_unique_live_exact_app_and_current_receiver() {
     use codex_input_service::{SubmitError, current_target, is_target_live, read_for_owner, submit};
@@ -80,6 +139,11 @@ fn public_boundary_requires_unique_live_exact_app_and_current_receiver() {
     use std::sync::atomic::Ordering;
     const OWNER: u32 = 0x8000_0000;
     const PATH: &str = "vFile:codex-input/new";
+    {
+        let mut vms = hv::VMS.lock().unwrap();
+        vms[0].run = 1;
+        vms[0].instance = Some([1; 16]);
+    }
     assert!(current_target().is_none());
     assert_eq!(read_for_owner(0, PATH), Err(FS_ERR_NOT_FOUND));
     assert_eq!(read_for_owner(OWNER | 999, PATH), Err(FS_ERR_NOT_FOUND));
@@ -120,6 +184,7 @@ fn public_boundary_requires_unique_live_exact_app_and_current_receiver() {
     assert!(current_target().is_none());
     assert!(is_target_live(&target));
     submit(&target, "still first VM").unwrap();
+    assert!(current_target().is_none(), "queued input must not make the other VM uniquely selected");
     assert!(read_for_owner(OWNER | 1, PATH).unwrap().is_empty());
     assert_eq!(read_for_owner(OWNER, PATH).unwrap(), b"still first VM");
     read_for_owner(OWNER | 1, "vFile:codex-input/offline").unwrap();
@@ -146,15 +211,20 @@ def main() -> None:
     channel = re.search(r'^channel\s*=\s*"([^"]+)"',
                         (ROOT / "rust-toolchain.toml").read_text(), re.MULTILINE)
     assert channel, "repository Rust toolchain channel missing"
+    adapter = (ROOT / "src/r/io/async_fs_cabi.rs").read_text()
+    start = adapter.index("fn start_codex_input_read(")
+    stop = adapter.index("\npub(crate) fn start_read(", start)
+    reserved_read = adapter[start:stop]
     with tempfile.TemporaryDirectory(prefix="trueos-codex-input-") as directory:
         directory = Path(directory)
         harness = directory / "harness.rs"
         harness.write_text(HARNESS.replace("@SOURCE@", json.dumps(str(SOURCE)))
-                           .replace("@CABI_CODES@", json.dumps(str(ROOT / "src/r/cabi_codes.rs"))))
+                           .replace("@CABI_CODES@", json.dumps(str(ROOT / "src/r/cabi_codes.rs")))
+                           .replace("@RESERVED_READ@", reserved_read))
         binary = directory / "tests"
         subprocess.run(["rustc", "+" + channel.group(1), "--edition=2024", "--test",
                         str(harness), "-o", str(binary)], check=True)
-        subprocess.run([str(binary)], check=True)
+        subprocess.run([str(binary), "--test-threads=1"], check=True)
 
 
 if __name__ == "__main__":

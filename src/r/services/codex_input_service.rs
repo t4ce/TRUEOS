@@ -73,8 +73,13 @@ impl Registry {
         let Some(slot) = self.receivers.get(index) else {
             return Err(crate::r::cabi_codes::FS_ERR_NOT_FOUND);
         };
-        let same_identity = slot.as_ref().is_some_and(|receiver| receiver.target.identity == identity);
-        let same_scope = same_identity && slot.as_ref().is_some_and(|receiver| receiver.target.scope == scope);
+        let same_identity = slot
+            .as_ref()
+            .is_some_and(|receiver| receiver.target.identity == identity);
+        let same_scope = same_identity
+            && slot
+                .as_ref()
+                .is_some_and(|receiver| receiver.target.scope == scope);
         let same_receiver = same_scope
             && slot
                 .as_ref()
@@ -105,8 +110,17 @@ impl Registry {
         }
         let receiver = self.receivers[index].as_mut().expect("registered receiver");
         receiver.ready_until_ms = now.saturating_add(READY_LEASE_MS);
-        if receiver.pending.as_ref().is_some_and(|pending| pending.scope == scope) {
-            Ok(receiver.pending.take().expect("matching pending input").text.into_bytes())
+        if receiver
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.scope == scope)
+        {
+            Ok(receiver
+                .pending
+                .take()
+                .expect("matching pending input")
+                .text
+                .into_bytes())
         } else {
             Ok(Vec::new())
         }
@@ -114,7 +128,10 @@ impl Registry {
 
     fn offline(&mut self, identity: Identity) {
         if let Some(slot) = self.receivers.get_mut(identity.vm as usize) {
-            if let Some(receiver) = slot.as_mut().filter(|receiver| receiver.target.identity == identity) {
+            if let Some(receiver) = slot
+                .as_mut()
+                .filter(|receiver| receiver.target.identity == identity)
+            {
                 receiver.ready_until_ms = 0;
             } else {
                 *slot = None;
@@ -131,11 +148,17 @@ impl Registry {
 
     fn candidates(&self, now: u64) -> [Option<Target>; VM_LIMIT] {
         core::array::from_fn(|index| {
-            self.receivers[index].as_ref().and_then(|receiver| {
-                (now < receiver.ready_until_ms && receiver.pending.is_none())
-                    .then_some(receiver.target)
-            })
+            self.receivers[index]
+                .as_ref()
+                .and_then(|receiver| (now < receiver.ready_until_ms).then_some(receiver.target))
         })
+    }
+
+    fn can_accept(&self, target: &Target, now: u64) -> bool {
+        self.is_live(target, now)
+            && self.receivers[target.identity.vm as usize]
+                .as_ref()
+                .is_some_and(|receiver| receiver.pending.is_none())
     }
 
     fn submit(&mut self, target: &Target, text: &str, now: u64) -> Result<(), SubmitError> {
@@ -154,7 +177,10 @@ impl Registry {
         if receiver.pending.is_some() {
             return Err(SubmitError::Busy);
         }
-        receiver.pending = Some(Pending { scope: target.scope, text: String::from(text) });
+        receiver.pending = Some(Pending {
+            scope: target.scope,
+            text: String::from(text),
+        });
         Ok(())
     }
 }
@@ -198,7 +224,12 @@ pub(crate) fn current_target() -> Option<Target> {
         }
         selected = Some(target);
     }
-    selected.filter(is_target_live)
+    selected.filter(|target| {
+        is_target_live(target)
+            && REGISTRY
+                .lock()
+                .can_accept(target, crate::r::input_timing::now_ms())
+    })
 }
 
 pub(crate) fn is_target_live(target: &Target) -> bool {
@@ -267,7 +298,9 @@ pub(crate) fn read_for_owner(owner: u32, path: &str) -> Result<Vec<u8>, i32> {
             return Ok(Vec::new());
         }
         let scope = parse_scope(scope).ok_or(FS_ERR_BAD_PARAM)?;
-        REGISTRY.lock().poll(identity, scope, crate::r::input_timing::now_ms())
+        REGISTRY
+            .lock()
+            .poll(identity, scope, crate::r::input_timing::now_ms())
     })
 }
 
@@ -327,7 +360,7 @@ mod tests {
             registry.submit(&target, "second", 100),
             Err(SubmitError::Busy)
         );
-        assert!(registry.candidates(100)[0].is_none());
+        assert!(!registry.can_accept(&target, 100));
         assert_eq!(
             registry.poll(identity(1), Scope::New, 200).unwrap(),
             b"first"
@@ -373,13 +406,29 @@ mod tests {
             registry.submit(&old, "must not redirect", 200),
             Err(SubmitError::Unavailable)
         );
-        assert!(registry.candidates(200)[0].is_none());
         let new_scope = registry.receivers[0].as_ref().unwrap().target;
+        assert!(!registry.can_accept(&new_scope, 200));
         assert_ne!(new_scope, old);
-        assert_eq!(registry.submit(&new_scope, "cannot replace old input", 200), Err(SubmitError::Busy));
-        assert!(registry.poll(identity(1), Scope::Thread([4; 16]), 300).unwrap().is_empty());
-        assert_eq!(registry.poll(identity(1), Scope::New, 400).unwrap(), b"old conversation only");
-        assert!(registry.poll(identity(1), Scope::New, 500).unwrap().is_empty());
+        assert_eq!(
+            registry.submit(&new_scope, "cannot replace old input", 200),
+            Err(SubmitError::Busy)
+        );
+        assert!(
+            registry
+                .poll(identity(1), Scope::Thread([4; 16]), 300)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            registry.poll(identity(1), Scope::New, 400).unwrap(),
+            b"old conversation only"
+        );
+        assert!(
+            registry
+                .poll(identity(1), Scope::New, 500)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -401,10 +450,23 @@ mod tests {
         registry.submit(&old, "accepted before modal", 100).unwrap();
         registry.offline(identity(1));
         assert!(!registry.is_live(&old, 200));
-        assert!(registry.poll(identity(1), Scope::Thread([7; 16]), 300).unwrap().is_empty());
-        assert!(registry.candidates(300)[0].is_none());
-        assert_eq!(registry.poll(identity(1), Scope::New, 400).unwrap(), b"accepted before modal");
-        assert!(registry.poll(identity(1), Scope::New, 500).unwrap().is_empty());
+        assert!(
+            registry
+                .poll(identity(1), Scope::Thread([7; 16]), 300)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!registry.can_accept(&registry.receivers[0].as_ref().unwrap().target, 300));
+        assert_eq!(
+            registry.poll(identity(1), Scope::New, 400).unwrap(),
+            b"accepted before modal"
+        );
+        assert!(
+            registry
+                .poll(identity(1), Scope::New, 500)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
