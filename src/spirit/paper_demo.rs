@@ -12,11 +12,16 @@ use crate::r::services::keyboard_control_service::{
 use crate::ui4::{WindowOwner, WindowSnapshot};
 
 const GREETING: &str = "Hello from TrueOS §";
-pub(super) const GREETING_GRID_SCALE: u32 = 2;
+pub(crate) const GREETING_GRID_SCALE: u32 = 2;
+pub(crate) const GREETING_GRID_WIDTH_MM: u32 = 190;
+pub(crate) const GREETING_GRID_HEIGHT_MM: u32 = 90;
 // 19 x 9 whole 10 mm cells, a 19:9 frame. The greeting fills row zero;
 // wrapping leaves its caret at row one, ready to erase every scalar.
 fn launch_script() -> String {
-    alloc::format!("mode gridpaper\nsize 190x90\nstep {}\nwrap on\n", GREETING_GRID_SCALE)
+    alloc::format!(
+        "mode gridpaper\nsize {}x{}\nstep {}\nwrap on\n",
+        GREETING_GRID_WIDTH_MM, GREETING_GRID_HEIGHT_MM, GREETING_GRID_SCALE,
+    )
 }
 const POLL_MS: u64 = 16;
 const INPUT_SETTLE_MS: u64 = 48;

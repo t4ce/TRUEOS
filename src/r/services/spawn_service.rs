@@ -87,6 +87,7 @@ define_started_flags!(
     UI4_COMPOSITOR_STARTED,
     UI4_COLOR_PICKER_STARTED,
     UI4_LINK_SERVICE_STARTED,
+    UI4_CODEX_PROMPT_SERVICE_STARTED,
     UI4_WINDOW_BROKER_SNAPSHOT_STARTED,
     UI4_VIDEO_CONVERSION_STARTED,
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
@@ -811,6 +812,10 @@ fn spawn_ui4_color_picker_service_task(spawner: Spawner) -> SpawnAttempt {
 /// combo registry. It deliberately does not claim a UI-core worker.
 fn spawn_ui4_link_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::ui4::ui4_link_service_task())
+}
+
+fn spawn_ui4_codex_prompt_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::ui4::ui4_codex_prompt_service_task())
 }
 
 fn spawn_ui4_window_broker_snapshot_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -1698,6 +1703,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::UI4_COMPOSITOR_READY,
         &UI4_LINK_SERVICE_STARTED,
         spawn_ui4_link_service_task,
+    ),
+    TaskSpec::enabled(
+        "ui4-codex-prompt-service",
+        crate::r::readiness::UI4_COMPOSITOR_READY,
+        &UI4_CODEX_PROMPT_SERVICE_STARTED,
+        spawn_ui4_codex_prompt_service_task,
     ),
     #[cfg(feature = "trueos_lumen")]
     TaskSpec::configured_gated(

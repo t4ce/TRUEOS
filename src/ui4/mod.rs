@@ -6,6 +6,7 @@
 pub(crate) mod blueprint_ui4;
 mod collapse;
 mod color_picker;
+mod codex_prompt;
 pub(crate) use collapse::{CollapseError, MAX_COLLAPSE_IMAGE_SIZE, enable_window_collapse};
 mod compositor_service;
 mod context_menu;
@@ -78,6 +79,7 @@ impl InteractionCadence {
 }
 
 pub(crate) use color_picker::ui4_color_picker_service_task;
+pub(crate) use codex_prompt::{request_open as request_codex_prompt_open, ui4_codex_prompt_service_task};
 pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use context_menu::{
     ContextMenuCloseReason, ContextMenuEntry,

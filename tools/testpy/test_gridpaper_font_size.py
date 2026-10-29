@@ -21,7 +21,8 @@ DEMO = "src/spirit/paper_demo.rs"
 
 def main() -> None:
     source = "extern crate alloc;\n"
-    source += constant(DEMO, "GREETING_GRID_SCALE").replace("pub(super)", "pub(crate)") + "\n"
+    for name in ("GREETING_GRID_SCALE", "GREETING_GRID_WIDTH_MM", "GREETING_GRID_HEIGHT_MM"):
+        source += constant(DEMO, name) + "\n"
     source += item(DEMO, "launch_script")
     source += item(SERVICE, "grid_cell_extent")
     source += item(SERVICE, "grid_glyph_blocking")

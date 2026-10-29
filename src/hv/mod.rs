@@ -1024,6 +1024,14 @@ pub(crate) fn vm_run_generation(vm_id: u8) -> Option<u64> {
     vm_slot(vm_id).map(|vm| vm.run_generation.load(Ordering::Acquire))
 }
 
+/// Current-run archive identity retained after the guest loader consumes its
+/// launch state. Never infer a host-side target from mutable guest argv/env.
+pub(crate) fn blueprint_current_run_archive(vm_id: u8, run: u64) -> Option<AllocString> {
+    let template = BLUEPRINT_CHILD_TEMPLATES.get(vm_id as usize)?.lock();
+    template.as_ref().filter(|template| template.generation == run)
+        .map(|template| template.archive.clone())
+}
+
 
 fn lifecycle_now_ms() -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);

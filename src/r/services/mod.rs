@@ -1,4 +1,5 @@
 //! Long-lived kernel service authorities and worker control planes.
+pub(crate) mod codex_input_service;
 pub(crate) mod codex_progress_service;
 
 pub mod gamepad_control_service;

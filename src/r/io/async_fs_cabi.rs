@@ -38,6 +38,7 @@ pub(crate) fn is_virtual_write(path: &str) -> bool { path == "vFile:appdb-instal
 pub(crate) fn is_virtual_read(path: &str) -> bool {
     matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE | TERMINAL_FRONTEND_VFILE)
         || path.starts_with("vFile:microfont-grid/")
+        || path.starts_with(crate::r::services::codex_input_service::VFILE_PREFIX)
 }
 const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
 
@@ -476,6 +477,32 @@ fn start_inner(owner: u32, kind: RequestKind) -> i32 {
 }
 
 pub(crate) fn start_read(owner: u32, path: String) -> i32 {
+    if path.starts_with(crate::r::services::codex_input_service::VFILE_PREFIX) {
+        return crate::allocators::with_host_alloc_domain_strong(|| {
+            // Reserve capacity before touching the one-shot mailbox. Do not
+            // hold the operation registry across VM identity/service locks.
+            let id = start_completed_read_inner(owner, Vec::new());
+            if id < 0 {
+                return id;
+            }
+            let result = crate::r::services::codex_input_service::read_for_owner(owner, &path);
+            let mut operations = lock_operations();
+            let Some(operation) = operations.get_mut(&(id as u32))
+                .filter(|operation| operation.owner == owner) else {
+                return FS_ERR_NOT_FOUND;
+            };
+            match result {
+                Ok(bytes) => {
+                    operation.state = OperationState::Read(bytes);
+                    id
+                }
+                Err(error) => {
+                    operations.remove(&(id as u32));
+                    error
+                }
+            }
+        });
+    }
     if path == TERMINAL_FRONTEND_VFILE {
         let vm = owner & !0x8000_0000;
         if owner & 0x8000_0000 == 0 || vm > u8::MAX as u32 {
@@ -1459,15 +1486,17 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_read_start(
 ) -> i32 {
     // Virtual files are VM-local host streams, not members of the app's
     // TrueOSFS root. Preserve the namespace before normal path resolution.
-    if crate::hv::current_hull_guest_context_vm_id().is_some()
-        && !path_ptr.is_null()
-        && path_len <= 64
+    if !path_ptr.is_null() && path_len <= 64
     {
         let raw_path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
         if let Ok(path) = core::str::from_utf8(raw_path)
             && is_virtual_read(path)
         {
-            return guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_READ_START, path);
+            return if crate::hv::current_hull_guest_context_vm_id().is_some() {
+                guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_READ_START, path)
+            } else {
+                start_read(direct_owner(), String::from(path))
+            };
         }
     }
     let path = match parse_path(path_ptr, path_len, false) {

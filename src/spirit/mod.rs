@@ -25,6 +25,7 @@ mod intel_cursor;
 mod lilly;
 mod lilly_cursor;
 mod paper_demo;
+pub(crate) use paper_demo::{GREETING_GRID_HEIGHT_MM, GREETING_GRID_SCALE, GREETING_GRID_WIDTH_MM};
 pub(crate) mod lilly_protocol;
 pub(crate) mod spirit_thoughts;
 
