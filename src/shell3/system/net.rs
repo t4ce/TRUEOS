@@ -130,7 +130,7 @@ fn append_r8125_details(lines: &mut Vec<String>, specific_index: Option<usize>) 
             .as_str()).into());
     }
 }
-fn nic_snapshot(width: usize, selector: Option<&str>) -> Vec<String> {
+pub(super) fn nic_snapshot(width: usize, selector: Option<&str>) -> Vec<String> {
     let mut lines = Vec::new();
     let specific_index = match selector {
         Some(sel) => match parse_device_selector(sel) {

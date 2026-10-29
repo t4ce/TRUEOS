@@ -42,6 +42,7 @@ mod metafmtstr;
 mod names;
 pub mod net;
 pub(crate) mod sessions;
+mod captured;
 mod ssh;
 mod ssh_boot;
 mod status;

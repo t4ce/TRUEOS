@@ -1,4 +1,6 @@
 // Versioned byte-session ABI. Guest requests carry no caller-supplied owner identity.
+// Geometry 0x0 selects captured command I/O; a valid nonzero geometry explicitly
+// selects the interactive terminal. Both use the existing Shell3 AP worker pool.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_shell3_session_open_v1(script_ptr: *const u8, script_len: usize, cols: u32, rows: u32, stdin_open: u32) -> i64 {
     let cap = trueos_vm::vmcall::PAYLOAD_CAP;
