@@ -70,7 +70,8 @@ def main() -> None:
         render += item(slot_path, name)
     for name in ("glyph_cursor_centers_and_clips_prepared_runs_on_slot_four",
                  "glyph_recolor_only_changes_coverage_modulated_tint",
-                 "text_cursor_recolor_keeps_nickname_rects_and_damage_outside_it_unchanged"):
+                 "text_cursor_recolor_keeps_nickname_rects_and_damage_outside_it_unchanged",
+                 "cached_nickname_edge_has_contrast_on_light_and_dark_backgrounds"):
         render += "#[test]\n" + block(slot, f"fn {name}()") + "\n"
 
     broker_path = "src/ui4/input_broker.rs"

@@ -156,6 +156,7 @@ pub mod r {
                 Rgba8::new(0,0,0,255)).unwrap();
             let visual = cursor_visual_metadata(cursor.slot_id).unwrap();
             let glyph = visual.glyph.unwrap();
+            assert!(glyph.body_edge_runs.is_empty());
             assert_eq!(u32::from(glyph.width), (u32::from(height) * 6 + 5) / 11);
             assert_eq!(glyph.height, height);
             let mut actual = alloc::vec![0; usize::from(glyph.width) * usize::from(height)];
@@ -215,6 +216,30 @@ pub mod r {
                         }
                     }
                 }
+                // Compare cached edge runs with an independent 3x3 dilation
+                // of resident coverage, clipped strictly to the body span.
+                let mut edge = alloc::vec![0; actual.len()];
+                for run in glyph.body_edge_runs.iter() {
+                    assert!(run.width != 0 && run.coverage != 0);
+                    assert!(run.x >= glyph.prefix_width);
+                    assert!(run.x + run.width <= width && run.y < height);
+                    for x in run.x..run.x + run.width {
+                        edge[usize::from(run.y)*usize::from(width)+usize::from(x)] = run.coverage;
+                    }
+                }
+                assert!(edge.iter().any(|&coverage| coverage != 0));
+                for y in 0..height {
+                    for x in glyph.prefix_width..width {
+                        let mut maximum = 0u8;
+                        for near_y in y.saturating_sub(1)..=(y + 1).min(height - 1) {
+                            for near_x in x.saturating_sub(1).max(glyph.prefix_width)..=(x + 1).min(width - 1) {
+                                maximum = maximum.max(actual[usize::from(near_y)*usize::from(width)+usize::from(near_x)]);
+                            }
+                        }
+                        let index = usize::from(y)*usize::from(width)+usize::from(x);
+                        assert_eq!(edge[index], maximum.saturating_sub(actual[index]));
+                    }
+                }
                 let same = request_text_cursor(OWNER,"same-name",text,height,1,
                     Rgba8::new(0,160,255,255),Rgba8::new(200,200,200,255)).unwrap();
                 assert!(alloc::sync::Arc::ptr_eq(glyph,
@@ -223,6 +248,8 @@ pub mod r {
                 let after = cursor_visual_metadata(cursor.slot_id).unwrap();
                 assert_eq!(after.text_color,Some(neutral));
                 assert!(alloc::sync::Arc::ptr_eq(glyph,after.glyph.as_ref().unwrap()));
+                assert!(alloc::sync::Arc::ptr_eq(&glyph.body_edge_runs,
+                    &after.glyph.as_ref().unwrap().body_edge_runs));
                 release_cursor(OWNER,cursor.handle).unwrap();
                 release_cursor(OWNER,same.handle).unwrap();
             }

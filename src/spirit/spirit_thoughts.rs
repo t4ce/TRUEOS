@@ -1422,6 +1422,54 @@ mod tests {
         for now in (0..ORBIT_PERIOD_MS).step_by(250) {
             check_layout(&plan, layout, now);
             check_programs(&plan, layout, now);
+            for motion in [first, second] {
+                let (_, curves) = motion.curves(now);
+                for curve in curves {
+                    for step in 0..=32 {
+                        let point = curve_point(curve, step as f64 / 32.0);
+                        let dx = f64::from(
+                            point.x - motion.track.center_offset_x - motion.track.orbit.center.x,
+                        );
+                        let dy = f64::from(point.y - motion.track.orbit.center.y);
+                        let distance = libm::sqrt(dx * dx + dy * dy);
+                        assert!(
+                            (180.0..=192.0).contains(&distance),
+                            "the actual queued cubic must keep § close to Lilly: {distance}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn edge_arc_reverses_without_changing_the_tight_prefix_radius() {
+        let mut thoughts = Thoughts::new();
+        thoughts
+            .ingest(
+                OWNER,
+                snapshot(
+                    1,
+                    vec![named_agent("runner", "Joker", AgentLifecycle::Running)],
+                ),
+                0,
+            )
+            .unwrap();
+        let layout = paper_geometry(1664, 0, 48);
+        let plan = thoughts.plan(layout, 0);
+        let motion = plan[0].orbit.unwrap();
+        assert!(!motion.track.full());
+        assert_eq!(motion.track.orbit.radius, 182);
+        let start = motion.point(motion.segment(0).0);
+        let turnaround = motion.point(motion.segment(ORBIT_PERIOD_MS / 2).0);
+        assert_ne!(
+            start, turnaround,
+            "a screen edge must retain visible motion"
+        );
+        assert_eq!(start, motion.point(motion.segment(ORBIT_PERIOD_MS).0));
+        for now in (0..ORBIT_PERIOD_MS).step_by(125) {
+            check_layout(&plan, layout, now);
+            check_programs(&plan, layout, now);
         }
     }
 

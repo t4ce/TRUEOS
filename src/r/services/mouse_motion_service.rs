@@ -82,6 +82,10 @@ pub(crate) struct MouseControlGlyph {
     pub(crate) width: u16,
     pub(crate) height: u16,
     pub(crate) runs: Arc<[MouseControlGlyphRun]>,
+    /// Immutable one-pixel contrast edge for the untinted body. Like the fill,
+    /// it is prepared once from resident coverage and remains inside the text
+    /// bounds; no edge may extend into the mutable prefix cell.
+    pub(crate) body_edge_runs: Arc<[MouseControlGlyphRun]>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -864,11 +868,15 @@ fn prepare_cursor_text(
     // Derive only color-free row runs; never rasterize another glyph or atlas.
     let atlas = super::microfont_mask_service::ready_atlas()
         .ok_or(MouseControlError::Unavailable)?;
+    let masks = text.chars().map(|character| {
+        atlas.glyph(character).or_else(|| atlas.glyph('?'))
+            .ok_or(MouseControlError::Invalid)
+    }).collect::<Result<AllocVec<_>, _>>()?;
     let mut runs = AllocVec::new();
-    for (column, character) in text.chars().enumerate() {
-        let mask = atlas.glyph(character).or_else(|| atlas.glyph('?'))
-            .ok_or(MouseControlError::Invalid)?;
-        for y in 0..u32::from(height) {
+    // Row order lets the cached body edge use just three scanlines of scratch,
+    // rather than allocating another full text-sized alpha image.
+    for y in 0..u32::from(height) {
+        for (column, &mask) in masks.iter().enumerate() {
             let mut from = 0;
             let mut coverage = atlas.sample(mask, 0, y, cell_width, u32::from(height));
             for x in 1..=cell_width {
@@ -895,13 +903,78 @@ fn prepare_cursor_text(
     if runs.is_empty() {
         return Err(MouseControlError::Invalid);
     }
+    let body_edge_runs = prepare_cursor_body_edge(width, height, prefix_width, &runs);
     Ok(MouseControlGlyph {
         text: Arc::from(text),
         prefix_width,
         width,
         height,
         runs: Arc::from(runs.into_boxed_slice()),
+        body_edge_runs: Arc::from(body_edge_runs.into_boxed_slice()),
     })
+}
+
+/// Dilate body coverage by one pixel and retain only the added edge. Sampling
+/// stays within the existing body rectangle, including at the prefix boundary.
+/// This runs at shape creation, never during motion or state-color changes.
+fn prepare_cursor_body_edge(
+    width: u16,
+    height: u16,
+    prefix_width: u16,
+    runs: &[MouseControlGlyphRun],
+) -> AllocVec<MouseControlGlyphRun> {
+    let body_width = usize::from(width.saturating_sub(prefix_width));
+    let mut edge = AllocVec::new();
+    if body_width == 0 { return edge; }
+    let mut rows = [
+        alloc::vec![0u8; body_width + 2],
+        alloc::vec![0u8; body_width + 2],
+        alloc::vec![0u8; body_width + 2],
+    ];
+    let mut next_run = 0;
+    let mut load_row = |y: u16, row: &mut [u8]| {
+        row.fill(0);
+        while let Some(run) = runs.get(next_run).filter(|run| run.y == y) {
+            if run.x >= prefix_width {
+                let start = usize::from(run.x - prefix_width) + 1;
+                row[start..start + usize::from(run.width)].fill(run.coverage);
+            }
+            next_run += 1;
+        }
+    };
+    load_row(0, &mut rows[1]);
+    if height > 1 { load_row(1, &mut rows[2]); }
+    for y in 0..height {
+        let mut from = 0;
+        let mut coverage = 0;
+        for x in 0..=body_width {
+            let next = if x < body_width {
+                let center = x + 1;
+                let mut maximum = 0;
+                for row in &rows {
+                    maximum = maximum.max(row[center - 1])
+                        .max(row[center]).max(row[center + 1]);
+                }
+                maximum.saturating_sub(rows[1][center])
+            } else { 0 };
+            if next != coverage || x == body_width {
+                if coverage != 0 {
+                    edge.push(MouseControlGlyphRun {
+                        x: prefix_width + from as u16,
+                        y,
+                        width: (x - from) as u16,
+                        coverage,
+                    });
+                }
+                from = x;
+                coverage = next;
+            }
+        }
+        rows.rotate_left(1);
+        if y + 2 < height { load_row(y + 2, &mut rows[2]); }
+        else { rows[2].fill(0); }
+    }
+    edge
 }
 
 fn apply_button_sets(cursor: &mut CursorRecord, set: u32, clear: u32) {
