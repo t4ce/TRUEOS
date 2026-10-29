@@ -40,6 +40,15 @@ static SOCKETS: Mutex<BTreeMap<u32, SocketState>> = Mutex::new(BTreeMap::new());
 static TUN_SEQ: Mutex<u32> = Mutex::new(1);
 static TUNS: Mutex<BTreeMap<u32, TunState>> = Mutex::new(BTreeMap::new());
 
+// Registry nodes and queued bytes can outlive the VM that first allocated them.
+fn with_sockets<T>(f: impl FnOnce(&mut BTreeMap<u32, SocketState>) -> T) -> T {
+    crate::allocators::with_host_alloc_domain_strong(|| f(&mut SOCKETS.lock()))
+}
+
+fn with_tuns<T>(f: impl FnOnce(&mut BTreeMap<u32, TunState>) -> T) -> T {
+    crate::allocators::with_host_alloc_domain_strong(|| f(&mut TUNS.lock()))
+}
+
 #[derive(Clone, Copy)]
 enum RemoteAddr {
     V4([u8; 4], u16),
@@ -135,26 +144,28 @@ fn with_socket_mut<T>(
     f: impl FnOnce(&mut SocketState) -> Result<T, i32>,
 ) -> Result<T, i32> {
     let owner_vm = crate::hv::current_guest_execution_context_vm_id();
-    let mut sockets = SOCKETS.lock();
-    let Some(socket) = sockets.get_mut(&socket_id) else {
-        return Err(-EBADF);
-    };
-    if socket.owner_vm != owner_vm {
-        return Err(-EBADF);
-    }
-    f(socket)
+    with_sockets(|sockets| {
+        let Some(socket) = sockets.get_mut(&socket_id) else {
+            return Err(-EBADF);
+        };
+        if socket.owner_vm != owner_vm {
+            return Err(-EBADF);
+        }
+        f(socket)
+    })
 }
 
 fn with_tun_mut<T>(tun_id: u32, f: impl FnOnce(&mut TunState) -> Result<T, i32>) -> Result<T, i32> {
     let owner_vm = crate::hv::current_guest_execution_context_vm_id();
-    let mut tuns = TUNS.lock();
-    let Some(tun) = tuns.get_mut(&tun_id) else {
-        return Err(-EBADF);
-    };
-    if tun.owner_vm != owner_vm {
-        return Err(-EBADF);
-    }
-    f(tun)
+    with_tuns(|tuns| {
+        let Some(tun) = tuns.get_mut(&tun_id) else {
+            return Err(-EBADF);
+        };
+        if tun.owner_vm != owner_vm {
+            return Err(-EBADF);
+        }
+        f(tun)
+    })
 }
 
 fn pump_socket(socket: &mut SocketState) {
@@ -419,12 +430,14 @@ fn connect_inner(socket_id: u32, remote: RemoteAddr, nonblocking: bool) -> Resul
 }
 
 fn close_socket_state(socket: &mut SocketState) {
-    if let (Some(vnet), Some(handle)) = (socket.vnet.as_ref(), socket.handle.take()) {
-        let _ = vnet.submit(api::Command::Close { handle });
-    }
-    socket.connected = false;
-    socket.connect_submitted = false;
-    socket.closed = true;
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        if let (Some(vnet), Some(handle)) = (socket.vnet.as_ref(), socket.handle.take()) {
+            let _ = vnet.submit(api::Command::Close { handle });
+        }
+        socket.connected = false;
+        socket.connect_submitted = false;
+        socket.closed = true;
+    });
 }
 
 fn recv_inner(socket_id: u32, out: &mut [u8], flags: i32) -> Result<Option<usize>, i32> {
@@ -476,42 +489,42 @@ pub(crate) fn socket_tcp_open_host(domain: i32, socket_type: i32, protocol: i32)
 
     let socket_id = next_socket_id();
     let owner_vm = crate::hv::current_guest_execution_context_vm_id();
-    SOCKETS
-        .lock()
-        .insert(socket_id, SocketState::new(owner_vm, domain, socket_type, protocol));
+    with_sockets(|sockets| {
+        sockets.insert(socket_id, SocketState::new(owner_vm, domain, socket_type, protocol));
+    });
     socket_id as i32
 }
 
 pub(crate) fn socket_tcp_close_host(socket_id: u32) -> i32 {
     let owner_vm = crate::hv::current_guest_execution_context_vm_id();
-    let mut sockets = SOCKETS.lock();
-    let Some(socket) = sockets.get(&socket_id) else {
+    let socket = with_sockets(|sockets| {
+        if sockets.get(&socket_id).is_some_and(|socket| socket.owner_vm == owner_vm) {
+            sockets.remove(&socket_id)
+        } else {
+            None
+        }
+    });
+    let Some(mut socket) = socket else {
         return -EBADF;
     };
-    if socket.owner_vm != owner_vm {
-        return -EBADF;
-    }
-    let Some(mut socket) = sockets.remove(&socket_id) else {
-        return -EBADF;
-    };
-    drop(sockets);
     close_socket_state(&mut socket);
     0
 }
 
 pub(crate) fn close_sockets_for_vm(vm_id: u8) -> usize {
-    let mut sockets = SOCKETS.lock();
-    let socket_ids: Vec<u32> = sockets
-        .iter()
-        .filter_map(|(id, socket)| (socket.owner_vm == Some(vm_id)).then_some(*id))
-        .collect();
-    let mut closed = Vec::new();
-    for socket_id in socket_ids {
-        if let Some(socket) = sockets.remove(&socket_id) {
-            closed.push(socket);
+    let closed = with_sockets(|sockets| {
+        let socket_ids: Vec<u32> = sockets
+            .iter()
+            .filter_map(|(id, socket)| (socket.owner_vm == Some(vm_id)).then_some(*id))
+            .collect();
+        let mut closed = Vec::new();
+        for socket_id in socket_ids {
+            if let Some(socket) = sockets.remove(&socket_id) {
+                closed.push(socket);
+            }
         }
-    }
-    drop(sockets);
+        closed
+    });
 
     let count = closed.len();
     for mut socket in closed {
@@ -782,37 +795,40 @@ pub(crate) fn tun_open_host(
         return -ENETUNREACH;
     }
 
-    let Some(vnet) = VNetBridge::open_primary() else {
-        return -ENETUNREACH;
-    };
     let ipv4 = ipv4_be.to_be_bytes();
-    if vnet
-        .submit(api::Command::OpenTun {
+    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
+    let vnet = crate::allocators::with_host_alloc_domain_strong(|| {
+        let vnet = VNetBridge::open_primary().ok_or(-ENETUNREACH)?;
+        vnet.submit(api::Command::OpenTun {
             ipv4,
             ipv4_prefix_len: ipv4_prefix_len as u8,
             ipv6,
             ipv6_prefix_len: ipv6_prefix_len as u8,
             mtu: mtu as u16,
         })
-        .is_err()
-    {
-        return -EAGAIN;
-    }
+        .map_err(|_| -EAGAIN)?;
+        Ok(vnet)
+    });
+    let vnet = match vnet {
+        Ok(vnet) => vnet,
+        Err(error) => return error,
+    };
 
     let tun_id = next_tun_id();
-    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
-    TUNS.lock().insert(
-        tun_id,
-        TunState {
-            owner_vm,
-            vnet,
-            handle: None,
-            opened: false,
-            closed: false,
-            last_error: 0,
-            recv_packets: VecDeque::new(),
-        },
-    );
+    with_tuns(|tuns| {
+        tuns.insert(
+            tun_id,
+            TunState {
+                owner_vm,
+                vnet,
+                handle: None,
+                opened: false,
+                closed: false,
+                last_error: 0,
+                recv_packets: VecDeque::new(),
+            },
+        );
+    });
 
     let mut result = Ok(());
     let ready = wait_until(Some(1_000), || {
@@ -844,7 +860,9 @@ pub(crate) fn tun_open_host(
     if ready && result.is_ok() {
         tun_id as i32
     } else {
-        TUNS.lock().remove(&tun_id);
+        with_tuns(|tuns| {
+            tuns.remove(&tun_id);
+        });
         result.err().unwrap_or(-ETIMEDOUT)
     }
 }
@@ -858,7 +876,9 @@ pub(crate) fn tun_close_host(tun_id: u32) -> i32 {
         Ok(())
     }) {
         Ok(()) => {
-            TUNS.lock().remove(&tun_id);
+            with_tuns(|tuns| {
+                tuns.remove(&tun_id);
+            });
             0
         }
         Err(err) => err,

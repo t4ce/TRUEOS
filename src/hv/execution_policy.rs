@@ -7,6 +7,28 @@ pub(super) const fn intercept_pause(preemption_timer_enabled: bool, native_pause
     !preemption_timer_enabled || !native_pause
 }
 
+/// Bound one executor turn across VM exits that immediately resume the guest.
+/// The VMX timer is reloaded on entry, so frequent short VMCALLs alone cannot
+/// enforce this bound. Only a host executor yield restarts this budget.
+pub(super) struct ExecutorBudget {
+    started_ms: u64,
+    quantum_ms: u64,
+}
+
+impl ExecutorBudget {
+    pub(super) fn new(now_ms: u64, quantum_ms: u64) -> Self {
+        Self { started_ms: now_ms, quantum_ms: quantum_ms.max(1) }
+    }
+
+    pub(super) fn expired(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.started_ms) >= self.quantum_ms
+    }
+
+    pub(super) fn restart(&mut self, now_ms: u64) {
+        self.started_ms = now_ms;
+    }
+}
+
 /// Give other ready tasks a turn without imposing a minimum wall-clock delay.
 /// The caller must clear its current-VM identity before awaiting this future.
 pub(crate) async fn yield_executor_turn() {
@@ -61,5 +83,42 @@ mod tests {
         assert_eq!(count.0.load(Ordering::Relaxed), 1);
         assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(()));
         assert_eq!(count.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn frequent_immediate_vm_exits_cannot_extend_the_executor_turn() {
+        let mut budget = ExecutorBudget::new(0, 125);
+        let mut host_turns = Vec::new();
+        // Model 100 short VMCALLs per millisecond. Checking admission on every
+        // resume must still give the host eight turns during this second.
+        for now_ms in 0..=1_000 {
+            for _ in 0..100 {
+                if budget.expired(now_ms) {
+                    host_turns.push(now_ms);
+                    budget.restart(now_ms);
+                }
+            }
+        }
+        assert_eq!(host_turns, [125, 250, 375, 500, 625, 750, 875, 1_000]);
+    }
+
+    #[test]
+    fn resuming_after_a_host_turn_gets_one_fresh_quantum() {
+        let mut budget = ExecutorBudget::new(0, 125);
+        assert!(budget.expired(125));
+        // Other executor work can take longer than a quantum. Restart at the
+        // actual resumption time; there is no debt requiring catch-up yields.
+        budget.restart(1_000);
+        assert!(!budget.expired(1_000));
+        assert!(!budget.expired(1_124));
+        assert!(budget.expired(1_125));
+    }
+
+    #[test]
+    fn executor_budgets_are_local_to_each_vm_run() {
+        let first = ExecutorBudget::new(10, 125);
+        let next = ExecutorBudget::new(130, 125);
+        assert!(first.expired(135));
+        assert!(!next.expired(135));
     }
 }

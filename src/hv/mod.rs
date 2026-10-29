@@ -4726,8 +4726,21 @@ async fn vmx_launch_once_with_ept_vpid(
     let mut cpuid_leaf1_count = 0u32;
     let mut cpuid_other_count = 0u32;
     let mut first = true;
+    let mut executor_budget = execution_policy::ExecutorBudget::new(
+        lifecycle_now_ms(),
+        crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS,
+    );
     'vmexit: loop {
         crate::smp::poll();
+        // Short VMCALLs reset the hardware timer on every VM entry. Keep a
+        // host budget across those exits so busy guest I/O cannot starve
+        // queued launches and services on this executor.
+        if executor_budget.expired(lifecycle_now_ms()) {
+            clear_current_vm_id();
+            execution_policy::yield_executor_turn().await;
+            set_current_vm_id(vm_id);
+            executor_budget.restart(lifecycle_now_ms());
+        }
         if vm.is_some_and(|vm| vm.execution_pause.requested()) {
             clear_current_vm_id();
             let keep_running = park_vm_execution(vm_id).await;
@@ -4965,12 +4978,14 @@ async fn vmx_launch_once_with_ept_vpid(
                             clear_current_vm_id();
                             execution_policy::yield_executor_turn().await;
                             set_current_vm_id(vm_id);
+                            executor_budget.restart(lifecycle_now_ms());
                             break 'vmcall;
                         }
                         crate::hv::vmcall::DispatchOutcome::SleepMs(ms) => {
                             clear_current_vm_id();
                             if ms == 0 {
                                 execution_policy::yield_executor_turn().await;
+                                executor_budget.restart(lifecycle_now_ms());
                             } else {
                                 await_vm_control_boundary(
                                     vm_id,
@@ -5066,6 +5081,7 @@ async fn vmx_launch_once_with_ept_vpid(
                 clear_current_vm_id();
                 execution_policy::yield_executor_turn().await;
                 set_current_vm_id(vm_id);
+                executor_budget.restart(lifecycle_now_ms());
             }
             0xA => {
                 let mut regs = crate::hv::vmx::guest_registers();

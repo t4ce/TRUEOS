@@ -519,6 +519,9 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             ) {
                 Ok(index) => {
                     if let Some(shell) = owned_shells.get_mut(index) {
+                        // A failed first paint must retain the admitted launch
+                        // through the normal presentation retries.
+                        shell.pending_startup = startup;
                         if let Some(window) = window.as_ref() {
                             shell.configure_window(window.placement);
                         }
@@ -548,16 +551,11 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                                 .ready
                                 .store(result, core::sync::atomic::Ordering::Release);
                         }
-                        match presentation {
-                            Ok(()) => {
-                                if let Some(startup) = startup {
-                                    startup.launch(shell);
-                                }
-                            }
-                            Err(error) => crate::log_warn!(target: "service";
+                        if let Err(error) = presentation {
+                            crate::log_warn!(target: "service";
                                 "sh3srv: initial presentation failed slot={} shell={} error={}\n",
                                 expected_slot, index, error,
-                            ),
+                            );
                         }
                     }
                 }

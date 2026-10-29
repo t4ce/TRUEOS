@@ -625,6 +625,7 @@ pub struct Shell3 {
     update_callbacks: Vec<UpdateCallback>,
     update_baseline: update::Snapshot,
     pending_presentation: Option<(update::Snapshot, UpdateBatch, Vec<update::RenderedLine>)>,
+    pending_startup: Option<startup::Startup>,
     show: Show,
 }
 
@@ -765,6 +766,7 @@ impl Shell3 {
             update_callbacks,
             update_baseline: initial,
             pending_presentation: None,
+            pending_startup: None,
             show: Show::default(),
         }
     }
@@ -797,7 +799,8 @@ impl Shell3 {
     }
 
     pub(super) fn show_is_closed(&self) -> bool {
-        self.show.is_closed()
+        // A startup may still be waiting for its first surface allocation.
+        (self.show.window().is_some() || self.pending_startup.is_none()) && self.show.is_closed()
     }
 
     pub(super) fn show_handles_window(&self, window: crate::ui4::WindowId) -> bool {
@@ -807,6 +810,11 @@ impl Shell3 {
     /// Publish the current title, status, and prompt strips through UI4.
     pub async fn present(&mut self) -> Result<(), &'static str> {
         self.reconcile_matrix_selection();
+        if self.show.is_closing() || (self.show.window().is_some() && self.show.is_closed()) {
+            self.pending_startup = None;
+            self.pending_presentation = None;
+            return Err("shell3-show-closed");
+        }
         let actual_slot = crate::percpu::current_slot() as u32;
         if actual_slot != self.executor_slot {
             return Err("shell3-show-wrong-executor");
@@ -873,6 +881,12 @@ impl Shell3 {
             }
         }
         self.matrix_selection_dirty = false;
+        if let Some(startup) = self.pending_startup.take()
+            && !self.show.is_closing()
+            && !self.show.is_closed()
+        {
+            startup.launch(self);
+        }
         Ok(())
     }
 
@@ -881,7 +895,7 @@ impl Shell3 {
     }
 
     pub(super) fn presentation_pending(&self) -> bool {
-        self.pending_presentation.is_some()
+        self.pending_presentation.is_some() || self.pending_startup.is_some()
     }
 
     /// Re-render at UI4's current dock or maximize target on this shell's AP.

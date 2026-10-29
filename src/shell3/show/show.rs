@@ -148,6 +148,10 @@ impl Show {
             .is_none_or(|surface| crate::ui4::window_is_closed(OWNER, surface.window))
     }
 
+    pub(crate) fn is_closing(&self) -> bool {
+        self.surface.as_ref().is_some_and(|surface| surface.closing)
+    }
+
     pub(crate) fn handles_window(&self, window: WindowId) -> bool {
         self.surface
             .as_ref()
