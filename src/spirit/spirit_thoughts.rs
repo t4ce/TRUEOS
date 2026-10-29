@@ -951,7 +951,7 @@ mod service {
                             placement.marker.height,
                             1,
                             Rgba8::new(r, g, b, a),
-                            Rgba8::new(255, 255, 255, 255),
+                            Rgba8::new(0, 0, 0, 255),
                         ) else {
                             continue;
                         };

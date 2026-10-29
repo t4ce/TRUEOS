@@ -582,15 +582,8 @@ fn push_cursor_text(
 ) {
     let origin_x = i64::from(cursor_x) - i64::from(glyph.width / 2);
     let origin_y = i64::from(cursor_y) - i64::from(glyph.height / 2);
-    // Both spans are cached shape data. Stream the immutable nickname edge
-    // behind its fill; state-color changes still affect only prefix rectangles.
-    let edge_color = crate::graphics::primitives::Rgba8::new(0, 0, 0, text_color.a);
-    let runs = glyph.body_edge_runs.iter().map(|run| (run, edge_color))
-        .chain(glyph.runs.iter().map(|run| {
-            let color = if run.x < glyph.prefix_width { prefix_color } else { text_color };
-            (run, color)
-        }));
-    for (run, color) in runs {
+    for run in glyph.runs.iter() {
+        let color = if run.x < glyph.prefix_width { prefix_color } else { text_color };
         let y = origin_y + i64::from(run.y);
         if y < 0 || y >= i64::from(screen_h) {
             continue;
@@ -1340,7 +1333,6 @@ mod tests {
         use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
         let glyph = MouseControlGlyph {
             text: Arc::from("§"), prefix_width: 4, width: 4, height: 4,
-            body_edge_runs: Arc::from([]),
             runs: Arc::from(alloc::vec![
                 MouseControlGlyphRun { x: 0, y: 0, width: 4, coverage: 255 },
                 MouseControlGlyphRun { x: 0, y: 2, width: 4, coverage: 128 },
@@ -1359,7 +1351,6 @@ mod tests {
         use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
         let glyph = MouseControlGlyph {
             text: Arc::from("§"), prefix_width: 2, width: 2, height: 2,
-            body_edge_runs: Arc::from([]),
             runs: Arc::from(alloc::vec![MouseControlGlyphRun { x: 0, y: 0, width: 2, coverage: 128 }].into_boxed_slice()),
         };
         for color in [Rgba8::new(0, 0, 0, 255), Rgba8::new(0, 160, 255, 255),
@@ -1375,12 +1366,9 @@ mod tests {
     #[test]
     fn text_cursor_recolor_keeps_nickname_rects_and_damage_outside_it_unchanged() {
         use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
-        let neutral = Rgba8::new(235, 235, 235, 255);
+        let neutral = Rgba8::new(0, 0, 0, 255);
         let glyph = MouseControlGlyph {
             text: Arc::from("§Joker"), prefix_width: 2, width: 12, height: 2,
-            body_edge_runs: Arc::from(alloc::vec![
-                MouseControlGlyphRun { x: 2, y: 1, width: 10, coverage: 127 },
-            ].into_boxed_slice()),
             runs: Arc::from(alloc::vec![
                 MouseControlGlyphRun { x: 0, y: 0, width: 2, coverage: 255 },
                 MouseControlGlyphRun { x: 0, y: 1, width: 2, coverage: 128 },
@@ -1402,61 +1390,14 @@ mod tests {
             if old.x >= nickname_left {
                 nickname_rects += 1;
                 assert!(overlay_rect_eq(old, new));
-                assert!(new.color == Rgba8::new(0, 0, 0, 127)
-                    || (new.color.r, new.color.g, new.color.b)
-                        == (neutral.r, neutral.g, neutral.b));
+                assert_eq!((new.color.r, new.color.g, new.color.b),
+                    (neutral.r, neutral.g, neutral.b));
             }
         }
         assert!(nickname_rects != 0);
         let damage = changed_rect_damage(&previous, &current);
         assert!(!damage.is_empty());
         assert!(damage.rects().iter().all(|rect| rect.x + rect.width <= nickname_left));
-    }
-
-    #[test]
-    fn cached_nickname_edge_has_contrast_on_light_and_dark_backgrounds() {
-        use crate::r::services::mouse_motion_service::{MouseControlGlyph, MouseControlGlyphRun};
-        let glyph = MouseControlGlyph {
-            text: Arc::from("§J"), prefix_width: 2, width: 8, height: 5,
-            body_edge_runs: Arc::from(alloc::vec![
-                MouseControlGlyphRun { x: 3, y: 1, width: 3, coverage: 255 },
-                MouseControlGlyphRun { x: 3, y: 2, width: 1, coverage: 255 },
-                MouseControlGlyphRun { x: 5, y: 2, width: 1, coverage: 255 },
-                MouseControlGlyphRun { x: 3, y: 3, width: 3, coverage: 255 },
-            ].into_boxed_slice()),
-            runs: Arc::from(alloc::vec![
-                MouseControlGlyphRun { x: 0, y: 2, width: 1, coverage: 255 },
-                MouseControlGlyphRun { x: 4, y: 2, width: 1, coverage: 255 },
-            ].into_boxed_slice()),
-        };
-        let mut rects = Slot4Rects::new();
-        push_cursor_text(&mut rects, 4, 2, &glyph,
-            Rgba8::new(0, 160, 255, 255), Rgba8::new(235, 235, 235, 255), 8, 5);
-        for background in [0u8, 255] {
-            let mut pixels = [[background; 3]; 40];
-            for rect in &rects {
-                assert!(rect.x + rect.width <= 8 && rect.y + rect.height <= 5);
-                for y in rect.y..rect.y + rect.height {
-                    for x in rect.x..rect.x + rect.width {
-                        let pixel = &mut pixels[(y * 8 + x) as usize];
-                        for (channel, foreground) in pixel.iter_mut().zip([
-                            rect.color.r, rect.color.g, rect.color.b,
-                        ]) {
-                            let alpha = u32::from(rect.color.a);
-                            *channel = ((u32::from(foreground) * alpha
-                                + u32::from(*channel) * (255 - alpha) + 127) / 255) as u8;
-                        }
-                    }
-                }
-            }
-            assert_eq!(pixels[2 * 8 + 4], [235; 3]);
-            assert_eq!(pixels[8 + 3], [0; 3]);
-            assert_eq!(pixels[8 + 2], [background; 3]);
-            assert_eq!(pixels[2 * 8 + 1], [background; 3]);
-            let strongest_contrast = pixels.iter().map(|pixel|
-                pixel[0].abs_diff(background)).max().unwrap();
-            assert!(strongest_contrast >= 235);
-        }
     }
 
     #[test]
