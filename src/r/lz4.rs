@@ -1,6 +1,6 @@
 //! Standard LZ4 block and frame service. No archive or filesystem semantics.
 extern crate alloc;
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use core::ops::Range;
 
 pub const MAGIC: [u8; 4] = [0x04, 0x22, 0x4d, 0x18];
@@ -175,11 +175,13 @@ pub fn decompress_frame_cpu(input: &[u8], max_output: usize) -> Result<Vec<u8>, 
 fn decompress_frame_cpu_with_progress(
     input: &[u8], max_output: usize, mut progress: impl FnMut(usize, usize),
 ) -> Result<Vec<u8>, Error> {
+    let started_ms = super::codec::codec_now_ms();
     let frame = parse(input, max_output)?;
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(frame.content_size.unwrap_or(0));
     for (index, block) in frame.blocks.iter().enumerate() {
         let data = &input[block.range.clone()];
-        let available = max_output.saturating_sub(out.len()).min(frame.max_block);
+        let available = frame.content_size.unwrap_or(max_output)
+            .saturating_sub(out.len()).min(frame.max_block);
         if block.raw {
             if data.len() > available {
                 crate::log_warn!(target: "storage"; "codec/lz4: phase=limit kind=decoded-bytes output={} next={} maximum={}\n", out.len(), data.len(), max_output);
@@ -187,26 +189,61 @@ fn decompress_frame_cpu_with_progress(
             }
             out.extend_from_slice(data);
         } else {
-            let mut decoded = vec![0; available];
+            // Decode directly into the final buffer. Keep preceding output
+            // available as the dictionary for dependent frames.
+            let start = out.len();
+            out.resize(start + available, 0);
+            let (previous, decoded) = out.split_at_mut(start);
             let length = if frame.independent {
-                lz4_flex::block::decompress_into(data, &mut decoded)
+                lz4_flex::block::decompress_into(data, decoded)
             } else {
                 lz4_flex::block::decompress_into_with_dict(
                     data,
-                    &mut decoded,
-                    &out[out.len().saturating_sub(65536)..],
+                    decoded,
+                    &previous[previous.len().saturating_sub(65536)..],
                 )
             }
             .map_err(|_| Error::Invalid)?;
-            out.extend_from_slice(&decoded[..length]);
+            out.truncate(start + length);
         }
         progress(index + 1, frame.blocks.len());
     }
     verify(&frame, &out)?;
-    crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=cpu input_bytes={} output_bytes={} blocks={}\n", input.len(), out.len(), frame.blocks.len());
+    crate::log_info!(target: "storage"; "codec/lz4: phase=decode-complete backend=cpu input_bytes={} output_bytes={} blocks={} total_ms={}\n", input.len(), out.len(), frame.blocks.len(), super::codec::codec_now_ms().saturating_sub(started_ms));
     Ok(out)
 }
 
+
+#[cfg(test)]
+mod cpu_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_multiple_blocks_and_enforces_output_limit() {
+        let input: Vec<u8> = (0..150_000).map(|i| ((i * 17 + i / 127) % 251) as u8).collect();
+        let encoded = compress_frame_cpu(&input);
+        assert_eq!(decompress_frame_cpu(&encoded, input.len()).unwrap(), input);
+        assert_eq!(decompress_frame_cpu(&encoded, input.len() - 1), Err(Error::Limit));
+        let mut corrupt = encoded;
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert_eq!(decompress_frame_cpu(&corrupt, input.len()), Err(Error::Invalid));
+    }
+
+    #[test]
+    fn linked_blocks_can_reference_preceding_output() {
+        let block: Vec<u8> = (0..4096).map(|i| ((i * 17 + i / 127) % 251) as u8).collect();
+        let mut input = block.clone();
+        input.extend_from_slice(&block);
+        let mut encoded = header(input.len());
+        encoded[4] &= !32;
+        encoded[14] = (hash(&encoded[4..14]) >> 8) as u8;
+        append_block(&mut encoded, &block, &lz4_flex::block::compress(&block));
+        append_block(&mut encoded, &block, &lz4_flex::block::compress_with_dict(&block, &block));
+        encoded.extend_from_slice(&0u32.to_le_bytes());
+        encoded.extend_from_slice(&hash(&input).to_le_bytes());
+        assert_eq!(decompress_frame_cpu(&encoded, input.len()).unwrap(), input);
+    }
+}
 
 pub async fn compress_frame(input: Vec<u8>) -> Result<Vec<u8>, Error> {
     if !crate::intel::gpgpu::lz4_gpu_available() {

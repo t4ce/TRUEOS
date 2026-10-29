@@ -639,6 +639,7 @@ struct BlueprintVmMemoryProfile {
 struct BlueprintPendingLaunchState {
     archive: AllocString,
     module_bytes: AllocVec<u8>,
+    unpacked_bytes: Option<AllocVec<u8>>,
     app_args: AllocVec<AllocString>,
     launch_script: Option<AllocString>,
     instance: BlueprintInstanceRequest,
@@ -1929,6 +1930,24 @@ pub fn start_blueprint_app_vm(
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
 ) -> Result<(), StartError> {
+    start_prepared_blueprint_app_vm(
+        vm_id, spawner, archive, module_bytes, None, app_args, launch_script,
+        instance, console_target, console_surface,
+    )
+}
+
+fn start_prepared_blueprint_app_vm(
+    vm_id: u8,
+    spawner: &Spawner,
+    archive: AllocString,
+    module_bytes: AllocVec<u8>,
+    unpacked_bytes: Option<AllocVec<u8>>,
+    app_args: AllocVec<AllocString>,
+    launch_script: Option<AllocString>,
+    instance: BlueprintInstanceRequest,
+    console_target: Option<MatrixTarget>,
+    console_surface: BlueprintConsoleSurface,
+) -> Result<(), StartError> {
     let _ = spawner;
     start_with_mode(
         vm_id,
@@ -1937,6 +1956,7 @@ pub fn start_blueprint_app_vm(
         Some(BlueprintPendingLaunchState {
             archive,
             module_bytes,
+            unpacked_bytes,
             app_args,
             launch_script,
             instance,
@@ -1963,6 +1983,7 @@ fn start_blueprint_child_vm(
         Some(BlueprintPendingLaunchState {
             archive,
             module_bytes,
+            unpacked_bytes: None,
             app_args,
             launch_script: None,
             instance,
@@ -2959,8 +2980,11 @@ fn prepare_blueprint_launch_on_lane(
     let module = crate::hv::blueprint::parse_blueprint(pending.module_bytes.as_slice())
         .map_err(|err| alloc::format!("app-vm parse failed: {}", err))?;
     let replicatable_tagged = module.is_replicatable();
-    let unpacked_bytes = crate::hv::blueprint::unpack_blueprint(&module)
-        .map_err(|err| alloc::format!("app-vm unpack failed: {}", err))?;
+    let unpacked_bytes = match pending.unpacked_bytes {
+        Some(bytes) => bytes,
+        None => crate::hv::blueprint::unpack_blueprint(&module)
+            .map_err(|err| alloc::format!("app-vm unpack failed: {}", err))?,
+    };
     let unpacked_at_ms = lifecycle_now_ms();
 
     if !unpacked_bytes.starts_with(b"\x7fELF")

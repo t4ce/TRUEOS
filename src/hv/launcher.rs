@@ -56,7 +56,10 @@ pub(crate) fn enqueue(
     request: LaunchRequest,
     observer: Option<Box<dyn LaunchObserver>>,
 ) -> Result<super::matrix::AppReceipt, String> {
-    let required = super::blueprint::prebind_required_readiness(&request.bytes)?;
+    let prebind_started = trueos_time::Instant::now();
+    let (required, unpacked) = super::blueprint::prebind_required_readiness(&request.bytes)?;
+    crate::log_info!(target: "apps"; "launch phase=prebind elapsed_ms={} input_bytes={} output_bytes={} payload_reused=1\n",
+        prebind_started.elapsed().as_millis(), request.bytes.len(), unpacked.len());
     let worker = crate::workers::pick_background_spawner().ok_or("apps: no background worker")?;
     let (target, receipt) = super::matrix::reserve(&request.archive, &request.bytes)?;
     if observer.is_some() {
@@ -69,7 +72,7 @@ pub(crate) fn enqueue(
             return Err(error);
         }
     }
-    let task = match launch_task(request, target.clone(), required, observer) {
+    let task = match launch_task(request, target.clone(), required, unpacked, observer) {
         Ok(task) => task,
         Err(_) => {
             super::matrix::discard(&target);
@@ -91,6 +94,7 @@ async fn launch_task(
     request: LaunchRequest,
     target: crate::shell3::MatrixTarget,
     required: u32,
+    unpacked: Vec<u8>,
     observer: Option<Box<dyn LaunchObserver>>,
 ) {
     let live = || {
@@ -137,11 +141,12 @@ async fn launch_task(
         }
         match super::first_free_vm_id() {
             Some(vm) => {
-                let result = super::start_blueprint_app_vm(
+                let result = super::start_prepared_blueprint_app_vm(
                     vm,
                     &spawner,
                     request.archive.clone(),
                     request.bytes,
+                    Some(unpacked),
                     request.args,
                     request.script,
                     request.instance,

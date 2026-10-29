@@ -804,6 +804,7 @@ pub(crate) fn start_blueprint_replica_vm(
         VmBootMode::Hull,
         None,
         Some(BlueprintPendingLaunchState {
+            unpacked_bytes: None,
             archive: state.archive,
             module_bytes: state.module_bytes,
             app_args: state.app_args,

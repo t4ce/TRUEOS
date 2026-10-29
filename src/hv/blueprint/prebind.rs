@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::{string::String, vec::Vec};
 
 pub(crate) fn prebind_base_readiness() -> u32 {
     crate::r::readiness::BACKGROUND_AP_WORKER_READY
@@ -147,7 +147,9 @@ mod tests {
     }
 }
 
-pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<u32, String> {
+/// Return the validated payload with its readiness mask so launch preparation
+/// can reuse it instead of decoding the entire Blueprint a second time.
+pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<(u32, Vec<u8>), String> {
     let module = super::parse_blueprint(module_bytes).map_err(String::from)?;
     let unpacked = super::unpack_blueprint(&module).map_err(String::from)?;
 
@@ -165,5 +167,5 @@ pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<u32, Str
         }
         required |= prebind_import_readiness(import.name, module.is_filesystem_independent());
     }
-    Ok(required)
+    Ok((required, unpacked))
 }
