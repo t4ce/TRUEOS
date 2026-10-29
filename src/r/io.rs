@@ -482,6 +482,22 @@ pub mod env {
             Some(alloc::format!("{}/{}", root.trim_matches('/'), rel))
         }
     }
+
+    /// Archive installation and path-based launch accept the shared common
+    /// export without granting access to other applications' filesystem roots.
+    /// The caller must still validate the archive before installing or running it.
+    pub(crate) fn resolve_blueprint_archive_path(path: &str) -> Result<String, i32> {
+        let resolved = resolve_fs_path(path, false).ok_or(-1)?;
+        if trueosfs_scope_granted() {
+            return Ok(resolved);
+        }
+        let resolved = normalize_app_path(&resolved, false).ok_or(-1)?;
+        if resolved.starts_with("apps/common/") {
+            Ok(resolved)
+        } else {
+            Err(-13)
+        }
+    }
 }
 
 pub mod async_fs_cabi;

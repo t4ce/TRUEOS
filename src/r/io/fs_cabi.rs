@@ -2595,8 +2595,10 @@ fn launch_script_request(vm_id: u8, payload: &[u8]) -> i32 {
         Some(frontend)
     } else { None };
     let path = if app.contains('/') {
-        if !super::env::trueosfs_scope_granted() { return -13; }
-        match super::env::resolve_fs_path(app, false) { Some(path) => Some(path), None => return -1 }
+        match super::env::resolve_blueprint_archive_path(app) {
+            Ok(path) => Some(path),
+            Err(code) => return code,
+        }
     } else { None };
     let archive = app.rsplit('/').next().unwrap_or(app);
     let archive = if archive.ends_with(".bp") { String::from(archive) } else { alloc::format!("{archive}.bp") };

@@ -32,13 +32,16 @@ const STARTUP_MANIFEST_VFILE: &str = "vFile:startup";
 const TERMINAL_FRONTEND_VFILE: &str = "vFile:terminal-frontend";
 /// Write a downloaded archive pathname here to import it into volatile AppDB.
 /// Completion acknowledges the import; this operation never launches a VM.
-pub(crate) fn is_virtual_write(path: &str) -> bool { path == "vFile:appdb-install" }
+pub(crate) fn is_virtual_write(path: &str) -> bool {
+    path == "vFile:appdb-install" || crate::r::services::ide_workspace_service::is_write(path)
+}
 
 
 pub(crate) fn is_virtual_read(path: &str) -> bool {
     matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE | TERMINAL_FRONTEND_VFILE)
         || path.starts_with("vFile:microfont-grid/")
         || path.starts_with(crate::r::services::codex_input_service::VFILE_PREFIX)
+        || crate::r::services::ide_workspace_service::is_read(path)
 }
 const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
 
@@ -476,6 +479,35 @@ fn start_inner(owner: u32, kind: RequestKind) -> i32 {
     id as i32
 }
 
+fn start_ide_workspace_read(owner: u32, path: &str) -> i32 {
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        // Capacity is reserved before consuming a queued request or reply.
+        // A full operation table must leave the broker's message intact.
+        let id = start_completed_read_inner(owner, Vec::new());
+        if id < 0 {
+            return id;
+        }
+        let result = crate::r::services::ide_workspace_service::read_for_owner(owner, path);
+        let mut operations = lock_operations();
+        let Some(operation) = operations
+            .get_mut(&(id as u32))
+            .filter(|operation| operation.owner == owner)
+        else {
+            return FS_ERR_NOT_FOUND;
+        };
+        match result {
+            Ok(bytes) => {
+                operation.state = OperationState::Read(bytes);
+                id
+            }
+            Err(error) => {
+                operations.remove(&(id as u32));
+                error
+            }
+        }
+    })
+}
+
 fn start_codex_input_read(owner: u32, path: &str) -> i32 {
     crate::allocators::with_host_alloc_domain_strong(|| {
         // Reserve capacity before touching the one-shot mailbox. Do not
@@ -506,6 +538,9 @@ fn start_codex_input_read(owner: u32, path: &str) -> i32 {
 }
 
 pub(crate) fn start_read(owner: u32, path: String) -> i32 {
+    if crate::r::services::ide_workspace_service::is_read(&path) {
+        return start_ide_workspace_read(owner, &path);
+    }
     if path.starts_with(crate::r::services::codex_input_service::VFILE_PREFIX) {
         return start_codex_input_read(owner, &path);
     }
@@ -635,7 +670,9 @@ fn stage_write(
     legacy_blob: bool,
     checked: Option<CheckedWriteOptions>,
 ) -> i32 {
-    let max_bytes = if path.starts_with("vFile:") {
+    let max_bytes = if path.starts_with(crate::r::services::ide_workspace_service::VFILE_PREFIX) {
+        crate::r::services::ide_workspace_service::MAX_FRAME_BYTES as u64
+    } else if path.starts_with("vFile:") {
         ASYNC_FS_MAX_RESULT_BYTES
     } else {
         ASYNC_FS_MAX_FILE_WRITE_BYTES
@@ -935,6 +972,13 @@ fn selected_disk(path: &str) -> Result<(crate::disc::block::DeviceHandle, &str),
         .ok_or(FS_ERR_NOT_FOUND)
 }
 
+/// Stable identity for a resolved pathname, including explicit mount aliases.
+/// The file need not exist yet when the IDE reserves its database writer lease.
+pub(crate) fn canonical_file_key(path: &str) -> Result<String, i32> {
+    let (disk, relative) = selected_disk(path)?;
+    Ok(alloc::format!("trueosfs:disc{}/{}", disk.id().raw(), relative))
+}
+
 /// Resolve a TRUEOSFS path as a file (`Some(true)`), directory
 /// (`Some(false)`), or missing (`None`).
 async fn path_kind_async(
@@ -997,13 +1041,18 @@ async fn process(request: &Request) -> OperationState {
     }
 
     if let RequestKind::Write { path, bytes, .. } = &request.kind {
-        if is_virtual_write(path) {
+        if crate::r::services::ide_workspace_service::is_write(path) {
+            return match crate::r::services::ide_workspace_service::write_for_owner(request.owner, path, bytes) {
+                Ok(()) => OperationState::Unit,
+                Err(code) => OperationState::Failed(code),
+            };
+        }
+        if path == "vFile:appdb-install" {
             let vm = request.owner & !0x8000_0000;
             if request.owner & 0x8000_0000 == 0 || vm > u8::MAX as u32 { return OperationState::Failed(FS_ERR_BAD_PATH); }
             let path = crate::hv::with_guest_broker_context(vm as u8, || {
-                if !super::env::trueosfs_scope_granted() { return None; }
                 let path = core::str::from_utf8(bytes).ok()?;
-                super::env::resolve_fs_path(path, false)
+                super::env::resolve_blueprint_archive_path(path).ok()
             });
             let Some(path) = path else { return OperationState::Failed(FS_ERR_BAD_PATH); };
             let archive = path.rsplit('/').next().unwrap_or("");

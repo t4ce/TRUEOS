@@ -1483,6 +1483,7 @@ pub(crate) fn blueprint_child_terminate(actor_vm_id: u8, handle: u64) -> Result<
 
 fn blueprint_child_lifecycle_cleanup(vm_id: u8, generation: u64, retain_for_resume: bool) {
     if !retain_for_resume {
+        crate::r::services::ide_workspace_service::release_vm(vm_id, generation);
         clear_blueprint_child_template(vm_id);
     }
     if let Some(slot) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize) {
