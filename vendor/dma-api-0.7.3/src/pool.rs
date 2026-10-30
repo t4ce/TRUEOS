@@ -73,7 +73,6 @@ impl DArrayPool {
         let mut pool = VecDeque::with_capacity(cap);
         for _ in 0..cap {
             if let Ok(dvec) =
-                // DArray::zeros(config.dma_mask, config.size, config.align, config.direction)
                 DArray::new_zero_with_align(
                     &dev,
                     config.size,

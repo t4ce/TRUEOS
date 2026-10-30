@@ -22,15 +22,15 @@ impl Drop for Output {
 impl Output {
 
     pub fn buffer_open() -> Result<Output> {
-        let mut q = ptr::null_mut();
-        acheck!(snd_output_buffer_open(&mut q)).map(|_| Output(q))
+        let mut buffer = ptr::null_mut();
+        acheck!(snd_output_buffer_open(&mut buffer)).map(|_| Output(buffer))
     }
 
     pub fn buffer_string<T, F: FnOnce(&[u8]) -> T>(&self, f: F) -> T {
         let b = unsafe {
-            let mut q = ptr::null_mut();
-            let s = alsa::snd_output_buffer_string(self.0, &mut q);
-            if s == 0 { &[] } else { slice::from_raw_parts(q as *const u8, s as usize) }
+            let mut buffer = ptr::null_mut();
+            let len = alsa::snd_output_buffer_string(self.0, &mut buffer);
+            if len == 0 { &[] } else { slice::from_raw_parts(buffer as *const u8, len as usize) }
         };
         f(b)
     }

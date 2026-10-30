@@ -287,6 +287,7 @@ impl<K, V> Default for AvlTree<K, V> {
 #[cfg(test)]
 mod tests {
     use super::AvlTree;
+    use core::fmt::Write as _;
     use alloc::string::String;
     use alloc::vec::Vec;
 

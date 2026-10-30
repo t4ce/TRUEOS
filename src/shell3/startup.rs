@@ -27,10 +27,10 @@ impl Startup {
                     script,
                 ) {
                     Ok(app) => {
-                        let slot = app.slot.clone();
+                        // This selects the admitted foreground route as well
+                        // as its Matrix slot. Ordinary slot navigation would
+                        // clear that route before a TUI's initial lease claim.
                         shell.select_queued_app(app);
-                        // Use the same navigation helper as global §slot entry.
-                        shell.select_matrix_slot_name(&slot);
                     }
                     Err(error) => super::MatrixSlots::echo(
                         shell.active_matrix_slot.as_deref(),

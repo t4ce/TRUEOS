@@ -152,11 +152,14 @@ impl<K, V, X> BstArena<K, V, X> {
     {
         let mut cur = self.root;
         while let Some(id) = cur {
-            let cmp = key.cmp(&self.node(id).key);
+            let (cmp, left, right) = {
+                let node = self.node(id);
+                (key.cmp(&node.key), node.left, node.right)
+            };
             match cmp {
                 Ordering::Equal => return Some(&mut self.node_mut(id).value),
-                Ordering::Less => cur = self.node(id).left,
-                Ordering::Greater => cur = self.node(id).right,
+                Ordering::Less => cur = left,
+                Ordering::Greater => cur = right,
             }
         }
         None

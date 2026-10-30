@@ -26,7 +26,7 @@ pub enum PlayerState {
 pub struct PatternPlayer {
     /// Current playback state
     pub state: PlayerState,
-    /// Number of loops to play (0 = infinite, N = play N times)
+    /// Number of loops to play (0 is treated as one loop; N plays N times)
     pub loop_count: u32,
     /// Current loop iteration
     pub current_loop: u32,
@@ -64,11 +64,11 @@ impl PatternPlayer {
             pattern.bpm
         );
 
-        for _loop_i in 0..self.loop_count {
+        for loop_i in 0..self.loop_count {
             if self.state != PlayerState::Playing {
                 break;
             }
-            self.current_loop = _loop_i;
+            self.current_loop = loop_i;
 
             // Render the full pattern as one buffer
             let samples = pattern.render(engine);

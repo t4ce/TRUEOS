@@ -8,15 +8,14 @@ const POOL_MAX: usize = crate::allcaps::net::PACKET_POOL_MAX;
 const RX_BUF_SIZE: usize = crate::allcaps::net::RX_BUF_SIZE;
 
 #[inline]
-fn alloc_uninit_buf(len: usize) -> Vec<u8> {
+fn alloc_zeroed_buf(len: usize) -> Vec<u8> {
     // Clippy forbids exposing uninitialized bytes as `Vec<u8>` (and it is UB per
     // `Vec::set_len` safety contract). For now we pay the initialization cost.
-    let v = vec![0; len];
-    v
+    vec![0; len]
 }
 
 #[inline]
-fn alloc_uninit_buf_with_capacity(capacity: usize, len: usize) -> Vec<u8> {
+fn alloc_zeroed_buf_with_capacity(capacity: usize, len: usize) -> Vec<u8> {
     let mut v = Vec::with_capacity(capacity.max(len));
     v.resize(len, 0);
     v
@@ -32,13 +31,13 @@ pub fn alloc_packet_buf(len: usize) -> Vec<u8> {
     if let Some(mut buf) = PACKET_POOL.lock().pop() {
         if buf.capacity() < len {
             // Too small: fall back to a fresh allocation sized for typical MTU.
-            return alloc_uninit_buf_with_capacity(RX_BUF_SIZE.max(len), len);
+            return alloc_zeroed_buf_with_capacity(RX_BUF_SIZE.max(len), len);
         }
 
         buf.resize(len, 0);
         buf
     } else {
-        alloc_uninit_buf_with_capacity(RX_BUF_SIZE.max(len), len)
+        alloc_zeroed_buf_with_capacity(RX_BUF_SIZE.max(len), len)
     }
 }
 
@@ -127,7 +126,7 @@ impl RxRing {
         let mut slots = Vec::with_capacity(desc_count.max(1));
         for _ in 0..desc_count.max(1) {
             slots.push(RxSlot {
-                buf: alloc_uninit_buf(buf_size),
+                buf: alloc_zeroed_buf(buf_size),
                 len: 0,
                 owned_by_hw: true,
             });

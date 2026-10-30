@@ -70,14 +70,10 @@ pub(crate) fn encode_rgb8_png(
     if stride_bytes < row_bytes {
         return Err(PngEncodeError::BufferTooSmall);
     }
-    let need = if height_usize == 0 {
-        0
-    } else {
-        stride_bytes
-            .checked_mul(height_usize.saturating_sub(1))
-            .and_then(|base| base.checked_add(row_bytes))
-            .ok_or(PngEncodeError::DimensionTooLarge)?
-    };
+    let need = stride_bytes
+        .checked_mul(height_usize - 1)
+        .and_then(|base| base.checked_add(row_bytes))
+        .ok_or(PngEncodeError::DimensionTooLarge)?;
     if rgb.len() < need {
         return Err(PngEncodeError::BufferTooSmall);
     }

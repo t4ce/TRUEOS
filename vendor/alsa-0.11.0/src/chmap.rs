@@ -99,7 +99,9 @@ impl<'a> From<&'a [ChmapPosition]> for Chmap {
         if p.is_null() { panic!("Out of memory") }
         let mut r = Chmap(p as *mut alsa::snd_pcm_chmap_t, true);
         r.set_channels(a.len() as libc::c_uint);
-        for (i,v) in r.as_slice_mut().iter_mut().enumerate() { *v = a[i] as libc::c_uint }
+        for (slot, position) in r.as_slice_mut().iter_mut().zip(a) {
+            *slot = *position as libc::c_uint;
+        }
         r
     }
 }

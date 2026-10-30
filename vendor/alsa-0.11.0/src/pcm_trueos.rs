@@ -561,7 +561,7 @@ impl<'a> SwParams<'a> {
 
     pub fn set_stop_threshold(&self, v: Frames) -> Result<()> {
         self.stop_threshold.set(v);
-        Ok(v).map(|_| ())
+        Ok(())
     }
 
     pub fn get_stop_threshold(&self) -> Result<Frames> {

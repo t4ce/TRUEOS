@@ -27,6 +27,7 @@ mod shell3 {
         launches: Vec<(String, Vec<u8>, u64, Option<String>)>,
         launch_error: bool,
         errors: Vec<&'static str>,
+        terminal_selected: bool,
     }
     thread_local! { static WORLD: RefCell<World> = RefCell::default(); }
     mod service {
@@ -135,8 +136,15 @@ mod shell3 {
         async fn resize_ui4_to_current(&mut self) -> Result<(), &'static str> { Ok(()) }
         fn capture_update_snapshot(&self) -> Snapshot { Snapshot }
         fn tui_frontend(&self) -> u64 { self.tui_frontend }
-        fn select_queued_app(&mut self, _: QueuedApp) {}
+        fn select_queued_app(&mut self, app: QueuedApp) {
+            WORLD.with_borrow_mut(|world| world.terminal_selected = true);
+            self.active_matrix_slot = Some(app.slot);
+            self.matrix_selection_dirty = true;
+        }
         fn select_matrix_slot_name(&mut self, slot: &str) {
+            // Ordinary Matrix navigation returns to the command pane. It
+            // deliberately does not enter a TUI or grant its initial claim.
+            WORLD.with_borrow_mut(|world| world.terminal_selected = false);
             self.active_matrix_slot = Some(slot.into());
             self.matrix_selection_dirty = true;
         }
@@ -169,6 +177,8 @@ mod shell3 {
         assert!(!shell.presentation_pending());
         assert!(shell.matrix_selection_dirty, "startup selection still needs its redraw");
         assert_eq!(shell.active_matrix_slot.as_deref(), Some("runtime-test"));
+        WORLD.with_borrow(|world| assert!(world.terminal_selected,
+            "startup must preserve the foreground route for the guest's first terminal claim"));
         WORLD.with_borrow(|world| assert_eq!(world.launches, vec![(
             "/apps/common/ide/builds/1-7/4/example.bp".into(), vec![1, 2, 3],
             33, Some("ide example".into()),

@@ -497,6 +497,7 @@ fn lower_bound<K: Ord>(keys: &[K], key: &K) -> Result<usize, usize> {
 #[cfg(test)]
 mod tests {
     use super::BPlusTree;
+    use core::fmt::Write as _;
 
     #[test]
     fn insert_get_smoke() {

@@ -195,6 +195,7 @@ impl<K, V> Default for BstMap<K, V> {
 #[cfg(test)]
 mod tests {
     use super::BstMap;
+    use core::fmt::Write as _;
     use alloc::string::String;
     use alloc::vec::Vec;
 
