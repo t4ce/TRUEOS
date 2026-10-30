@@ -351,7 +351,7 @@ TOPICS: dict[str, dict[str, Any]] = {
          'remote_url': 'https://trueos.eu/TrueOS.tar.lz4',
          'lan_url': 'http://192.168.178.111:8080/TrueOS.tar.lz4',
          'manual_http': 'python3 -m http.server 8080 --bind 0.0.0.0 --directory tgt',
-         'serving': 'Run the HTTP command manually from the repository root when needed; rig builds do not launch it. pxe3.js remains TFTP-only.',
+         'serving': 'pxe3.js serves /TrueOS.tar.lz4 on port 8080 of its selected LAN interface. Use the manual HTTP command only without pxe3.js; rig builds do not launch it.',
          'online_install': 'Online disk installation keeps the separate https://trueos.eu/TrueOS.lz4 endpoint and its older ISO-containing bundle.',
      },
      'incremental': ['Dev and release caches are separate. Cargo runs for every app each time and owns '

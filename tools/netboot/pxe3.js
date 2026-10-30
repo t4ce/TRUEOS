@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-// IPv4 ProxyDHCP + TFTP for the native UEFI artifacts. No ISO or HTTP server.
+// IPv4 ProxyDHCP + TFTP for native UEFI artifacts, plus LAN live-update HTTP.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -56,7 +56,7 @@ async function main() {
     console.log("Usage: sudo node tools/netboot/pxe3.js [interface] [artifact-directory]");
     console.log("Defaults: default-route interface, tgt/pxe-current. Requires ip and dnsmasq.");
     console.log("Automatically reloads completed builds; keep this server running alongside Cargo.");
-    console.log("Existing LAN DHCP supplies addresses; this serves only IPv4 PXE boot information and TFTP.");
+    console.log("Existing LAN DHCP supplies addresses; serves PXE/TFTP and the live-update archive on HTTP :8080.");
     console.log("The Rust EFI loader uses firmware PXE/TFTP to fetch the remaining files.");
     console.log("--stop stops only PXE servers running this repository's pxe3.js.");
     return;
@@ -76,7 +76,8 @@ async function main() {
   // A private snapshot exposes exactly these three files, even if the staging
   // directory contains other artifacts. It also survives dnsmasq's privilege drop.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "trueos-pxe3-"));
-  const cleanup = () => fs.rmSync(root, { recursive: true, force: true });
+  let updates;
+  const cleanup = () => { updates?.close(); fs.rmSync(root, { recursive: true, force: true }); };
   process.once("exit", cleanup);
   fs.chmodSync(root, 0o755);
   fs.mkdirSync(path.join(root, "EFI/BOOT"), { recursive: true, mode: 0o755 });
@@ -142,6 +143,18 @@ async function main() {
   }, 100);
   process.once("exit", () => clearInterval(watcher));
   const child = spawn("dnsmasq", dnsmasqArgs, { stdio: ["ignore", "inherit", "pipe"] });
+  updates = require("node:http").createServer((request, response) => {
+    if (request.method !== "GET" || request.url !== "/TrueOS.tar.lz4") { response.writeHead(404).end(); return; }
+    try {
+      const file = path.join(fs.realpathSync(source), "TrueOS.tar.lz4");
+      const size = fs.statSync(file).size;
+      const stream = fs.createReadStream(file);
+      stream.on("error", () => response.destroy());
+      response.writeHead(200, { "Content-Length": size, "Content-Type": "application/octet-stream" });
+      stream.pipe(response);
+    } catch { response.writeHead(503).end(); }
+  }).listen(8080, ip, () => console.log(`LAN live update: http://${ip}:8080/TrueOS.tar.lz4`));
+  updates.on("error", (error) => { console.error(`LAN live update: ${error.message}`); child.kill("SIGTERM"); process.exitCode = 1; });
   // dnsmasq announces the TFTP root after successfully binding its sockets.
   let output = "";
   child.stderr.on("data", (chunk) => {
@@ -163,7 +176,7 @@ async function main() {
   });
   child.once("exit", (code, signal) => {
     clearInterval(watcher);
-    process.exitCode = code ?? (signal === "SIGINT" || signal === "SIGTERM" ? 0 : 1);
+    process.exitCode ||= code ?? (signal === "SIGINT" || signal === "SIGTERM" ? 0 : 1);
     cleanup();
   });
 }

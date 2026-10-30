@@ -1370,6 +1370,7 @@ pub async fn file_in_typed_checked_async(
     new_content_type: ContentTypeId,
     create_new: bool,
     expected_sha256: Option<[u8; 32]>,
+    infer_blob: bool,
 ) -> Result<bool, CheckedWriteError> {
     use sha2::{Digest, Sha256};
     let _activity = crate::disc::access::Activity::begin(disk)?;
@@ -1431,6 +1432,18 @@ pub async fn file_in_typed_checked_async(
         let actual: [u8; 32] = hash.finalize().into();
         if actual != expected { return Err(CheckedWriteError::Conflict); }
     }
+    // Inference is a conditional promotion of exactly the previewed Blob.
+    // Validate under the same lease as publication, preserving its file ID/key.
+    if infer_blob {
+        let record = existing.as_ref().ok_or(CheckedWriteError::Conflict)?;
+        let candidate_hash: [u8; 32] = Sha256::digest(bytes).into();
+        if create_new || expected_sha256 != Some(candidate_hash)
+            || record.content_type != ContentTypeId::BLOB
+            || super::content_type_boundary::verify_named_bytes(name, bytes).ok() != Some(new_content_type)
+        {
+            return Err(CheckedWriteError::Conflict);
+        }
+    }
     let metadata = existing.as_ref().map_or(
         trueos_fs::FileWriteMetadata {
             file_id: 0,
@@ -1439,7 +1452,7 @@ pub async fn file_in_typed_checked_async(
         },
         |record| trueos_fs::FileWriteMetadata {
             file_id: record.file_id,
-            content_type: record.content_type,
+            content_type: if infer_blob { new_content_type } else { record.content_type },
             record_key: record.record_key,
         },
     );

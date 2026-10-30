@@ -813,6 +813,7 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_ui4_drag_cancel_v1(token: i32) -> i32;
     pub fn trueos_cabi_ui4_drag_take_v1(window_id: u32, out: *mut u8, cap: usize) -> i32;
+    pub fn trueos_cabi_ui4_scene_collapse_v1(window_id: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_enable_collapse_v1(
         window_id: u32,
         width: u32,
@@ -963,13 +964,17 @@ unsafe extern "C" {
         window_id: u32,
         params: *const TrueosUi4ShadertoyParamsV1,
     ) -> i32;
-    /// Experimental SEND-free Xe-LP body, available with odin-native-gpgpu.
+    /// Experimental Xe-LP arithmetic body or complete SIMD8 kernel; odin-native-gpgpu.
     pub fn trueos_cabi_ui4_scene_native_compute_upload_v1(
         window_id: u32,
         offset: u32,
         code_len: u32,
         bytes: *const u8,
         len: usize,
+    ) -> i32;
+    /// Run one uploaded complete SIMD8 kernel with 1..=8 input registers; out holds 8 u32 lanes.
+    pub fn trueos_cabi_ui4_scene_native_compute_dispatch_v1(
+        window_id: u32, inputs: *const u32, registers: u32, out: *mut u32,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_native_compute_render_v1(
         window_id: u32,

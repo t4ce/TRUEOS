@@ -5,7 +5,8 @@ use super::{
     WindowOwner, blueprint_owner, gpgpu_rgba_surface, guest_status, surface_mut,
 };
 use crate::intel::gpgpu::{
-    GeneratedPixelParamsV1, GeneratedPixelProgram, create_generated_pixel_program,
+    GeneratedPixelParamsV1, GeneratedPixelProgram, NativeKernelProgram,
+    create_generated_pixel_program, create_native_kernel_program, dispatch_native_kernel,
     generated_pixel_rgba8_surface_full,
 };
 use alloc::vec::Vec;
@@ -18,6 +19,7 @@ const ERROR_UNSUPPORTED: i32 = -95;
 pub(super) struct NativeComputeState {
     upload: Option<CodeUpload>,
     program: Option<GeneratedPixelProgram>,
+    kernel: Option<NativeKernelProgram>,
 }
 
 struct CodeUpload {
@@ -83,6 +85,8 @@ pub(crate) fn upload_chunk(
             return ERROR_BUSY;
         }
         if offset == 0 {
+            surface.native_compute.program = None;
+            surface.native_compute.kernel = None;
             let mut staging = Vec::new();
             if staging.try_reserve_exact(total).is_err() {
                 return ERROR_UI4;
@@ -108,9 +112,12 @@ pub(crate) fn upload_chunk(
         }
         surface.native_compute.upload.take().unwrap()
     };
-    let program = match create_generated_pixel_program(&complete.bytes) {
-        Ok(program) => program,
-        Err(rc) => return rc,
+    let (pixel, kernel) = match create_generated_pixel_program(&complete.bytes) {
+        Ok(program) => (Some(program), None),
+        Err(_) => match create_native_kernel_program(&complete.bytes) {
+            Ok(program) => (None, Some(program)),
+            Err(rc) => return rc,
+        },
     };
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -121,8 +128,9 @@ pub(crate) fn upload_chunk(
     }
     crate::log_info!(target: "gpgpu";
         "odin-native: program registered owner={:?} window={} bytes={} admission=runtime-generated\n",
-        owner, window_id, program.code_len());
-    surface.native_compute.program = Some(program);
+        owner, window_id, complete.bytes.len());
+    surface.native_compute.program = pixel;
+    surface.native_compute.kernel = kernel;
     0
 }
 
@@ -224,4 +232,107 @@ pub(crate) fn render_wire(owner: WindowOwner, window_id: u32, payload: &[u8]) ->
     } else {
         ERROR_BUSY
     }
+}
+
+/// Dispatch the uploaded complete SIMD8 kernel once; inputs are 1..=8 GRFs,
+/// each containing eight raw dword lanes. The result is one eight-lane GRF.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_native_compute_dispatch_v1(
+    window_id: u32,
+    inputs: *const u32,
+    registers: u32,
+    out: *mut u32,
+) -> i32 {
+    if !cfg!(feature = "odin-native-gpgpu") {
+        return ERROR_UNSUPPORTED;
+    }
+    if !(1..=8).contains(&registers)
+        || inputs.is_null()
+        || out.is_null()
+        || inputs.addr() % 4 != 0
+        || out.addr() % 4 != 0
+    {
+        return ERROR_INVALID;
+    }
+    let input = unsafe { core::slice::from_raw_parts(inputs, registers as usize * 8) };
+    let mut payload = [0u8; 260];
+    payload[..4].copy_from_slice(&registers.to_le_bytes());
+    for (i, bits) in input.iter().enumerate() {
+        payload[4 + 4 * i..8 + 4 * i].copy_from_slice(&bits.to_le_bytes());
+    }
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut reply = [0u8; 32];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_NATIVE_COMPUTE_DISPATCH_V1,
+            u64::from(window_id),
+            0,
+            &payload[..4 + input.len() * 4],
+            &mut reply,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            Err(ERROR_UI4)
+        } else if rc as i64 != 0 {
+            Err(rc as i64 as i32)
+        } else {
+            Ok(core::array::from_fn(|i| {
+                u32::from_le_bytes(reply[4 * i..4 * i + 4].try_into().unwrap())
+            }))
+        }
+    } else {
+        let Some(owner) = blueprint_owner() else {
+            return ERROR_CONTEXT;
+        };
+        dispatch_wire(owner, window_id, &payload[..4 + input.len() * 4])
+    };
+    match result {
+        Ok(lanes) => {
+            unsafe {
+                core::ptr::copy_nonoverlapping(lanes.as_ptr(), out, 8);
+            }
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+pub(crate) fn dispatch_wire(
+    owner: WindowOwner,
+    window_id: u32,
+    payload: &[u8],
+) -> Result<[u32; 8], i32> {
+    if !cfg!(feature = "odin-native-gpgpu") {
+        return Err(ERROR_UNSUPPORTED);
+    }
+    if payload.len() < 4 {
+        return Err(ERROR_INVALID);
+    }
+    let registers = u32::from_le_bytes(payload[..4].try_into().unwrap()) as usize;
+    if !(1..=8).contains(&registers) || payload.len() != 4 + 32 * registers {
+        return Err(ERROR_INVALID);
+    }
+    let mut inputs = [[0u32; 8]; 8];
+    for (i, bytes) in payload[4..].chunks_exact(4).enumerate() {
+        inputs[i / 8][i % 8] = u32::from_le_bytes(bytes.try_into().unwrap());
+    }
+    let program = {
+        let mut surfaces = SURFACES.lock();
+        let surface = surface_mut(&mut surfaces, owner, window_id).ok_or(ERROR_NOT_FOUND)?;
+        if surface.gpu_submission_unretired {
+            return Err(ERROR_BUSY);
+        }
+        let program = surface.native_compute.kernel.take().ok_or(ERROR_STATE)?;
+        surface.gpu_submission_unretired = true;
+        program
+    };
+    let digest = program.digest();
+    let bytes = program.code_len();
+    let result = dispatch_native_kernel(&program, &inputs[..registers]);
+    let mut surfaces = SURFACES.lock();
+    let surface = surface_mut(&mut surfaces, owner, window_id).ok_or(ERROR_NOT_FOUND)?;
+    surface.native_compute.kernel = Some(program);
+    surface.gpu_submission_unretired = matches!(result, Err((_, true)));
+    crate::log_info!(target: "gpgpu";
+        "odin-native: dispatch owner={:?} window={} bytes={} sha256={:02x?} simd=8 registers={} status={}\n",
+        owner, window_id, bytes, digest, registers, result.as_ref().err().map_or(0, |e| e.0));
+    result.map_err(|(rc, _)| rc)
 }

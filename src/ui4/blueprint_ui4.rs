@@ -742,6 +742,7 @@ pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
     release_display_color(owner, None);
     clipboard_api::release_owner(owner);
     display_api::release_owner(owner);
+    collapse_api::release_terminal(owner);
     let owned = {
         let mut surfaces = SURFACES.lock();
         let mut owned = Vec::new();
@@ -4913,6 +4914,9 @@ pub(crate) fn begin_sprite_rgba8_upload(
     width: u32,
     height: u32,
 ) -> i32 {
+    if window_id == 0 && sprite_id == collapse_api::UPLOAD_ID {
+        return collapse_api::begin_terminal(owner, width, height);
+    }
     let Some(packed_len) = expected_rgba8_len(width, height) else {
         return ERROR_INVALID;
     };
@@ -5061,6 +5065,9 @@ pub(crate) fn write_sprite_rgba8_upload_chunk(
     offset: usize,
     bytes: &[u8],
 ) -> i32 {
+    if window_id == 0 && sprite_id == collapse_api::UPLOAD_ID {
+        return collapse_api::write_terminal(owner, offset, bytes);
+    }
     if bytes.is_empty() || offset & 3 != 0 || bytes.len() & 3 != 0 {
         return ERROR_INVALID;
     }

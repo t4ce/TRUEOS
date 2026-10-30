@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import time
 import unittest
+import urllib.request
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -329,6 +331,7 @@ echo runtime > "$3"
             f = artifacts / name
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_bytes(b'test artifact')
+        (artifacts / 'TrueOS.tar.lz4').write_bytes(b'native update archive')
         ready = self.root / 'ready'
         proc = subprocess.Popen(['node', str(pxe), '--ready-file', str(ready), 'lo',
                                  str(artifacts)], env=self.env,
@@ -345,6 +348,15 @@ echo runtime > "$3"
         while (served_root / 'TRUEOS.elf').read_bytes() != b'updated kernel' and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertEqual((served_root / 'TRUEOS.elf').read_bytes(), b'updated kernel')
+        with urllib.request.urlopen('http://127.0.0.1:8080/TrueOS.tar.lz4', timeout=3) as response:
+            self.assertEqual(response.read(), b'native update archive')
+        (artifacts / 'TrueOS.tar.lz4').write_bytes(b'next native update archive')
+        with urllib.request.urlopen('http://127.0.0.1:8080/TrueOS.tar.lz4', timeout=3) as response:
+            self.assertEqual(response.read(), b'next native update archive')
+        with self.assertRaises(urllib.error.HTTPError) as missing:
+            urllib.request.urlopen('http://127.0.0.1:8080/TRUEOS.elf', timeout=3)
+        self.assertEqual(missing.exception.code, 404)
+        missing.exception.close()
         self.assertIsNone(proc.poll(), 'Reload restarted the server')
         # Reap concurrently: stop waits for the old process to disappear from /proc.
         import threading

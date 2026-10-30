@@ -267,6 +267,7 @@ pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C; // arg0 x/y,arg1 width
 pub const OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1: u32 = 0x12F; // packed size/window, offset/id, package chunk
 pub const OP_BP_UI4_NATIVE_COMPUTE_UPLOAD_V1: u32 = 0x236;
 pub const OP_BP_UI4_NATIVE_COMPUTE_RENDER_V1: u32 = 0x237;
+pub const OP_BP_UI4_NATIVE_COMPUTE_DISPATCH_V1: u32 = 0x238;
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
 pub const OP_BP_UI4_CONTEXT_MENU_REGISTER: u32 = 0x11F; // arg0 window,payload labelled entries -> rc
@@ -2263,6 +2264,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_UI4_NATIVE_COMPUTE_DISPATCH_V1 => {
+            let result = request_payload(vm_id, req_len).ok_or(-22).and_then(|payload|
+                crate::ui4::blueprint_ui4::native_compute_api::dispatch_wire(
+                    crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, payload));
+            match result {
+                Ok(lanes) => {
+                    let Some(page) = host_ptr(vm_id) else {
+                        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                        return DispatchOutcome::Resume;
+                    };
+                    for (i, value) in lanes.iter().enumerate() {
+                        unsafe { (&mut (*page).payload)[4*i..4*i+4].copy_from_slice(&value.to_le_bytes()); }
+                    }
+                    write_response(vm_id, seq, STATUS_OK, 0, 32);
+                }
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_NATIVE_COMPUTE_RENDER_V1 => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -2345,12 +2365,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_ENABLE_COLLAPSE_V1 => {
-            if req_len != 0 || arg1 != 0 || arg0 > u32::MAX as u64 {
+            if req_len != 0 || arg1 > 1 || arg0 > u32::MAX as u64 {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
-            let rc = crate::ui4::blueprint_ui4::collapse_api::finish(
-                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32);
+            let owner = crate::ui4::WindowOwner::Vm(vm_id);
+            let rc = if arg1 == 0 {
+                crate::ui4::blueprint_ui4::collapse_api::finish(owner, arg0 as u32)
+            } else {
+                crate::ui4::blueprint_ui4::collapse_api::collapse(owner, arg0 as u32)
+            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

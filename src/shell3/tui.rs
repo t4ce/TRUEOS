@@ -129,7 +129,26 @@ pub(super) fn bind_ui4_window(frontend: u64, window: crate::ui4::WindowId) {
     } else {
         routes.ui4_windows.push((frontend, window));
     }
+    drop(routes);
+    // A terminal lease may be claimed while launch feedback still owns the
+    // shell selection. Bind its retained UI4 controls only once presented.
+    if let Some(vm) = vm_for_window(window) {
+        crate::ui4::blueprint_ui4::collapse_api::refresh_terminal(crate::ui4::WindowOwner::Vm(vm));
+    }
 }
+
+/// Registration belongs to a local lease, including the launch-feedback phase
+/// before its route becomes selected. Remote terminals have no UI4 frame.
+pub(crate) fn has_local_lease(vm: u8) -> bool {
+    let Some(run) = crate::hv::vm_run_generation(vm) else { return false; };
+    let routes = ROUTES.lock();
+    routes.routes.iter().any(|route| {
+        route.owner == Some(Owner { vm, run }) && route.frontend.is_some_and(|frontend| {
+            !routes.remote_frontends.iter().any(|entry| entry.0 == frontend)
+        })
+    })
+}
+
 pub(crate) fn window_for_vm(vm: u8) -> Option<crate::ui4::WindowId> {
     let run = crate::hv::vm_run_generation(vm)?;
     let routes = ROUTES.lock();
@@ -469,6 +488,7 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
         .find(|entry| Some(entry.0) == frontend)
         .map(|entry| entry.1);
     drop(routes);
+    crate::ui4::blueprint_ui4::collapse_api::release_terminal(crate::ui4::WindowOwner::Vm(vm));
     if let Some(window) = window {
         crate::ui4::drag_drop::release_terminal(crate::ui4::WindowOwner::Vm(vm), window);
     }

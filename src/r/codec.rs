@@ -524,8 +524,9 @@ async fn read_source_file(
 
 /// The way an archive member's identity is restored.
 ///
-/// An absent extension denotes a legacy or third-party tar archive. It must use
-/// the TRUEOSFS legacy Blob writer, which refuses to downgrade an existing
+/// Absent content-type metadata denotes a legacy or third-party tar archive.
+/// Try verified named-byte inference; otherwise use the TRUEOSFS legacy Blob
+/// writer, which refuses to downgrade an existing
 /// typed file. An explicit Blob ID is different: it is a preserved, deliberate
 /// TRUEOSFS identity and uses the typed writer like every other explicit ID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -545,8 +546,9 @@ fn legacy_destination_would_downgrade(
 
 /// Resolve archive member identities before mutating the destination tree.
 ///
-/// A missing extension is an ordinary tar compatibility case and is explicitly
-/// restored as Blob. A present identity must be one this kernel can legally
+/// Missing metadata is an ordinary tar compatibility case. Infer only when
+/// filename extension and bytes agree, otherwise restore as Blob. A present
+/// identity must be one this kernel can legally
 /// originate; accepting `NONE` or an unknown future registry value would turn
 /// archive extraction into an unsafe raw metadata injection path.
 fn restored_content_types(
@@ -558,7 +560,9 @@ fn restored_content_types(
         .map_err(|_| CodecError::LimitExceeded)?;
     for entry in entries {
         let disposition = match entry.content_type_raw {
-            None => RestoreDisposition::LegacyBlob,
+            None => crate::r::fs::content_type_boundary::verify_named_bytes(&entry.name, &entry.bytes)
+                .map(RestoreDisposition::Typed)
+                .unwrap_or(RestoreDisposition::LegacyBlob),
             Some(raw) => {
                 let content_type = crate::r::fs::trueosfs::ContentTypeId::from_raw(raw);
                 if content_type == crate::r::fs::trueosfs::ContentTypeId::NONE {

@@ -38,6 +38,7 @@ include!("artifacts/metadata.rs");
 include!("artifacts/uploads.rs");
 include!("operations/primitives.rs");
 include!("operations/native_scalar.rs");
+include!("operations/native_kernel.rs");
 include!("operations/generated_pixel.rs");
 include!("operations/svg_outline.rs");
 include!("operations/solid_rects.rs");

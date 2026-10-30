@@ -1,3 +1,5 @@
+# Additive UI4 collapse activation v1; all existing signatures unchanged.
+# Additive Odin-native SIMD8 dispatch/readback v1; all previous signatures verified unchanged.
 # Additive test-only runtime-generated native compute v1; all existing signatures unchanged.
 # Additive bounded Hull microfont text runs v1; all existing signatures reviewed unchanged.
 # Intentional removal of unused native scheduled audio and Konsole row/cursor/end-frame exports; surviving signatures unchanged.
@@ -32,4 +34,4 @@
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
 # Additive owner-bound Spirit agent snapshot v1; every existing declaration unchanged.
 # Additive launch-scoped placement and continuation-scoped role/activity v1; all prior signatures verified unchanged.
-45caefc18335381adba6e5438b72c4c07484e0673977f5cf0749d2b3178c5d25
+b7594f79057f8e40c84817a5be35635bba4faa371963d2de30102e343c2891a3

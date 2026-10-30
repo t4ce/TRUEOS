@@ -8,7 +8,7 @@ use core::task::{Context, Poll, Waker};
 
 use crate::vcabi;
 
-pub use crate::content_identity::ContentTypeId;
+pub use crate::content_identity::{ContentTypeId, infer_named_bytes};
 
 pub const ERR_BAD_UTF8: i32 = -1;
 pub const ERR_IO: i32 = -2;
@@ -563,6 +563,23 @@ pub async fn write_file_typed_checked(
     for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
         write.write_chunk(chunk)?;
     }
+    write.commit().await
+}
+
+/// Confirm a soft inference proposal for unchanged Blob bytes.
+/// Flag 6 requires both the expected-content digest and guarded Blob promotion.
+/// The kernel revalidates the extension, bytes, stored type, and digest atomically.
+pub async fn infer_blob_checked(
+    path: &[u8], bytes: &[u8], content_type: ContentTypeId, expected_sha256: [u8; 32],
+) -> Result<(), i32> {
+    let operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_checked_write_begin_v1(
+            path.as_ptr(), path.len(), bytes.len(), content_type.raw(), 6,
+            expected_sha256.as_ptr(),
+        )
+    })?;
+    let mut write = TypedWrite { operation, total_len: bytes.len(), next_offset: 0 };
+    for chunk in bytes.chunks(WRITE_CHUNK_BYTES) { write.write_chunk(chunk)?; }
     write.commit().await
 }
 

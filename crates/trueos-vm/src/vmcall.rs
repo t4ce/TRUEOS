@@ -301,6 +301,7 @@ pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C;
 pub const OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1: u32 = 0x12F; // packed size/window, offset/id, package chunk
 pub const OP_BP_UI4_NATIVE_COMPUTE_UPLOAD_V1: u32 = 0x236;
 pub const OP_BP_UI4_NATIVE_COMPUTE_RENDER_V1: u32 = 0x237;
+pub const OP_BP_UI4_NATIVE_COMPUTE_DISPATCH_V1: u32 = 0x238;
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D;
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E;
 // REGISTER: arg0 low32=window, high32=mode (0 fixed, 1 dynamic), arg1=serial

@@ -110,3 +110,91 @@ mod tests {
         assert!(!validate(&original[..original.len() - 1]));
     }
 }
+
+/// Complete upstream SIMD8 kernels: direct GRF arithmetic/control flow and one
+/// fixed BT0 media-block result store. Hashes identify uploads, not admission.
+pub(crate) fn validate_simd8(code: &[u8]) -> bool {
+    const HEAD: [[u32; 4]; 3] = [
+        [0x00030061, 0x77050220, 0x00460005, 0],
+        [0x00010061, 0x77054220, 0, 0],
+        [0x00000061, 0x77454220, 0, 31],
+    ];
+    const TAIL: [[u32; 4]; 3] = [
+        [0x00039031, 0, 0xc0007714, 0x02a00000],
+        [0x00030061, 0x76050220, 0x00460005, 0],
+        [0x00039131, 4, 0x7020760c, 0x10000000],
+    ];
+    if !(112..=MAX_CODE_BYTES).contains(&code.len()) || code.len() % 16 != 0 {
+        return false;
+    }
+    let end = code.len() - 48;
+    if code[..48]
+        .chunks_exact(16)
+        .zip(HEAD)
+        .any(|(a, b)| words(a) != b)
+        || code[end..]
+            .chunks_exact(16)
+            .zip(TAIL)
+            .any(|(a, b)| words(a) != b)
+    {
+        return false;
+    }
+    let grf = |r: u32| (1..118).contains(&r) || r == 120;
+    let source = |w: u32| grf((w >> 8) & 255) && w & 0x00ff_00ff == 0x0046_0005;
+    for (index, bytes) in code[48..end].chunks_exact(16).enumerate() {
+        let w = words(bytes);
+        let op = w[0] & 0x7f;
+        if w[0] & !0x11c0_0000 != 0x00030100 | op || w[0] & 0x1100_0000 == 0x1000_0000 {
+            return false;
+        }
+        if matches!(op, 0x22 | 0x24 | 0x25 | 0x27 | 0x2e | 0x2f) {
+            if !matches!(w[1], 0x4000 | 0xc000) || (w[1] == 0x4000 && w[2] != 0) {
+                return false;
+            }
+            for offset in [w[3], w[2]]
+                .into_iter()
+                .take(if w[1] == 0xc000 { 2 } else { 1 })
+            {
+                let target = (index as i64 + 3) * 16 + i64::from(offset as i32);
+                if target < 48 || target > end as i64 || target % 16 != 0 {
+                    return false;
+                }
+            }
+            continue;
+        }
+        let dst = w[1] >> 24;
+        let ty = (w[1] >> 4) & 15;
+        let null_cmp = op == 0x70 && dst == 0;
+        if (!null_cmp && !grf(dst)) || !matches!(ty, 2 | 6 | 10) {
+            return false;
+        }
+        let base = dst << 24 | if null_cmp { 0x10000 } else { 0x50000 } | ty << 4 | ty << 8;
+        if op == 0x61 {
+            if ty != 2
+                || !((w[1] == base | 0x4000 && w[2] == 0)
+                    || (w[1] == base && w[2] >> 24 == 0 && source(w[2]) && w[3] == 0))
+            {
+                return false;
+            }
+        } else {
+            if !matches!(op, 0x40 | 0x41 | 0x65 | 0x66 | 0x67 | 0x68 | 0x69 | 0x70)
+                || (op == 0x41 && ty != 10)
+                || (matches!(op, 0x65..=0x69) && ty != 2)
+            {
+                return false;
+            }
+            let condition = if op == 0x70 { w[2] >> 28 } else { 0 };
+            if (op == 0x70 && !(1..=6).contains(&condition))
+                || !source(w[2])
+                || w[2] >> 24 != condition << 4 | ty
+            {
+                return false;
+            }
+            let immediate = w[1] == base | 0x8000;
+            if !immediate && (w[1] != base || w[3] & 0xfc00_0000 != 0 || !source(w[3])) {
+                return false;
+            }
+        }
+    }
+    true
+}

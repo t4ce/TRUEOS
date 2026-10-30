@@ -48,10 +48,13 @@ const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CheckedWriteOptions {
     pub create_new: bool,
+    pub infer_blob: bool,
     pub expected_sha256: Option<[u8; 32]>,
 }
 
-/// Fixed, versioned wire header: flags:u32 LE, expected SHA-256:32, then path.
+/// Fixed wire header: flags:u32 LE, expected SHA-256:32, then path.
+/// Modes: 0=replace retaining metadata, 1=create-only, 2=checked replace,
+/// 6=checked Blob inference (bit 2 requires the digest bit 1).
 pub(crate) fn decode_checked_write_payload(
     bytes: &[u8],
 ) -> Result<(CheckedWriteOptions, &str), i32> {
@@ -59,14 +62,14 @@ pub(crate) fn decode_checked_write_payload(
         return Err(FS_ERR_BAD_PARAM);
     }
     let flags = u32::from_le_bytes(bytes[..4].try_into().map_err(|_| FS_ERR_BAD_PARAM)?);
-    if flags > 2 || (flags != 2 && bytes[4..36].iter().any(|b| *b != 0)) {
+    if !matches!(flags, 0 | 1 | 2 | 6) || (flags & 2 == 0 && bytes[4..36].iter().any(|b| *b != 0)) {
         return Err(FS_ERR_BAD_PARAM);
     }
-    let expected_sha256 = if flags == 2 {
+    let expected_sha256 = if flags & 2 != 0 {
         Some(bytes[4..36].try_into().map_err(|_| FS_ERR_BAD_PARAM)?)
     } else { None };
     let path = core::str::from_utf8(&bytes[36..]).map_err(|_| FS_ERR_BAD_UTF8)?;
-    Ok((CheckedWriteOptions { create_new: flags == 1, expected_sha256 }, path))
+    Ok((CheckedWriteOptions { create_new: flags == 1, infer_blob: flags == 6, expected_sha256 }, path))
 }
 
 #[derive(Debug)]
@@ -642,6 +645,7 @@ pub(crate) fn start_write_checked(
         return FS_ERR_TYPE_REQUIRED;
     }
     if !content_type.is_registered() || (options.create_new && options.expected_sha256.is_some())
+        || (options.infer_blob && (options.create_new || options.expected_sha256.is_none()))
         || path.starts_with("vFile:")
     {
         return FS_ERR_BAD_PARAM;
@@ -1192,7 +1196,7 @@ async fn process(request: &Request) -> OperationState {
                 use crate::r::fs::trueosfs::CheckedWriteError;
                 return match crate::r::fs::trueosfs::file_in_typed_checked_async(
                     disk, selected_path, bytes.as_slice(), *content_type,
-                    options.create_new, options.expected_sha256,
+                    options.create_new, options.expected_sha256, options.infer_blob,
                 ).await {
                     Ok(true) => OperationState::Unit,
                     Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
@@ -1493,7 +1497,8 @@ fn guest_checked_write_begin(
     path: &str, total_len: usize, content_type: u32, options: CheckedWriteOptions,
 ) -> i32 {
     let mut payload = Vec::with_capacity(36 + path.len());
-    let flags = u32::from(options.create_new) | (u32::from(options.expected_sha256.is_some()) << 1);
+    let flags = u32::from(options.create_new) | (u32::from(options.expected_sha256.is_some()) << 1)
+        | (u32::from(options.infer_blob) << 2);
     payload.extend_from_slice(&flags.to_le_bytes());
     payload.extend_from_slice(&options.expected_sha256.unwrap_or([0; 32]));
     payload.extend_from_slice(path.as_bytes());
@@ -1621,7 +1626,7 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_checked_write_begin_v1(
     flags: u32,
     expected_sha256: *const u8,
 ) -> i32 {
-    if flags > 2 || (flags == 2 && expected_sha256.is_null()) {
+    if !matches!(flags, 0 | 1 | 2 | 6) || (flags & 2 != 0 && expected_sha256.is_null()) {
         return FS_ERR_BAD_PARAM;
     }
     let path = match parse_path(path_ptr, path_len, false) {
@@ -1631,12 +1636,12 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_checked_write_begin_v1(
     let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(content_type);
     if id == crate::r::fs::trueosfs::ContentTypeId::NONE { return FS_ERR_TYPE_REQUIRED; }
     if !id.is_registered() || path.starts_with("vFile:") { return FS_ERR_BAD_PARAM; }
-    let hash = if flags == 2 {
+    let hash = if flags & 2 != 0 {
         let mut hash = [0u8; 32];
         hash.copy_from_slice(unsafe { core::slice::from_raw_parts(expected_sha256, 32) });
         Some(hash)
     } else { None };
-    let options = CheckedWriteOptions { create_new: flags == 1, expected_sha256: hash };
+    let options = CheckedWriteOptions { create_new: flags == 1, infer_blob: flags == 6, expected_sha256: hash };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         guest_checked_write_begin(path.as_str(), total_len, content_type, options)
     } else {

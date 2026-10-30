@@ -3476,6 +3476,21 @@ pub(super) fn install_collapse(
     Ok(())
 }
 
+pub(super) fn clear_collapse(owner: WindowOwner, id: WindowId) {
+    let icon = {
+        let mut broker = WINDOW_BROKER.lock();
+        let Ok(window) = broker.checked_window_mut(owner, id) else { return; };
+        let icon = window.collapse.take();
+        if icon.is_none() { return; }
+        window.revision = next_serial(window.revision);
+        window.damage = Some(DamageRegion::FULL);
+        broker.mark_composition_changed();
+        icon
+    };
+    if let Some(icon) = icon { retire_frame_when_released(icon.frame); }
+    super::cursor_frame_inout::selection_strip_stack_changed();
+}
+
 pub(super) fn collapse_state(owner: WindowOwner, id: WindowId) -> Option<bool> {
     let mut broker = WINDOW_BROKER.lock();
     broker

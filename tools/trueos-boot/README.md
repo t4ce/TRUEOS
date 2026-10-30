@@ -141,15 +141,17 @@ latest successful archive:
 
 RAM live update extracts `TRUEOS.elf` from this native archive. Its online URL
 is `https://trueos.eu/TrueOS.tar.lz4`; the LAN URL is
-`http://192.168.178.111:8080/TrueOS.tar.lz4`. To serve the current archive from
+`http://192.168.178.111:8080/TrueOS.tar.lz4`. The running `pxe3.js` serves this
+archive on port 8080, bound to its selected LAN interface. Select **Live update
+from LAN** in the OS builtin. To serve the current archive without `pxe3.js`, from
 the development host manually, run this from the repository root:
 
 ```sh
 python3 -m http.server 8080 --bind 0.0.0.0 --directory tgt
 ```
 
-The rig build does not start this HTTP server. `pxe3.js` continues to serve only
-the three native boot files over TFTP. Online disk installation retains its
+The rig build does not start an HTTP server. `pxe3.js` serves the three native
+boot files over TFTP and only `/TrueOS.tar.lz4` over HTTP. Online disk installation retains its
 separate `https://trueos.eu/TrueOS.lz4` endpoint and older ISO-containing bundle.
 
 The kernel build verifies that the prepared set matches the current sources and
