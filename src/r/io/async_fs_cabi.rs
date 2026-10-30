@@ -2,10 +2,14 @@ extern crate alloc;
 
 pub use crate::r::cabi_codes::*;
 
+use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::future::{Future, poll_fn};
+use core::pin::{Pin, pin};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::task::{Context, Poll};
 #[path = "async_fs_progress.rs"]
 mod progress;
 static PROGRESS: progress::Tracker = progress::Tracker::new();
@@ -16,6 +20,9 @@ fn progress_now_ms() -> u64 {
 use spin::Mutex;
 
 const ASYNC_FS_MAX_OPERATIONS: usize = 64;
+// Independent Blueprint owners can progress while another awaits storage.
+// Keep one request per owner active, retaining its submission order.
+const ASYNC_FS_MAX_ACTIVE: usize = 4;
 const ASYNC_FS_MAX_RESULT_BYTES: u64 = 16 * 1024 * 1024;
 // File transfers support the WebDAV share's 4 GiB per-file limit. These are
 // host-memory admission limits, not guest address-space mappings. Directory
@@ -232,24 +239,25 @@ static ASYNC_FS_REQUESTS: Mutex<VecDeque<Request>> = Mutex::new(VecDeque::new())
 static ASYNC_FS_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 // Discarding a result does not cancel an already-running filesystem future.
 // Keep its owner visible until that future reaches its commit/abort boundary.
-static ASYNC_FS_ACTIVE_REQUEST: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+static ASYNC_FS_ACTIVE_REQUESTS: Mutex<[Option<(u32, u32)>; ASYNC_FS_MAX_ACTIVE]> =
+    Mutex::new([None; ASYNC_FS_MAX_ACTIVE]);
 static ASYNC_FS_OPERATIONS: Mutex<BTreeMap<u32, Operation>> = Mutex::new(BTreeMap::new());
 
 fn pending_in(
     owner: u32,
     requests: &VecDeque<Request>,
-    active: Option<(u32, u32)>,
+    active: &[Option<(u32, u32)>],
     operations: &BTreeMap<u32, Operation>,
 ) -> usize {
     let queued = requests.iter().filter(|request| request.owner == owner).count();
-    let running = usize::from(active.is_some_and(|(running_owner, _)| running_owner == owner));
+    let running = active.iter().flatten().filter(|(running_owner, _)| *running_owner == owner).count();
     // Submission publishes Pending before it enters the request queue. Include
     // that short interval without counting queued/running operations twice.
     let submitting = operations.iter().filter(|(id, operation)| {
         operation.owner == owner
             && matches!(operation.state, OperationState::Pending)
             && !requests.iter().any(|request| request.owner == owner && request.id == **id)
-            && active != Some((owner, **id))
+            && !active.contains(&Some((owner, **id)))
     }).count();
     queued + running + submitting
 }
@@ -259,18 +267,18 @@ fn pending_in(
 pub(crate) fn pending_for_owner(owner: u32) -> usize {
     // All multi-lock broker paths use requests -> active -> operations.
     let requests = ASYNC_FS_REQUESTS.lock();
-    let active = ASYNC_FS_ACTIVE_REQUEST.lock();
+    let active = ASYNC_FS_ACTIVE_REQUESTS.lock();
     let operations = lock_operations();
-    pending_in(owner, &requests, *active, &operations)
+    pending_in(owner, &requests, active.as_slice(), &operations)
 }
 
 /// Release staged uploads and completed results after guest admission closes.
 /// Pending disk work must finish first; Err leaves all owner state intact.
 pub(crate) fn release_owner(owner: u32) -> Result<usize, usize> {
     let requests = ASYNC_FS_REQUESTS.lock();
-    let active = ASYNC_FS_ACTIVE_REQUEST.lock();
+    let active = ASYNC_FS_ACTIVE_REQUESTS.lock();
     let mut operations = lock_operations();
-    let pending = pending_in(owner, &requests, *active, &operations);
+    let pending = pending_in(owner, &requests, active.as_slice(), &operations);
     if pending != 0 {
         return Err(pending);
     }
@@ -281,23 +289,14 @@ pub(crate) fn release_owner(owner: u32) -> Result<usize, usize> {
 
 fn take_request() -> Option<Request> {
     let mut requests = ASYNC_FS_REQUESTS.lock();
-    let request = requests.pop_front()?;
-    let mut active = ASYNC_FS_ACTIVE_REQUEST.lock();
-    assert!(active.is_none(), "async filesystem service already processing a request");
-    *active = Some((request.owner, request.id));
+    let mut active = ASYNC_FS_ACTIVE_REQUESTS.lock();
+    let slot = active.iter().position(Option::is_none)?;
+    let index = requests.iter().position(|request| {
+        !active.iter().flatten().any(|(owner, _)| *owner == request.owner)
+    })?;
+    let request = requests.remove(index)?;
+    active[slot] = Some((request.owner, request.id));
     Some(request)
-}
-
-async fn next_request() -> Request {
-    loop {
-        // Snapshot before checking for work: an arrival before registration
-        // changes the generation and cannot strand a queued request.
-        let observed = ASYNC_FS_WAIT.observe();
-        if let Some(request) = take_request() {
-            return request;
-        }
-        ASYNC_FS_WAIT.wait_after(observed).await;
-    }
 }
 
 fn notify_request_arrival() {
@@ -319,8 +318,9 @@ fn begin_request(request: &Request) -> bool {
 }
 
 fn finish_request(request: &Request, state: Option<OperationState>) {
-    let mut active = ASYNC_FS_ACTIVE_REQUEST.lock();
-    assert_eq!(*active, Some((request.owner, request.id)));
+    let mut active = ASYNC_FS_ACTIVE_REQUESTS.lock();
+    let slot = active.iter().position(|identity| *identity == Some((request.owner, request.id)))
+        .expect("async filesystem request is not active");
     let mut timing = None;
     if let Some(state) = state {
         let mut operations = lock_operations();
@@ -338,7 +338,7 @@ fn finish_request(request: &Request, state: Option<OperationState>) {
     } else {
         PROGRESS.release(request.owner, request.id);
     }
-    *active = None;
+    active[slot] = None;
     drop(active);
     if let Some(timing) = timing {
         trace_slow_progress(timing);
@@ -1430,17 +1430,56 @@ async fn process(request: &Request) -> OperationState {
     }
 }
 
+async fn process_owned_request(request: Request) {
+    if !begin_request(&request) {
+        finish_request(&request, None);
+        return;
+    }
+    let state = process(&request).await;
+    finish_request(&request, Some(state));
+}
+
+// No Send bound: all filesystem and block futures remain on the BSP executor.
+type ActiveRequest = Pin<Box<dyn Future<Output = ()>>>;
+
+fn poll_request_batch(active: &mut Vec<ActiveRequest>, cx: &mut Context<'_>) {
+    while let Some(request) = take_request() {
+        active.push(Box::pin(process_owned_request(request)));
+    }
+    let mut index = 0;
+    while index < active.len() {
+        if active[index].as_mut().poll(cx).is_ready() {
+            drop(active.swap_remove(index));
+        } else {
+            index += 1;
+        }
+    }
+    // Completing an owner exposes its next FIFO request. Backfill the freed
+    // slots, then poll them on the next turn instead of waiting for an arrival
+    // that may never come. A blocked owner alone never causes a busy poll.
+    let mut admitted = false;
+    while let Some(request) = take_request() {
+        active.push(Box::pin(process_owned_request(request)));
+        admitted = true;
+    }
+    if admitted {
+        cx.waker().wake_by_ref();
+    }
+}
+
 #[trueos_executor::task]
 pub async fn service_task() {
+    let mut active = Vec::with_capacity(ASYNC_FS_MAX_ACTIVE);
     loop {
-        let request = next_request().await;
-
-        if !begin_request(&request) {
-            finish_request(&request, None);
-            continue;
-        }
-        let state = process(&request).await;
-        finish_request(&request, Some(state));
+        // Observe and register before inspecting requests. Notifications during
+        // this gap remain visible through the WaitQueue generation counter.
+        let observed = ASYNC_FS_WAIT.observe();
+        let mut arrival = pin!(ASYNC_FS_WAIT.wait_after(observed));
+        poll_fn(|cx| {
+            let notified = arrival.as_mut().poll(cx).is_ready();
+            poll_request_batch(&mut active, cx);
+            if notified { Poll::Ready(()) } else { Poll::Pending }
+        }).await;
     }
 }
 

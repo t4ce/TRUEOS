@@ -28,6 +28,7 @@ struct IndexRef {
 type TrueosFsIndex = BTreeMap<Vec<u8>, IndexRef>;
 
 const FILE_RECORD_CACHE_CAP: usize = 64;
+const NODE_RECORD_CACHE_CAP: usize = 128;
 const TRUEOSFS_CHECKPOINT_MIN_TAIL_BLOCKS: u64 = 4096;
 pub const TRUEOSFS_LIST_SOFT_CAP: usize = 1024;
 // Worst-case small records for `backups/`, the streamed image header/name,
@@ -46,6 +47,13 @@ struct FileRecordCacheEntry {
     path: String,
     record: trueos_fs::FileRecordRef,
     cache_gen: u32,
+    last_use: u64,
+}
+
+struct NodeRecordCacheEntry {
+    disk_id: block::DiscId,
+    mount_seq: u32,
+    record: trueos_fs::NodeRecordRef,
     last_use: u64,
 }
 
@@ -81,6 +89,8 @@ static PRIMARY_ROOT_HANDLE_RAW: AtomicUsize = AtomicUsize::new(0);
 
 static FILE_RECORD_CACHE_SEQ: AtomicU64 = AtomicU64::new(1);
 static FILE_RECORD_CACHE: Mutex<Vec<FileRecordCacheEntry>> = Mutex::new(Vec::new());
+static NODE_RECORD_CACHE_SEQ: AtomicU64 = AtomicU64::new(1);
+static NODE_RECORD_CACHE: Mutex<Vec<NodeRecordCacheEntry>> = Mutex::new(Vec::new());
 
 static CONTENT_TYPED_COMMITS: AtomicU64 = AtomicU64::new(0);
 static CONTENT_LEGACY_BLOB_COMMITS: AtomicU64 = AtomicU64::new(0);
@@ -1856,6 +1866,47 @@ pub async fn file_write_all_async(
     Ok(true)
 }
 
+// Committed append-only records are immutable. Resolve the current pathname
+// through the index first, then cache its header by record revision. Unrelated
+// writes must not force every stat and directory-prefix check back to storage.
+// A fresh mount sequence prevents a reused LBA after remount/format from hitting
+// an old header, including an in-flight read completed after the remount.
+fn node_record_cache_lookup(
+    disk_id: block::DiscId,
+    mount_seq: u32,
+    entry_lba: u64,
+) -> Option<trueos_fs::NodeRecordRef> {
+    let mut cache = NODE_RECORD_CACHE.lock();
+    let entry = cache.iter_mut().find(|entry| {
+        entry.disk_id == disk_id && entry.mount_seq == mount_seq
+            && entry.record.entry_lba == entry_lba
+    })?;
+    entry.last_use = NODE_RECORD_CACHE_SEQ.fetch_add(1, Ordering::Relaxed);
+    Some(entry.record)
+}
+
+fn node_record_cache_insert(
+    disk_id: block::DiscId,
+    mount_seq: u32,
+    record: trueos_fs::NodeRecordRef,
+) {
+    let mut cache = NODE_RECORD_CACHE.lock();
+    let seq = NODE_RECORD_CACHE_SEQ.fetch_add(1, Ordering::Relaxed);
+    if let Some(entry) = cache.iter_mut().find(|entry| {
+        entry.disk_id == disk_id && entry.mount_seq == mount_seq
+            && entry.record.entry_lba == record.entry_lba
+    }) {
+        entry.record = record;
+        entry.last_use = seq;
+        return;
+    }
+    if cache.len() >= NODE_RECORD_CACHE_CAP {
+        let (oldest, _) = cache.iter().enumerate().min_by_key(|(_, entry)| entry.last_use).unwrap();
+        cache.swap_remove(oldest);
+    }
+    cache.push(NodeRecordCacheEntry { disk_id, mount_seq, record, last_use: seq });
+}
+
 async fn lookup_node_via_index_async(
     disk: block::DeviceHandle,
     placement: &TrueosFsPlacement,
@@ -1865,7 +1916,7 @@ async fn lookup_node_via_index_async(
     ensure_index_async(disk, placement).await?;
     let disk_id = disk.id();
 
-    let entry_lba = {
+    let (mount_seq, entry_lba) = {
         let roots = ROOTS.lock();
         let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
             return Err(block::Error::NotReady);
@@ -1878,11 +1929,15 @@ async fn lookup_node_via_index_async(
                 if !matches!(entry.kind, trueos_fs::LogKind::Put | trueos_fs::LogKind::Directory) {
                     return Ok(None);
                 }
-                entry.entry_lba
+                (mount.seq, entry.entry_lba)
             }
             None => return Ok(None),
         }
     };
+
+    if let Some(record) = node_record_cache_lookup(disk_id, mount_seq, entry_lba) {
+        return Ok(Some(record));
+    }
 
     let params = trueos_fs::FsParams {
         super_lba: placement.super_lba,
@@ -1891,9 +1946,13 @@ async fn lookup_node_via_index_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    trueos_fs::get_node_record_by_lba(&io, &params, entry_lba)
+    let record = trueos_fs::get_node_record_by_lba(&io, &params, entry_lba)
         .await
-        .map_err(map_engine_err)
+        .map_err(map_engine_err)?;
+    if let Some(record) = record {
+        node_record_cache_insert(disk_id, mount_seq, record);
+    }
+    Ok(record)
 }
 
 async fn lookup_via_index_async(
@@ -2202,13 +2261,6 @@ pub async fn file_info_async(
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
-
-    if node_info_async(disk, name)
-        .await?
-        .is_some_and(|info| info.kind != NodeKind::File)
-    {
-        return Ok(None);
-    }
 
     let disk_id = disk.id();
     let record = file_record_cache_lookup(disk_id, name);

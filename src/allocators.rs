@@ -360,6 +360,21 @@ impl Drop for HvGuestDmaPinReservation {
 // node and allocation tag layouts, and therefore saved heap images, do not
 // change.
 const FREE_ADDRESS_FENCES: usize = 256;
+// Cache a bounded number of proven-too-small prefixes. Unlike a next-fit
+// cursor, these hints never bypass a block that could satisfy the request.
+// Exact minimum sizes also help when fragmentation is concentrated within a
+// single address band, before a large surviving tail.
+const ALLOC_SEARCH_HINTS: usize = 32;
+
+#[derive(Clone, Copy)]
+struct AllocSearchHint {
+    minimum: usize,
+    before: Option<NonNull<FreeBlock>>,
+}
+
+impl AllocSearchHint {
+    const EMPTY: Self = Self { minimum: 0, before: None };
+}
 
 struct FreeList {
     head: Option<NonNull<FreeBlock>>,
@@ -368,6 +383,7 @@ struct FreeList {
     // during batched destruction. Allocation and heap replacement invalidate
     // this hint before they can remove or replace its node.
     free_finger: Option<NonNull<FreeBlock>>,
+    alloc_search: [AllocSearchHint; ALLOC_SEARCH_HINTS],
     // Cumulative candidate visits, committed once per allocation under the
     // existing heap lock. These are work counts, not elapsed-time samples.
     alloc_calls: u64,
@@ -389,6 +405,7 @@ impl FreeList {
             head: None,
             address_fences: [None; FREE_ADDRESS_FENCES],
             free_finger: None,
+            alloc_search: [AllocSearchHint::EMPTY; ALLOC_SEARCH_HINTS],
             alloc_calls: 0,
             alloc_nodes: 0,
             alloc_max_nodes: 0,
@@ -445,9 +462,30 @@ impl FreeList {
 
         let trace_enabled = matches!(domain, AllocDomain::HvGuest(_))
             || crate::hv::current_guest_execution_context_vm_id().is_none();
-        let mut current = self.head;
-        trace_alloc_entry(trace_enabled, layout, current);
-        let mut prev: Option<NonNull<FreeBlock>> = None;
+        trace_alloc_entry(trace_enabled, layout, self.head);
+        let Some(minimum) = minimum_block_size()
+            .checked_add(layout.size())
+            .and_then(|size| size.checked_add(align_of::<FreeBlock>() - 1))
+            .map(|size| size & !(align_of::<FreeBlock>() - 1))
+        else {
+            return null_mut();
+        };
+        let hint_index = Self::alloc_search_index(minimum);
+        if self.alloc_search[hint_index].minimum != minimum {
+            self.alloc_search[hint_index] = AllocSearchHint { minimum, before: None };
+        }
+        let mut prev = self.alloc_search[hint_index].before;
+        let mut current = match prev {
+            Some(node) => {
+                if self.checked_free_block_end(node).is_none() {
+                    trace_alloc_invalid_ptr(trace_enabled, node.as_ptr() as usize);
+                    return null_mut();
+                }
+                unsafe { node.as_ref().next }
+            }
+            None => self.head,
+        };
+        let mut small_prefix = true;
         let mut last_rejected = None;
 
         while let Some(mut block_ptr) = current {
@@ -460,6 +498,15 @@ impl FreeList {
                 return null_mut();
             }
             let block = block_ptr.as_mut();
+
+            // Only a contiguous prefix of blocks smaller than this lower
+            // bound is reusable across requests. Alignment can reject a larger
+            // block, but another alignment at the same minimum may fit there.
+            if small_prefix && block.size < minimum {
+                self.alloc_search[hint_index].before = Some(block_ptr);
+            } else {
+                small_prefix = false;
+            }
 
             let block_start = block as *mut FreeBlock as usize;
 
@@ -521,6 +568,7 @@ impl FreeList {
             };
             block.size = alloc_block_size;
 
+            self.remove_alloc_search_node(block_ptr, prev);
             self.remove_address_fences(block_ptr, prev, block.next);
             if remaining != 0 {
                 self.insert_address_fences(next_block.unwrap(), block.next);
@@ -629,6 +677,7 @@ impl FreeList {
             next: current,
         });
         let new_node = NonNull::new_unchecked(block_ptr);
+        self.rewind_alloc_search(new_node, block_size, prev);
         self.insert_address_fences(new_node, current);
 
         if let Some(mut p) = prev {
@@ -891,12 +940,50 @@ impl FreeList {
         self.address_fences[first..end].fill(prev);
     }
 
+    fn alloc_search_index(minimum: usize) -> usize {
+        let units = minimum / align_of::<FreeBlock>();
+        (units ^ (units >> 5) ^ (units >> 10)) & (ALLOC_SEARCH_HINTS - 1)
+    }
+
+    /// A removed prefix anchor must never remain a pointer into allocated
+    /// storage. Its predecessor was part of the same too-small prefix.
+    fn remove_alloc_search_node(
+        &mut self,
+        node: NonNull<FreeBlock>,
+        prev: Option<NonNull<FreeBlock>>,
+    ) {
+        for hint in &mut self.alloc_search {
+            if hint.before == Some(node) {
+                hint.before = prev;
+            }
+        }
+    }
+
+    /// Insertion or coalescing can create a first fit inside an old rejected
+    /// prefix. Back up before that block; every earlier node is still proven
+    /// too small. The caller may conservatively supply an earlier predecessor.
+    fn rewind_alloc_search(
+        &mut self,
+        node: NonNull<FreeBlock>,
+        size: usize,
+        prev: Option<NonNull<FreeBlock>>,
+    ) {
+        for hint in &mut self.alloc_search {
+            if size >= hint.minimum
+                && hint.before.is_some_and(|before| before.as_ptr() as usize >= node.as_ptr() as usize)
+            {
+                hint.before = prev;
+            }
+        }
+    }
+
     #[cfg(any(test, feature = "legacy_vm_checkpoint"))]
 /// Used once after loading a validated heap image; the index is derived
     /// allocator state and is deliberately absent from the image format.
     unsafe fn rebuild_address_fences(&mut self) {
         self.reset_work_counts();
         self.free_finger = None;
+        self.alloc_search.fill(AllocSearchHint::EMPTY);
         self.address_fences.fill(None);
         let mut current = self.head;
         while let Some(node) = current {
@@ -910,6 +997,7 @@ impl FreeList {
         self.reset_work_counts();
         self.head = None;
         self.free_finger = None;
+        self.alloc_search.fill(AllocSearchHint::EMPTY);
         self.address_fences.fill(None);
         self.initialized = false;
         self.heap_virt_start = virt_start;
@@ -955,8 +1043,13 @@ impl FreeList {
             if node_end == next_start {
                 let next_size = next_ptr.as_ref().size;
                 let next_next = next_ptr.as_ref().next;
+                self.remove_alloc_search_node(next_ptr, Some(node));
                 self.remove_address_fences(next_ptr, Some(node), next_next);
                 let new_size = node_size + next_size;
+                // This address fence precedes node's entire band, so it also
+                // precedes node without another free-list traversal.
+                let preceding_band = self.address_fences[self.address_band(node.as_ptr() as usize)];
+                self.rewind_alloc_search(node, new_size, preceding_band);
                 let node_mut = node.as_mut();
                 node_mut.size = new_size;
                 node_mut.next = next_next;
@@ -966,6 +1059,9 @@ impl FreeList {
         false
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 struct Allocator;
 

@@ -321,19 +321,8 @@ collect() {
         attempt=$((attempt + 1))
         printf 'trueos baremetal log drain: run_id=%s connect_attempt=%s target=%s:%s at=%s\n' \
             "$run_id" "$attempt" "$host" "$port" "$(date -Is)" >> "$log_path"
-        python3 -u -c '
-import socket
-import sys
-
-with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=1.0) as stream:
-    stream.settimeout(None)
-    while True:
-        data = stream.recv(64 * 1024)
-        if not data:
-            break
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
-' "$host" "$port" >> "$log_path" 2>&1 &
+        python3 -u "$repo_root/tools/baremetal-log-reader.py" \
+            "$host" "$port" >> "$log_path" 2>&1 &
         child_pid=$!
         set +e
         wait "$child_pid"
