@@ -73,7 +73,7 @@ fn classify_sampling(components: u8, h: [u8; 3], v: [u8; 3]) -> JpegSampling {
     if components == 1 {
         return JpegSampling::Yuv400;
     }
-    if components < 3 || h[1] != h[2] || v[1] != v[2] {
+    if components != 3 || h[1] != h[2] || v[1] != v[2] {
         return JpegSampling::Other;
     }
     match ((h[0], v[0]), (h[1], v[1])) {
@@ -128,14 +128,14 @@ fn parse_sof_sampling(encoded: &[u8]) -> Option<(u32, u32, u8, [u8; 3], [u8; 3])
         {
             let height = u16::from_be_bytes([encoded[idx + 1], encoded[idx + 2]]) as u32;
             let width = u16::from_be_bytes([encoded[idx + 3], encoded[idx + 4]]) as u32;
-            let components = encoded[idx + 5].min(3);
+            let components = encoded[idx + 5];
             let mut h = [0u8; 3];
             let mut v = [0u8; 3];
-            let need = 6usize.saturating_add(usize::from(components).saturating_mul(3));
+            let need = 8usize.saturating_add(usize::from(components).saturating_mul(3));
             if width == 0 || height == 0 || segment_len < need {
                 return None;
             }
-            for component_idx in 0..usize::from(components) {
+            for component_idx in 0..usize::from(components.min(3)) {
                 let hv = encoded[idx + 7 + component_idx * 3];
                 h[component_idx] = hv >> 4;
                 v[component_idx] = hv & 0x0F;

@@ -73,20 +73,20 @@ fn decode_jpeg_rgba_with_limit(
     if width == 0 || height == 0 {
         return Err(JpegDecodeError::Invalid);
     }
+    let expected_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or(JpegDecodeError::Unsupported)?;
     if let Some((max_bytes, max_dimension)) = limit {
-        if width > max_dimension || height > max_dimension
-            || (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)).is_none_or(|n| n > max_bytes)
-        { return Err(JpegDecodeError::Unsupported); }
+        if width > max_dimension || height > max_dimension || expected_len > max_bytes {
+            return Err(JpegDecodeError::Unsupported);
+        }
     }
 
     let rgba = decoder
         .decode()
         .map_err(|_| JpegDecodeError::DecodeFailed)?;
-    if rgba.len()
-        != (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4)
-    {
+    if rgba.len() != expected_len {
         return Err(JpegDecodeError::Unsupported);
     }
 

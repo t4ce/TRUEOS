@@ -2,13 +2,14 @@
 //!
 //! The old kernel is treated as a disposable in-memory boot loader:
 //! 1. validate and stage a compatible TRUEOS ELF in a PMM-reserved arena;
-//! 2. checkpoint active replicatable VMX applications to TRUEOSFS;
-//! 3. park every AP through an HHDM-resident trampoline and execute VMXOFF;
+//! 2. RAM-park active VMX applications for explicit discard at commit;
+//! 3. park every AP through an HHDM-resident trampoline and execute VMXOFF
+//!    (retained Hulls defer VMXOFF until the irreversible stack switch);
 //! 4. contain PCI DMA, replace only the kernel PML4 slot, flush the TLB, and jump;
-//! 5. bring the new kernel up from copied immutable bootloader handoff facts and restore VMs.
+//! 5. bring the new kernel up from copied immutable bootloader handoff facts.
 //!
 //! No candidate-kernel bytes are written to the ESP or TRUEOSFS. Persistent
-//! storage is used only for VM application checkpoints selected by this handoff.
+//! storage is used only for checkpoints under the opt-in legacy VM lifecycle.
 
 use alloc::{format, vec::Vec};
 use core::{
@@ -478,7 +479,7 @@ fn enter_ap_transition_if_requested() {
     }
     RENDEZVOUS_ISR_ACTIVE.fetch_add(1, Ordering::AcqRel);
     // Pair pointer publication with abort-side invalidation. If abort won the
-    // race before this ISR became visible, do not dereference the arena.
+    // race before this AP became visible, do not dereference the arena.
     if ACTIVE_CONTROL_HHDM.load(Ordering::Acquire) != control_addr {
         RENDEZVOUS_ISR_ACTIVE.fetch_sub(1, Ordering::AcqRel);
         return;
@@ -915,7 +916,11 @@ pub(crate) async fn stage_and_swap(
 
     report_update(
         &target,
-        "update live: step=08/20 checkpointing active VMX apps to TRUEOSFS",
+        if cfg!(feature = "legacy_vm_checkpoint") {
+            "update live: step=08/20 checkpointing active VMX apps to TRUEOSFS"
+        } else {
+            "update live: step=08/20 parking active VMX apps in RAM; discard only at commit"
+        },
     );
     let checkpoint = checkpoint_active_vms(&spawner, &target, non_replicatable_vms).await?;
     let checkpoint_count: u32 = checkpoint
@@ -926,7 +931,8 @@ pub(crate) async fn stage_and_swap(
     staged.set_vm_plan(checkpoint.restore_mask, checkpoint.resume_mask, checkpoint.vm_heap_ranges);
     report_update(
         &target,
-        format!("update live: step=09/20 VM checkpoints committed count={}", checkpoint_count,)
+        format!("update live: step=09/20 VM plan ready restore-count={} legacy-checkpoint={}",
+            checkpoint_count, u8::from(cfg!(feature = "legacy_vm_checkpoint")))
             .as_str(),
     );
 

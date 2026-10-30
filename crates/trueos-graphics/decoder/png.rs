@@ -79,9 +79,17 @@ fn decode_png_rgba_with_limit(
     if let Some((max_bytes, _)) = limit { decoder.set_limits(png::Limits { bytes: max_bytes }); }
     let header = decoder.read_header_info().map_err(|_| PngDecodeError::Invalid)?;
     if let Some((max_bytes, max_dimension)) = limit {
-        if header.width == 0 || header.height == 0 || header.width > max_dimension || header.height > max_dimension
-            || (header.width as usize).checked_mul(header.height as usize).and_then(|n| n.checked_mul(4)).is_none_or(|n| n > max_bytes)
-        { return Err(PngDecodeError::Unsupported); }
+        let rgba_len = (header.width as usize)
+            .checked_mul(header.height as usize)
+            .and_then(|pixels| pixels.checked_mul(4));
+        if header.width == 0
+            || header.height == 0
+            || header.width > max_dimension
+            || header.height > max_dimension
+            || rgba_len.is_none_or(|len| len > max_bytes)
+        {
+            return Err(PngDecodeError::Unsupported);
+        }
     }
     let is_indexed = header.color_type == png::ColorType::Indexed;
     if is_indexed {
