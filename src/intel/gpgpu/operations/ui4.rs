@@ -53,7 +53,7 @@ pub(crate) fn queue_ui4_compositor_layers(
     let upload =
         upload_ui4_compose_layers_rgba8_kernel().ok_or(Ui4CompositorSubmitError::Unavailable)?;
     let state = ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let desc = ui4_compositor_sprite_quad_desc_buffer_once()
+    let desc = ui4_compositor_desc_buffer_once()
         .ok_or(Ui4CompositorSubmitError::Unavailable)?;
 
     unsafe {
@@ -181,7 +181,7 @@ pub(crate) fn queue_ui4_compositor_layers(
         queue_depth_at_admission: 1,
         started_tick,
         admitted_tick,
-        marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
+        marker_slot: UI4_COMPOSITOR_POST_MARKER_SLOT,
         marker_value: UI4_COMPOSE_LAYERS_POST_MARKER,
         kernel: "ui4-compose-layers",
         stats: GpgpuWorklistSubmitStats {
@@ -205,28 +205,6 @@ pub(crate) fn queue_ui4_compositor_layers(
         if base_is_dst { "dst-pat3-uc" } else { "pat0-wb" },
     );
     Ok(submission)
-}
-
-pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
-    dst: GpgpuRgba8Surface,
-    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
-) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    queue_ui4_sprite_quad_runs(dst, runs, false, "sprite-quad-runs")
-}
-
-/// Queue an arbitrary-quad Blueprint scene into its exact UI4 write lease.
-///
-/// This is deliberately a UI4 producer entry point rather than a mode on the
-/// shared direct-RCS helper. It keeps the sprite ABI while giving the request
-/// the compositor-private context, descriptor page, PPGTT, timeline, and
-/// asynchronous retirement contract. The destination is mapped with UI4's
-/// scanout cache policy because a successful final marker is published
-/// directly as the producer release for this exact allocation.
-pub(crate) fn queue_ui4_blueprint_sprite_scene(
-    dst: GpgpuRgba8Surface,
-    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
-) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    queue_ui4_sprite_quad_runs(dst, runs, true, "blueprint-sprite-scene")
 }
 
 /// Queue one ordered set of 1:1 Blueprint sprite rectangles.  This uses the
@@ -289,7 +267,7 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
     let upload =
         upload_alpha_blend_worklist_rgba8_kernel().ok_or(Ui4CompositorSubmitError::Unavailable)?;
     let state = ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let desc = ui4_compositor_sprite_quad_desc_buffer_once()
+    let desc = ui4_compositor_desc_buffer_once()
         .ok_or(Ui4CompositorSubmitError::Unavailable)?;
     if desc.bytes < ALPHA_BLEND_WORKLIST_DESC_BYTES {
         return Err(Ui4CompositorSubmitError::Unavailable);
@@ -390,148 +368,7 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
     Ok(submission)
 }
 
-fn queue_ui4_sprite_quad_runs(
-    dst: GpgpuRgba8Surface,
-    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
-    direct_scanout: bool,
-    kernel: &'static str,
-) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    // Do not call `sprite_quad_worklist_ready()` here. That helper runs the
-    // legacy synchronous smoke probe and polls its marker on the caller's CPU.
-    // UI4 calls this entry point from an Embassy task and owns an asynchronous
-    // GuC completion path below; making admission depend on the synchronous
-    // probe can time out a successfully admitted GuC request, poison the
-    // one-shot readiness flag, and prevent the real compositor request from
-    // ever being queued. Preparing and admitting this request is the capability
-    // check; its marker is validated by `poll_ui4_compositor_submission()`.
-    if !dst.is_valid() {
-        return Err(Ui4CompositorSubmitError::Unavailable);
-    }
-    let total_descs = runs
-        .iter()
-        .try_fold(0usize, |total, run| total.checked_add(run.descs.len()))
-        .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
-    if runs.is_empty()
-        || total_descs == 0
-        || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS
-        || runs.iter().any(|run| run.descs.is_empty())
-    {
-        return Err(Ui4CompositorSubmitError::InvalidWorklist);
-    }
 
-    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
-    if !runtime.pending.is_empty() {
-        return Err(Ui4CompositorSubmitError::Busy);
-    }
-    let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let upload =
-        upload_sprite_quad_worklist_rgba8_kernel().ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let state = ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let desc = ui4_compositor_sprite_quad_desc_buffer_once()
-        .ok_or(Ui4CompositorSubmitError::Unavailable)?;
-
-    unsafe {
-        core::ptr::write_bytes(desc.virt, 0, desc.bytes);
-        let out = desc.virt as *mut GpgpuSpriteQuadWorklistDesc;
-        let mut index = 0usize;
-        for run in runs {
-            for descriptor in run.descs.iter().copied() {
-                core::ptr::write_volatile(out.add(index), descriptor);
-                index = index.saturating_add(1);
-            }
-        }
-    }
-    super::dma_flush(desc.virt, desc.bytes);
-
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, state));
-    if mapped_ok {
-        runtime.state_mapped = true;
-    }
-    let ppgtt_ok = mapped_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(state));
-    if ppgtt_ok {
-        runtime.ppgtt_initialized = true;
-    }
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok = kernel_ppgtt_ok
-        && if direct_scanout {
-            direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
-        } else {
-            direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes)
-        };
-    let desc_ppgtt_ok =
-        dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
-    let mut src_ppgtt_ok = desc_ppgtt_ok;
-    if src_ppgtt_ok {
-        for run in runs {
-            if !direct_rcs_map_ppgtt_kernel(state, run.src.gpu, run.src.phys, run.src.bytes) {
-                src_ppgtt_ok = false;
-                break;
-            }
-        }
-    }
-    let batch_ok = src_ppgtt_ok
-        && direct_rcs_encode_sprite_quad_worklist_runs_batch(state, upload, dst, desc, runs);
-    if !batch_ok {
-        crate::log_error!(target: "ui4";
-            "ui4/guc-compositor: queue rejected stage=prepare request={} forcewake={} mapped={} ppgtt={} kernel={} dst={} dst_cache={} desc={} src={} batch={} descs={}\n",
-            kernel,
-            forcewake_ok as u8,
-            mapped_ok as u8,
-            ppgtt_ok as u8,
-            kernel_ppgtt_ok as u8,
-            dst_ppgtt_ok as u8,
-            if direct_scanout { "pat3-uc" } else { "pat0-wb" },
-            desc_ppgtt_ok as u8,
-            src_ppgtt_ok as u8,
-            batch_ok as u8,
-            total_descs,
-        );
-        return Err(Ui4CompositorSubmitError::InvalidWorklist);
-    }
-    let started_tick = direct_rcs_now_tick();
-    let Some(gpu) = direct_rcs_submit_batch_with_runtime(
-        dev,
-        state,
-        &mut runtime.submit,
-        crate::gpu::vgpu::KernelClient::Ui4Compositor,
-        true,
-    ) else {
-        return Err(Ui4CompositorSubmitError::SubmissionRejected);
-    };
-    let admitted_tick = direct_rcs_now_tick();
-    runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
-    let serial = runtime.next_serial;
-    let submission = Ui4CompositorSubmission { serial, gpu };
-    runtime.pending.push_back(Ui4CompositorPending {
-        submission,
-        job_slot: 0,
-        queue_depth_at_admission: 1,
-        started_tick,
-        admitted_tick,
-        marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
-        marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
-        kernel,
-        stats: GpgpuWorklistSubmitStats {
-            descs: total_descs,
-            walkers: total_descs,
-            submits: 1,
-            submit_ms: 0,
-            probe: GpgpuSubmissionProbe::default(),
-        },
-        overdue_logged: false,
-    });
-    crate::log_trace!(target: "ui4";
-        "ui4/guc-compositor: queued serial={} kernel={} descs={} dst_gpu=0x{:X} dst_cache={} context=isolated persistent=1 wait=none\n",
-        serial,
-        kernel,
-        total_descs,
-        dst.gpu,
-        if direct_scanout { "pat3-uc" } else { "pat0-wb" },
-    );
-    Ok(submission)
-}
 
 /// Convert one decoder-retired media-Y-tiled NV12 picture directly into the
 /// exact leased UI4 RGBA allocation. The older `Tile64` symbol names are kept
@@ -723,8 +560,8 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         queue_depth_at_admission,
         started_tick,
         admitted_tick,
-        marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
-        marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
+        marker_slot: UI4_COMPOSITOR_POST_MARKER_SLOT,
+        marker_value: UI4_COMPOSITOR_POST_MARKER,
         kernel: "nv12-media-ytile-rgba8-frame",
         stats: GpgpuWorklistSubmitStats {
             descs: 1,

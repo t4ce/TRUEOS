@@ -273,6 +273,8 @@ pub const OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1: u32 = 0x12F; // packed size/windo
 pub const OP_BP_UI4_NATIVE_COMPUTE_UPLOAD_V1: u32 = 0x236;
 pub const OP_BP_UI4_NATIVE_COMPUTE_RENDER_V1: u32 = 0x237;
 pub const OP_BP_UI4_NATIVE_COMPUTE_RENDER_V2: u32 = 0x240;
+pub const OP_BP_UI4_NATIVE_COMPUTE_FIELDS_UPLOAD_V1: u32 = 0x241;
+pub const OP_BP_UI4_NATIVE_COMPUTE_FIELDS_RENDER_V1: u32 = 0x242;
 pub const OP_BP_UI4_NATIVE_COMPUTE_DISPATCH_V1: u32 = 0x238;
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
@@ -2267,6 +2269,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32,
                 arg1 as usize, (arg0 >> 32) as usize, payload,
             );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_NATIVE_COMPUTE_FIELDS_UPLOAD_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui4::blueprint_ui4::native_compute_api::fields_upload_chunk(
+                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32,
+                arg1 as usize, (arg0 >> 32) as usize, payload);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_NATIVE_COMPUTE_FIELDS_RENDER_V1 => {
+            let rc = if req_len != 0 { -22 } else {
+                crate::ui4::blueprint_ui4::native_compute_api::fields_render(
+                    crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32)
+            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

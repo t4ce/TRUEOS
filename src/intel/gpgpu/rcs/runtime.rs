@@ -672,9 +672,7 @@ fn direct_rcs_ppgtt_pte_flags() -> u64 {
     super::GEN8_PAGE_PRESENT | GEN8_PAGE_RW
 }
 
-fn direct_rcs_ppgtt_limit_bytes() -> u64 {
-    DIRECT_RCS_PPGTT_LIMIT_BYTES
-}
+
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum DirectRcsPpgttMapResult {

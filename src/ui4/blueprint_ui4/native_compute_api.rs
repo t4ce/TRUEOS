@@ -8,7 +8,8 @@ use crate::intel::gpgpu::{
     GeneratedPixelParamsV1, GeneratedPixelProgram, NativeKernelProgram,
     create_generated_pixel_program, create_native_grid_pixel_program,
     create_native_kernel_program, dispatch_native_kernel,
-    generated_pixel_rgba8_surface_full,
+    generated_pixel_rgba8_surface_full, generated_field_rgba8_surface_full,
+    create_native_field_pixel_program, GENERATED_FIELD_BYTES,
 };
 use alloc::vec::Vec;
 
@@ -21,6 +22,9 @@ pub(super) struct NativeComputeState {
     upload: Option<CodeUpload>,
     program: Option<GeneratedPixelProgram>,
     kernel: Option<NativeKernelProgram>,
+    field_program: Option<GeneratedPixelProgram>,
+    field_upload: Option<CodeUpload>,
+    fields: Option<Vec<u8>>,
 }
 
 struct CodeUpload {
@@ -88,6 +92,7 @@ pub(crate) fn upload_chunk(
         if offset == 0 {
             surface.native_compute.program = None;
             surface.native_compute.kernel = None;
+            surface.native_compute.field_program = None;
             let mut staging = Vec::new();
             if staging.try_reserve_exact(total).is_err() {
                 return ERROR_UI4;
@@ -130,6 +135,7 @@ pub(crate) fn upload_chunk(
     crate::log_info!(target: "gpgpu";
         "odin-native: program registered owner={:?} window={} bytes={} admission=runtime-generated\n",
         owner, window_id, complete.bytes.len());
+    surface.native_compute.field_program = create_native_field_pixel_program(&complete.bytes).ok();
     surface.native_compute.program = pixel;
     surface.native_compute.kernel = kernel;
     0
@@ -364,4 +370,89 @@ pub(crate) fn dispatch_wire(
         "odin-native: dispatch owner={:?} window={} bytes={} sha256={:02x?} simd=8 registers={} status={}\n",
         owner, window_id, bytes, digest, registers, result.as_ref().err().map_or(0, |e| e.0));
     result.map_err(|(rc, _)| rc)
+}
+
+/// Six planar 192x144 finite f32 fields, consumed as SIMD8 r1..r6 by uploaded code.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_native_compute_fields_upload_v1(
+    window_id: u32, offset: u32, total: u32, bytes: *const u8, len: usize,
+) -> i32 {
+    if !cfg!(feature = "odin-native-gpgpu") { return ERROR_UNSUPPORTED; }
+    if bytes.is_null() || len == 0 || len > MAX_CHUNK_BYTES { return ERROR_INVALID; }
+    let data = unsafe { core::slice::from_raw_parts(bytes, len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(trueos_vm::vmcall::OP_BP_UI4_NATIVE_COMPUTE_FIELDS_UPLOAD_V1,
+            (u64::from(total) << 32) | u64::from(window_id), u64::from(offset), data);
+    }
+    let Some(owner) = blueprint_owner() else { return ERROR_CONTEXT; };
+    fields_upload_chunk(owner, window_id, offset as usize, total as usize, data)
+}
+
+pub(crate) fn fields_upload_chunk(
+    owner: WindowOwner, window_id: u32, offset: usize, total: usize, data: &[u8],
+) -> i32 {
+    if !cfg!(feature = "odin-native-gpgpu") { return ERROR_UNSUPPORTED; }
+    if total != GENERATED_FIELD_BYTES || data.is_empty() || data.len() > MAX_CHUNK_BYTES
+        || offset % 4 != 0 || data.len() % 4 != 0
+        || data.chunks_exact(4).any(|v| !f32::from_le_bytes(v.try_into().unwrap()).is_finite())
+    { return ERROR_INVALID; }
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
+    if surface.visual_cadence.is_none() { return ERROR_INVALID; }
+    if surface.gpu_submission_unretired { return ERROR_BUSY; }
+    let state = &mut surface.native_compute;
+    if offset == 0 {
+        state.fields = None;
+        let mut bytes = Vec::new();
+        if bytes.try_reserve_exact(total).is_err() { return ERROR_UI4; }
+        state.field_upload = Some(CodeUpload { total, bytes });
+    }
+    let Some(upload) = state.field_upload.as_mut() else { return ERROR_STATE; };
+    if upload.total != total || offset != upload.bytes.len() || data.len() > total.saturating_sub(offset) {
+        state.field_upload = None;
+        return ERROR_INVALID;
+    }
+    upload.bytes.extend_from_slice(data);
+    if upload.bytes.len() == total {
+        state.fields = Some(state.field_upload.take().unwrap().bytes);
+    }
+    0
+}
+
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_native_compute_fields_render_v1(window_id: u32) -> i32 {
+    if !cfg!(feature = "odin-native-gpgpu") { return ERROR_UNSUPPORTED; }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(trueos_vm::vmcall::OP_BP_UI4_NATIVE_COMPUTE_FIELDS_RENDER_V1,
+            u64::from(window_id), 0, &[]);
+    }
+    let Some(owner) = blueprint_owner() else { return ERROR_CONTEXT; };
+    fields_render(owner, window_id)
+}
+
+pub(crate) fn fields_render(owner: WindowOwner, window_id: u32) -> i32 {
+    if !cfg!(feature = "odin-native-gpgpu") { return ERROR_UNSUPPORTED; }
+    let (lease, destination, program, fields) = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
+        if surface.gpu_submission_unretired { return ERROR_BUSY; }
+        let Some(lease) = surface.write_lease else { return ERROR_STATE; };
+        if surface.pending_gpu_release.is_some() || surface.pending_render_release.is_some() { return ERROR_STATE; }
+        let Ok(destination) = gpgpu_rgba_surface(lease) else { return ERROR_UI4; };
+        if surface.native_compute.field_program.is_none() || surface.native_compute.fields.is_none() { return ERROR_STATE; }
+        let program = surface.native_compute.field_program.take().unwrap();
+        let fields = surface.native_compute.fields.take().unwrap();
+        surface.gpu_submission_unretired = true;
+        (lease, destination, program, fields)
+    };
+    let result = generated_field_rgba8_surface_full(&program, destination, &fields);
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
+    surface.native_compute.field_program = Some(program);
+    surface.native_compute.fields = Some(fields);
+    if surface.write_lease != Some(lease) { return ERROR_STATE; }
+    if result.ok || !result.submitted { surface.gpu_submission_unretired = false; }
+    if result.ok {
+        let Some(release) = result.release else { return ERROR_UI4; };
+        surface.pending_gpu_release = Some(release);
+        0
+    } else if result.submitted { ERROR_UI4 } else { ERROR_BUSY }
 }

@@ -162,7 +162,6 @@ const OVERLAY_COMPOSE_RCS_GPU_PLANE_STRIDE: u64 = 0x0200_0000;
 // Never run the synchronous UI4 compositor through the general GPGPU LRC.
 // Video conversion and fonts own that queue.  UI4 is re-enabled only through
 // its isolated asynchronous compositor context.
-const UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED: bool = false;
 const OVERLAY_SWAP_GPU_BASE: u64 = 0x1800_0000;
 const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
 const OVERLAY_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
@@ -5133,9 +5132,6 @@ pub(crate) fn queue_ui4_overlay_composition(
         surface,
         tiles,
         effective,
-        true,
-        sparse_static_painter,
-        destination_fresh_transparent,
     ) {
         GpgpuCompositionResult::Queued(gpu) => {
             // The accepted GPU request now owns this destination. A later
@@ -5890,15 +5886,8 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
     surface: OverlaySurface,
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
-    asynchronous: bool,
-    sparse_static_painter: bool,
-    destination_fresh_transparent: bool,
-) -> GpgpuCompositionResult {
-    if surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, surface.plane_slot)
-        || (!asynchronous
-            && (!UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED
-                || !crate::intel::gpgpu::sprite_quad_worklist_ready()))
-    {
+ ) -> GpgpuCompositionResult {
+    if surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, surface.plane_slot) {
         return GpgpuCompositionResult::Unavailable;
     }
     let Some(destination_gpu) = overlay_compose_rcs_gpu_for_surface(surface) else {
@@ -5915,7 +5904,7 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
         return GpgpuCompositionResult::Unavailable;
     };
 
-    if asynchronous && !sparse_static_painter {
+    {
         let Some(bounds) = damage
             .bounding_rect()
             .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
@@ -5973,167 +5962,6 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
         };
     }
 
-    // New overlay allocations are synchronously zero-filled and cache-flushed
-    // before they are mapped. For the immutable sparse painter that is already
-    // the required transparent base, so its first composition must not launch
-    // an otherwise redundant 2560x1440 clear. Once a destination has carried
-    // content, ordinary damage-local clears remain in the same ordered batch.
-    let clear_descriptors = if sparse_static_painter && destination_fresh_transparent {
-        Vec::new()
-    } else {
-        damage
-            .rects()
-            .iter()
-            .copied()
-            .map(|rect| {
-                composition_quad_descriptor(
-                    rect,
-                    0,
-                    0,
-                    surface.width,
-                    surface.height,
-                    u8::MAX,
-                    crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_CLEAR,
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let mut descriptors = Vec::with_capacity(tiles.len());
-    for tile in tiles {
-        let Some(source) = tile.gpgpu_surface else {
-            return GpgpuCompositionResult::Unavailable;
-        };
-        if !source.is_valid()
-            || source.width != tile.source_width
-            || source.height != tile.source_height
-            || source.pitch_bytes as usize != tile.pitch_bytes
-            || tile.width == 0
-            || tile.height == 0
-            || gpgpu_ranges_overlap(destination.gpu, destination.bytes, source.gpu, source.bytes)
-        {
-            return GpgpuCompositionResult::Unavailable;
-        }
-
-        let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
-        let mut tile_descriptors = Vec::new();
-        for damaged in damage.rects() {
-            let Some(draw) = intersect_composition_damage(tile_rect, *damaged)
-                .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
-            else {
-                continue;
-            };
-            tile_descriptors.push(composition_quad_descriptor(
-                draw,
-                tile.x,
-                tile.y,
-                tile.width,
-                tile.height,
-                tile.opacity,
-                crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
-                    | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
-            ));
-        }
-        descriptors.push((source, tile_descriptors));
-    }
-
-    let expected_descriptors = clear_descriptors.len().saturating_add(
-        descriptors
-            .iter()
-            .map(|(_, descriptors)| descriptors.len())
-            .sum::<usize>(),
-    );
-    if expected_descriptors > crate::intel::gpgpu::sprite_quad_worklist_max_descs() {
-        return GpgpuCompositionResult::Unavailable;
-    }
-    let mut runs = Vec::with_capacity(descriptors.len().saturating_add(1));
-    if !clear_descriptors.is_empty() {
-        runs.push(crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
-            // CLEAR descriptors never sample this binding; using the
-            // destination keeps the run valid without another allocation.
-            src: destination,
-            descs: &clear_descriptors,
-        });
-    }
-    runs.extend(
-        descriptors
-            .iter()
-            .filter(|(_, descriptors)| !descriptors.is_empty())
-            .map(|(src, descriptors)| crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
-                src: *src,
-                descs: descriptors,
-            }),
-    );
-    if runs.is_empty() {
-        return GpgpuCompositionResult::Complete;
-    }
-    if asynchronous {
-        return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(destination, &runs)
-        {
-            Ok(submission) => GpgpuCompositionResult::Queued(submission),
-            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
-                GpgpuCompositionResult::SubmittedIncomplete
-            }
-            Err(_) => GpgpuCompositionResult::Unavailable,
-        };
-    }
-    let result =
-        crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(destination, &runs);
-    match result.outcome {
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete
-            if result.stats.descs == expected_descriptors && result.stats.submits == 1 =>
-        {
-            GpgpuCompositionResult::Complete
-        }
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete => {
-            GpgpuCompositionResult::SubmittedIncomplete
-        }
-        _ => GpgpuCompositionResult::Unavailable,
-    }
-}
-
-fn composition_quad_descriptor(
-    draw: CompositionDamageRect,
-    source_origin_x: u32,
-    source_origin_y: u32,
-    destination_extent_width: u32,
-    destination_extent_height: u32,
-    opacity: u8,
-    flags: u32,
-) -> crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
-    let left = draw.x as f32;
-    let top = draw.y as f32;
-    let right = draw.x.saturating_add(draw.width) as f32;
-    let bottom = draw.y.saturating_add(draw.height) as f32;
-    // The kernel evaluates UV at destination pixel centers. Offset by half a
-    // destination pixel so nearest sampling exactly matches the CPU fallback:
-    // floor(destination_coordinate * source_extent / destination_extent).
-    let source_x = draw.x.saturating_sub(source_origin_x) as f32;
-    let source_y = draw.y.saturating_sub(source_origin_y) as f32;
-    let u0 = (source_x - 0.5) / destination_extent_width as f32;
-    let v0 = (source_y - 0.5) / destination_extent_height as f32;
-    let u1 = (source_x + draw.width as f32 - 0.5) / destination_extent_width as f32;
-    let v1 = (source_y + draw.height as f32 - 0.5) / destination_extent_height as f32;
-    crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
-        c0_x: left,
-        c0_y: top,
-        c0_u: u0,
-        c0_v: v0,
-        c1_x: right,
-        c1_y: top,
-        c1_u: u1,
-        c1_v: v0,
-        c2_x: right,
-        c2_y: bottom,
-        c2_u: u1,
-        c2_v: v1,
-        c3_x: left,
-        c3_y: bottom,
-        c3_u: u0,
-        c3_v: v1,
-        color_rgba: u32::from_le_bytes([opacity, opacity, opacity, opacity]),
-        flags,
-    }
 }
 
 fn gpgpu_ranges_overlap(

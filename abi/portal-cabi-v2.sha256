@@ -1,3 +1,4 @@
+# Additive bounded owner/window-scoped native water field upload/render v1; existing signatures unchanged.
 # Additive native pixel render v2 with six scalar uniforms; every existing signature verified unchanged.
 # Additive asynchronous owner/window-scoped Hull image lifecycle v1; every previous signature unchanged.
 # Additive UI4 collapse activation v1; all existing signatures unchanged.
@@ -36,4 +37,4 @@
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
 # Additive owner-bound Spirit agent snapshot v1; every existing declaration unchanged.
 # Additive launch-scoped placement and continuation-scoped role/activity v1; all prior signatures verified unchanged.
-bb8becb74d7c92c97f83e35da5013f93e72a2e62c8e2240233f14053f1814e93
+14ba897959d6b21a5fd1d5057087f004889d767b67c23bbe998b9ffbed84cc51

@@ -1,5 +1,4 @@
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
-const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D37_0000;
 const UI4_COMPOSE_LAYERS_RGBA8_ADLS_GPU: u64 = 0x0D3E_0000;
 
 const ALPHA_BLEND_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D30_0000;
@@ -30,8 +29,6 @@ const UI4_NV12_TILE64_TO_RGBA8_FRAME_TEXT_OFFSET_BYTES: u64 =
 const ALPHA_BLEND_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 =
     ALPHA_BLEND_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 
-const SPRITE_QUAD_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 =
-    SPRITE_QUAD_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const UI4_COMPOSE_LAYERS_RGBA8_TEXT_OFFSET_BYTES: u64 =
     UI4_COMPOSE_LAYERS_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 
@@ -261,41 +258,12 @@ const ALPHA_BLEND_WORKLIST_CROSS_THREAD_BYTES: usize =
 const ALPHA_BLEND_WORKLIST_INDIRECT_BYTES: usize =
     ALPHA_BLEND_WORKLIST_CROSS_THREAD_BYTES + RECT_WORKLIST_PER_THREAD_BYTES;
 const _: () = assert!(ALPHA_BLEND_WORKLIST_INDIRECT_BYTES == RECT_WORKLIST_INDIRECT_BYTES);
-// The 2D kernel consumes global/local/enqueued-local payload fields before its
-// three pointers and scalar arguments.  The baked ADL-S artifact therefore
-// declares 104 bytes of cross-thread data, rounded to four 32-byte GRFs.
-const SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS: u32 = 4;
-const SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES: usize =
-    SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS as usize * 32;
-const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: usize = 96;
-const SPRITE_QUAD_WORKLIST_INDIRECT_BYTES: usize =
-    SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES + SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES;
-// Like glyph-mask payloads above, the 224 useful bytes are legal but each
-// GPGPU_WALKER indirect-data start is encoded at 64-byte granularity. Keep the
-// useful length in the command while placing consecutive payloads in aligned
-// 256-byte slots.
-const SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES: usize =
-    (SPRITE_QUAD_WORKLIST_INDIRECT_BYTES + GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES - 1)
-        & !(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES - 1);
 const UI4_COMPOSE_LAYERS_CROSS_THREAD_GRFS: u32 = 4;
 const UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES: usize =
     UI4_COMPOSE_LAYERS_CROSS_THREAD_GRFS as usize * 32;
 const UI4_COMPOSE_LAYERS_PER_THREAD_BYTES: usize = 96;
 const UI4_COMPOSE_LAYERS_INDIRECT_BYTES: usize =
     UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES + UI4_COMPOSE_LAYERS_PER_THREAD_BYTES;
-const SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES: usize = 0x140;
-// The sprite path can emit one walker plus an ordering flush per descriptor.
-// Its maximum command stream is therefore much larger than the older rect
-// worklists and must not share their 0x1400 state offset.  Keep the first 32
-// KiB exclusively for commands, followed by texture/run state and payloads.
-const SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES: usize = 0x8000;
-const SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES: usize =
-    SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
-const SPRITE_QUAD_WORKLIST_RUN_IDD_REL: usize = 0x00;
-const SPRITE_QUAD_WORKLIST_RUN_BINDING_REL: usize = 0x40;
-const SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL: usize = 0x80;
-const SPRITE_QUAD_WORKLIST_RUN_DST_SURFACE_REL: usize = 0xC0;
-const SPRITE_QUAD_WORKLIST_RUN_DESC_SURFACE_REL: usize = 0x100;
 const RECT_WORKLIST_PRE_MARKER_SLOT: usize = 15;
 const RECT_WORKLIST_POST_MARKER_SLOT: usize = 14;
 const ALPHA_BLEND_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5A01;
@@ -304,20 +272,22 @@ const ALPHA_BLEND_WORKLIST_POST_MARKER: u32 = 0xC0DE_5A02;
 // PIPE_CONTROL completion writes a QWord at POST and POST + 1.  Keep the
 // diagnostic pre-dispatch cookie outside that pair; slot 25 used to be
 // silently cleared by the high DWORD of the completion write.
-const SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT: usize = 32;
-const SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT: usize = 24;
-const SPRITE_QUAD_WORKLIST_PRE_MARKER: u32 = 0xC0DE_5B01;
-const SPRITE_QUAD_WORKLIST_POST_MARKER: u32 = 0xC0DE_5B02;
+const UI4_COMPOSITOR_PRE_MARKER_SLOT: usize = 32;
+const UI4_COMPOSITOR_POST_MARKER_SLOT: usize = 24;
+const UI4_COMPOSITOR_PRE_MARKER: u32 = 0xC0DE_5B01;
+const UI4_COMPOSITOR_POST_MARKER: u32 = 0xC0DE_5B02;
 const UI4_COMPOSE_LAYERS_PRE_MARKER: u32 = 0xC0DE_4C01;
 const UI4_COMPOSE_LAYERS_POST_MARKER: u32 = 0xC0DE_4C02;
-const _: () = assert!(SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT.is_multiple_of(2));
+const _: () = assert!(UI4_COMPOSITOR_POST_MARKER_SLOT.is_multiple_of(2));
 const _: () = assert!(
-    SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT != SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT
-        && SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT != SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT + 1
+    UI4_COMPOSITOR_PRE_MARKER_SLOT != UI4_COMPOSITOR_POST_MARKER_SLOT
+        && UI4_COMPOSITOR_PRE_MARKER_SLOT != UI4_COMPOSITOR_POST_MARKER_SLOT + 1
 );
 
 const RECT_WORKLIST_DESC_GPU: u64 = 0x05A0_0000;
-const SPRITE_QUAD_WORKLIST_DESC_GPU: u64 = 0x05C0_0000;
+const UI4_COMPOSITOR_DESC_GPU: u64 = 0x05C0_0000;
+// Shared only by the layer, alpha-rectangle and video service payloads.
+const UI4_COMPOSITOR_DESC_BYTES: usize = 8192;
 const RECT_WORKLIST_MAX_DESCS: usize = 256;
 const RECT_WORKLIST_DESCS_PER_WALKER: usize = 16;
 const RECT_WORKLIST_MAX_WALKERS: usize = RECT_WORKLIST_MAX_DESCS / RECT_WORKLIST_DESCS_PER_WALKER;
@@ -325,19 +295,7 @@ const RECT_WORKLIST_DESC_BYTES: usize = 8192;
 const ALPHA_BLEND_WORKLIST_MAX_DESCS: usize = RECT_WORKLIST_MAX_DESCS;
 const ALPHA_BLEND_WORKLIST_DESC_BYTES: usize =
     ALPHA_BLEND_WORKLIST_MAX_DESCS * core::mem::size_of::<GpgpuAlphaBlendWorklistDesc>();
-const SPRITE_QUAD_WORKLIST_MAX_DESCS: usize = 256;
-const SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER: usize = 1;
-const SPRITE_QUAD_WORKLIST_MAX_WALKERS: usize = SPRITE_QUAD_WORKLIST_MAX_DESCS;
-const SPRITE_QUAD_WORKLIST_DESCRIPTOR_ARRAY_BYTES: usize =
-    SPRITE_QUAD_WORKLIST_MAX_DESCS * core::mem::size_of::<GpgpuSpriteQuadWorklistDesc>();
-const SPRITE_QUAD_TILEMAP_STATE_OFFSET_BYTES: usize = SPRITE_QUAD_WORKLIST_DESCRIPTOR_ARRAY_BYTES;
-const SPRITE_QUAD_WORKLIST_DESC_BYTES: usize = SPRITE_QUAD_TILEMAP_STATE_OFFSET_BYTES
-    + SPRITE_QUAD_TILEMAP_STATE_MAX_DWORDS * core::mem::size_of::<u32>();
-const SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER: usize = SPRITE_QUAD_WORKLIST_MAX_DESCS;
 const UI4_COMPOSE_LAYERS_MAX_LAYERS: usize = 32;
-// Match the shader's one-work-item-per-pixel contract. A previous 64-row
-// serial lane tile was the source of partial horizontal compositor strips.
-const SPRITE_QUAD_WORKLIST_TILE_ROWS: u32 = 1;
 const SKYBOX_SAMPLE_IDD_OFFSET_BYTES: usize = 0x4200;
 const SKYBOX_SAMPLE_BINDING_TABLE_OFFSET_BYTES: usize = 0x4240;
 const SKYBOX_SAMPLE_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x4280;
@@ -589,31 +547,6 @@ const DIRECT_RCS_RING_BYTES: usize = 4096;
 const DIRECT_RCS_CONTEXT_BYTES: usize = 22 * 4096;
 const DIRECT_RCS_BATCH_BYTES: usize = 256 * 1024;
 const EXECUTION_RCS_JOB_SLOTS: usize = 2;
-// Worst case: every descriptor changes texture, so each contributes one
-// four-DWORD IDD load, one 15-DWORD walker, one two-DWORD state flush, and one
-// six-DWORD ordering PIPE_CONTROL.  The fixed allowance covers the prologue,
-// markers, and epilogue.  These assertions make command/state aliasing a
-// build-time failure instead of a GPU hang.
-const SPRITE_QUAD_WORKLIST_MAX_COMMAND_DWORDS: usize = 128 + SPRITE_QUAD_WORKLIST_MAX_DESCS * 27;
-const _: () = assert!(
-    SPRITE_QUAD_WORKLIST_MAX_COMMAND_DWORDS * core::mem::size_of::<u32>()
-        <= SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
-);
-const _: () = assert!(
-    SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
-        + SPRITE_QUAD_WORKLIST_MAX_DESCS * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES
-        + SPRITE_QUAD_WORKLIST_MAX_DESCS * SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES
-        <= DIRECT_RCS_BATCH_BYTES
-);
-const _: () = assert!(
-    SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES
-        .is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
-);
-const _: () = assert!(
-    SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
-);
-const _: () =
-    assert!(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES >= SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
 const DIRECT_RCS_RESULT_BYTES: usize = 4096;
 const _: () = assert!(
     (UI4_VIDEO_FRAME_GPU_POST_RELEASE_TIMESTAMP_SLOT + 2) * core::mem::size_of::<u32>()
@@ -735,7 +668,6 @@ const _: () = assert!(
         + (UI4_COMPOSITOR_RCS_JOB_SLOTS * DIRECT_RCS_RESULT_BYTES) as u64
         <= UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE
 );
-const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
 const DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS: usize = 64;
 
 const _: () = {

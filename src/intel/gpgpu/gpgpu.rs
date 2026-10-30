@@ -42,7 +42,6 @@ include!("operations/native_kernel.rs");
 include!("operations/generated_pixel.rs");
 include!("operations/svg_outline.rs");
 include!("operations/solid_rects.rs");
-include!("operations/sprite_quad_worklist.rs");
 include!("operations/ui4.rs");
 include!("operations/surfaces.rs");
 include!("operations/spirit_vfx.rs");

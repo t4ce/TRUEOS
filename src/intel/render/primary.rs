@@ -130,6 +130,9 @@ pub(crate) enum ResidentSceneFragmentContract {
     /// Immutable source-cell geometry, GPU width/scale expansion, R8 coverage.
     MicrofontMask(u64),
     ClipPosition3UvTexture,
+    ClipPosition3UvTexturePremultiplied,
+    ClipPosition3UvTextureCopy,
+    ConstantRgbaCopy,
     VoxyHeadless,
     VoxyHeadlessTexture,
     VoxyFigure,
@@ -149,10 +152,12 @@ fn resident_scene_shader_pipeline(
         {
             Ok(crate::intel::shader::microfont_mask_pipeline())
         }
-        (ResidentSceneFragmentContract::ConstantRgba, false) => {
+        (ResidentSceneFragmentContract::ConstantRgba | ResidentSceneFragmentContract::ConstantRgbaCopy, false) => {
             Ok(crate::intel::shader::triangle_pipeline_simd16())
         }
-        (ResidentSceneFragmentContract::ClipPosition3UvTexture, true)
+        (ResidentSceneFragmentContract::ClipPosition3UvTexture
+            | ResidentSceneFragmentContract::ClipPosition3UvTexturePremultiplied
+            | ResidentSceneFragmentContract::ClipPosition3UvTextureCopy, true)
             if vertex_format == TriangleVertexFormat::PosUv && vertex_stride == 20 =>
         {
             Ok(crate::intel::shader::clip_position3_uv_texture_pipeline())
@@ -3170,7 +3175,10 @@ fn submit_resident_scene_geometry_batched(
             (TriangleBlendProbeMode::StraightAlpha, None)
         };
         let blend_mode = match scene_draw.fragment_contract {
-            ResidentSceneFragmentContract::VoxyFigure => TriangleBlendProbeMode::MesaZeroedState,
+            ResidentSceneFragmentContract::VoxyFigure
+            | ResidentSceneFragmentContract::ConstantRgbaCopy
+            | ResidentSceneFragmentContract::ClipPosition3UvTextureCopy => TriangleBlendProbeMode::MesaZeroedState,
+            ResidentSceneFragmentContract::ClipPosition3UvTexturePremultiplied => TriangleBlendProbeMode::PremultipliedAlpha,
             ResidentSceneFragmentContract::MicrofontMask(_) => {
                 TriangleBlendProbeMode::StraightAlpha
             }

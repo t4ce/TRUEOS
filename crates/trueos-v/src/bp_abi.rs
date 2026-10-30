@@ -1027,6 +1027,13 @@ unsafe extern "C" {
         window_id: u32, params: *const f32, len: usize,
     ) -> i32;
 
+    /// Six planar 192x144 f32 fields, uploaded in sequential chunks of at most 2048 bytes.
+    pub fn trueos_cabi_ui4_scene_native_compute_fields_upload_v1(
+        window_id: u32, offset: u32, total: u32, bytes: *const u8, len: usize,
+    ) -> i32;
+    /// The uploaded SIMD8 shader receives fields in r1..r6 and returns packed 24-bit RGB as f32.
+    pub fn trueos_cabi_ui4_scene_native_compute_fields_render_v1(window_id: u32) -> i32;
+
     pub fn trueos_cabi_poll_once();
     pub fn trueos_cabi_sleep_ms(ms: u64);
     pub fn trueos_cabi_thread_current_id() -> usize;

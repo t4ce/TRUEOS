@@ -10,9 +10,6 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME: &str =
     "ui4_nv12_tile64_to_rgba8_frame";
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_nv12_tile64_to_rgba8_frame.clcpp");
-pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME: &str = "sprite_quad_worklist_rgba8";
-pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/sprite_quad_worklist_rgba8.clcpp");
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME: &str = "ui4_compose_layers_rgba8";
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_compose_layers_rgba8.clcpp");
@@ -70,7 +67,6 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some(UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE)
         }
-        SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE),
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => Some(UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE),
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => None,
         CPP_DEMO_RGBA8_KERNEL_NAME => None,
@@ -102,9 +98,6 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
 
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_nv12_tile64_to_rgba8_frame.clcpp")
-        }
-        SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/sprite_quad_worklist_rgba8.clcpp")
         }
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_compose_layers_rgba8.clcpp")
@@ -144,7 +137,6 @@ include!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/helio_retained_transform.contract.rs");
 
 include!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.contract.rs");
-include!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.contract.rs");
 embedded_compute_artifact!(pub(crate) COPY_RECT_RGBA8_ADLS_BIN, COPY_RECT_RGBA8_ADLS_SPV,
@@ -235,10 +227,6 @@ embedded_compute_artifact!(pub(crate) ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN, ALPHA
 embedded_compute_artifact!(pub(crate) UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN, UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV,
     UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_STORAGE,
     "kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.bin"
-);
-embedded_compute_artifact!(pub(crate) SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN, SPRITE_QUAD_WORKLIST_RGBA8_ADLS_SPV,
-    SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_STORAGE,
-    "kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.bin"
 );
 embedded_compute_artifact!(pub(crate) UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN, UI4_COMPOSE_LAYERS_RGBA8_ADLS_SPV,
     UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN_STORAGE,

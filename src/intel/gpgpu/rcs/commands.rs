@@ -182,44 +182,7 @@ fn direct_rcs_push_rect_worklist_walker(
         && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
 }
 
-fn direct_rcs_push_sprite_quad_worklist_walker(
-    batch: &mut [u32],
-    cursor: &mut usize,
-    payload_offset: usize,
-    group_x: u32,
-    group_y: u32,
-    right_mask: u32,
-) -> bool {
-    if group_x == 0
-        || group_y == 0
-        || group_x as usize > SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER
-        || !payload_offset.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
-        || payload_offset
-            .checked_add(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES)
-            .is_none_or(|end| end > DIRECT_RCS_BATCH_BYTES)
-    {
-        return false;
-    }
-    direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, SPRITE_QUAD_WORKLIST_INDIRECT_BYTES as u32)
-        && direct_rcs_push(batch, cursor, payload_offset as u32)
-        && direct_rcs_push(
-            batch,
-            cursor,
-            (GPGPU_WALKER_SIMD16_SELECT << 30) | (GPGPU_WALKER_GROUP_THREADS - 1),
-        )
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, group_x)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, group_y)
-        && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, GPGPU_WALKER_GROUP_Z_DIM)
-        && direct_rcs_push(batch, cursor, right_mask)
-        && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
-}
+
 
 fn direct_rcs_push_state_base_address(
     batch: &mut [u32],
@@ -784,9 +747,7 @@ fn execution_rcs_retirement_proof(
     direct_rcs_retirement_proof_on_lane(state, DirectRcsLane::Execution, marker_observed)
 }
 
-fn complete_direct_rcs_submission() {
-    complete_direct_rcs_submission_on_lane(DirectRcsLane::SystemService);
-}
+
 
 fn complete_execution_rcs_submission() {
     complete_direct_rcs_submission_on_lane(DirectRcsLane::Execution);
@@ -826,50 +787,7 @@ fn direct_rcs_append_ring_batch_start(
     tail_bytes
 }
 
-fn direct_rcs_poll_result_slot(state: DirectRcsState, slot: usize, expected: u32) -> u32 {
-    let mut observed = 0;
-    let mut completed = false;
-    for _ in 0..DIRECT_RCS_SMOKE_POLL_ITERS {
-        observed = direct_rcs_read_result_slot(state, slot);
-        let proof = direct_rcs_retirement_proof_on_lane(
-            state,
-            DirectRcsLane::SystemService,
-            observed == expected,
-        );
-        if proof.complete() {
-            completed = true;
-            break;
-        }
-        core::hint::spin_loop();
-    }
-    let proof = direct_rcs_retirement_proof_on_lane(
-        state,
-        DirectRcsLane::SystemService,
-        observed == expected,
-    );
-    completed &= proof.complete();
-    if !completed {
-        // The physical request is not cancelled by failing its software
-        // timeline. Poison the shared context before the submit lock can be
-        // released so no caller rewrites memory a late batch may still fetch.
-        let reason = if observed == expected {
-            "completion-marker-observed-context-save-unproven-reboot-required"
-        } else {
-            "completion-marker-unobserved-reboot-required"
-        };
-        crate::log_error!(target: "gpgpu";
-            "intel/gpgpu: direct-rcs retirement unproven lane={} marker_observed={} saved_head={} published_tail={} action=quarantine-retain-pending-and-backing\n",
-            DirectRcsLane::SystemService.name(),
-            (observed == expected) as u8,
-            proof.saved_head_bytes,
-            proof.published_tail_bytes,
-        );
-        quarantine_direct_rcs_context(reason);
-    } else {
-        complete_direct_rcs_submission();
-    }
-    if completed { observed } else { 0 }
-}
+
 
 fn direct_rcs_poll_result_slot_timeout_ms(
     state: DirectRcsState,
@@ -1401,10 +1319,10 @@ mod direct_rcs_fail_closed_tests {
     }
 
     #[test]
-    fn sprite_pre_marker_does_not_alias_completion_qword() {
-        assert!(SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT.is_multiple_of(2));
-        assert_ne!(SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT, SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT);
-        assert_ne!(SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT, SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT + 1);
+    fn ui4_pre_marker_does_not_alias_completion_qword() {
+        assert!(UI4_COMPOSITOR_POST_MARKER_SLOT.is_multiple_of(2));
+        assert_ne!(UI4_COMPOSITOR_PRE_MARKER_SLOT, UI4_COMPOSITOR_POST_MARKER_SLOT);
+        assert_ne!(UI4_COMPOSITOR_PRE_MARKER_SLOT, UI4_COMPOSITOR_POST_MARKER_SLOT + 1);
 
         let mut batch = [0u32; 4];
         let mut cursor = 0usize;
@@ -1412,89 +1330,15 @@ mod direct_rcs_fail_closed_tests {
             &mut batch,
             &mut cursor,
             DIRECT_RCS_GPU_VA_RESULT_BASE,
-            SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
-            SPRITE_QUAD_WORKLIST_PRE_MARKER,
+            UI4_COMPOSITOR_PRE_MARKER_SLOT,
+            UI4_COMPOSITOR_PRE_MARKER,
         ));
         let marker_gpu = DIRECT_RCS_GPU_VA_RESULT_BASE
-            + (SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT * core::mem::size_of::<u32>()) as u64;
+            + (UI4_COMPOSITOR_PRE_MARKER_SLOT * core::mem::size_of::<u32>()) as u64;
         assert_eq!(batch[0], MI_STORE_DATA_IMM_GGTT_DW1);
         assert_eq!(batch[1], marker_gpu as u32);
         assert_eq!(batch[2], (marker_gpu >> 32) as u32);
-        assert_eq!(batch[3], SPRITE_QUAD_WORKLIST_PRE_MARKER);
+        assert_eq!(batch[3], UI4_COMPOSITOR_PRE_MARKER);
     }
 
-    #[test]
-    fn sprite_walker_payload_slots_are_aligned_and_non_overlapping() {
-        assert_eq!(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES, 224);
-        assert_eq!(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES, 256);
-
-        for descriptor in 0..SPRITE_QUAD_WORKLIST_MAX_DESCS {
-            let offset = sprite_quad_worklist_payload_offset(
-                SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
-                descriptor,
-            )
-            .unwrap();
-            assert!(offset.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
-            assert!(offset + SPRITE_QUAD_WORKLIST_INDIRECT_BYTES <= DIRECT_RCS_BATCH_BYTES);
-            if descriptor + 1 < SPRITE_QUAD_WORKLIST_MAX_DESCS {
-                let next = sprite_quad_worklist_payload_offset(
-                    SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
-                    descriptor + 1,
-                )
-                .unwrap();
-                assert_eq!(next - offset, SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES);
-                assert!(offset + SPRITE_QUAD_WORKLIST_INDIRECT_BYTES <= next);
-            }
-        }
-    }
-
-    #[test]
-    fn sprite_multi_run_payload_slots_are_aligned_and_non_overlapping() {
-        for run_count in 1..=SPRITE_QUAD_WORKLIST_MAX_DESCS {
-            let state_bytes = run_count * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
-            let payload_base = align_up(
-                SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + state_bytes,
-                GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES,
-            )
-            .unwrap();
-            assert!(payload_base.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
-
-            let first = sprite_quad_worklist_payload_offset(payload_base, 0).unwrap();
-            let last = sprite_quad_worklist_payload_offset(
-                payload_base,
-                SPRITE_QUAD_WORKLIST_MAX_DESCS - 1,
-            )
-            .unwrap();
-            assert_eq!(first, payload_base);
-            assert!(last.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
-            assert!(last + SPRITE_QUAD_WORKLIST_INDIRECT_BYTES <= DIRECT_RCS_BATCH_BYTES);
-        }
-    }
-
-    #[test]
-    fn sprite_walker_rejects_a_misaligned_indirect_start() {
-        let mut batch = [0u32; 15];
-        let mut cursor = 0usize;
-        assert!(!direct_rcs_push_sprite_quad_worklist_walker(
-            &mut batch,
-            &mut cursor,
-            SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES + 32,
-            1,
-            1,
-            GPGPU_WALKER_SIMD16_MASK,
-        ));
-        assert_eq!(cursor, 0);
-
-        assert!(direct_rcs_push_sprite_quad_worklist_walker(
-            &mut batch,
-            &mut cursor,
-            SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
-            1,
-            1,
-            GPGPU_WALKER_SIMD16_MASK,
-        ));
-        assert_eq!(cursor, batch.len());
-        assert_eq!(batch[2], SPRITE_QUAD_WORKLIST_INDIRECT_BYTES as u32);
-        assert_eq!(batch[3], SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES as u32,);
-    }
 }

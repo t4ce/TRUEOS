@@ -979,10 +979,6 @@ pub(crate) fn create_resident_indexed_mesh(
 
 /// Upload the authenticated WGPU position+UV vertex contract without
 /// discarding the second attribute at the broker boundary.
-#[expect(
-    dead_code,
-    reason = "triangle-only convenience entry point retained for kernel callers"
-)]
 pub(crate) fn create_resident_textured_triangle_mesh(
     draw_vertices: &[[f32; 5]],
     draw_indices: &[u32],
@@ -2938,6 +2934,7 @@ pub(crate) fn allocate_resident_render_buffer(
         storage_bytes,
         gpu_base,
         carrier: None,
+        borrowed: false,
     })
 }
 
@@ -2987,6 +2984,7 @@ pub(crate) fn allocate_picasso_render1_resident_buffer(
         storage_bytes,
         gpu_base,
         carrier: Some(carrier),
+        borrowed: false,
     })
 }
 
@@ -3056,6 +3054,36 @@ fn create_resident_sampled_rgba8_texture_for_carrier(
     })
 }
 
+/// Import an immutable leased source without a CPU readback or pixel copy.
+/// Caller pins the producer allocation until exact renderer retirement; an
+/// ambiguous submission must retain both this mapping and that producer lease.
+pub(crate) fn import_resident_sampled_rgba8_texture(
+    source: crate::intel::gpgpu::GpgpuRgba8Surface,
+    scanout_cache: bool,
+) -> Result<ResidentSampledTexture, &'static str> {
+    if !source.is_valid() || !source.phys.is_multiple_of(4096) || !source.bytes.is_multiple_of(4096) {
+        return Err("resident-texture-import-shape");
+    }
+    let gpu_base = reserve_persistent_render_gpu_va(source.bytes).ok_or("resident-resource-va")?;
+    let mapped = if scanout_cache {
+        map_render_ppgtt_scanout_range(gpu_base, source.phys, source.bytes)
+    } else {
+        map_render_ppgtt_range(gpu_base, source.phys, source.bytes)
+    };
+    if !mapped {
+        // A partial map must never become a different source at the same VA.
+        return Err("resident-texture-import-map");
+    }
+    Ok(ResidentSampledTexture {
+        storage: ResidentRenderBuffer {
+            storage_phys: source.phys, storage_virt: core::ptr::null_mut(),
+            storage_bytes: source.bytes, gpu_base, carrier: None, borrowed: true,
+        },
+        width: source.width, height: source.height, pitch: source.pitch_bytes,
+        sampler_flags: 0,
+    })
+}
+
 pub(crate) fn release_resident_sampled_texture(texture: &ResidentSampledTexture) -> bool {
     release_resident_render_buffer(&texture.storage)
 }
@@ -3077,7 +3105,9 @@ pub(crate) fn release_resident_render_buffer(buffer: &ResidentRenderBuffer) -> b
     if !unmap_render_ppgtt_range(buffer.gpu_base, buffer.storage_bytes) {
         return false;
     }
-    crate::dma::dealloc(buffer.storage_virt, buffer.storage_bytes);
+    if !buffer.borrowed {
+        crate::dma::dealloc(buffer.storage_virt, buffer.storage_bytes);
+    }
     recycle_persistent_render_gpu_va(buffer.gpu_base, buffer.storage_bytes);
     true
 }

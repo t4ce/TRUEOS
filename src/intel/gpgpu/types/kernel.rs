@@ -247,68 +247,6 @@ const fn copy_rect_2d_dispatch(width: u32, height: u32) -> Option<FillRect2dDisp
     fill_rect_2d_dispatch(work_item_width, height)
 }
 
-const fn sprite_quad_2d_dispatch(width: u32, height: u32) -> Option<FillRect2dDispatch> {
-    let Some(mut dispatch) = fill_rect_2d_dispatch(width, height) else {
-        return None;
-    };
-    dispatch.group_y = height.div_ceil(SPRITE_QUAD_WORKLIST_TILE_ROWS);
-    Some(dispatch)
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct SpriteQuadDescriptorDispatch {
-    walker: FillRect2dDispatch,
-    global_x: u32,
-    global_tile_y: u32,
-}
-
-fn sprite_quad_descriptor_dispatch(
-    desc: GpgpuSpriteQuadWorklistDesc,
-    dst_width: u32,
-    dst_height: u32,
-) -> Option<SpriteQuadDescriptorDispatch> {
-    if dst_width == 0 || dst_height == 0 {
-        return None;
-    }
-    let xs = [desc.c0_x, desc.c1_x, desc.c2_x, desc.c3_x];
-    let ys = [desc.c0_y, desc.c1_y, desc.c2_y, desc.c3_y];
-    if xs.iter().chain(ys.iter()).any(|value| !value.is_finite()) {
-        return None;
-    }
-    let mut left = xs[0];
-    let mut right = xs[0];
-    let mut top = ys[0];
-    let mut bottom = ys[0];
-    for value in xs.into_iter().skip(1) {
-        left = left.min(value);
-        right = right.max(value);
-    }
-    for value in ys.into_iter().skip(1) {
-        top = top.min(value);
-        bottom = bottom.max(value);
-    }
-
-    let min_x = (libm::floorf(left).max(0.0) as u32).min(dst_width - 1);
-    let max_x = (libm::ceilf(right).max(0.0) as u32).min(dst_width - 1);
-    let min_y = (libm::floorf(top).max(0.0) as u32).min(dst_height - 1);
-    let max_y = (libm::ceilf(bottom).max(0.0) as u32).min(dst_height - 1);
-    if max_x < min_x || max_y < min_y || right < 0.0 || bottom < 0.0 {
-        return None;
-    }
-
-    let global_tile_y = min_y / SPRITE_QUAD_WORKLIST_TILE_ROWS;
-    let final_tile_y = max_y / SPRITE_QUAD_WORKLIST_TILE_ROWS;
-    Some(SpriteQuadDescriptorDispatch {
-        walker: FillRect2dDispatch {
-            group_x: max_x.saturating_sub(min_x).saturating_add(1).div_ceil(16),
-            group_y: final_tile_y.saturating_sub(global_tile_y).saturating_add(1),
-            right_mask: GPGPU_WALKER_SIMD16_MASK,
-        },
-        global_x: min_x,
-        global_tile_y,
-    })
-}
-
 const _: () = {
     let exact = fill_rect_2d_dispatch(16, 1).unwrap();
     assert!(exact.group_x == 1);
@@ -327,7 +265,5 @@ const _: () = {
     let copy_tail = copy_rect_2d_dispatch(33, 3).unwrap();
     assert!(copy_tail.group_x == 2);
     assert!(copy_tail.group_y == 3);
-    let sprite_scanout = sprite_quad_2d_dispatch(2560, 1440).unwrap();
-    assert!(sprite_scanout.group_x == 160);
-    assert!(sprite_scanout.group_y == 1440);
+
 };

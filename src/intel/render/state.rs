@@ -270,6 +270,8 @@ pub(crate) struct ResidentRenderBuffer {
     /// its immutable Render1 lease, so release can never unmap this storage
     /// from another renderer's address space.
     carrier: Option<PicassoCarrierLease>,
+    // Imported sources own only their renderer VA, never the producer pages.
+    borrowed: bool,
 }
 
 unsafe impl Send for ResidentRenderBuffer {}
@@ -296,7 +298,7 @@ impl ResidentRenderBuffer {
         let Some(end) = offset.checked_add(bytes.len()) else {
             return false;
         };
-        if end > self.storage_bytes {
+        if self.borrowed || end > self.storage_bytes {
             return false;
         }
         unsafe {
@@ -324,7 +326,9 @@ impl ResidentRenderBuffer {
     }
 
     pub(crate) fn flush(&self) {
-        crate::intel::dma_flush(self.storage_virt, self.storage_bytes);
+        if !self.borrowed {
+            crate::intel::dma_flush(self.storage_virt, self.storage_bytes);
+        }
     }
 }
 
@@ -771,6 +775,7 @@ enum TriangleBlendProbeMode {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ExplicitRt0,
     StraightAlpha,
+    PremultipliedAlpha,
     MesaZeroedState,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     MesaZeroedNoBlendPointer,
@@ -810,6 +815,7 @@ impl TriangleBlendProbeMode {
         match self {
             Self::ExplicitRt0 => "explicit-rt0",
             Self::StraightAlpha => "straight-alpha",
+            Self::PremultipliedAlpha => "premultiplied-alpha",
             Self::MesaZeroedState => "mesa-zeroed",
             Self::MesaZeroedNoBlendPointer => "mesa-zeroed-no-blend-ptr",
         }

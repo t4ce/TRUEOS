@@ -1,19 +1,6 @@
 
 
-fn direct_rcs_write_sprite_quad_worklist_interface_descriptor_at(
-    state: DirectRcsState,
-    idd_offset: usize,
-    binding_table_offset: usize,
-) -> bool {
-    direct_rcs_write_rect_worklist_interface_descriptor_at(
-        state,
-        idd_offset,
-        binding_table_offset,
-        SPRITE_QUAD_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
-        3,
-        SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS,
-    )
-}
+
 
 
 fn direct_rcs_write_rect_worklist_interface_descriptor_at(
@@ -157,53 +144,7 @@ fn direct_rcs_write_alpha_blend_worklist_payload_at(
     }
     true
 }
-fn direct_rcs_write_sprite_quad_worklist_payload_at(
-    state: DirectRcsState,
-    payload_offset: usize,
-    params: SpriteQuadWorklistRgba8Params,
-    global_x: u32,
-    global_tile_y: u32,
-) -> bool {
-    if payload_offset + SPRITE_QUAD_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
-        return false;
-    }
 
-    unsafe {
-        let payload = state.batch_virt.add(payload_offset);
-        core::ptr::write_bytes(payload, 0, SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
-        let dwords = payload as *mut u32;
-        core::ptr::write_volatile(dwords, global_x);
-        core::ptr::write_volatile(dwords.add(1), global_tile_y);
-        core::ptr::write_volatile(dwords.add(3), 16);
-        core::ptr::write_volatile(dwords.add(4), 1);
-        core::ptr::write_volatile(dwords.add(5), 1);
-        core::ptr::write_volatile(dwords.add(8), 16);
-        core::ptr::write_volatile(dwords.add(9), 1);
-        core::ptr::write_volatile(dwords.add(10), 1);
-        core::ptr::write_volatile(dwords.add(12), params.src_gpu as u32);
-        core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
-        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.desc_gpu as u32);
-        core::ptr::write_volatile(dwords.add(17), (params.desc_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(18), params.src_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(19), params.dst_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(20), params.src_width);
-        core::ptr::write_volatile(dwords.add(21), params.src_height);
-        core::ptr::write_volatile(dwords.add(22), params.dst_width);
-        core::ptr::write_volatile(dwords.add(23), params.dst_height);
-        core::ptr::write_volatile(dwords.add(24), params.desc_base);
-        core::ptr::write_volatile(dwords.add(25), params.desc_count);
-
-        let local_ids = payload.add(SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES) as *mut u16;
-        for lane in 0..16usize {
-            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
-            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
-            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
-        }
-    }
-    true
-}
 
 fn pack_i16_pair_u32(x: i16, y: i16) -> u32 {
     (u16::from_ne_bytes(x.to_ne_bytes()) as u32)

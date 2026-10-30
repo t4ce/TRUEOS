@@ -47,7 +47,6 @@ pub(crate) enum KnownKernelRole {
     Copy,
     WorklistBlend,
     Present,
-    Sprite,
     FluidX3d,
     CppDemo,
     CppAudio,
@@ -60,8 +59,6 @@ const COPY_CROSS_THREAD_BYTES: u32 = 96;
 const COPY_PER_THREAD_BYTES: u32 = 96;
 const RECT_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
 const RECT_WORKLIST_PER_THREAD_BYTES: u32 = 96;
-const SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES: u32 = 128;
-const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: u32 = 96;
 const UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES: u32 = 128;
 const SKYBOX_CROSS_THREAD_BYTES: u32 = 160;
 const CPP_DEMO_CROSS_THREAD_BYTES: u32 =
@@ -86,17 +83,6 @@ const ALPHA_BLEND_DESC_FIELDS: &[DescriptorField<'_>] = &[
 ];
 const ALPHA_BLEND_DESC: DescriptorLayout<'_> =
     DescriptorLayout::new("AlphaBlendDesc", 5, Some(256), ALPHA_BLEND_DESC_FIELDS);
-
-const SPRITE_QUAD_DESC_FIELDS: &[DescriptorField<'_>] = &[
-    DescriptorField::new("c0", 0, 4),
-    DescriptorField::new("c1", 4, 4),
-    DescriptorField::new("c2", 8, 4),
-    DescriptorField::new("c3", 12, 4),
-    DescriptorField::new("color_rgba", 16, 1),
-    DescriptorField::new("flags", 17, 1),
-];
-const SPRITE_QUAD_DESC: DescriptorLayout<'_> =
-    DescriptorLayout::new("SpriteQuadDesc", 18, Some(256), SPRITE_QUAD_DESC_FIELDS);
 
 const UI4_COMPOSE_LAYER_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("src_gpu", 0, 2),
@@ -137,7 +123,6 @@ macro_rules! f32_arg {
 
 const NO_DESCS: &[DescriptorLayout<'_>] = &[];
 const ALPHA_BLEND_DESCS: &[DescriptorLayout<'_>] = &[ALPHA_BLEND_DESC];
-const SPRITE_QUAD_DESCS: &[DescriptorLayout<'_>] = &[SPRITE_QUAD_DESC];
 const UI4_COMPOSE_LAYER_DESCS: &[DescriptorLayout<'_>] = &[UI4_COMPOSE_LAYER_DESC];
 
 const COPY_RECT_ARGS: &[KernelCallArg<'_>] = &[
@@ -191,34 +176,6 @@ const ALPHA_BLEND_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: RECT_WORKLIST_CONSUMERS,
 };
 
-
-const SPRITE_QUAD_ARGS: &[KernelCallArg<'_>] = &[
-    ro_buf!(0, "src_rgba", "__global const uint*", 0, 12),
-    rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
-    ro_buf!(2, "descs", "__global const uint*", 2, 16),
-    u32_arg!(3, "src_pitch_bytes", 18),
-    u32_arg!(4, "dst_pitch_bytes", 19),
-    u32_arg!(5, "src_width", 20),
-    u32_arg!(6, "src_height", 21),
-    u32_arg!(7, "dst_width", 22),
-    u32_arg!(8, "dst_height", 23),
-    u32_arg!(9, "desc_base", 24),
-    u32_arg!(10, "desc_count", 25),
-];
-const SPRITE_QUAD_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/sprite_quad_worklist_rgba8.clcpp",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES,
-    per_thread_bytes: SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES,
-    binding_count: 3,
-    args: SPRITE_QUAD_ARGS,
-    descriptor_layouts: SPRITE_QUAD_DESCS,
-    launch: KernelLaunchContract::descriptor_worklist(16),
-    consumers: &["intel::init_once upload", "explicit sprite batches"],
-};
 
 const UI4_COMPOSE_LAYERS_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "base_xrgb", "__global const uint*", 0, 12),
@@ -386,14 +343,6 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         role: KnownKernelRole::WorklistBlend,
     },
     
-    KnownAotKernel {
-        name: gpgpu::SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
-        artifact: &gpgpu::SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        contract: &SPRITE_QUAD_CONTRACT,
-        upload: gpgpu::upload_sprite_quad_worklist_rgba8_kernel,
-        status: gpgpu::sprite_quad_worklist_rgba8_upload_status,
-        role: KnownKernelRole::Sprite,
-    },
     KnownAotKernel {
         name: gpgpu::UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
         artifact: &gpgpu::UI4_COMPOSE_LAYERS_RGBA8_ADLS_ARTIFACT,

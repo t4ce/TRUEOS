@@ -426,8 +426,8 @@ const fn resident_scene_sampler_flags_valid(voxy_headless: bool, sampler_flags: 
     if voxy_headless {
         sampler_flags == 0
     } else {
-        // The existing indexed texture contract requires repeat in U and V.
-        sampler_flags == 3
+        // Sprite imports clamp; indexed clients can explicitly repeat both axes.
+        sampler_flags == 0 || sampler_flags == 3
     }
 }
 
@@ -565,7 +565,7 @@ mod voxy_headless_atlas_state_tests {
         assert!(resident_scene_sampler_flags_valid(true, 0));
         assert!(!resident_scene_sampler_flags_valid(true, 3));
         assert!(resident_scene_sampler_flags_valid(false, 3));
-        assert!(!resident_scene_sampler_flags_valid(false, 0));
+        assert!(resident_scene_sampler_flags_valid(false, 0));
         for flags in [1, 2, 4, u32::MAX] {
             assert!(!resident_scene_sampler_flags_valid(true, flags));
             assert!(!resident_scene_sampler_flags_valid(false, flags));
@@ -1521,7 +1521,7 @@ fn write_triangle_probe_state_with_flush(
     let samplers =
         &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + SAMPLER_CACHE_LINE_DWORDS];
     write_nearest_repeat_sampler_cache_line(samplers);
-    if draw.voxy_headless && draw.sampled_texture.is_some() {
+    if draw.sampled_texture.is_some_and(|texture| texture.sampler_flags == 0) {
         write_nearest_clamp_sampler_cache_line(samplers);
     }
     if native_pbr {
@@ -1595,14 +1595,14 @@ fn write_triangle_probe_state_with_flush(
             blend[0] = 0;
             blend[1] = (1 << 0) | (1 << 1) | (2 << 2);
         }
-        TriangleBlendProbeMode::StraightAlpha => {
+        TriangleBlendProbeMode::StraightAlpha | TriangleBlendProbeMode::PremultipliedAlpha => {
             // Gen12 blend state: straight-alpha color over, with separate
             // alpha accumulation (src=ONE, dst=INV_SRC_ALPHA).  The common
             // dword enables independent alpha; entry dword 0 carries the
             // blend factors/function and entry dword 1 keeps RGBA writable.
             blend[0] = 1 << 30;
             blend[1] = (1 << 31)
-                | (BLEND_FACTOR_SRC_ALPHA << 26)
+                | ((if matches!(blend_mode, TriangleBlendProbeMode::PremultipliedAlpha) { BLEND_FACTOR_ONE } else { BLEND_FACTOR_SRC_ALPHA }) << 26)
                 | (BLEND_FACTOR_INV_SRC_ALPHA << 21)
                 | (BLEND_FUNCTION_ADD << 18)
                 | (BLEND_FACTOR_ONE << 13)
@@ -3254,14 +3254,14 @@ fn encode_triangle_probe_batch(
         || backend_probe_mode.disable_ps_blend_writeable_rt()
     {
         0
-    } else if matches!(blend_mode, TriangleBlendProbeMode::StraightAlpha) {
+    } else if matches!(blend_mode, TriangleBlendProbeMode::StraightAlpha | TriangleBlendProbeMode::PremultipliedAlpha) {
         // 3DSTATE_PS_BLEND: writable RT + color blending enabled, with
         // straight-alpha RGB and independent alpha factors.
         (1 << 30)
             | (1 << 29)
             | (BLEND_FACTOR_ONE << 24)
             | (BLEND_FACTOR_INV_SRC_ALPHA << 19)
-            | (BLEND_FACTOR_SRC_ALPHA << 14)
+            | ((if matches!(blend_mode, TriangleBlendProbeMode::PremultipliedAlpha) { BLEND_FACTOR_ONE } else { BLEND_FACTOR_SRC_ALPHA }) << 14)
             | (BLEND_FACTOR_INV_SRC_ALPHA << 9)
             | (1 << 7)
     } else {

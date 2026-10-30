@@ -35,16 +35,14 @@ use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
     GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState,
     GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSolidRect,
-    GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun, GpgpuSubmissionOutcome,
-    ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
-    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams, ShaderToyRuntimeState,
+    GpgpuSubmissionOutcome,
+    ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, ShaderToyFrameParams, ShaderToyRuntimeState,
     SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
     Ui4CompositorSubmitError, Ui4SpriteSceneCompletion, alpha_blend_worklist_max_descs,
     fill_solid_rects_rgba8_scanout_result, particle_craft_rgba8_frame, poll_ui4_bcs0_sprite_copy,
     poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
-    queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
+    queue_ui4_blueprint_alpha_rects,
     release_rgba8_surface_for_scanout, skybox_sample_rgb565_to_rgba8,
-    sprite_quad_worklist_max_descs,
 };
 
 use super::{
@@ -63,6 +61,7 @@ use super::{
     take_window_first_presentation, window_input_routes, window_resize_state, writable_rgba_view,
 };
 
+mod sprite_render;
 mod guest_transport;
 use guest_transport::{
     guest_context_menu_event_take, guest_context_menu_register, guest_image_source_info,
@@ -5538,44 +5537,9 @@ fn rounded_sprite_coordinate(value: f32) -> Option<i32> {
     Some(rounded as i32)
 }
 
-fn gpgpu_sprite_quad_descriptor(
-    quad: TrueosUi4SpriteQuad,
-    premultiplied_source: bool,
-) -> GpgpuSpriteQuadWorklistDesc {
-    GpgpuSpriteQuadWorklistDesc {
-        c0_x: quad.c0_x,
-        c0_y: quad.c0_y,
-        c0_u: quad.c0_u,
-        c0_v: quad.c0_v,
-        c1_x: quad.c1_x,
-        c1_y: quad.c1_y,
-        c1_u: quad.c1_u,
-        c1_v: quad.c1_v,
-        c2_x: quad.c2_x,
-        c2_y: quad.c2_y,
-        c2_u: quad.c2_u,
-        c2_v: quad.c2_v,
-        c3_x: quad.c3_x,
-        c3_y: quad.c3_y,
-        c3_u: quad.c3_u,
-        c3_v: quad.c3_v,
-        color_rgba: quad.color_rgba,
-        flags: if quad.flags & (SPRITE_QUAD_FLAG_SRC_OVER | SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR) != 0
-        {
-            SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
-        } else {
-            0
-        } | if premultiplied_source {
-            SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC
-        } else {
-            0
-        },
-    }
-}
-
 /// Convert an axis-aligned, pixel-locked sprite to the compact alpha worklist.
 /// Anything involving resampling, rotation, flipping, or sampler clamping stays
-/// on the arbitrary-quad compute path so the native scene contract is exact.
+/// on the GLSL triangle path so the native scene contract is exact.
 fn alpha_rect_descriptor(
     quad: TrueosUi4SpriteQuad,
     source: GpgpuRgba8Surface,
@@ -5728,7 +5692,7 @@ mod sprite_overlay_tests {
     use super::{
         NonzeroAlphaRun, SPRITE_QUAD_FLAG_BCS0_COPY, SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR,
         TrueosUi4SpriteQuad, bcs0_solid_rect, bcs0_sprite_copies, cache_premultiplied_alpha_runs,
-        gpgpu_sprite_quad_descriptor, rgba8_is_premultiplied, sprite_scene_needs_clear,
+        rgba8_is_premultiplied, sprite_scene_needs_clear,
         sprite_scene_uses_bcs0_clear, valid_sprite_quad,
     };
     use crate::intel::gpgpu::GpgpuRgba8Surface;
@@ -5849,11 +5813,7 @@ mod sprite_overlay_tests {
             flags: SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR,
             ..bcs_quad
         };
-        assert_ne!(
-            gpgpu_sprite_quad_descriptor(premul, true).flags
-                & crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER,
-            0
-        );
+        assert!(valid_sprite_quad(premul));
     }
 
     #[test]
@@ -5886,8 +5846,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     }
     struct OwnedRun {
         sprite_id: u32,
-        source: GpgpuRgba8Surface,
-        descriptors: Vec<GpgpuSpriteQuadWorklistDesc>,
+        descriptors: Vec<sprite_render::Sprite>,
     }
 
     #[derive(Copy, Clone)]
@@ -5906,7 +5865,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         Quad {
             sprite_id: u32,
             source: GpgpuRgba8Surface,
-            descriptor: GpgpuSpriteQuadWorklistDesc,
+            descriptor: sprite_render::Sprite,
         },
     }
 
@@ -5943,7 +5902,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 Self::Bcs0 { .. } => "bcs0-premultiplied-rgba-copy",
                 Self::Bcs0Fill { .. } => "bcs0-premultiplied-rect-fill",
                 Self::Alpha { .. } => "gpgpu-alpha-rect-worklist",
-                Self::Quad { .. } => "gpgpu-arbitrary-quad-fallback",
+                Self::Quad { .. } => "glsl-textured-triangles",
             }
         }
     }
@@ -6213,7 +6172,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             prepared.push(PreparedOp::Quad {
                 sprite_id: 0,
                 source: solid.surface,
-                descriptor: gpgpu_sprite_quad_descriptor(clear, false),
+                descriptor: sprite_render::Sprite { quad: clear, source: solid.surface, source_virt: solid.virt, premultiplied: false },
             });
         }
     }
@@ -6277,11 +6236,11 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 source.has_validated_premultiplied_pixels(),
             )
         };
-        // Physical XeLP has proven the general sprite-quad source-over path,
+        // Physical XeLP has proven the native textured-triangle source-over path,
         // while the older compact alpha-rectangle source-over kernel can
         // accept a submission without retiring its marker. Keep opaque 1:1
         // copies eligible for the compact path, but route every blended sprite
-        // through the newer ordered quad worklist.
+        // through the GLSL triangle renderer.
         if quad.flags & SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR != 0 {
             if !validated_premultiplied {
                 cancel_blueprint_sprite_frame_without_live_gpu(surface);
@@ -6307,12 +6266,15 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             AlphaRectConversion::Unsupported => prepared.push(PreparedOp::Quad {
                 sprite_id: quad.sprite_id,
                 source,
-                descriptor: gpgpu_sprite_quad_descriptor(quad, premultiplied_source),
+                descriptor: sprite_render::Sprite { quad, source, premultiplied: premultiplied_source,
+                    source_virt: surface.sprites.iter().find(|(id, _)| *id == quad.sprite_id)
+                        .map_or(solid.virt, |(_, BlueprintSpriteSource::Uploaded(source))| source.virt),
+                },
             }),
         }
     }
 
-    let batch_capacity = alpha_blend_worklist_max_descs().min(sprite_quad_worklist_max_descs());
+    let batch_capacity = 32.min(alpha_blend_worklist_max_descs());
     let mut batches = Vec::<PreparedBatch>::new();
     let mut cursor = 0usize;
     while cursor < prepared.len() {
@@ -6385,7 +6347,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                     } else {
                         groups.push(OwnedRun {
                             sprite_id,
-                            source,
                             descriptors: alloc::vec![descriptor],
                         });
                     }
@@ -6579,22 +6540,38 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             }
             continue;
         }
+        if let PreparedBatch::Quad { groups } = batch {
+            let sprites = groups.iter().flat_map(|group| group.descriptors.iter().copied()).collect::<Vec<_>>();
+            let release = match sprite_render::draw(destination, &sprites) {
+                Ok(release) => release,
+                Err(sprite_render::Failure::Busy) => {
+                    cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                    return ERROR_BUSY;
+                }
+                Err(sprite_render::Failure::Rejected) => {
+                    cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                    return ERROR_UI4;
+                }
+                Err(sprite_render::Failure::Incomplete) => {
+                    quarantine_blueprint_sprite_submission(surface, owner, window_id, lease,
+                        batch_index, batch_count, "glsl-sprite-retirement-incomplete");
+                    return ERROR_UI4;
+                }
+            };
+            if final_batch {
+                surface.pending_render_release = Some(release);
+                surface.pending_gpu_release = None;
+                surface.sprite_clear_rgba = None;
+                return 0;
+            }
+            continue;
+        }
         let queued = match batch {
             PreparedBatch::Alpha {
                 source,
                 descriptors,
             } => queue_blueprint_alpha_batch(*source, destination, descriptors),
-            PreparedBatch::Quad { groups } => {
-                let runs = groups
-                    .iter()
-                    .map(|group| GpgpuSpriteQuadWorklistRun {
-                        src: group.source,
-                        descs: &group.descriptors,
-                    })
-                    .collect::<Vec<_>>();
-                queue_blueprint_sprite_batch(destination, &runs)
-            }
-            PreparedBatch::Bcs0 { .. } | PreparedBatch::Bcs0Fill { .. } => unreachable!(),
+            PreparedBatch::Bcs0 { .. } | PreparedBatch::Bcs0Fill { .. } | PreparedBatch::Quad { .. } => unreachable!(),
         };
         let submission = match queued {
             Ok(submission) => submission,
@@ -6880,25 +6857,6 @@ fn queue_blueprint_alpha_batch(
     let started = crate::chronos::monotonic_nanos();
     loop {
         match queue_ui4_blueprint_alpha_rects(source, destination, descriptors) {
-            Err(Ui4CompositorSubmitError::Busy)
-            | Err(Ui4CompositorSubmitError::SubmissionRejected)
-                if crate::chronos::monotonic_nanos().saturating_sub(started)
-                    < UI4_SPRITE_BATCH_TIMEOUT_NS =>
-            {
-                core::hint::spin_loop();
-            }
-            result => return result,
-        }
-    }
-}
-
-fn queue_blueprint_sprite_batch(
-    destination: GpgpuRgba8Surface,
-    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
-) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    let started = crate::chronos::monotonic_nanos();
-    loop {
-        match queue_ui4_blueprint_sprite_scene(destination, runs) {
             Err(Ui4CompositorSubmitError::Busy)
             | Err(Ui4CompositorSubmitError::SubmissionRejected)
                 if crate::chronos::monotonic_nanos().saturating_sub(started)

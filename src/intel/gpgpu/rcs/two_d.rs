@@ -61,8 +61,8 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
         batch,
         &mut cursor,
         state.gpu_va.result,
-        SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
-        SPRITE_QUAD_WORKLIST_PRE_MARKER,
+        UI4_COMPOSITOR_PRE_MARKER_SLOT,
+        UI4_COMPOSITOR_PRE_MARKER,
     );
     ok &= direct_rcs_push_pipe_control_timestamp_at(
         batch,
@@ -92,8 +92,8 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
         &mut cursor,
         state.gpu_va.result,
         UI4_VIDEO_FRAME_GPU_POST_RELEASE_TIMESTAMP_SLOT,
-        SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
-        SPRITE_QUAD_WORKLIST_POST_MARKER,
+        UI4_COMPOSITOR_POST_MARKER_SLOT,
+        UI4_COMPOSITOR_POST_MARKER,
     );
     if !ok {
         return false;

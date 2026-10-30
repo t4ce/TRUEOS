@@ -9,9 +9,7 @@ pub(crate) fn alpha_blend_worklist_rgba8_upload_status() -> Option<UploadedKerne
 }
 
 
-pub(crate) fn sprite_quad_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD.lock()
-}
+
 
 pub(crate) fn ui4_compose_layers_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *UI4_COMPOSE_LAYERS_RGBA8_UPLOAD.lock()
@@ -92,27 +90,7 @@ pub(crate) fn upload_ui4_nv12_tile64_to_rgba8_frame_kernel() -> Option<UploadedK
     Some(upload)
 }
 
-pub(crate) fn upload_sprite_quad_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
 
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: sprite-quad-worklist-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        SPRITE_QUAD_WORKLIST_RGBA8_ADLS_GPU,
-    )?;
-    *SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
 
 pub(crate) fn upload_ui4_compose_layers_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *UI4_COMPOSE_LAYERS_RGBA8_UPLOAD.lock() {
@@ -362,7 +340,6 @@ struct GpgpuKnownArtifactSlot {
 const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     COPY_RECT_RGBA8_KERNEL_NAME,
     ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
-    SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
     UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
     SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
     CPP_DEMO_RGBA8_KERNEL_NAME,
@@ -438,7 +415,6 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         COPY_RECT_RGBA8_KERNEL_NAME
         | ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME
         | UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME
-        | SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME
         | UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME
         | SKYBOX_SAMPLE_RGB565_KERNEL_NAME
         | CPP_DEMO_RGBA8_KERNEL_NAME
@@ -499,11 +475,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: SPIRIT_VFX_SPRITE_RGBA8_ADLS_ARTIFACT,
             gpu: SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU,
             upload: &SPIRIT_VFX_SPRITE_RGBA8_UPLOAD,
-        }),
-        SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT,
-            gpu: SPRITE_QUAD_WORKLIST_RGBA8_ADLS_GPU,
-            upload: &SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD,
         }),
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: UI4_COMPOSE_LAYERS_RGBA8_ADLS_ARTIFACT,
