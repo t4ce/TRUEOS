@@ -33,7 +33,8 @@ const TERMINAL_FRONTEND_VFILE: &str = "vFile:terminal-frontend";
 /// Write a downloaded archive pathname here to import it into volatile AppDB.
 /// Completion acknowledges the import; this operation never launches a VM.
 pub(crate) fn is_virtual_write(path: &str) -> bool {
-    path == "vFile:appdb-install" || crate::r::services::ide_workspace_service::is_write(path)
+    path == "vFile:appdb-install" || path == trueos_ide::store_protocol::REQUEST
+        || crate::r::services::ide_workspace_service::is_write(path)
 }
 
 
@@ -42,6 +43,7 @@ pub(crate) fn is_virtual_read(path: &str) -> bool {
         || path.starts_with("vFile:microfont-grid/")
         || path.starts_with(crate::r::services::codex_input_service::VFILE_PREFIX)
         || crate::r::services::ide_workspace_service::is_read(path)
+        || path == trueos_ide::store_protocol::REPLY
 }
 const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
 
@@ -490,7 +492,9 @@ fn start_ide_workspace_read(owner: u32, path: &str) -> i32 {
         if id < 0 {
             return id;
         }
-        let result = crate::r::services::ide_workspace_service::read_for_owner(owner, path);
+        let result = if path == trueos_ide::store_protocol::REPLY {
+            crate::r::services::ide_source_service::read_for_owner(owner)
+        } else { crate::r::services::ide_workspace_service::read_for_owner(owner, path) };
         let mut operations = lock_operations();
         let Some(operation) = operations
             .get_mut(&(id as u32))
@@ -541,7 +545,7 @@ fn start_codex_input_read(owner: u32, path: &str) -> i32 {
 }
 
 pub(crate) fn start_read(owner: u32, path: String) -> i32 {
-    if crate::r::services::ide_workspace_service::is_read(&path) {
+    if crate::r::services::ide_workspace_service::is_read(&path) || path == trueos_ide::store_protocol::REPLY {
         return start_ide_workspace_read(owner, &path);
     }
     if path.starts_with(crate::r::services::codex_input_service::VFILE_PREFIX) {
@@ -674,7 +678,9 @@ fn stage_write(
     legacy_blob: bool,
     checked: Option<CheckedWriteOptions>,
 ) -> i32 {
-    let max_bytes = if path.starts_with(crate::r::services::ide_workspace_service::VFILE_PREFIX) {
+    let max_bytes = if path == trueos_ide::store_protocol::REQUEST {
+        trueos_ide::store_protocol::MAX_FRAME_BYTES as u64
+    } else if path.starts_with(crate::r::services::ide_workspace_service::VFILE_PREFIX) {
         crate::r::services::ide_workspace_service::MAX_FRAME_BYTES as u64
     } else if path.starts_with("vFile:") {
         ASYNC_FS_MAX_RESULT_BYTES
@@ -955,7 +961,7 @@ pub(crate) fn discard(owner: u32, id: u32) -> i32 {
     0
 }
 
-fn selected_disk(path: &str) -> Result<(crate::disc::block::DeviceHandle, &str), i32> {
+pub(crate) fn selected_disk(path: &str) -> Result<(crate::disc::block::DeviceHandle, &str), i32> {
     const PREFIX: &str = "trueosfs:disc";
     let Some(selector) = path.strip_prefix(PREFIX) else {
         return crate::r::fs::volatile_files::selected_disk(path)
@@ -1045,6 +1051,12 @@ async fn process(request: &Request) -> OperationState {
     }
 
     if let RequestKind::Write { path, bytes, .. } = &request.kind {
+        if path == trueos_ide::store_protocol::REQUEST {
+            return match crate::r::services::ide_source_service::write_for_owner(request.owner, bytes).await {
+                Ok(()) => OperationState::Unit,
+                Err(code) => OperationState::Failed(code),
+            };
+        }
         if crate::r::services::ide_workspace_service::is_write(path) {
             return match crate::r::services::ide_workspace_service::write_for_owner(request.owner, path, bytes) {
                 Ok(()) => OperationState::Unit,

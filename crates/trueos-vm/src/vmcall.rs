@@ -168,6 +168,11 @@ const _: () = {
 pub const OP_BP_CLIPBOARD_COMMAND_V1: u32 = 0x230;
 /// Bounded pointer-free Hull microfont text runs into a retired frame lease.
 pub const OP_BP_UI4_HULL_TEXT_RUNS_V1: u32 = 0x235;
+/// Owner-scoped asynchronous web-image lifecycle; no image bytes cross the VM.
+pub const OP_BP_UI4_HULL_IMAGE_REQUEST_V1: u32 = 0x239;
+pub const OP_BP_UI4_HULL_IMAGE_STATUS_V1: u32 = 0x23A;
+pub const OP_BP_UI4_HULL_IMAGE_RELEASE_V1: u32 = 0x23B;
+pub const OP_BP_UI4_HULL_IMAGE_RESET_V1: u32 = 0x23C;
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB;
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123;
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150;

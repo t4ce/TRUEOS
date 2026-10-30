@@ -189,6 +189,11 @@ const _: () = {
 };
 pub const OP_BP_CLIPBOARD_COMMAND_V1: u32 = 0x230;
 pub const OP_BP_UI4_HULL_TEXT_RUNS_V1: u32 = 0x235;
+/// Owner-scoped asynchronous web-image lifecycle; no image bytes cross the VM.
+pub const OP_BP_UI4_HULL_IMAGE_REQUEST_V1: u32 = 0x239;
+pub const OP_BP_UI4_HULL_IMAGE_STATUS_V1: u32 = 0x23A;
+pub const OP_BP_UI4_HULL_IMAGE_RELEASE_V1: u32 = 0x23B;
+pub const OP_BP_UI4_HULL_IMAGE_RESET_V1: u32 = 0x23C;
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
@@ -2703,6 +2708,38 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg0 as u32,
                 arg1 as usize,
                 payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_HULL_IMAGE_REQUEST_V1 => {
+            let rc = request_payload(vm_id, req_len)
+                .map(|payload| crate::ui4::blueprint_ui4::hull_image_api::request_wire(
+                    crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, payload,
+                ))
+                .unwrap_or(crate::ui4::blueprint_ui4::ERROR_INVALID);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_HULL_IMAGE_STATUS_V1 => {
+            match crate::ui4::blueprint_ui4::hull_image_api::status(
+                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, arg1 as u32,
+            ) {
+                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_HULL_IMAGE_RELEASE_V1 => {
+            let rc = crate::ui4::blueprint_ui4::hull_image_api::release(
+                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, arg1 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_HULL_IMAGE_RESET_V1 => {
+            let rc = crate::ui4::blueprint_ui4::hull_image_api::reset(
+                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, arg1,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

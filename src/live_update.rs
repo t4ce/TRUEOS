@@ -166,6 +166,7 @@ static LIVE_UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static WARM_APS_RELEASED: AtomicBool = AtomicBool::new(false);
 static POST_BOOT_UPLIFT_COMPLETE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CONTROL_HHDM: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_AP_SLOT: AtomicU64 = AtomicU64::new(0);
 static RENDEZVOUS_ISR_ACTIVE: AtomicU64 = AtomicU64::new(0);
 static POST_BOOT_TLB_ACTIVE: AtomicBool = AtomicBool::new(false);
 static POST_BOOT_TLB_ACKS: AtomicU64 = AtomicU64::new(0);
@@ -177,6 +178,32 @@ static AP_VMX_CONTRACT_DONE_MASK: [AtomicU64; CPU_MASK_WORDS] =
     [const { AtomicU64::new(0) }; CPU_MASK_WORDS];
 static AP_VMXOFF_EXECUTED_MASK: [AtomicU64; CPU_MASK_WORDS] =
     [const { AtomicU64::new(0) }; CPU_MASK_WORDS];
+static AP_VMXOFF_DEFERRED_MASK: [AtomicU64; CPU_MASK_WORDS] =
+    [const { AtomicU64::new(0) }; CPU_MASK_WORDS];
+static AP_TRANSITION_ERRORS: [ApTransitionError; CPU_SLOT_LIMIT] =
+    [const { ApTransitionError::new() }; CPU_SLOT_LIMIT];
+
+struct ApTransitionError {
+    reason_ptr: AtomicU64,
+    reason_len: AtomicU64,
+    stage: AtomicU8,
+}
+
+impl ApTransitionError {
+    const fn new() -> Self {
+        Self {
+            reason_ptr: AtomicU64::new(0),
+            reason_len: AtomicU64::new(0),
+            stage: AtomicU8::new(0),
+        }
+    }
+
+    fn record(&self, stage: u8, reason: &'static str) {
+        self.reason_ptr.store(reason.as_ptr() as u64, Ordering::Relaxed);
+        self.reason_len.store(reason.len() as u64, Ordering::Relaxed);
+        self.stage.store(stage, Ordering::Release);
+    }
+}
 
 #[repr(C, align(64))]
 struct TransitionControl {
@@ -184,6 +211,7 @@ struct TransitionControl {
     arrived: AtomicU64,
     stacked: AtomicU64,
     failures: AtomicU64,
+    vmxoff_failure_slot: AtomicU64,
     cr3: u64,
     root_hhdm: u64,
     kernel_slot: u64,
@@ -216,6 +244,7 @@ pub enum LiveUpdateError {
     #[cfg(feature = "legacy_vm_checkpoint")]
     VmCheckpointStore(u8),
     ApRendezvous(&'static str),
+    ApTransition { slot: usize, stage: &'static str, reason: &'static str },
 }
 
 impl fmt::Display for LiveUpdateError {
@@ -235,6 +264,9 @@ impl fmt::Display for LiveUpdateError {
             #[cfg(feature = "legacy_vm_checkpoint")]
             Self::VmCheckpointStore(vm) => write!(f, "vm{vm} persistent checkpoint failed"),
             Self::ApRendezvous(reason) => write!(f, "AP rendezvous failed ({reason})"),
+            Self::ApTransition { slot, stage, reason } => write!(f,
+                "AP rendezvous failed (slot={slot} stage={stage} reason={reason}; VPID-lane={})",
+                crate::hv::vpid::lane_state_name(*slot)),
         }
     }
 }
@@ -423,7 +455,8 @@ extern "x86-interrupt" fn live_update_rendezvous_isr(_frame: InterruptStackFrame
         return;
     }
 
-    enter_ap_transition_if_requested();
+    // A reversible probe also needs a safe point: an arbitrary interrupt may
+    // catch an assignment halfway through setup or a task holding a lock.
 }
 
 /// Join a published live-update transition only from an AP executor boundary.
@@ -431,10 +464,10 @@ extern "x86-interrupt" fn live_update_rendezvous_isr(_frame: InterruptStackFrame
 /// The final rendezvous uses this path instead of entering permanently from an
 /// arbitrary interrupt frame. Consequently an AP cannot be frozen halfway
 /// through polling a task while it owns a runtime lock. The rendezvous ISR
-/// retains the same body for reversible preflight and post-boot TLB service.
+/// is reserved for post-boot TLB service; preflight uses this same safe point.
 pub(crate) fn poll_ap_transition_safe_point() {
     if ACTIVE_CONTROL_HHDM.load(Ordering::Acquire) != 0 {
-        enter_ap_transition_if_requested();
+        x86_64::instructions::interrupts::without_interrupts(enter_ap_transition_if_requested);
     }
 }
 
@@ -457,6 +490,10 @@ fn enter_ap_transition_if_requested() {
     }
 
     let slot = crate::percpu::current_slot();
+    if slot as u64 != ACTIVE_AP_SLOT.load(Ordering::Acquire) {
+        RENDEZVOUS_ISR_ACTIVE.fetch_sub(1, Ordering::AcqRel);
+        return;
+    }
     if slot == 0 || slot >= AP_TRANSITION_ENTERED.len() {
         control.failures.fetch_add(1, Ordering::AcqRel);
         RENDEZVOUS_ISR_ACTIVE.fetch_sub(1, Ordering::AcqRel);
@@ -468,9 +505,10 @@ fn enter_ap_transition_if_requested() {
     }
     mark_ap_mask(&AP_ISR_ENTERED_MASK, slot);
 
-    let left_vmx = match crate::hv::leave_vmx_root_for_current_cpu_contract() {
-        Ok(left) => left,
-        Err(_) => {
+    let vmx = match crate::hv::prepare_current_cpu_for_live_update() {
+        Ok(vmx) => vmx,
+        Err(reason) => {
+            AP_TRANSITION_ERRORS[slot].record(1, reason);
             control.failures.fetch_add(1, Ordering::AcqRel);
             AP_TRANSITION_ENTERED[slot].store(false, Ordering::Release);
             RENDEZVOUS_ISR_ACTIVE.fetch_sub(1, Ordering::AcqRel);
@@ -478,24 +516,30 @@ fn enter_ap_transition_if_requested() {
         }
     };
     mark_ap_mask(&AP_VMX_CONTRACT_DONE_MASK, slot);
+    let left_vmx = vmx == crate::hv::LiveUpdateVmxDisposition::Off;
+    let vmxoff_deferred = vmx == crate::hv::LiveUpdateVmxDisposition::Retained;
     if left_vmx {
         mark_ap_mask(&AP_VMXOFF_EXECUTED_MASK, slot);
     }
-    // Publish arrival only after this CPU has completed every operation that
-    // can still fail. Otherwise the BSP can transiently observe N/N, cross the
-    // irreversible barrier, and later wait forever for an AP that retreated
-    // after a failed VMXOFF. The window is especially plausible on large SMP.
+    if vmxoff_deferred {
+        mark_ap_mask(&AP_VMXOFF_DEFERRED_MASK, slot);
+    }
+    // Publish arrival after all reversible checks. Retained Hulls execute
+    // their VMXOFF at stack switch and publish `stacked` only on success.
     control.arrived.fetch_add(1, Ordering::AcqRel);
     let lapic_id = crate::percpu::this_cpu().lapic_id();
-    let park: extern "C" fn(*const TransitionControl, usize, u32) =
+    let park: extern "C" fn(*const TransitionControl, usize, u32, bool) =
         unsafe { core::mem::transmute(control.ap_park_hhdm as usize) };
-    park(control, slot, lapic_id);
+    park(control, slot, lapic_id, vmxoff_deferred);
 
     // The dedicated transition mapping returns only when the BSP aborts
     // before the irreversible stack-switch phase. `arrived` is released last:
     // once the BSP observes zero it may unmap and free the control arena.
-    if left_vmx && crate::hv::enter_vmx_root_for_current_cpu_contract().is_err() {
-        control.failures.fetch_add(1, Ordering::AcqRel);
+    if left_vmx {
+        if let Err(reason) = crate::hv::enter_vmx_root_for_current_cpu_contract() {
+            AP_TRANSITION_ERRORS[slot].record(2, reason);
+            control.failures.fetch_add(1, Ordering::AcqRel);
+        }
     }
     AP_TRANSITION_ENTERED[slot].store(false, Ordering::Release);
     control.arrived.fetch_sub(1, Ordering::AcqRel);
@@ -509,11 +553,13 @@ unsafe extern "C" fn trueos_live_update_ap_park_trampoline(
     _control: *const TransitionControl,
     _slot: usize,
     _lapic_id: u32,
+    _vmxoff_deferred: bool,
 ) {
     core::arch::naked_asm!(
         "mov r8, rdi",
         "mov r9, rsi",
         "mov r10, rdx",
+        "mov r11, rcx",
         "1:",
         "mov rax, qword ptr [r8 + {command}]",
         "cmp rax, {abort}",
@@ -523,6 +569,13 @@ unsafe extern "C" fn trueos_live_update_ap_park_trampoline(
         "pause",
         "jmp 1b",
         "3:",
+        // A retained RAM pause must remain resumable until this irreversible
+        // command. No old-kernel VMCS/VPID state is needed after stack switch.
+        "test r11b, r11b",
+        "jz 6f",
+        "vmxoff",
+        "jna 7f",
+        "6:",
         "mov rax, r9",
         "inc rax",
         "imul rax, qword ptr [r8 + {stack_stride}]",
@@ -554,10 +607,19 @@ unsafe extern "C" fn trueos_live_update_ap_park_trampoline(
         "5:",
         "pause",
         "jmp 4b",
+        "7:",
+        "mov qword ptr [r8 + {vmxoff_failure_slot}], r9",
+        "lock inc qword ptr [r8 + {failures}]",
+        "8:",
+        "cli",
+        "hlt",
+        "jmp 8b",
         "9:",
         "ret",
         command = const offset_of!(TransitionControl, command),
         stacked = const offset_of!(TransitionControl, stacked),
+        failures = const offset_of!(TransitionControl, failures),
+        vmxoff_failure_slot = const offset_of!(TransitionControl, vmxoff_failure_slot),
         cr3 = const offset_of!(TransitionControl, cr3),
         stack_base = const offset_of!(TransitionControl, stack_base_hhdm),
         stack_stride = const offset_of!(TransitionControl, stack_stride),
@@ -972,10 +1034,12 @@ async fn preflight_ap_transitions(
         let word = slot / 64;
         let bit = 1u64 << (slot % 64);
         let vmxoff_executed = AP_VMXOFF_EXECUTED_MASK[word].load(Ordering::Acquire) & bit != 0;
+        let vmxoff_deferred = AP_VMXOFF_DEFERRED_MASK[word].load(Ordering::Acquire) & bit != 0;
         let complete = format!(
-            "update live: step=12q/20 AP-preflight-complete slot={} vmx-contract-done=1 vmxoff-executed={} abort-returned=1",
+            "update live: step=12q/20 AP-preflight-complete slot={} vmx-contract-done=1 vmxoff-executed={} vmxoff-deferred={} abort-returned=1 safe-point=1",
             slot,
             u8::from(vmxoff_executed),
+            u8::from(vmxoff_deferred),
         );
         report_update(target, complete.as_str());
         crate::log_info!(target: "global"; "{}\n", complete);
@@ -992,21 +1056,18 @@ fn probe_one_ap_transition(
     control.arrived.store(0, Ordering::Release);
     control.stacked.store(0, Ordering::Release);
     control.failures.store(0, Ordering::Release);
-    for word in 0..CPU_MASK_WORDS {
-        AP_ISR_ENTERED_MASK[word].store(0, Ordering::Release);
-        AP_VMX_CONTRACT_DONE_MASK[word].store(0, Ordering::Release);
-        AP_VMXOFF_EXECUTED_MASK[word].store(0, Ordering::Release);
-    }
+    reset_ap_transition_diagnostics();
 
     let interrupts_were_enabled = x86_64::instructions::interrupts::are_enabled();
     x86_64::instructions::interrupts::disable();
+    ACTIVE_AP_SLOT.store(slot as u64, Ordering::Release);
     ACTIVE_CONTROL_HHDM.store(staged.control_hhdm, Ordering::Release);
     control.command.store(TRANSITION_PARK, Ordering::Release);
 
-    if !crate::remote_work_wake::send_fixed_x2apic_ipi(slot as u32, RENDEZVOUS_VECTOR) {
+    if !crate::remote_work_wake::wake_cpu_for_remote_work(slot as u32) {
         control.failures.fetch_add(1, Ordering::AcqRel);
         finish_ap_preflight_abort(control, interrupts_were_enabled);
-        return Err(LiveUpdateError::ApRendezvous("preflight IPI delivery unavailable"));
+        return Err(ap_transition_error(slot, "preflight safe-point wake unavailable"));
     }
 
     let timeout_ticks = AP_RENDEZVOUS_TIMEOUT_MS
@@ -1017,25 +1078,61 @@ fn probe_one_ap_transition(
     while control.arrived.load(Ordering::Acquire) == 0 {
         if control.failures.load(Ordering::Acquire) != 0 {
             finish_ap_preflight_abort(control, interrupts_were_enabled);
-            return Err(LiveUpdateError::ApRendezvous("AP preflight transition failure"));
+            return Err(ap_transition_error(slot, "AP preflight transition failure"));
         }
         if embassy_time_driver::now() >= deadline {
             finish_ap_preflight_abort(control, interrupts_were_enabled);
-            return Err(LiveUpdateError::ApRendezvous("AP preflight timeout"));
+            return Err(ap_transition_error(slot, "AP preflight safe-point timeout"));
         }
         core::hint::spin_loop();
     }
 
     finish_ap_preflight_abort(control, interrupts_were_enabled);
     if control.failures.load(Ordering::Acquire) != 0 {
-        return Err(LiveUpdateError::ApRendezvous("AP preflight abort return failure"));
+        return Err(ap_transition_error(slot, "AP preflight abort return failure"));
     }
     Ok(())
+}
+
+fn reset_ap_transition_diagnostics() {
+    ACTIVE_AP_SLOT.store(0, Ordering::Release);
+    for error in &AP_TRANSITION_ERRORS {
+        error.stage.store(0, Ordering::Release);
+    }
+    for word in 0..CPU_MASK_WORDS {
+        AP_ISR_ENTERED_MASK[word].store(0, Ordering::Release);
+        AP_VMX_CONTRACT_DONE_MASK[word].store(0, Ordering::Release);
+        AP_VMXOFF_EXECUTED_MASK[word].store(0, Ordering::Release);
+        AP_VMXOFF_DEFERRED_MASK[word].store(0, Ordering::Release);
+    }
+}
+
+/// Read only after the abort drain has joined every AP. The producer records
+/// a static string before publishing its stage; no allocation or AP lock.
+fn ap_transition_error(slot: usize, fallback: &'static str) -> LiveUpdateError {
+    let error = &AP_TRANSITION_ERRORS[slot];
+    let stage = error.stage.load(Ordering::Acquire);
+    let reason = if stage == 0 {
+        fallback
+    } else {
+        let bytes = unsafe { core::slice::from_raw_parts(
+            error.reason_ptr.load(Ordering::Relaxed) as *const u8,
+            error.reason_len.load(Ordering::Relaxed) as usize,
+        ) };
+        // `record` accepts only &'static str.
+        unsafe { core::str::from_utf8_unchecked(bytes) }
+    };
+    LiveUpdateError::ApTransition {
+        slot,
+        stage: match stage { 1 => "VMX-prepare", 2 => "VMX-abort-return", _ => "safe-point" },
+        reason,
+    }
 }
 
 fn finish_ap_preflight_abort(control: &TransitionControl, interrupts_were_enabled: bool) {
     control.command.store(TRANSITION_ABORT, Ordering::Release);
     ACTIVE_CONTROL_HHDM.store(0, Ordering::Release);
+    ACTIVE_AP_SLOT.store(0, Ordering::Release);
     let timeout_ticks = ABORT_DRAIN_TIMEOUT_MS
         .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
         .saturating_add(999)
@@ -1398,11 +1495,7 @@ async fn rendezvous_aps(
     control.arrived.store(0, Ordering::Release);
     control.stacked.store(0, Ordering::Release);
     control.failures.store(0, Ordering::Release);
-    for word in 0..CPU_MASK_WORDS {
-        AP_ISR_ENTERED_MASK[word].store(0, Ordering::Release);
-        AP_VMX_CONTRACT_DONE_MASK[word].store(0, Ordering::Release);
-        AP_VMXOFF_EXECUTED_MASK[word].store(0, Ordering::Release);
-    }
+    reset_ap_transition_diagnostics();
     transition_marker(b"live-update: step=12e/20 rendezvous-counters-cleared APs-signaled=0\n");
 
     let interrupts_were_enabled = x86_64::instructions::interrupts::are_enabled();
@@ -1413,19 +1506,18 @@ async fn rendezvous_aps(
     transition_marker(b"live-update: step=12g/20 rendezvous-control-published APs-signaled=0\n");
 
     for slot in 1..crate::percpu::total_slots() {
+        ACTIVE_AP_SLOT.store(slot as u64, Ordering::Release);
         // Wake the AP through its ordinary executor interrupt. It joins the
         // transition only after the interrupted executor poll has returned to
         // runtime::run_ap_forever's lock-free safe-point boundary.
         if !crate::remote_work_wake::wake_cpu_for_remote_work(slot as u32) {
             control.failures.fetch_add(1, Ordering::AcqRel);
             abort_rendezvous(staged, interrupts_were_enabled);
-            return Err(LiveUpdateError::ApRendezvous("AP safe-point wake unavailable"));
+            return Err(ap_transition_error(slot, "AP safe-point wake unavailable"));
         }
 
-        // Complete one AP's entire fallible transition before waking the next.
-        // The individual preflight proved every target can make the VMX
-        // transition; the cooperative boundary additionally proves it has
-        // returned from task polling before it is permanently parked.
+        // Repeat the reversible preflight at the same executor boundary,
+        // keeping retained VMX ownership intact until the stack-switch command.
         let timeout_ticks = AP_RENDEZVOUS_TIMEOUT_MS
             .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
             .saturating_add(999)
@@ -1435,11 +1527,11 @@ async fn rendezvous_aps(
         while control.arrived.load(Ordering::Acquire) < expected_arrivals {
             if control.failures.load(Ordering::Acquire) != 0 {
                 abort_rendezvous(staged, interrupts_were_enabled);
-                return Err(LiveUpdateError::ApRendezvous("AP reported transition failure"));
+                return Err(ap_transition_error(slot, "AP reported transition failure"));
             }
             if embassy_time_driver::now() >= deadline {
                 abort_rendezvous(staged, interrupts_were_enabled);
-                return Err(LiveUpdateError::ApRendezvous("timeout"));
+                return Err(ap_transition_error(slot, "AP final safe-point timeout"));
             }
             core::hint::spin_loop();
         }
@@ -1510,10 +1602,13 @@ async fn switch_ap_transition_stacks(target: &MatrixTarget, staged: &StagedCandi
         if stacked >= staged.expected_aps {
             break;
         }
-        if Instant::now().as_millis() >= deadline {
+        let failures = control.failures.load(Ordering::Acquire);
+        if failures != 0 || Instant::now().as_millis() >= deadline {
             let timeout = format!(
-                "update live: fail-stop=AP-transition-stack-timeout stacked={}/{} runtime=BSP+network",
+                "update live: fail-stop={} stacked={}/{} vmxoff-failure-slot={} failures={} runtime=BSP+network",
+                if failures != 0 { "AP-commit-VMXOFF-failed" } else { "AP-transition-stack-timeout" },
                 stacked, staged.expected_aps,
+                control.vmxoff_failure_slot.load(Ordering::Acquire), failures,
             );
             report_update(target, timeout.as_str());
             crate::log_info!(target: "global"; "{}\n", timeout);
@@ -1669,6 +1764,7 @@ fn abort_rendezvous(staged: &mut StagedCandidate, interrupts_were_enabled: bool)
     // Prevent a late IPI from acquiring the control pointer while the existing
     // ISR/trampoline population drains.
     ACTIVE_CONTROL_HHDM.store(0, Ordering::Release);
+    ACTIVE_AP_SLOT.store(0, Ordering::Release);
     let timeout_ticks = ABORT_DRAIN_TIMEOUT_MS
         .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
         .saturating_add(999)
@@ -2109,6 +2205,7 @@ fn stage_candidate(kernel: &[u8]) -> Result<StagedCandidate, LiveUpdateError> {
             arrived: AtomicU64::new(0),
             stacked: AtomicU64::new(0),
             failures: AtomicU64::new(0),
+            vmxoff_failure_slot: AtomicU64::new(0),
             cr3,
             root_hhdm,
             kernel_slot: kernel_slot as u64,

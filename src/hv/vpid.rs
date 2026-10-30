@@ -425,6 +425,30 @@ pub fn lane_state_name(slot: usize) -> &'static str {
     state_name(lane.state.load(Ordering::Acquire))
 }
 
+/// Inspect a retained assignment without changing its ownership or lane state.
+/// Only the owning CPU at an executor safe point may use this for live update.
+pub(crate) fn retained_owner_for_live_update() -> Result<Option<(u8, u64)>, &'static str> {
+    let slot = current_lane_slot()?;
+    let lane = &LANE_VPID_STATE[slot];
+    match lane.state.load(Ordering::Acquire) {
+        LANE_READY => Ok(None),
+        LANE_ACTIVE => {
+            let owner = lane.owner_tag.load(Ordering::Acquire);
+            let vm_id = owner.checked_sub(1)
+                .and_then(|id| u8::try_from(id).ok())
+                .filter(|&id| vpid_for_vm(id) == Some(lane.vpid.load(Ordering::Acquire)))
+                .ok_or("live-update VPID owner metadata mismatch")?;
+            Ok(Some((vm_id, lane.generation.load(Ordering::Acquire))))
+        }
+        _ => Err("live-update VPID lane is neither idle nor retained"),
+    }
+}
+
+/// Fence a paused assignment while retaining it for a reversible update abort.
+pub(crate) fn fence_retained_lane_for_live_update() -> Result<(), &'static str> {
+    flush_allocatable_vpids()
+}
+
 fn current_lane_slot() -> Result<usize, &'static str> {
     let slot = crate::percpu::current_slot();
     if slot < LANE_VPID_STATE.len() && slot >= 2 {

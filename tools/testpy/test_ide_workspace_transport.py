@@ -22,10 +22,16 @@ mod allcaps { pub mod hv { pub const VM_ID_LIMIT: usize = 20; } }
 mod allocators {
     pub fn with_host_alloc_domain_strong<R>(call: impl FnOnce() -> R) -> R { call() }
 }
+mod trueos_ide { pub mod store_protocol { pub const REPLY: &str = "vFile:ide/store-reply"; } }
 mod r {
     #[allow(dead_code)]
     #[path = @CABI_CODES@] pub mod cabi_codes;
-    pub mod services { pub(crate) use crate::ide_workspace_service; }
+    pub mod services {
+        pub(crate) use crate::ide_workspace_service;
+        pub mod ide_source_service {
+            pub fn read_for_owner(_: u32) -> Result<Vec<u8>, i32> { Err(crate::r::cabi_codes::FS_ERR_NOT_FOUND) }
+        }
+    }
     pub mod io {
       pub mod async_fs_cabi {
         pub fn canonical_file_key(path: &str) -> Result<String, i32> {
@@ -95,6 +101,7 @@ mod hv {
 #[path = @SOURCE@] mod ide_workspace_service;
 
 mod async_fs_adapter {
+    use crate::trueos_ide;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard};
@@ -127,7 +134,7 @@ mod async_fs_adapter {
         let registration = json!({"version":1,"project":"demo","database":"common/ide/projects.redb"});
         assert_eq!(write(0, "vFile:ide/register", registration.clone()), Err(FS_ERR_NOT_FOUND));
         write(OWNER, "vFile:ide/register", registration.clone()).unwrap();
-        assert_eq!(write(CLIENT, "vFile:ide/register", json!({"version":1,"project":"other",
+        assert_eq!(write(CLIENT, "vFile:ide/register", json!({"version":1,"project":"demo",
             "database":"/apps/common/ide/projects.redb"})), Err(FS_ERR_ALREADY_EXISTS));
         let descriptors: Value = serde_json::from_slice(&service::read_for_owner(CLIENT, "vFile:ide/discover").unwrap()).unwrap();
         let endpoint = descriptors[0]["endpoint"].as_u64().unwrap();

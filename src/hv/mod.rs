@@ -464,7 +464,45 @@ pub fn enter_vmx_root_for_current_cpu_contract() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Tear down this CPU's generation-local VMX root state before FULLFORGET.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum LiveUpdateVmxDisposition {
+    Inactive,
+    Off,
+    Retained,
+}
+
+/// Called only at the owning AP's executor safe point. A RAM-paused Hull owns
+/// its VMCS and VPID until commit: cycling VMX here would destroy abort recovery.
+pub(crate) fn prepare_current_cpu_for_live_update() -> Result<LiveUpdateVmxDisposition, &'static str> {
+    let slot = current_vmx_slot()?;
+    if slot <= 1 || !VMX_ROOT_ACTIVE_BY_CPU[slot].load(Ordering::Acquire) {
+        return Ok(LiveUpdateVmxDisposition::Inactive);
+    }
+    if let Some((vm_id, generation)) = vpid::retained_owner_for_live_update()? {
+        let vm = vm_slot(vm_id).ok_or("live-update retained VM missing")?;
+        if vm.run_generation.load(Ordering::Acquire) != generation
+            || !vm.running.load(Ordering::Acquire)
+            || vm.starting.load(Ordering::Acquire)
+            || vm.stop_req.load(Ordering::Acquire)
+            || !vm.execution_pause.paused()
+        {
+            return Err("live-update retained VPID owner is not RAM-paused in this generation");
+        }
+        let eptp = ACTIVE_EPTP_BY_VM[vm_id as usize].load(Ordering::Acquire);
+        if eptp == 0 {
+            return Err("live-update retained VM has no active EPT");
+        }
+        vpid::fence_retained_lane_for_live_update()?;
+        if !vmx::invept_single_context(eptp) {
+            return Err("live-update retained VM INVEPT failed");
+        }
+        return Ok(LiveUpdateVmxDisposition::Retained);
+    }
+    leave_vmx_root_for_current_cpu_contract()?;
+    Ok(LiveUpdateVmxDisposition::Off)
+}
+
+/// Tear down this CPU's idle generation-local VMX root state before FULLFORGET.
 ///
 /// VM snapshots are portable envelopes on TRUEOSFS; VMXON and VMCS pages are
 /// deliberately not carried into the replacement kernel.
@@ -685,6 +723,7 @@ struct BlueprintChildLink {
     parent_vm_id: u8,
     parent_generation: u64,
     child_generation: u64,
+    child_lifecycle_generation: u64,
     state: u8,
     parent_to_child: VecDeque<AllocVec<u8>>,
     child_to_parent: VecDeque<AllocVec<u8>>,
@@ -1155,6 +1194,8 @@ pub(crate) struct BlueprintChildProcessLaunch {
     #[serde(default)]
     pub env: BTreeMap<AllocString, AllocString>,
     pub cwd: Option<AllocString>,
+    #[serde(default)]
+    pub script: Option<AllocString>,
 }
 
 pub(crate) fn blueprint_child_spawn_program(parent_vm_id: u8, payload: &[u8]) -> Result<u64, i32> {
@@ -1163,6 +1204,7 @@ pub(crate) fn blueprint_child_spawn_program(parent_vm_id: u8, payload: &[u8]) ->
     if request.program.is_empty()
         || request.program.contains('\0')
         || request.args.iter().any(|arg| arg.contains('\0'))
+        || request.script.as_ref().is_some_and(|script| script.contains('\0'))
         || request
             .env
             .iter()
@@ -1254,6 +1296,8 @@ fn blueprint_child_spawn_archive(
         .unwrap_or(0)
         .wrapping_add(1)
         .max(1);
+    let child_lifecycle_generation = vm_slot(child_vm_id)
+        .ok_or(BLUEPRINT_CHILD_ERR_UNAVAILABLE)?.lifecycle_generation.load(Ordering::Acquire);
     let handle = BLUEPRINT_CHILD_HANDLE_SEQUENCE
         .fetch_add(1, Ordering::AcqRel)
         .max(1);
@@ -1266,6 +1310,7 @@ fn blueprint_child_spawn_archive(
         parent_vm_id,
         parent_generation,
         child_generation,
+        child_lifecycle_generation,
         state: BLUEPRINT_CHILD_STATE_STARTING,
         parent_to_child,
         child_to_parent: VecDeque::new(),
@@ -1476,7 +1521,7 @@ pub(crate) fn blueprint_child_terminate(actor_vm_id: u8, handle: u64) -> Result<
     let link = link.as_mut().ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
     if link.state < BLUEPRINT_CHILD_STATE_EXITED {
         link.state = BLUEPRINT_CHILD_STATE_STOPPING;
-        let _ = stop(child_vm_id);
+        let _ = stop_matching_generation(child_vm_id, Some(link.child_lifecycle_generation));
     }
     Ok(())
 }
@@ -1484,6 +1529,7 @@ pub(crate) fn blueprint_child_terminate(actor_vm_id: u8, handle: u64) -> Result<
 fn blueprint_child_lifecycle_cleanup(vm_id: u8, generation: u64, retain_for_resume: bool) {
     if !retain_for_resume {
         crate::r::services::ide_workspace_service::release_vm(vm_id, generation);
+        crate::r::services::ide_source_service::release_vm(vm_id, generation);
         clear_blueprint_child_template(vm_id);
     }
     if let Some(slot) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize) {
@@ -1500,16 +1546,19 @@ fn blueprint_child_lifecycle_cleanup(vm_id: u8, generation: u64, retain_for_resu
     // A parent owns the lifetime of its hidden children.  Requesting stop is
     // nonblocking; each child still performs the ordinary VM teardown path.
     for (child_id, slot) in BLUEPRINT_CHILD_LINKS.iter().enumerate() {
-        let owned = slot
-            .lock()
-            .as_ref()
-            .is_some_and(|link| blueprint_child_actor_is_parent(link, vm_id, generation));
-        if owned {
+        let owned = {
+            let mut guard = slot.lock();
+            if guard.as_ref().is_some_and(|link| blueprint_child_actor_is_parent(link, vm_id, generation)) {
+                guard.take()
+            } else { None }
+        };
+        if let Some(link) = owned {
             // No principal remains to observe this endpoint, so release the
             // queues now rather than retaining guest-provided bytes until the
             // numeric VM slot happens to be reused.
-            let _ = slot.lock().take();
-            let _ = stop(child_id as u8);
+            if link.state < BLUEPRINT_CHILD_STATE_EXITED {
+                let _ = stop_matching_generation(child_id as u8, Some(link.child_lifecycle_generation));
+            }
         }
     }
 }
@@ -3208,6 +3257,13 @@ pub fn stage_blueprint_launch(
         clear_blueprint_child_template(vm_id);
         return Err(StartError::GuestMemoryUnavailable);
     };
+    let child_launch = BLUEPRINT_CHILD_LINKS.get(vm_id as usize).and_then(|slot| {
+        slot.lock().as_ref()
+            .filter(|link| link.child_generation == generation)
+            .and_then(|link| link.process_launch.clone())
+    });
+    let launch_script = child_launch.as_ref().and_then(|request| request.script.clone())
+        .or_else(|| state.launch_script.clone());
     let mut process_context = BlueprintProcessContext {
         args: crate::hv::blueprint::build_process_args(
             state.archive.as_str(),
@@ -3218,7 +3274,7 @@ pub fn stage_blueprint_launch(
             state.module_bytes.as_slice(),
             Some(app_fs_root.as_str()),
             Some(&state.identity),
-            state.launch_script.as_deref(),
+            launch_script.as_deref(),
             trueosfs_scope,
         ),
         console_target,
@@ -3231,13 +3287,7 @@ pub fn stage_blueprint_launch(
         console_input_since_ms: None,
         exit_reason: None,
     };
-    if let Some(link) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize).and_then(|slot| {
-        let guard = slot.lock();
-        guard
-            .as_ref()
-            .filter(|link| link.child_generation == generation)
-            .and_then(|link| link.process_launch.clone())
-    }) {
+    if let Some(link) = child_launch {
         // Platform identity, access scope and channel selection are kernel-owned.
         for (key, value) in link.env {
             if !key.starts_with("TRUEOS_") {
@@ -3267,7 +3317,7 @@ pub fn stage_blueprint_launch(
         clear_blueprint_child_template(vm_id);
         return Err(StartError::GuestMemoryUnavailable);
     }
-    *launch_script_slot.lock() = state.launch_script.clone();
+    *launch_script_slot.lock() = launch_script;
     *slot.lock() = Some(guest_state);
     let _ = exit_reason_mailbox.lock().take();
     *process_slot.lock() = Some(process_context);

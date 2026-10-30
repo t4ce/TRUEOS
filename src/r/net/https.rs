@@ -1494,6 +1494,62 @@ pub async fn get_bytes_shared(
     }
 }
 
+/// A cancellable finite GET for background image assets. Redirects use the
+/// existing URI resolver and one total deadline; cancellation closes/fences the
+/// active TLS owner instead of abandoning a still-running socket future.
+pub(crate) async fn get_image_bytes_shared(
+    url: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+    cancellation: &MediaFetchCancellation,
+) -> Result<Vec<u8>, String> {
+    let request = HttpsRequest {
+        method: "GET",
+        content_type: None,
+        headers: vec![
+            (String::from("Accept"), String::from("image/png,image/jpeg,image/bmp,*/*;q=0.1")),
+            (String::from("Accept-Encoding"), String::from("identity")),
+            (String::from("User-Agent"), String::from("TRUEOS Hull raster/1")),
+        ],
+        body: &[],
+    };
+    let mut current = String::from(url);
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms.max(1) as u64);
+    let mut seen = alloc::collections::BTreeSet::new();
+    for hop in 0..=5 {
+        if cancellation.0.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
+        // Share image admission's URL policy for every redirect, so credentials,
+        // oversized URLs and non-HTTPS locations cannot bypass the first check.
+        current = crate::r::services::hull_image_policy::canonical_url(&current)
+            .map_err(|_| String::from("unsupported image redirect URL"))?;
+        if !seen.insert(current.clone()) { return Err(String::from("redirect loop")); }
+        let target = parse_fetch_url(&current).map_err(String::from)?;
+        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+        if remaining == 0 { return Err(String::from("timeout")); }
+        let response = request_https_response_once_cancellable(
+            &target, &request, remaining.min(u32::MAX as u64) as u32, max_bytes,
+            Some(&cancellation.0),
+        );
+        let mut response = core::pin::pin!(response);
+        let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(remaining)));
+        let mut expired = false;
+        let response = core::future::poll_fn(|cx| {
+            if !expired && timeout.as_mut().poll(cx).is_ready() {
+                expired = true;
+                cancellation.cancel();
+            }
+            // Keep polling after cancellation until the TLS owner fence retires;
+            // dropping the response future here would leave live socket work.
+            response.as_mut().poll(cx)
+        }).await?;
+        if !matches!(response.status, 301 | 302 | 303 | 307 | 308) { return success_body(response); }
+        if hop == 5 { return Err(String::from("too many redirects")); }
+        let location = response.location.ok_or_else(|| String::from("redirect missing location"))?;
+        current = resolve_fetch_redirect(&target, &location)?;
+    }
+    Err(String::from("too many redirects"))
+}
+
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn get_bytes_bearer_shared(
     url: &str,

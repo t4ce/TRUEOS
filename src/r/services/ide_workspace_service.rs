@@ -1,6 +1,7 @@
 //! Bounded routing between an Edit workspace owner and independent VMX clients.
 //!
-//! The owner retains all source, editor, and build semantics. This registry only
+//! Edit retains editor and build semantics; the source service owns persistence.
+//! This registry only
 //! binds opaque endpoints and request tickets to host-observed VM incarnations.
 //! Reads are immediate and return an empty body when no frame is available.
 
@@ -43,9 +44,9 @@ pub(crate) fn is_write(path: &str) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Identity {
-    vm: u8,
-    run: u64,
+pub(crate) struct Identity {
+    pub(crate) vm: u8,
+    pub(crate) run: u64,
     instance: [u8; 16],
 }
 
@@ -240,8 +241,9 @@ impl Registry {
     ) -> Result<(), i32> {
         if registration.version != 1
             || registration.project.is_empty()
+            || registration.project.trim() != registration.project
             || registration.project.len() > 128
-            || registration.project.contains('\0')
+            || registration.project.chars().any(char::is_control)
         {
             return Err(FS_ERR_BAD_PARAM);
         }
@@ -249,7 +251,8 @@ impl Registry {
             .endpoints
             .iter()
             .flatten()
-            .any(|endpoint| endpoint.database_key == database_key && endpoint.identity != identity)
+            .any(|endpoint| endpoint.database_key == database_key
+                && endpoint.descriptor.project == registration.project && endpoint.identity != identity)
         {
             return Err(FS_ERR_ALREADY_EXISTS);
         }
@@ -441,7 +444,7 @@ fn available(vm: u8) -> bool {
         && !state.restore_inflight
 }
 
-fn caller(owner: u32) -> Result<Identity, i32> {
+pub(crate) fn caller(owner: u32) -> Result<Identity, i32> {
     let vm = owner & !0x8000_0000;
     if owner & 0x8000_0000 == 0 || vm >= VM_LIMIT as u32 || !available(vm as u8) {
         return Err(FS_ERR_NOT_FOUND);
@@ -477,6 +480,12 @@ fn with_registry<T>(
         }
         return action(&mut registry, &available);
     }
+}
+
+pub(crate) fn owns_project(identity: Identity, database_key: &str, project: &str) -> Result<bool, i32> {
+    with_registry(identity, |registry, _| Ok(registry.endpoints[identity.vm as usize]
+        .as_ref().is_some_and(|endpoint| endpoint.identity == identity
+            && endpoint.database_key == database_key && endpoint.descriptor.project == project)))
 }
 
 /// Async-FS must reserve a result slot before calling this consuming read.
@@ -609,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn writer_lease_is_exclusive_and_registration_is_idempotent() {
+    fn project_lease_is_exclusive_and_registration_is_idempotent() {
         let mut registry = Registry::new();
         let owner = identity(0, 1);
         let endpoint = register(&mut registry, owner);
@@ -619,7 +628,7 @@ mod tests {
                 identity(1, 1),
                 Registration {
                     version: 1,
-                    project: "other".into(),
+                    project: "demo".into(),
                     database: "/apps/common/ide/projects.redb".into()
                 },
                 "apps/common/ide/projects.redb".into(),
@@ -627,6 +636,14 @@ mod tests {
             ),
             Err(FS_ERR_ALREADY_EXISTS)
         );
+        registry.register(identity(1, 1), Registration {
+            version: 1, project: "other".into(), database: "/apps/common/ide/projects.redb".into(),
+        }, "apps/common/ide/projects.redb".into(), None).unwrap();
+        let other = registry.endpoints[1].as_ref().unwrap().descriptor.endpoint;
+        registry.release_run(0, 1);
+        assert_eq!(registry.endpoints[1].as_ref().unwrap().descriptor.endpoint, other);
+        // A new owner can now acquire demo without touching the other lease.
+        let _ = register(&mut registry, identity(0, 2));
         assert!(registry.discover(&[false; VM_LIMIT]).unwrap() == b"[]");
         assert!(
             registry.endpoints[0].is_some(),

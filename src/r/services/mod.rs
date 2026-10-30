@@ -2,6 +2,7 @@
 pub(crate) mod codex_input_service;
 pub(crate) mod codex_progress_service;
 pub(crate) mod ide_workspace_service;
+pub(crate) mod ide_source_service;
 
 pub mod gamepad_control_service;
 pub mod gna_audio_frontend_service;
@@ -9,6 +10,8 @@ pub mod gna_audio_frontend_service;
 pub mod hda_capture_lane;
 pub mod hid_udp_service;
 pub(crate) mod hull_font_service;
+pub(crate) mod hull_image_policy;
+pub(crate) mod hull_image_service;
 pub(crate) mod image_open_service;
 pub mod keyboard_control_service;
 pub mod media_service;

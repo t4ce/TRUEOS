@@ -2602,6 +2602,16 @@ fn launch_script_request(vm_id: u8, payload: &[u8]) -> i32 {
     } else { None };
     let archive = app.rsplit('/').next().unwrap_or(app);
     let archive = if archive.ends_with(".bp") { String::from(archive) } else { alloc::format!("{archive}.bp") };
+    // Report absent AppDB entries before admitting the asynchronous launch.
+    // Callers can use the normal Apps downloader and retry without losing
+    // their startup script or confusing queue admission with app availability.
+    if path.is_none() {
+        match crate::app_db::list() {
+            Ok(apps) if !apps.iter().any(|entry| entry.archive == archive) => return -2,
+            Err(_) => return -5,
+            _ => {},
+        }
+    }
     let script = (!script.is_empty()).then(|| String::from(script));
     let Some(worker) = crate::workers::pick_background_spawner() else { return -3; };
     match launch_archive_task(frontend, archive, path, script, destination) {

@@ -9,6 +9,7 @@ pub(crate) mod collapse_api;
 pub(crate) mod cursor_image_api;
 pub(crate) mod display_api;
 pub(crate) mod drag_drop_api;
+pub(crate) mod hull_image_api;
 pub(crate) mod hull_text_api;
 pub(crate) mod native_compute_api;
 pub use cursor_image_api::{
@@ -539,6 +540,7 @@ struct BlueprintSceneSurface {
     skybox_upload: Option<Rgb565Upload>,
     skybox_kernel_upload: Option<ShaderToyPackageUpload>,
     skybox_kernel_registered: bool,
+    hull_images: hull_image_api::ImageResources,
     sprites: Vec<(u32, BlueprintSpriteSource)>,
     sprite_upload: Option<Rgba8Upload>,
     solid_source: Option<OwnedRgba8Surface>,
@@ -638,6 +640,8 @@ struct Rgb565Upload {
 
 #[derive(Copy, Clone)]
 struct OwnedRgba8Surface {
+    // Nonzero only for service-owned web images, including GPU quarantine.
+    hull_image_budget_bytes: usize,
     opaque: bool,
     premultiplied: bool,
     nonzero_alpha_runs: *const NonzeroAlphaRun,
@@ -698,6 +702,9 @@ struct SpriteSceneUpload {
     quads: Vec<TrueosUi4SpriteQuad>,
 }
 
+// Serialize source VA reservations with publication, including transient upload
+// allocations that are prepared outside SURFACES. Draw only needs SURFACES.
+static SPRITE_MUTATION: Mutex<()> = Mutex::new(());
 static SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
 // One primary-display transition at a time. Revoke on VM teardown as well as
 // normal client completion, so a crashing Blueprint cannot leave a black screen.
@@ -739,6 +746,9 @@ static QUARANTINED_SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec:
 /// The caller owns the application lifecycle decision. UI4 only applies the
 /// owner-scoped resource revocation and does not inspect VM state.
 pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
+    if let WindowOwner::Vm(id) = owner {
+        crate::r::services::hull_image_service::release_owner(u32::from(id));
+    }
     release_display_color(owner, None);
     clipboard_api::release_owner(owner);
     display_api::release_owner(owner);
@@ -1306,6 +1316,7 @@ fn open_blueprint_surface_with_cadence_scaled(
                 skybox_upload: None,
                 skybox_kernel_upload: None,
                 skybox_kernel_registered: false,
+                hull_images: hull_image_api::ImageResources::new(),
                 sprites: Vec::new(),
 
                 sprite_upload: None,
@@ -1356,6 +1367,7 @@ fn open_blueprint_surface_with_cadence_scaled(
         skybox_upload: None,
         skybox_kernel_upload: None,
         skybox_kernel_registered: false,
+        hull_images: hull_image_api::ImageResources::new(),
         sprites: Vec::new(),
 
         sprite_upload: None,
@@ -1737,6 +1749,7 @@ fn begin_blueprint_frame_with_region(
     cpu_clear: bool,
     repaint_region: Option<DamageRect>,
 ) -> i32 {
+    hull_image_api::reap_retired();
     // Guest vmcalls enter here directly, bypassing the C-ABI wrappers. Reclaim
     // old immutable generations before admission on every producer path.
     reap_retired_frames();
@@ -4917,6 +4930,7 @@ pub(crate) fn begin_sprite_rgba8_upload(
     if window_id == 0 && sprite_id == collapse_api::UPLOAD_ID {
         return collapse_api::begin_terminal(owner, width, height);
     }
+    let _mutation = SPRITE_MUTATION.lock();
     let Some(packed_len) = expected_rgba8_len(width, height) else {
         return ERROR_INVALID;
     };
@@ -5004,6 +5018,7 @@ pub(crate) fn begin_sprite_rgba8_upload(
     let upload = Rgba8Upload {
         sprite_id,
         owned: OwnedRgba8Surface {
+            hull_image_budget_bytes: 0,
             opaque: false,
             premultiplied: false,
             nonzero_alpha_runs: core::ptr::null(),
@@ -5046,6 +5061,10 @@ fn allocate_sprite_gpu_va(
             (source.gpu, source.gpu.saturating_add(owned.bytes() as u64))
         })
         .collect::<Vec<_>>();
+    if let Some(upload) = &surface.sprite_upload {
+        let source = upload.owned.surface;
+        spans.push((source.gpu, source.gpu.saturating_add(upload.owned.bytes as u64)));
+    }
     spans.sort_unstable_by_key(|span| span.0);
     let mut candidate = base;
     for (start, end) in spans {
@@ -5115,6 +5134,7 @@ pub(crate) fn finish_sprite_rgba8_upload(
     window_id: u32,
     sprite_id: u32,
 ) -> i32 {
+    let _mutation = SPRITE_MUTATION.lock();
     let upload = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -5932,13 +5952,20 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
-    let Some(upload) = surface.sprite_scene_upload.take() else {
+    let Some(mut upload) = surface.sprite_scene_upload.take() else {
         return ERROR_STATE;
     };
     if upload.quads.len() != upload.expected {
         cancel_blueprint_sprite_frame_without_live_gpu(surface);
         return ERROR_INVALID;
     }
+    // Navigation may retire an image after its last status poll. Missing
+    // service-owned sources are transparent placeholders; preserve the frame
+    // lease and all later text/geometry instead of aborting the whole page.
+    upload.quads.retain(|quad| {
+        quad.sprite_id < hull_image_api::SERVICE_SPRITE_BASE
+            || surface.sprites.iter().any(|(id, _)| *id == quad.sprite_id)
+    });
     let Some(lease) = surface.write_lease else {
         cancel_blueprint_sprite_frame_without_live_gpu(surface);
         return ERROR_STATE;
@@ -6739,12 +6766,19 @@ fn finish_emulator_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     let Some(lease) = surface.write_lease else {
         return ERROR_STATE;
     };
-    let Some(upload) = surface.sprite_scene_upload.take() else {
+    let Some(mut upload) = surface.sprite_scene_upload.take() else {
         return ERROR_STATE;
     };
     if upload.quads.len() != upload.expected || surface.sprite_clear_rgba.is_none() {
         return ERROR_INVALID;
     }
+    // Navigation may retire an image after its last status poll. Missing
+    // service-owned sources are transparent placeholders; preserve the frame
+    // lease and all later text/geometry instead of aborting the whole page.
+    upload.quads.retain(|quad| {
+        quad.sprite_id < hull_image_api::SERVICE_SPRITE_BASE
+            || surface.sprites.iter().any(|(id, _)| *id == quad.sprite_id)
+    });
     let mut sources: Vec<(u32, Arc<Image>)> = Vec::new();
     let mut paints = Vec::new();
     for quad in upload.quads {
@@ -6920,6 +6954,7 @@ fn ensure_solid_source(surface: &mut BlueprintSceneSurface) -> Result<OwnedRgba8
         return Err(ERROR_UI4);
     };
     let owned = OwnedRgba8Surface {
+        hull_image_budget_bytes: 0,
         opaque: true,
         premultiplied: true,
         nonzero_alpha_runs: core::ptr::null(),
@@ -7425,6 +7460,7 @@ fn destroy_rgba8_surface(surface: OwnedRgba8Surface) {
         unsafe { drop(alloc::boxed::Box::from_raw(runs)) };
     }
     crate::dma::dealloc(surface.virt, surface.bytes);
+    hull_image_api::release_image_bytes(surface.hull_image_budget_bytes);
 }
 
 const fn pack_i32_pair(first: i32, second: i32) -> u64 {
@@ -7704,6 +7740,10 @@ fn blueprint_surface_close_request(
 }
 
 fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurfaceRelease) {
+    if let WindowOwner::Vm(id) = surface.owner {
+        crate::r::services::hull_image_service::release_window(u32::from(id), surface.render_target);
+    }
+    hull_image_api::forget_surface(surface.owner, surface.render_target, surface.hull_images.incarnation);
     release_display_color(surface.owner, Some(surface.render_target));
     clipboard_api::release_window(surface.owner, surface.window);
     DYNAMIC_CONTEXT_MENU_EVENTS

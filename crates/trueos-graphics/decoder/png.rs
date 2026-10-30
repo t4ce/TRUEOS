@@ -61,12 +61,29 @@ fn decode_indexed_png_rgba(
 }
 
 pub fn decode_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
+    decode_png_rgba_with_limit(bytes, None)
+}
+
+/// Hull admission checks dimensions before `read_info` or any frame allocation.
+/// The decoder's own limit also bounds ancillary/decompression buffers.
+pub(crate) fn decode_png_rgba_bounded(
+    bytes: &[u8], max_bytes: usize, max_dimension: u32,
+) -> Result<DecodedPng, PngDecodeError> {
+    decode_png_rgba_with_limit(bytes, Some((max_bytes, max_dimension)))
+}
+
+fn decode_png_rgba_with_limit(
+    bytes: &[u8], limit: Option<(usize, u32)>,
+) -> Result<DecodedPng, PngDecodeError> {
     let mut decoder = png::Decoder::new(Cursor::new(bytes));
-    let is_indexed = decoder
-        .read_header_info()
-        .map_err(|_| PngDecodeError::Invalid)?
-        .color_type
-        == png::ColorType::Indexed;
+    if let Some((max_bytes, _)) = limit { decoder.set_limits(png::Limits { bytes: max_bytes }); }
+    let header = decoder.read_header_info().map_err(|_| PngDecodeError::Invalid)?;
+    if let Some((max_bytes, max_dimension)) = limit {
+        if header.width == 0 || header.height == 0 || header.width > max_dimension || header.height > max_dimension
+            || (header.width as usize).checked_mul(header.height as usize).and_then(|n| n.checked_mul(4)).is_none_or(|n| n > max_bytes)
+        { return Err(PngDecodeError::Unsupported); }
+    }
+    let is_indexed = header.color_type == png::ColorType::Indexed;
     if is_indexed {
         return decode_indexed_png_rgba(decoder);
     }

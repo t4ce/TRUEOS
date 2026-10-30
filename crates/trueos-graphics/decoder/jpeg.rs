@@ -31,9 +31,25 @@ impl JpegDecodeError {
 }
 
 pub fn decode_jpeg_rgba(bytes: &[u8]) -> Result<DecodedJpeg, JpegDecodeError> {
-    let options = DecoderOptions::default()
+    decode_jpeg_rgba_with_limit(bytes, None)
+}
+
+pub(crate) fn decode_jpeg_rgba_bounded(
+    bytes: &[u8], max_bytes: usize, max_dimension: u32,
+) -> Result<DecodedJpeg, JpegDecodeError> {
+    decode_jpeg_rgba_with_limit(bytes, Some((max_bytes, max_dimension)))
+}
+
+fn decode_jpeg_rgba_with_limit(
+    bytes: &[u8], limit: Option<(usize, u32)>,
+) -> Result<DecodedJpeg, JpegDecodeError> {
+    let mut options = DecoderOptions::default()
         .jpeg_set_out_colorspace(ColorSpace::RGBA)
         .set_use_unsafe(true);
+    if let Some((_, max_dimension)) = limit {
+        options = options.set_max_width(max_dimension as usize)
+            .set_max_height(max_dimension as usize).jpeg_set_max_scans(64);
+    }
     if !JPEG_DECODE_GATE_LOGGED.swap(true, Ordering::AcqRel) {
         let layout = super::jpeg_layout::classify_jpeg_layout(bytes);
         crate::log!(
@@ -56,6 +72,11 @@ pub fn decode_jpeg_rgba(bytes: &[u8]) -> Result<DecodedJpeg, JpegDecodeError> {
     let height = u32::from(info.height);
     if width == 0 || height == 0 {
         return Err(JpegDecodeError::Invalid);
+    }
+    if let Some((max_bytes, max_dimension)) = limit {
+        if width > max_dimension || height > max_dimension
+            || (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)).is_none_or(|n| n > max_bytes)
+        { return Err(JpegDecodeError::Unsupported); }
     }
 
     let rgba = decoder

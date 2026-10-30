@@ -79,9 +79,37 @@ pub struct RetainedTextureInfo {
 
 const _: () = assert!(core::mem::size_of::<RetainedTextureInfo>() == 48);
 
-struct DecodedImage {
-    info: ImageInfo,
-    rgba: Vec<u8>,
+pub(crate) struct DecodedImage {
+    pub(crate) info: ImageInfo,
+    pub(crate) rgba: Vec<u8>,
+}
+
+/// Kernel-only bounded decode for UI4 assets. Admission runs before invoking
+/// any codec; compressed and decoded bytes never cross Hull's ABI.
+pub(crate) fn decode_ui4_bounded(encoded: &[u8]) -> Result<DecodedImage, i32> {
+    use super::hull_image_policy::{preflight, MAX_SOURCE_BYTES, MAX_SOURCE_DIMENSION};
+    let source = preflight(encoded)?;
+    let (width, height, rgba, backend) = match source.format {
+        FORMAT_PNG => {
+            let image = crate::graphics::png_codec::decode_png_rgba_bounded(encoded, MAX_SOURCE_BYTES, MAX_SOURCE_DIMENSION)
+                .map_err(|_| ERR_FAILED)?;
+            (image.width, image.height, image.rgba, BACKEND_PNG)
+        }
+        FORMAT_JPEG => {
+            let image = crate::graphics::jpeg_codec::decode_jpeg_rgba_bounded(encoded, MAX_SOURCE_BYTES, MAX_SOURCE_DIMENSION)
+                .map_err(|_| ERR_FAILED)?;
+            (image.width, image.height, image.rgba, BACKEND_ZUNE_JPEG)
+        }
+        FORMAT_BMP => {
+            let image = crate::graphics::bmp_codec::decode_bmp_rgba(encoded).map_err(|_| ERR_FAILED)?;
+            (image.width, image.height, image.rgba, BACKEND_BMP)
+        }
+        _ => return Err(ERR_UNSUPPORTED),
+    };
+    if width != source.width || height != source.height || rgba.len() > MAX_SOURCE_BYTES {
+        return Err(ERR_INVALID);
+    }
+    validated_image(source.format, backend, width, height, rgba)
 }
 
 #[derive(Clone, Copy)]

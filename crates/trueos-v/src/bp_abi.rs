@@ -1,3 +1,21 @@
+/// State of a kernel-owned asynchronous web image. Pixels never cross this ABI.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrueosUi4HullImageInfoV1 {
+    pub state: u32,
+    /// Retained UI4 SpriteQuad source, valid only when state is READY.
+    pub sprite_id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub generation: u64,
+    pub error: i32,
+    pub reserved: u32,
+}
+pub const UI4_HULL_IMAGE_PENDING: u32 = 0;
+pub const UI4_HULL_IMAGE_READY: u32 = 1;
+pub const UI4_HULL_IMAGE_FAILED: u32 = 2;
+const _: () = assert!(core::mem::size_of::<TrueosUi4HullImageInfoV1>() == 32);
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosCabiHeapStats {
@@ -924,6 +942,27 @@ unsafe extern "C" {
         quads: *const TrueosUi4SpriteQuad,
         quad_count: usize,
     ) -> i32;
+    /// Queue an owner/window scoped image; positive result is the request ticket.
+    pub fn trueos_cabi_ui4_hull_image_request_v1(
+        window_id: u32,
+        url: *const u8,
+        url_len: usize,
+        cache_root: *const u8,
+        cache_root_len: usize,
+        page_host: *const u8,
+        page_host_len: usize,
+        width: u32,
+        height: u32,
+        generation: u64,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_hull_image_status_v1(
+        window_id: u32,
+        ticket: u32,
+        out: *mut TrueosUi4HullImageInfoV1,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_hull_image_release_v1(window_id: u32, ticket: u32) -> i32;
+    pub fn trueos_cabi_ui4_hull_image_reset_v1(window_id: u32, generation: u64) -> i32;
+
     pub fn trueos_cabi_ui4_hull_text_runs_v1(
         window_id: u32,
         runs: *const TrueosUi4HullTextRunV1,
