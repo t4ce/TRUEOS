@@ -19,22 +19,16 @@ use super::{
 
 const CLOSE_TRANSITION_PERIOD_MS: u64 = 16;
 const PENDING_POLL_PERIOD_MS: u64 = 1;
-const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_WINDOWS * 2;
 const PRESENT_FAILURE_LOG_INTERVAL: u64 = 1_000;
 const PROFILE_INITIAL_REPORT_TURNS: u64 = 16;
 const PROFILE_REPORT_INTERVAL_TURNS: u64 = 1_024;
 static RESIDENT_SCENE_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static COMPUTE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
-static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
-static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
-static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
-static STATIC_SINGLE_GPU_RCS_LOGGED: AtomicBool = AtomicBool::new(false);
 /// The stack painter route is the contract's normal steady state, so report it
 /// once at info rather than leaving it only in the per-submission trace.
 static STACK_PAINTER_LOGGED: AtomicBool = AtomicBool::new(false);
 static GPU_SOURCE_RELEASE_INVALID_WARNED: AtomicBool = AtomicBool::new(false);
-static DIRTY_FONT_SHARED_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_ADMISSION_WARNED: AtomicBool = AtomicBool::new(false);
 static FONT_RUSH_PRIMARY_DIRECT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -56,13 +50,6 @@ enum Ui4CompositorError {
     QueueFailed {
         slot: usize,
         error: crate::intel::Ui4AsyncCompositionError,
-    },
-    DirectOnlySource {
-        window: u32,
-        layer: u8,
-        slot: usize,
-        source: (u32, u32),
-        placement: WindowPlacement,
     },
 }
 
@@ -310,7 +297,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0-stack+slot1-3-lease/on-demand admission=never-fails lease=one-frame-per-plane/claim-lowest-free/focus-stable-move-to-top/motion-refresh-only stack=slot0/bcs0-copies-in-broker-z/topmost-wins/overflow-only lone-source=direct-scanout-when-eligible mixed_slot=guc-rcs-all-sources/placement-old+new-repair static_single=released-gpu-rcs+cpu-bcs0/cpu-fallback slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0-stack+slot1-3-lease/on-demand admission=never-fails lease=one-frame-per-plane/claim-lowest-free/focus-stable-move-to-top/motion-refresh-only stack=slot0/bcs0-copies-in-broker-z/topmost-wins/overflow-only lone-source=direct-scanout-when-eligible overlay=direct-only/error-on-unsupported shader-compositor=removed slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
         CLOSE_TRANSITION_PERIOD_MS,
         PENDING_POLL_PERIOD_MS,
     );
@@ -866,70 +853,17 @@ fn queue_async_plane(
         )
         .map_err(|_| Ui4CompositorError::PresentFailed);
     }
-    // A lone eligible source may be imported directly. Two or more sources
-    // always retain their complete broker/z order and compose into one
-    // display-owned plane surface, regardless of producer cadence or buffer
-    // count. The read leases above make every selected front stable for the
-    // transaction; buffering controls producer backpressure, not whether UI4
-    // may sample the published generation.
-    let all_shared_composable = !selected.is_empty()
-        && selected.iter().all(|(window, _)| {
-            frame_snapshot(window.frame)
-                .is_ok_and(|snapshot| super::frame_plan_shares_compositor_plane(snapshot.plan))
-        });
-    let all_static_single = all_shared_composable
-        && selected.iter().all(|(window, _)| {
-            frame_snapshot(window.frame).is_ok_and(|snapshot| {
-                snapshot.plan.cadence == super::FrameCadence::Immutable
-                    && snapshot.plan.buffering == super::FrameBuffering::Single
-            })
-        });
-    let all_dirty_double_font = all_shared_composable
-        && selected.iter().all(|(window, _)| {
-            frame_snapshot(window.frame).is_ok_and(|snapshot| {
-                matches!(
-                    (snapshot.plan.content, snapshot.plan.cadence, snapshot.plan.buffering),
-                    (
-                        FrameContent::FontScene2d,
-                        super::FrameCadence::Dirty,
-                        super::FrameBuffering::Double
-                    )
-                )
-            })
-        });
-    // Slot0 carries the UI4 stack: every frame which does not hold one of the
-    // three hardware lease planes presents here, so its membership is arbitrary
-    // in content, cadence and buffering. The layer kernel walks the broker-z
-    // descriptors in reverse order and selects the topmost covering frame.
-    // Plan uniformity is irrelevant; stack membership alone selects the painter.
-    let stack_plane = target_plane_slot(plan.target) == super::PRIMARY_PLANE_SLOT;
-    let has_arc = selected.iter().any(|(window, _)| window.arc != 0);
-    let sparse_static_painter = (all_static_single || stack_plane) && !has_arc;
-    // Overlap inside the stack is the contract, not an anomaly. Keep the probe
-    // for the isolated single-plane painter, where it still reports an
-    // unresolved z specialization.
-    if sparse_static_painter
-        && !stack_plane
-        && same_slot_windows_overlap(&selected)
-        && !STATIC_SINGLE_OVERLAP_WARNED.swap(true, Ordering::AcqRel)
-    {
-        crate::log_warn!(target: "ui4";
-            "ui4/static-painter: same-slot overlap detected slot={} windows={} needs_threadment=1 action=painter-order-baseline zstack-specialization=deferred log=once\n",
-            target_plane_slot(plan.target), selected.len(),
-        );
+    if selected.is_empty() {
+        return crate::intel::queue_ui4_empty_overlay(target_plane_slot(plan.target), plan.damage,
+            overlay_async_reason(target_plane_slot(plan.target)))
+            .map_err(|error| Ui4CompositorError::QueueFailed { slot: target_plane_slot(plan.target), error });
     }
+    let stack_plane = matches!(plan.target, CompositionTarget::Primary);
     let local_direct = if selected.len() == 1 {
         selected.first().copied()
     } else {
         None
     };
-    if selected.len() > 1 && !all_shared_composable {
-        crate::log_once!(target: "ui4";
-            "ui4/mixed-slot-composition: slot={} windows={} backend=guc-rcs-rgba8-layers source_ownership=published-read-leases policy=compose-all-in-broker-z-order local_winner=0 cpu_frame_copy=0 log=once\n",
-            target_plane_slot(plan.target),
-            selected.len(),
-        );
-    }
     // A lone Slot0 window owns a real hardware plane too. Import its RGBA
     // directly just like Slots1-3; only overflow needs the BCS painter.
     let direct_primary_font_preview = matches!(plan.target, CompositionTarget::Primary)
@@ -1048,26 +982,19 @@ fn queue_async_plane(
             return Err(Ui4CompositorError::PresentFailed);
         }
     }
-    // Slot0 also composes a lone demoted producer. Preserve the existing
-    // direct-only lifecycle for a lone isolated producer on a lease plane. Immutable single-buffer frames are shareable; released-compute
-    // Blueprint snapshots (including image-viewer) deliberately continue
-    // through the domain-safe static compositor below.
-    if selected.len() == 1 && !stack_plane && !all_shared_composable && !has_arc {
-        let (window, view) = selected[0];
-        return Err(Ui4CompositorError::DirectOnlySource {
-            window: window.id.raw(),
-            layer: window.layer,
-            slot: window.plane.slot(),
-            source: (view.width, view.height),
-            placement: window.placement,
-        });
-    }
-    if all_dirty_double_font && !DIRTY_FONT_SHARED_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel) {
-        crate::log_info!(target: "ui4";
-            "ui4/font-composition: mode=shared-slot plane={} windows={} buffering=dirty/double backend=guc-rcs-rgba8-batch source_ownership=stable-front+producer-back direct_scanout=0 cpu_frame_copy=0 log=once\n",
-            target_plane_slot(plan.target),
-            selected.len(),
-        );
+    if !stack_plane {
+        static LIMIT: crate::log_os::LogRateLimitState = crate::log_os::LogRateLimitState::new();
+        if LIMIT.observe(1, 128).should_emit() {
+            let (window, view) = selected[0];
+            crate::log_error!(target: "ui4";
+                "ui4/overlay-direct-required: slot={} sources={} window={} frame={} state={:?} source={}x{} placement={}x{}@{},{} arc={} gpu_authored={} release={} action=preserve-live-plane-and-retry shader_fallback=removed cpu_fallback=disabled\n",
+                target_plane_slot(plan.target), selected.len(), window.id.raw(), window.frame.raw(),
+                window.state, view.width, view.height, window.placement.width, window.placement.height,
+                window.placement.x, window.placement.y, window.arc, view.gpu_authored as u8,
+                view.gpu_release.is_some() as u8,
+            );
+        }
+        return Err(Ui4CompositorError::PresentFailed);
     }
     if let Some((window, view)) = selected.iter().find(|(_, view)| {
         view.gpu_authored
@@ -1136,79 +1063,12 @@ fn queue_async_plane(
         .collect();
     let slot = target_plane_slot(plan.target);
     let reason = overlay_async_reason(slot);
-    let has_released_gpu_source = tiles.iter().any(|tile| tile.gpgpu_scanout_cache);
-    let queued = match plan.target {
-        CompositionTarget::Primary => {
-            if sparse_static_painter
-                && tiles.len() > 1
-                && !STACK_PAINTER_LOGGED.swap(true, Ordering::AcqRel)
-            {
-                crate::log_info!(target: "ui4";
-                    "ui4/stack-painter: slot0 backend=guc-bcs0-ordered-copy windows={} order=broker-z pixel_op=topmost-wins alpha=preserved shader_dispatches=0 log=once\n",
-                    tiles.len(),
-                );
-            }
-            crate::log_trace!(target: "ui4";
-                "ui4/slot0-compose backend=guc-bcs0-ordered-copy windows={} order=broker-z frame_blend=0 alpha=preserved pipe_bottom=visible-where-empty\n",
-                tiles.len(),
-            );
-            crate::intel::queue_ui4_primary_composition(
-                &tiles,
-                plan.damage,
-                sparse_static_painter,
-                reason,
-            )
-        }
-        CompositionTarget::Overlay(_) if sparse_static_painter && has_released_gpu_source => {
-            if !STATIC_SINGLE_GPU_RCS_LOGGED.swap(true, Ordering::AcqRel) {
-                crate::log_info!(target: "ui4";
-                    "ui4/static-painter-route: backend=guc-rcs-rgba8-layers reason=released-gpu-source source_domain=gpu-released-pat3 buffering=single plane_isolation=slot-local bcs_source_import=0 cpu_source_read=0 damage=old+new-placement flip=ui4-batched log=once\n"
-                );
-            }
-            crate::intel::queue_ui4_overlay_composition(slot, &tiles, plan.damage, false, reason)
-        }
-        CompositionTarget::Overlay(_)
-            if sparse_static_painter && STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED =>
-        {
-            let bcs = crate::intel::queue_ui4_static_overlay_composition_bcs0(
-                slot,
-                &tiles,
-                plan.damage,
-                reason,
-            );
-            match bcs {
-                Ok(composition) => {
-                    if !STATIC_SINGLE_BCS0_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
-                        crate::log_info!(target: "ui4";
-                            "ui4/static-painter: backend=guc-bcs0-fast-copy source_domain=cpu-authored buffering=single plane_isolation=slot-local batch=one-per-changed-plane completion=mi-flush-dw-post-sync flip=after-retire cpu_pixel_copy=0 shader_dispatches=0 clear=fresh-transparent-only log=once\n"
-                        );
-                    }
-                    Ok(composition)
-                }
-                Err(crate::intel::Ui4AsyncCompositionError::Unavailable) => {
-                    if !STATIC_SINGLE_CPU_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
-                        crate::log_warn!(target: "ui4";
-                            "ui4/static-painter-fallback: backend=cpu-sparse-copy reason=non-pristine-or-bcs-unavailable source_domain=cpu-authored buffering=single plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 damage=old+new-placement flip=ui4-batched log=once\n"
-                        );
-                    }
-                    crate::intel::queue_ui4_static_overlay_composition_cpu(
-                        slot,
-                        &tiles,
-                        plan.damage,
-                        reason,
-                    )
-                }
-                Err(error) => Err(error),
-            }
-        }
-        CompositionTarget::Overlay(_) => crate::intel::queue_ui4_overlay_composition(
-            slot,
-            &tiles,
-            plan.damage,
-            sparse_static_painter,
-            reason,
-        ),
-    };
+    if tiles.len() > 1 && !STACK_PAINTER_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "ui4";
+            "ui4/stack-painter: slot0 backend=guc-bcs0-ordered-copy windows={} order=broker-z pixel_op=topmost-wins alpha=preserved shader_dispatches=0 log=once\n", tiles.len(),
+        );
+    }
+    let queued = crate::intel::queue_ui4_primary_composition(&tiles, plan.damage, reason);
     queued.map_err(|error| Ui4CompositorError::QueueFailed { slot, error })
 }
 
@@ -1271,25 +1131,9 @@ fn composition_source_uses_scanout_cache(window: &WindowSnapshot, view: FrameRgb
     })
 }
 
-fn same_slot_windows_overlap(selected: &[(WindowSnapshot, FrameRgbaView)]) -> bool {
-    selected.iter().enumerate().any(|(left_index, (left, _))| {
-        selected
-            .iter()
-            .skip(left_index.saturating_add(1))
-            .any(|(right, _)| placements_overlap(left.placement, right.placement))
-    })
-}
 
-fn placements_overlap(left: WindowPlacement, right: WindowPlacement) -> bool {
-    let left_x = i64::from(left.x);
-    let left_y = i64::from(left.y);
-    let right_x = i64::from(right.x);
-    let right_y = i64::from(right.y);
-    left_x < right_x.saturating_add(i64::from(right.width))
-        && right_x < left_x.saturating_add(i64::from(left.width))
-        && left_y < right_y.saturating_add(i64::from(right.height))
-        && right_y < left_y.saturating_add(i64::from(left.height))
-}
+
+
 
 fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {
     if window.arc != 0 {

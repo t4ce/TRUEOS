@@ -722,10 +722,9 @@ pub(crate) fn cancel_ui4_plane_surface_flip_batch() {
 pub(crate) fn queue_ui4_primary_composition(
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
-    sparse_static_painter: bool,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_primary_composition(tiles, damage, sparse_static_painter, reason)
+    self::display::queue_ui4_primary_composition(tiles, damage, reason)
 }
 
 pub(crate) fn queue_ui4_primary_transparent_park(
@@ -735,38 +734,12 @@ pub(crate) fn queue_ui4_primary_transparent_park(
     self::display::queue_ui4_primary_transparent_park(damage, reason)
 }
 
-pub(crate) fn queue_ui4_overlay_composition(
+pub(crate) fn queue_ui4_empty_overlay(
     plane_slot: usize,
-    tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRegion,
-    sparse_static_painter: bool,
-    reason: &'static str,
-) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_overlay_composition(
-        plane_slot,
-        tiles,
-        damage,
-        sparse_static_painter,
-        reason,
-    )
-}
-
-pub(crate) fn queue_ui4_static_overlay_composition_cpu(
-    plane_slot: usize,
-    tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_static_overlay_composition_cpu(plane_slot, tiles, damage, reason)
-}
-
-pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
-    plane_slot: usize,
-    tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRegion,
-    reason: &'static str,
-) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_static_overlay_composition_bcs0(plane_slot, tiles, damage, reason)
+    self::display::queue_ui4_empty_overlay(plane_slot, damage, reason)
 }
 
 pub(crate) fn queue_ui4_direct_overlay_frame(

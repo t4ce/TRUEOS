@@ -78,15 +78,7 @@ pub(super) fn overlay_capacity(pipe: PipeInfo) -> u64 {
     }
 }
 
-pub(super) fn compose_capacity(pipe: PipeInfo, slot: usize) -> u64 {
-    if !active(pipe) {
-        super::COMPOSE_RCS_GPU_ALIAS_BYTES
-    } else if slot == 0 {
-        PRIMARY_BYTES
-    } else {
-        OVERLAY_BYTES
-    }
-}
+
 
 pub(super) fn base_gpu(pipe: PipeInfo, desktop_gpu: u64) -> u64 {
     if active(pipe) {

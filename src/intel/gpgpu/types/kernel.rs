@@ -60,65 +60,6 @@ pub(crate) struct Ui4Nv12Tile64ToRgba8FrameParams {
 
 
 
-/// One axis-aligned premultiplied RGBA source in the stable UI4 compositor
-/// contract.  Unlike the exploratory sprite worklist, every layer in a frame
-/// is consumed by one kernel invocation and one walker.
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct GpgpuUi4ComposeLayer {
-    pub(crate) src: GpgpuRgba8Surface,
-    /// The source was produced through the stable PAT3/UC scanout mapping and
-    /// must retain that policy when the compositor samples it.
-    pub(crate) src_scanout_cache: bool,
-    pub(crate) dst_x: i32,
-    pub(crate) dst_y: i32,
-    pub(crate) dst_width: u32,
-    pub(crate) dst_height: u32,
-    pub(crate) opacity: u8,
-    pub(crate) arc: u16,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-struct GpgpuUi4ComposeLayerDesc {
-    src_gpu_lo: u32,
-    src_gpu_hi: u32,
-    src_pitch_bytes: u32,
-    src_width: u32,
-    src_height: u32,
-    dst_x: i32,
-    dst_y: i32,
-    dst_width: u32,
-    dst_height: u32,
-    opacity: u32,
-    flags: u32,
-    arc: u32,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct Ui4ComposeLayersParams {
-    base_gpu: u64,
-    dst_gpu: u64,
-    layers_gpu: u64,
-    base_pitch_bytes: u32,
-    dst_pitch_bytes: u32,
-    dst_width: u32,
-    dst_height: u32,
-    damage_x: u32,
-    damage_y: u32,
-    damage_width: u32,
-    damage_height: u32,
-    layer_count: u32,
-    flags: u32,
-}
-
-pub(crate) const UI4_COMPOSE_FLAG_BASE_XRGB: u32 = 1 << 0;
-/// Slot0 owns rectangular window visibility, not source-alpha blending between
-/// windows.  The compositor chooses the topmost covering frame and writes its
-/// already-authored RGBA pixel once; transparent pixels then belong to the
-/// Slot0 plane itself and are blended only by display hardware over Pipe A.
-#[expect(dead_code, reason = "Optional compositor ABI mode; Slot0 currently uses source-over blending")]
-pub(crate) const UI4_COMPOSE_FLAG_OPAQUE_RECTS: u32 = 1 << 2;
-
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct SkyboxSampleRgb565Params {
     pub(crate) sky_gpu: u64,

@@ -122,8 +122,8 @@ fn direct_rcs_write_alpha_blend_worklist_payload_at(
         core::ptr::write_volatile(dwords.add(5), 1);
         // The baked artifact's .ze_info places its three 64-bit buffer
         // addresses at byte offsets 32/40/48 and the scalar arguments at
-        // 56/60/64/68. Unlike the arbitrary-quad artifact, this 1D kernel has
-        // no enqueued_local_size field in its cross-thread payload.
+        // 56/60/64/68. This 1D kernel has no enqueued_local_size field in
+        // its cross-thread payload.
         core::ptr::write_volatile(dwords.add(8), params.src_gpu as u32);
         core::ptr::write_volatile(dwords.add(9), (params.src_gpu >> 32) as u32);
         core::ptr::write_volatile(dwords.add(10), params.dst_gpu as u32);

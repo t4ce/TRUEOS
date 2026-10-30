@@ -107,13 +107,6 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT: GpgpuKernelArtifa
     );
 
 
-pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
-        UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN,
-        UI4_COMPOSE_LAYERS_RGBA8_ADLS_SPV,
-        &UI4_COMPOSE_LAYERS_RGBA8_ADLS_CPP_ABI_CONTRACT,
-    );
 
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(

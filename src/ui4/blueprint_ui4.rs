@@ -5347,7 +5347,7 @@ enum SolidRectConversion {
     Unsupported,
 }
 
-/// Match the arbitrary-quad kernel's pixel-center coverage rule for one
+/// Match native rasterization's pixel-center coverage rule for one
 /// canonical axis-aligned edge. The tolerance is the shader's normalized
 /// `s/t` tolerance projected back into destination pixels.
 fn solid_axis_pixel_span(start: f32, end: f32) -> Option<(i32, i32)> {
@@ -5864,7 +5864,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         },
         Quad {
             sprite_id: u32,
-            source: GpgpuRgba8Surface,
             descriptor: sprite_render::Sprite,
         },
     }
@@ -6171,7 +6170,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         } else {
             prepared.push(PreparedOp::Quad {
                 sprite_id: 0,
-                source: solid.surface,
                 descriptor: sprite_render::Sprite { quad: clear, source: solid.surface, source_virt: solid.virt, premultiplied: false },
             });
         }
@@ -6265,7 +6263,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             AlphaRectConversion::Clipped => {}
             AlphaRectConversion::Unsupported => prepared.push(PreparedOp::Quad {
                 sprite_id: quad.sprite_id,
-                source,
                 descriptor: sprite_render::Sprite { quad, source, premultiplied: premultiplied_source,
                     source_virt: surface.sprites.iter().find(|(id, _)| *id == quad.sprite_id)
                         .map_or(solid.virt, |(_, BlueprintSpriteSource::Uploaded(source))| source.virt),
@@ -6334,7 +6331,6 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 while cursor < prepared.len() && descriptor_count < batch_capacity {
                     let PreparedOp::Quad {
                         sprite_id,
-                        source,
                         descriptor,
                     } = prepared[cursor]
                     else {

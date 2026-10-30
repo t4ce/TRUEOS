@@ -46,7 +46,6 @@ impl KnownAotKernel {
 pub(crate) enum KnownKernelRole {
     Copy,
     WorklistBlend,
-    Present,
     FluidX3d,
     CppDemo,
     CppAudio,
@@ -59,7 +58,6 @@ const COPY_CROSS_THREAD_BYTES: u32 = 96;
 const COPY_PER_THREAD_BYTES: u32 = 96;
 const RECT_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
 const RECT_WORKLIST_PER_THREAD_BYTES: u32 = 96;
-const UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES: u32 = 128;
 const SKYBOX_CROSS_THREAD_BYTES: u32 = 160;
 const CPP_DEMO_CROSS_THREAD_BYTES: u32 =
     gpgpu::CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
@@ -83,19 +81,6 @@ const ALPHA_BLEND_DESC_FIELDS: &[DescriptorField<'_>] = &[
 ];
 const ALPHA_BLEND_DESC: DescriptorLayout<'_> =
     DescriptorLayout::new("AlphaBlendDesc", 5, Some(256), ALPHA_BLEND_DESC_FIELDS);
-
-const UI4_COMPOSE_LAYER_DESC_FIELDS: &[DescriptorField<'_>] = &[
-    DescriptorField::new("src_gpu", 0, 2),
-    DescriptorField::new("src_pitch_bytes", 2, 1),
-    DescriptorField::new("src_width", 3, 1),
-    DescriptorField::new("src_height", 4, 1),
-    DescriptorField::new("dst_xy", 5, 2),
-    DescriptorField::new("dst_extent", 7, 2),
-    DescriptorField::new("opacity", 9, 1),
-    DescriptorField::new("flags", 10, 1),
-];
-const UI4_COMPOSE_LAYER_DESC: DescriptorLayout<'_> =
-    DescriptorLayout::new("Ui4ComposeLayerDesc", 12, Some(32), UI4_COMPOSE_LAYER_DESC_FIELDS);
 
 macro_rules! ro_buf {
     ($index:expr, $name:expr, $ty:expr, $binding:expr, $payload:expr) => {
@@ -123,7 +108,6 @@ macro_rules! f32_arg {
 
 const NO_DESCS: &[DescriptorLayout<'_>] = &[];
 const ALPHA_BLEND_DESCS: &[DescriptorLayout<'_>] = &[ALPHA_BLEND_DESC];
-const UI4_COMPOSE_LAYER_DESCS: &[DescriptorLayout<'_>] = &[UI4_COMPOSE_LAYER_DESC];
 
 const COPY_RECT_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "src_rgba", "__global const uint*", 0, 12),
@@ -176,36 +160,6 @@ const ALPHA_BLEND_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: RECT_WORKLIST_CONSUMERS,
 };
 
-
-const UI4_COMPOSE_LAYERS_ARGS: &[KernelCallArg<'_>] = &[
-    ro_buf!(0, "base_xrgb", "__global const uint*", 0, 12),
-    rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
-    ro_buf!(2, "layers", "__global const uint*", 2, 16),
-    u32_arg!(3, "base_pitch_bytes", 18),
-    u32_arg!(4, "dst_pitch_bytes", 19),
-    u32_arg!(5, "dst_width", 20),
-    u32_arg!(6, "dst_height", 21),
-    u32_arg!(7, "damage_x", 22),
-    u32_arg!(8, "damage_y", 23),
-    u32_arg!(9, "damage_width", 24),
-    u32_arg!(10, "damage_height", 25),
-    u32_arg!(11, "layer_count", 26),
-    u32_arg!(12, "flags", 27),
-];
-const UI4_COMPOSE_LAYERS_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/ui4_compose_layers_rgba8.clcpp",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES,
-    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
-    binding_count: 3,
-    args: UI4_COMPOSE_LAYERS_ARGS,
-    descriptor_layouts: UI4_COMPOSE_LAYER_DESCS,
-    launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &["ui4 persistent GuC compositor"],
-};
 
 const SKYBOX_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "skybox_rgb565", "__global const ushort*", 0, 12),
@@ -343,14 +297,6 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         role: KnownKernelRole::WorklistBlend,
     },
     
-    KnownAotKernel {
-        name: gpgpu::UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
-        artifact: &gpgpu::UI4_COMPOSE_LAYERS_RGBA8_ADLS_ARTIFACT,
-        contract: &UI4_COMPOSE_LAYERS_CONTRACT,
-        upload: gpgpu::upload_ui4_compose_layers_rgba8_kernel,
-        status: gpgpu::ui4_compose_layers_rgba8_upload_status,
-        role: KnownKernelRole::Present,
-    },
     KnownAotKernel {
         name: gpgpu::SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
         artifact: &gpgpu::SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT,
