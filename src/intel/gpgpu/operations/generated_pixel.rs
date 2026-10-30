@@ -1,6 +1,7 @@
 // Experimental native Odin pixel programs. The compiler supplies only a
-// bounded SIMD8 arithmetic body; this driver owns coordinates, the only
-// memory SEND, cache release and EOT. No catalog entry or static hash admits
+// bounded SIMD8 arithmetic body or validated POC control-flow body; this
+// driver owns coordinates, framebuffer stores, cache release and EOT.
+// No catalog entry or static hash admits
 // the code. An owned immutable copy is staged in the system compute carrier
 // while its submission lock is held, exactly as for native scalar calls.
 
@@ -23,6 +24,7 @@ pub(crate) struct GeneratedPixelProgram {
     body_bytes: usize,
     digest: [u8; 32],
     reported: AtomicBool,
+    grid_stride: bool,
 }
 
 impl GeneratedPixelProgram {
@@ -40,12 +42,13 @@ pub(crate) struct GeneratedPixelParamsV1 {
     pub(crate) origin_y: f32,
     pub(crate) step_x: f32,
     pub(crate) step_y: f32,
+    pub(crate) uniforms: [f32; 6],
 }
 
 impl GeneratedPixelParamsV1 {
     fn is_valid(self) -> bool {
         [self.origin_x, self.origin_y, self.step_x, self.step_y]
-            .iter()
+            .into_iter().chain(self.uniforms)
             .all(|value| value.is_finite())
     }
 }
@@ -61,6 +64,18 @@ pub(crate) fn create_generated_pixel_program(code: &[u8]) -> Result<GeneratedPix
         body_bytes: code.len(),
         digest,
         reported: AtomicBool::new(false),
+        grid_stride: false,
+    })
+}
+
+pub(crate) fn create_native_grid_pixel_program(code: &[u8]) -> Result<GeneratedPixelProgram, i32> {
+    let body = crate::gpu::native_xelp::pixel_body_simd8(code).ok_or(-22)?;
+    Ok(GeneratedPixelProgram {
+        kernel: generated_grid_pixel_envelope(body)?,
+        body_bytes: code.len(),
+        digest: sha256_digest(code),
+        reported: AtomicBool::new(false),
+        grid_stride: true,
     })
 }
 
@@ -181,6 +196,7 @@ pub(crate) fn generated_pixel_rgba8_surface_full(
         return GpgpuRgba8KernelResult::default();
     }
     let mut first_row = 0;
+    let mut batches = 0u32;
     let mut any_submitted = false;
     while first_row < dst.height {
         let rows = rows_per_batch.min(dst.height - first_row);
@@ -217,13 +233,15 @@ pub(crate) fn generated_pixel_rgba8_surface_full(
             };
         }
         first_row += rows;
+        batches += 1;
     }
     if !program.reported.swap(true, Ordering::AcqRel) {
         let checksum = generated_pixel_surface_fnv(dst);
         crate::log_important!(target: "gpgpu";
-            "odin-native-pixel: completed marker=0x{:08X} extent={}x{} pitch={} body_bytes={} body_sha256={} framebuffer_fnv1a64=0x{:016X} source=native-eu gpu_retired=1 cpu_pixel_writes=0\n",
+            "odin-native-pixel: completed marker=0x{:08X} extent={}x{} pitch={} body_bytes={} body_sha256={} framebuffer_fnv1a64=0x{:016X} source=native-eu gpu_retired=1 cpu_pixel_writes=0 grid_stride={} batches={} elapsed_ms={}\n",
             GENERATED_PIXEL_COOKIE, dst.width, dst.height, dst.pitch_bytes,
-            program.body_bytes, digest_hex(&program.code_hash()).as_str(), checksum);
+            program.body_bytes, digest_hex(&program.code_hash()).as_str(), checksum,
+            u8::from(program.grid_stride), batches, direct_rcs_elapsed_ms_since(started));
     }
     GpgpuRgba8KernelResult {
         ok: true,
@@ -266,7 +284,7 @@ fn encode_generated_pixel(
             dst.width,
             dst.pitch_bytes,
             first_row,
-            0,
+            first_row + rows,
         ]
         .into_iter()
         .enumerate()
@@ -275,6 +293,10 @@ fn encode_generated_pixel(
         }
         for lane in 0..8 {
             payload.add(8 + lane).write(lane as u32);
+        }
+        payload.add(16).write(rows.min(16));
+        for (index, value) in params.uniforms.into_iter().enumerate() {
+            payload.add(17 + index).write(value.to_bits());
         }
         state
             .batch_virt
@@ -360,7 +382,7 @@ fn encode_generated_pixel(
         dst.width.div_ceil(8),
         0,
         0,
-        rows,
+        if program.grid_stride { rows.min(16) } else { rows },
         0,
         1,
         0xff,
@@ -457,6 +479,99 @@ fn generated_pixel_envelope(body: &[u8]) -> Result<Vec<u8>, i32> {
     }
     // Match the proven IGC root-thread termination packet exactly: SIMD1,
     // write-enable, dependency distance @1. EOT is not an SBID-producing SEND.
+    emit([0x80000131, 0x00000004, 0x70207f0c, 0]);
+    Ok(code)
+}
+
+fn generated_grid_pixel_envelope(body: &[u8]) -> Result<Vec<u8>, i32> {
+    let mut code = Vec::new();
+    code.try_reserve_exact(body.len() + 1536).map_err(|_| -12)?;
+    let mut emit = |w: [u32; 4]| {
+        for word in w {
+            code.extend_from_slice(&word.to_le_bytes());
+        }
+    };
+    emit(crate::gpu::native_xelp::PREFIX);
+    // r121 preserves uniforms, r125 the row stride. The POC body can clobber
+    // its arguments, so neither may remain in r1..r3 between pixels.
+    emit([0x00030161, 0x79050220, 0x00460105, 0]);
+    emit([0x00030161, 0x7a050220, 0x00460205, 0]);
+    emit([0x00030161, 0x7d050220, 0x00000304, 0]);
+    // Keep the six optional scalar uniforms outside the compiler allocation mask.
+    // mov (8|M0) r126.0<1>:ud r3.0<8;8,1>:ud {@1}
+    emit([0x00030161, 0x7e050220, 0x00460305, 0]);
+    // x=thread_x*8+lane; y=thread_y+first_row. Padding stays masked at store.
+    emit([0x80030161, 0x70050220, 0x24, 0]);
+    emit(generated_pixel_binary(0x69, 112, 112, 3, true, false));
+    emit(generated_pixel_binary(0x40, 112, 112, 122, false, false));
+    emit([0x80030161, 0x71050220, 0xc4, 0]);
+    emit(generated_pixel_broadcast(0x40, 113, 113, 121, 6, false));
+    emit([0x00030161, 0x74050220, 0x00007984, 0]); // width r121.4
+    emit([0x00030161, 0x7c050220, 0x000079e4, 0]); // last row r121.7
+    drop(emit);
+    let loop_start = code.len();
+    let mut emit = |w: [u32; 4]| {
+        for word in w {
+            code.extend_from_slice(&word.to_le_bytes());
+        }
+    };
+    // mul(8) r114:UD r113:UD r121.10<0;1,0>:UW; pitch is bounded to u16.
+    emit([0x00030141, 0x72050220, 0x01467105, 0x000079a4]);
+    emit(generated_pixel_binary(0x69, 123, 112, 2, true, false));
+    emit(generated_pixel_binary(0x40, 123, 123, 114, false, false));
+    emit([0x00030161, 0x720502a0, 0x00467005, 0]);
+    emit(generated_pixel_broadcast(0x41, 114, 114, 121, 2, true));
+    emit(generated_pixel_broadcast(0x40, 114, 114, 121, 0, true));
+    emit([0x00030161, 0x730502a0, 0x00467105, 0]);
+    emit(generated_pixel_broadcast(0x41, 115, 115, 121, 3, true));
+    emit(generated_pixel_broadcast(0x40, 115, 115, 121, 1, true));
+    emit([0x00030161, 0x01050aa0, 0x00467205, 0]);
+    emit([0x00030161, 0x02050aa0, 0x00467305, 0]);
+    for argument in 3..=8u32 {
+        // mov (8|M0) r{argument}.0<1>:f r126.{argument-2}<0;1,0>:f {@1}
+        emit([0x00030161, argument << 24 | 0x00050aa0,
+            126 << 8 | (argument - 2) << 5 | 4, 0]);
+    }
+    drop(emit);
+    code.extend_from_slice(body);
+    let mut emit = |w: [u32; 4]| {
+        for word in w {
+            code.extend_from_slice(&word.to_le_bytes());
+        }
+    };
+    // The POC ABI returns r120. Conversion matches the straight-line renderer.
+    emit([0x00030170, 0x00018aa0, 0x4a467805, 0]);
+    emit([0x01030162, 0x75058aa0, 0x0a467805, 0]);
+    emit([0x00030170, 0x00018aa0, 0x6a467505, 0x3f800000]);
+    emit([0x01030162, 0x75058aa0, 0x0a467505, 0x3f800000]);
+    emit(generated_pixel_binary(0x41, 117, 117, 255f32.to_bits(), true, true));
+    emit([0x00030147, 0x75050aa0, 0x00467505, 0]);
+    emit([0x00030161, 0x75050a20, 0x00467505, 0]);
+    emit(generated_pixel_binary(0x69, 118, 117, 8, true, false));
+    emit(generated_pixel_binary(0x66, 117, 117, 118, false, false));
+    emit(generated_pixel_binary(0x69, 118, 117, 16, true, false));
+    emit(generated_pixel_binary(0x66, 117, 117, 118, false, false));
+    emit(generated_pixel_binary(0x66, 117, 117, 0xff000000, true, false));
+    emit([0x00030161, 0x03050220, 0x00467b05, 0]);
+    emit([0x00030170, 0x00010220, 0x52467005, 0x00467405]);
+    emit([0x00000101, 0x00010000, 0, 0]);
+    emit([0x01034031, 0, 0xcc00030c, 0x009a750c]);
+    // Retire the scatter before reusing its payload on the next grid row.
+    emit([0x00003001, 0x00010000, 0, 0]);
+    emit(generated_pixel_binary(0x40, 113, 113, 125, false, false));
+    emit([0x00030170, 0x00010220, 0x52467105, 0x00467c05]);
+    drop(emit);
+    let displacement = (loop_start as i32 - code.len() as i32) as u32;
+    let mut emit = |w: [u32; 4]| {
+        for word in w {
+            code.extend_from_slice(&word.to_le_bytes());
+        }
+    };
+    // (+f0.0) while (8|M0) loop_start {@1}; all lanes share the row bound.
+    emit([0x01030127, 0x00004000, 0, displacement]);
+    for instruction in crate::gpu::native_xelp::SUFFIX.iter().skip(2).take(6) {
+        emit(*instruction);
+    }
     emit([0x80000131, 0x00000004, 0x70207f0c, 0]);
     Ok(code)
 }

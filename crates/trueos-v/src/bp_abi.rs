@@ -1022,6 +1022,10 @@ unsafe extern "C" {
         step_x: f32,
         step_y: f32,
     ) -> i32;
+    /// Ten f32 values: origin.xy, positive step.xy, six scalar uniforms; len must be 40 bytes.
+    pub fn trueos_cabi_ui4_scene_native_compute_render_v2(
+        window_id: u32, params: *const f32, len: usize,
+    ) -> i32;
 
     pub fn trueos_cabi_poll_once();
     pub fn trueos_cabi_sleep_ms(ms: u64);

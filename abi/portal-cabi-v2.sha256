@@ -1,3 +1,4 @@
+# Additive native pixel render v2 with six scalar uniforms; every existing signature verified unchanged.
 # Additive asynchronous owner/window-scoped Hull image lifecycle v1; every previous signature unchanged.
 # Additive UI4 collapse activation v1; all existing signatures unchanged.
 # Additive Odin-native SIMD8 dispatch/readback v1; all previous signatures verified unchanged.
@@ -35,4 +36,4 @@
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
 # Additive owner-bound Spirit agent snapshot v1; every existing declaration unchanged.
 # Additive launch-scoped placement and continuation-scoped role/activity v1; all prior signatures verified unchanged.
-e23dc871a7ba745ec9385a9e62a71533e16eb11456bcaa1b7c2f889dfb614040
+bb8becb74d7c92c97f83e35da5013f93e72a2e62c8e2240233f14053f1814e93

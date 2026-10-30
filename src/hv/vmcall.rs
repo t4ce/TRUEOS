@@ -272,6 +272,7 @@ pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C; // arg0 x/y,arg1 width
 pub const OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1: u32 = 0x12F; // packed size/window, offset/id, package chunk
 pub const OP_BP_UI4_NATIVE_COMPUTE_UPLOAD_V1: u32 = 0x236;
 pub const OP_BP_UI4_NATIVE_COMPUTE_RENDER_V1: u32 = 0x237;
+pub const OP_BP_UI4_NATIVE_COMPUTE_RENDER_V2: u32 = 0x240;
 pub const OP_BP_UI4_NATIVE_COMPUTE_DISPATCH_V1: u32 = 0x238;
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
@@ -2288,12 +2289,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
-        OP_BP_UI4_NATIVE_COMPUTE_RENDER_V1 => {
+        OP_BP_UI4_NATIVE_COMPUTE_RENDER_V1 | OP_BP_UI4_NATIVE_COMPUTE_RENDER_V2 => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::ui4::blueprint_ui4::native_compute_api::render_wire(
+            let render = if op == OP_BP_UI4_NATIVE_COMPUTE_RENDER_V2 {
+                crate::ui4::blueprint_ui4::native_compute_api::render_uniforms_wire
+            } else {
+                crate::ui4::blueprint_ui4::native_compute_api::render_wire
+            };
+            let rc = render(
                 crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, payload,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);

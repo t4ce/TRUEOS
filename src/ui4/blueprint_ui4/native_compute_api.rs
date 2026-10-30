@@ -6,7 +6,8 @@ use super::{
 };
 use crate::intel::gpgpu::{
     GeneratedPixelParamsV1, GeneratedPixelProgram, NativeKernelProgram,
-    create_generated_pixel_program, create_native_kernel_program, dispatch_native_kernel,
+    create_generated_pixel_program, create_native_grid_pixel_program,
+    create_native_kernel_program, dispatch_native_kernel,
     generated_pixel_rgba8_surface_full,
 };
 use alloc::vec::Vec;
@@ -115,7 +116,7 @@ pub(crate) fn upload_chunk(
     let (pixel, kernel) = match create_generated_pixel_program(&complete.bytes) {
         Ok(program) => (Some(program), None),
         Err(_) => match create_native_kernel_program(&complete.bytes) {
-            Ok(program) => (None, Some(program)),
+            Ok(program) => (create_native_grid_pixel_program(&complete.bytes).ok(), Some(program)),
             Err(rc) => return rc,
         },
     };
@@ -166,13 +167,40 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_native_compute_render_v1(
 }
 
 pub(crate) fn render_wire(owner: WindowOwner, window_id: u32, payload: &[u8]) -> i32 {
+    render_params_wire(owner, window_id, payload, 16)
+}
+
+/// V2 is ten packed f32 values: origin.xy, step.xy, then six scalar uniforms.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_native_compute_render_v2(
+    window_id: u32, params: *const f32, len: usize,
+) -> i32 {
+    if !cfg!(feature = "odin-native-gpgpu") { return ERROR_UNSUPPORTED; }
+    if params.is_null() || params.addr() % 4 != 0 || len != 40 { return ERROR_INVALID; }
+    let values = unsafe { core::slice::from_raw_parts(params, 10) };
+    let mut payload = [0u8; 40];
+    for (dst, value) in payload.chunks_exact_mut(4).zip(values) {
+        dst.copy_from_slice(&value.to_le_bytes());
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(trueos_vm::vmcall::OP_BP_UI4_NATIVE_COMPUTE_RENDER_V2,
+            u64::from(window_id), 0, &payload);
+    }
+    let Some(owner) = blueprint_owner() else { return ERROR_CONTEXT; };
+    render_uniforms_wire(owner, window_id, &payload)
+}
+
+pub(crate) fn render_uniforms_wire(owner: WindowOwner, window_id: u32, payload: &[u8]) -> i32 {
+    render_params_wire(owner, window_id, payload, 40)
+}
+
+fn render_params_wire(owner: WindowOwner, window_id: u32, payload: &[u8], expected: usize) -> i32 {
     if !cfg!(feature = "odin-native-gpgpu") {
         return ERROR_UNSUPPORTED;
     }
-    if payload.len() != 16 {
+    if payload.len() != expected {
         return ERROR_INVALID;
     }
-    let mut values = [0f32; 4];
+    let mut values = [0f32; 10];
     for (dst, src) in values.iter_mut().zip(payload.chunks_exact(4)) {
         *dst = f32::from_le_bytes(src.try_into().unwrap());
     }
@@ -184,6 +212,7 @@ pub(crate) fn render_wire(owner: WindowOwner, window_id: u32, payload: &[u8]) ->
         origin_y: values[1],
         step_x: values[2],
         step_y: values[3],
+        uniforms: values[4..].try_into().unwrap(),
     };
     let (lease, destination, program) = {
         let mut surfaces = SURFACES.lock();

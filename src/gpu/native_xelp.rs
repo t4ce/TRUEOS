@@ -144,6 +144,23 @@ pub(crate) fn validate_simd8(code: &[u8]) -> bool {
     for (index, bytes) in code[48..end].chunks_exact(16).enumerate() {
         let w = words(bytes);
         let op = w[0] & 0x7f;
+        // The compiler's reciprocal is the only admitted out-of-order ALU op.
+        // Its fixed SBID must be retired before any result can be consumed.
+        if op == 0x38 {
+            if w[0] != 0x00039238 || !grf(w[1] >> 24)
+                || w[1] & 0x00ffffff != 0x00050aa0
+                || !source(w[2]) || w[2] >> 24 != 0x10 || w[3] != 0
+                || code.get(64 + index*16..80 + index*16)
+                    .map(words) != Some([0x00002201, 0x00010000, 0, 0])
+            { return false; }
+            continue;
+        }
+        if op == 0x01 {
+            if w != [0x00002201, 0x00010000, 0, 0] || index == 0
+                || words(&code[32 + index*16..48 + index*16])[0] != 0x00039238
+            { return false; }
+            continue;
+        }
         if w[0] & !0x11c0_0000 != 0x00030100 | op || w[0] & 0x1100_0000 == 0x1000_0000 {
             return false;
         }
@@ -197,4 +214,34 @@ pub(crate) fn validate_simd8(code: &[u8]) -> bool {
         }
     }
     true
+}
+
+/// The complete POC arithmetic/control-flow body can also run between the
+/// driver's coordinate and framebuffer stages. Keep their persistent GRFs
+/// inaccessible, including as sources, across every grid-stride iteration.
+pub(crate) fn pixel_body_simd8(code: &[u8]) -> Option<&[u8]> {
+    if !validate_simd8(code) {
+        return None;
+    }
+    let body = &code[48..code.len() - 48];
+    let allowed = |r: u32| (1..112).contains(&r) || r == 120;
+    for bytes in body.chunks_exact(16) {
+        let w = words(bytes);
+        let op = w[0] & 0x7f;
+        if matches!(op, 0x01 | 0x22 | 0x24 | 0x25 | 0x27 | 0x2e | 0x2f) {
+            continue;
+        }
+        if !(op == 0x70 && w[1] >> 24 == 0) && !allowed(w[1] >> 24) {
+            return None;
+        }
+        if op == 0x61 && w[1] & 0x4000 != 0 {
+            continue;
+        }
+        if !allowed(w[2] >> 8 & 255)
+            || (!matches!(op, 0x61 | 0x38) && w[1] & 0x8000 == 0 && !allowed(w[3] >> 8 & 255))
+        {
+            return None;
+        }
+    }
+    Some(body)
 }
