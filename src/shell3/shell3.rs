@@ -443,6 +443,46 @@ impl MatrixSlots {
         service::notify_work();
     }
 
+    /// Commit one paste to its original slot lifetime, preserving the prompt.
+    /// The existing transcript keeps 256 rows, including the context label.
+    fn echo_pasted_context(active: Option<&str>, lifetime: Option<u64>, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        let mut slots = matrix_slots().lock();
+        if active.is_some_and(|id| {
+            !slots.lifetimes.iter().any(|(name, current)| {
+                name == id && Some(*current) == lifetime
+            })
+        }) {
+            return false;
+        }
+        let index = slots
+            .echoes
+            .iter()
+            .position(|(id, _)| id.as_deref() == active)
+            .unwrap_or_else(|| {
+                slots.echoes.push((active.map(str::to_string), VecDeque::new()));
+                slots.echoes.len() - 1
+            });
+        let lines = &mut slots.echoes[index].1;
+        let pasted: Vec<&str> = text.split('\n').take(255).collect();
+        for line in pasted.iter().rev() {
+            lines.push_front((*line).into());
+        }
+        let count = text.split('\n').count();
+        lines.push_front(if count > pasted.len() {
+            format!("Pasted context (first {} of {count} lines):", pasted.len())
+        } else {
+            "Pasted context:".into()
+        });
+        lines.truncate(256);
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
+        true
+    }
+
     fn echo_snapshot(active: Option<&str>) -> (u64, Vec<String>) {
         let slots = matrix_slots().lock();
         let active = active.filter(|id| slots.ids.iter().any(|name| name == id));
@@ -1892,6 +1932,17 @@ impl Shell3 {
                 crate::allcaps::shell3::PANBUFFER_GUARD_CELLS as usize,
             )
             .with_matrix_identity(self.active_matrix_slot.clone(), self.active_matrix_lifetime)
+    }
+
+    fn record_pasted_context(&mut self, active: Option<&str>, lifetime: Option<u64>, text: &str) {
+        if MatrixSlots::echo_pasted_context(active, lifetime, text)
+            && self.active_matrix_slot.as_deref() == active
+            && self.active_matrix_lifetime == lifetime
+        {
+            self.matrix_scroll = 0;
+            self.matrix_column = 0;
+            self.matrix_drag = None;
+        }
     }
 
     fn record_terminal_notice(&mut self, text: &str) {

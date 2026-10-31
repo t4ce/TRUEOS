@@ -804,6 +804,8 @@ pub(crate) fn start_blueprint_replica_vm(
         VmBootMode::Hull,
         None,
         Some(BlueprintPendingLaunchState {
+            timing: launch_timing::Trace::DISABLED,
+            queued_timing: launch_timing::Pending::DISABLED,
             unpacked_bytes: None,
             archive: state.archive,
             module_bytes: state.module_bytes,
@@ -925,6 +927,7 @@ pub fn restore_blueprint_portable_state(
         return Err("blueprint executable range restore failed");
     }
     let state = BlueprintLaunchState {
+        timing: launch_timing::Trace::DISABLED,
         archive: archive.clone(),
         module_bytes,
         unpacked_bytes,

@@ -2111,8 +2111,10 @@ pub(crate) fn invoke_host_rel(
     process_env: BTreeMap<String, String>,
     console_target: Option<crate::shell3::MatrixTarget>,
     app_fs_root: Option<String>,
+    timing: crate::hv::launch_timing::Trace,
 ) -> Result<(), String> {
-    let image = load_rel_image(unpacked)?;
+    let image = timing.measure("elf_load", || load_rel_image(unpacked))?;
+    let mut entry_span = timing.span("guest_entry");
     let file = parse_elf(unpacked)?;
     let main_addr = find_main_addr(&file, image.section_bases.as_slice(), entry_hint)?;
     let entry_section = entry_hint_section(entry_hint) as usize;
@@ -2145,6 +2147,7 @@ pub(crate) fn invoke_host_rel(
             console_target,
             app_fs_root,
             || {
+                entry_span.complete();
                 main_fn(
                     argv.len(),
                     if argv.is_empty() {
@@ -2162,7 +2165,10 @@ pub(crate) fn invoke_host_rel(
             process_env,
             console_target,
             app_fs_root,
-            || main_fn(),
+            || {
+                entry_span.complete();
+                main_fn()
+            },
         );
         None
     };

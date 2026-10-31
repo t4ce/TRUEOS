@@ -140,6 +140,12 @@ pub mod hv {
     // Passive cross-carrier progress/interrupt probes. No forced interrupts,
     // preemption, timeout recovery or scheduler policy changes.
     pub const CODEX_PROGRESS_PROBES_ENABLED: bool = true;
+    // Detailed crash snapshots publish shared atomics on every guest allocation.
+    // Keep coarse heap work counters; enable this only in a diagnostic image.
+    pub const HV_ALLOC_DETAIL_PROBES_ENABLED: bool = false;
+    // Alloc/free breadcrumbs are substantially hotter than other ABI boundaries.
+    // Other Codex progress, wait, filesystem and startup probes remain enabled.
+    pub const CODEX_ALLOC_ABI_PROBES_ENABLED: bool = false;
 
     pub const GUEST_STACK_MIN_MIB: usize = 8;
     pub const GUEST_STACK_DEFAULT_MIB: usize = 64;

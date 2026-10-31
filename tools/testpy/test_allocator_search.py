@@ -26,6 +26,7 @@ extern crate alloc;
 #[macro_export]
 macro_rules! log { ($($args:tt)*) => {}; }
 mod hv { pub fn current_guest_execution_context_vm_id() -> Option<u8> { None } }
+mod allcaps { pub mod hv { pub const HV_ALLOC_DETAIL_PROBES_ENABLED: bool = false; } }
 fn trace_alloc_entry(_: bool, _: Layout, _: Option<NonNull<FreeBlock>>) {}
 fn trace_alloc_block(_: bool, _: &FreeBlock, _: usize, _: usize, _: usize) {}
 fn trace_alloc_compare(_: bool) {}

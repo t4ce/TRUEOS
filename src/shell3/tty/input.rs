@@ -1,5 +1,6 @@
 //! UTF-8/control decoding, shared keyboard dispatch, and session-local recall.
 use super::super::tui;
+use super::paste::Paste;
 use super::{LINE_LIMIT, Terminal};
 use alloc::{format, string::String, vec::Vec};
 use zeroize::{Zeroize, Zeroizing};
@@ -12,7 +13,9 @@ pub(super) struct InputDecoder {
     pub(super) escape: u8,
     pub(super) csi: Vec<u8>,
     pub(super) csi_overflow: bool,
+    pub(super) ss3: bool,
     pub(super) after_cr: bool,
+    pub(super) paste: Option<Paste>,
 }
 
 impl Terminal {
@@ -96,7 +99,7 @@ impl Terminal {
             }
             "exit" => {
                 if self.view.lines.is_some() { self.write(b"\x1b[r\x1b[0 q\x1b[?25h"); }
-                self.write(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
+                self.write(b"\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?1049l\x1b[?1007rBye.\r\n");
                 self.closing = true;
             }
             _ if self.view.lines.is_some() && !recalled => {
@@ -159,10 +162,20 @@ impl Terminal {
             final_byte == b'M', inside, (1, 1));
     }
 
+    /// EOF is transport state, not pasted Ctrl-C/D bytes. Discard incomplete
+    /// capture before preserving the existing interrupt/close behavior.
+    pub fn input_eof(&mut self) {
+        self.decoder.paste = None;
+        self.decoder.escape = 0;
+        self.input(b"\x03\x04");
+    }
+
     pub fn input(&mut self, mut bytes: &[u8]) {
         // Preserve the app's byte stream, including fragmented UTF-8. Only
         // VMX Tab needs to pass through Shell3's navigation handler.
         if self.decoder.utf8_len == 0
+            && self.decoder.paste.is_none()
+            && self.decoder.escape == 0
             && !(self.shell.active_vmx_app().is_some() && bytes.contains(&b'\t'))
             && tui::remote_active(self.shell.tui_frontend)
             && tui::input(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref(), bytes)
@@ -175,6 +188,20 @@ impl Terminal {
             if self.closing {
                 break;
             }
+            if let Some(paste) = self.decoder.paste.as_mut() {
+                bytes = rest;
+                if paste.push(byte) {
+                    let paste = self.decoder.paste.take().unwrap();
+                    if paste.overflow {
+                        self.notice("Paste exceeded 65536 bytes; pasted context discarded.");
+                    } else {
+                        self.shell.record_pasted_context(
+                            paste.slot.as_deref(), paste.lifetime, &paste.text(),
+                        );
+                    }
+                }
+                continue;
+            }
             // A leased crossterm app receives terminal bytes directly, including
             // arrows, Enter and Ctrl-C/D; VMX Tab returns to the shell.
             // Submit available ASCII together:
@@ -182,7 +209,7 @@ impl Terminal {
             // Batches containing VMX Tab use shared keyboard dispatch for
             // UTF-8 text; the active app still owns those text characters.
             let ascii_len =
-                if (self.view.lines.is_some() || tui::remote_active(self.shell.tui_frontend)) && self.decoder.utf8_len == 0 && byte.is_ascii() {
+                if (self.view.lines.is_some() || tui::remote_active(self.shell.tui_frontend)) && self.decoder.utf8_len == 0 && self.decoder.escape == 0 && byte.is_ascii() {
                     bytes.iter().take_while(|byte| byte.is_ascii()
                         && !(self.shell.active_vmx_app().is_some() && **byte == b'\t')).count()
                 } else {
@@ -215,10 +242,21 @@ impl Terminal {
                         self.decoder.escape = 2;
                         self.decoder.csi.clear();
                         self.decoder.csi_overflow = false;
+                        self.decoder.ss3 = byte == b'O';
                         continue;
                     }
                     self.decoder.escape = 0;
                 } else if (0x40..=0x7e).contains(&byte) {
+                    if self.view.lines.is_some() && !self.decoder.csi_overflow && !self.decoder.ss3
+                        && byte == b'~' && self.decoder.csi == b"200"
+                    {
+                        self.decoder.paste = Some(Paste::new(
+                            self.shell.active_matrix_slot.clone(),
+                            self.shell.active_matrix_lifetime,
+                        ));
+                        self.decoder.utf8_len = 0;
+                        self.decoder.after_cr = false;
+                    }
                     self.matrix_mouse(byte);
                     self.matrix_scroll_key(byte);
                     let arrow_parameters = matches!(self.decoder.csi.as_slice(), b"" | b"0" | b"1")
@@ -269,7 +307,7 @@ impl Terminal {
                         if self.view.lines.is_some() {
                             self.write(b"\x1b[r\x1b[0 q\x1b[?25h");
                         }
-                        self.write(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?1049l\x1b[?1007r\r\nBye.\r\n");
+                        self.write(b"\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m\x1b[?1049l\x1b[?1007r\r\nBye.\r\n");
                         self.closing = true;
                     }
                     21 => {

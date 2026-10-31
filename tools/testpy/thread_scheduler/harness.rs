@@ -51,6 +51,7 @@ mod allcaps {
         pub const VM_ID_LIMIT: usize = @VM_ID_LIMIT@;
         pub const VM_CPU_SLOT_LIMIT: usize = @VM_CPU_SLOT_LIMIT@;
         pub const CODEX_PROGRESS_PROBES_ENABLED: bool = true;
+        pub const CODEX_ALLOC_ABI_PROBES_ENABLED: bool = false;
         pub const INPUT_TIMING_ENABLED: bool = true;
     }
     pub mod wls {

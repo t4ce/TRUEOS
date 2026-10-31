@@ -240,6 +240,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     // host teardown still owns. Keep this guest view borrowed-by-convention;
     // the host removes and drops the authoritative state after VM exit.
     let state = ManuallyDrop::new(state);
+    let timing = state.timing;
 
     // Publish loader stages and failures through the host-owned log router,
     // including failures before an application acquires its terminal.
@@ -339,7 +340,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             app_fs_common.as_str()
         ));
 
-        match create_blueprint_dir_all_async(app_fs_root.as_str()) {
+        match timing.measure("guest_fs_root", || create_blueprint_dir_all_async(app_fs_root.as_str())) {
             Ok(()) => {
                 log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
                     .as_str())
@@ -352,7 +353,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             .as_str()),
         }
 
-        match create_blueprint_dir_all_async(app_fs_common.as_str()) {
+        match timing.measure("guest_fs_common", || create_blueprint_dir_all_async(app_fs_common.as_str())) {
             Ok(()) => log(alloc::format!(
                 "run: guest app fs common ready path={}",
                 app_fs_common.as_str()
@@ -378,11 +379,12 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
     log(alloc::format!("run: guest invoke alloc begin vm={}", vm_id).as_str());
     let invoke_result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+        let mut env_span = timing.span("guest_env");
         let process_args = crate::hv::blueprint::build_process_args(
             state.archive.as_str(),
             state.app_args.as_slice(),
         );
-        let process_env = crate::hv::blueprint::build_process_env(
+        let mut process_env = crate::hv::blueprint::build_process_env(
             state.archive.as_str(),
             state.module_bytes.as_slice(),
             Some(app_fs_root.as_str()),
@@ -390,6 +392,10 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             state.launch_script.as_deref(),
             module.has_trueosfs_scope(),
         );
+        if timing.request != 0 {
+            process_env.insert(String::from("TRUEOS_STARTUP_REQUEST"), alloc::format!("{}", timing.request));
+        }
+        env_span.complete();
         crate::hv::blueprint::invoke_host_rel(
             unpacked,
             module.entry,
@@ -398,6 +404,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             process_env,
             None,
             Some(app_fs_root),
+            timing,
         )
     })
     .unwrap_or_else(|| Err(alloc::format!("guest heap domain unavailable vm={}", vm_id)));

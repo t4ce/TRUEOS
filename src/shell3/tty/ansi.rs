@@ -9,6 +9,7 @@ pub(super) struct AnsiView {
     pub(super) lines: Option<Vec<update::RenderedLine>>,
     pub(super) cursor_column: Option<usize>,
     pub(super) terminal_active: bool,
+    bracketed_paste: bool,
     mouse: MouseOptions,
 }
 
@@ -18,6 +19,7 @@ impl AnsiView {
             lines: enabled.then(Vec::new),
             cursor_column: None,
             terminal_active: false,
+            bracketed_paste: false,
             mouse: MouseOptions::default(),
         }
     }
@@ -103,10 +105,14 @@ impl Terminal {
             }
             if drain.active || drain.pending {
                 self.view.terminal_active = true;
+                // Remote ownership starts with RESET, which disables this
+                // mode. The app then controls its own paste handling.
+                self.view.bracketed_paste = false;
                 return;
             }
             if drain.repaint {
                 self.view.terminal_active = false;
+                self.view.bracketed_paste = false;
                 self.view.mouse = MouseOptions::default();
                 self.view.cursor_column = None;
                 self.view.lines.as_mut().unwrap().clear();
@@ -116,6 +122,12 @@ impl Terminal {
         let app =
             tui::snapshot(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref());
         let active = app.is_some();
+        let bracketed_paste =
+            !tui::active(self.shell.tui_frontend, self.shell.active_matrix_slot_name().as_deref());
+        if self.view.bracketed_paste != bracketed_paste {
+            self.write(if bracketed_paste { b"\x1b[?2004h" } else { b"\x1b[?2004l" });
+            self.view.bracketed_paste = bracketed_paste;
+        }
         let mouse = if active {
             tui::mouse_options(
                 self.shell.tui_frontend,

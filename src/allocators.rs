@@ -460,8 +460,10 @@ impl FreeList {
             self.init_once();
         }
 
-        let trace_enabled = matches!(domain, AllocDomain::HvGuest(_))
-            || crate::hv::current_guest_execution_context_vm_id().is_none();
+        let trace_enabled = match domain {
+            AllocDomain::HvGuest(_) => crate::allcaps::hv::HV_ALLOC_DETAIL_PROBES_ENABLED,
+            AllocDomain::Host => crate::hv::current_guest_execution_context_vm_id().is_none(),
+        };
         trace_alloc_entry(trace_enabled, layout, self.head);
         let Some(minimum) = minimum_block_size()
             .checked_add(layout.size())

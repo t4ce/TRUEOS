@@ -1,6 +1,7 @@
 //! Shell3 terminal session: lifecycle, transport output, and view resizing.
 mod ansi;
 mod input;
+mod paste;
 
 use super::command_history::CommandHistory;
 use super::{MetaFmtStr, RgbaColor, Shell3, SpecialRows};

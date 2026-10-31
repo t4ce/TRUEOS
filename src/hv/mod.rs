@@ -6,6 +6,7 @@ pub mod control_kick;
 mod cooperative_stop;
 mod depthchecker_debug;
 pub(crate) mod launcher;
+pub(crate) mod launch_timing;
 mod lifecycle;
 pub(crate) mod matrix;
 mod teardown_diagnostics;
@@ -675,6 +676,8 @@ struct BlueprintVmMemoryProfile {
 
 #[derive(Clone)]
 struct BlueprintPendingLaunchState {
+    timing: launch_timing::Trace,
+    queued_timing: launch_timing::Pending,
     archive: AllocString,
     module_bytes: AllocVec<u8>,
     unpacked_bytes: Option<AllocVec<u8>>,
@@ -689,6 +692,7 @@ struct BlueprintPendingLaunchState {
 
 #[derive(Clone)]
 pub struct BlueprintLaunchState {
+    pub(crate) timing: launch_timing::Trace,
     pub archive: AllocString,
     pub module_bytes: AllocVec<u8>,
     pub unpacked_bytes: AllocVec<u8>,
@@ -1982,7 +1986,7 @@ pub fn start_blueprint_app_vm(
 ) -> Result<(), StartError> {
     start_prepared_blueprint_app_vm(
         vm_id, spawner, archive, module_bytes, None, app_args, launch_script,
-        instance, console_target, console_surface,
+        instance, console_target, console_surface, None,
     )
 }
 
@@ -1997,13 +2001,17 @@ fn start_prepared_blueprint_app_vm(
     instance: BlueprintInstanceRequest,
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
+    timing: Option<launch_timing::Trace>,
 ) -> Result<(), StartError> {
     let _ = spawner;
-    start_with_mode(
+    let timing = timing.unwrap_or_else(|| launch_timing::Trace::for_archive(&archive));
+    timing.measure("vm_admission", || start_with_mode(
         vm_id,
         VmBootMode::Hull,
         None,
         Some(BlueprintPendingLaunchState {
+            timing,
+            queued_timing: launch_timing::Pending::DISABLED,
             archive,
             module_bytes,
             unpacked_bytes,
@@ -2016,7 +2024,7 @@ fn start_prepared_blueprint_app_vm(
             restored_app_fs_root: None,
         }),
         false,
-    )
+    ))
 }
 
 fn start_blueprint_child_vm(
@@ -2026,11 +2034,14 @@ fn start_blueprint_child_vm(
     app_args: AllocVec<AllocString>,
     instance: BlueprintInstanceRequest,
 ) -> Result<(), StartError> {
-    start_with_mode(
+    let timing = launch_timing::Trace::for_archive(&archive);
+    timing.measure("vm_admission", || start_with_mode(
         vm_id,
         VmBootMode::Hull,
         None,
         Some(BlueprintPendingLaunchState {
+            timing,
+            queued_timing: launch_timing::Pending::DISABLED,
             archive,
             module_bytes,
             unpacked_bytes: None,
@@ -2043,7 +2054,7 @@ fn start_blueprint_child_vm(
             restored_app_fs_root: None,
         }),
         true,
-    )
+    ))
 }
 
 fn start_with_mode(
@@ -2271,6 +2282,12 @@ fn start_with_mode(
         .run_generation
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
+    if let Some(slot) = BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize) {
+        if let Some(pending) = slot.lock().as_mut() {
+            pending.timing = pending.timing.bind(vm_id, generation);
+            pending.queued_timing = pending.timing.begin("ap_queue");
+        }
+    }
     hvlogf(format_args!(
         "hv: vm{} lifecycle: generation={} assigned slot={}",
         vm_id, generation, target.slot
@@ -3008,7 +3025,9 @@ fn take_blueprint_pending_launch(vm_id: u8) -> Option<BlueprintPendingLaunchStat
 
 fn clear_blueprint_pending_launch(vm_id: u8) {
     if let Some(slot) = BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize) {
-        let _ = slot.lock().take();
+        if let Some(pending) = slot.lock().take() {
+            pending.queued_timing.finish(launch_timing::Status::Cancelled);
+        }
     }
 }
 
@@ -3021,12 +3040,14 @@ fn prepare_blueprint_launch_on_lane(
     vm_id: u8,
     pending: BlueprintPendingLaunchState,
 ) -> Result<(), AllocString> {
+    let timing = pending.timing;
     let prepare_started_ms = lifecycle_now_ms();
     let target = pending.console_target.clone();
     let log = |args: core::fmt::Arguments<'_>| log_blueprint_launch_line(target.as_ref(), args);
     log(format_args!("apps: vm{} preparing {} on AP lane", vm_id, pending.archive.as_str()));
 
     let host_alloc_guard = crate::allocators::enter_host_alloc_domain_current_cpu();
+    let mut unpack_span = timing.span("ap_unpack");
     let module = crate::hv::blueprint::parse_blueprint(pending.module_bytes.as_slice())
         .map_err(|err| alloc::format!("app-vm parse failed: {}", err))?;
     let replicatable_tagged = module.is_replicatable();
@@ -3036,6 +3057,8 @@ fn prepare_blueprint_launch_on_lane(
             .map_err(|err| alloc::format!("app-vm unpack failed: {}", err))?,
     };
     let unpacked_at_ms = lifecycle_now_ms();
+    unpack_span.complete();
+    let mut inspect_span = timing.span("ap_inspect");
 
     if !unpacked_bytes.starts_with(b"\x7fELF")
         || !matches!(crate::hv::blueprint::elf_type_name(unpacked_bytes.as_slice()), Some("REL"))
@@ -3065,6 +3088,8 @@ fn prepare_blueprint_launch_on_lane(
     log(format_args!("apps: console surface {:?}", console_surface));
     log_blueprint_memory_profile_info(profile);
     let inspected_at_ms = lifecycle_now_ms();
+    inspect_span.complete();
+    let mut arenas_span = timing.span("ap_arenas");
 
     // Reserve the guest's large contiguous arenas before decoding and copying
     // embedded assets into the host filesystem. Toolchain Blueprints carry
@@ -3081,6 +3106,8 @@ fn prepare_blueprint_launch_on_lane(
         return Err(AllocString::from("app-vm stack profile allocation failed"));
     }
     let arenas_at_ms = lifecycle_now_ms();
+    arenas_span.complete();
+    let mut assets_span = timing.span("ap_assets");
 
     let identity = if let Some(identity) = pending.restored_identity.clone() {
         let Some(slot) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) else {
@@ -3123,6 +3150,8 @@ fn prepare_blueprint_launch_on_lane(
         ));
     }
     let assets_at_ms = lifecycle_now_ms();
+    assets_span.complete();
+    let mut files_span = timing.span("ap_files");
     if crate::hv::blueprint::uses_volatile_codex_files(pending.archive.as_str()) {
         log(format_args!(
             "apps: vm{} preparing boot-local Codex files from {}",
@@ -3132,7 +3161,9 @@ fn prepare_blueprint_launch_on_lane(
             .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
     }
     let files_at_ms = lifecycle_now_ms();
+    files_span.complete();
     drop(host_alloc_guard);
+    let mut stage_span = timing.span("stage_env");
 
     if !memory::arm_guest_rel_exec_for_vm(vm_id) {
         return Err(AllocString::from("app-vm REL execute policy unavailable"));
@@ -3142,6 +3173,7 @@ fn prepare_blueprint_launch_on_lane(
     if let Err(err) = stage_blueprint_launch(
         vm_id,
         BlueprintLaunchState {
+            timing,
             archive: pending.archive,
             module_bytes: pending.module_bytes,
             unpacked_bytes,
@@ -3158,6 +3190,7 @@ fn prepare_blueprint_launch_on_lane(
     }
     set_blueprint_lifecycle_capability(vm_id, lifecycle_archive.as_str(), replicatable);
     let prepared_at_ms = lifecycle_now_ms();
+    stage_span.complete();
 
     crate::log!(
         "app-vm-run-queue: AP prep ok vm={} stack_mib={} total_ms={} unpack_ms={} inspect_ms={} arenas_ms={} assets_ms={} files_ms={} stage_ms={}\n",
@@ -3287,6 +3320,9 @@ pub fn stage_blueprint_launch(
         console_input_since_ms: None,
         exit_reason: None,
     };
+    if state.timing.request != 0 {
+        process_context.vars.insert(AllocString::from("TRUEOS_STARTUP_REQUEST"), alloc::format!("{}", state.timing.request));
+    }
     if let Some(link) = child_launch {
         // Platform identity, access scope and channel selection are kernel-owned.
         for (key, value) in link.env {
@@ -4228,6 +4264,8 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
 
     let boot_mode = boot_mode_for_vm(vm_id);
     let pending_blueprint = take_blueprint_pending_launch(vm_id);
+    let timing = pending_blueprint.as_ref().map_or(launch_timing::Trace::DISABLED, |pending| pending.timing);
+    if let Some(pending) = &pending_blueprint { pending.queued_timing.finish(launch_timing::Status::Ok); }
     let guest = crate::limine::guest_kernel_bytes();
     match boot_mode {
         VmBootMode::Full => {
@@ -4260,7 +4298,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         }
     }
     if let Some(pending) = pending_blueprint
-        && let Err(err) = prepare_blueprint_launch_on_lane(vm_id, pending)
+        && let Err(err) = timing.measure("ap_prepare", || prepare_blueprint_launch_on_lane(vm_id, pending))
     {
         hvwarnf(format_args!("hv: vm{} lifecycle: blueprint prep failed ({})", vm_id, err));
         clear_current_vm_id();
@@ -4275,6 +4313,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         publish_vm_offline(vm_id, vm);
         return;
     }
+    let mut vm_boot_span = timing.span("vm_boot");
     hvlogf(format_args!("hv: vm{} reporting: vmx preflight ok, stage=m1", vm_id));
     hvlogf(format_args!("hv: vm{} reporting: vlayer policy=integrity-first", vm_id));
     if boot_mode == VmBootMode::Hull {
@@ -4328,8 +4367,10 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         lineage_record,
         lane_lease.slot() as usize,
         vm.run_generation.load(Ordering::Acquire),
+        &mut vm_boot_span,
     )
     .await;
+    if launch_result.is_err() { vm_boot_span.error(); }
     #[cfg(feature = "legacy_vm_checkpoint")]
     if let Ok(lr) = launch_result {
         snapshot::capture_snapshot_meta(vm_id, lr);
@@ -4676,6 +4717,7 @@ async fn vmx_launch_once_with_ept(
     lineage_record: LineageRecord,
     expected_lane_slot: usize,
     generation: u64,
+    boot_span: &mut launch_timing::Span,
 ) -> Result<LaunchResult, &'static str> {
     let vm_id = current_vm_id().ok_or("vm context missing")?;
     if !current_vmx_root_active()? {
@@ -4688,7 +4730,7 @@ async fn vmx_launch_once_with_ept(
     }
 
     let assignment = vpid::assign_current_lane(vm_id, generation, expected_lane_slot)?;
-    let run_result = vmx_launch_once_with_ept_vpid(lineage_record, &assignment).await;
+    let run_result = vmx_launch_once_with_ept_vpid(lineage_record, &assignment, boot_span).await;
     if let Err(retire_error) = assignment.retire() {
         if let Err(run_error) = &run_result {
             hverrorf(format_args!(
@@ -4704,6 +4746,7 @@ async fn vmx_launch_once_with_ept(
 async fn vmx_launch_once_with_ept_vpid(
     lineage_record: LineageRecord,
     assignment: &vpid::VpidAssignment,
+    boot_span: &mut launch_timing::Span,
 ) -> Result<LaunchResult, &'static str> {
     let vm_id = current_vm_id().ok_or("vm context missing")?;
     let vm = vm_slot(vm_id);
@@ -4813,6 +4856,7 @@ async fn vmx_launch_once_with_ept_vpid(
         }
 
         if first {
+            boot_span.complete();
             crate::log!("app-vm-run-queue: vmlaunch begin vm={}\n", vm_id);
             vmlaunch_once_wrapper(vm_id, &mut lr);
             first = false;

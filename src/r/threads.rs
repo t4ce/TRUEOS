@@ -190,6 +190,11 @@ pub(crate) fn current_errno() -> Option<&'static AtomicI32> {
 /// from it. It must never escape into a caller/registry that outlives this Thread.
 pub(crate) unsafe fn abi_scope(operation: diagnostics::AbiOperation) -> diagnostics::AbiGuard {
     if !crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { return diagnostics::AbiGuard::inactive(); }
+    if !crate::allcaps::hv::CODEX_ALLOC_ABI_PROBES_ENABLED
+        && matches!(operation, diagnostics::AbiOperation::Alloc | diagnostics::AbiOperation::Dealloc)
+    {
+        return diagnostics::AbiGuard::inactive();
+    }
     let ptr = active();
     if ptr.is_null() { return diagnostics::AbiGuard::inactive(); }
     let thread = unsafe { &*ptr };

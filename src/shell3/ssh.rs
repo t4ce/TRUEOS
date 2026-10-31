@@ -232,7 +232,7 @@ impl Session {
                     let mut bytes = [0; 1024];
                     let count = if self.runner.is_channel_eof(channel) {
                         if !tty.closing {
-                            tty.input(b"\x03\x04");
+                            tty.input_eof();
                         }
                         0
                     } else {

@@ -59,14 +59,24 @@ extern "C" fn trueos_cabi_thread_swap_activity_v1(activity: u32) -> u32 {
 }
 fn main() {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    let config = codex_roles::configure_from_env();
+    let config = codex_roles::configure_from_env().and_then(|()| {
+        if std::env::var_os("HARNESS_REWRITE_PROFILE").is_some() {
+            // Runtime creation must use the admitted snapshot even if the
+            // profile changes after placement configuration and dotenv loading.
+            std::fs::write(find_codex_home()?.join("trueos-threads.conf"), b"invalid profile").unwrap();
+        }
+        codex_roles::runtime_worker_count()
+    });
     if arguments[0] == "error" {
         assert!(config.unwrap_err().to_string().contains(&arguments[1]));
         return;
     }
-    config.unwrap();
+    let workers = config.unwrap();
     assert_eq!(MODE.load(Ordering::Relaxed), arguments[0].parse::<u32>().unwrap());
     assert_eq!(CAP.load(Ordering::Relaxed), arguments[1].parse::<u32>().unwrap());
+    let expected_workers = arguments.get(2).map(|s| s.parse::<usize>().unwrap())
+        .unwrap_or(1);
+    assert_eq!(workers, expected_workers);
     {
         let _foreground = codex_roles::ChildRoleGuard::foreground();
         let _activity = codex_roles::ActivityGuard::foreground();
@@ -119,7 +129,8 @@ def main() -> None:
             "-Aexplicit_builtin_cfgs_in_flags", str(source), "-o", str(executable),
         ], check=True)
         env = dict(os.environ)
-        for key in ["CODEX_TRUEOS_THREAD_PLACEMENT", "CODEX_TRUEOS_BACKGROUND_CARRIERS", "HARNESS_CONFIGURE_ERRNO"]:
+        for key in ["CODEX_TRUEOS_THREAD_PLACEMENT", "CODEX_TRUEOS_BACKGROUND_CARRIERS",
+                    "TOKIO_WORKER_THREADS", "HARNESS_CONFIGURE_ERRNO", "HARNESS_REWRITE_PROFILE"]:
             env.pop(key, None)
         home = directory / "home"
         home.mkdir()
@@ -134,7 +145,20 @@ def main() -> None:
             ({"HARNESS_CONFIGURE_ERRNO": "95"}, ["0", "2"]),
             ({"CODEX_TRUEOS_THREAD_PLACEMENT": "single", "HARNESS_CONFIGURE_ERRNO": "95"}, ["error", "configuration failed"]),
             ({"CODEX_TRUEOS_BACKGROUND_CARRIERS": "2", "HARNESS_CONFIGURE_ERRNO": "95"}, ["error", "configuration failed"]),
+            ({"TOKIO_WORKER_THREADS": "1"}, ["0", "2", "1"]),
+            ({"TOKIO_WORKER_THREADS": "2"}, ["error", "TOKIO_WORKER_THREADS"]),
+            ({"HARNESS_CONFIGURE_ERRNO": "95", "TOKIO_WORKER_THREADS": "2"}, ["error", "TOKIO_WORKER_THREADS"]),
+            ({"CODEX_TRUEOS_THREAD_PLACEMENT": "single", "CODEX_TRUEOS_BACKGROUND_CARRIERS": "4",
+              "TOKIO_WORKER_THREADS": "2"}, ["error", "TOKIO_WORKER_THREADS"]),
+            ({"CODEX_TRUEOS_THREAD_PLACEMENT": "isolated", "CODEX_TRUEOS_BACKGROUND_CARRIERS": "2",
+              "TOKIO_WORKER_THREADS": "1"}, ["1", "2", "1"]),
+            ({"CODEX_TRUEOS_THREAD_PLACEMENT": "spread", "CODEX_TRUEOS_BACKGROUND_CARRIERS": "4",
+              "TOKIO_WORKER_THREADS": "3"}, ["2", "4", "3"]),
         ]
+        for value in ["", "0", "3", "5", "-1", "many", "1.5", " 2", "2 ", b"\xff"]:
+            cases.append(({"CODEX_TRUEOS_THREAD_PLACEMENT": "isolated",
+                           "CODEX_TRUEOS_BACKGROUND_CARRIERS": "2",
+                           "TOKIO_WORKER_THREADS": value}, ["error", "TOKIO_WORKER_THREADS"]))
         for settings, arguments in cases:
             subprocess.run([str(executable), *arguments], env=env | settings, check=True)
         profile_cases = [
@@ -144,6 +168,10 @@ def main() -> None:
             (b"invalid profile content", {}, ["error", "trueos-threads.conf"]),
             (b"invalid profile content", {"CODEX_TRUEOS_THREAD_PLACEMENT": "spread"}, ["2", "2"]),
             (b"isolated 3", {"CODEX_TRUEOS_BACKGROUND_CARRIERS": "4"}, ["0", "4"]),
+            (b"isolated 2", {"HARNESS_REWRITE_PROFILE": "1"}, ["1", "2", "1"]),
+            (b"isolated 2", {"HARNESS_REWRITE_PROFILE": "1", "TOKIO_WORKER_THREADS": "2"}, ["1", "2", "2"]),
+            (b"spread 4", {"HARNESS_REWRITE_PROFILE": "1", "TOKIO_WORKER_THREADS": "2"}, ["2", "4", "2"]),
+            (b"single 4", {"HARNESS_REWRITE_PROFILE": "1"}, ["0", "4", "1"]),
         ]
         for contents, settings, arguments in profile_cases:
             (home / "trueos-threads.conf").write_bytes(contents)

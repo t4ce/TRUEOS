@@ -56,12 +56,13 @@ pub(crate) fn enqueue(
     request: LaunchRequest,
     observer: Option<Box<dyn LaunchObserver>>,
 ) -> Result<super::matrix::AppReceipt, String> {
+    let timing = super::launch_timing::Trace::for_archive(&request.archive);
     let prebind_started = trueos_time::Instant::now();
-    let (required, unpacked) = super::blueprint::prebind_required_readiness(&request.bytes)?;
+    let (required, unpacked) = timing.measure("prebind", || super::blueprint::prebind_required_readiness(&request.bytes))?;
     crate::log_info!(target: "apps"; "launch phase=prebind elapsed_ms={} input_bytes={} output_bytes={} payload_reused=1\n",
         prebind_started.elapsed().as_millis(), request.bytes.len(), unpacked.len());
     let worker = crate::workers::pick_background_spawner().ok_or("apps: no background worker")?;
-    let (target, receipt) = super::matrix::reserve(&request.archive, &request.bytes)?;
+    let (target, receipt) = timing.measure("matrix_reserve", || super::matrix::reserve(&request.archive, &request.bytes))?;
     if observer.is_some() {
         super::matrix::observe_completion(&target);
     }
@@ -72,7 +73,8 @@ pub(crate) fn enqueue(
             return Err(error);
         }
     }
-    let task = match launch_task(request, target.clone(), required, unpacked, observer) {
+    let queue = timing.span("launch_queue");
+    let task = match launch_task(request, target.clone(), required, unpacked, observer, timing, queue) {
         Ok(task) => task,
         Err(_) => {
             super::matrix::discard(&target);
@@ -96,7 +98,10 @@ async fn launch_task(
     required: u32,
     unpacked: Vec<u8>,
     observer: Option<Box<dyn LaunchObserver>>,
+    timing: super::launch_timing::Trace,
+    mut queue: super::launch_timing::Span,
 ) {
+    queue.complete();
     let live = || {
         crate::shell3::matrix_target::matrix_slot_is_live(&crate::shell3::matrix_target_slot_lease(
             &target,
@@ -116,6 +121,7 @@ async fn launch_task(
             super::matrix::discard(&target);
         }
     };
+    let mut readiness = timing.span("readiness");
     let deadline = trueos_time::Instant::now() + Duration::from_secs(30);
     while crate::r::readiness::mask() & required != required {
         if !live() {
@@ -123,6 +129,7 @@ async fn launch_task(
             return;
         }
         if trueos_time::Instant::now() >= deadline {
+            readiness.error();
             finish(
                 None,
                 Some(alloc::format!("{}: readiness timeout mask=0x{required:x}", request.archive)),
@@ -132,9 +139,12 @@ async fn launch_task(
         }
         Timer::after(Duration::from_millis(25)).await;
     }
+    readiness.complete();
     let spawner = unsafe { trueos_executor::Spawner::for_current_executor().await };
     let result = {
+        let mut admission = timing.span("admission_lock");
         let _admission = ADMISSION.lock();
+        admission.complete();
         if !live() {
             finish(None, None, None);
             return;
@@ -152,6 +162,7 @@ async fn launch_task(
                     request.instance,
                     Some(target.clone()),
                     request.console_surface,
+                    Some(timing),
                 );
                 result
                     .map(|()| {

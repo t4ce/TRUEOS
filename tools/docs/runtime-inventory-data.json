@@ -1,0 +1,4441 @@
+{
+  "scope": "src/**/*.rs and crates/**/*.rs, excluding vendor; all cfg variants",
+  "limits": [
+    "Lexical declarations and call candidates, not a resolved call graph.",
+    "No compiler cfg evaluation or runtime liveness inference.",
+    "Macro templates are separate; public ABI/callback services need manual tracing.",
+    "Named pool symbols are an index, not a count of live pool instances.",
+    "Shader host C/C++ command pools are covered in the reviewed report."
+  ],
+  "rust_files_scanned": 793,
+  "task_declarations": [
+    {
+      "file": "crates/trueos-graphics/decoder/png_decode_pool.rs",
+      "line": 365,
+      "symbol": "png_row_expand_task",
+      "pool_size": "PNG_ROW_EXPAND_TASK_POOL_SIZE",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "crates/trueos-graphics/decoder/png_decode_pool.rs",
+          "line": 349,
+          "spelling": "png_row_expand_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-crates.md"
+    },
+    {
+      "file": "src/ai/lfm25_boot_warm.rs",
+      "line": 14,
+      "symbol": "service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 151,
+          "spelling": "service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 295,
+          "spelling": "crate::r::io::async_fs_cabi::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 299,
+          "spelling": "crate::r::fs::request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 303,
+          "spelling": "crate::r::net::dns_request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 349,
+          "spelling": "crate::ai::lfm25_boot_warm::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 576,
+          "spelling": "crate::chronos::signals::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 661,
+          "spelling": "crate::r::tga_rpc::service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ai/lumen_service.rs",
+      "line": 534,
+      "symbol": "lumen_blueprint_worker",
+      "pool_size": "TASK_POOL_SIZE",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/lumen_service.rs",
+          "line": 185,
+          "spelling": "lumen_blueprint_worker"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ai/ttstt_capture.rs",
+      "line": 700,
+      "symbol": "writer_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 338,
+          "spelling": "crate::ai::ttstt_capture::writer_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 1006,
+          "spelling": "crate::user_input_record::writer_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ai/ttstt_service.rs",
+      "line": 1541,
+      "symbol": "worker_task",
+      "pool_size": "WORKER_TASK_POOL",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 1644,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 126,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 130,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 430,
+          "spelling": "crate::r::services::video_service::worker_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 439,
+          "spelling": "crate::r::services::media_service::worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ai/ttstt_service.rs",
+      "line": 1669,
+      "symbol": "service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 151,
+          "spelling": "service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 295,
+          "spelling": "crate::r::io::async_fs_cabi::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 299,
+          "spelling": "crate::r::fs::request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 303,
+          "spelling": "crate::r::net::dns_request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 349,
+          "spelling": "crate::ai::lfm25_boot_warm::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 576,
+          "spelling": "crate::chronos::signals::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 661,
+          "spelling": "crate::r::tga_rpc::service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/aud/audio_live_http.rs",
+      "line": 918,
+      "symbol": "tinyaudio_live_http_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 906,
+          "spelling": "crate::aud::audio_live_http::tinyaudio_live_http_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/aud/esynth.rs",
+      "line": 634,
+      "symbol": "tinyaudio_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 902,
+          "spelling": "crate::aud::esynth::tinyaudio_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/chronos/signals.rs",
+      "line": 87,
+      "symbol": "service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 151,
+          "spelling": "service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 295,
+          "spelling": "crate::r::io::async_fs_cabi::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 299,
+          "spelling": "crate::r::fs::request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 303,
+          "spelling": "crate::r::net::dns_request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 349,
+          "spelling": "crate::ai::lfm25_boot_warm::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 576,
+          "spelling": "crate::chronos::signals::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 661,
+          "spelling": "crate::r::tga_rpc::service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/cpu.rs",
+      "line": 261,
+      "symbol": "atomic_bomb_after_restart_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/cpu.rs",
+          "line": 325,
+          "spelling": "atomic_bomb_after_restart_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/cpu_task_pool.rs",
+      "line": 323,
+      "symbol": "cpu_task_pool_worker",
+      "pool_size": "crate::allcaps::cpu_task_pool::TASK_STORAGE_SLOTS",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/cpu_task_pool.rs",
+          "line": 101,
+          "spelling": "cpu_task_pool_worker"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/disc/block.rs",
+      "line": 143,
+      "symbol": "serviced_block_device_task",
+      "pool_size": "BLOCK_DEVICE_SERVICE_TASK_POOL",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/disc/block.rs",
+          "line": 210,
+          "spelling": "serviced_block_device_task"
+        },
+        {
+          "file": "src/disc/block.rs",
+          "line": 239,
+          "spelling": "serviced_block_device_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/disc/install/controller.rs",
+      "line": 54,
+      "symbol": "install_command_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/disc/install/controller.rs",
+          "line": 45,
+          "spelling": "install_command_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/disc/install/controller.rs",
+      "line": 177,
+      "symbol": "online_install_command_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/disc/install/controller.rs",
+          "line": 168,
+          "spelling": "online_install_command_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/efi/acpi/tlb.rs",
+      "line": 1110,
+      "symbol": "cmd_tlb_pci_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/efi/acpi/tlb.rs",
+          "line": 1181,
+          "spelling": "cmd_tlb_pci_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/efi/acpi/tlb.rs",
+      "line": 3743,
+      "symbol": "cmd_tlb_dump_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/efi/acpi/tlb.rs",
+          "line": 3765,
+          "spelling": "cmd_tlb_dump_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/efi/acpi/tlb_rapl.rs",
+      "line": 16,
+      "symbol": "rapl_store_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/efi/acpi/tlb_rapl.rs",
+          "line": 8,
+          "spelling": "rapl_store_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/executor_task_profile.rs",
+      "line": 414,
+      "symbol": "bsp_task_profile_reporter_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/main.rs",
+          "line": 305,
+          "spelling": "crate::executor_task_profile::bsp_task_profile_reporter_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/gpu/vgpu.rs",
+      "line": 7426,
+      "symbol": "gpu_fault_containment_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 672,
+          "spelling": "crate::gpu::vgpu::gpu_fault_containment_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/hv/launcher.rs",
+      "line": 92,
+      "symbol": "launch_task",
+      "pool_size": "64",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/hv/launcher.rs",
+          "line": 75,
+          "spelling": "launch_task"
+        },
+        {
+          "file": "src/r/services/image_open_service.rs",
+          "line": 27,
+          "spelling": "launch_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/hv/mod.rs",
+      "line": 2514,
+      "symbol": "stop_cleanup_deadline",
+      "pool_size": "64",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/hv/mod.rs",
+          "line": 2621,
+          "spelling": "stop_cleanup_deadline"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/hv/mod.rs",
+      "line": 4189,
+      "symbol": "vm_task",
+      "pool_size": "64",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/hv/mod.rs",
+          "line": 2280,
+          "spelling": "vm_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/hv/store.rs",
+      "line": 633,
+      "symbol": "vm_store_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 483,
+          "spelling": "crate::hv::store::vm_store_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/hv/store.rs",
+      "line": 669,
+      "symbol": "vm_store_replication_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 488,
+          "spelling": "crate::hv::store::vm_store_replication_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/intel/gpgpu/operations/ui4.rs",
+      "line": 721,
+      "symbol": "gpu_completion_reaper_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 668,
+          "spelling": "crate::intel::gpgpu::gpu_completion_reaper_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/intel/media/hw_pic.rs",
+      "line": 507,
+      "symbol": "hw_pic_service",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/intel/mod.rs",
+          "line": 924,
+          "spelling": "self::hw_pic::hw_pic_service"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 868,
+          "spelling": "crate::intel::hw_pic_service"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/intel/sound/hda.rs",
+      "line": 2546,
+      "symbol": "tinyaudio_output_pump_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/intel/sound/hda.rs",
+          "line": 2581,
+          "spelling": "tinyaudio_output_pump_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/intel/sound/intel_hda_audio_demo.rs",
+      "line": 172,
+      "symbol": "task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "crates/trueos-executor/trueos-executor-macros/src/macros/main.rs",
+          "line": 224,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "crates/trueos-graphics/decoder/png_decode_pool.rs",
+          "line": 365,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ai/lfm25_boot_warm.rs",
+          "line": 14,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ai/lumen_service.rs",
+          "line": 534,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 1541,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/cpu_task_pool.rs",
+          "line": 323,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/disc/block.rs",
+          "line": 143,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/disc/install/controller.rs",
+          "line": 54,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/disc/install/controller.rs",
+          "line": 177,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/efi/acpi/tlb.rs",
+          "line": 1110,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/efi/acpi/tlb.rs",
+          "line": 3743,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/efi/acpi/tlb_rapl.rs",
+          "line": 16,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/hv/launcher.rs",
+          "line": 92,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/hv/mod.rs",
+          "line": 2514,
+          "spelling": "task"
+        },
+        {
+          "file": "src/hv/mod.rs",
+          "line": 4189,
+          "spelling": "task"
+        },
+        {
+          "file": "src/hv/store.rs",
+          "line": 633,
+          "spelling": "task"
+        },
+        {
+          "file": "src/hv/store.rs",
+          "line": 669,
+          "spelling": "task"
+        },
+        {
+          "file": "src/intel/sound/hda.rs",
+          "line": 2546,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/net/adapter.rs",
+          "line": 5575,
+          "spelling": "task"
+        },
+        {
+          "file": "src/net/adapter.rs",
+          "line": 5670,
+          "spelling": "task"
+        },
+        {
+          "file": "src/r/blocking.rs",
+          "line": 342,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/codec.rs",
+          "line": 1054,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/io/fs_cabi.rs",
+          "line": 2622,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 396,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/services/image_open_service.rs",
+          "line": 33,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/services/media_service.rs",
+          "line": 632,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/services/microfont_log_service.rs",
+          "line": 188,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/services/shell3_font_service.rs",
+          "line": 267,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 214,
+          "spelling": "task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 232,
+          "spelling": "task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 251,
+          "spelling": "task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 272,
+          "spelling": "task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 878,
+          "spelling": "crate::intel_hda_audio_demo::task"
+        },
+        {
+          "file": "src/r/services/video_open_service.rs",
+          "line": 45,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/services/video_service.rs",
+          "line": 425,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/startup_config.rs",
+          "line": 70,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/threads.rs",
+          "line": 542,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/r/threads.rs",
+          "line": 548,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 938,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 652,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 685,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 70,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 83,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/lifecycle.rs",
+          "line": 90,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/log_tap.rs",
+          "line": 54,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/monitor.rs",
+          "line": 151,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/os.rs",
+          "line": 34,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/service.rs",
+          "line": 359,
+          "spelling": "task"
+        },
+        {
+          "file": "src/shell3/service.rs",
+          "line": 457,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/service.rs",
+          "line": 967,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 73,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 542,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 1348,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 738,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 66,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 140,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/spirit/mod.rs",
+          "line": 1000,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/spirit/mod.rs",
+          "line": 1179,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/spirit/spirit_thoughts.rs",
+          "line": 894,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/spirit/window_selection.rs",
+          "line": 30,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/surfer/html_shack.rs",
+          "line": 1311,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/turbo/trueos-lumen-cpu-vnni/reference/lfm25_boot_warm.cpu_vnni.rs",
+          "line": 14,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/codex_prompt.rs",
+          "line": 71,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/compositor_service.rs",
+          "line": 282,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/gpgpu_preview_consumer.rs",
+          "line": 301,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/gpgpu_svg_probe_consumer.rs",
+          "line": 137,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/h264_encode_stream.rs",
+          "line": 220,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/h264_encode_stream.rs",
+          "line": 530,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/h264_encode_udp.rs",
+          "line": 573,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/input_broker.rs",
+          "line": 1987,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/link_service.rs",
+          "line": 71,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/screenshot.rs",
+          "line": 1106,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/slot4_service.rs",
+          "line": 57,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/start_button.rs",
+          "line": 102,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/video_frame.rs",
+          "line": 1054,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/ui4/window_broker.rs",
+          "line": 1692,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/usb3/hid/boot.rs",
+          "line": 394,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/usb3/hid/leds.rs",
+          "line": 422,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/usb3/hid/mediacontrol.rs",
+          "line": 147,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/usb3/hid/midi.rs",
+          "line": 532,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/usb3/net.rs",
+          "line": 118,
+          "spelling": "trueos_executor::task"
+        },
+        {
+          "file": "src/usb3/pen.rs",
+          "line": 896,
+          "spelling": "trueos_executor::task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/log_os.rs",
+      "line": 914,
+      "symbol": "logtotcp_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 626,
+          "spelling": "crate::log_os::logtotcp::logtotcp_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/mio_probe.rs",
+      "line": 12,
+      "symbol": "mio_net_ready_assume_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/mio_probe.rs",
+          "line": 193,
+          "spelling": "mio_net_ready_assume_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/mio_probe.rs",
+      "line": 96,
+      "symbol": "mio_net_probe_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/mio_probe.rs",
+          "line": 163,
+          "spelling": "mio_net_probe_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/net/adapter.rs",
+      "line": 5575,
+      "symbol": "net_poll_task",
+      "pool_size": "MAX_NET_DEVICES",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 498,
+          "spelling": "crate::net::adapter::net_poll_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/net/adapter.rs",
+      "line": 5670,
+      "symbol": "net_service_task",
+      "pool_size": "MAX_NET_DEVICES",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 521,
+          "spelling": "crate::net::adapter::net_service_task"
+        },
+        {
+          "file": "src/usb3/net.rs",
+          "line": 153,
+          "spelling": "crate::net::adapter::net_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/net/cache_service.rs",
+      "line": 222,
+      "symbol": "cache_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/net/cache_service.rs",
+          "line": 210,
+          "spelling": "cache_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/net/tls_socket.rs",
+      "line": 670,
+      "symbol": "tls_socket_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 571,
+          "spelling": "crate::net::tls_socket::tls_socket_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/power/rapl.rs",
+      "line": 316,
+      "symbol": "raple_service",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 883,
+          "spelling": "crate::power::rapl::raple_service"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/power/thermal.rs",
+      "line": 264,
+      "symbol": "thermal_service",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 887,
+          "spelling": "crate::power::thermal::thermal_service"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/r/blocking.rs",
+      "line": 342,
+      "symbol": "service_lane_executor_task",
+      "pool_size": "SERVICE_LANE_TASK_POOL",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/blocking.rs",
+          "line": 433,
+          "spelling": "service_lane_executor_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/blocking.rs",
+      "line": 400,
+      "symbol": "blocking_job_dispatcher_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 307,
+          "spelling": "crate::r::blocking::blocking_job_dispatcher_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/codec.rs",
+      "line": 1054,
+      "symbol": "codec_worker_task",
+      "pool_size": "CODEC_WORKER_CAP",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 386,
+          "spelling": "crate::r::codec::codec_worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/fs/http_trueosfs.rs",
+      "line": 964,
+      "symbol": "http_trueosfs_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 630,
+          "spelling": "crate::r::fs::http_trueosfs::http_trueosfs_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/fs/request_broker.rs",
+      "line": 990,
+      "symbol": "service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 151,
+          "spelling": "service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 295,
+          "spelling": "crate::r::io::async_fs_cabi::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 299,
+          "spelling": "crate::r::fs::request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 303,
+          "spelling": "crate::r::net::dns_request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 349,
+          "spelling": "crate::ai::lfm25_boot_warm::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 576,
+          "spelling": "crate::chronos::signals::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 661,
+          "spelling": "crate::r::tga_rpc::service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/fs/trueosfs.rs",
+      "line": 278,
+      "symbol": "mount_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 474,
+          "spelling": "crate::r::fs::trueosfs::mount_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/fs/trueosfs.rs",
+      "line": 327,
+      "symbol": "index_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 478,
+          "spelling": "crate::r::fs::trueosfs::index_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/io/async_fs_cabi.rs",
+      "line": 1470,
+      "symbol": "service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 151,
+          "spelling": "service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 295,
+          "spelling": "crate::r::io::async_fs_cabi::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 299,
+          "spelling": "crate::r::fs::request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 303,
+          "spelling": "crate::r::net::dns_request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 349,
+          "spelling": "crate::ai::lfm25_boot_warm::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 576,
+          "spelling": "crate::chronos::signals::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 661,
+          "spelling": "crate::r::tga_rpc::service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/io/fs_cabi.rs",
+      "line": 2622,
+      "symbol": "launch_archive_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/io/fs_cabi.rs",
+          "line": 2617,
+          "spelling": "launch_archive_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/cli/ftp.rs",
+      "line": 574,
+      "symbol": "ftp_server_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 654,
+          "spelling": "crate::r::net::ftp::ftp_server_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/cli/ntp.rs",
+      "line": 214,
+      "symbol": "ntp_sync_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 580,
+          "spelling": "crate::r::net::ntp::ntp_sync_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/cli/ws_time.rs",
+      "line": 339,
+      "symbol": "ws_time_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 634,
+          "spelling": "crate::r::net::cli::ws_time::ws_time_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/discovery.rs",
+      "line": 30,
+      "symbol": "lan_discovery_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 638,
+          "spelling": "crate::r::net::discovery::lan_discovery_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/dns_request_broker.rs",
+      "line": 135,
+      "symbol": "service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 151,
+          "spelling": "service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 295,
+          "spelling": "crate::r::io::async_fs_cabi::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 299,
+          "spelling": "crate::r::fs::request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 303,
+          "spelling": "crate::r::net::dns_request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 349,
+          "spelling": "crate::ai::lfm25_boot_warm::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 576,
+          "spelling": "crate::chronos::signals::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 661,
+          "spelling": "crate::r::tga_rpc::service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/midi_udp.rs",
+      "line": 381,
+      "symbol": "midi_piano_udp_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 650,
+          "spelling": "crate::r::net::midi_udp::midi_piano_udp_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/printer.rs",
+      "line": 238,
+      "symbol": "printer_discovery_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 642,
+          "spelling": "crate::r::net::printer::printer_discovery_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/printer.rs",
+      "line": 420,
+      "symbol": "printer_spooler_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 646,
+          "spelling": "crate::r::net::printer::printer_spooler_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/srv/sntp.rs",
+      "line": 111,
+      "symbol": "sntp_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 584,
+          "spelling": "crate::r::net::sntp::sntp_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/throughput_bench.rs",
+      "line": 154,
+      "symbol": "throughput_rx_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 552,
+          "spelling": "crate::r::net::throughput_bench::throughput_rx_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/net/throughput_bench.rs",
+      "line": 207,
+      "symbol": "throughput_tx_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 556,
+          "spelling": "crate::r::net::throughput_bench::throughput_tx_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/restart.rs",
+      "line": 124,
+      "symbol": "restart_apps_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 1201,
+          "spelling": "crate::r::restart::restart_apps_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/codex_progress_service.rs",
+      "line": 9,
+      "symbol": "codex_progress_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 611,
+          "spelling": "super::codex_progress_service::codex_progress_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/gamepad_control_service.rs",
+      "line": 451,
+      "symbol": "gamepad_control_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 758,
+          "spelling": "crate::r::services::gamepad_control_service::gamepad_control_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/gna_audio_frontend_service.rs",
+      "line": 278,
+      "symbol": "gna_audio_frontend_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 897,
+          "spelling": "crate::r::services::gna_audio_frontend_service::gna_audio_frontend_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/hda_capture_lane.rs",
+      "line": 1314,
+      "symbol": "hda_capture_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/hda_capture_lane.rs",
+          "line": 1302,
+          "spelling": "hda_capture_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/hid_udp_service.rs",
+      "line": 257,
+      "symbol": "hid_udp_srv_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 599,
+          "spelling": "crate::r::services::hid_udp_service::hid_udp_srv_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/hull_image_service.rs",
+      "line": 396,
+      "symbol": "worker_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 1644,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 126,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 130,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 430,
+          "spelling": "crate::r::services::video_service::worker_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 439,
+          "spelling": "crate::r::services::media_service::worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/image_open_service.rs",
+      "line": 33,
+      "symbol": "launch_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/hv/launcher.rs",
+          "line": 75,
+          "spelling": "launch_task"
+        },
+        {
+          "file": "src/r/services/image_open_service.rs",
+          "line": 27,
+          "spelling": "launch_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/keyboard_control_service.rs",
+      "line": 530,
+      "symbol": "keyboard_control_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 752,
+          "spelling": "crate::r::services::keyboard_control_service::keyboard_control_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/media_service.rs",
+      "line": 632,
+      "symbol": "worker_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 1644,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 126,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 130,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 430,
+          "spelling": "crate::r::services::video_service::worker_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 439,
+          "spelling": "crate::r::services::media_service::worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/microfont_log_service.rs",
+      "line": 188,
+      "symbol": "microfont_log_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 616,
+          "spelling": "super::microfont_log_service::microfont_log_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/mouse_motion_service.rs",
+      "line": 791,
+      "symbol": "mouse_motion_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 746,
+          "spelling": "crate::r::services::mouse_motion_service::mouse_motion_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/shell3_font_service.rs",
+      "line": 267,
+      "symbol": "microfont_warm_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 319,
+          "spelling": "super::shell3_font_service::microfont_warm_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1034,
+      "symbol": "trueosfs_rw_probe_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 1175,
+          "spelling": "trueosfs_rw_probe_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1204,
+      "symbol": "atomic_bomb_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 1223,
+          "spelling": "atomic_bomb_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1236,
+      "symbol": "executor_realm_migration_smoke_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 1337,
+          "spelling": "executor_realm_migration_smoke_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1895,
+      "symbol": "spawn_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/main.rs",
+          "line": 310,
+          "spelling": "crate::r::services::spawn_service::spawn_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/video_open_service.rs",
+      "line": 45,
+      "symbol": "playback_task",
+      "pool_size": "3",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/video_open_service.rs",
+          "line": 39,
+          "spelling": "playback_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/video_service.rs",
+      "line": 425,
+      "symbol": "worker_task",
+      "pool_size": "3",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 1644,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 126,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/hull_image_service.rs",
+          "line": 130,
+          "spelling": "worker_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 430,
+          "spelling": "crate::r::services::video_service::worker_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 439,
+          "spelling": "crate::r::services::media_service::worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/startup_config.rs",
+      "line": 70,
+      "symbol": "watcher_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/startup_config.rs",
+          "line": 66,
+          "spelling": "watcher_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/tga_rpc.rs",
+      "line": 417,
+      "symbol": "service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 151,
+          "spelling": "service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 295,
+          "spelling": "crate::r::io::async_fs_cabi::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 299,
+          "spelling": "crate::r::fs::request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 303,
+          "spelling": "crate::r::net::dns_request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 349,
+          "spelling": "crate::ai::lfm25_boot_warm::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 576,
+          "spelling": "crate::chronos::signals::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 661,
+          "spelling": "crate::r::tga_rpc::service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/tga_rpc.rs",
+      "line": 435,
+      "symbol": "heartbeat_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 664,
+          "spelling": "crate::r::tga_rpc::heartbeat_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/threads.rs",
+      "line": 542,
+      "symbol": "thread_task",
+      "pool_size": "THREAD_LIMIT",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/threads.rs",
+          "line": 664,
+          "spelling": "thread_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/threads.rs",
+      "line": 548,
+      "symbol": "codex_application_task",
+      "pool_size": "THREAD_LIMIT",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/threads.rs",
+          "line": 657,
+          "spelling": "codex_application_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/ram_probe.rs",
+      "line": 90,
+      "symbol": "boot_factory_ram_probe_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 470,
+          "spelling": "crate::ram_probe::boot_factory_ram_probe_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ram_usage.rs",
+      "line": 179,
+      "symbol": "history_sampler_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 368,
+          "spelling": "crate::ram_usage::history_sampler_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/admin.rs",
+      "line": 938,
+      "symbol": "menu_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/capture.rs",
+      "line": 652,
+      "symbol": "menu_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/capture.rs",
+      "line": 685,
+      "symbol": "mux_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 612,
+          "spelling": "mux_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/capture.rs",
+      "line": 915,
+      "symbol": "record_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 759,
+          "spelling": "record_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/capture/camera.rs",
+      "line": 70,
+      "symbol": "save_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 138,
+          "spelling": "save_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/capture/camera.rs",
+      "line": 83,
+      "symbol": "menu_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/lifecycle.rs",
+      "line": 90,
+      "symbol": "lifecycle_task",
+      "pool_size": "5",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/lifecycle.rs",
+          "line": 79,
+          "spelling": "lifecycle_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/log_tap.rs",
+      "line": 54,
+      "symbol": "drain",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "crates/trueos-graphics/decoder/bmp.rs",
+          "line": 275,
+          "spelling": "drain"
+        },
+        {
+          "file": "crates/trueos-v/src/alsa_compat.rs",
+          "line": 141,
+          "spelling": "drain"
+        },
+        {
+          "file": "crates/trueos-v/src/vhttp_srv.rs",
+          "line": 187,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/aud/audio_live_http.rs",
+          "line": 864,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/hv/mod.rs",
+          "line": 1470,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/hv/store.rs",
+          "line": 732,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/hv/store.rs",
+          "line": 762,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/hv/vnet.rs",
+          "line": 142,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/intel/media/hls.rs",
+          "line": 307,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/intel/media/hls.rs",
+          "line": 332,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/intel/media/hw_vid.rs",
+          "line": 2830,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/intel/media/hw_vid.rs",
+          "line": 2842,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/intel/media/hw_vid.rs",
+          "line": 2850,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/intel/ppgtt.rs",
+          "line": 152,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/log_os.rs",
+          "line": 949,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/mio_compat.rs",
+          "line": 767,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/mio_compat.rs",
+          "line": 1750,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/mio_compat.rs",
+          "line": 1837,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/net/adapter.rs",
+          "line": 4814,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/net/tls.rs",
+          "line": 233,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/net/tls_socket.rs",
+          "line": 76,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/net/tls_socket.rs",
+          "line": 96,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/power/rapl.rs",
+          "line": 445,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/io/fs_cabi.rs",
+          "line": 135,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/cli/ftp.rs",
+          "line": 330,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/cli/ftp.rs",
+          "line": 1045,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/cli/irc.rs",
+          "line": 282,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/cli/pop3.rs",
+          "line": 324,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/cli/pop3.rs",
+          "line": 349,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/cli/smtp.rs",
+          "line": 331,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/cli/ws.rs",
+          "line": 252,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/dns.rs",
+          "line": 552,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/https.rs",
+          "line": 1332,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/https.rs",
+          "line": 1370,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/https.rs",
+          "line": 2721,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/net/srv/wss.rs",
+          "line": 326,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/time.rs",
+          "line": 187,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/r/time.rs",
+          "line": 192,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/log_tap.rs",
+          "line": 37,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/net.rs",
+          "line": 208,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/net.rs",
+          "line": 292,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/sessions.rs",
+          "line": 292,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/sessions.rs",
+          "line": 361,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/ssh.rs",
+          "line": 30,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/ssh.rs",
+          "line": 125,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/ssh.rs",
+          "line": 250,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/tui.rs",
+          "line": 701,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/tui.rs",
+          "line": 701,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/shell3/tui/remote.rs",
+          "line": 63,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/std_abi_shim.rs",
+          "line": 3660,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/std_abi_shim.rs",
+          "line": 3674,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/std_abi_shim.rs",
+          "line": 4674,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/ui4/blueprint_ui4.rs",
+          "line": 7753,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/ui4/codex_prompt_editor.rs",
+          "line": 43,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/ui4/codex_prompt_editor.rs",
+          "line": 51,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/ui4/input_broker.rs",
+          "line": 1711,
+          "spelling": "drain"
+        },
+        {
+          "file": "src/user_input_record.rs",
+          "line": 93,
+          "spelling": "drain"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/monitor.rs",
+      "line": 151,
+      "symbol": "monitor_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/monitor.rs",
+          "line": 39,
+          "spelling": "monitor_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/net.rs",
+      "line": 247,
+      "symbol": "terminal_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 595,
+          "spelling": "crate::shell3::net::terminal_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/os.rs",
+      "line": 34,
+      "symbol": "action_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/os.rs",
+          "line": 28,
+          "spelling": "action_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/os_update.rs",
+      "line": 33,
+      "symbol": "live_update_command_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/os_update.rs",
+          "line": 24,
+          "spelling": "live_update_command_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/os_update.rs",
+      "line": 107,
+      "symbol": "live_update_swap_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/os_update.rs",
+          "line": 99,
+          "spelling": "live_update_swap_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/service.rs",
+      "line": 457,
+      "symbol": "shell_worker_task",
+      "pool_size": "TOPOLOGY_TASK_POOL_CAPACITY",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/service.rs",
+          "line": 815,
+          "spelling": "shell_worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/service.rs",
+      "line": 967,
+      "symbol": "edit_aka_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/service.rs",
+          "line": 982,
+          "spelling": "edit_aka_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/ssh.rs",
+      "line": 36,
+      "symbol": "auth_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/net.rs",
+          "line": 253,
+          "spelling": "super::ssh::auth_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/system/font.rs",
+      "line": 73,
+      "symbol": "menu_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/system/gpu.rs",
+      "line": 542,
+      "symbol": "menu_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/system/log.rs",
+      "line": 1348,
+      "symbol": "menu_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/system/net.rs",
+      "line": 738,
+      "symbol": "menu_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/system/tlb.rs",
+      "line": 66,
+      "symbol": "menu_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/shell3/system/vcpy.rs",
+      "line": 140,
+      "symbol": "menu_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/shell3/admin.rs",
+          "line": 45,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture.rs",
+          "line": 217,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/capture/camera.rs",
+          "line": 17,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/font.rs",
+          "line": 31,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/gpu.rs",
+          "line": 535,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/log.rs",
+          "line": 15,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/net.rs",
+          "line": 19,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/tlb.rs",
+          "line": 27,
+          "spelling": "menu_task"
+        },
+        {
+          "file": "src/shell3/system/vcpy.rs",
+          "line": 133,
+          "spelling": "menu_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/smp.rs",
+      "line": 266,
+      "symbol": "hlt_history_sampler_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 364,
+          "spelling": "crate::smp::hlt_history_sampler_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/spirit/mod.rs",
+      "line": 1000,
+      "symbol": "spirit_cursor_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 697,
+          "spelling": "crate::spirit::spirit_cursor_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/spirit/mod.rs",
+      "line": 1179,
+      "symbol": "spirit_worker_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 684,
+          "spelling": "crate::spirit::spirit_worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/spirit/spirit_thoughts.rs",
+      "line": 894,
+      "symbol": "spirit_thoughts_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 728,
+          "spelling": "crate::spirit::spirit_thoughts::spirit_thoughts_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/spirit/window_selection.rs",
+      "line": 30,
+      "symbol": "spirit_window_selection_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 718,
+          "spelling": "crate::spirit::spirit_window_selection_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/surfer/html_shack.rs",
+      "line": 1311,
+      "symbol": "html_fetch_worker_task",
+      "pool_size": "10",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/surfer/mod.rs",
+          "line": 13,
+          "spelling": "html_shack::html_fetch_worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/tga/mod.rs",
+      "line": 704,
+      "symbol": "tga_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 658,
+          "spelling": "crate::tga::tga_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/turbo/avx2_fma_sse2_help.rs",
+      "line": 220,
+      "symbol": "bf16_helper_boot_exercise_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/turbo/trueos-lumen-cpu-vnni/reference/lfm25_boot_warm.cpu_vnni.rs",
+      "line": 14,
+      "symbol": "service_task",
+      "pool_size": "1",
+      "context": "overlay reference",
+      "call_candidates": [
+        {
+          "file": "src/ai/ttstt_service.rs",
+          "line": 151,
+          "spelling": "service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 295,
+          "spelling": "crate::r::io::async_fs_cabi::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 299,
+          "spelling": "crate::r::fs::request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 303,
+          "spelling": "crate::r::net::dns_request_broker::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 349,
+          "spelling": "crate::ai::lfm25_boot_warm::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 576,
+          "spelling": "crate::chronos::signals::service_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 661,
+          "spelling": "crate::r::tga_rpc::service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/codex_prompt.rs",
+      "line": 71,
+      "symbol": "ui4_codex_prompt_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 818,
+          "spelling": "crate::ui4::ui4_codex_prompt_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/color_picker.rs",
+      "line": 139,
+      "symbol": "ui4_color_picker_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 808,
+          "spelling": "crate::ui4::ui4_color_picker_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/compositor_service.rs",
+      "line": 282,
+      "symbol": "ui4_compositor_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 804,
+          "spelling": "crate::ui4::ui4_compositor_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/gpgpu_preview_consumer.rs",
+      "line": 301,
+      "symbol": "gpgpu_preview_consumer_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 857,
+          "spelling": "crate::ui4::gpgpu_preview_consumer_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/gpgpu_svg_probe_consumer.rs",
+      "line": 137,
+      "symbol": "gpgpu_svg_probe_consumer_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 863,
+          "spelling": "crate::ui4::gpgpu_svg_probe_consumer_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/h264_encode_stream.rs",
+      "line": 220,
+      "symbol": "ui4_h264_encode_prepare_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 782,
+          "spelling": "crate::ui4::ui4_h264_encode_prepare_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/h264_encode_stream.rs",
+      "line": 530,
+      "symbol": "ui4_h264_encode_stream_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 786,
+          "spelling": "crate::ui4::ui4_h264_encode_stream_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/h264_encode_udp.rs",
+      "line": 573,
+      "symbol": "ui4_h264_encode_udp_egress_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 790,
+          "spelling": "crate::ui4::ui4_h264_encode_udp_egress_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/input_broker.rs",
+      "line": 1884,
+      "symbol": "ui4_input_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 763,
+          "spelling": "crate::ui4::ui4_input_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/input_broker.rs",
+      "line": 1987,
+      "symbol": "ui4_desktop_shell_launcher_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/ui4/input_broker.rs",
+          "line": 1925,
+          "spelling": "ui4_desktop_shell_launcher_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/link_service.rs",
+      "line": 71,
+      "symbol": "ui4_link_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 814,
+          "spelling": "crate::ui4::ui4_link_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/screenshot.rs",
+      "line": 1106,
+      "symbol": "ui4_screenshot_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 775,
+          "spelling": "crate::ui4::ui4_screenshot_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/slot4_service.rs",
+      "line": 57,
+      "symbol": "ui4_slot4_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 767,
+          "spelling": "crate::ui4::ui4_slot4_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/start_button.rs",
+      "line": 102,
+      "symbol": "ui4_start_button_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 771,
+          "spelling": "crate::ui4::ui4_start_button_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/video_frame.rs",
+      "line": 1054,
+      "symbol": "ui4_video_conversion_service_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 833,
+          "spelling": "crate::ui4::ui4_video_conversion_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/ui4/window_broker.rs",
+      "line": 1692,
+      "symbol": "ui4_window_broker_snapshot_service_task",
+      "pool_size": "1",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 822,
+          "spelling": "crate::ui4::ui4_window_broker_snapshot_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/unix_fd_probe.rs",
+      "line": 749,
+      "symbol": "unix_fd_probe_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 1179,
+          "spelling": "crate::unix_fd_probe::unix_fd_probe_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/dev_gears.rs",
+      "line": 148,
+      "symbol": "usb_device_pool_worker_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/mod.rs",
+          "line": 80,
+          "spelling": "dev_gears::usb_device_pool_worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/dev_gears.rs",
+      "line": 186,
+      "symbol": "usb_boot_mouse_worker_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/hid/boot.rs",
+      "line": 394,
+      "symbol": "hid_boot_stream_task",
+      "pool_size": "8",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/hid/boot.rs",
+          "line": 946,
+          "spelling": "hid_boot_stream_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/hid/leds.rs",
+      "line": 422,
+      "symbol": "led_probe_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/hid/leds.rs",
+          "line": 496,
+          "spelling": "led_probe_task"
+        },
+        {
+          "file": "src/usb3/hid/leds.rs",
+          "line": 570,
+          "spelling": "led_probe_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/hid/mediacontrol.rs",
+      "line": 147,
+      "symbol": "media_control_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/hid/mediacontrol.rs",
+          "line": 349,
+          "spelling": "media_control_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/hid/midi.rs",
+      "line": 388,
+      "symbol": "piano_drain_loop",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/hid/midi.rs",
+          "line": 330,
+          "spelling": "piano_drain_loop"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/hid/midi.rs",
+      "line": 532,
+      "symbol": "midi_stream_task",
+      "pool_size": "4",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/hid/midi.rs",
+          "line": 747,
+          "spelling": "midi_stream_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/mod.rs",
+      "line": 35,
+      "symbol": "usb_controller_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 1002,
+          "spelling": "crate::usb2::usb_controller_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/mod.rs",
+      "line": 74,
+      "symbol": "usb_additional_controller_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/mod.rs",
+          "line": 60,
+          "spelling": "usb_additional_controller_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/mod.rs",
+      "line": 459,
+      "symbol": "usb_event_pump_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/mod.rs",
+          "line": 173,
+          "spelling": "usb_event_pump_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/net.rs",
+      "line": 118,
+      "symbol": "usb_rtl8153_worker_task",
+      "pool_size": "2",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/net.rs",
+          "line": 36,
+          "spelling": "usb_rtl8153_worker_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/usb3/pen.rs",
+      "line": 896,
+      "symbol": "mass_storage_task",
+      "pool_size": "8",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/usb3/pen.rs",
+          "line": 1179,
+          "spelling": "mass_storage_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/user_input_record.rs",
+      "line": 193,
+      "symbol": "writer_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 338,
+          "spelling": "crate::ai::ttstt_capture::writer_task"
+        },
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 1006,
+          "spelling": "crate::user_input_record::writer_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/virtio_gpu_logo.rs",
+      "line": 1244,
+      "symbol": "fallback_logo_service_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/virtio_gpu_logo.rs",
+          "line": 1306,
+          "spelling": "fallback_logo_service_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-services.md"
+    },
+    {
+      "file": "src/wait.rs",
+      "line": 772,
+      "symbol": "job_runner_task",
+      "pool_size": "1 (macro default)",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/spawn_service.rs",
+          "line": 291,
+          "spelling": "crate::wait::job_runner_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    }
+  ],
+  "macro_templates": [
+    {
+      "file": "crates/trueos-executor/trueos-executor-macros/src/macros/main.rs",
+      "line": 224,
+      "symbol": "__embassy_main",
+      "pool_size": "1 (macro default)",
+      "context": "macro template"
+    }
+  ],
+  "registry_constructors": [
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1184,
+      "name": "unix-fd-probe",
+      "constructor": "disabled",
+      "arguments": "\"unix-fd-probe\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY, &UNIX_FD_PROBE_STARTED, spawn_unix_fd_probe,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1191,
+      "name": "unix-fd-probe",
+      "constructor": "disabled",
+      "arguments": "\"unix-fd-probe\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY, &UNIX_FD_PROBE_STARTED, spawn_unix_fd_probe,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1375,
+      "name": "codex-progress-observer",
+      "constructor": "enabled_gated",
+      "arguments": "\"codex-progress-observer\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, codex_progress_gate, &CODEX_PROGRESS_STARTED, spawn_codex_progress,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1384,
+      "name": "microfont-log",
+      "constructor": "enabled_gated",
+      "arguments": "\"microfont-log\", 0, microfont_log_gate, &MICROFONT_LOG_STARTED, spawn_microfont_log,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1391,
+      "name": "job-runner",
+      "constructor": "enabled",
+      "arguments": "\"job-runner\", 0, &JOB_RUNNER_STARTED, spawn_job_runner"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1392,
+      "name": "blueprint-async-fs-service",
+      "constructor": "enabled",
+      "arguments": "\"blueprint-async-fs-service\", 0, &BLUEPRINT_ASYNC_FS_SERVICE_STARTED, spawn_blueprint_async_fs_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1400,
+      "name": "trueosfs-request-broker",
+      "constructor": "enabled",
+      "arguments": "\"trueosfs-request-broker\", 0, &TRUEOSFS_REQUEST_BROKER_STARTED, spawn_trueosfs_request_broker,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1408,
+      "name": "dns-request-broker",
+      "constructor": "enabled",
+      "arguments": "\"dns-request-broker\", 0, &DNS_REQUEST_BROKER_STARTED, spawn_dns_request_broker,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1414,
+      "name": "blocking-service-lanes",
+      "constructor": "enabled",
+      "arguments": "\"blocking-service-lanes\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &BLOCKING_JOB_DISPATCHER_STARTED, spawn_blocking_service_lanes,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1420,
+      "name": "microfont-warm",
+      "constructor": "enabled_gated",
+      "arguments": "\"microfont-warm\", crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, microfont_warm_gate, &MICROFONT_WARM_STARTED, spawn_microfont_warm,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1428,
+      "name": "ttstt-cpu-service",
+      "constructor": "configured_gated",
+      "arguments": "crate::allcaps::ttstt::BOOT_RESIDENT_WARM_ENABLED, \"ttstt-cpu-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ttstt_cpu_service_gate, &TTSTT_CPU_SERVICE_STARTED, spawn_ttstt_cpu_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1437,
+      "name": "ttstt-capture-writer",
+      "constructor": "enabled",
+      "arguments": "\"ttstt-capture-writer\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED, &TTSTT_CAPTURE_WRITER_STARTED, spawn_ttstt_capture_writer,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1443,
+      "name": "smp-hlt-history",
+      "constructor": "enabled",
+      "arguments": "\"smp-hlt-history\", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1444,
+      "name": "ram-usage-history",
+      "constructor": "enabled",
+      "arguments": "\"ram-usage-history\", 0, &RAM_USAGE_HISTORY_STARTED, spawn_ram_usage_history"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1445,
+      "name": "executor-realm-migration-smoke",
+      "constructor": "disabled",
+      "arguments": "\"executor-realm-migration-smoke\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &EXECUTOR_REALM_MIGRATION_SMOKE_STARTED, spawn_executor_realm_migration_smoke,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1451,
+      "name": "codec-service",
+      "constructor": "enabled",
+      "arguments": "\"codec-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &CODEC_SERVICE_STARTED, spawn_codec_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1457,
+      "name": "vmedia-service",
+      "constructor": "enabled",
+      "arguments": "\"vmedia-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &VMEDIA_SERVICE_STARTED, spawn_vmedia_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1463,
+      "name": "factory-ram-probe",
+      "constructor": "enabled",
+      "arguments": "\"factory-ram-probe\", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1464,
+      "name": "trueosfs-mount-service",
+      "constructor": "enabled",
+      "arguments": "\"trueosfs-mount-service\", 0, &TRUEOSFS_MOUNT_SERVICE_STARTED, spawn_trueosfs_mount_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1470,
+      "name": "trueosfs-index-service",
+      "constructor": "enabled",
+      "arguments": "\"trueosfs-index-service\", 0, &TRUEOSFS_INDEX_SERVICE_STARTED, spawn_trueosfs_index_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1477,
+      "name": "hv-vm-store",
+      "constructor": "enabled",
+      "arguments": "\"hv-vm-store\", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1479,
+      "name": "hv-vm-store-net",
+      "constructor": "enabled",
+      "arguments": "\"hv-vm-store-net\", crate::r::readiness::NET_ANY_CONFIGURED, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1485,
+      "name": "net-poll-tasks",
+      "constructor": "enabled",
+      "arguments": "\"net-poll-tasks\", 0, &NET_POLL_STARTED, spawn_net_poll_tasks"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1486,
+      "name": "net-service",
+      "constructor": "enabled",
+      "arguments": "\"net-service\", 0, &NET_SERVICE_STARTED, spawn_net_service"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1487,
+      "name": "net-cache-service",
+      "constructor": "enabled",
+      "arguments": "\"net-cache-service\", 0, &NET_CACHE_SERVICE_STARTED, spawn_net_cache_service"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1488,
+      "name": "net-throughput-bench",
+      "constructor": "enabled",
+      "arguments": "\"net-throughput-bench\", crate::r::readiness::NET_ANY_CONFIGURED, &NET_THROUGHPUT_BENCH_STARTED, spawn_net_throughput_bench,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1494,
+      "name": "tls-socket-service",
+      "constructor": "enabled",
+      "arguments": "\"tls-socket-service\", crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &TLS_SOCKET_SERVICE_STARTED, spawn_tls_socket_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1500,
+      "name": "clock-signals",
+      "constructor": "enabled",
+      "arguments": "\"clock-signals\", 0, &CLOCK_SIGNALS_STARTED, spawn_clock_signals"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1501,
+      "name": "ntp-sync",
+      "constructor": "enabled",
+      "arguments": "\"ntp-sync\", crate::r::readiness::NET_ANY_CONFIGURED, &NTP_SYNC_STARTED, spawn_ntp_sync,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1507,
+      "name": "sntp-service",
+      "constructor": "enabled",
+      "arguments": "\"sntp-service\", crate::r::readiness::NET_V4_CONFIGURED, &SNTP_SERVICE_STARTED, spawn_sntp_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1513,
+      "name": "shell3-tcp",
+      "constructor": "enabled",
+      "arguments": "\"shell3-tcp\", crate::r::readiness::NET_ANY_CONFIGURED, &SHELL3_TCP_STARTED, spawn_shell3_tcp,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1519,
+      "name": "sh3srv",
+      "constructor": "enabled_gated",
+      "arguments": "\"sh3srv\", 0, shell3_pool_gate, &SH3SRV_STARTED, spawn_sh3srv,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1526,
+      "name": "hid-udp-srv",
+      "constructor": "enabled",
+      "arguments": "\"hid-udp-srv\", crate::r::readiness::NET_ANY_CONFIGURED, &HID_UDP_SRV_STARTED, spawn_hid_udp_srv,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1532,
+      "name": "logtotcp",
+      "constructor": "enabled",
+      "arguments": "\"logtotcp\", crate::r::readiness::NET_ANY_CONFIGURED, &LOGTOTCP_STARTED, spawn_logtotcp,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1538,
+      "name": "http-trueosfs",
+      "constructor": "enabled_gated",
+      "arguments": "\"http-trueosfs\", crate::r::readiness::NET_ANY_CONFIGURED, http_trueosfs_gate, &HTTP_TRUEOSFS_STARTED, spawn_http_trueosfs,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1545,
+      "name": "trueosfs-rw-probe",
+      "constructor": "disabled",
+      "arguments": "\"trueosfs-rw-probe\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY, &TRUEOSFS_RW_PROBE_STARTED, spawn_trueosfs_rw_probe,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1552,
+      "name": "bp-autostart",
+      "constructor": "enabled",
+      "arguments": "\"bp-autostart\", BP_AUTOSTART_READY, &BP_AUTOSTART_STARTED, spawn_bp_autostart,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1558,
+      "name": "ws-time",
+      "constructor": "enabled",
+      "arguments": "\"ws-time\", crate::r::readiness::NET_ANY_CONFIGURED, &WS_TIME_STARTED, spawn_ws_time,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1564,
+      "name": "usb-controller-tasks",
+      "constructor": "enabled",
+      "arguments": "\"usb-controller-tasks\", 0, &USB_CONTROLLER_TASKS_STARTED, spawn_usb_controller_tasks,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1570,
+      "name": "lan-discovery",
+      "constructor": "enabled",
+      "arguments": "\"lan-discovery\", crate::r::readiness::NET_ANY_CONFIGURED, &LAN_DISCOVERY_STARTED, spawn_lan_discovery,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1576,
+      "name": "midi-piano-udp",
+      "constructor": "enabled",
+      "arguments": "\"midi-piano-udp\", crate::r::readiness::NET_ANY_CONFIGURED, &MIDI_PIANO_UDP_STARTED, spawn_midi_piano_udp,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1582,
+      "name": "printer-discovery",
+      "constructor": "enabled",
+      "arguments": "\"printer-discovery\", crate::r::readiness::NET_ANY_CONFIGURED, &PRINTER_DISCOVERY_STARTED, spawn_printer_discovery,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1588,
+      "name": "printer-spooler",
+      "constructor": "enabled",
+      "arguments": "\"printer-spooler\", crate::r::readiness::NET_ANY_CONFIGURED, &PRINTER_SPOOLER_STARTED, spawn_printer_spooler,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1594,
+      "name": "ftp-server",
+      "constructor": "disabled",
+      "arguments": "\"ftp-server\", NET_ANY_CONFIGURED_AND_ROOT_READY, &FTP_SERVER_STARTED, spawn_ftp_server,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1600,
+      "name": "tga",
+      "constructor": "disabled",
+      "arguments": "\"tga\", 0, &TGA_TASK_STARTED, spawn_tga_task"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1601,
+      "name": "tga-rpc",
+      "constructor": "enabled",
+      "arguments": "\"tga-rpc\", 0, &TGA_RPC_SERVICE_STARTED, spawn_tga_rpc_service"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1602,
+      "name": "tga-rpc-heartbeat",
+      "constructor": "enabled",
+      "arguments": "\"tga-rpc-heartbeat\", 0, &TGA_RPC_HEARTBEAT_STARTED, spawn_tga_rpc_heartbeat"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1603,
+      "name": "gpu-completion-reaper",
+      "constructor": "enabled_gated",
+      "arguments": "\"gpu-completion-reaper\", 0, intel_device_gate, &GPU_COMPLETION_REAPER_STARTED, spawn_gpu_completion_reaper,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1610,
+      "name": "gpu-fault-containment",
+      "constructor": "enabled_gated",
+      "arguments": "\"gpu-fault-containment\", 0, gpu_fault_containment_gate, &GPU_FAULT_CONTAINMENT_STARTED, spawn_gpu_fault_containment,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1624,
+      "name": "trueos-spirit",
+      "constructor": "enabled_gated",
+      "arguments": "\"trueos-spirit\", 0, trueos_spirit_gate, &TRUEOS_SPIRIT_STARTED, spawn_trueos_spirit_workers,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1632,
+      "name": "mouse-motion-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"mouse-motion-service\", 0, ui_core_ready_gate, &MOUSE_MOTION_SERVICE_STARTED, spawn_mouse_motion_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1639,
+      "name": "keyboard-control-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"keyboard-control-service\", 0, ui_core_ready_gate, &KEYBOARD_CONTROL_SERVICE_STARTED, spawn_keyboard_control_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1646,
+      "name": "gamepad-control-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"gamepad-control-service\", 0, ui_core_ready_gate, &GAMEPAD_CONTROL_SERVICE_STARTED, spawn_gamepad_control_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1653,
+      "name": "ui4-input-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"ui4-input-service\", 0, ui4_input_gate, &UI4_INPUT_SERVICE_STARTED, spawn_ui4_input_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1660,
+      "name": "ui4-slot4-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"ui4-slot4-service\", 0, ui4_slot4_service_gate, &UI4_SLOT4_SERVICE_STARTED, spawn_ui4_slot4_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1667,
+      "name": "ui4-start-button",
+      "constructor": "enabled_gated",
+      "arguments": "\"ui4-start-button\", 0, ui4_input_gate, &UI4_START_BUTTON_SERVICE_STARTED, spawn_ui4_start_button_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1674,
+      "name": "ui4-screenshot-service",
+      "constructor": "enabled",
+      "arguments": "\"ui4-screenshot-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &UI4_SCREENSHOT_SERVICE_STARTED, spawn_ui4_screenshot_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1681,
+      "name": "ui4-h264-encode-stream",
+      "constructor": "enabled_gated",
+      "arguments": "\"ui4-h264-encode-stream\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, h264_stream_service_gate, &UI4_H264_ENCODE_STREAM_STARTED, spawn_ui4_h264_encode_stream_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1688,
+      "name": "ui4-compositor-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"ui4-compositor-service\", 0, ui4_compositor_gate, &UI4_COMPOSITOR_STARTED, spawn_ui4_compositor_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1695,
+      "name": "ui4-color-picker",
+      "constructor": "enabled",
+      "arguments": "\"ui4-color-picker\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_COLOR_PICKER_STARTED, spawn_ui4_color_picker_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1701,
+      "name": "ui4-link-service",
+      "constructor": "enabled",
+      "arguments": "\"ui4-link-service\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_LINK_SERVICE_STARTED, spawn_ui4_link_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1707,
+      "name": "ui4-codex-prompt-service",
+      "constructor": "enabled",
+      "arguments": "\"ui4-codex-prompt-service\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_CODEX_PROMPT_SERVICE_STARTED, spawn_ui4_codex_prompt_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1714,
+      "name": "lumen-boot-warm",
+      "constructor": "configured_gated",
+      "arguments": "crate::allcaps::lumen::BOOT_RESIDENT_WARM_ENABLED, \"lumen-boot-warm\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::UI4_COMPOSITOR_READY, lumen_boot_warm_gate, &LUMEN_BOOT_WARM_STARTED, spawn_lumen_boot_warm,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1725,
+      "name": "ui4-window-broker-snapshot",
+      "constructor": "enabled_gated",
+      "arguments": "\"ui4-window-broker-snapshot\", 0, ui4_input_gate, &UI4_WINDOW_BROKER_SNAPSHOT_STARTED, spawn_ui4_window_broker_snapshot_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1732,
+      "name": "ui4-video-conversion-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"ui4-video-conversion-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &UI4_VIDEO_CONVERSION_STARTED, spawn_ui4_video_conversion_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1742,
+      "name": "gpgpu-ui4-preview-consumer-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"gpgpu-ui4-preview-consumer-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &GPGPU_UI4_PREVIEW_CONSUMER_STARTED, spawn_gpgpu_ui4_preview_consumer_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1751,
+      "name": "gpgpu-ui4-svg-probe-consumer-service",
+      "constructor": "enabled_gated",
+      "arguments": "\"gpgpu-ui4-svg-probe-consumer-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED, spawn_gpgpu_ui4_svg_probe_consumer_service_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1758,
+      "name": "hw_pic_service",
+      "constructor": "enabled_gated",
+      "arguments": "\"hw_pic_service\", 0, intel_media_engine_gate, &HW_PIC_SERVICE_STARTED, spawn_hw_pic_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1765,
+      "name": "fallback-logo-ui",
+      "constructor": "enabled_gated",
+      "arguments": "\"fallback-logo-ui\", 0, fallback_logo_ui_gate, &FALLBACK_LOGO_UI_STARTED, spawn_fallback_logo_ui_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1772,
+      "name": "intel-hda-audio-demo",
+      "constructor": "disabled",
+      "arguments": "\"intel-hda-audio-demo\", 0, &INTEL_HDA_AUDIO_DEMO_STARTED, spawn_intel_hda_audio_demo_task,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1778,
+      "name": "raple-service",
+      "constructor": "disabled",
+      "arguments": "\"raple-service\", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1779,
+      "name": "thermal-service",
+      "constructor": "enabled",
+      "arguments": "\"thermal-service\", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1780,
+      "name": "html_fetch_service",
+      "constructor": "enabled_gated",
+      "arguments": "\"html_fetch_service\", crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY, html_shack_gate, &HTML_SHACK_SERVICE_STARTED, html_fetch_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1787,
+      "name": "gna-audio-front-end",
+      "constructor": "enabled",
+      "arguments": "\"gna-audio-front-end\", crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &GNA_AUDIO_FRONTEND_SERVICE_STARTED, spawn_gna_audio_frontend_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1793,
+      "name": "tinyaudio_service",
+      "constructor": "enabled",
+      "arguments": "\"tinyaudio_service\", crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &TINYAUDIO_SERVICE_STARTED, spawn_tinyaudio_service,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1799,
+      "name": "tinyaudio-live-http",
+      "constructor": "enabled",
+      "arguments": "\"tinyaudio-live-http\", crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::INTEL_HDA_READY, &TINYAUDIO_LIVE_HTTP_STARTED, spawn_tinyaudio_live_http,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1805,
+      "name": "user-input-record-writer",
+      "constructor": "enabled_gated",
+      "arguments": "\"user-input-record-writer\", 0, user_input_writer_gate, &USER_INPUT_RECORD_WRITER_STARTED, spawn_user_input_record_writer,"
+    },
+    {
+      "file": "src/r/services/spawn_service.rs",
+      "line": 1812,
+      "name": "atomic_bomb",
+      "constructor": "disabled",
+      "arguments": "\"atomic_bomb\", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb"
+    }
+  ],
+  "named_pool_declarations": [
+    {
+      "file": "crates/trueos-executor/src/lib.rs",
+      "line": 93,
+      "symbol": "TaskPoolHolder"
+    },
+    {
+      "file": "crates/trueos-executor/src/raw/mod.rs",
+      "line": 412,
+      "symbol": "TaskPool"
+    },
+    {
+      "file": "crates/trueos-executor/trueos-executor-macros/src/macros/task.rs",
+      "line": 211,
+      "symbol": "POOL"
+    },
+    {
+      "file": "crates/trueos-executor/trueos-executor-macros/src/macros/task.rs",
+      "line": 225,
+      "symbol": "POOL"
+    },
+    {
+      "file": "src/ai/lfm25_hybrid_cpu_backend.rs",
+      "line": 47,
+      "symbol": "CPU_VNNI_ROW_POOL"
+    },
+    {
+      "file": "src/cpu_task_pool.rs",
+      "line": 25,
+      "symbol": "CpuTaskPool"
+    },
+    {
+      "file": "src/cpu_task_pool.rs",
+      "line": 295,
+      "symbol": "CpuTaskPoolSnapshot"
+    },
+    {
+      "file": "src/intel/display.rs",
+      "line": 964,
+      "symbol": "Ui4DirectScanoutPool"
+    },
+    {
+      "file": "src/intel/display.rs",
+      "line": 970,
+      "symbol": "OverlaySurfacePool"
+    },
+    {
+      "file": "src/intel/display.rs",
+      "line": 1004,
+      "symbol": "PrimarySwapSurfacePool"
+    },
+    {
+      "file": "src/live_update.rs",
+      "line": 305,
+      "symbol": "TablePool"
+    },
+    {
+      "file": "src/net/ring.rs",
+      "line": 6,
+      "symbol": "PACKET_POOL"
+    },
+    {
+      "file": "src/ui4/frame_pool.rs",
+      "line": 23,
+      "symbol": "FramePoolError"
+    },
+    {
+      "file": "src/ui4/frame_pool.rs",
+      "line": 220,
+      "symbol": "FramePool"
+    },
+    {
+      "file": "src/ui4/frame_pool.rs",
+      "line": 255,
+      "symbol": "FRAME_POOL"
+    },
+    {
+      "file": "src/usb3/dev_gears.rs",
+      "line": 22,
+      "symbol": "USB_DEVICE_POOL"
+    },
+    {
+      "file": "src/usb3/dev_gears.rs",
+      "line": 24,
+      "symbol": "USB_BOOT_MOUSE_POOL"
+    },
+    {
+      "file": "src/usb3/dev_gears.rs",
+      "line": 26,
+      "symbol": "UsbDevicePool"
+    },
+    {
+      "file": "src/usb3/dev_gears.rs",
+      "line": 31,
+      "symbol": "PooledUsbDevice"
+    },
+    {
+      "file": "src/usb3/dev_gears.rs",
+      "line": 42,
+      "symbol": "UsbBootMousePool"
+    },
+    {
+      "file": "src/usb3/dev_gears.rs",
+      "line": 58,
+      "symbol": "PooledUsbBootMouse"
+    },
+    {
+      "file": "src/wls.rs",
+      "line": 40,
+      "symbol": "LOGGED_WORKER_POOL_BUSY"
+    }
+  ],
+  "service_named_files": [
+    "src/ai/lumen_service.rs",
+    "src/ai/ttstt_service.rs",
+    "src/net/cache_service.rs",
+    "src/r/services/codex_input_service.rs",
+    "src/r/services/codex_progress_service.rs",
+    "src/r/services/gamepad_control_service.rs",
+    "src/r/services/gna_audio_frontend_service.rs",
+    "src/r/services/hid_udp_service.rs",
+    "src/r/services/hull_font_service.rs",
+    "src/r/services/hull_image_service.rs",
+    "src/r/services/ide_source_service.rs",
+    "src/r/services/ide_workspace_service.rs",
+    "src/r/services/image_open_service.rs",
+    "src/r/services/keyboard_control_service.rs",
+    "src/r/services/media_service.rs",
+    "src/r/services/microfont_log_service.rs",
+    "src/r/services/microfont_mask_service.rs",
+    "src/r/services/mouse_motion_service.rs",
+    "src/r/services/shell3_font_service.rs",
+    "src/r/services/spawn_service.rs",
+    "src/r/services/vcpy_service.rs",
+    "src/r/services/video_open_service.rs",
+    "src/r/services/video_service.rs",
+    "src/shell3/service.rs",
+    "src/ui4/compositor_service.rs",
+    "src/ui4/link_service.rs",
+    "src/ui4/slot4_service.rs",
+    "src/usb3/heal_service.rs"
+  ]
+}
