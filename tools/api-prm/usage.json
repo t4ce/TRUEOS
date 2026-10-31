@@ -1,0 +1,64 @@
+{
+  "overview": [
+    "TRUEOS application reference, generated from cargo rustdoc JSON. Read the index first and load only the needed topic. These files contain signatures, public data layouts, constants and usage contracts; no kernel implementations, Cargo dependencies or SDK source trees are included.",
+    "C ABI declarations are callable from foreign languages through the Blueprint loader. Rust facade functions, macros, fmt::Arguments and traits are application-side code, not additional kernel symbols. A declaration is not runtime feature discovery: service readiness, enabled kernel features, ownership and Blueprint scope still apply.",
+    "Target: x86-64, little endian, System V C calling convention. Rust usize/isize are 64-bit; Odin uintptr/int are 64-bit. Rust *const T/*mut T correspond to pointers with the documented direction, not Rust references or Rust slices. Byte buffers use explicit pointer plus length. Use types.prm for repr(C) field order and arrays; never infer wire encodings from a similarly named struct.",
+    "For Odin SON: default packages have no core:fmt, core:os, vendor collections or reusable Rust libraries. Use project-local Odin modules and foreign C declarations. Formatting text/numbers is application work; the logging API accepts already formatted UTF-8. The compiler's own statically linked fmt does not become an application SDK.",
+    "The IDE owns source revisions, compiler snapshots and launch. Use its compile/build-status/run operations. A TUI needs a terminal-attached launch (current shell or sh3); graphical UI4 demos can run headless. Platform API documentation is IDE context, independent of the selected compiler. No running-kernel compatibility is implied solely by this reference's version.",
+    "Retired synchronous trueos_cabi_fs_* and trueos_cabi_trueosfs_* declarations are excluded. Use filesystem.prm. Signatures missing a semantic contract are discovery information only; do not invent return-code meanings or ownership rules. Human-reviewed contracts below supplement rustdoc, which cannot infer lifecycle requirements from signatures."
+  ],
+  "topics": {
+    "logging": {
+      "notes": [
+        "trueos_cabi_log(level,target_ptr,target_len,message_ptr,message_len) sends one already formatted UTF-8 record to the host log router, separate from attached-terminal bytes. No format string or Rust fmt::Arguments crosses this ABI. Level constants are listed below. Target must be nonempty and at most 256 bytes; message limit is 65536 bytes. Hull transport can truncate long messages to its payload capacity on a UTF-8 boundary. Return0 indicates accepted normal submission; negative indicates error, not necessarily delivery to every configured sink.",
+        "LOG_FLAG_QUERY_ENABLED ORed into the level queries filtering with an empty message:1 enabled,0 disabled,negative unsupported/error. LOG_LEVEL_ONCE carries no stable guest callsite identity.",
+        "trueos_cabi_write uses stream1 stdout and2 stderr, accepting already prepared bytes. Use terminal.prm for screen drawing. A small local Odin formatting module is needed for dynamic numbers, floats, padding or interpolation; logging does not provide that formatting."
+      ],
+      "sources": ["src/r/io/fs_cabi.rs", "crates/trueos-v/src/vsys.rs"]
+    },
+    "terminal": {
+      "notes": [
+        "A foreground TUI starts by calling terminal_lease_current_v1(0,&epoch). On success retain the exact epoch. Draw the first frame and then acknowledge readiness with terminal_lease_current_v1(epoch,&observed). Do not draw when the lease is inactive. Restore ANSI modes/cursor before releasing or exiting.",
+        "terminal_lease_release_v1(epoch,&ticket) hands the terminal back to the shell. Preserve the opaque ticket to park without exiting. terminal_lease_poll_reentry_v1(ticket,&epoch) returns 1 pending, 0 with new epoch ready,negative error; yield while pending, redraw and acknowledge the new epoch when resumed. Explicit shell reentry requests and terminal_surface_snapshot_v1 also support the existing parked-TUI lifecycle.",
+        "Lease return codes:0 success; -1 unsupported,-2 not active,-3 stale,-4 detached,-5 busy. Do not apply this error map to unrelated APIs.",
+        "terminal_surface_snapshot_v1 returns generation,columns,rows together. Redraw when dimensions OR generation changes, including same-size reconnect. shell_attached_read_byte returns 0..255 or -1 when no byte is available; it is not a Crossterm event. Parse UTF-8, escape sequences, mouse and paste reports locally. shell_attached_write can write only a prefix; loop until complete and handle zero progress.",
+        "ANSI alternate screen, cursor, color and mouse modes travel over the attached byte stream. Kernel-managed terminal handoff replaces Unix termios for direct C ABI users. Rust Crossterm is a client wrapper and is not importable by Odin. poll_once/sleep_ms avoid busy spinning. Keep structured logs off the terminal byte stream."
+      ],
+      "sources": ["src/r/io/fs_cabi.rs", "crates/trueos-v/src/vshell.rs", "src/r/io/launch_request.rs"]
+    },
+    "filesystem": {
+      "notes": [
+        "Use async operations scoped to the Blueprint filesystem identity. A *_start call returns a positive operation ID or an error. async_fs_status(id):0 pending,1 ready,negative failure. While pending call poll_once (and optionally sleep_ms) so kernel services can progress.",
+        "After ready, obtain result_len and copy with result_read(id,offset,out,cap), advancing by the returned byte count. Result layouts are operation-specific: typed metadata and directory data are not arbitrary Rust structs. Copy results before discard. Discard every operation exactly once, including failure paths.",
+        "Writes use write_begin, offset-based write_chunk, then write_commit. Commit submission alone is not durable completion: poll status until ready before claiming success. Content types, checked identities and flags belong to their documented operation-specific contracts. Rust async_fs::block_on is a Rust helper around this protocol, not an exported C function."
+      ],
+      "sources": ["crates/trueos-v/src/vfs_async.rs", "src/r/io/async_fs_cabi.rs", "src/hv/blueprint/prebind.rs"]
+    },
+    "lifecycle": {
+      "notes": [
+        "Check blueprint_stop_control_v1 using the same operation protocol as the native examples (initial registration 0, loop check 1). On stop, release application-owned resources, restore terminal state if held, then call blueprint_shutdown with an explanatory byte string.",
+        "blueprint_launch_script_v1 payload is app + NUL + script, optionally + NUL + destination. Omitted destination selects current shell; supported explicit destinations are sh3 and headless. The API reports launch admission, not proof the child completed successfully. Shared path-based launches and filesystem scope are enforced by the host."
+      ],
+      "sources": ["src/r/io/launch_request.rs", "src/r/io/fs_cabi.rs"]
+    },
+    "memory": {
+      "notes": [
+        "Allocation, buffer ownership and cleanup remain explicit across the ABI. Pass live, properly aligned buffers of the specified size; never pass Rust Vec/String/fmt::Arguments layouts through a C function. Allocations returned by the TRUEOS allocator must use its matching realloc/free contract. Handles and guest pointers are not GPU virtual addresses."
+      ],
+      "sources": ["crates/trueos-v/src/bp_abi.rs"]
+    },
+    "graphics": {
+      "notes": [
+        "UI4 resources are owner-scoped. Distinguish CPU pixel writes, retained sprite resources and GPU surfaces. A successful GPU submission is not a completed/published frame; preserve the documented frame/release lifecycle and handle busy responses without overwriting in-flight resources.",
+        "Odin SON uses the single intel_xelp backend. --gpu-xelp emits complete SIMD8 kernels; --gpu-pixel and --gpu-poc are aliases. The current TRUEOS framebuffer wrapper accepts 2..8 f32 arguments and one f32 result, with no helper procedures or global uniforms. The standalone backend has broader integer/builtin/uniform/store support; that does not broaden the framebuffer ABI. The driver validates instruction/register admission on upload. Native compute requires odin-native-gpgpu in the running kernel."
+      ],
+      "sources": ["src/ui4/blueprint_ui4/native_compute_api.rs", "crates/trueos-v/src/vgpu.rs"]
+    },
+    "services": {
+      "notes": [
+        "These are additional Blueprint service declarations. Consult attached rustdoc notes and the matching platform version for operation-specific contracts. Their presence in the declaration crate is not evidence every kernel enables the service."
+      ],
+      "sources": ["crates/trueos-v/src/bp_abi.rs", "src/hv/blueprint/prebind.rs"]
+    }
+  }
+}
