@@ -169,6 +169,9 @@ async fn serviced_block_device_task(front: &'static ServicedBlockDeviceFront) {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockServiceWorkerPolicy { CurrentExecutor, Bsp }
+
 struct ServicedBlockDevice {
     front: &'static ServicedBlockDeviceFront,
     block_size: u32,
@@ -176,7 +179,7 @@ struct ServicedBlockDevice {
     dma_alignment: u32,
     max_transfer_bytes: u64,
     writable: bool,
-    prefer_eff_worker: bool,
+    worker_policy: BlockServiceWorkerPolicy,
     next_seq: u64,
 }
 
@@ -197,36 +200,28 @@ impl ServicedBlockDevice {
             return Ok(());
         }
 
-        if self.prefer_eff_worker {
-            if let Some((worker_slot, core_kind, worker_spawner)) =
-                crate::workers::pick_eff_background_spawner_with_slot()
-            {
-                if self
-                    .front
-                    .spawned
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    match serviced_block_device_task(self.front) {
-                        Ok(token) => {
-                            worker_spawner.spawn(token);
-                            crate::log_info!(
-                                target: "storage";
-                                "block-service: worker placement=ecore slot={} core_kind={} policy=ecore-preferred-bsp-fallback pool_cap={}\n",
-                                worker_slot,
-                                core_kind,
-                                BLOCK_DEVICE_SERVICE_TASK_POOL,
-                            );
-                            return Ok(());
-                        }
-                        Err(_) => {
-                            self.front.spawned.store(false, Ordering::Release);
-                        }
+        if self.worker_policy == BlockServiceWorkerPolicy::Bsp {
+            // A synchronous native caller can occupy any general AP. Its disk
+            // completion service must remain on the independently polled BSP.
+            let Some(spawner) = crate::workers::spawner_for_slot(0) else {
+                return Err(Error::NotReady);
+            };
+            if spawner.cpu_slot() != 0 { return Err(Error::NotReady); }
+            if self.front.spawned.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                match serviced_block_device_task(self.front) {
+                    Ok(token) => {
+                        spawner.spawn(token);
+                        crate::log_info!(target: "storage";
+                            "block-service: worker placement=bsp slot={} policy=bsp-required pool_cap={}\n",
+                            spawner.cpu_slot(), BLOCK_DEVICE_SERVICE_TASK_POOL);
                     }
-                } else {
-                    return Ok(());
+                    Err(_) => {
+                        self.front.spawned.store(false, Ordering::Release);
+                        return Err(Error::NotReady);
+                    }
                 }
             }
+            return Ok(());
         }
 
         let spawner: Spawner = unsafe { Spawner::for_current_executor().await };
@@ -239,13 +234,6 @@ impl ServicedBlockDevice {
             match serviced_block_device_task(self.front) {
                 Ok(token) => {
                     spawner.spawn(token);
-                    if self.prefer_eff_worker {
-                        crate::log_info!(
-                            target: "storage";
-                            "block-service: worker placement=current-executor policy=ecore-preferred-bsp-fallback reason=no-available-ecore pool_cap={}\n",
-                            BLOCK_DEVICE_SERVICE_TASK_POOL,
-                        );
-                    }
                 }
                 Err(_) => {
                     self.front.spawned.store(false, Ordering::Release);
@@ -753,7 +741,7 @@ fn register_device_with_worker_inner<D>(
     descriptor: DeviceDescriptor,
     device: D,
     request_trueosfs_mount: bool,
-    prefer_eff_worker: bool,
+    worker_policy: BlockServiceWorkerPolicy,
 ) -> DeviceHandle
 where
     D: BlockDevice + 'static,
@@ -773,7 +761,7 @@ where
         dma_alignment,
         max_transfer_bytes,
         writable,
-        prefer_eff_worker,
+        worker_policy,
         next_seq: 1,
     };
 
@@ -784,7 +772,7 @@ pub fn register_device_with_worker<D>(descriptor: DeviceDescriptor, device: D) -
 where
     D: BlockDevice + 'static,
 {
-    register_device_with_worker_inner(descriptor, device, true, false)
+    register_device_with_worker_inner(descriptor, device, true, BlockServiceWorkerPolicy::CurrentExecutor)
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -795,20 +783,19 @@ pub fn register_device_with_worker_deferred_mount<D>(
 where
     D: BlockDevice + 'static,
 {
-    register_device_with_worker_inner(descriptor, device, false, false)
+    register_device_with_worker_inner(descriptor, device, false, BlockServiceWorkerPolicy::CurrentExecutor)
 }
 
-/// Register a deferred-mount device whose serialized transport worker should
-/// prefer an AP2+ efficiency core. If no E-core is available when first used,
-/// preserve the existing behavior and spawn on the calling executor.
-pub fn register_device_with_worker_deferred_mount_ecore_preferred<D>(
+/// Register a deferred-mount device whose serialized transport worker requires
+/// the BSP executor. If BSP registration is unavailable, I/O returns NotReady.
+pub fn register_device_with_bsp_worker_deferred_mount<D>(
     descriptor: DeviceDescriptor,
     device: D,
 ) -> DeviceHandle
 where
     D: BlockDevice + 'static,
 {
-    register_device_with_worker_inner(descriptor, device, false, true)
+    register_device_with_worker_inner(descriptor, device, false, BlockServiceWorkerPolicy::Bsp)
 }
 
 pub fn device_handles() -> Vec<DeviceHandle> {

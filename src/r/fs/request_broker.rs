@@ -30,6 +30,16 @@ use crate::wait::CompletionCell;
 
 const BROKER_QUEUE_CAP: usize = 256;
 
+#[path = "native_request_progress.rs"]
+mod native_request_progress;
+use native_request_progress as progress;
+static PROGRESS: progress::Tracker = progress::Tracker::new();
+static REPORTED_FULL: AtomicU64 = AtomicU64::new(0);
+static REPORTED_MISSED: AtomicU64 = AtomicU64::new(0);
+static REPORTED_EXPIRED: AtomicU64 = AtomicU64::new(0);
+static REPORTED_RELEASED: AtomicU64 = AtomicU64::new(0);
+const _: () = assert!(progress::OWNER_CAP == crate::allcaps::hv::VM_ID_LIMIT);
+
 static BROKER_ONLINE: AtomicBool = AtomicBool::new(false);
 static BROKER_REQUESTS: Mutex<VecDeque<OwnedRequest>> = Mutex::new(VecDeque::new());
 static BROKER_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -40,6 +50,73 @@ type Completion<T> = Arc<CompletionCell<FsResult<T>>>;
 struct OwnedRequest {
     request: Request,
     owner: Option<u8>,
+    // The broker, rather than its waiting caller, owns this observation.
+    progress: progress::Ticket<'static>,
+}
+
+/// Arm only a measured Codex launch, before its first native process file open.
+/// This helper touches atomics and the clock, never a VM or filesystem lock.
+pub(crate) fn arm_startup_diagnostics(vm_id: u8, generation: u64, launch: u64) {
+    if crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED && launch != 0 {
+        PROGRESS.arm(vm_id, generation, launch, crate::r::input_timing::now_ms());
+    }
+}
+
+fn diagnostic_ticket(owner: Option<u8>, id: u64, operation: &'static str) -> progress::Ticket<'static> {
+    if !crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED { return PROGRESS.inactive(); }
+    let Some(owner) = owner else { return PROGRESS.inactive(); };
+    if !PROGRESS.selected(owner) { return PROGRESS.inactive(); }
+    let Some(generation) = crate::hv::vm_run_generation(owner) else { return PROGRESS.inactive(); };
+    PROGRESS.admit(owner, generation, id, operation_code(operation), crate::r::input_timing::now_ms)
+}
+
+// Fixed numeric schema. Never print request paths, data, completion values, or Debug.
+fn operation_code(operation: &str) -> u32 {
+    match operation {
+        "prepare-volatile-files" => 1, "read-file" => 2, "read-file-len" => 3,
+        "read-file-range" => 4, "stat" => 5, "typed-stat" => 6,
+        "write-file-begin" => 7, "write-file-begin-typed" => 8, "create-dir-all" => 9,
+        "write-file-chunk" => 10, "write-file-finish" => 11, "write-file-abort" => 12,
+        "html-tree" => 13, "json-all" => 14, "list-dir" => 15, "typed-list-dir" => 16,
+        "remove" => 17, "exists" => 18, _ => 0,
+    }
+}
+
+/// At most four numeric records per observer tick, including a terminal summary.
+/// After 180s, an observation expires; its disk request continues unchanged.
+pub(crate) fn progress_lines(cursor: &mut usize, limit: usize) -> Vec<String> {
+    let limit = limit.min(progress::OUTPUT_CAP);
+    if !crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED || limit == 0 { return Vec::new(); }
+    let mut lines = Vec::new();
+    // A summary remains observable after the last ticket is released/expired.
+    let counters_changed = PROGRESS.full.load(Ordering::Relaxed) != REPORTED_FULL.load(Ordering::Relaxed)
+        || PROGRESS.missed.load(Ordering::Relaxed) != REPORTED_MISSED.load(Ordering::Relaxed)
+        || PROGRESS.expired.load(Ordering::Relaxed) != REPORTED_EXPIRED.load(Ordering::Relaxed)
+        || PROGRESS.released.load(Ordering::Relaxed) != REPORTED_RELEASED.load(Ordering::Relaxed);
+    if !PROGRESS.has_samples() && !counters_changed { return lines; }
+    let now = crate::r::input_timing::now_ms();
+    let rows = PROGRESS.sample(now, cursor, limit);
+    let full = PROGRESS.full.load(Ordering::Relaxed);
+    let missed = PROGRESS.missed.load(Ordering::Relaxed);
+    let expired = PROGRESS.expired.load(Ordering::Relaxed);
+    let released = PROGRESS.released.load(Ordering::Relaxed);
+    for row in rows.into_iter().flatten() {
+        let queued = if row.phase >= progress::SERVICE { row.begun.saturating_sub(row.queued) }
+            else { now.saturating_sub(row.queued) };
+        let service = if row.phase >= progress::SERVICE { now.saturating_sub(row.begun) } else { 0 };
+        lines.push(alloc::format!(
+            "codex-fs-native vm={} generation={} launch={} request={} op={} phase={} status={} queued_ms={} service_ms={} phase_ms={} age_ms={} full={} missed={} expired={} released={}",
+            row.owner, row.generation, row.launch, row.id, row.operation, row.phase, row.status,
+            queued, service, now.saturating_sub(row.changed), now.saturating_sub(row.queued), full, missed, expired, released));
+    }
+    if lines.is_empty() && (counters_changed || expired != REPORTED_EXPIRED.load(Ordering::Relaxed)) {
+        lines.push(alloc::format!("codex-fs-native-summary full={} missed={} expired={} released={}", full, missed, expired, released));
+    }
+    REPORTED_FULL.store(full, Ordering::Relaxed);
+    REPORTED_MISSED.store(missed, Ordering::Relaxed);
+    REPORTED_EXPIRED.store(expired, Ordering::Relaxed);
+    REPORTED_RELEASED.store(released, Ordering::Relaxed);
+    lines
 }
 
 // Request ownership remains live when a native caller parks or is killed.
@@ -318,8 +395,9 @@ fn submit<T>(
             return Err(BlockingRequestError::QueueFull);
         }
         BROKER_OWNERS.lock().submit(id, owner, request.stream_handle());
+        let progress = diagnostic_ticket(owner, id, operation);
         crate::allocators::with_host_alloc_domain_strong(|| {
-            requests.push_back(OwnedRequest { request, owner });
+            requests.push_back(OwnedRequest { request, owner, progress });
         });
         requests.len()
     };
@@ -553,7 +631,8 @@ pub fn exists(
 }
 
 async fn process_request(owned: OwnedRequest) {
-    let OwnedRequest { request, owner } = owned;
+    let OwnedRequest { request, owner, mut progress } = owned;
+    progress.advance(progress::SERVICE, 0, crate::r::input_timing::now_ms);
     let (request_id, operation) = request.metadata();
     crate::log_trace!(target: "filesystem";
         "trueosfs-request-broker: begin id={} op={} realm=bsp\n",
@@ -568,11 +647,11 @@ async fn process_request(owned: OwnedRequest) {
         match request {
             Request::WriteFileBegin { id, completion, .. }
             | Request::WriteFileBeginTyped { id, completion, .. } => {
-                finish(id, operation, completion, Err(FsError::Device(block::Error::NotReady)));
+                finish(id, operation, completion, Err(FsError::Device(block::Error::NotReady)), &mut progress);
             }
             _ => unreachable!(),
         }
-        complete_request(request_id);
+        retire_request(request_id, &mut progress);
         return;
     }
     if let Some(handle) = request.stream_handle() {
@@ -592,18 +671,19 @@ async fn process_request(owned: OwnedRequest) {
                 Request::WriteFileChunk { id, completion, .. }
                 | Request::WriteFileFinish { id, completion, .. }
                 | Request::WriteFileAbort { id, completion, .. } => {
-                    finish(id, operation, completion, Err(FsError::BadPath));
+                    finish(id, operation, completion, Err(FsError::BadPath), &mut progress);
                 }
                 _ => unreachable!(),
             }
-            complete_request(request_id);
+            retire_request(request_id, &mut progress);
             return;
         }
     }
+    progress.advance(progress::FILESYSTEM, 0, crate::r::input_timing::now_ms);
     match request {
         Request::PrepareVolatileFiles { id, root, completion } => {
             let result = super::volatile_files::prepare(&root).await;
-            finish(id, "prepare-volatile-files", completion, result);
+            finish(id, "prepare-volatile-files", completion, result, &mut progress);
         }
         Request::ReadFile {
             id,
@@ -616,7 +696,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(None) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "read-file", completion, result);
+            finish(id, "read-file", completion, result, &mut progress);
         }
         Request::ReadFileLen {
             id,
@@ -629,7 +709,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(None) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "read-file-len", completion, result);
+            finish(id, "read-file-len", completion, result, &mut progress);
         }
         Request::ReadFileRange {
             id,
@@ -639,12 +719,23 @@ async fn process_request(owned: OwnedRequest) {
             cap,
             completion,
         } => {
+            progress.advance(progress::RANGE_SCRATCH, 0, crate::r::input_timing::now_ms);
             let mut scratch = alloc::vec![0u8; cap];
-            let result = match super::trueosfs::file_read_range_async(
+            let result = match super::trueosfs::file_read_range_observed_async(
                 disk,
                 path.as_str(),
                 offset,
                 scratch.as_mut_slice(),
+                |phase| {
+                    use super::trueosfs::ReadRangePhase;
+                    let phase = match phase {
+                        ReadRangePhase::Placement => progress::RANGE_PLACEMENT,
+                        ReadRangePhase::RecordCache => progress::RANGE_RECORD_CACHE,
+                        ReadRangePhase::Index => progress::RANGE_INDEX,
+                        ReadRangePhase::Read => progress::RANGE_READ,
+                    };
+                    progress.advance(phase, 0, crate::r::input_timing::now_ms);
+                },
             )
             .await
             {
@@ -655,7 +746,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(None) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "read-file-range", completion, result);
+            finish(id, "read-file-range", completion, result, &mut progress);
         }
         Request::Stat {
             id,
@@ -664,7 +755,7 @@ async fn process_request(owned: OwnedRequest) {
             completion,
         } => {
             let result = stat_async(disk, path.as_str()).await;
-            finish(id, "stat", completion, result);
+            finish(id, "stat", completion, result, &mut progress);
         }
         Request::TypedStat {
             id,
@@ -689,7 +780,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(None) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "typed-stat", completion, result);
+            finish(id, "typed-stat", completion, result, &mut progress);
         }
         Request::WriteFileBegin {
             id,
@@ -719,7 +810,7 @@ async fn process_request(owned: OwnedRequest) {
             if let Ok(handle) = &result {
                 BROKER_OWNERS.lock().remember_write(owner, *handle);
             }
-            finish(id, "write-file-begin", completion, result);
+            finish(id, "write-file-begin", completion, result, &mut progress);
         }
         Request::WriteFileBeginTyped {
             id,
@@ -744,7 +835,7 @@ async fn process_request(owned: OwnedRequest) {
             if let Ok(handle) = &result {
                 BROKER_OWNERS.lock().remember_write(owner, *handle);
             }
-            finish(id, "write-file-begin-typed", completion, result);
+            finish(id, "write-file-begin-typed", completion, result, &mut progress);
         }
         Request::CreateDirAll {
             id,
@@ -753,7 +844,7 @@ async fn process_request(owned: OwnedRequest) {
             completion,
         } => {
             let result = create_dir_all_async(disk, path.as_str()).await;
-            finish(id, "create-dir-all", completion, result);
+            finish(id, "create-dir-all", completion, result, &mut progress);
         }
         Request::WriteFileChunk {
             id,
@@ -767,7 +858,7 @@ async fn process_request(owned: OwnedRequest) {
             if result.is_err() {
                 BROKER_OWNERS.lock().forget_write(owner, handle);
             }
-            finish(id, "write-file-chunk", completion, result);
+            finish(id, "write-file-chunk", completion, result, &mut progress);
         }
         Request::WriteFileFinish {
             id,
@@ -778,7 +869,7 @@ async fn process_request(owned: OwnedRequest) {
                 .await
                 .map_err(FsError::from);
             BROKER_OWNERS.lock().forget_write(owner, handle);
-            finish(id, "write-file-finish", completion, result);
+            finish(id, "write-file-finish", completion, result, &mut progress);
         }
         Request::WriteFileAbort {
             id,
@@ -789,7 +880,7 @@ async fn process_request(owned: OwnedRequest) {
                 .await
                 .map_err(FsError::from);
             BROKER_OWNERS.lock().forget_write(owner, handle);
-            finish(id, "write-file-abort", completion, result);
+            finish(id, "write-file-abort", completion, result, &mut progress);
         }
         Request::HtmlTree {
             id,
@@ -802,7 +893,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(None) => Err(FsError::NoRoot),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "html-tree", completion, result);
+            finish(id, "html-tree", completion, result, &mut progress);
         }
         Request::JsonAll {
             id,
@@ -815,7 +906,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(None) => Err(FsError::NoRoot),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "json-all", completion, result);
+            finish(id, "json-all", completion, result, &mut progress);
         }
         Request::ListDir {
             id,
@@ -836,7 +927,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(None) => Err(FsError::NoRoot),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "list-dir", completion, result);
+            finish(id, "list-dir", completion, result, &mut progress);
         }
         Request::TypedListDir {
             id,
@@ -849,7 +940,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(None) => Err(FsError::NoRoot),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "typed-list-dir", completion, result);
+            finish(id, "typed-list-dir", completion, result, &mut progress);
         }
         Request::Remove {
             id,
@@ -862,7 +953,7 @@ async fn process_request(owned: OwnedRequest) {
                 Ok(false) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
             };
-            finish(id, "remove", completion, result);
+            finish(id, "remove", completion, result, &mut progress);
         }
         Request::Exists {
             id,
@@ -874,10 +965,16 @@ async fn process_request(owned: OwnedRequest) {
                 .await
                 .map(|info| info.is_some())
                 .map_err(FsError::from);
-            finish(id, "exists", completion, result);
+            finish(id, "exists", completion, result, &mut progress);
         }
     }
-    complete_request(request_id);
+    retire_request(request_id, &mut progress);
+}
+
+fn retire_request(id: u64, progress: &mut progress::Ticket<'_>) {
+    progress.advance(progress::RETIRE, 0, crate::r::input_timing::now_ms);
+    complete_request(id);
+    progress.advance(progress::FINISHED, 0, crate::r::input_timing::now_ms);
 }
 
 fn complete_request(id: u64) {
@@ -901,6 +998,7 @@ fn queue_retired_write_aborts() {
                 id, handle, completion: Arc::new(CompletionCell::new()),
             },
             owner: Some(owner),
+            progress: diagnostic_ticket(Some(owner), id, "write-file-abort"),
         });
     }
 }
@@ -938,9 +1036,14 @@ async fn create_dir_all_async(disk: block::DeviceHandle, path: &str) -> FsResult
     }
 }
 
-fn finish<T>(id: u64, operation: &'static str, completion: Completion<T>, result: FsResult<T>) {
+fn finish<T>(id: u64, operation: &'static str, completion: Completion<T>, result: FsResult<T>, progress: &mut progress::Ticket<'_>) {
     let status = if result.is_ok() { "ok" } else { "error" };
-    if completion.complete(result).is_err() {
+    let numeric_status = if result.is_ok() { 1 } else { 2 };
+    progress.advance(progress::RESULT, numeric_status, crate::r::input_timing::now_ms);
+    progress.advance(progress::PUBLISH, numeric_status, crate::r::input_timing::now_ms);
+    let publication = completion.complete(result);
+    progress.advance(progress::PUBLISHED, if publication.is_ok() { numeric_status } else { 3 }, crate::r::input_timing::now_ms);
+    if publication.is_err() {
         crate::log_error!(target: "filesystem";
             "trueosfs-request-broker: duplicate completion id={} op={}\n",
             id,

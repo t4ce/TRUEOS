@@ -1,5 +1,5 @@
 //! Read-only observer on the BSP, outside every Codex application carrier.
-//! One sample emits at most 25 records regardless of the number of VMs/APs.
+//! One sample emits at most 29 records regardless of the number of VMs/APs.
 use crate::r::{blocking::diagnostics, input_timing::now_ms, progress_probe};
 use trueos_time::{Duration, Timer};
 
@@ -15,6 +15,7 @@ pub(crate) async fn codex_progress_task() {
     let mut idle_timing_sweep = diagnostics::TimingSweep::new();
     let mut job_cursor = 0;
     let mut allocator_cursor = 0;
+    let mut native_fs_cursor = 0;
     let mut had_active = false;
     let mut previous_retirements = 0;
     let mut sample = 0u64;
@@ -37,6 +38,11 @@ pub(crate) async fn codex_progress_task() {
         // TCP owners such as App Store can run without a Codex carrier. Keep
         // their bounded transport counters observable through the idle gate.
         for line in crate::mio_compat::progress_lines(LINES_PER_CATEGORY) {
+            crate::log_info!(target: "blueprint"; "{}\n", line);
+        }
+        // Profile/config opens can stall before a native carrier exists. These
+        // snapshots use only bounded atomics, outside VM/filesystem locks.
+        for line in crate::r::fs::request_broker::progress_lines(&mut native_fs_cursor, LINES_PER_CATEGORY) {
             crate::log_info!(target: "blueprint"; "{}\n", line);
         }
         // An exhausted/empty sweep is silent; a busy roster remains evidence.

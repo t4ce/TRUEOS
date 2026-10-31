@@ -3272,6 +3272,7 @@ pub fn stage_blueprint_launch(
     };
     let console_target_present = console_target.is_some();
     let generation = vm_run_generation(vm_id).ok_or(StartError::UnsupportedVmId)?;
+    crate::r::fs::request_broker::arm_startup_diagnostics(vm_id, generation, state.timing.request);
     let Some(template_slot) = BLUEPRINT_CHILD_TEMPLATES.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };

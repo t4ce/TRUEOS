@@ -2363,10 +2363,26 @@ pub async fn file_read_range_async(
     offset: u64,
     out: &mut [u8],
 ) -> Result<Option<usize>, block::Error> {
+    file_read_range_observed_async(disk, name, offset, out, |_| {}).await
+}
+
+/// Fixed substeps only; the caller decides whether any observation is enabled.
+/// RecordCache covers lookup and insertion after a successful index lookup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReadRangePhase { Placement, RecordCache, Index, Read }
+
+pub(super) async fn file_read_range_observed_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    offset: u64,
+    out: &mut [u8],
+    mut observe: impl FnMut(ReadRangePhase),
+) -> Result<Option<usize>, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
+    observe(ReadRangePhase::Placement);
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
@@ -2379,12 +2395,15 @@ pub async fn file_read_range_async(
     let io = KernelBlockIo::new(disk);
 
     let disk_id = disk.id();
+    observe(ReadRangePhase::RecordCache);
     let record = file_record_cache_lookup(disk_id, name);
     let record = match record {
         Some(v) => Some(v),
         None => {
+            observe(ReadRangePhase::Index);
             let rec = lookup_via_index_async(disk, &placement, name).await?;
             if let Some(r) = rec {
+                observe(ReadRangePhase::RecordCache);
                 file_record_cache_insert(disk_id, name, r);
                 Some(r)
             } else {
@@ -2394,6 +2413,7 @@ pub async fn file_read_range_async(
     };
 
     if let Some(rec) = record {
+        observe(ReadRangePhase::Read);
         return trueos_fs::read_file_range_at(&io, &params, &rec, offset, out)
             .await
             .map_err(map_engine_err);

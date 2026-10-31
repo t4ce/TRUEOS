@@ -317,7 +317,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         write_bytes: 0,
         flush_ops: 0,
     };
-    let handle = crate::disc::block::register_device_with_worker_deferred_mount_ecore_preferred(
+    let handle = crate::disc::block::register_device_with_bsp_worker_deferred_mount(
         descriptor,
         block_device,
     );
