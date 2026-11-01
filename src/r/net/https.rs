@@ -1507,7 +1507,7 @@ pub(crate) async fn get_image_bytes_shared(
         method: "GET",
         content_type: None,
         headers: vec![
-            (String::from("Accept"), String::from("image/png,image/jpeg,image/bmp,*/*;q=0.1")),
+            (String::from("Accept"), String::from("image/png,image/jpeg,image/bmp,image/webp,*/*;q=0.1")),
             (String::from("Accept-Encoding"), String::from("identity")),
             (String::from("User-Agent"), String::from("TRUEOS Hull raster/1")),
         ],

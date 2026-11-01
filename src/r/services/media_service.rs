@@ -17,6 +17,8 @@ pub const BACKEND_PNG: u32 = 1;
 pub const BACKEND_ZUNE_JPEG: u32 = 2;
 pub const BACKEND_BMP: u32 = 3;
 pub const BACKEND_XELP_JPEG: u32 = 4;
+// Internal UI4 decoder; generic VMedia format admission remains unchanged.
+const BACKEND_WEBP: u32 = 5;
 
 pub const STATUS_PENDING: i32 = 0;
 pub const STATUS_READY: i32 = 1;
@@ -109,6 +111,10 @@ pub(crate) fn decode_ui4_bounded(encoded: &[u8]) -> Result<DecodedImage, i32> {
                 .map_err(|error| error.code())?;
             let backend = if image.png_frame { BACKEND_PNG } else { BACKEND_BMP };
             (image.width, image.height, image.rgba, backend)
+        }
+        5 => {
+            let image=crate::graphics::webp_codec::decode_webp_rgba(encoded).map_err(|error|error.code())?;
+            (image.width,image.height,image.rgba,BACKEND_WEBP)
         }
         _ => return Err(ERR_UNSUPPORTED),
     };

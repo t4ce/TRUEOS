@@ -2,13 +2,14 @@
 """Exercise Hull's real admission policy and image codecs on the host.
 
 The kernel is freestanding. This harness compiles its production policy and
-PNG/JPEG/BMP/ICO decoders, plus real service admission and cache checks. Worker
+PNG/JPEG/BMP/ICO/WebP decoders, plus real service admission and cache checks. Worker
 scheduling, UI ownership, and filesystem operations use deterministic mocks.
 It does not use the network, TRUEOS storage, or graphics hardware.
 Run with ``python3 tools/testpy/test_hull_image_policy.py``.
 """
 
 import json
+import base64
 import os
 from pathlib import Path
 import re
@@ -94,6 +95,46 @@ mod integration_tests {
         assert_eq!(policy::contained_extent(256,1,28,28),Ok((28,1)));
         assert!(policy::contained_extent(0,256,28,28).is_err());
         assert_eq!(policy::contained_extent(u32::MAX,u32::MAX,28,28),Ok((28,28)));
+    }
+
+    #[test]
+    fn static_webp_lossless_rgb_and_alpha_decode_by_magic() {
+        for (name,bytes,expected) in [
+            ("RGB",include_bytes!("webp-lossless-rgb.bin").as_slice(),[255,0,0,255,0,255,0,255,0,0,255,255,11,22,33,255]),
+            ("alpha",include_bytes!("webp-lossless-alpha.bin").as_slice(),[0,0,0,0,10,20,30,64,40,50,60,128,70,80,90,255]),
+        ] {
+            let image=media::decode_ui4_bounded(bytes).unwrap_or_else(|e|panic!("WebP {name} failed {e}"));
+            assert_eq!((image.info.source_format,image.info.width,image.info.height),(5,2,2));
+            assert_eq!(image.rgba,expected,"WebP {name}");
+            assert_eq!(policy::extension(5),Some("webp"));
+            let metadata=policy::metadata("https://fixture.test/misleading.jpg",5,bytes);
+            assert_eq!(policy::cache_descriptor(metadata.as_bytes(),"https://fixture.test/misleading.jpg").map(|v|v.0),Some(5));
+        }
+    }
+    #[test]
+    fn static_webp_vp8_lossy_rgb_and_extended_alpha_decode() {
+        let opaque=media::decode_ui4_bounded(include_bytes!("webp-lossy-rgb.bin")).unwrap();
+        assert_eq!((opaque.info.width,opaque.info.height),(2,2));
+        assert!(opaque.rgba.chunks_exact(4).all(|pixel|pixel[3]==255));
+        let alpha=media::decode_ui4_bounded(include_bytes!("webp-lossy-alpha.bin")).unwrap();
+        assert_eq!((alpha.info.width,alpha.info.height),(2,2));
+        assert_eq!(alpha.rgba.chunks_exact(4).map(|pixel|pixel[3]).collect::<Vec<_>>(),[0,64,128,255]);
+    }
+    #[test]
+    fn webp_admission_rejects_animation_ranges_duplicate_frames_and_unadmitted_extents() {
+        let original=include_bytes!("webp-lossy-alpha.bin");
+        for length in 0..original.len(){assert!(policy::preflight(&original[..length]).is_err());}
+        let mut bytes=original.to_vec();bytes[20]|=2;assert_eq!(policy::preflight(&bytes),Err(policy::ERR_UNSUPPORTED));
+        let mut bytes=original.to_vec();bytes[24..27].fill(0xff);assert_eq!(policy::preflight(&bytes),Err(policy::ERR_TOO_LARGE));
+        let mut bytes=original.to_vec();bytes[24]=2;assert_eq!(policy::preflight(&bytes),Err(policy::ERR_INVALID));
+        let mut bytes=original.to_vec();bytes[16..20].copy_from_slice(&u32::MAX.to_le_bytes());assert_eq!(policy::preflight(&bytes),Err(policy::ERR_INVALID));
+        let mut bytes=include_bytes!("webp-lossy-rgb.bin").to_vec();
+        bytes.extend_from_slice(&include_bytes!("webp-lossy-rgb.bin")[12..]);
+        let size=bytes.len() as u32-8;bytes[4..8].copy_from_slice(&size.to_le_bytes());
+        assert_eq!(policy::preflight(&bytes),Err(policy::ERR_INVALID));
+        let mut bytes=include_bytes!("webp-lossless-rgb.bin").to_vec();
+        let bits=8191u32|(8191u32<<14);bytes[21..25].copy_from_slice(&bits.to_le_bytes());
+        assert_eq!(policy::preflight(&bytes),Err(policy::ERR_TOO_LARGE));
     }
 
     #[test]
@@ -208,7 +249,7 @@ mod integration_tests {
                 random ^= random << 13; random ^= random >> 7; random ^= random << 17;
                 *b = random as u8;
             }
-            for magic in [b"BM".as_slice(), b"\xff\xd8".as_slice(), b"\x89PNG\r\n\x1a\n".as_slice(), b"\0\0\x01\0".as_slice()] {
+            for magic in [b"BM".as_slice(), b"\xff\xd8".as_slice(), b"\x89PNG\r\n\x1a\n".as_slice(), b"\0\0\x01\0".as_slice(),b"RIFF".as_slice()] {
                 if bytes.len() >= magic.len() { bytes[..magic.len()].copy_from_slice(magic); }
                 let _ = policy::preflight(&bytes);
             }
@@ -469,7 +510,7 @@ def main() -> None:
         pool = pool.replace(production_item(pool, "png_row_expand_task"), "")
         (source / "png_decode_pool.rs").write_text(pool)
         modules = "\n".join(f"#[path={json.dumps(str(DECODERS / (name + '.rs')))}] pub mod {name};"
-                            for name in ("png", "jpeg", "jpeg_layout", "bmp", "ico"))
+                            for name in ("png", "jpeg", "jpeg_layout", "bmp", "ico", "webp"))
         harness = r'''#![allow(dead_code)]
 extern crate alloc;
 #[macro_export] macro_rules! log { ($($tt:tt)*) => { let _ = format_args!($($tt)*); } }
@@ -484,7 +525,7 @@ mod wait {
 mod workers { pub fn has_background_worker_slot() -> bool { false } }
 '''
         harness += f"#[path={json.dumps(str(ROOT / 'src/r/services/hull_image_policy.rs'))}] pub(crate) mod policy;\n"
-        harness += "mod graphics {\n" + modules + "\npub(crate) use ico as ico_codec;\npub(crate) use png as png_codec;\npub(crate) use jpeg as jpeg_codec;\npub(crate) use bmp as bmp_codec;\n"
+        harness += "mod graphics {\n" + modules + "\npub(crate) use ico as ico_codec;\npub(crate) use png as png_codec;\npub(crate) use jpeg as jpeg_codec;\npub(crate) use bmp as bmp_codec;\npub(crate) use webp as webp_codec;\n"
         harness += f"#[path={json.dumps(str(source / 'png_decode_pool.rs'))}] mod png_decode_pool;\n}}\n"
         (source / "lib.rs").write_text(harness + bounded_media_harness() + TESTS + service_harness())
         rgba = bytes([255,0,0,255, 0,255,0,128, 0,0,255,0, 255,255,255,255])
@@ -497,6 +538,16 @@ mod workers { pub fn has_background_worker_slot() -> bool { false } }
         (source / "duplicate-header.png").write_bytes(png(2, 2, 6, b"\0" * 18,
             before_data=chunk(b"IHDR", struct.pack(">IIBBBBB", 8192, 8192, 8, 6, 0, 0, 0))))
         (source / "oversized.png").write_bytes(png(8192, 8192, 6, b""))
+        # Benign 2x2 colour swatches encoded once with Pillow/libwebp; no runtime
+        # host encoder dependency and no website image bytes are checked in.
+        webp_fixtures = {
+            "lossless-rgb":"UklGRjIAAABXRUJQVlA4TCYAAAAvAUAAAB8gECCY8H9qQyCQBLC/7gIBghT/keY/8MlRwQ0YIvofAg==",
+            "lossless-alpha":"UklGRjQAAABXRUJQVlA4TCcAAAAvAUAAEB8gFkxxEN0TC6a4O4iNh0AgGS2z1aP0EQfZAGWqMIvof+wA",
+            "lossy-alpha":"UklGRl4AAABXRUJQVlA4WAoAAAAQAAAAAQAAAQAAQUxQSAUAAAAAAECA/wBWUDggMgAAALABAJ0BKgIAAgAAwBIllAJ0AQ72xMgA/v8R4Xj/S3vhvwdCpI8hyOwhutf64ubIbwAA",
+            "lossy-rgb":"UklGRkIAAABXRUJQVlA4IDYAAADQAQCdASoCAAIAAMASJZwCdAEO+M37wAD+/07h/wef5qgTORTplm27AMSx475578boUomgAAA=",
+        }
+        for name, data in webp_fixtures.items():
+            (source / ("webp-"+name+".bin")).write_bytes(base64.b64decode(data))
         (source / "sample.jpg").write_bytes((ROOT / "vendor/infer/testdata/sample.jpg").read_bytes())
         (project / "Cargo.toml").write_text(f'''[package]
 name = "hull-image-host-tests"
@@ -505,6 +556,7 @@ edition = "2024"
 [workspace]
 [dependencies]
 core3 = {{ version = "0.1.2", default-features = false, features = ["alloc"] }}
+image-webp = {{ path = {json.dumps(str(ROOT / "vendor/image-webp-0.2.4-trueos"))}, default-features = false }}
 png = {{ path = {json.dumps(str(ROOT / 'vendor/png-0.18.1'))}, default-features = false }}
 zune-core = {{ path = {json.dumps(str(ROOT / 'vendor/zune-core-0.5.1'))}, default-features = false }}
 zune-jpeg = {{ path = {json.dumps(str(ROOT / 'vendor/zune-jpeg-0.5.15'))}, default-features = false, features = ["x86", "portable_simd"] }}

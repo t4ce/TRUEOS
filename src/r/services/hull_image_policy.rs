@@ -25,6 +25,7 @@ pub(super) fn extension(format: u32) -> Option<&'static str> {
         2 => Some("png"),
         3 => Some("bmp"),
         4 => Some("ico"),
+        5 => Some("webp"),
         _ => None,
     }
 }
@@ -210,6 +211,10 @@ pub(super) fn preflight(bytes: &[u8]) -> Result<SourceInfo, i32> {
             offset = end;
         }
         return if ended { Ok(info) } else { Err(ERR_INVALID) };
+    }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12)==Some(b"WEBP".as_slice()) {
+        let (width,height)=crate::graphics::webp_codec::inspect_webp(bytes).map_err(|error|error.code())?;
+        return bounded(5,width,height);
     }
     if bytes.starts_with(b"\0\0\x01\0") {
         let frame = crate::graphics::ico_codec::inspect_ico(bytes).map_err(|error| error.code())?;

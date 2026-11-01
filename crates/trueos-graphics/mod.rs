@@ -11,5 +11,6 @@ pub(crate) use self::decoder::ico as ico_codec;
 pub(crate) use self::decoder::jpeg as jpeg_codec;
 pub(crate) use self::decoder::jpeg_layout;
 pub(crate) use self::decoder::png as png_codec;
+pub(crate) use self::decoder::webp as webp_codec;
 pub(crate) mod image;
 pub(crate) mod primitives;

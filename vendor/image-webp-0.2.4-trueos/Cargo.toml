@@ -1,0 +1,17 @@
+[package]
+name = "image-webp"
+version = "0.2.4-trueos.1"
+edition = "2021"
+rust-version = "1.80.1"
+license = "MIT OR Apache-2.0"
+description = "Decoder-only no_std port of image-webp 0.2.4 for TRUEOS"
+repository = "https://github.com/image-rs/image-webp"
+
+[dependencies]
+core3 = { version = "0.1.2", default-features = false, features = ["alloc", "utils"] }
+byteorder-lite = { version = "0.1.0", default-features = false }
+
+[features]
+_benchmarks = []
+
+[workspace]

@@ -1,0 +1,13 @@
+Upstream: https://github.com/image-rs/image-webp
+Crates.io package: image-webp 0.2.4
+Upstream crate archive SHA256: 525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3
+License: MIT OR Apache-2.0; both license files retained.
+
+TRUEOS modifications:
+- Decoder-only no_std + alloc package; encoder source/module not included.
+- std IO -> core3::io, std core types -> core, collections -> alloc::BTreeMap.
+- Private core3 ReadBytesExt uses no_std byteorder-lite primitives.
+- quick-error replaced with equivalent error variants, Display and From<io::Error>.
+- No std compatibility shim, host codec, C library or network access.
+- Entropy scratch rejects more than256 Huffman groups; VP8 declared partitions
+  above8MiB reject before allocation. Decode algorithms otherwise remain intact.

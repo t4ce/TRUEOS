@@ -165,6 +165,7 @@ miniz_oxide = { version = "0.9", default-features = false, features = ["with-all
 lz4_flex = { version = "0.11.6", default-features = false, features = ["safe-encode", "safe-decode", "checked-decode"] }
 twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32"] }
 png = { version = "0.18.1", default-features = false }
+image-webp = { path = "vendor/image-webp-0.2.4-trueos", default-features = false }
 zune-core = { version = "0.5.1", default-features = false }
 zune-jpeg = { version = "0.5.15", default-features = false, features = ["x86", "portable_simd"] }
 crc32fast = { version = "1.5.0", default-features = false }

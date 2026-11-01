@@ -8,4 +8,5 @@ pub(crate) mod ico;
 pub(crate) mod jpeg;
 pub(crate) mod jpeg_layout;
 pub(crate) mod png;
+pub(crate) mod webp;
 pub(crate) mod png_decode_pool;
