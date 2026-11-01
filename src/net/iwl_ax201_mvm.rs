@@ -346,22 +346,55 @@ impl Runtime {
         if !matches!(self.stage, Stage::Ready | Stage::ScanFinished) {
             return Err("AX201 wait for scan completion");
         }
-        let network = self
-            .networks
-            .iter()
-            .filter(|n| n.ssid == ssid)
-            .max_by_key(|n| n.signal_dbm)
-            .ok_or("AX201 SSID not found; run a scan first")?;
-        let beacon = self
-            .beacons
-            .iter()
-            .find(|entry| entry.bssid == network.bssid)
-            .ok_or("AX201 AP beacon unavailable")?;
-        let bss = Bss::from_beacon(&beacon.frame, ssid)?;
         let nvm = self.nvm.as_ref().ok_or("AX201 NVM not ready")?;
-        if !scan::transmit_allowed(&nvm.channels, nvm.sku, bss.channel) {
-            return Err("AX201 AP channel not permitted for initial station TX");
+        let mut selected: Option<(&Beacon, Bss)> = None;
+        let mut rejection = "AX201 SSID not found; run a scan first";
+        let mut eligible = 0;
+        let mut skipped = 0;
+        // A dual-band SSID may have a stronger AP on a channel this initial
+        // station path cannot transmit on. Rank only candidates whose cached
+        // beacon and receive channel agree and pass the existing NVM limits.
+        for network in self.networks.iter().filter(|n| n.ssid == ssid) {
+            let candidate = (|| {
+                let beacon = self
+                    .beacons
+                    .iter()
+                    .find(|entry| entry.bssid == network.bssid)
+                    .ok_or("AX201 AP beacon unavailable")?;
+                let bss = Bss::from_beacon(&beacon.frame, ssid)?;
+                if bss.channel != network.channel {
+                    return Err("AX201 AP beacon and receive channel disagree");
+                }
+                if !scan::transmit_allowed(&nvm.channels, nvm.sku, bss.channel) {
+                    return Err("AX201 AP channel not permitted for initial station TX");
+                }
+                Ok((beacon, bss))
+            })();
+            match candidate {
+                Ok((beacon, bss)) => {
+                    eligible += 1;
+                    if selected
+                        .as_ref()
+                        .is_none_or(|(best, _)| beacon.signal > best.signal)
+                    {
+                        selected = Some((beacon, bss));
+                    }
+                }
+                Err(reason) => {
+                    rejection = reason;
+                    if skipped < 8 {
+                        crate::log_warn!(target: "net";
+                            "iwl-ax201: stage=ap-selection skip_channel={} signal_dbm={} reason={}\n",
+                            network.channel, network.signal_dbm, reason);
+                    }
+                    skipped += 1;
+                }
+            }
         }
+        let (beacon, bss) = selected.ok_or(rejection)?;
+        crate::log_warn!(target: "net";
+            "iwl-ax201: stage=ap-selected channel={} signal_dbm={} eligible={} skipped={}\n",
+            bss.channel, beacon.signal, eligible, skipped);
         let config = StationConfig {
             mac,
             bss,

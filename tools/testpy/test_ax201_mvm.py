@@ -259,6 +259,70 @@ mod net {
             assert_eq!(networks[0].security,super::wifi::WifiSecurity::Open);
             assert_eq!(networks[0].channel,1);
         }
+        fn candidate_beacon(shared:&Shared,bssid:[u8;6],rx_channel:u8,ie_channel:u8,signal:u8,capability:u16){
+            let mut frame=vec![0;36];frame[0]=0x80;frame[4..10].fill(0xff);
+            frame[10..16].copy_from_slice(&bssid);frame[16..22].copy_from_slice(&bssid);
+            frame[32..34].copy_from_slice(&100u16.to_le_bytes());frame[34..36].copy_from_slice(&capability.to_le_bytes());
+            frame.extend_from_slice(&[0,8]);frame.extend_from_slice(b"easyeasy");
+            frame.extend_from_slice(&[1,1,0x82,3,1,ie_channel]);
+            let mut packet=vec![0;48];packet[..2].copy_from_slice(&(frame.len() as u16).to_le_bytes());
+            packet[3]=12;packet[12]=3;packet[32]=signal;packet[33]=signal;packet[34]=rx_channel;
+            packet.extend_from_slice(&frame);inject(shared,0,0xc1,0x8000,packet);
+        }
+        fn connectable_scan()->(Runtime,Shared){
+            let(mut runtime,shared)=scan_ready();
+            // Valid/active channels 1,6,11,36,52; individual tests may restrict
+            // one profile. Initial station TX must keep the production limits.
+            let profiles=&mut runtime.nvm.as_mut().unwrap().channels;profiles.fill(0);
+            for index in [0,5,10,14,18]{profiles[index]=9;}
+            begin_scan(&mut runtime,&shared);(runtime,shared)
+        }
+        fn finish_candidate_scan(runtime:&mut Runtime,shared:&Shared){
+            scan_complete(shared,1,1);assert!(runtime.poll().unwrap());assert!(runtime.scan_finished());
+        }
+        fn selected_station(runtime:&mut Runtime,shared:&Shared)->(u8,[u8;6]){
+            runtime.connect("easyeasy",b"",[2,1,2,3,4,5]).unwrap();
+            assert!(runtime.poll().unwrap());let phy=latest(shared);
+            assert_eq!((phy.group,phy.id),(1,8));let channel=phy.payload[8];
+            ack(shared);runtime.poll().unwrap();assert_eq!((latest(shared).group,latest(shared).id),(5,8));
+            ack(shared);runtime.poll().unwrap();let mac=latest(shared);assert_eq!((mac.group,mac.id),(1,0x28));
+            (channel,mac.payload[24..30].try_into().unwrap())
+        }
+        #[test] fn stronger_passive_or_dfs_bss_does_not_mask_permitted_channel_one(){
+            for (channel,index,flags) in [(36,14,1),(52,18,25)]{
+                let(mut runtime,shared)=connectable_scan();runtime.nvm.as_mut().unwrap().channels[index]=flags;
+                let blocked=[2,0,0,0,0,1];let permitted=[2,0,0,0,0,2];
+                candidate_beacon(&shared,blocked,channel,channel,25,1);
+                candidate_beacon(&shared,permitted,1,1,70,1);finish_candidate_scan(&mut runtime,&shared);
+                assert_eq!(runtime.scan_results().len(),2);
+                assert_eq!(selected_station(&mut runtime,&shared),(1,permitted));
+            }
+        }
+        #[test] fn strongest_permitted_bss_is_selected_among_same_ssid_candidates(){
+            let(mut runtime,shared)=connectable_scan();let weaker=[2,0,0,0,0,1];let stronger=[2,0,0,0,0,2];
+            candidate_beacon(&shared,weaker,1,1,70,1);candidate_beacon(&shared,stronger,6,6,30,1);
+            finish_candidate_scan(&mut runtime,&shared);
+            assert_eq!(selected_station(&mut runtime,&shared),(6,stronger));
+        }
+        #[test] fn malformed_or_channel_mismatched_beacon_does_not_mask_usable_bss(){
+            for (rx_channel,ie_channel,capability) in [(6,1,1),(6,6,0)]{
+                let(mut runtime,shared)=connectable_scan();let invalid=[2,0,0,0,0,1];let permitted=[2,0,0,0,0,2];
+                candidate_beacon(&shared,invalid,rx_channel,ie_channel,20,capability);
+                candidate_beacon(&shared,permitted,11,11,65,1);finish_candidate_scan(&mut runtime,&shared);
+                assert_eq!(runtime.scan_results().len(),2);
+                assert_eq!(selected_station(&mut runtime,&shared),(11,permitted));
+            }
+        }
+        #[test] fn all_same_ssid_candidates_blocked_fail_before_station_commands(){
+            let(mut runtime,shared)=connectable_scan();runtime.nvm.as_mut().unwrap().channels[14]=1;
+            runtime.nvm.as_mut().unwrap().channels[18]=25;
+            candidate_beacon(&shared,[2,0,0,0,0,1],36,36,25,1);
+            candidate_beacon(&shared,[2,0,0,0,0,2],52,52,70,1);finish_candidate_scan(&mut runtime,&shared);
+            let sent=shared.lock().unwrap().sent.len();
+            assert!(runtime.connect("easyeasy",b"",[2,1,2,3,4,5]).is_err());
+            assert!(runtime.connection_state().is_none());assert!(runtime.poll().unwrap());
+            assert_eq!(shared.lock().unwrap().sent.len(),sent);assert!(shared.lock().unwrap().raw.is_empty());
+        }
         #[test] fn aborted_and_malformed_scan_completion_fail_closed(){
             for status in [0,2]{
                 let(mut runtime,shared)=scan_ready();begin_scan(&mut runtime,&shared);

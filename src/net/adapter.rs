@@ -1941,9 +1941,15 @@ impl NetService {
         // Always install an IPv6 link-local address derived from the MAC.
         let ipv6_ll = ipv6_link_local_from_mac(mac);
 
-        // Bring-up default: install static IPv4 before DHCP starts.
-        let (fallback_ip, fallback_gw) =
-            apply_static_fallback_ipv4(&mut iface, device_index, ipv6_ll);
+        // Seed the laptop AX201 once before DHCP starts, so local SSH has a
+        // known address immediately after association. DHCP may replace it.
+        let ax201_initial_address = mac == [0x4c, 0x03, 0x4f, 0x8c, 0xfc, 0x44]
+            && crate::net::device_id_at(device_index) == Some((0x8086, 0xa0f0));
+        let (fallback_ip, fallback_gw) = if ax201_initial_address {
+            apply_static_ipv4(&mut iface, Ipv4Address::new(192, 168, 178, 66), ipv6_ll)
+        } else {
+            apply_static_fallback_ipv4(&mut iface, device_index, ipv6_ll)
+        };
 
         let mut profile_dns = [[0u8; 4]; DHCP_DNS_MAX];
         if laptop_profile {
@@ -2099,6 +2105,18 @@ impl NetService {
                 |cidr| *cidr == IpCidr::new(IpAddress::Ipv4(fallback_ip),
                     crate::net::laptop_profile::PREFIX_LEN),
             ));
+        }
+        if ax201_initial_address {
+            // Configuration readiness admits SSH; it does not claim a DHCP
+            // lease or gateway reachability. Publish after the cached IP and
+            // interface configuration agree, without waiting for DHCP.
+            crate::r::readiness::set(
+                crate::r::readiness::NET_ANY_CONFIGURED
+                    | crate::r::readiness::NET_V4_CONFIGURED,
+            );
+            crate::log_warn!(target: "net";
+                "net: ax201 initial dev={} ipv4=192.168.178.66/24 gw=192.168.178.1 dhcp=enabled ssh=admitted\n",
+                device_index);
         }
         service
     }
@@ -5479,7 +5497,14 @@ fn apply_static_fallback_ipv4(
     device_index: usize,
     ipv6_ll: Ipv6Address,
 ) -> (Ipv4Address, Ipv4Address) {
-    let ip = fallback_ipv4_for_device(device_index);
+    apply_static_ipv4(iface, fallback_ipv4_for_device(device_index), ipv6_ll)
+}
+
+fn apply_static_ipv4(
+    iface: &mut Interface,
+    ip: Ipv4Address,
+    ipv6_ll: Ipv6Address,
+) -> (Ipv4Address, Ipv4Address) {
     let gw = Ipv4Address::new(
         STATIC_FALLBACK_GATEWAY[0],
         STATIC_FALLBACK_GATEWAY[1],
