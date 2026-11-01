@@ -7,7 +7,7 @@ use crate::{pci, wait};
 
 mod virgl;
 mod requests;
-pub(crate) use virgl::blit::{copy_rgba, fill_rgba};
+pub(crate) use virgl::blit::copy_rgba;
 pub(crate) use virgl::coverage::{NativeMaskGeometry, NativeMaskVertex, render_coverage_mask};
 
 static EMULATOR_OUTPUT: AtomicU64 = AtomicU64::new(0);

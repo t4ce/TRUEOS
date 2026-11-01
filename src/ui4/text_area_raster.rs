@@ -3,6 +3,7 @@
 use super::text_area::{
     CellCopy, CellRect, CellWrite, RasterBudget, RasterLayout, RasterReservation, TextArea,
 };
+use crate::intel::bcs_plan::{BcsOp, BcsPlan, CopyBackend, SourceCache};
 use crate::intel::gpgpu::GpgpuOwnedRgba8Surface;
 use crate::intel::{GucBcs0RgbaCopy, GucBcs0RgbaSurface};
 use alloc::vec::Vec;
@@ -126,18 +127,21 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
                     return Err("text-area-emulator-resize-copy");
                 }
             } else {
-                let queued = crate::intel::queue_guc_bcs0_rgba_copies(next.surface(), &copies);
-                // Persist both owners' state before an await. Cancellation can
-                // drop next locally and later drop self through its Show owner.
-                self.unretired = submission_may_be_live(&queued);
-                if let Err(error) = retire(queued, poisoned, &mut next.unretired).await {
-                    if *poisoned {
-                        self.quarantine();
-                        next.quarantine();
-                    } else {
-                        self.unretired = false;
+                let plan = copy_plan(next.surface(), &copies, CopyBackend::PreferFast)?;
+                for batch in plan.batches() {
+                    let queued = crate::intel::queue_guc_bcs0_plan_batch(batch);
+                    // Persist both owners before an await. Cancellation can
+                    // drop next and later drop self through its Show owner.
+                    self.unretired = submission_may_be_live(&queued);
+                    if let Err(error) = retire(queued, poisoned, &mut next.unretired).await {
+                        if *poisoned {
+                            self.quarantine();
+                            next.quarantine();
+                        } else {
+                            self.unretired = false;
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
                 }
                 self.unretired = false;
             }
@@ -163,9 +167,12 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         }
         // Stage emulator metadata with its owned-pixel request. Cancellation
         // may discard a readback, so only successful painting commits cells.
-        let mut staged = crate::virtio_gpu_logo::output_dimensions().is_some()
+        let mut staged = crate::virtio_gpu_logo::output_dimensions()
+            .is_some()
             .then(|| self.cells.clone());
-        let update = staged.as_mut().unwrap_or(&mut self.cells)
+        let update = staged
+            .as_mut()
+            .unwrap_or(&mut self.cells)
             .update(view, revision, produce)
             .ok_or("text-area-view")?;
         let layout = self.layout();
@@ -185,11 +192,27 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
         };
         let started = super::text_blit::stamp();
         let cpu_paint = unsafe { super::text_blit::try_glyph_copy(self.surface(), &copies) };
-        let batches = if cpu_paint {
-            0
+        let plan = if !cpu_paint && staged.is_none() {
+            match copy_plan(self.surface(), &copies, CopyBackend::Legacy) {
+                Ok(plan) => Some(plan),
+                Err(error) => {
+                    self.invalidate();
+                    return Err(error);
+                }
+            }
         } else {
-            copies.len().div_ceil(128)
+            None
         };
+        let batches = plan.as_ref().map_or_else(
+            || {
+                if cpu_paint {
+                    0
+                } else {
+                    copies.len().div_ceil(128)
+                }
+            },
+            |plan| plan.batches().len(),
+        );
         let work = RasterWork {
             produced: update.produced,
             reused: update.reused,
@@ -197,25 +220,32 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             cpu_glyphs: if cpu_paint { copies.len() } else { 0 },
             copy_batches: batches,
         };
-        if staged.is_some() { self.invalidate(); }
-        for chunk in copies.chunks(128).filter(|_| !cpu_paint) {
-            if staged.is_some() {
+        if staged.is_some() {
+            self.invalidate();
+        }
+        if !cpu_paint && staged.is_some() {
+            for chunk in copies.chunks(128) {
                 if let Err(error) = crate::virtio_gpu_logo::copy_rgba(self.surface(), chunk).await {
                     self.invalidate();
                     return Err(error);
                 }
-                continue;
-            }
-            let queued = crate::intel::queue_guc_bcs0_legacy_rgba_copies(self.surface(), chunk);
-            if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
-                self.invalidate();
-                if *poisoned {
-                    self.quarantine();
-                }
-                return Err(error);
             }
         }
-        if let Some(cells) = staged { self.cells = cells; }
+        if let Some(plan) = plan {
+            for batch in plan.batches() {
+                let queued = crate::intel::queue_guc_bcs0_plan_batch(batch);
+                if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
+                    self.invalidate();
+                    if *poisoned {
+                        self.quarantine();
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        if let Some(cells) = staged {
+            self.cells = cells;
+        }
         super::text_blit::report(
             "cache-glyph-copy",
             super::text_blit::copy_pixels(&copies),
@@ -288,29 +318,53 @@ impl<C: Clone + PartialEq> BcsTextArea<C> {
             );
             return Ok(count);
         }
-        // Stay below BCS0's 160-copy admission limit, including ring wraps.
-        for chunk in copies.chunks(128) {
-            if crate::virtio_gpu_logo::output_dimensions().is_some() {
+        let batches;
+        if crate::virtio_gpu_logo::output_dimensions().is_some() {
+            batches = copies.len().div_ceil(128);
+            for chunk in copies.chunks(128) {
                 crate::virtio_gpu_logo::copy_rgba(destination, chunk).await?;
-                continue;
             }
-            let queued = crate::intel::queue_guc_bcs0_rgba_copies(destination, chunk);
-            if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
-                if *poisoned {
-                    self.quarantine();
+        } else {
+            // The planner accounts for command bytes and selects legacy for
+            // viewport starts that cannot use aligned fast-copy commands.
+            let plan = copy_plan(destination, &copies, CopyBackend::PreferFast)?;
+            batches = plan.batches().len();
+            for batch in plan.batches() {
+                let queued = crate::intel::queue_guc_bcs0_plan_batch(batch);
+                if let Err(error) = retire(queued, poisoned, &mut self.unretired).await {
+                    if *poisoned {
+                        self.quarantine();
+                    }
+                    return Err(error);
                 }
-                return Err(error);
             }
         }
         super::text_blit::report(
             "viewport-copy",
             super::text_blit::copy_pixels(&copies),
             false,
-            copies.len().div_ceil(128),
+            batches,
             started,
         );
         Ok(count)
     }
+}
+
+fn copy_plan(
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+    backend: CopyBackend,
+) -> Result<BcsPlan, &'static str> {
+    let operations: Vec<_> = copies
+        .iter()
+        .copied()
+        .map(|copy| BcsOp::Copy {
+            copy,
+            backend,
+            source_cache: SourceCache::WriteBack,
+        })
+        .collect();
+    BcsPlan::new(destination, &operations).map_err(|_| "text-area-copy-plan-invalid")
 }
 
 fn rgba_copy(
@@ -337,7 +391,11 @@ fn rgba_copy(
 fn submission_may_be_live(
     queued: &Result<crate::intel::GucBcs0CopySubmission, crate::intel::GucBcs0CopySubmitError>,
 ) -> bool {
-    queued.is_ok() || matches!(queued, Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed))
+    queued.is_ok()
+        || matches!(
+            queued,
+            Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed)
+        )
 }
 
 async fn retire(

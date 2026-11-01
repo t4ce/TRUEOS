@@ -1,6 +1,10 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use alloc::vec::Vec;
 use spin::Mutex;
+
+use super::bcs_mappings::{BcsMapping, BcsMappings};
+use super::bcs_plan::{BCS_PLAN_BATCH_BYTES, BCS_PLAN_ENVELOPE_DWORDS, BcsBatch};
 
 const BCS0_RING_BASE: usize = 0x22000;
 const RING_HEAD: usize = 0x34;
@@ -65,6 +69,8 @@ const MI_ARB_CHECK: u32 = 0x05 << 23;
 const DIRECT_BLT_RING_BYTES: usize = 4096;
 const DIRECT_BLT_CONTEXT_BYTES: usize = 22 * 4096;
 const DIRECT_BLT_BATCH_BYTES: usize = 8192;
+const _: () = assert!(DIRECT_BLT_BATCH_BYTES == BCS_PLAN_BATCH_BYTES);
+const _: () = assert!(BCS_PLAN_ENVELOPE_DWORDS == 20);
 const DIRECT_BLT_RESULT_BYTES: usize = 4096;
 const DIRECT_BLT_COPY_BYTES: usize = 4096;
 // Match the direct-RCS address envelope so BCS can consume the same stable,
@@ -117,6 +123,7 @@ static DIRECT_BLT_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(1);
 static GUC_BLT_PROBE: Mutex<GucBltProbeRuntime> = Mutex::new(GucBltProbeRuntime::new());
 static GUC_BLT_UI4: Mutex<GucBltUi4Runtime> = Mutex::new(GucBltUi4Runtime::new());
 static GUC_BLT_RING: Mutex<GucBltRingRuntime> = Mutex::new(GucBltRingRuntime::new());
+static GUC_BLT_MAPPINGS: Mutex<BcsMappings> = Mutex::new(BcsMappings::new());
 static GUC_BLT_LANE_BUSY: AtomicBool = AtomicBool::new(false);
 static GUC_BLT_LANE_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static GUC_BLT_LAST_TIMEOUT: Mutex<Option<GucBcs0Timeout>> = Mutex::new(None);
@@ -763,29 +770,27 @@ pub(crate) fn queue_guc_bcs0_rgba_copies_with_scanout_cache(
     )
 }
 
-/// Classical BLT backend, linear 32bpp SRCCOPY with RGB and alpha writes.
-/// Scheduling, address spaces and retirement remain owned by the GuC lane.
-pub(crate) fn queue_guc_bcs0_legacy_rgba_copies(
-    destination: GucBcs0RgbaSurface,
-    copies: &[GucBcs0RgbaCopy],
-) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
-    if copies.is_empty()
-        || copies
-            .iter()
-            .any(|&copy| !guc_blt_valid_legacy_copy(destination, copy))
-    {
-        return Err(GucBcs0CopySubmitError::InvalidRequest);
-    }
-    queue_guc_bcs0_batch(destination, copies, false, None, GucBcs0BatchKind::LegacyCopy)
-}
-
 #[derive(Clone, Copy, Debug)]
 enum GucBcs0BatchKind<'a> {
     FastCopy,
-    LegacyCopy,
     FastFill(u32),
     FastFills(&'a [GucBcs0RgbaFill]),
     LegacyMono(&'a [GucBcs0MonoGlyph]),
+    Plan(&'a BcsBatch),
+}
+
+/// Submit a fully validated, byte-bounded ordered plan chunk. The caller owns
+/// all source/destination backing until exact completion, just as for copies.
+pub(crate) fn queue_guc_bcs0_plan_batch(
+    batch: &BcsBatch,
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    queue_guc_bcs0_batch(
+        batch.destination(),
+        &[],
+        false,
+        None,
+        GucBcs0BatchKind::Plan(batch),
+    )
 }
 
 /// Word-aligned monochrome rows, MSB first in each byte. Each request owns a
@@ -815,9 +820,14 @@ pub(crate) fn queue_guc_bcs0_mono_glyphs(
     {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, &[], false, None, GucBcs0BatchKind::LegacyMono(glyphs))
+    queue_guc_bcs0_batch(
+        destination,
+        &[],
+        false,
+        None,
+        GucBcs0BatchKind::LegacyMono(glyphs),
+    )
 }
-
 
 /// Bit-preserving 32-bit copies from a device-written system-memory source.
 /// Use UC source mappings for display writeback; no RGBA interpretation occurs.
@@ -840,7 +850,13 @@ pub(crate) fn queue_guc_bcs0_rgba_fill(
     if !guc_blt_valid_fill(destination) {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, &[], false, None, GucBcs0BatchKind::FastFill(color))
+    queue_guc_bcs0_batch(
+        destination,
+        &[],
+        false,
+        None,
+        GucBcs0BatchKind::FastFill(color),
+    )
 }
 
 pub(crate) fn queue_guc_bcs0_rgba_fills(
@@ -855,7 +871,13 @@ pub(crate) fn queue_guc_bcs0_rgba_fills(
     {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, &[], false, None, GucBcs0BatchKind::FastFills(fills))
+    queue_guc_bcs0_batch(
+        destination,
+        &[],
+        false,
+        None,
+        GucBcs0BatchKind::FastFills(fills),
+    )
 }
 
 fn queue_guc_bcs0_batch(
@@ -895,16 +917,27 @@ fn queue_guc_bcs0_batch(
     let prepared = (|| {
         let forcewake = direct_blt_forcewake(dev);
         let ggtt = forcewake && direct_blt_map_state(dev, state);
-        let ppgtt = ggtt && direct_blt_init_ppgtt(state);
-        if !ppgtt
-            || !guc_blt_map_ui4_surfaces(
+        if !ggtt {
+            return None;
+        }
+        let mapped = match kind {
+            GucBcs0BatchKind::Plan(batch) => guc_blt_map_surface_mappings(
+                state,
+                destination,
+                batch
+                    .source_mappings()
+                    .iter()
+                    .map(|&(source, cache)| (source, cache.is_uncached())),
+            ),
+            _ => guc_blt_map_ui4_surfaces(
                 state,
                 destination,
                 copies,
                 uncached_sources,
                 source_scanout_cache,
-            )
-        {
+            ),
+        };
+        if !mapped {
             return None;
         }
         let sequence = DIRECT_BLT_SUBMIT_COUNTER
@@ -921,22 +954,11 @@ fn queue_guc_bcs0_batch(
             GucBcs0BatchKind::FastCopy => {
                 guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?
             }
-            GucBcs0BatchKind::LegacyCopy => {
-                guc_blt_encode_legacy_copy_batch(state, destination, copies, marker)?
-            }
             GucBcs0BatchKind::LegacyMono(glyphs) => {
-                if !direct_blt_map_ppgtt_region(
-                    state,
-                    DIRECT_BLT_GPU_VA_SRC_BASE,
-                    state.src_phys,
-                    DIRECT_BLT_COPY_BYTES,
-                    super::GEN8_PAGE_PRESENT | (1 << 1),
-                ) {
-                    return None;
-                }
-                super::dma_flush(state.ppgtt_virt, DIRECT_BLT_PPGTT_BYTES);
+                // The immutable control mappings include the mono scratch.
                 guc_blt_encode_mono_batch(state, destination, glyphs, marker)?
             }
+            GucBcs0BatchKind::Plan(batch) => guc_blt_encode_plan_batch(state, batch, marker)?,
         };
         Some((sequence, marker, copy_count, copied_bytes))
     })();
@@ -1001,8 +1023,8 @@ fn queue_guc_bcs0_batch(
             GucBcs0BatchKind::FastCopy => "xy-fast-copy-blt",
             GucBcs0BatchKind::FastFill(_) => "xy-fast-color-blt",
             GucBcs0BatchKind::FastFills(_) => "xy-fast-color-blt-rects",
-            GucBcs0BatchKind::LegacyCopy => "xy-src-copy-blt",
             GucBcs0BatchKind::LegacyMono(_) => "xy-mono-src-copy-blt",
+            GucBcs0BatchKind::Plan(_) => "bcs-plan",
         },
     );
     Ok(GucBcs0CopySubmission { sequence })
@@ -1321,12 +1343,36 @@ fn direct_blt_map_state(dev: super::Dev, state: DirectBltState) -> bool {
         return false;
     }
     for (gpu, phys, bytes) in [
-        (DIRECT_BLT_GPU_VA_RING_BASE, state.ring_phys, DIRECT_BLT_RING_BYTES),
-        (DIRECT_BLT_GPU_VA_CONTEXT_BASE, state.context_phys, DIRECT_BLT_CONTEXT_BYTES),
-        (DIRECT_BLT_GPU_VA_BATCH_BASE, state.batch_phys, DIRECT_BLT_BATCH_BYTES),
-        (DIRECT_BLT_GPU_VA_RESULT_BASE, state.result_phys, DIRECT_BLT_RESULT_BYTES),
-        (DIRECT_BLT_GPU_VA_SRC_BASE, state.src_phys, DIRECT_BLT_COPY_BYTES),
-        (DIRECT_BLT_GPU_VA_DST_BASE, state.dst_phys, DIRECT_BLT_COPY_BYTES),
+        (
+            DIRECT_BLT_GPU_VA_RING_BASE,
+            state.ring_phys,
+            DIRECT_BLT_RING_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_CONTEXT_BASE,
+            state.context_phys,
+            DIRECT_BLT_CONTEXT_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_BATCH_BASE,
+            state.batch_phys,
+            DIRECT_BLT_BATCH_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_RESULT_BASE,
+            state.result_phys,
+            DIRECT_BLT_RESULT_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_SRC_BASE,
+            state.src_phys,
+            DIRECT_BLT_COPY_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_DST_BASE,
+            state.dst_phys,
+            DIRECT_BLT_COPY_BYTES,
+        ),
     ] {
         for offset in (0..bytes).step_by(4096) {
             let pte = super::read_ggtt_pte(dev, gpu + offset as u64).unwrap_or(0);
@@ -1526,7 +1572,11 @@ fn init_guc_bcs0_engine_for_boot(dev: super::Dev) -> bool {
             return false;
         }
     }
-    super::mmio_write(dev, BCS0_RING_BASE + RING_HWS_PGA, DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32);
+    super::mmio_write(
+        dev,
+        BCS0_RING_BASE + RING_HWS_PGA,
+        DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32,
+    );
     super::mmio_write(
         dev,
         BCS0_RING_BASE + RING_MODE_GEN7,
@@ -1546,6 +1596,9 @@ fn init_guc_bcs0_engine_for_boot(dev: super::Dev) -> bool {
 }
 
 fn direct_blt_init_ppgtt(state: DirectBltState) -> bool {
+    // Boot/probe paths rebuild the image outside the incremental mapper.
+    // A later plan must reconstruct its metadata before trusting any PTEs.
+    GUC_BLT_MAPPINGS.lock().invalidate();
     let pml4_off = 0usize;
     let pdp_off = 4096usize;
     let pd_off = 8192usize;
@@ -1558,7 +1611,10 @@ fn direct_blt_init_ppgtt(state: DirectBltState) -> bool {
         let pml4 = state.ppgtt_virt.add(pml4_off) as *mut u64;
         let pdp = state.ppgtt_virt.add(pdp_off) as *mut u64;
         let pd = state.ppgtt_virt.add(pd_off) as *mut u64;
-        core::ptr::write_volatile(pml4, (state.ppgtt_phys + pdp_off as u64) | pde_present_rw_uc);
+        core::ptr::write_volatile(
+            pml4,
+            (state.ppgtt_phys + pdp_off as u64) | pde_present_rw_uc,
+        );
         core::ptr::write_volatile(pdp, (state.ppgtt_phys + pd_off as u64) | pde_present_rw_uc);
         for index in 0..DIRECT_BLT_PPGTT_PT_COUNT {
             let pt_phys = state.ppgtt_phys + pt_off as u64 + (index as u64) * 4096;
@@ -1676,7 +1732,7 @@ fn direct_blt_encode_fast_copy_batch(state: DirectBltState) -> bool {
     true
 }
 
-fn guc_blt_valid_surface(surface: GucBcs0RgbaSurface) -> bool {
+pub(super) fn guc_blt_valid_surface(surface: GucBcs0RgbaSurface) -> bool {
     if surface.phys == 0
         || !surface.phys.is_multiple_of(super::WARM_ALIGN as u64)
         || surface.gpu == 0
@@ -1704,7 +1760,7 @@ fn guc_blt_valid_surface(surface: GucBcs0RgbaSurface) -> bool {
     allocation_valid && gpu_range_valid && physical_range_valid && !control_overlap
 }
 
-fn guc_blt_valid_copy(destination: GucBcs0RgbaSurface, copy: GucBcs0RgbaCopy) -> bool {
+pub(super) fn guc_blt_valid_copy(destination: GucBcs0RgbaSurface, copy: GucBcs0RgbaCopy) -> bool {
     guc_blt_valid_surface(copy.source)
         && !guc_blt_physical_ranges_overlap(destination, copy.source)
         && !guc_blt_gpu_ranges_overlap(destination, copy.source)
@@ -1728,7 +1784,10 @@ fn guc_blt_valid_copy(destination: GucBcs0RgbaSurface, copy: GucBcs0RgbaCopy) ->
             .is_some_and(|bottom| bottom <= destination.height && bottom <= u16::MAX as u32)
 }
 
-fn guc_blt_valid_legacy_copy(destination: GucBcs0RgbaSurface, copy: GucBcs0RgbaCopy) -> bool {
+pub(super) fn guc_blt_valid_legacy_copy(
+    destination: GucBcs0RgbaSurface,
+    copy: GucBcs0RgbaCopy,
+) -> bool {
     // XY_SRC_COPY_BLT uses signed 16-bit coordinates and pitches. This first
     // consumer needs only positive, non-overlapping linear rectangles.
     guc_blt_valid_surface(destination)
@@ -1751,62 +1810,126 @@ fn guc_blt_map_ui4_surfaces(
     if source_scanout_cache.is_some_and(|flags| flags.len() != copies.len()) {
         return false;
     }
-    let scanout_cache = |index: usize| {
-        source_scanout_cache.map_or(uncached_sources, |flags| flags[index])
-    };
-    // All mappings coexist for the entire batch. Reject aliases that would
-    // replace a prior source's backing or give overlapping backing two cache
-    // policies before changing any PTEs.
-    for (index, copy) in copies.iter().enumerate() {
-        if !guc_blt_valid_copy(destination, *copy) {
+    // Validate before changing PTEs, but compare against unique mappings rather
+    // than every earlier glyph. One retained atlas needs only one mapping.
+    let mut sources: Vec<(GucBcs0RgbaSurface, bool)> = Vec::new();
+    for (index, &copy) in copies.iter().enumerate() {
+        if !guc_blt_valid_copy(destination, copy) {
             return false;
         }
-        for (previous_index, previous) in copies[..index].iter().enumerate() {
+        let uncached = source_scanout_cache.map_or(uncached_sources, |flags| flags[index]);
+        let mut duplicate = false;
+        for &(previous, previous_uncached) in &sources {
             if !guc_blt_source_mappings_compatible(
                 copy.source,
-                scanout_cache(index),
-                previous.source,
-                scanout_cache(previous_index),
+                uncached,
+                previous,
+                previous_uncached,
             ) {
                 return false;
             }
+            duplicate |= copy.source.gpu == previous.gpu
+                && copy.source.phys == previous.phys
+                && copy.source.bytes.div_ceil(4096) == previous.bytes.div_ceil(4096)
+                && uncached == previous_uncached;
+        }
+        if !duplicate {
+            sources.push((copy.source, uncached));
         }
     }
-    let pte_present_rw_wb = super::GEN8_PAGE_PRESENT | (1 << 1);
-    // PAT3 is the system-memory UC contract used by render-to-scanout targets.
-    // BCS completion therefore releases into memory visible to the display,
-    // rather than requiring a post-copy CPU sweep of the destination.
-    let pte_present_rw_scanout_uc = pte_present_rw_wb | (1 << 3) | (1 << 4);
-    if !direct_blt_map_ppgtt_region(
-        state,
-        destination.gpu,
-        destination.phys,
-        destination.bytes,
-        pte_present_rw_scanout_uc,
-    ) {
-        return false;
-    }
+    guc_blt_map_surface_mappings(state, destination, sources.into_iter())
+}
 
-    for (index, copy) in copies.iter().copied().enumerate() {
-        if !direct_blt_map_ppgtt_region(
-            state,
-            copy.source.gpu,
-            copy.source.phys,
-            copy.source.bytes,
-            if scanout_cache(index) {
-                pte_present_rw_scanout_uc
-            } else {
-                pte_present_rw_wb
-            },
-        ) {
-            return false;
+fn guc_blt_control_mappings(state: DirectBltState) -> [BcsMapping; 6] {
+    let flags = super::GEN8_PAGE_PRESENT | (1 << 1);
+    [
+        (
+            DIRECT_BLT_GPU_VA_RING_BASE,
+            state.ring_phys,
+            DIRECT_BLT_RING_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_CONTEXT_BASE,
+            state.context_phys,
+            DIRECT_BLT_CONTEXT_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_BATCH_BASE,
+            state.batch_phys,
+            DIRECT_BLT_BATCH_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_RESULT_BASE,
+            state.result_phys,
+            DIRECT_BLT_RESULT_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_SRC_BASE,
+            state.src_phys,
+            DIRECT_BLT_COPY_BYTES,
+        ),
+        (
+            DIRECT_BLT_GPU_VA_DST_BASE,
+            state.dst_phys,
+            DIRECT_BLT_COPY_BYTES,
+        ),
+    ]
+    .map(|(gpu, phys, bytes)| BcsMapping {
+        gpu,
+        phys,
+        bytes,
+        flags,
+    })
+}
+
+/// Called only while the lane and its saved-context ownership gate are held.
+/// Keep topology/control aliases stable, replace transient leaves, and publish
+/// their merged dirty cache lines with one final fence. The command entry still
+/// invalidates BCS translations before it accesses recycled producer addresses.
+fn guc_blt_map_surface_mappings(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    sources: impl Iterator<Item = (GucBcs0RgbaSurface, bool)>,
+) -> bool {
+    let wb = super::GEN8_PAGE_PRESENT | (1 << 1);
+    let uc = wb | (1 << 3) | (1 << 4);
+    let mut transient = Vec::new();
+    transient.push(BcsMapping {
+        gpu: destination.gpu,
+        phys: destination.phys,
+        bytes: destination.bytes,
+        flags: uc,
+    });
+    transient.extend(sources.map(|(source, uncached)| BcsMapping {
+        gpu: source.gpu,
+        phys: source.phys,
+        bytes: source.bytes,
+        flags: if uncached { uc } else { wb },
+    }));
+    let table = unsafe {
+        core::slice::from_raw_parts_mut(state.ppgtt_virt.cast::<u64>(), DIRECT_BLT_PPGTT_BYTES / 8)
+    };
+    let mut mappings = GUC_BLT_MAPPINGS.lock();
+    let Some(dirty) = mappings.prepare(
+        table,
+        state.ppgtt_phys,
+        &guc_blt_control_mappings(state),
+        &transient,
+    ) else {
+        return false;
+    };
+    if !dirty.is_empty() {
+        for (offset, bytes) in dirty {
+            unsafe {
+                super::dma_flush_cache_lines(state.ppgtt_virt.add(offset), bytes);
+            }
         }
+        super::dma_flush_fence();
     }
-    super::dma_flush(state.ppgtt_virt, DIRECT_BLT_PPGTT_BYTES);
     true
 }
 
-fn guc_blt_source_mappings_compatible(
+pub(super) fn guc_blt_source_mappings_compatible(
     first: GucBcs0RgbaSurface,
     first_scanout_cache: bool,
     second: GucBcs0RgbaSurface,
@@ -1833,37 +1956,14 @@ fn guc_blt_encode_ui4_copy_batch(
     copies: &[GucBcs0RgbaCopy],
     marker: u32,
 ) -> Option<(usize, u64)> {
-    guc_blt_encode_copy_batch(state, destination, copies, marker, false)
+    guc_blt_encode_copy_batch(state, destination, copies, marker)
 }
 
-fn guc_blt_encode_legacy_copy_batch(
-    state: DirectBltState,
-    destination: GucBcs0RgbaSurface,
-    copies: &[GucBcs0RgbaCopy],
-    marker: u32,
-) -> Option<(usize, u64)> {
-    guc_blt_encode_copy_batch(state, destination, copies, marker, true)
-}
-
-fn guc_blt_encode_copy_batch(
-    state: DirectBltState,
-    destination: GucBcs0RgbaSurface,
-    copies: &[GucBcs0RgbaCopy],
-    marker: u32,
-    legacy: bool,
-) -> Option<(usize, u64)> {
-    if copies.len() > GUC_BLT_UI4_MAX_COPIES {
+/// Entry and completion stay identical for legacy commands and mixed plans.
+/// These helpers only write command words; their caller owns publication.
+fn guc_blt_begin_batch(batch: &mut [u32]) -> Option<usize> {
+    if batch.len() < BCS_PLAN_ENVELOPE_DWORDS {
         return None;
-    }
-    let batch = unsafe {
-        core::slice::from_raw_parts_mut(
-            state.batch_virt.cast::<u32>(),
-            DIRECT_BLT_BATCH_BYTES / core::mem::size_of::<u32>(),
-        )
-    };
-    batch.fill(0);
-    unsafe {
-        core::ptr::write_bytes(state.result_virt, 0, DIRECT_BLT_RESULT_BYTES);
     }
     batch[..4].copy_from_slice(&[
         MI_STORE_DATA_IMM_GGTT_DW1,
@@ -1885,33 +1985,85 @@ fn guc_blt_encode_copy_batch(
         MI_ARB_CHECK | (1 << 8),
         MI_NOOP,
     ]);
-    let mut cursor = 12usize;
+    Some(12)
+}
+
+fn guc_blt_finish_batch(batch: &mut [u32], cursor: usize, marker: u32) -> Option<usize> {
+    // MI_FLUSH_DW's post-sync immediate is the completion cookie. Unlike a
+    // later plain store, it is ordered after the preceding BCS writes. The
+    // compositor will not stage PLANE_SURF until this exact cookie retires.
+    if cursor.saturating_add(8) > batch.len() {
+        return None;
+    }
+    batch[cursor] = MI_FLUSH_DW | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE;
+    batch[cursor + 1] = DIRECT_BLT_GPU_VA_RESULT_BASE as u32 | MI_FLUSH_DW_DEST_GGTT;
+    batch[cursor + 2] = (DIRECT_BLT_GPU_VA_RESULT_BASE >> 32) as u32;
+    batch[cursor + 3] = marker;
+    batch[cursor + 4] = 0;
+    batch[cursor + 5] = MI_ARB_CHECK;
+    batch[cursor + 6] = MI_BATCH_BUFFER_END;
+    batch[cursor + 7] = MI_NOOP;
+    Some(cursor + 8)
+}
+
+fn guc_blt_encode_plan_batch(
+    state: DirectBltState,
+    plan: &BcsBatch,
+    marker: u32,
+) -> Option<(usize, u64)> {
+    if plan.operation_count() == 0
+        || plan
+            .encoded_dwords()
+            .checked_add(BCS_PLAN_ENVELOPE_DWORDS)?
+            > DIRECT_BLT_BATCH_BYTES / 4
+    {
+        return None;
+    }
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(state.batch_virt.cast::<u32>(), DIRECT_BLT_BATCH_BYTES / 4)
+    };
+    batch.fill(0);
+    unsafe {
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_BLT_RESULT_BYTES);
+    }
+    let start = guc_blt_begin_batch(batch)?;
+    let body_end = start.checked_add(plan.encoded_dwords())?;
+    plan.encode_body(&mut batch[start..body_end])?;
+    let end = guc_blt_finish_batch(batch, body_end, marker)?;
+    super::dma_flush(state.batch_virt, end * 4);
+    super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
+    Some((plan.operation_count(), plan.copied_bytes()))
+}
+
+fn guc_blt_encode_copy_batch(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+    marker: u32,
+) -> Option<(usize, u64)> {
+    if copies.len() > GUC_BLT_UI4_MAX_COPIES {
+        return None;
+    }
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            state.batch_virt.cast::<u32>(),
+            DIRECT_BLT_BATCH_BYTES / core::mem::size_of::<u32>(),
+        )
+    };
+    batch.fill(0);
+    unsafe {
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_BLT_RESULT_BYTES);
+    }
+    let mut cursor = guc_blt_begin_batch(batch)?;
     let mut copied_bytes = 0u64;
     for copy in copies.iter().copied() {
-        let valid = if legacy {
-            guc_blt_valid_legacy_copy(destination, copy)
-        } else {
-            guc_blt_valid_copy(destination, copy)
-        };
-        if !valid || cursor.saturating_add(10) > batch.len() {
+        if !guc_blt_valid_copy(destination, copy) || cursor.saturating_add(10) > batch.len() {
             return None;
         }
         let destination_right = copy.destination_x.checked_add(copy.width)?;
         let destination_bottom = copy.destination_y.checked_add(copy.height)?;
-        // TGL Vol 2a pp.1426-1428: XY_SRC_COPY_BLT, both 32bpp byte masks,
-        // clipping disabled, SRCCOPY ROP CC. Vol 10 "BLT Engine Instructions"
-        // specifies BYTE pitches for linear surfaces (DWords only for tiled).
-        batch[cursor] = if legacy {
-            (2 << 29) | (0x53 << 22) | (3 << 20) | 8
-        } else {
-            XY_FAST_COPY_BLT_CMD
-        };
-        batch[cursor + 1] = destination.pitch_bytes
-            | if legacy {
-                (3 << 24) | (0xCC << 16)
-            } else {
-                XY_FAST_COPY_COLOR_DEPTH_32
-            };
+        batch[cursor] = XY_FAST_COPY_BLT_CMD;
+        batch[cursor + 1] = destination.pitch_bytes | XY_FAST_COPY_COLOR_DEPTH_32;
         batch[cursor + 2] = copy.destination_x | (copy.destination_y << 16);
         batch[cursor + 3] = destination_right | (destination_bottom << 16);
         batch[cursor + 4] = destination.gpu as u32;
@@ -1928,22 +2080,11 @@ fn guc_blt_encode_copy_batch(
         );
     }
 
-    // MI_FLUSH_DW's post-sync immediate is the completion cookie. Unlike a
-    // later plain store, it is ordered after the preceding BCS writes. The
-    // compositor will not stage PLANE_SURF until this exact cookie retires.
-    if cursor.saturating_add(8) > batch.len() {
-        return None;
-    }
-    batch[cursor] = MI_FLUSH_DW | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE;
-    batch[cursor + 1] = DIRECT_BLT_GPU_VA_RESULT_BASE as u32 | MI_FLUSH_DW_DEST_GGTT;
-    batch[cursor + 2] = (DIRECT_BLT_GPU_VA_RESULT_BASE >> 32) as u32;
-    batch[cursor + 3] = marker;
-    batch[cursor + 4] = 0;
-    batch[cursor + 5] = MI_ARB_CHECK;
-    batch[cursor + 6] = MI_BATCH_BUFFER_END;
-    batch[cursor + 7] = MI_NOOP;
-    cursor += 8;
-    super::dma_flush(state.batch_virt, cursor.saturating_mul(core::mem::size_of::<u32>()));
+    let cursor = guc_blt_finish_batch(batch, cursor, marker)?;
+    super::dma_flush(
+        state.batch_virt,
+        cursor.saturating_mul(core::mem::size_of::<u32>()),
+    );
     super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
     Some((copies.len(), copied_bytes))
 }
@@ -2021,7 +2162,10 @@ fn guc_blt_valid_fill(destination: GucBcs0RgbaSurface) -> bool {
         && destination.height <= i16::MAX as u32
 }
 
-fn guc_blt_valid_fill_rect(destination: GucBcs0RgbaSurface, fill: GucBcs0RgbaFill) -> bool {
+pub(super) fn guc_blt_valid_fill_rect(
+    destination: GucBcs0RgbaSurface,
+    fill: GucBcs0RgbaFill,
+) -> bool {
     guc_blt_valid_fill(destination)
         && fill.width != 0
         && fill.height != 0
@@ -2072,7 +2216,7 @@ fn guc_blt_encode_ui4_fill_rects_batch(
         return None;
     }
     // Reuse the copy lane's TLB/pre-parser boundary and ordered retirement.
-    // Place one XY_COLOR_BLT command per rectangle before the exact marker.
+    // Place one XY_FAST_COLOR_BLT command per rectangle before the exact marker.
     guc_blt_encode_ui4_copy_batch(state, destination, &[], marker)?;
     let batch = unsafe {
         core::slice::from_raw_parts_mut(state.batch_virt.cast::<u32>(), DIRECT_BLT_BATCH_BYTES / 4)
@@ -2227,7 +2371,11 @@ fn direct_blt_submit_batch(dev: super::Dev, state: DirectBltState) -> bool {
     let ctx_ctl = direct_blt_ctx_control_value(false);
     super::mmio_write(dev, BCS0_RING_BASE + RING_CONTEXT_CONTROL, ctx_ctl);
     super::mmio_write(dev, BCS0_RING_BASE + RING_CONTEXT_CONTROL_REF, ctx_ctl);
-    super::mmio_write(dev, BCS0_RING_BASE + RING_MI_MODE, direct_blt_masked_bit_disable(STOP_RING));
+    super::mmio_write(
+        dev,
+        BCS0_RING_BASE + RING_MI_MODE,
+        direct_blt_masked_bit_disable(STOP_RING),
+    );
     super::mmio_write(dev, BCS0_RING_BASE + RING_HWS_PGA, pphwsp_gpu);
     super::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
@@ -2460,7 +2608,11 @@ fn direct_blt_wait_idleish(dev: super::Dev) {
         }
         core::hint::spin_loop();
     }
-    super::mmio_write(dev, BCS0_RING_BASE + RING_MI_MODE, STOP_RING | (STOP_RING << 16));
+    super::mmio_write(
+        dev,
+        BCS0_RING_BASE + RING_MI_MODE,
+        STOP_RING | (STOP_RING << 16),
+    );
     for _ in 0..50_000u32 {
         if super::mmio_read(dev, BCS0_RING_BASE + RING_MI_MODE) & MODE_IDLE != 0 {
             break;

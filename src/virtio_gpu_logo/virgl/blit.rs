@@ -110,25 +110,6 @@ pub(crate) async fn copy_rgba(
     publish(destination, &output)
 }
 
-pub(crate) async fn fill_rgba(
-    destination: GucBcs0RgbaSurface,
-    fills: &[GucBcs0RgbaFill],
-) -> Result<(), &'static str> {
-    if fills.is_empty() {
-        return Ok(());
-    }
-    if !crate::ui4::text_blit::valid_fills(destination, fills) {
-        return Err("virgl-blit-fill-bounds");
-    }
-    let target = snapshot(destination)?;
-    let fills = fills.to_vec();
-    let output = super::super::requests::dispatch(move |compositor, gpu| {
-        execute(compositor, gpu, target, Vec::new(), Vec::new(), fills)
-    })
-    .await?;
-    publish(destination, &output)
-}
-
 fn resource_id(compositor: &mut Compositor) -> Result<u32, &'static str> {
     let id = compositor.next_id;
     compositor.next_id = id.checked_add(1).ok_or("virgl-blit-resource-id")?;

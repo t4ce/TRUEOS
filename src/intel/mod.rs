@@ -1,5 +1,10 @@
 extern crate alloc;
 
+#[path = "copy/bcs_mappings.rs"]
+mod bcs_mappings;
+#[path = "copy/bcs_plan.rs"]
+pub(crate) mod bcs_plan;
+
 #[path = "copy/blt.rs"]
 mod blt;
 mod display;
@@ -26,7 +31,7 @@ mod uc_fw;
 pub(crate) use self::blt::{
     GUC_BCS0_MONO_MAX_GLYPHS, GucBcs0CopyCompletion, GucBcs0CopySubmission, GucBcs0CopySubmitError,
     GucBcs0MonoGlyph, GucBcs0RgbaCopy, GucBcs0RgbaFill, GucBcs0RgbaSurface, guc_bcs0_last_timeout,
-    poll_guc_bcs0_rgba_copies, queue_guc_bcs0_legacy_rgba_copies,
+    poll_guc_bcs0_rgba_copies, queue_guc_bcs0_plan_batch,
     queue_guc_bcs0_mono_glyphs, queue_guc_bcs0_rgba_copies,
     queue_guc_bcs0_rgba_copies_with_scanout_cache, queue_guc_bcs0_rgba_fill,
     queue_guc_bcs0_rgba_fills, queue_guc_bcs0_uncached_copies, submit_guc_bcs0_fast_copy_probe_now,
