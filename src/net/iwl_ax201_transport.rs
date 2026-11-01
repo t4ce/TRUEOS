@@ -133,20 +133,39 @@ impl DataQueue {
             busy: [false; DATA_COUNT],
         })
     }
-    fn config(&mut self) -> Vec<u8> {
-        let mut payload = alloc::vec![0; 24];
-        payload[0] = self.station;
-        payload[1] = self.tid;
-        payload[2..4].copy_from_slice(&1u16.to_le_bytes()); // ENABLE_QUEUE, long TFD
-        payload[4..8].copy_from_slice(&2u32.to_le_bytes()); // log2(32)-3
-        payload[8..16].copy_from_slice(&self.byte_count.phys.to_le_bytes());
-        payload[16..24].copy_from_slice(&self.tfd.phys.to_le_bytes());
+    fn config(&mut self, version: u8) -> Result<Vec<u8>, &'static str> {
+        // Linux pcie/tx-gen2.c selects this ABI from DATA_PATH_GROUP/0x17
+        // metadata, independently of the device family's long-TFD format.
+        let payload = match version {
+            0 => {
+                let mut payload = alloc::vec![0; 24];
+                payload[0] = self.station;
+                payload[1] = self.tid;
+                payload[2..4].copy_from_slice(&1u16.to_le_bytes()); // ENABLE_QUEUE
+                payload[4..8].copy_from_slice(&2u32.to_le_bytes()); // log2(32)-3
+                payload[8..16].copy_from_slice(&self.byte_count.phys.to_le_bytes());
+                payload[16..24].copy_from_slice(&self.tfd.phys.to_le_bytes());
+                payload
+            }
+            3 => {
+                // iwl_scd_queue_cfg_cmd v3 ADD. ENABLE_QUEUE is invalid here:
+                // the operation field requests addition, flags select long TFD.
+                let mut payload = alloc::vec![0; 36];
+                payload[4..8].copy_from_slice(&(1u32 << self.station).to_le_bytes());
+                payload[8] = self.tid;
+                payload[16..20].copy_from_slice(&2u32.to_le_bytes());
+                payload[20..28].copy_from_slice(&self.byte_count.phys.to_le_bytes());
+                payload[28..36].copy_from_slice(&self.tfd.phys.to_le_bytes());
+                payload
+            }
+            _ => return Err("AX201 unsupported queue allocation command version"),
+        };
         for dma in [&mut self.tfd, &mut self.byte_count, &mut self.packets] {
             dma.flush();
             dma.pinned = true;
         }
         fence(Ordering::Release);
-        payload
+        Ok(payload)
     }
 }
 
@@ -183,6 +202,7 @@ pub(crate) struct Transport {
     phy_config: u32,
     tx_command_version: u8,
     tx_notification_version: u8,
+    queue_alloc_cmd_version: u8,
     pending_data_queue: Option<DataQueue>,
     data_queues: Vec<DataQueue>,
 }
@@ -259,6 +279,7 @@ impl Transport {
             phy_config: fw.phy_config,
             tx_command_version: fw.command_version(1, 0x1c).unwrap_or(7),
             tx_notification_version: fw.notification_version(1, 0x1c).unwrap_or(6),
+            queue_alloc_cmd_version: fw.command_version(5, 0x17).unwrap_or(0),
             pending_data_queue: None,
             data_queues: Vec::new(),
         })
@@ -529,9 +550,18 @@ impl Transport {
         Ok(notification)
     }
 
-    /// Prepare DMA and return the old (pre-AX210) SCD_QUEUE_CFG command body.
-    /// Caller sends it as group0/id0x1d/version0 and then supplies its response
-    /// to activate_tx_queue. Only one allocation may be in flight at a time.
+    /// Select the queue command using firmware metadata as Linux does. The
+    /// advertised v3 chooses its body and opcode; WIDE_ID sends wire version0.
+    pub(crate) fn queue_allocation_command(&self) -> Result<(u8, u8, u8), &'static str> {
+        match self.queue_alloc_cmd_version {
+            0 => Ok((1, 0x1d, 0)),
+            3 => Ok((5, 0x17, 0)),
+            _ => Err("AX201 unsupported queue allocation command version"),
+        }
+    }
+
+    /// Prepare DMA and return the body for queue_allocation_command. Caller
+    /// supplies its response to activate_tx_queue. One allocation may be pending.
     pub(crate) fn prepare_tx_queue(
         &mut self,
         station: u8,
@@ -546,8 +576,9 @@ impl Transport {
         if self.data_queues.len() >= MAX_DATA_QUEUES {
             return Err("AX201 data queue capacity");
         }
+        self.queue_allocation_command()?;
         let mut queue = DataQueue::new(station, tid)?;
-        let config = queue.config();
+        let config = queue.config(self.queue_alloc_cmd_version)?;
         self.pending_data_queue = Some(queue);
         Ok(config)
     }

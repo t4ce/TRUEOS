@@ -49,8 +49,29 @@ TRANSPORT
         #[cfg(test)] mod host_contract_tests {
             use super::*;
             fn transport(mmio:&mut [u32])->Transport {
-                let firmware=crate::net::iwl_ax201_fw::parse(crate::net::iwl_ax201_fw::EMBEDDED).unwrap();
+                transport_with_firmware(mmio,crate::net::iwl_ax201_fw::EMBEDDED)
+            }
+            fn transport_with_firmware(mmio:&mut [u32],image:&[u8])->Transport {
+                let firmware=crate::net::iwl_ax201_fw::parse(image).unwrap();
                 Transport::new(mmio.as_mut_ptr() as usize,mmio.len()*4,(0,2,0),&firmware).unwrap()
+            }
+            fn firmware_with_queue_api(version:Option<u8>)->Vec<u8> {
+                let mut image=crate::net::iwl_ax201_fw::EMBEDDED.to_vec();
+                let mut at=88;
+                while at<image.len() {
+                    let kind=u32::from_le_bytes(image[at..at+4].try_into().unwrap());
+                    let len=u32::from_le_bytes(image[at+4..at+8].try_into().unwrap())as usize;
+                    if kind==48 {
+                        for entry in image[at+8..at+8+len].chunks_exact_mut(4) {
+                            if entry[0]==0x17&&entry[1]==5 {
+                                if let Some(version)=version {entry[2]=version;} else {entry[1]=0xff;}
+                                return image;
+                            }
+                        }
+                    }
+                    at+=8+(len+3)&!3;
+                }
+                panic!("embedded firmware must advertise scheduler queue API");
             }
             fn qword(bytes:&[u8],at:usize)->u64 {u64::from_le_bytes(bytes[at..at+8].try_into().unwrap())}
             #[test]
@@ -92,9 +113,48 @@ TRANSPORT
             fn allocate_data(tr:&mut Transport)->u16 {
                 tr.restocked=true;
                 let config=tr.prepare_tx_queue(1,16).unwrap();
-                assert_eq!(&config[..8],&[1,15,1,0,2,0,0,0]);
-                assert_ne!(qword(&config,8),0);assert_ne!(qword(&config,16),0);
+                assert_eq!(tr.queue_allocation_command().unwrap(),(5,0x17,0));
+                assert_eq!(config.len(),36);
+                assert_eq!(&config[..20],&[0,0,0,0,2,0,0,0,15,0,0,0,0,0,0,0,2,0,0,0]);
+                assert_ne!(qword(&config,20),0);assert_ne!(qword(&config,28),0);
                 tr.activate_tx_queue(&[4,0,0,0,0,0,0,0]).unwrap()
+            }
+            #[test]
+            fn advertised_queue_v3_uses_datapath_add_body_and_wide_wire_version_zero() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                assert_eq!(tr.queue_alloc_cmd_version,3);tr.restocked=true;
+                let body=tr.prepare_tx_queue(3,16).unwrap();
+                assert_eq!(&body[..20],&[0,0,0,0,8,0,0,0,15,0,0,0,0,0,0,0,2,0,0,0]);
+                let queue=tr.pending_data_queue.as_ref().unwrap();
+                assert_eq!(qword(&body,20),queue.byte_count.phys);
+                assert_eq!(qword(&body,28),queue.tfd.phys);
+                let (group,id,version)=tr.queue_allocation_command().unwrap();
+                tr.send_command(group,id,version,&body).unwrap();
+                assert_eq!(&tr.commands.bytes()[..8],&[0x17,5,0,0,36,0,0,0]);
+                assert_eq!(&tr.commands.bytes()[8..44],&body);
+            }
+            #[test]
+            fn absent_datapath_queue_metadata_uses_legacy_24_byte_body() {
+                let image=firmware_with_queue_api(None);
+                let fw=crate::net::iwl_ax201_fw::parse(&image).unwrap();
+                assert_eq!(fw.command_version(5,0x17),None);
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport_with_firmware(&mut mmio,&image);
+                assert_eq!(tr.queue_allocation_command().unwrap(),(1,0x1d,0));tr.restocked=true;
+                let body=tr.prepare_tx_queue(3,0).unwrap();
+                assert_eq!(body.len(),24);assert_eq!(&body[..8],&[3,0,1,0,2,0,0,0]);
+                let queue=tr.pending_data_queue.as_ref().unwrap();
+                assert_eq!(qword(&body,8),queue.byte_count.phys);
+                assert_eq!(qword(&body,16),queue.tfd.phys);
+                assert_eq!(tr.activate_tx_queue(&[7,0,0,0,0,0,0,0]).unwrap(),7);
+            }
+            #[test]
+            fn unsupported_queue_metadata_rejects_before_dma_publication() {
+                let image=firmware_with_queue_api(Some(4));
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport_with_firmware(&mut mmio,&image);
+                let reason="AX201 unsupported queue allocation command version";
+                assert_eq!(tr.queue_allocation_command().unwrap_err(),reason);tr.restocked=true;
+                assert_eq!(tr.prepare_tx_queue(1,0).unwrap_err(),reason);
+                assert!(tr.pending_data_queue.is_none());assert_eq!(mmio[0x460/4],0);
             }
             fn authentication()->Vec<u8> {
                 let mut frame=vec![0;30];frame[0]=0xb0;frame[4..10].fill(2);frame[10..16].fill(4);frame[16..22].fill(2);

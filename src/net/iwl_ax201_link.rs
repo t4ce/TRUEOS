@@ -189,6 +189,17 @@ impl Connection {
             },
         )
     }
+    fn allocate_queue(&mut self, transport: &mut Transport, tid: u8) -> Result<(), &'static str> {
+        let body = transport.prepare_tx_queue(station::AP_STA_ID, tid)?;
+        let (group, id, version) = transport.queue_allocation_command()?;
+        let sequence = transport.send_command(group, id, version, &body)?;
+        self.queue_request = Some(sequence);
+        crate::log_warn!(target: "net";
+            "iwl-ax201: stage=tx-queue-request tid={} cmd={:02x}:{:02x} version={} bytes={} seq=0x{:04x}\n",
+            tid, group, id, version, body.len(), sequence);
+        Ok(())
+    }
+
     fn send_authentication(&mut self, transport: &mut Transport) -> Result<(), &'static str> {
         let sequence = self.next_sequence();
         let frame = station::authentication(&self.config, sequence);
@@ -399,15 +410,15 @@ impl Connection {
             }
         }
         if self.queue_request == Some(notification.sequence) {
-            if notification.group != 1 || notification.id != 0x1d {
+            let (group, id, _) = transport.queue_allocation_command()?;
+            if notification.group != group || notification.id != id {
                 return Err("AX201 TX queue response mismatch");
             }
             let queue = transport.activate_tx_queue(&notification.payload)?;
             self.queue_request = None;
             if self.queue.is_none() {
                 self.queue = Some(queue);
-                let body = transport.prepare_tx_queue(station::AP_STA_ID, 0)?;
-                self.queue_request = Some(transport.send_command(1, 0x1d, 0, &body)?);
+                self.allocate_queue(transport, 0)?;
             } else {
                 self.data_queue = Some(queue);
                 self.state = State::Session;
@@ -464,8 +475,7 @@ impl Connection {
                 self.pending = Some((sequence, command));
                 self.deadline = now() + 2000;
             } else if self.state == State::Configure {
-                let body = transport.prepare_tx_queue(station::AP_STA_ID, 16)?;
-                self.queue_request = Some(transport.send_command(1, 0x1d, 0, &body)?);
+                self.allocate_queue(transport, 16)?;
                 self.state = State::Queue;
                 self.deadline = now() + 2000;
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=station-context-ready\n");

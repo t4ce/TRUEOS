@@ -14,6 +14,11 @@ pub(crate) const AP_STA_ID: u8 = 0;
 pub(crate) const AUX_STA_ID: u8 = 1;
 pub(crate) const SESSION_GROUP: u8 = 3;
 pub(crate) const SESSION_NOTIFICATION: u8 = 0xfb;
+// Linux v6.14 fw/api/mac.h: iwl_mac_ctx_cmd has 60 common bytes, five
+// 8-byte AC records, and the full 48-byte union (p2p_sta = sta + ctwin).
+// mvm/mac-ctxt.c sends sizeof(*cmd), including the unused final four bytes
+// for BSS_STA; sending only its 44-byte STA member truncates the command.
+const MAC_CONTEXT_BYTES: usize = 60 + 5 * 8 + 48;
 const RATES: [u8; 12] = [2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108];
 
 #[derive(Clone, Debug)]
@@ -352,7 +357,7 @@ pub(crate) fn mac_context(
     if aid.is_some_and(|aid| aid == 0 || aid > 2007) {
         return Err("AX201 invalid association ID");
     }
-    let mut mac = vec![0; 144];
+    let mut mac = vec![0; MAC_CONTEXT_BYTES];
     put32(&mut mac, 0, MAC_ID);
     put32(&mut mac, 4, if aid.is_some() { 2 } else { 1 });
     put32(&mut mac, 8, 5); // FW_MAC_TYPE_BSS_STA
@@ -459,10 +464,12 @@ pub(crate) fn associated(
     config: &StationConfig,
     aid: u16,
 ) -> Result<Vec<Command>, &'static str> {
-    Ok(vec![
-        mac_context(fw, config, Some(aid))?,
-        ap_station(fw, config, true)?,
-    ])
+    let mac = mac_context(fw, config, Some(aid))?;
+    let mut station = ap_station(fw, config, true)?;
+    // ADD_STA keeps its own association ID in addition to MAC_CONTEXT's.
+    // Linux mvm/sta.c sets this field once the station reaches ASSOC.
+    put16(&mut station.payload, 36, aid);
+    Ok(vec![mac, station])
 }
 
 pub(crate) fn session_protection(
@@ -669,7 +676,7 @@ mod tests {
             vec![
                 (1, 8, 4, 32),
                 (5, 8, 2, 32),
-                (1, 0x28, 5, 144),
+                (1, 0x28, 5, 148),
                 (1, 0x2b, 2, 28),
                 (1, 0x18, 12, 48),
                 (3, 5, 1, 24)
@@ -693,11 +700,15 @@ mod tests {
         assert_eq!(u32_at(mac, 8).unwrap(), 5);
         assert_eq!(u32_at(mac, 100).unwrap(), 0);
         assert_eq!(u32_at(mac, 52).unwrap(), 0x5e);
+        // The wire command includes the full union even for the BSS STA
+        // variant, whose 44-byte data ends at offset 144.
+        assert_eq!(&mac[144..148], &[0; 4]);
         assert_eq!(u32_at(&commands[3].payload, 12).unwrap(), u32::MAX);
         assert!(commands[3].validate_response(&0u32.to_le_bytes()).is_ok());
         assert!(commands[3].validate_response(&1u32.to_le_bytes()).is_err());
         assert!(commands[4].validate_response(&1u32.to_le_bytes()).is_ok());
         assert!(commands[4].validate_response(&0u32.to_le_bytes()).is_err());
+        assert_eq!(u16_at(&commands[4].payload, 36).unwrap(), 0);
     }
     #[test]
     fn auth_and_assoc_requests_and_responses_validate_station_identity() {
@@ -739,10 +750,15 @@ mod tests {
         put32(&mut n, 4, 0);
         assert!(session_started(&n).is_err());
         let update = associated(&fw, &cfg, 42).unwrap();
+        assert_eq!(update[0].payload.len(), 148);
         assert_eq!(u32_at(&update[0].payload, 4).unwrap(), 2);
         assert_eq!(u32_at(&update[0].payload, 100).unwrap(), 1);
         assert_eq!(u32_at(&update[0].payload, 136).unwrap(), 42);
+        assert_eq!(&update[0].payload[144..148], &[0; 4]);
         assert_eq!(update[1].payload[0], 1);
+        assert_eq!(u16_at(&update[1].payload, 36).unwrap(), 42);
+        assert!(associated(&fw, &cfg, 0).is_err());
+        assert!(associated(&fw, &cfg, 2008).is_err());
         let remove = teardown(&fw, &cfg).unwrap();
         assert_eq!(
             remove.iter().map(|c| c.id).collect::<Vec<_>>(),

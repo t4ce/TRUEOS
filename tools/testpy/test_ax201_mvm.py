@@ -64,11 +64,12 @@ mod net {
                 state.sent.push(Command{group:if group==0{1}else{group},id,version,sequence,payload:payload.to_vec()});Ok(sequence)
             }
             pub fn poll(&mut self)->Result<Option<Notification>,&'static str>{Ok(self.0.lock().unwrap().incoming.pop_front())}
+            pub fn queue_allocation_command(&self)->Result<(u8,u8,u8),&'static str>{Ok((5,0x17,0))}
             pub fn prepare_tx_queue(&mut self,station:u8,tid:u8)->Result<Vec<u8>,&'static str>{
                 self.0.lock().unwrap().queue_prepared.push((station,tid));Ok(vec![station,tid])
             }
             pub fn activate_tx_queue(&mut self,payload:&[u8])->Result<u16,&'static str>{
-                if payload.len()<2{return Err("mock bad queue response");}
+                if payload.len()!=8{return Err("mock bad queue response");}
                 let queue=u16::from_le_bytes([payload[0],payload[1]]);self.0.lock().unwrap().active_queues.push(queue);Ok(queue)
             }
             pub fn send_raw80211(&mut self,queue:u16,frame:&[u8],options:TxOptions)->Result<u16,&'static str>{
@@ -314,16 +315,20 @@ mod link_lifecycle_tests {
             let payload=match response{station::Response::Transport=>vec![],station::Response::ZeroStatus=>vec![0;4],station::Response::AddStation=>1u32.to_le_bytes().to_vec()};
             self.notify(cmd.group,cmd.id,cmd.sequence,payload);
         }
-        fn configure(&mut self,session:bool){
+        fn configure_station(&mut self){
             for command in station::prepare(&self.fw,&self.config).unwrap(){
                 self.poll();let sent=self.shared.lock().unwrap().sent.last().unwrap().clone();
                 assert_eq!((sent.group,sent.id,sent.version),(command.group,command.id,command.version));
                 self.ack(command.response);
             }
             self.poll();
+        }
+        fn configure(&mut self,session:bool){
+            self.configure_station();
             for queue in [1u16,2]{
-                let cmd=self.shared.lock().unwrap().sent.last().unwrap().clone();assert_eq!((cmd.group,cmd.id),(1,0x1d));
-                self.notify(1,0x1d,cmd.sequence,queue.to_le_bytes().to_vec());
+                let cmd=self.shared.lock().unwrap().sent.last().unwrap().clone();assert_eq!((cmd.group,cmd.id,cmd.version),(5,0x17,0));
+                let mut response=vec![0;8];response[..2].copy_from_slice(&queue.to_le_bytes());
+                self.notify(5,0x17,cmd.sequence,response);
             }
             if session {
                 let mut body=vec![0;16];body[4]=1;body[8]=1;self.notify(3,0xfb,0x8000,body);
@@ -392,6 +397,16 @@ mod link_lifecycle_tests {
         let mut f=fixture(true);f.configure(true);f.management(0xb0,&[0,0,2,0,1,0]);
         assert_eq!(f.connection.state(),WifiState::Failed);assert!(!f.connection.connected());
         assert!(f.connection.send(&mut f.transport,&ethernet()).is_err());
+    }
+    #[test]fn legacy_queue_reply_cannot_complete_datapath_allocation(){
+        let mut f=fixture(true);f.configure_station();
+        let cmd=f.shared.lock().unwrap().sent.last().unwrap().clone();
+        assert_eq!((cmd.group,cmd.id),(5,0x17));
+        f.notify(1,0x1d,cmd.sequence,vec![1,0,0,0,0,0,0,0]);
+        assert_eq!(f.connection.state(),WifiState::Failed);
+        assert!(f.shared.lock().unwrap().active_queues.is_empty());
+        assert!(f.shared.lock().unwrap().raw.is_empty());
+        assert!(!f.connection.connected());
     }
     #[test]fn open_association_routes_ethernet_and_disconnect_closes_port(){
         let mut f=fixture(false);f.associate();assert!(f.connection.connected());
