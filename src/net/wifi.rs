@@ -175,6 +175,7 @@ pub(crate) fn owns_network_interface(index: usize) -> bool {
 pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
     let mut last_registration_error = None;
     let mut boot_connect_attempted = false;
+    let mut next_boot_scan_ms = 0;
     if boot::credentials().is_some() {
         crate::log_warn!(target: "net"; "wifi-boot: state=waiting-for-scan credentials=embedded\n");
     }
@@ -183,7 +184,7 @@ pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
     loop {
         ticks = ticks.saturating_add(1);
         poll();
-        connect_boot_profile_once(&mut boot_connect_attempted);
+        connect_boot_profile_once(&mut boot_connect_attempted, &mut next_boot_scan_ms);
         match register_network_interface(spawner) {
             Ok(_) => last_registration_error = None,
             Err(error) => {
@@ -209,7 +210,7 @@ pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
 /// The local build profile is optional and requires no runtime filesystem or
 /// keyboard. Submit once, only after the initial passive scan has completed;
 /// uncertain station setup must never be retried over live firmware queues.
-fn connect_boot_profile_once(attempted: &mut bool) {
+fn connect_boot_profile_once(attempted: &mut bool, next_scan_ms: &mut u64) {
     if *attempted {
         return;
     }
@@ -230,8 +231,25 @@ fn connect_boot_profile_once(attempted: &mut bool) {
     let driver = guard.as_mut();
     if driver.status() != DriverStatus::Running
         || driver.wifi_state() != WifiState::Disconnected
-        || !driver.scan_results().iter().any(|network| network.ssid == ssid)
     {
+        return;
+    }
+    if !driver.scan_results().iter().any(|network| network.ssid == ssid) {
+        let now_ms = trueos_time::Instant::now().as_millis();
+        if now_ms >= *next_scan_ms {
+            *next_scan_ms = now_ms.saturating_add(5_000);
+            match driver.scan() {
+                Ok(()) => {
+                    *CONNECTION_STATE.lock() = driver.wifi_state();
+                    crate::log_warn!(target: "net"; "wifi-boot: state=waiting-for-network scan=retry\n");
+                }
+                Err(reason) => {
+                    *attempted = true;
+                    *LAST_OPERATION_ERROR.lock() = Some(reason);
+                    crate::log_warn!(target: "net"; "wifi-boot: state=scan-failed reason={}\n", reason);
+                }
+            }
+        }
         return;
     }
     *attempted = true;

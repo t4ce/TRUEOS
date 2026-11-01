@@ -298,7 +298,7 @@ mod service {
     }
 
     #[test]
-    fn admission_deduplicates_ready_images_and_bounds_each_window() {
+    fn admission_deduplicates_ready_images_and_bounds_window_memory() {
         let _guard = setup();
         let url = "https://example.test/0.png";
         let first = admit(7,1,url,2048,2048,9).unwrap();
@@ -308,11 +308,42 @@ mod service {
             r.operations[0].info.width=1; r.operations[0].info.height=1;
         }
         assert_eq!(admit(7,1,url,2048,2048,9), Ok(first));
-        for i in 1..8 { admit(7,1,&format!("https://example.test/{i}.png"),2048,2048,9).unwrap(); }
-        assert_eq!(admit(7,1,"https://example.test/overflow.png",1,1,9),Err(ERR_BUSY));
+        let reservation=policy::target_extent(2048,2048).unwrap().2;
+        let capacity=WINDOW_BYTES/reservation;
+        assert!(capacity>0 && capacity<42);
+        for i in 1..capacity { admit(7,1,&format!("https://example.test/{i}.png"),2048,2048,9).unwrap(); }
+        assert_eq!(admit(7,1,"https://example.test/overflow.png",2048,2048,9),Err(ERR_BUSY));
         let r = REGISTRY.lock();
-        assert_eq!(r.operations.len(),8);
+        assert_eq!(r.operations.len(),capacity);
         assert!(r.operations.iter().map(|op|op.reserved_bytes).sum::<usize>()<=WINDOW_BYTES);
+    }
+
+    #[test]
+    fn admission_accepts_42_small_images_and_reuses_a_released_slot() {
+        let _guard = setup();
+        let url = "https://example.test/0.png";
+        let first = admit(7,1,url,20,10,9).unwrap() as u32;
+        for i in 1..42 {
+            admit(7,1,&format!("https://example.test/{i}.png"),20,10,9).unwrap();
+        }
+        assert_eq!(REGISTRY.lock().operations.len(),42);
+        assert_eq!(admit(7,1,url,20,10,9),Ok(first as i32));
+        assert_eq!(admit(7,1,"https://example.test/overflow.png",20,10,9),Err(ERR_BUSY));
+        assert_eq!(release(7,1,first),0);
+        assert!(admit(7,1,"https://example.test/overflow.png",20,10,9).is_ok());
+        assert_eq!(REGISTRY.lock().operations.len(),42);
+    }
+
+    #[test]
+    fn admission_keeps_the_global_64_ticket_limit_across_windows() {
+        let _guard = setup();
+        for (window, count) in [(1,42),(2,22)] {
+            for i in 0..count {
+                admit(7,window,&format!("https://example.test/{i}.png"),20,10,9).unwrap();
+            }
+        }
+        assert_eq!(REGISTRY.lock().operations.len(),64);
+        assert_eq!(admit(7,2,"https://example.test/overflow.png",20,10,9),Err(ERR_BUSY));
     }
 
     #[test]

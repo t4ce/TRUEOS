@@ -57,8 +57,8 @@ fn invalid(message: &'static str) -> io::Error {
 }
 
 fn encode(input: &[u8]) -> io::Result<Vec<u8>> {
-    let text = std::str::from_utf8(input)
-        .map_err(|_| invalid("Wi-Fi credential file must be UTF-8"))?;
+    let text =
+        std::str::from_utf8(input).map_err(|_| invalid("Wi-Fi credential file must be UTF-8"))?;
     // Only remove line endings: spaces and tabs are part of both values.
     let body = if let Some(body) = text.strip_suffix('\n') {
         body.strip_suffix('\r').unwrap_or(body)
@@ -69,8 +69,14 @@ fn encode(input: &[u8]) -> io::Result<Vec<u8>> {
         .split_once('\n')
         .ok_or_else(|| invalid("Wi-Fi credential file must contain exactly two lines"))?;
     let ssid = ssid.strip_suffix('\r').unwrap_or(ssid);
-    if ssid.bytes().chain(password.bytes()).any(|byte| matches!(byte, 0 | b'\r' | b'\n')) {
-        return Err(invalid("Wi-Fi credential file must contain exactly two text lines"));
+    if ssid
+        .bytes()
+        .chain(password.bytes())
+        .any(|byte| matches!(byte, 0 | b'\r' | b'\n'))
+    {
+        return Err(invalid(
+            "Wi-Fi credential file must contain exactly two text lines",
+        ));
     }
     if ssid.is_empty() || ssid.len() > 32 {
         return Err(invalid("Wi-Fi SSID must contain 1-32 UTF-8 bytes"));
@@ -78,7 +84,9 @@ fn encode(input: &[u8]) -> io::Result<Vec<u8>> {
     if !(8..=63).contains(&password.len())
         && !(password.len() == 64 && password.bytes().all(|byte| byte.is_ascii_hexdigit()))
     {
-        return Err(invalid("Wi-Fi password must contain 8-63 bytes or 64 hexadecimal digits"));
+        return Err(invalid(
+            "Wi-Fi password must contain 8-63 bytes or 64 hexadecimal digits",
+        ));
     }
     let mut payload = Vec::with_capacity(6 + ssid.len() + password.len());
     payload.extend_from_slice(b"TW01");
@@ -119,7 +127,8 @@ mod tests {
             static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
             let directory = env::temp_dir().join(format!(
                 "trueos-wifi-build-test-{}-{}",
-                std::process::id(), SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed),
             ));
             fs::create_dir_all(&directory).unwrap();
             Self(directory)
@@ -132,7 +141,10 @@ mod tests {
         }
         fn run(&self, variables: &[(&str, OsString)]) -> io::Result<()> {
             generate_for_environment(&self.0, |name| {
-                variables.iter().find(|(key, _)| *key == name).map(|(_, value)| value.clone())
+                variables
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.clone())
             })
         }
     }
@@ -144,7 +156,7 @@ mod tests {
 
     #[test]
     fn wire_payload_preserves_whitespace_and_accepts_lf_crlf_or_no_final_newline() {
-        let expected = b"TW01\x05\x0b ssid password \t ";
+        let expected = b"TW01\x05\x0b ssidpassword \t ";
         for input in [
             &b" ssid\npassword \t "[..],
             &b" ssid\npassword \t \n"[..],
@@ -169,10 +181,15 @@ mod tests {
     #[test]
     fn malformed_credentials_return_value_free_errors() {
         for input in [
-            &b""[..], &b"only-one-line"[..], &b"\npassword"[..],
-            &b"synthetic-ssid\nshort"[..], &b"ssid\npassword\nthird"[..],
-            &b"ssid\npassword\n\n"[..], &b"ssid\npassword\0"[..],
-            &b"ssid\npassword\r"[..], &b"ssid\npassword\xff"[..],
+            &b""[..],
+            &b"only-one-line"[..],
+            &b"\npassword"[..],
+            &b"synthetic-ssid\nshort"[..],
+            &b"ssid\npassword\nthird"[..],
+            &b"ssid\npassword\n\n"[..],
+            &b"ssid\npassword\0"[..],
+            &b"ssid\npassword\r"[..],
+            &b"ssid\npassword\xff"[..],
         ] {
             let error = encode(input).unwrap_err().to_string();
             assert!(!error.contains("synthetic-ssid"));
@@ -185,10 +202,14 @@ mod tests {
     fn missing_or_disabled_source_overwrites_stale_private_output() {
         let fixture = Fixture::new();
         fs::write(fixture.0.join(OUTPUT), b"stale-private-output").unwrap();
-        fixture.run(&[("TRUEOS_WIFI_CREDENTIALS", fixture.source().into_os_string())]).unwrap();
+        fixture
+            .run(&[("TRUEOS_WIFI_CREDENTIALS", fixture.source().into_os_string())])
+            .unwrap();
         assert!(fixture.output().is_empty());
         fs::write(fixture.0.join(OUTPUT), b"stale-private-output").unwrap();
-        fixture.run(&[("TRUEOS_WIFI_CREDENTIALS", OsString::new())]).unwrap();
+        fixture
+            .run(&[("TRUEOS_WIFI_CREDENTIALS", OsString::new())])
+            .unwrap();
         assert!(fixture.output().is_empty());
     }
 
@@ -201,7 +222,8 @@ mod tests {
                 "CI" | "GITHUB_ACTIONS" => (name == variable).then(OsString::new),
                 "TRUEOS_WIFI_CREDENTIALS" => panic!("CI must not inspect the credential source"),
                 _ => None,
-            }).unwrap();
+            })
+            .unwrap();
             assert!(fixture.output().is_empty());
         }
     }
@@ -213,7 +235,10 @@ mod tests {
         fs::write(&source, b"synthetic-ssid\nsynthetic-password\n").unwrap();
         let variables = [("TRUEOS_WIFI_CREDENTIALS", source.clone().into_os_string())];
         fixture.run(&variables).unwrap();
-        assert_eq!(fixture.output(), encode(b"synthetic-ssid\nsynthetic-password\n").unwrap());
+        assert_eq!(
+            fixture.output(),
+            encode(b"synthetic-ssid\nsynthetic-password\n").unwrap()
+        );
         fs::write(&source, b"malformed").unwrap();
         assert!(fixture.run(&variables).is_err());
         assert!(fixture.output().is_empty());
@@ -228,6 +253,9 @@ mod tests {
         fs::write(&output, b"old").unwrap();
         fs::set_permissions(&output, fs::Permissions::from_mode(0o666)).unwrap();
         write_output(&fixture.0, b"synthetic-payload").unwrap();
-        assert_eq!(fs::metadata(output).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(output).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }
