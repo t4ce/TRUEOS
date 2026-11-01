@@ -7,6 +7,9 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
+#[path = "wifi_boot.rs"]
+mod boot;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiSecurity {
     Open,
@@ -171,11 +174,16 @@ pub(crate) fn owns_network_interface(index: usize) -> bool {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
     let mut last_registration_error = None;
+    let mut boot_connect_attempted = false;
+    if boot::credentials().is_some() {
+        crate::log_warn!(target: "net"; "wifi-boot: state=waiting-for-scan credentials=embedded\n");
+    }
     let mut ticks = 0u64;
     let mut last_heartbeat_ms = trueos_time::Instant::now().as_millis();
     loop {
         ticks = ticks.saturating_add(1);
         poll();
+        connect_boot_profile_once(&mut boot_connect_attempted);
         match register_network_interface(spawner) {
             Ok(_) => last_registration_error = None,
             Err(error) => {
@@ -198,6 +206,48 @@ pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
         trueos_time::Timer::after(trueos_time::Duration::from_millis(10)).await;
     }
 }
+/// The local build profile is optional and requires no runtime filesystem or
+/// keyboard. Submit once, only after the initial passive scan has completed;
+/// uncertain station setup must never be retried over live firmware queues.
+fn connect_boot_profile_once(attempted: &mut bool) {
+    if *attempted {
+        return;
+    }
+    let Some((ssid, password)) = boot::credentials() else {
+        *attempted = true;
+        return;
+    };
+    let Some(pci) = *WIFI_PCI.lock() else {
+        return;
+    };
+    if (pci.vendor_id, pci.device_id) != (0x8086, 0xa0f0) {
+        return;
+    }
+    let Some(shared) = shared_driver() else {
+        return;
+    };
+    let mut guard = shared.lock();
+    let driver = guard.as_mut();
+    if driver.status() != DriverStatus::Running
+        || driver.wifi_state() != WifiState::Disconnected
+        || !driver.scan_results().iter().any(|network| network.ssid == ssid)
+    {
+        return;
+    }
+    *attempted = true;
+    crate::log_warn!(target: "net"; "wifi-boot: state=connecting\n");
+    match driver.connect(ssid, password) {
+        Ok(()) => {
+            *CONNECTION_STATE.lock() = driver.wifi_state();
+            *LAST_OPERATION_ERROR.lock() = None;
+        }
+        Err(reason) => {
+            *LAST_OPERATION_ERROR.lock() = Some(reason);
+            crate::log_warn!(target: "net"; "wifi-boot: state=failed reason={}\n", reason);
+        }
+    }
+}
+
 static WIFI_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Deferred WiFi PCI location (bus, device, function) — set during boot, probed on first use

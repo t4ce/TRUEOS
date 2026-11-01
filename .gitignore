@@ -3,3 +3,7 @@ tgt/
 Cargo.lock
 !tools/trueos-boot/Cargo.lock
 !tools/testpy/thread_scheduler/Cargo.lock
+
+# Private local build inputs; generated credential payloads stay under tgt/.
+.local/
+/pw.txt

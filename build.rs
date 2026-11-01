@@ -9,9 +9,14 @@ use std::{
 
 const PORTAL_CABI_LOCK_PATH: &str = "abi/portal-cabi-v2.sha256";
 
+#[path = "tools/build/wifi_credentials.rs"]
+mod wifi_credentials;
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    wifi_credentials::generate(&out_dir).expect("prepare optional local Wi-Fi credentials");
 
     if target_os == "trueos" {
         generate_empty_system_libraries().expect("prepare freestanding system libraries");
