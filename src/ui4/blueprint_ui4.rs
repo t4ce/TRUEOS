@@ -5226,6 +5226,10 @@ pub(crate) fn finish_sprite_rgba8_upload(
     0
 }
 
+fn sprite_scene_clear_rgba(surface: &BlueprintSceneSurface) -> Option<u32> {
+    surface.sprite_clear_rgba.or_else(|| surface.pending_render_release.map(|_| 0))
+}
+
 pub(crate) fn begin_sprite_scene(owner: WindowOwner, window_id: u32, expected: usize) -> i32 {
     if expected > MAX_SPRITE_QUADS {
         return ERROR_INVALID;
@@ -5234,7 +5238,9 @@ pub(crate) fn begin_sprite_scene(owner: WindowOwner, window_id: u32, expected: u
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
-    if surface.write_lease.is_none() || surface.sprite_clear_rgba.is_none() {
+    if surface.write_lease.is_none()
+        || sprite_scene_clear_rgba(surface).is_none()
+    {
         return ERROR_STATE;
     }
     if surface.gpu_submission_unretired {
@@ -5928,7 +5934,10 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         cancel_blueprint_sprite_frame_without_live_gpu(surface);
         return ERROR_STATE;
     };
-    let Some(clear_rgba) = surface.sprite_clear_rgba else {
+    // A retired native pass already owns the background pixels. Its exact
+    // target receipt authorizes a continuation even after the initial clear
+    // marker has been consumed; the overlay path below does not clear again.
+    let Some(clear_rgba) = sprite_scene_clear_rgba(surface) else {
         cancel_blueprint_sprite_frame_without_live_gpu(surface);
         return ERROR_STATE;
     };

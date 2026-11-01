@@ -45,7 +45,7 @@ pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 = 0x1438_5963_1
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 = 0x4A7C_D238_6AA5_C232;
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64: u64 = 0xD2A3_B942_FA09_24B6;
 const SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR: u32 = u32::from_le_bytes([118, 221, 153, 255]);
-pub(crate) const MAX_INDEXED_BATCH_DRAWS: usize = v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS;
+pub(crate) const MAX_INDEXED_BATCH_DRAWS: usize = crate::intel::render::RESIDENT_SCENE_MAX_DRAWS;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Capabilities(u64);

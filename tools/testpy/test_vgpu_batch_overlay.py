@@ -22,10 +22,15 @@ def block(source, start):
 def main():
     wire = (ROOT / 'crates/trueos-v/src/vgpu.rs').read_text()
     broker = (ROOT / 'src/r/io/vgpu_cabi.rs').read_text()
+    hull = (ROOT.parent / 'TRUEOS-Buildins/hull/xxx/gpu.rs').read_text()
+    renderer = (ROOT / 'src/intel/render/constants.rs').read_text()
+    resident_limit = int(re.search(r'RESIDENT_SCENE_MAX_DRAWS: usize = (\d+)', renderer)[1])
+    for facade in [wire, (ROOT.parent / 'TRUEOS-Buildins/vendor/trueos-v/src/vgpu.rs').read_text()]:
+        assert int(re.search(r'MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS: usize = (\d+)', facade)[1]) == resident_limit
     gpu = (ROOT / 'src/gpu/vgpu.rs').read_text()
     primary = (ROOT / 'src/intel/render/primary.rs').read_text()
     constants = '\n'.join(re.findall(
-        r'^pub const (?:PRIMITIVE_TOPOLOGY_\w+|MAX_INDEXED_BATCH_V2_DRAWS|'
+        r'^pub const (?:PRIMITIVE_TOPOLOGY_\w+|MAX_INDEXED_BATCH_V2_DRAWS|MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS|'
         r'MAX_INDEXED_DRAW_POINT_WIDTH_PX|INDEXED_BATCH_V2_LOAD_COLOR):[^;]+;', wire, re.M))
     wire_types = '\n'.join(
         '#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]\n#[repr(C)]\n' + block(wire, f'pub struct {name} {{')
@@ -44,6 +49,11 @@ mod vgpu {{ {descriptor} }}
 {block(broker, 'fn broker_primitive_topology(')}
 {block(broker, 'fn decode_indexed_batch_v2(')}
 {block(broker, 'mod indexed_batch_v2_tests {')}
+mod hull_batches {{
+use crate::v::vgpu::*;
+{block(hull, 'fn draw_batches(')}
+{block(hull, 'mod batch_tests {')}
+}}
 '''
     with tempfile.TemporaryDirectory(prefix='trueos-vgpu-overlay-') as temporary:
         directory = Path(temporary)

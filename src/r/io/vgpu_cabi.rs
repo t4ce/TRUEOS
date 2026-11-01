@@ -571,7 +571,7 @@ fn decode_indexed_batch_v2(
 ) -> Result<alloc::vec::Vec<vgpu::Ui4IndexedBatchDrawDescriptor>, i32> {
     let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
     if draw_count == 0
-        || draw_count > v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS
+        || draw_count > v::vgpu::MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS
         || batch.draws[..draw_count]
             .iter()
             .enumerate()
@@ -648,6 +648,19 @@ mod indexed_batch_v2_tests {
         batch.draws[1].reserved = v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR;
         assert!(decode_indexed_batch_v2(&batch).is_err());
         batch.draw_count = 1;
+        assert!(decode_indexed_batch_v2(&batch).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_batches_before_resident_submission() {
+        let mut batch = batch();
+        let draw = batch.draws[0];
+        batch.draws.fill(draw);
+        batch.draw_count = v::vgpu::MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS as u32;
+        batch.draws[batch.draw_count as usize..].fill(Default::default());
+        assert_eq!(decode_indexed_batch_v2(&batch).unwrap().len(), 340);
+        batch.draws[340] = draw;
+        batch.draw_count += 1;
         assert!(decode_indexed_batch_v2(&batch).is_err());
     }
 

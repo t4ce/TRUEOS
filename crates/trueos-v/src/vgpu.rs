@@ -268,9 +268,12 @@ pub const fn indexed_draw_flags_valid(flags: u32) -> bool {
 }
 
 pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
-/// The mixed-topology V2 batch maps directly to the resident renderer's
-/// 600-draw scene capacity. V1 remains at 16 for ABI compatibility.
+/// Fixed V2 wire capacity; active submissions use the smaller limit below.
+/// V1 remains at 16 for ABI compatibility.
 pub const MAX_INDEXED_BATCH_V2_DRAWS: usize = 600;
+/// Resident renderer state-slot capacity. Split larger ordered worklists,
+/// using LOAD_COLOR for continuation batches; the wire array stays at 600.
+pub const MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS: usize = 340;
 /// Set in draws[0].reserved to overlay an already acquired UI4 frame.
 /// Other draws must not set this bit. Offscreen submissions reject it.
 /// Lower bits retain the existing POINT_LIST width encoding.
@@ -1057,7 +1060,7 @@ impl Device {
         if queue.device != self
             || surface.device != self
             || batch.draw_count == 0
-            || batch.draw_count as usize > MAX_INDEXED_BATCH_V2_DRAWS
+            || batch.draw_count as usize > MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS
         {
             return Err(ERR_BAD_HANDLE);
         }
