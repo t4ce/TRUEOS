@@ -7,6 +7,7 @@ use crate::{pci, wait};
 
 mod virgl;
 mod requests;
+mod scanout;
 pub(crate) use virgl::blit::copy_rgba;
 pub(crate) use virgl::coverage::{NativeMaskGeometry, NativeMaskVertex, render_coverage_mask};
 
@@ -904,7 +905,12 @@ unsafe impl Send for EmulatorUi {}
 impl EmulatorUi {
     fn init() -> Option<Self> {
         let mut gpu = VirtioGpuLogo::init_first()?;
-        let (scanout_id, width, height) = gpu.get_display_info()?;
+        let (scanout_id, host_width, host_height) = gpu.get_display_info()?;
+        let loader = limine_framebuffer_info().ok().map(|fb| (fb.width, fb.height));
+        let ((width, height), source) = scanout::initial_extent((host_width, host_height), loader);
+        crate::log_important!(target: "gfx";
+            "virtio-gpu-ui: initial-mode host={}x{} loader={:?} selected={}x{} source={}\n",
+            host_width, host_height, loader, width, height, source);
         let scanout_bytes = bytes_for_surface(width, height)?;
         let scanout_backing = DmaRegion::alloc(scanout_bytes, 4096)?;
 

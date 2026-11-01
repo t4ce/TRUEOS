@@ -427,15 +427,18 @@ impl Connection {
         }
         if matches!(notification.group, 0 | 1) && notification.id == 0x1c {
             let report = data::tx_report(&notification.payload)?;
-            if self.data_queue == Some(report.queue)
-                && self.key_confirmation == Some(report.sequence)
-            {
-                if !report.success {
-                    return Err("AX201 WPA2 confirmation was not acknowledged");
+            if self.data_queue == Some(report.queue) {
+                if let Some(success) = self
+                    .key_confirmation
+                    .and_then(|token| transport.tx_completion_status(report.queue, token))
+                {
+                    if !success {
+                        return Err("AX201 WPA2 confirmation was not acknowledged");
+                    }
+                    self.key_confirmation = None;
+                    self.state = State::Connected;
+                    crate::log_warn!(target: "net"; "iwl-ax201: stage=link-up security=wpa2-ccmp data=ethernet\n");
                 }
-                self.key_confirmation = None;
-                self.state = State::Connected;
-                crate::log_warn!(target: "net"; "iwl-ax201: stage=link-up security=wpa2-ccmp data=ethernet\n");
             }
         }
         if notification.group == 0 && notification.id == 0xc1 {

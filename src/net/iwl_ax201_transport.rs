@@ -177,6 +177,14 @@ pub(crate) struct Notification {
     pub payload: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
+struct TxCompletion {
+    queue: u16,
+    read_before: u8,
+    count: usize,
+    first_success: bool,
+}
+
 pub(crate) struct Transport {
     base: usize,
     pci: (u8, u8, u8),
@@ -205,6 +213,8 @@ pub(crate) struct Transport {
     queue_alloc_cmd_version: u8,
     pending_data_queue: Option<DataQueue>,
     data_queues: Vec<DataQueue>,
+    last_tx_completion: Option<TxCompletion>,
+    tx_completion_logs: u8,
 }
 
 impl Transport {
@@ -282,6 +292,8 @@ impl Transport {
             queue_alloc_cmd_version: fw.command_version(5, 0x17).unwrap_or(0),
             pending_data_queue: None,
             data_queues: Vec::new(),
+            last_tx_completion: None,
+            tx_completion_logs: 0,
         })
     }
 
@@ -478,6 +490,7 @@ impl Transport {
     }
 
     pub(crate) fn poll(&mut self) -> Result<Option<Notification>, &'static str> {
+        self.last_tx_completion = None;
         if self.failed {
             return Err("AX201 transport faulted");
         }
@@ -593,28 +606,54 @@ impl Transport {
             .is_some_and(|queue| queue.outstanding == 0)
     }
 
+    /// Resolve a host token only against slots retired by the current poll.
+    /// Nonaggregate firmware replies do not promise to echo agg_status.sequence.
+    pub(crate) fn tx_completion_status(&self, queue_id: u16, token: u16) -> Option<bool> {
+        let completion = self.last_tx_completion?;
+        let slot = usize::from(token & 0xff);
+        if completion.queue != queue_id
+            || token >> 8 != queue_id & 0x1f
+            || slot >= DATA_COUNT
+        {
+            return None;
+        }
+        (0..completion.count)
+            .find(|&step| (usize::from(completion.read_before) + step) & (DATA_COUNT - 1) == slot)
+            // Linux mvm/tx.c marks later cumulatively reclaimed frames ACKed;
+            // the report status belongs to the first frame in the range.
+            .map(|step| step != 0 || completion.first_success)
+    }
+
     pub(crate) fn activate_tx_queue(&mut self, response: &[u8]) -> Result<u16, &'static str> {
         if response.len() != 8 {
             return Err("AX201 malformed queue allocation response");
         }
         let id = u16::from_le_bytes([response[0], response[1]]);
         let flags = u16::from_le_bytes([response[2], response[3]]);
-        let write = u16::from_le_bytes([response[4], response[5]]);
-        if flags != 0
-            || id == 0
-            || id >= 512
-            || write >= 256
-            || self.data_queues.iter().any(|queue| queue.id == Some(id))
-        {
-            return Err("AX201 queue allocation rejected");
+        let raw_write = u16::from_le_bytes([response[4], response[5]]);
+        // Linux pcie/tx-gen2.c::iwl_pcie_txq_alloc_response validates queue
+        // ownership, ignores the response flags, and masks the initial pointer
+        // by max_tfd_queue_size-1 (255 on AX201). It is not a ring slot index.
+        let write = (raw_write & 255) as u8;
+        crate::log_warn!(target: "net";
+            "iwl-ax201: stage=tx-queue-response queue={} flags=0x{:04x} write=0x{:04x} cursor={}\n",
+            id, flags, raw_write, write);
+        if id == 0 {
+            return Err("AX201 queue allocation returned reserved command queue");
+        }
+        if id >= 512 {
+            return Err("AX201 queue allocation returned out-of-range queue");
+        }
+        if self.data_queues.iter().any(|queue| queue.id == Some(id)) {
+            return Err("AX201 queue allocation returned an owned queue");
         }
         let mut queue = self
             .pending_data_queue
             .take()
             .ok_or("AX201 no pending queue allocation")?;
         queue.id = Some(id);
-        queue.read = write as u8;
-        queue.write = write as u8;
+        queue.read = write;
+        queue.write = write;
         self.data_queues.push(queue);
         Ok(id)
     }
@@ -727,38 +766,62 @@ impl Transport {
     }
 
     fn retire_tx_notification(&mut self, notification: &Notification) -> Result<(), &'static str> {
+        self.last_tx_completion = None;
         if notification.id != 0x1c || !matches!(notification.group, 0 | 1) {
             return Ok(());
         }
         if self.tx_notification_version != 7 {
+            crate::log_warn!(target: "net"; "iwl-ax201: stage=tx-completion header_seq=0x{:04x} error=unsupported-version version={}\n", notification.sequence, self.tx_notification_version);
             return Err("AX201 unsupported TX response version");
         }
-        let report = data::tx_report(&notification.payload)?;
-        let queue = self
+        let report = match data::tx_report(&notification.payload) {
+            Ok(report) => report,
+            Err(reason) => {
+                crate::log_warn!(target: "net"; "iwl-ax201: stage=tx-completion header_seq=0x{:04x} bytes={} error={}\n", notification.sequence, notification.payload.len(), reason);
+                return Err(reason);
+            }
+        };
+        let raw_ssn = u32::from_le_bytes(notification.payload[44..48].try_into().unwrap()) & 0xfff;
+        let Some(queue) = self
             .data_queues
             .iter_mut()
             .find(|queue| queue.id == Some(report.queue))
-            .ok_or("AX201 TX response for unknown queue")?;
+        else {
+            crate::log_warn!(target: "net"; "iwl-ax201: stage=tx-completion header_seq=0x{:04x} aggregate_seq=0x{:04x} queue={} ssn={} next={} read=none write=none outstanding=0 status=0x{:04x} error=unknown-queue\n", notification.sequence, report.sequence, report.queue, raw_ssn, report.next_index, report.status);
+            return Err("AX201 TX response for unknown queue");
+        };
         let distance = report.next_index.wrapping_sub(queue.read) as usize;
-        let completed_index = usize::from(report.sequence & 0xff);
-        if distance == 0
-            || distance > queue.outstanding
-            || (report.sequence >> 8) & 0x1f != report.queue & 0x1f
-            || completed_index >= DATA_COUNT
-            || !(0..distance)
-                .any(|step| (usize::from(queue.read) + step) & (DATA_COUNT - 1) == completed_index)
+        let error = if distance == 0 || distance > queue.outstanding {
+            Some("AX201 TX retirement outside outstanding window")
+        } else if !(0..distance)
+            .all(|step| queue.busy[(usize::from(queue.read) + step) & (DATA_COUNT - 1)])
         {
-            return Err("AX201 TX retirement outside outstanding window");
+            Some("AX201 TX retirement of unowned slot")
+        } else {
+            None
+        };
+        if self.tx_completion_logs < 8 || error.is_some() {
+            crate::log_warn!(target: "net"; "iwl-ax201: stage=tx-completion header_seq=0x{:04x} aggregate_seq=0x{:04x} queue={} ssn={} next={} read={} write={} outstanding={} status=0x{:04x} result={}\n", notification.sequence, report.sequence, report.queue, raw_ssn, report.next_index, queue.read, queue.write, queue.outstanding, report.status, error.unwrap_or("retired"));
+            self.tx_completion_logs = self.tx_completion_logs.saturating_add(1);
         }
+        if let Some(error) = error {
+            return Err(error);
+        }
+        let completion = TxCompletion {
+            queue: report.queue,
+            read_before: queue.read,
+            count: distance,
+            first_success: report.success,
+        };
+        // Validate every slot before changing ownership, so malformed cumulative
+        // replies cannot partially reclaim a queue.
         for _ in 0..distance {
             let index = usize::from(queue.read) & (DATA_COUNT - 1);
-            if !queue.busy[index] {
-                return Err("AX201 TX retirement of unowned slot");
-            }
             queue.busy[index] = false;
             queue.outstanding -= 1;
             queue.read = queue.read.wrapping_add(1);
         }
+        self.last_tx_completion = Some(completion);
         Ok(())
     }
 

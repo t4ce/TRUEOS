@@ -53,7 +53,7 @@ mod net {
             pub group:u8,pub id:u8,pub version:u8,pub sequence:u16,pub payload:Vec<u8>,
         }
         pub struct State {
-            pub alive:Option<Notification>, pub incoming:VecDeque<Notification>,pub sent:Vec<Command>,pub sequence:u16,pub raw:Vec<RawTx>,pub queue_prepared:Vec<(u8,u8)>,pub active_queues:Vec<u16>,
+            pub alive:Option<Notification>, pub incoming:VecDeque<Notification>,pub sent:Vec<Command>,pub sequence:u16,pub raw:Vec<RawTx>,pub queue_prepared:Vec<(u8,u8)>,pub active_queues:Vec<u16>,pub tx_completion:Option<(u16,u16,u16)>,
         }
         pub type Shared=Arc<Mutex<State>>;
         pub struct Transport(pub Shared);
@@ -72,6 +72,10 @@ mod net {
                 if payload.len()!=8{return Err("mock bad queue response");}
                 let queue=u16::from_le_bytes([payload[0],payload[1]]);self.0.lock().unwrap().active_queues.push(queue);Ok(queue)
             }
+            pub fn tx_completion_status(&self,queue:u16,token:u16)->Option<bool>{
+                self.0.lock().unwrap().tx_completion.filter(|&(q,t,_)|q==queue&&t==token)
+                    .map(|(_,_,status)|matches!(status&0xff,1|2))
+            }
             pub fn send_raw80211(&mut self,queue:u16,frame:&[u8],options:TxOptions)->Result<u16,&'static str>{
                 let mut state=self.0.lock().unwrap();if !state.active_queues.contains(&queue){return Err("mock queue inactive");}
                 let sequence=state.sequence;state.sequence+=1;state.raw.push(RawTx{queue,sequence,frame:frame.to_vec(),options});Ok(sequence)
@@ -87,7 +91,7 @@ mod net {
             crate::NOW.with(|value|value.set(0));
             let shared=Arc::new(Mutex::new(State{
                 alive:Some(Notification{group:0,id:1,sequence:0x8000,payload:vec![0xfe,0xca,0,0]}),
-                incoming:VecDeque::new(),sent:Vec::new(),sequence:0,raw:Vec::new(),queue_prepared:Vec::new(),active_queues:Vec::new(),
+                incoming:VecDeque::new(),sent:Vec::new(),sequence:0,raw:Vec::new(),queue_prepared:Vec::new(),active_queues:Vec::new(),tx_completion:None,
             }));
             let image=if legacy_dqa {
                 // A synthetic capability on the otherwise real image exercises
@@ -302,7 +306,7 @@ mod link_lifecycle_tests {
         },tx_chains:3,rx_chains:3,device_timestamp:0,host_decrypt:true};
         let connection=Connection::new(&firmware,config.clone(),if protected{PSK}else{b""},if protected{&RSN}else{&[]},-42).unwrap();
         let shared=Arc::new(Mutex::new(State{alive:None,incoming:VecDeque::new(),sent:vec![],sequence:0,
-            raw:vec![],queue_prepared:vec![],active_queues:vec![]}));
+            raw:vec![],queue_prepared:vec![],active_queues:vec![],tx_completion:None}));
         Fixture{fw:firmware,config,connection,transport:Transport(shared.clone()),shared}
     }
     impl Fixture {
@@ -354,8 +358,9 @@ mod link_lifecycle_tests {
         }
         fn eapol(&mut self,bytes:&[u8]){self.frame(downlink([0x88,0x8e],AP,bytes));}
         fn tx_result(&mut self,tx:&RawTx,status:u16){
+            self.shared.lock().unwrap().tx_completion=Some((tx.queue,tx.sequence,status));
             let mut payload=vec![0;48];payload[0]=1;payload[36..38].copy_from_slice(&tx.queue.to_le_bytes());
-            payload[40..42].copy_from_slice(&status.to_le_bytes());payload[42..44].copy_from_slice(&tx.sequence.to_le_bytes());
+            payload[40..42].copy_from_slice(&status.to_le_bytes());payload[42..44].copy_from_slice(&0x7fffu16.to_le_bytes()); // Untrusted aggregation metadata.
             payload[44..48].copy_from_slice(&(u32::from(tx.sequence)+1).to_le_bytes());self.notify(1,0x1c,0x8000,payload);
         }
     }
@@ -453,6 +458,14 @@ mod link_lifecycle_tests {
         let frame=gtk.encrypt(&multicast).unwrap();f.frame(frame.clone());
         let ethernet=f.connection.receive().unwrap();assert_eq!(&ethernet[..6],&[0xff;6]);assert_eq!(&ethernet[14..],&[0x77;46]);
         f.frame(frame);assert!(f.connection.receive().is_none());
+    }
+    #[test]fn aggregate_sequence_alone_never_confirms_m4_descriptor(){
+        let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();
+        let mut payload=vec![0;48];payload[0]=1;payload[36..38].copy_from_slice(&m4.queue.to_le_bytes());
+        payload[40]=1;payload[42..44].copy_from_slice(&m4.sequence.to_le_bytes());payload[44]=1;
+        f.notify(1,0x1c,0x8000,payload);
+        assert!(!f.connection.connected());assert!(f.connection.send(&mut f.transport,&ethernet()).is_err());
+        f.tx_result(&m4,1);assert!(f.connection.connected());
     }
     #[test]fn m4_radio_failure_never_opens_port(){
         let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();f.tx_result(&m4,0x82);

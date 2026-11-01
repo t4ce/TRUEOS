@@ -175,7 +175,9 @@ pub(crate) fn decapsulate_ethernet(
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TxReport {
-    /// Sequence token returned by send_raw80211(), carried in agg_tx_status.
+    /// Raw agg_tx_status sequence, diagnostic only for nonaggregate TX.
+    /// Linux reclaims single frames by queue/SSN; this field does not prove
+    /// which host-owned descriptor completed.
     pub sequence: u16,
     pub queue: u16,
     /// First descriptor not owned by the device anymore, modulo 256 on AX201.

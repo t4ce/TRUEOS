@@ -166,6 +166,58 @@ TRANSPORT
                 Notification{group:0,id:0x1c,sequence,payload}
             }
             #[test]
+            fn queue_reply_flags_do_not_override_a_valid_unused_queue_id() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);tr.restocked=true;
+                tr.prepare_tx_queue(1,16).unwrap();
+                assert_eq!(tr.activate_tx_queue(&[4,0,0x42,0,0,0,0,0]).unwrap(),4);
+                assert!(tr.pending_data_queue.is_none());assert_eq!(tr.data_queues.len(),1);
+                assert_eq!(tr.data_queues[0].read,0);assert_eq!(tr.data_queues[0].write,0);
+            }
+            #[test]
+            fn queue_reply_write_pointer_masks_to_hardware_ring_and_retires_across_wrap() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);tr.restocked=true;
+                tr.prepare_tx_queue(1,16).unwrap();
+                let qid=tr.activate_tx_queue(&[4,0,0x42,0,0xff,0xff,0,0]).unwrap();
+                assert_eq!(tr.data_queues[0].read,255);assert_eq!(tr.data_queues[0].write,255);
+                let frame=authentication();
+                let token=tr.send_raw80211(qid,&frame,TxOptions{band_2ghz:true,antenna:1,encrypt:false,high_priority:true}).unwrap();
+                assert_eq!(token,0x41f);assert_eq!(mmio[0x460/4],0x40000);
+                let queue=&tr.data_queues[0];
+                assert_eq!(queue.write,0);assert_eq!(queue.outstanding,1);
+                assert!(queue.busy[31]);assert!(queue.busy[..31].iter().all(|&busy|!busy));
+                assert_eq!(&queue.packets.bytes()[31*DATA_BYTES..31*DATA_BYTES+4],&[0x1c,0,0x1f,4]);
+                assert_eq!(qword(queue.tfd.bytes(),31*TFD_BYTES+4),queue.packets.phys+(31*DATA_BYTES)as u64);
+                tr.retire_tx_notification(&tx_notification(token,0)).unwrap();
+                let queue=&tr.data_queues[0];
+                assert_eq!(queue.read,0);assert_eq!(queue.write,0);assert_eq!(queue.outstanding,0);
+                assert!(queue.busy.iter().all(|&busy|!busy));assert!(tr.tx_queue_idle(qid));
+                assert_eq!(tr.tx_completion_status(qid,token),Some(true));
+            }
+            #[test]
+            fn queue_reply_rejects_reserved_out_of_range_and_duplicate_ids() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);tr.restocked=true;
+                tr.prepare_tx_queue(1,16).unwrap();
+                let reserved=tr.activate_tx_queue(&[0,0,0x42,0,0,0,0,0]).unwrap_err();
+                let range=tr.activate_tx_queue(&[0,2,0x42,0,0,0,0,0]).unwrap_err();
+                assert!(tr.activate_tx_queue(&[0xff,0xff,0,0,0,0,0,0]).is_err());
+                assert!(tr.pending_data_queue.is_some());assert!(tr.data_queues.is_empty());
+                tr.activate_tx_queue(&[4,0,0,0,0,0,0,0]).unwrap();tr.prepare_tx_queue(1,0).unwrap();
+                let duplicate=tr.activate_tx_queue(&[4,0,0x42,0,0,0,0,0]).unwrap_err();
+                assert_ne!(reserved,range);assert_ne!(reserved,duplicate);assert_ne!(range,duplicate);
+                assert!(tr.pending_data_queue.is_some());assert_eq!(tr.data_queues.len(),1);
+            }
+            #[test]
+            fn queue_reply_requires_exact_length_and_a_pending_allocation() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);tr.restocked=true;
+                let no_pending=tr.activate_tx_queue(&[4,0,0,0,0,0,0,0]).unwrap_err();
+                tr.prepare_tx_queue(1,16).unwrap();
+                for bytes in [&[][..],&[4,0,0,0,0,0,0][..],&[4,0,0,0,0,0,0,0,0][..]] {
+                    let malformed=tr.activate_tx_queue(bytes).unwrap_err();assert_ne!(malformed,no_pending);
+                    assert!(tr.pending_data_queue.is_some());assert!(tr.data_queues.is_empty());
+                }
+                tr.activate_tx_queue(&[4,0,0,0,0,0,0,0]).unwrap();
+            }
+            #[test]
             fn data_queue_config_and_frame_tfd_match_gen2_contract() {
                 let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
                 let qid=allocate_data(&mut tr);let frame=authentication();
@@ -193,13 +245,82 @@ TRANSPORT
                 let options=TxOptions{band_2ghz:false,antenna:2,encrypt:false,high_priority:true};
                 for _ in 0..32{tr.send_raw80211(qid,&frame,options).unwrap();}
                 assert_eq!(tr.send_raw80211(qid,&frame,options).unwrap_err(),"AX201 TX queue full");
-                assert!(tr.retire_tx_notification(&tx_notification(0x500,1)).is_err());
+                let mut wrong_queue=tx_notification(0x400,1);wrong_queue.payload[36]=5;
+                assert!(tr.retire_tx_notification(&wrong_queue).is_err());
                 assert!(tr.retire_tx_notification(&tx_notification(0x400,33)).is_err());
                 assert_eq!(tr.data_queues[0].outstanding,32);
                 tr.retire_tx_notification(&tx_notification(0x400,1)).unwrap();
                 tr.send_raw80211(qid,&frame,options).unwrap();
                 assert_eq!(tr.data_queues[0].outstanding,32);
                 assert_eq!(&tr.data_queues[0].packets.bytes()[20..24],&0x8100u32.to_le_bytes());
+            }
+            #[test]
+            fn tx_retirement_uses_owned_queue_and_ssn_instead_of_aggregate_sequence() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let qid=allocate_data(&mut tr);let frame=authentication();
+                let token=tr.send_raw80211(qid,&frame,TxOptions{band_2ghz:true,antenna:1,encrypt:false,high_priority:true}).unwrap();
+                assert_eq!(tr.tx_completion_status(qid,token),None);
+                let mut report=tx_notification(0xffff,1);report.sequence=0xbeef;
+                tr.retire_tx_notification(&report).unwrap();
+                assert_eq!(tr.tx_completion_status(qid,token),Some(true));
+                assert_eq!(tr.tx_completion_status(qid+32,token),None);
+                assert_eq!(tr.tx_completion_status(qid,0x500),None);
+                assert_eq!(tr.tx_completion_status(qid,0x401),None);
+                assert_eq!(tr.tx_completion_status(qid,0x420),None);
+                assert_eq!(tr.tx_completion_status(qid,0x8400),None);
+                assert!(tr.retire_tx_notification(&report).is_err());
+                assert_eq!(tr.tx_completion_status(qid,token),None);
+            }
+            #[test]
+            fn cumulative_retirement_applies_status_to_first_owned_frame_only() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let qid=allocate_data(&mut tr);let frame=authentication();
+                let options=TxOptions{band_2ghz:true,antenna:1,encrypt:false,high_priority:true};
+                let tokens=(0..3).map(|_|tr.send_raw80211(qid,&frame,options).unwrap()).collect::<Vec<_>>();
+                let mut report=tx_notification(0xffff,3);report.payload[40]=0x83;
+                tr.retire_tx_notification(&report).unwrap();
+                assert_eq!(tr.tx_completion_status(qid,tokens[0]),Some(false));
+                assert_eq!(tr.tx_completion_status(qid,tokens[1]),Some(true));
+                assert_eq!(tr.tx_completion_status(qid,tokens[2]),Some(true));
+                assert_eq!(tr.tx_completion_status(qid,0x403),None);assert!(tr.tx_queue_idle(qid));
+            }
+            #[test]
+            fn cumulative_retirement_validates_all_ownership_before_mutating() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let qid=allocate_data(&mut tr);let frame=authentication();
+                let options=TxOptions{band_2ghz:true,antenna:1,encrypt:false,high_priority:true};
+                let token=tr.send_raw80211(qid,&frame,options).unwrap();tr.send_raw80211(qid,&frame,options).unwrap();
+                tr.data_queues[0].busy[1]=false;
+                assert!(tr.retire_tx_notification(&tx_notification(0xffff,2)).is_err());
+                let queue=&tr.data_queues[0];
+                assert_eq!(queue.read,0);assert_eq!(queue.write,2);assert_eq!(queue.outstanding,2);
+                assert!(queue.busy[0]);assert!(!queue.busy[1]);assert_eq!(tr.tx_completion_status(qid,token),None);
+            }
+            #[test]
+            fn invalid_ssn_cannot_complete_or_release_an_owned_frame() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let qid=allocate_data(&mut tr);let frame=authentication();
+                let token=tr.send_raw80211(qid,&frame,TxOptions{band_2ghz:true,antenna:1,encrypt:false,high_priority:true}).unwrap();
+                for next in [0,2,255] {
+                    assert!(tr.retire_tx_notification(&tx_notification(0xffff,next)).is_err());
+                    assert_eq!(tr.data_queues[0].read,0);assert_eq!(tr.data_queues[0].outstanding,1);
+                    assert!(tr.data_queues[0].busy[0]);assert_eq!(tr.tx_completion_status(qid,token),None);
+                }
+            }
+            #[test]
+            fn completion_status_is_scoped_to_current_notification_and_poll() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let qid=allocate_data(&mut tr);let frame=authentication();
+                let options=TxOptions{band_2ghz:true,antenna:1,encrypt:false,high_priority:true};
+                let token=tr.send_raw80211(qid,&frame,options).unwrap();
+                tr.pending.push_back(tx_notification(0xffff,1));
+                assert!(tr.poll().unwrap().is_some());assert_eq!(tr.tx_completion_status(qid,token),Some(true));
+                tr.pending.push_back(Notification{group:12,id:2,sequence:0,payload:vec![]});
+                assert!(tr.poll().unwrap().is_some());assert_eq!(tr.tx_completion_status(qid,token),None);
+                let token=tr.send_raw80211(qid,&frame,options).unwrap();
+                tr.retire_tx_notification(&tx_notification(0xffff,2)).unwrap();
+                assert_eq!(tr.tx_completion_status(qid,token),Some(true));
+                tr.failed=true;assert!(tr.poll().is_err());assert_eq!(tr.tx_completion_status(qid,token),None);
             }
             #[test]
             fn raw_rx_and_data_completions_never_reclaim_command_queue() {
