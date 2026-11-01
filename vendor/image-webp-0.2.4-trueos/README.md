@@ -1,3 +1,9 @@
+# TRUEOS decoder-only port
+
+This copy adapts image-webp 0.2.4 to `no_std` plus `alloc` for kernel image decoding. See [SOURCE](SOURCE) for provenance and port changes. The upstream README follows; its encoder examples and `std` interfaces are not exported by this port.
+
+---
+
 # image-webp
 
 [![crates.io](https://img.shields.io/crates/v/image-webp.svg)](https://crates.io/crates/image-webp)

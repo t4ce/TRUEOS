@@ -9,5 +9,5 @@ TRUEOS modifications:
 - Private core3 ReadBytesExt uses no_std byteorder-lite primitives.
 - quick-error replaced with equivalent error variants, Display and From<io::Error>.
 - No std compatibility shim, host codec, C library or network access.
-- Entropy scratch rejects more than256 Huffman groups; VP8 declared partitions
-  above8MiB reject before allocation. Decode algorithms otherwise remain intact.
+- Entropy scratch rejects more than 256 Huffman groups; VP8 declared partitions
+  above 8 MiB reject before allocation. Decode algorithms otherwise remain intact.

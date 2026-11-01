@@ -113,8 +113,9 @@ pub(crate) fn decode_ui4_bounded(encoded: &[u8]) -> Result<DecodedImage, i32> {
             (image.width, image.height, image.rgba, backend)
         }
         5 => {
-            let image=crate::graphics::webp_codec::decode_webp_rgba(encoded).map_err(|error|error.code())?;
-            (image.width,image.height,image.rgba,BACKEND_WEBP)
+            let image = crate::graphics::webp_codec::decode_webp_rgba(encoded)
+                .map_err(|error| error.code())?;
+            (image.width, image.height, image.rgba, BACKEND_WEBP)
         }
         _ => return Err(ERR_UNSUPPORTED),
     };

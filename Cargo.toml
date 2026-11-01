@@ -56,6 +56,7 @@ exclude = [
     "tools/wgpu-video-mesh",
     "tools/trueos-boot",
     "vendor/*",
+    "vendor/image-webp-0.2.4-trueos",
     "vendor/getrandom-0.4.3",
     "vendor/rand_core-0.6.4",
     "vendor/log-os",
