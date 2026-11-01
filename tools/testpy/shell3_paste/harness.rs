@@ -50,6 +50,7 @@ mod r {
 
 mod shell3 {
     use super::*;
+    struct App { app: String, slot: String, lifetime: u64 }
     #[derive(Clone, Copy, PartialEq)]
     pub(super) enum RgbaColor {
         Pink, BlackTransparent,
@@ -159,6 +160,8 @@ mod shell3 {
         drag_calls: usize,
         mode: u8,
         vmx: bool,
+        command_history: command_history::CommandHistory,
+        app_name: String,
         matrix_scroll: i32,
         matrix_column: usize,
         matrix_drag: Option<()>,
@@ -178,7 +181,11 @@ mod shell3 {
         fn replay_terminal_line(&mut self, text: &str) { self.replay.push(text.into()); }
         fn get_mode(&self) -> u8 { self.mode }
         fn set_mode(&mut self, mode: u8) { self.mode = mode; }
-        fn active_vmx_app(&self) -> Option<u8> { self.vmx.then_some(1) }
+        fn active_vmx_app(&self) -> Option<App> {
+            self.vmx.then(|| App { app: self.app_name.clone(),
+                slot: self.active_matrix_slot.clone().unwrap(),
+                lifetime: self.active_matrix_lifetime.unwrap() })
+        }
         fn active_matrix_slot_name(&self) -> Option<String> { self.active_matrix_slot.clone() }
         fn get_size(&self) -> (usize, usize) { (80, 24) }
         fn capture_matrix_snapshot(&self) -> Snapshot { Snapshot }
@@ -186,6 +193,7 @@ mod shell3 {
         fn drag_matrix(&mut self, _: (i32, i32), _: bool, _: bool, _: bool, _: (usize, usize)) { self.drag_calls += 1; }
         fn record_terminal_notice(&mut self, text: &str) { self.notices.push(text.into()); }
         @SHELL_PASTE_METHOD@
+        @HULL_PASTE_METHOD@
     }
 
     pub(super) mod tty {
@@ -216,7 +224,7 @@ mod shell3 {
                     shell: Shell3 { tui_frontend: 1, active_matrix_slot: Some("first".into()),
                         active_matrix_lifetime: Some(10), prompt: "keep this prompt".into(),
                         keyboard: Vec::new(), replay: Vec::new(), notices: Vec::new(),
-                        scroll: Vec::new(), drag_calls: 0, mode: 1, vmx: false,
+                        scroll: Vec::new(), drag_calls: 0, mode: 1, vmx: false, command_history: CommandHistory::default(), app_name: "hull.bp".into(),
                         matrix_scroll: 0, matrix_column: 0, matrix_drag: None },
                     line: "keep this prompt".into(), line_overflow: false,
                     history: CommandHistory::default(), decoder: input::InputDecoder::default(),
@@ -264,6 +272,50 @@ mod shell3 {
             assert!(!terminal.closing);
             assert!(!terminal.output.windows(b"\x1b[2J".len()).any(|bytes| bytes == b"\x1b[2J"));
             assert_eq!(terminal.shell.mode, 1);
+        }
+
+        #[test]
+        fn hull_paste_fills_prompt_without_submitting() {
+            let mut terminal = setup(true);
+            terminal.shell.vmx = true;
+            let bytes = pasted(b"https://example.com/path?q=1\r\n");
+            for byte in bytes { terminal.input(&[byte]); }
+            assert_eq!(terminal.shell.prompt, "https://example.com/path?q=1");
+            assert_eq!(terminal.line, terminal.shell.prompt);
+            assert!(terminal.shell.keyboard.is_empty());
+            assert!(terminal.shell.replay.is_empty());
+            terminal.input(b"\r");
+            assert_eq!(terminal.shell.keyboard, vec![(r::keyboard::KEYBOARD_KEY_ENTER, 0)]);
+        }
+
+        #[test]
+        fn hull_paste_rejects_multiline_commands_and_changed_slots() {
+            let mut terminal = setup(true);
+            terminal.shell.vmx = true;
+            terminal.input(&pasted(b"https://example.com/\nexit"));
+            terminal.input(&pasted(b"exit"));
+            terminal.input(START);
+            terminal.shell.active_matrix_slot = Some("second".into());
+            terminal.shell.active_matrix_lifetime = Some(20);
+            terminal.input(b"https://example.com/");
+            terminal.input(END);
+            untouched(&terminal);
+        }
+
+        #[test]
+        fn url_paste_is_context_for_other_apps_and_stale_lifetimes() {
+            let mut terminal = setup(true);
+            terminal.shell.vmx = true;
+            terminal.shell.app_name = "qjs.bp".into();
+            terminal.input(&pasted(b"https://example.com/"));
+            untouched(&terminal);
+            context(Some("first"), "https://example.com/");
+            terminal.shell.app_name = "hull.bp".into();
+            terminal.input(START);
+            matrix_slots().lock().lifetimes[0].1 = 11;
+            terminal.input(b"https://example.com/");
+            terminal.input(END);
+            untouched(&terminal);
         }
 
         #[test]

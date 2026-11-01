@@ -198,6 +198,12 @@ impl Terminal {
                         self.shell.record_pasted_context(
                             paste.slot.as_deref(), paste.lifetime, &paste.text(),
                         );
+                        if self.line != self.shell.prompt() {
+                            self.end_recall();
+                            self.line.zeroize();
+                            self.line.push_str(self.shell.prompt());
+                            self.line_overflow = false;
+                        }
                     }
                 }
                 continue;

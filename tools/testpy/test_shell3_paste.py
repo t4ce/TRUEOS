@@ -36,6 +36,8 @@ def main() -> None:
                             method(shell, "fn echo_pasted_context("))
     source = source.replace("@SHELL_PASTE_METHOD@",
                             method(shell, "fn record_pasted_context("))
+    source = source.replace("@HULL_PASTE_METHOD@",
+                            method(shell, "fn fill_pasted_hull_url("))
     remote = (ROOT / "src/shell3/tui/remote.rs").read_text()
     reset = re.search(r'^const RESET:.*;$', remote, re.MULTILINE)
     assert reset, "remote terminal reset missing"

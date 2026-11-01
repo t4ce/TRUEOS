@@ -1942,7 +1942,28 @@ impl Shell3 {
             self.matrix_scroll = 0;
             self.matrix_column = 0;
             self.matrix_drag = None;
+            self.fill_pasted_hull_url(active, lifetime, text);
         }
+    }
+
+    /// Stage a pasted Hull URL for explicit submission with Enter.
+    /// Keep paste out of operator dispatch.
+    fn fill_pasted_hull_url(&mut self, active: Option<&str>, lifetime: Option<u64>, text: &str) {
+        let url = text.trim();
+        if url.len() > 4096 || !url.starts_with("https://")
+            || url.len() == "https://".len() || url.chars().any(char::is_whitespace)
+        {
+            return;
+        }
+        let Some(app) = self.active_vmx_app() else { return; };
+        if app.app.rsplit('/').next() != Some("hull.bp")
+            || active != Some(app.slot.as_str()) || lifetime != Some(app.lifetime)
+        {
+            return;
+        }
+        self.set_prompt(url);
+        self.set_cursor(url.chars().count());
+        self.command_history.end_recall();
     }
 
     fn record_terminal_notice(&mut self, text: &str) {
