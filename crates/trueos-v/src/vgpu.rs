@@ -271,6 +271,11 @@ pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
 /// The mixed-topology V2 batch maps directly to the resident renderer's
 /// 600-draw scene capacity. V1 remains at 16 for ABI compatibility.
 pub const MAX_INDEXED_BATCH_V2_DRAWS: usize = 600;
+/// Set in draws[0].reserved to overlay an already acquired UI4 frame.
+/// Other draws must not set this bit. Offscreen submissions reject it.
+/// Lower bits retain the existing POINT_LIST width encoding.
+pub const INDEXED_BATCH_V2_LOAD_COLOR: u32 = 1 << 31;
+
 
 /// Largest integer point width accepted through `IndexedBatchDrawV2::reserved`.
 /// Zero selects the renderer default; nonzero values are valid only for
@@ -353,9 +358,9 @@ pub struct IndexedBatchDrawV2 {
     pub base_vertex: i32,
     pub rgba8_srgb: u32,
     pub topology: u32,
-    /// POINT_LIST-only integer point width in pixels. Zero selects the
-    /// renderer default. This occupies the original reserved word so the V2
-    /// C ABI layout remains unchanged; all other topologies require zero.
+    /// POINT_LIST integer pixel width in the low bits; zero selects default.
+    /// The first draw may also set INDEXED_BATCH_V2_LOAD_COLOR for the batch.
+    /// Other topologies require zero width. Wire layout is unchanged.
     pub reserved: u32,
 }
 

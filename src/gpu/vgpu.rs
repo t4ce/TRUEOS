@@ -3070,6 +3070,7 @@ pub(crate) struct Ui4IndexedBatchDescriptor {
     pub(crate) index_offset: usize,
     pub(crate) clear_rgba8_srgb: u32,
     pub(crate) draws: Vec<Ui4IndexedBatchDrawDescriptor>,
+    pub(crate) load_color: bool,
 }
 
 pub(crate) struct Ui4SurfaceIndexedCompletion {
@@ -4463,7 +4464,9 @@ pub(crate) fn submit_ui4_indexed_batch(
     // the imported surface through the existing failed-submission path.
     let native_lines = scene_draws.iter().all(|draw|
         draw.topology == crate::intel::render::ResidentScenePrimitiveTopology::LineList);
-    let clear_result = if native_lines {
+    let clear_result = if batch.load_color {
+        Ok(None)
+    } else if native_lines {
         use crate::intel::gpgpu::GpgpuSubmissionOutcome;
         match crate::r::services::vcpy_service::fill_rgba8_complete(
             destination, batch.clear_rgba8_srgb,

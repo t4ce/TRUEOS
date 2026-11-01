@@ -467,6 +467,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit(
             vertex_offset: usize::try_from(batch.vertex_offset).map_err(|_| -22)?,
             index_offset: usize::try_from(batch.index_offset).map_err(|_| -22)?,
             clear_rgba8_srgb: batch.clear_rgba8_srgb,
+            load_color: false,
             draws,
         },
     )
@@ -571,10 +572,15 @@ fn decode_indexed_batch_v2(
     let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
     if draw_count == 0
         || draw_count > v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS
-        || batch.draws[..draw_count].iter().any(|draw| {
-            draw.reserved > v::vgpu::MAX_INDEXED_DRAW_POINT_WIDTH_PX
-                || (draw.reserved != 0 && draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST)
-        })
+        || batch.draws[..draw_count]
+            .iter()
+            .enumerate()
+            .any(|(index, draw)| {
+                let width = draw.reserved & !v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR;
+                (index != 0 && draw.reserved & v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR != 0)
+                    || width > v::vgpu::MAX_INDEXED_DRAW_POINT_WIDTH_PX
+                    || (width != 0 && draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST)
+            })
         || batch.draws[draw_count..]
             .iter()
             .any(|draw| *draw != v::vgpu::IndexedBatchDrawV2::default())
@@ -590,10 +596,77 @@ fn decode_indexed_batch_v2(
                 base_vertex: draw.base_vertex,
                 rgba8_srgb: draw.rgba8_srgb,
                 topology: broker_primitive_topology(draw.topology)?,
-                point_width_px: draw.reserved,
+                point_width_px: draw.reserved & !v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR,
             })
         })
         .collect::<Result<_, i32>>()
+}
+
+#[cfg(test)]
+mod indexed_batch_v2_tests {
+    use super::*;
+
+    fn batch() -> v::vgpu::IndexedDrawBatchV2 {
+        let mut batch = v::vgpu::IndexedDrawBatchV2 {
+            draw_count: 1,
+            ..Default::default()
+        };
+        batch.draws[0] = v::vgpu::IndexedBatchDrawV2 {
+            index_count: 4,
+            topology: v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LOOP,
+            ..Default::default()
+        };
+        batch
+    }
+
+    #[test]
+    fn line_loop_overlay_keeps_the_wire_layout_and_has_no_point_width() {
+        assert_eq!(core::mem::size_of::<v::vgpu::IndexedBatchDrawV2>(), 24);
+        assert_eq!(core::mem::size_of::<v::vgpu::IndexedDrawBatchV2>(), 14456);
+        let mut batch = batch();
+        assert_eq!(
+            decode_indexed_batch_v2(&batch).unwrap()[0].point_width_px,
+            0
+        );
+        batch.draws[0].reserved = v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR;
+        let draws = decode_indexed_batch_v2(&batch).unwrap();
+        assert_eq!(
+            draws[0].topology,
+            crate::intel::render::ResidentScenePrimitiveTopology::LineLoop
+        );
+        assert_eq!(draws[0].point_width_px, 0);
+    }
+
+    #[test]
+    fn load_flag_is_first_draw_only_and_does_not_enable_line_width_bits() {
+        let mut batch = batch();
+        batch.draws[0].reserved = v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR | 3;
+        assert!(decode_indexed_batch_v2(&batch).is_err());
+        batch.draws[0].reserved = 0;
+        batch.draw_count = 2;
+        batch.draws[1] = batch.draws[0];
+        batch.draws[1].reserved = v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR;
+        assert!(decode_indexed_batch_v2(&batch).is_err());
+        batch.draw_count = 1;
+        assert!(decode_indexed_batch_v2(&batch).is_err());
+    }
+
+    #[test]
+    fn point_width_survives_overlay_and_unknown_bits_are_rejected() {
+        let mut batch = batch();
+        batch.draws[0].topology = v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST;
+        batch.draws[0].reserved = v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR | 7;
+        assert_eq!(
+            decode_indexed_batch_v2(&batch).unwrap()[0].point_width_px,
+            7
+        );
+        batch.draws[0].reserved |= 1 << 20;
+        assert!(decode_indexed_batch_v2(&batch).is_err());
+        batch.draw_count = 0;
+        assert!(decode_indexed_batch_v2(&batch).is_err());
+        batch.draw_count = v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS as u32 + 1;
+        assert!(decode_indexed_batch_v2(&batch).is_err());
+    }
 }
 
 pub(crate) fn broker_ui4_indexed_batch_submit_v2(
@@ -616,6 +689,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
             vertex_offset: usize::try_from(batch.vertex_offset).map_err(|_| -22)?,
             index_offset: usize::try_from(batch.index_offset).map_err(|_| -22)?,
             clear_rgba8_srgb: batch.clear_rgba8_srgb,
+            load_color: batch.draws[0].reserved & v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR != 0,
             draws,
         },
     )
@@ -643,6 +717,7 @@ pub(crate) fn broker_offscreen_indexed_batch_v1(
     use crate::r::ui_surface;
     let batch = request.batch;
     if batch.surface != 0
+        || batch.draws[0].reserved & v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR != 0
         || request.width == 0
         || request.height == 0
         || request.width > 4096
@@ -701,6 +776,7 @@ pub(crate) fn broker_offscreen_indexed_batch_v1(
             vertex_offset: batch.vertex_offset as usize,
             index_offset: batch.index_offset as usize,
             clear_rgba8_srgb: batch.clear_rgba8_srgb,
+            load_color: false,
             draws,
         },
     );
