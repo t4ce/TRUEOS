@@ -167,6 +167,7 @@ printf '%s\\0' "$CARGO_BUILD_JOBS" "$RAYON_NUM_THREADS" "$TRUEOS_BUILD_SCOPE" "$
         self.assertEqual(payload_args, [b'1', b'1', b'1', *(arg.encode() for arg in arguments)])
 
     def prepare_fixture(self, profile='debug'):
+        (self.root / 'Cargo.lock').write_text('existing lock\n')
         script = self.root / 'tools/trueos-boot/prepare.sh'
         script.parent.mkdir(parents=True)
         shutil.copy(ROOT / 'tools/trueos-boot/prepare.sh', script)
@@ -189,11 +190,17 @@ if [[ $1 == */bundle.py ]]; then
     exit "${BUNDLE_STATUS:-0}"
 fi
 echo buildins >> "$TEST_ROOT/trace"
+test -f "$TEST_ROOT/Cargo.lock"
 exit "${BUILDINS_STATUS:-0}"
 ''')
         self.script(self.bin / 'cargo', '''
 test "$TRUEOS_BUILDINS_DIR" = "$TEST_ROOT/tgt/buildins/$TEST_APP_PROFILE"
 echo "cargo $*" >> "$TEST_ROOT/trace"
+if [[ $1 == generate-lockfile ]]; then
+    if [[ ${LOCK_STATUS:-0} != 0 ]]; then exit "$LOCK_STATUS"; fi
+    echo 'generated lock' > "$TEST_ROOT/Cargo.lock"
+    exit 0
+fi
 mkdir -p "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release" "$TEST_ROOT/tgt/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE"
 echo loader > "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release/BOOTX64.efi"
 echo kernel > "$TEST_ROOT/tgt/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE/TRUEOS"
@@ -214,6 +221,27 @@ echo runtime > "$3"
         self.env['LD_LIBRARY_PATH'] = 'inherited-libraries'
         return script
 
+    def test_clean_release_creates_kernel_lock_before_building_apps(self):
+        script = self.prepare_fixture('release')
+        (self.root / 'Cargo.lock').unlink()
+        result = subprocess.run(['bash', str(script), '--release'], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'trace').read_text().splitlines(),
+                         ['cargo generate-lockfile', 'buildins', 'cargo build --release',
+                          'cargo boot', 'strip-debug', 'bundle'])
+
+    def test_failed_lock_generation_stops_before_building_apps(self):
+        script = self.prepare_fixture('release')
+        (self.root / 'Cargo.lock').unlink()
+        result = subprocess.run(['bash', str(script), '--release'],
+                                env=dict(self.env, LOCK_STATUS='25'),
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 25, result.stderr)
+        self.assertEqual((self.root / 'trace').read_text().splitlines(),
+                         ['cargo generate-lockfile'])
+        self.assertFalse((self.root / 'tgt/pxe-current').exists())
+
     def test_preparation_builds_apps_before_embedding_and_publishes_complete_kernel(self):
         script = self.prepare_fixture()
         result = subprocess.run(['bash', str(script), '--dev'], env=self.env,
@@ -221,6 +249,7 @@ echo runtime > "$3"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
                          ['buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
+        self.assertEqual((self.root / 'Cargo.lock').read_text(), 'existing lock\n')
         self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'tgt/usb-debug/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'tgt/x86_64-unknown-trueos/debug/TRUEOS').read_text(), 'kernel\n')
