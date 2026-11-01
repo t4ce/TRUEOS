@@ -1610,6 +1610,9 @@ pub(crate) fn complete_vgpu_surface_submission(
     }
     surface.vgpu_surface = None;
     surface.gpu_submission_unretired = false;
+    // A completed producer on this exact allocation supersedes the earlier
+    // producer proof. Publication must carry one final producer, not both.
+    surface.pending_render_release = None;
     surface.pending_gpu_release = Some(release);
     Ok(())
 }
@@ -1632,6 +1635,9 @@ pub(crate) fn complete_vgpu_resident_surface_submission(
     }
     surface.vgpu_surface = None;
     surface.gpu_submission_unretired = false;
+    // Native LOAD_COLOR overlays preserve earlier pixels but replace the
+    // earlier compute producer proof after the new exact-allocation retirement.
+    surface.pending_gpu_release = None;
     surface.pending_render_release = Some(release);
     Ok(())
 }

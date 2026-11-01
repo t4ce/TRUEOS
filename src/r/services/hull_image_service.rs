@@ -435,8 +435,12 @@ async fn process(job: &Job) -> Result<(), i32> {
     let permit = decode_permit(&job.life).await?;
     let decoded = super::media_service::decode_ui4_bounded(&encoded)?;
     let format = decoded.info.source_format;
-    let width = job.width.min(decoded.info.width);
-    let height = job.height.min(decoded.info.height);
+    let (width, height) = policy::contained_extent(
+        decoded.info.width,
+        decoded.info.height,
+        job.width,
+        job.height,
+    )?;
     let pixels = resize(
         &decoded.rgba,
         decoded.info.width,

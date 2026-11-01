@@ -7,6 +7,11 @@ pub mod e1000;
 pub mod i226;
 pub mod iwl4965;
 pub mod iwl_ax211;
+pub mod iwl_ax201;
+pub(crate) mod iwl_ax201_fw;
+pub(crate) mod iwl_ax201_transport;
+pub(crate) mod iwl_ax201_station;
+pub(crate) mod iwl_ax201_wpa2;
 pub(crate) mod laptop_profile;
 pub mod r8125;
 pub mod r8139;
@@ -18,6 +23,7 @@ pub mod tls_socket;
 pub(crate) mod usb;
 pub mod vio;
 pub mod wifi;
+mod wifi_adapter;
 
 use ::core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
@@ -71,6 +77,7 @@ const ENABLE_R8125: bool = true;
 
 enum ActiveDevice {
     Usb(usb::UsbNic),
+    Wifi(wifi_adapter::WifiNic),
     Virtio(NetCore<VirtioNetAdapter>),
     E1000(NetCore<E1000Adapter>),
     I226(NetCore<I226Adapter>),
@@ -87,6 +94,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.mac(),
             ActiveDevice::R8125(dev) => dev.mac(),
             ActiveDevice::Usb(dev) => dev.mac(),
+            ActiveDevice::Wifi(dev) => dev.mac(),
         }
     }
 
@@ -98,6 +106,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.poll_rx(),
             ActiveDevice::R8125(dev) => dev.poll_rx(),
             ActiveDevice::Usb(dev) => dev.poll_rx(),
+            ActiveDevice::Wifi(dev) => dev.poll_rx(),
         }
     }
 
@@ -109,6 +118,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.pop_rx(),
             ActiveDevice::R8125(dev) => dev.pop_rx(),
             ActiveDevice::Usb(dev) => dev.pop_rx(),
+            ActiveDevice::Wifi(dev) => dev.pop_rx(),
         }
     }
 
@@ -120,6 +130,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.rx_queue_len(),
             ActiveDevice::R8125(dev) => dev.rx_queue_len(),
             ActiveDevice::Usb(dev) => dev.rx_queue_len(),
+            ActiveDevice::Wifi(dev) => dev.rx_queue_len(),
         }
     }
 
@@ -131,6 +142,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.drain_rx_each(limit, f),
             ActiveDevice::R8125(dev) => dev.drain_rx_each(limit, f),
             ActiveDevice::Usb(dev) => dev.drain_rx_each(limit, f),
+            ActiveDevice::Wifi(dev) => dev.drain_rx_each(limit, f),
         }
     }
 
@@ -142,6 +154,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.transmit(frame),
             ActiveDevice::R8125(dev) => dev.transmit(frame),
             ActiveDevice::Usb(dev) => dev.transmit(frame),
+            ActiveDevice::Wifi(dev) => dev.transmit(frame),
         }
     }
 
@@ -153,6 +166,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.transmit_with(len, fill),
             ActiveDevice::R8125(dev) => dev.transmit_with(len, fill),
             ActiveDevice::Usb(dev) => dev.transmit_with(len, fill),
+            ActiveDevice::Wifi(dev) => dev.transmit_with(len, fill),
         }
     }
 
@@ -164,6 +178,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.transmit_ready(),
             ActiveDevice::R8125(dev) => dev.transmit_ready(),
             ActiveDevice::Usb(dev) => dev.transmit_ready(),
+            ActiveDevice::Wifi(dev) => dev.transmit_ready(),
         }
     }
 
@@ -175,6 +190,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Rtl8169(dev) => dev.link_state(),
             ActiveDevice::R8125(dev) => dev.link_state(),
             ActiveDevice::Usb(dev) => dev.link_state(),
+            ActiveDevice::Wifi(dev) => dev.link_state(),
         }
     }
 }
@@ -190,6 +206,7 @@ pub fn device_name_at(index: usize) -> Option<&'static str> {
         ActiveDevice::Rtl8169(_) => "Realtek RTL8169/8168",
         ActiveDevice::R8125(_) => "Realtek RTL8125",
         ActiveDevice::Usb(_) => "Realtek RTL8153 USB ECM",
+        ActiveDevice::Wifi(nic) => nic.name(),
     })
 }
 
@@ -203,6 +220,7 @@ pub fn pci_device_at(index: usize) -> Option<PciDevice> {
         ActiveDevice::Rtl8169(n) => n.pci_device(),
         ActiveDevice::R8125(n) => n.pci_device(),
         ActiveDevice::Usb(_) => None,
+        ActiveDevice::Wifi(nic) => Some(nic.pci_device()),
     }
 }
 
@@ -344,11 +362,14 @@ pub fn init() {
     // The Intel CNVi function is a real PCI network device, but it is not one
     // of the Ethernet-style ActiveDevice variants below. Probe it separately
     // so enumeration, ownership, and BAR mapping are still exercised.
+    // Runtime Wi-Fi admission waits for firmware/NVM to provide a station MAC
+    // and for the driver to opt into Ethernet RX/TX. Probe-only devices never
+    // appear as usable NICs merely because their BAR was mapped.
     let wifi_pci = crate::pci::with_devices(|devices| {
         devices
             .iter()
             .copied()
-            .find(|dev| dev.vendor_id == 0x8086 && dev.device_id == 0x7A70)
+            .find(|dev| dev.vendor_id == 0x8086 && matches!(dev.device_id, 0x7A70 | 0xA0F0))
     });
     if let Some(dev) = wifi_pci {
         if wifi::probe_pci(&dev) {
@@ -363,10 +384,10 @@ pub fn init() {
             );
             match wifi::start_scan() {
                 Ok(()) => {
-                    crate::log_info!(target: "net"; "wifi-probe: initial AX211 scan started\n")
+                    crate::log_info!(target: "net"; "wifi-probe: initial scan started\n")
                 }
                 Err(error) => crate::log_warn!(target: "net";
-                    "wifi-probe: initial AX211 scan failed reason={}\n", error
+                    "wifi-probe: initial scan failed reason={}\n", error
                 ),
             }
         } else {
@@ -656,4 +677,19 @@ pub(crate) fn prefer_link_up_device(index: usize) {
     {
         PRIMARY_DEVICE_INDEX.store(index, Ordering::Relaxed);
     }
+}
+
+/// Admit one firmware-backed Wi-Fi station to the normal TCP/IP device list.
+/// Caller must drop the radio lock before entering the global NIC lock.
+pub(crate) fn register_wifi_nic(nic: wifi_adapter::WifiNic) -> Result<usize, &'static str> {
+    let mut devices = DEVICES.lock();
+    if let Some(index) = devices.iter().position(|device| matches!(device, ActiveDevice::Wifi(_))) {
+        return Ok(index);
+    }
+    if devices.len() >= adapter::MAX_NET_DEVICES {
+        return Err("network device capacity");
+    }
+    let index = devices.len();
+    devices.push(ActiveDevice::Wifi(nic));
+    Ok(index)
 }

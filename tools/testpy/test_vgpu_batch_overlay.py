@@ -23,6 +23,7 @@ def main():
     wire = (ROOT / 'crates/trueos-v/src/vgpu.rs').read_text()
     broker = (ROOT / 'src/r/io/vgpu_cabi.rs').read_text()
     hull = (ROOT.parent / 'TRUEOS-Buildins/hull/xxx/gpu.rs').read_text()
+    hull_geometry = (ROOT.parent / 'TRUEOS-Buildins/hull/xxx/mod.rs').read_text()
     renderer = (ROOT / 'src/intel/render/constants.rs').read_text()
     resident_limit = int(re.search(r'RESIDENT_SCENE_MAX_DRAWS: usize = (\d+)', renderer)[1])
     for facade in [wire, (ROOT.parent / 'TRUEOS-Buildins/vendor/trueos-v/src/vgpu.rs').read_text()]:
@@ -49,8 +50,13 @@ mod vgpu {{ {descriptor} }}
 {block(broker, 'fn broker_primitive_topology(')}
 {block(broker, 'fn decode_indexed_batch_v2(')}
 {block(broker, 'mod indexed_batch_v2_tests {')}
+type Rect = [f32; 4];
+{block(hull_geometry, 'fn geometry(')}
 mod hull_batches {{
 use crate::v::vgpu::*;
+use crate::Rect;
+const ERR_IO: i32 = -5;
+{block(hull, 'fn colored_rectangles_geometry(')}
 {block(hull, 'fn draw_batches(')}
 {block(hull, 'mod batch_tests {')}
 }}

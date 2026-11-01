@@ -248,7 +248,20 @@ fn ecam_read_u32(bus: u8, slot: u8, function: u8, aligned_off: u16) -> Option<u3
     let bus_base = ecam_bus_base_seg0(bus)?;
     let offset = ((slot as usize) << 15) | ((function as usize) << 12) | (aligned_off as usize);
     let ptr = (bus_base + offset) as *const u32;
-    Some(unsafe { core::ptr::read_volatile(ptr) })
+    // Keep the ECAM transaction a plain dword MOV. LLVM can fold a volatile
+    // read followed by variable bit extraction into SHRX [mmio], which KVM's
+    // MMIO instruction emulator rejects (observed during AX201 enumeration).
+    // Apply shifts to the register result, never to the device-memory operand.
+    let value: u32;
+    unsafe {
+        core::arch::asm!(
+            "mov {value:e}, dword ptr [{address}]",
+            value = out(reg) value,
+            address = in(reg) ptr,
+            options(nostack, preserves_flags, readonly),
+        );
+    }
+    Some(value)
 }
 
 fn ecam_write_u32(bus: u8, slot: u8, function: u8, aligned_off: u16, value: u32) -> Option<()> {

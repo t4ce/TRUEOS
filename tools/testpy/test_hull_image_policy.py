@@ -2,7 +2,7 @@
 """Exercise Hull's real admission policy and image codecs on the host.
 
 The kernel is freestanding. This harness compiles its production policy and
-PNG/JPEG/BMP decoders, plus real service admission and cache checks. Worker
+PNG/JPEG/BMP/ICO decoders, plus real service admission and cache checks. Worker
 scheduling, UI ownership, and filesystem operations use deterministic mocks.
 It does not use the network, TRUEOS storage, or graphics hardware.
 Run with ``python3 tools/testpy/test_hull_image_policy.py``.
@@ -47,9 +47,54 @@ TESTS = r'''
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use graphics::{bmp, jpeg, png};
+    use graphics::{bmp, jpeg, png, ico};
 
     const EXPECTED: &[u8] = &[255,0,0,255, 0,255,0,128, 0,0,255,0, 255,255,255,255];
+
+    fn ico_with_png(png: &[u8], width: u8, height: u8) -> Vec<u8> {
+        let mut bytes=vec![0u8;22];bytes[2]=1;bytes[4]=1;bytes[6]=width;bytes[7]=height;
+        bytes[14..18].copy_from_slice(&(png.len() as u32).to_le_bytes());
+        bytes[18..22].copy_from_slice(&22u32.to_le_bytes());bytes.extend_from_slice(png);bytes
+    }
+    #[test]
+    fn ico_png_frame_reuses_bounded_decoder_and_preserves_alpha() {
+        let bytes=ico_with_png(include_bytes!("rgba.png"),2,2);
+        let info=policy::preflight(&bytes).unwrap();
+        assert_eq!((info.format,info.width,info.height),(4,2,2));
+        let image=ico::decode_ico_rgba(&bytes).unwrap();
+        assert!(image.png_frame);assert_eq!(image.rgba,EXPECTED);
+        let admitted=media::decode_ui4_bounded(&bytes).unwrap();
+        assert_eq!((admitted.info.source_format,admitted.info.backend,admitted.info.width,admitted.info.height),(4,media::BACKEND_PNG,2,2));
+        assert_eq!(admitted.rgba,EXPECTED);
+        assert_eq!(policy::extension(4),Some("ico"));
+        let metadata=policy::metadata("https://example.test/favicon.ico",4,&bytes);
+        assert_eq!(policy::cache_descriptor(metadata.as_bytes(),"https://example.test/favicon.ico").map(|item|item.0),Some(4));
+    }
+    #[test]
+    fn ico_256_png_uses_zero_directory_extent_without_extra_frame_allocation() {
+        let bytes=ico_with_png(include_bytes!("large-icon.png"),0,0);
+        let image=media::decode_ui4_bounded(&bytes).unwrap();
+        assert_eq!((image.info.width,image.info.height,image.info.source_format),(256,256,4));
+        assert_eq!(image.rgba.len(),256*256*4);
+        assert!(image.rgba.chunks_exact(4).all(|p|p==[11,22,33,128]));
+    }
+
+    #[test]
+    fn ico_png_rejects_animation_mismatched_directory_and_oversize_before_decode() {
+        for bytes in [ico_with_png(include_bytes!("animated.png"),2,2),ico_with_png(include_bytes!("duplicate-header.png"),2,2),ico_with_png(include_bytes!("rgba.png"),16,16),ico_with_png(include_bytes!("oversized.png"),0,0)] {
+            assert!(policy::preflight(&bytes).is_err());assert!(ico::decode_ico_rgba(&bytes).is_err());
+        }
+    }
+    #[test]
+    fn raster_downsize_contains_without_distortion_or_upscale() {
+        assert_eq!(policy::contained_extent(256,128,28,28),Ok((28,14)));
+        assert_eq!(policy::contained_extent(128,256,28,28),Ok((14,28)));
+        assert_eq!(policy::contained_extent(16,16,28,28),Ok((16,16)));
+        assert_eq!(policy::contained_extent(1,256,28,28),Ok((1,28)));
+        assert_eq!(policy::contained_extent(256,1,28,28),Ok((28,1)));
+        assert!(policy::contained_extent(0,256,28,28).is_err());
+        assert_eq!(policy::contained_extent(u32::MAX,u32::MAX,28,28),Ok((28,28)));
+    }
 
     #[test]
     fn png_decodes_real_rgba_without_flattening_transparency() {
@@ -163,7 +208,7 @@ mod integration_tests {
                 random ^= random << 13; random ^= random >> 7; random ^= random << 17;
                 *b = random as u8;
             }
-            for magic in [b"BM".as_slice(), b"\xff\xd8".as_slice(), b"\x89PNG\r\n\x1a\n".as_slice()] {
+            for magic in [b"BM".as_slice(), b"\xff\xd8".as_slice(), b"\x89PNG\r\n\x1a\n".as_slice(), b"\0\0\x01\0".as_slice()] {
                 if bytes.len() >= magic.len() { bytes[..magic.len()].copy_from_slice(magic); }
                 let _ = policy::preflight(&bytes);
             }
@@ -396,6 +441,20 @@ def service_harness() -> str:
             .replace("SERVICE_TYPES", types).replace("SERVICE_FUNCTIONS", functions))
 
 
+def bounded_media_harness() -> str:
+    source = (ROOT / "src/r/services/media_service.rs").read_text()
+    constants = source[source.index("pub const FORMAT_JPEG:"):source.index("static NEXT_ID:")]
+    structures = []
+    for name in ("ImageInfo", "DecodedImage"):
+        declaration = re.search(rf"^pub(?:\(crate\))? struct {name} \{{", source, re.MULTILINE)
+        end = source.index("\n}", declaration.end()) + 2
+        structures.append(source[declaration.start():end])
+    functions = "\n".join(production_item(source, name) for name in
+                           ("decode_ui4_bounded", "validated_image", "rgba_byte_len_within_limit"))
+    return ("pub(crate) use policy as hull_image_policy;\nmod media {\nuse alloc::vec::Vec;\n"
+            + constants + "\n" + "\n".join(structures) + "\n" + functions + "\n}\n")
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="trueos-hull-images-") as directory:
         project = Path(directory)
@@ -410,7 +469,7 @@ def main() -> None:
         pool = pool.replace(production_item(pool, "png_row_expand_task"), "")
         (source / "png_decode_pool.rs").write_text(pool)
         modules = "\n".join(f"#[path={json.dumps(str(DECODERS / (name + '.rs')))}] pub mod {name};"
-                            for name in ("png", "jpeg", "jpeg_layout", "bmp"))
+                            for name in ("png", "jpeg", "jpeg_layout", "bmp", "ico"))
         harness = r'''#![allow(dead_code)]
 extern crate alloc;
 #[macro_export] macro_rules! log { ($($tt:tt)*) => { let _ = format_args!($($tt)*); } }
@@ -424,12 +483,13 @@ mod wait {
 }
 mod workers { pub fn has_background_worker_slot() -> bool { false } }
 '''
-        harness += f"#[path={json.dumps(str(ROOT / 'src/r/services/hull_image_policy.rs'))}] mod policy;\n"
-        harness += "mod graphics {\n" + modules + "\n"
+        harness += f"#[path={json.dumps(str(ROOT / 'src/r/services/hull_image_policy.rs'))}] pub(crate) mod policy;\n"
+        harness += "mod graphics {\n" + modules + "\npub(crate) use ico as ico_codec;\npub(crate) use png as png_codec;\npub(crate) use jpeg as jpeg_codec;\npub(crate) use bmp as bmp_codec;\n"
         harness += f"#[path={json.dumps(str(source / 'png_decode_pool.rs'))}] mod png_decode_pool;\n}}\n"
-        (source / "lib.rs").write_text(harness + TESTS + service_harness())
+        (source / "lib.rs").write_text(harness + bounded_media_harness() + TESTS + service_harness())
         rgba = bytes([255,0,0,255, 0,255,0,128, 0,0,255,0, 255,255,255,255])
         (source / "rgba.png").write_bytes(png(2, 2, 6, b"\0" + rgba[:8] + b"\0" + rgba[8:]))
+        (source / "large-icon.png").write_bytes(png(256,256,6,(b"\0"+bytes([11,22,33,128])*256)*256))
         (source / "indexed.png").write_bytes(png(2, 1, 3, b"\0\x40", depth=1,
             before_data=chunk(b"PLTE", bytes([255,0,0, 0,0,255])) + chunk(b"tRNS", bytes([255,64]))))
         (source / "animated.png").write_bytes(png(2, 2, 6, b"\0" * 18,

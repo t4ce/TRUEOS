@@ -251,13 +251,12 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
     if data.len() < 8 {
         if HID_DEBUG_REPORT_LOGS {
             crate::log!(
-                "kbd-report-short: ctrl={} slot={} ep={} seq={} len={} bytes={:02X?}\n",
+                "kbd-report-short: ctrl={} slot={} ep={} seq={} len={} payload=omitted\n",
                 runtime.controller_id as u32,
                 runtime.slot_id,
                 runtime.ep_target,
                 runtime.seq as u32,
-                data.len(),
-                data
+                data.len()
             );
         }
         return;
@@ -304,26 +303,15 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         flags,
     });
     if HID_DEBUG_REPORT_LOGS && (flags != 0 || runtime.seq <= 4) {
+        // Debug report logging must not expose passwords through HID usages,
+        // modifier combinations or their decoded character bytes.
         crate::log!(
-            "kbd-report: ctrl={} slot={} ep={} seq={} flags=0x{:02X} mods=0x{:02X} keys=[{},{},{},{},{},{}] ascii=[{},{},{},{},{},{}]\n",
+            "kbd-report: ctrl={} slot={} ep={} seq={} flags=0x{:02X} payload=omitted\n",
             runtime.controller_id as u32,
             runtime.slot_id,
             runtime.ep_target,
             runtime.seq as u32,
             flags,
-            modifiers,
-            keys[0],
-            keys[1],
-            keys[2],
-            keys[3],
-            keys[4],
-            keys[5],
-            ascii[0],
-            ascii[1],
-            ascii[2],
-            ascii[3],
-            ascii[4],
-            ascii[5],
         );
     }
     super::input::push_event(super::input::InputEvent::Keyboard(super::input::KeyboardEvent {

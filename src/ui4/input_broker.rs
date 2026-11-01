@@ -1430,12 +1430,13 @@ impl InputBroker {
         if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT {
             let forwards = KEYBOARD_TEXT_FORWARDS.fetch_add(1, Ordering::Relaxed) + 1;
             if forwards <= 64 || forwards.is_multiple_of(120) {
+                // The selected owner may be accepting a password. Log routing
+                // metadata only; even numeric codepoints disclose its text.
                 crate::log_info!(target: "ui4";
-                    "ui4/input: text forwarded forward_seq={} ring_seq={} device_seq={} codepoint={} controller={} slot={} ep={} owner={:?} window={} combo={} virtual_keyboard={} path=keyboard-output-ring->selected-frame-owner-queue log_policy=first-64+each-120\n",
+                    "ui4/input: text forwarded forward_seq={} ring_seq={} device_seq={} controller={} slot={} ep={} owner={:?} window={} combo={} virtual_keyboard={} path=keyboard-output-ring->selected-frame-owner-queue text=omitted log_policy=first-64+each-120\n",
                     forwards,
                     event.seq,
                     event.device_seq,
-                    event.codepoint,
                     event.controller_id,
                     event.slot_id,
                     event.ep_target,

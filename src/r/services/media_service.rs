@@ -104,6 +104,12 @@ pub(crate) fn decode_ui4_bounded(encoded: &[u8]) -> Result<DecodedImage, i32> {
             let image = crate::graphics::bmp_codec::decode_bmp_rgba(encoded).map_err(|_| ERR_FAILED)?;
             (image.width, image.height, image.rgba, BACKEND_BMP)
         }
+        4 => {
+            let image = crate::graphics::ico_codec::decode_ico_rgba(encoded)
+                .map_err(|error| error.code())?;
+            let backend = if image.png_frame { BACKEND_PNG } else { BACKEND_BMP };
+            (image.width, image.height, image.rgba, backend)
+        }
         _ => return Err(ERR_UNSUPPORTED),
     };
     if width != source.width || height != source.height || rgba.len() > MAX_SOURCE_BYTES {

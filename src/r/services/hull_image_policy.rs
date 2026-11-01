@@ -24,6 +24,7 @@ pub(super) fn extension(format: u32) -> Option<&'static str> {
         1 => Some("jpg"),
         2 => Some("png"),
         3 => Some("bmp"),
+        4 => Some("ico"),
         _ => None,
     }
 }
@@ -115,6 +116,37 @@ pub(super) fn target_extent(width: u32, height: u32) -> Result<(u32, u32, usize)
     }
 }
 
+/// Uniformly contain a decoded source in its requested raster box. Never
+/// enlarge the source; floor only the final ratio and retain at least one cell.
+pub(super) fn contained_extent(
+    source_width: u32,
+    source_height: u32,
+    box_width: u32,
+    box_height: u32,
+) -> Result<(u32, u32), i32> {
+    if source_width == 0 || source_height == 0 || box_width == 0 || box_height == 0 {
+        return Err(ERR_INVALID);
+    }
+    if source_width <= box_width && source_height <= box_height {
+        return Ok((source_width, source_height));
+    }
+    if u64::from(box_width) * u64::from(source_height)
+        <= u64::from(box_height) * u64::from(source_width)
+    {
+        Ok((
+            box_width,
+            (u64::from(source_height) * u64::from(box_width) / u64::from(source_width)).max(1)
+                as u32,
+        ))
+    } else {
+        Ok((
+            (u64::from(source_width) * u64::from(box_height) / u64::from(source_height)).max(1)
+                as u32,
+            box_height,
+        ))
+    }
+}
+
 fn bounded(format: u32, width: u32, height: u32) -> Result<SourceInfo, i32> {
     if width == 0 || height == 0 {
         return Err(ERR_INVALID);
@@ -178,6 +210,10 @@ pub(super) fn preflight(bytes: &[u8]) -> Result<SourceInfo, i32> {
             offset = end;
         }
         return if ended { Ok(info) } else { Err(ERR_INVALID) };
+    }
+    if bytes.starts_with(b"\0\0\x01\0") {
+        let frame = crate::graphics::ico_codec::inspect_ico(bytes).map_err(|error| error.code())?;
+        return bounded(4, frame.width, frame.height);
     }
     if bytes.starts_with(b"BM") {
         if bytes.len() < 54 {

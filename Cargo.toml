@@ -141,6 +141,10 @@ getrandom = { version = "=0.4.3", default-features = false }
 raw-cpuid = { version = "11", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
+hmac = { version = "0.12.1", default-features = false }
+sha1 = { version = "=0.10.6", default-features = false }
+aes = { version = "0.8.4", default-features = false }
+cipher = { version = "0.4.4", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 libm = { workspace = true }
 half = { workspace = true }

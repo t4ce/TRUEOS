@@ -2,6 +2,7 @@ use super::{DriverStatus, NetworkDriver};
 use crate::pci::PciDevice;
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
@@ -9,18 +10,15 @@ use spin::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiSecurity {
     Open,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WEP,
     WPA,
     WPA2,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WPA3,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Unknown,
 }
 
 impl WifiSecurity {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn as_str(&self) -> &'static str {
         match self {
             WifiSecurity::Open => "Open",
@@ -78,48 +76,159 @@ pub enum WifiState {
     Connecting,
     Authenticating,
     Connected,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Failed,
 }
 
 pub trait WifiDriver: NetworkDriver + Send {
+    fn last_error(&self) -> Option<&'static str> { None }
+    /// Real NVM/firmware station address, available only after hardware reads it.
+    fn mac_address(&self) -> Option<[u8; 6]> {
+        None
+    }
+    /// Opt in only when send/receive carry Ethernet II frames. Firmware commands,
+    /// management notifications and raw 802.11 MPDUs must stay driver-side.
+    fn ethernet_data_path(&self) -> bool {
+        false
+    }
     fn wifi_state(&self) -> WifiState;
     fn scan(&mut self) -> Result<(), &'static str>;
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn scan_results(&self) -> Vec<WifiNetwork>;
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn connect(&mut self, ssid: &str, password: &str) -> Result<(), &'static str>;
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn disconnect(&mut self) -> Result<(), &'static str>;
     fn connected_ssid(&self) -> Option<String>;
     fn signal_strength(&self) -> Option<i8>;
 }
 
-pub(crate) static WIFI_DRIVER: Mutex<Option<Box<dyn WifiDriver>>> = Mutex::new(None);
+pub(crate) type SharedDriver = Arc<Mutex<Box<dyn WifiDriver>>>;
+static WIFI_DRIVER: Mutex<Option<SharedDriver>> = Mutex::new(None);
+static WIFI_PCI: Mutex<Option<PciDevice>> = Mutex::new(None);
+
+pub(crate) fn shared_driver() -> Option<SharedDriver> {
+    WIFI_DRIVER.lock().clone()
+}
+
+#[derive(Default)]
+struct NetworkRegistration {
+    index: Option<usize>,
+    poll_started: bool,
+    service_started: bool,
+}
+static NETWORK_REGISTRATION: Mutex<NetworkRegistration> = Mutex::new(NetworkRegistration {
+    index: None,
+    poll_started: false,
+    service_started: false,
+});
+
+/// Called by the radio service after polling firmware. A valid hardware MAC
+/// and explicit Ethernet framing support admit a NIC; association controls its
+/// link separately. A late firmware start uses the existing per-NIC IP tasks.
+#[cfg(not(test))]
+pub(crate) fn register_network_interface(
+    spawner: trueos_executor::Spawner,
+) -> Result<Option<usize>, &'static str> {
+    let mut registration = NETWORK_REGISTRATION.lock();
+    let index = if let Some(index) = registration.index {
+        index
+    } else {
+        let Some(driver) = shared_driver() else {
+            return Ok(None);
+        };
+        let Some(pci) = *WIFI_PCI.lock() else {
+            return Ok(None);
+        };
+        let Some(nic) = super::wifi_adapter::WifiNic::new(driver, pci) else {
+            return Ok(None);
+        };
+        let index = super::register_wifi_nic(nic)?;
+        registration.index = Some(index);
+        crate::log_info!(target: "net";
+            "net/wifi: stage=ethernet-registered net={} pci={:04x}:{:04x} bdf={:02x}:{:02x}.{} link=association-controlled\n",
+            index, pci.vendor_id, pci.device_id, pci.bus, pci.slot, pci.function);
+        index
+    };
+    if !registration.poll_started {
+        let task =
+            super::adapter::net_poll_task(index).map_err(|_| "WiFi net-poll task capacity")?;
+        spawner.spawn(task);
+        registration.poll_started = true;
+    }
+    if !registration.service_started {
+        let task = super::adapter::net_service_task(index)
+            .map_err(|_| "WiFi net-service task capacity")?;
+        spawner.spawn(task);
+        registration.service_started = true;
+    }
+    drop(registration);
+    super::prefer_link_up_device(index);
+    Ok(Some(index))
+}
+
+pub(crate) fn owns_network_interface(index: usize) -> bool {
+    NETWORK_REGISTRATION.lock().index == Some(index)
+}
+
+#[cfg(not(test))]
+#[trueos_executor::task(pool_size = 1)]
+pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
+    let mut last_registration_error = None;
+    let mut ticks = 0u64;
+    let mut last_heartbeat_ms = trueos_time::Instant::now().as_millis();
+    loop {
+        ticks = ticks.saturating_add(1);
+        poll();
+        match register_network_interface(spawner) {
+            Ok(_) => last_registration_error = None,
+            Err(error) => {
+                if last_registration_error != Some(error) {
+                    crate::log_warn!(target: "net";
+                        "net/wifi: stage=ethernet-admission-deferred reason={}\n", error);
+                    last_registration_error = Some(error);
+                }
+            }
+        }
+        let now_ms = trueos_time::Instant::now().as_millis();
+        if state() != WifiState::Connected
+            && now_ms.saturating_sub(last_heartbeat_ms) >= 5_000
+        {
+            crate::log_warn!(target: "net";
+                "wifi-service: alive tick={} uptime_ms={} state={:?} port=closed\n",
+                ticks, now_ms, state());
+            last_heartbeat_ms = now_ms;
+        }
+        trueos_time::Timer::after(trueos_time::Duration::from_millis(10)).await;
+    }
+}
 static WIFI_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Deferred WiFi PCI location (bus, device, function) — set during boot, probed on first use
 static DEFERRED_PCI: Mutex<Option<(u8, u8, u8)>> = Mutex::new(None);
 
 /// Last scan results (cached for UI)
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static SCAN_RESULTS: Mutex<Vec<WifiNetwork>> = Mutex::new(Vec::new());
 
 /// Current connection state
 static CONNECTION_STATE: Mutex<WifiState> = Mutex::new(WifiState::NoHardware);
 
 /// Currently connected SSID
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static CONNECTED_SSID: Mutex<Option<String>> = Mutex::new(None);
 
 /// Pending connection request
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static CONNECT_REQUEST: Mutex<Option<(String, String)>> = Mutex::new(None);
+static LAST_OPERATION_ERROR: Mutex<Option<&'static str>> = Mutex::new(None);
+
+pub fn last_operation_error() -> Option<&'static str> {
+    shared_driver().and_then(|driver| driver.lock().last_error()).or(*LAST_OPERATION_ERROR.lock())
+}
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_deferred_pci(bus: u8, device: u8, function: u8) {
     *DEFERRED_PCI.lock() = Some((bus, device, function));
-    crate::log!("wifi: Deferred PCI probe stored: {}.{}.{}", bus, device, function);
+    crate::log!(
+        "wifi: Deferred PCI probe stored: {}.{}.{}",
+        bus,
+        device,
+        function
+    );
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -127,7 +236,6 @@ pub fn has_wifi() -> bool {
     WIFI_ACTIVE.load(Ordering::Relaxed) || DEFERRED_PCI.lock().is_some()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn has_active_driver() -> bool {
     WIFI_ACTIVE.load(Ordering::Relaxed)
 }
@@ -155,7 +263,7 @@ pub fn lazy_probe() -> Result<(), &'static str> {
 
     // Now actually probe (map_bar0 + bus master)
     if probe_pci(&pci_dev) {
-        crate::log!("wifi: probe ok driver=iwl4965\n");
+        crate::log!("wifi: PCI probe ready\n");
         Ok(())
     } else {
         // Put the deferred info back so user can retry
@@ -164,27 +272,21 @@ pub fn lazy_probe() -> Result<(), &'static str> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn state() -> WifiState {
-    *CONNECTION_STATE.lock()
+    shared_driver().map_or(WifiState::NoHardware, |driver| driver.lock().wifi_state())
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn is_connected() -> bool {
-    *CONNECTION_STATE.lock() == WifiState::Connected
+    state() == WifiState::Connected
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn connected_ssid() -> Option<String> {
-    CONNECTED_SSID.lock().clone()
+    shared_driver().and_then(|driver| driver.lock().connected_ssid())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn signal_strength() -> Option<i8> {
-    WIFI_DRIVER
-        .lock()
-        .as_ref()
-        .and_then(|d| d.signal_strength())
+    shared_driver().and_then(|driver| driver.lock().signal_strength())
 }
 
 pub fn ensure_started() -> Result<(), &'static str> {
@@ -193,8 +295,9 @@ pub fn ensure_started() -> Result<(), &'static str> {
         lazy_probe()?;
     }
 
-    let mut guard = WIFI_DRIVER.lock();
-    let driver = guard.as_mut().ok_or("No WiFi driver")?;
+    let shared = shared_driver().ok_or("No WiFi driver")?;
+    let mut guard = shared.lock();
+    let driver = guard.as_mut();
     if driver.status() == DriverStatus::Running {
         return Ok(());
     }
@@ -207,6 +310,7 @@ pub fn ensure_started() -> Result<(), &'static str> {
             Ok(())
         }
         Err(e) => {
+            *LAST_OPERATION_ERROR.lock() = Some(e);
             crate::log!("wifi: Driver start failed: {}", e);
             crate::log!("wifi: start failed: {}", e);
             Err(e)
@@ -219,22 +323,24 @@ pub fn start_scan() -> Result<(), &'static str> {
     ensure_started()?;
 
     {
-        let mut guard = WIFI_DRIVER.lock();
-        let driver = guard.as_mut().ok_or("No WiFi driver")?;
+        let shared = shared_driver().ok_or("No WiFi driver")?;
+        let mut guard = shared.lock();
+        let driver = guard.as_mut();
         *CONNECTION_STATE.lock() = WifiState::Scanning;
-        driver.scan()
+        let result = driver.scan();
+        *LAST_OPERATION_ERROR.lock() = result.as_ref().err().copied();
+        result
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn get_scan_results() -> Vec<WifiNetwork> {
     SCAN_RESULTS.lock().clone()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn poll() {
-    let mut guard = WIFI_DRIVER.lock();
-    if let Some(driver) = guard.as_mut() {
+    if let Some(shared) = shared_driver() {
+        let mut guard = shared.lock();
+        let driver = guard.as_mut();
         driver.poll();
 
         // Update cached state
@@ -262,9 +368,11 @@ pub fn poll() {
             crate::log!("wifi: Connecting to '{}'...", ssid);
             match driver.connect(&ssid, &password) {
                 Ok(()) => {
-                    *CONNECTION_STATE.lock() = WifiState::Connecting;
+                    *CONNECTION_STATE.lock() = driver.wifi_state();
+                    *LAST_OPERATION_ERROR.lock() = None;
                 }
                 Err(e) => {
+                    *LAST_OPERATION_ERROR.lock() = Some(e);
                     crate::log!("wifi: Connect failed: {}", e);
                     *CONNECTION_STATE.lock() = WifiState::Failed;
                 }
@@ -275,17 +383,27 @@ pub fn poll() {
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn request_connect(ssid: &str, password: &str) {
-    if let Err(e) = ensure_started() {
-        crate::log!("wifi: Cannot connect — start failed: {}", e);
-        return;
+    if let Err(error) = try_request_connect(ssid, password) {
+        crate::log_warn!(target: "net"; "wifi: connect request failed reason={}\n", error);
     }
-    *CONNECT_REQUEST.lock() = Some((String::from(ssid), String::from(password)));
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
+/// Queue credentials in memory for the radio task; never persist or log keys.
+pub fn try_request_connect(ssid: &str, password: &str) -> Result<(), &'static str> {
+    if ssid.is_empty() || ssid.len() > 32 {
+        return Err("Wi-Fi SSID must contain 1-32 bytes");
+    }
+    let result = ensure_started();
+    *LAST_OPERATION_ERROR.lock() = result.as_ref().err().copied();
+    result?;
+    *CONNECT_REQUEST.lock() = Some((String::from(ssid), String::from(password)));
+    Ok(())
+}
+
 pub fn disconnect() -> Result<(), &'static str> {
-    let mut guard = WIFI_DRIVER.lock();
-    let driver = guard.as_mut().ok_or("No WiFi driver")?;
+    let shared = shared_driver().ok_or("No WiFi driver")?;
+    let mut guard = shared.lock();
+    let driver = guard.as_mut();
     driver.disconnect()?;
     *CONNECTION_STATE.lock() = WifiState::Disconnected;
     *CONNECTED_SSID.lock() = None;
@@ -294,16 +412,27 @@ pub fn disconnect() -> Result<(), &'static str> {
 
 pub fn set_driver(driver: Box<dyn WifiDriver>) {
     crate::log!("wifi: WiFi driver active: {}", driver.info().name);
-    *WIFI_DRIVER.lock() = Some(driver);
+    *WIFI_DRIVER.lock() = Some(Arc::new(Mutex::new(driver)));
     WIFI_ACTIVE.store(true, Ordering::SeqCst);
     *CONNECTION_STATE.lock() = WifiState::Disconnected;
 }
 
 pub fn probe_pci(pci_dev: &PciDevice) -> bool {
+    // AX201 has a separate QuZ transport; never feed it AX211/4965 firmware.
+    if pci_dev.vendor_id == 0x8086 && pci_dev.device_id == 0xA0F0 {
+        if let Some(driver) = super::iwl_ax201::probe(pci_dev) {
+            *WIFI_PCI.lock() = Some(*pci_dev);
+            set_driver(driver);
+            return true;
+        }
+        return false;
+    }
+
     // AX211 is an integrated Gen2 device. Keep it out of the legacy 4965
     // probe and let the dedicated path perform the single PCI claim.
     if pci_dev.vendor_id == 0x8086 && pci_dev.device_id == 0x7A70 {
         if let Some(driver) = super::iwl_ax211::probe(pci_dev) {
+            *WIFI_PCI.lock() = Some(*pci_dev);
             set_driver(driver);
             return true;
         }
@@ -366,6 +495,7 @@ pub fn probe_pci(pci_dev: &PciDevice) -> bool {
     // Try Intel WiFi Link 4965AGN
     if pci_dev.vendor_id == 0x8086 {
         if let Some(driver) = super::iwl4965::probe(pci_dev) {
+            *WIFI_PCI.lock() = Some(*pci_dev);
             set_driver(driver);
             return true;
         }

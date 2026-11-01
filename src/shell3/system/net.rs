@@ -203,10 +203,10 @@ pub(super) fn nic_snapshot(width: usize, selector: Option<&str>) -> Vec<String> 
         };
         let ipv6 = ipv6_text(index);
 
-        table
-            .emit_row::<&str, _>(&[&idx, &bdf, &vidpid, iface, &mac, &ipv4, mode, &ipv6], |text| {
-                lines.push(text.into())
-            });
+        table.emit_row::<&str, _>(
+            &[&idx, &bdf, &vidpid, iface, &mac, &ipv4, mode, &ipv6],
+            |text| lines.push(text.into()),
+        );
     }
 
     table.emit_footer(|text| lines.push(text.into()));
@@ -413,12 +413,16 @@ async fn irc(server: String, chan: Option<String>, job: Arc<Job>, lease: super::
     job.line("irc: done");
 }
 
-const LABELS: [&str; 6] = [
+const LABELS: [&str; 10] = [
     "Network interfaces",
     "Inspect one interface",
     "ICMP ping",
     "IRC connection test",
     "Hostname",
+    "Wi-Fi status",
+    "Wi-Fi scan",
+    "Wi-Fi connect",
+    "Wi-Fi disconnect",
     "Return",
 ];
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -427,6 +431,8 @@ enum Field {
     Ping,
     Irc,
     Hostname,
+    WifiSsid,
+    WifiPassword,
 }
 impl Field {
     fn prompt(self) -> &'static str {
@@ -435,6 +441,8 @@ impl Field {
             Self::Ping => "Target [interface]",
             Self::Irc => "Host [#channel]",
             Self::Hostname => "Hostname (empty shows current)",
+            Self::WifiSsid => "Wi-Fi SSID (1-32 bytes)",
+            Self::WifiPassword => "Wi-Fi password (empty for open network)",
         }
     }
 }
@@ -443,12 +451,14 @@ enum Page {
     Field(Field),
     Details(Option<String>),
     Output,
+    Wifi,
 }
 struct View {
     page: Page,
     selected: usize,
     scroll: usize,
     value: String,
+    wifi_ssid: String,
     after_cr: bool,
     input: Input,
     screen: Screen,
@@ -463,6 +473,7 @@ impl View {
             selected: 0,
             scroll: 0,
             value: String::new(),
+            wifi_ssid: String::new(),
             after_cr: false,
             input: Input::default(),
             screen: Screen::default(),
@@ -477,6 +488,7 @@ impl View {
         }
         self.page = Page::Home;
         self.value.clear();
+        self.wifi_ssid.clear();
         self.scroll = 0;
         self.input = Input::default();
     }
@@ -499,6 +511,22 @@ impl View {
             2 => Page::Field(Field::Ping),
             3 => Page::Field(Field::Irc),
             4 => Page::Field(Field::Hostname),
+            5 => Page::Wifi,
+            6 => {
+                self.message = match crate::net::wifi::start_scan() {
+                    Ok(()) => "Scan requested; results update below.".into(),
+                    Err(error) => format!("Scan: {}", error),
+                };
+                Page::Wifi
+            }
+            7 => Page::Field(Field::WifiSsid),
+            8 => {
+                self.message = match crate::net::wifi::disconnect() {
+                    Ok(()) => "Disconnected.".into(),
+                    Err(error) => format!("Disconnect: {}", error),
+                };
+                Page::Wifi
+            }
             _ => {
                 tui::native_return(target);
                 return;
@@ -507,6 +535,25 @@ impl View {
     }
     fn submit(&mut self, field: Field, target: &MatrixTarget, cols: usize) {
         let value = core::mem::take(&mut self.value);
+        if field == Field::WifiSsid {
+            if value.is_empty() || value.len() > 32 {
+                self.message = "Use a Wi-Fi SSID of 1-32 bytes.".into();
+                return;
+            }
+            self.wifi_ssid = value;
+            self.message.clear();
+            self.page = Page::Field(Field::WifiPassword);
+            return;
+        }
+        if field == Field::WifiPassword {
+            self.message = match crate::net::wifi::try_request_connect(&self.wifi_ssid, &value) {
+                Ok(()) => "Connection requested; state updates below.".into(),
+                Err(error) => format!("Connect: {}", error),
+            };
+            self.wifi_ssid.clear();
+            self.page = Page::Wifi;
+            return;
+        }
         let parts: Vec<&str> = value.split_whitespace().collect();
         if field == Field::Hostname {
             if parts.len() > 1
@@ -697,8 +744,48 @@ impl View {
             }
             Page::Field(field) => {
                 lines[2] = field.prompt().into();
-                lines[3] = format!("> {}", self.value);
+                lines[3] = if *field == Field::WifiPassword {
+                    format!("> {}", "*".repeat(self.value.len()))
+                } else {
+                    format!("> {}", self.value)
+                };
                 lines[4] = self.message.clone();
+            }
+            Page::Wifi => {
+                lines[2] = "Wi-Fi station".into();
+                let mut content = Vec::new();
+                content.push(format!("State: {:?}", crate::net::wifi::state()));
+                if !self.message.is_empty() {
+                    content.push(self.message.clone());
+                }
+                if let Some(error) = crate::net::wifi::last_operation_error() {
+                    content.push(format!("Last operation: {}", error));
+                }
+                if let Some(ssid) = crate::net::wifi::connected_ssid() {
+                    content.push(format!("Connected SSID: {}", ssid));
+                }
+                if let Some(dbm) = crate::net::wifi::signal_strength() {
+                    content.push(format!("Signal: {} dBm", dbm));
+                }
+                for network in crate::net::wifi::get_scan_results() {
+                    content.push(format!(
+                        "{}  ch={}  {} dBm  {}",
+                        network.ssid,
+                        network.channel,
+                        network.signal_dbm,
+                        network.security.as_str()
+                    ));
+                }
+                let visible = rows - 3;
+                self.scroll = self.scroll.min(content.len().saturating_sub(visible));
+                for (index, line) in content
+                    .into_iter()
+                    .skip(self.scroll)
+                    .take(visible)
+                    .enumerate()
+                {
+                    lines[3 + index] = line;
+                }
             }
             Page::Details(_) | Page::Output => {
                 let content = if let Some(job) = &self.job {

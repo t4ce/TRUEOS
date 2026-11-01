@@ -54,6 +54,7 @@ define_started_flags!(
     TRUEOSFS_INDEX_SERVICE_STARTED,
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
+    WIFI_SERVICE_STARTED,
     NET_CACHE_SERVICE_STARTED,
     NET_THROUGHPUT_BENCH_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
@@ -488,6 +489,14 @@ fn spawn_hv_vm_store_net(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::hv::store::vm_store_replication_task())
 }
 
+fn wifi_service_gate() -> bool {
+    crate::net::wifi::has_active_driver()
+}
+
+fn spawn_wifi_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| crate::net::wifi::wifi_service_task(spawner))
+}
+
 fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
     // Some drivers may fail to report a MAC early; treat any detected NIC as usable.
     let count = crate::net::device_count();
@@ -495,6 +504,7 @@ fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     }
     for idx in 0..count {
+        if crate::net::wifi::owns_network_interface(idx) { continue; }
         match crate::net::adapter::net_poll_task(idx) {
             Ok(token) => spawner.spawn(token),
             Err(e) => {
@@ -518,6 +528,7 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
 
     let mut spawned_any = false;
     for idx in 0..count {
+        if crate::net::wifi::owns_network_interface(idx) { continue; }
         match crate::net::adapter::net_service_task(idx) {
             Ok(token) => {
                 spawner.spawn(token);
@@ -1366,7 +1377,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 71
+const TASK_COUNT: usize = 72
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
@@ -1482,6 +1493,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HV_VM_STORE_NET_STARTED,
         spawn_hv_vm_store_net,
     ),
+    TaskSpec::enabled_gated("wifi-service", 0, wifi_service_gate, &WIFI_SERVICE_STARTED, spawn_wifi_service),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
     TaskSpec::enabled("net-cache-service", 0, &NET_CACHE_SERVICE_STARTED, spawn_net_cache_service),
