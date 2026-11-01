@@ -81,13 +81,25 @@ mod net {
     #[cfg(test)] mod lifecycle_tests {
         use super::{iwl_ax201_fw as fw,iwl_ax201_transport::{Transport,State,Shared,Notification,Command},iwl_ax201_mvm::Runtime};
         use std::{sync::{Arc,Mutex},collections::VecDeque};
-        fn fixture()->(Runtime,Shared){
+        fn fixture()->(Runtime,Shared){fixture_with_legacy_dqa(false)}
+        fn fixture_with_legacy_dqa(legacy_dqa:bool)->(Runtime,Shared){
             crate::NOW.with(|value|value.set(0));
             let shared=Arc::new(Mutex::new(State{
                 alive:Some(Notification{group:0,id:1,sequence:0x8000,payload:vec![0xfe,0xca,0,0]}),
                 incoming:VecDeque::new(),sent:Vec::new(),sequence:0,raw:Vec::new(),queue_prepared:Vec::new(),active_queues:Vec::new(),
             }));
-            let runtime=Runtime::start(Transport(shared.clone()),fw::parse(fw::EMBEDDED).unwrap()).unwrap();
+            let image=if legacy_dqa {
+                // A synthetic capability on the otherwise real image exercises
+                // the optional legacy command without changing production data.
+                let mut bytes=fw::EMBEDDED.to_vec();
+                bytes.extend_from_slice(&30u32.to_le_bytes());
+                bytes.extend_from_slice(&8u32.to_le_bytes());
+                bytes.extend_from_slice(&0u32.to_le_bytes());
+                bytes.extend_from_slice(&(1u32<<12).to_le_bytes());
+                &*Box::leak(bytes.into_boxed_slice())
+            }else{fw::EMBEDDED};
+            let firmware=fw::parse(image).unwrap();assert_eq!(firmware.has_capability(12),legacy_dqa);
+            let runtime=Runtime::start(Transport(shared.clone()),firmware).unwrap();
             (runtime,shared)
         }
         fn latest(shared:&Shared)->Command{shared.lock().unwrap().sent.last().unwrap().clone()}
@@ -119,12 +131,12 @@ mod net {
             assert_eq!((antenna.group,antenna.id,antenna.version),(1,0x98,0));
             assert_eq!(antenna.payload,3u32.to_le_bytes());
             assert!(runtime.begin_scan([2,1,2,3,4,5]).is_err());
-            ack(shared);assert!(!runtime.poll().unwrap());
-            let dqa=latest(shared);
-            assert_eq!((dqa.group,dqa.id,dqa.version),(5,0,0));
-            assert_eq!(dqa.payload,[0;4]);
-            assert!(runtime.begin_scan([2,1,2,3,4,5]).is_err());
+            // Actual QuZ API77 lacks CAPA12. Its antenna acknowledgement
+            // immediately makes the gen2 radio ready; no legacy DQA is sent.
+            let count=shared.lock().unwrap().sent.len();
             ack(shared);assert!(runtime.poll().unwrap());
+            assert_eq!(shared.lock().unwrap().sent.len(),count);
+            assert!(!shared.lock().unwrap().sent.iter().any(|command|(command.group,command.id)==(5,0)));
         }
         #[test] fn unified_init_ack_and_nvm_ready(){
             let(mut runtime,shared)=fixture();
@@ -177,9 +189,27 @@ mod net {
             assert_eq!(runtime.poll().unwrap_err(),"AX201 firmware REPLY_ERROR");
             assert!(!runtime.poll().unwrap());
         }
-        #[test] fn radio_bootstrap_requires_both_command_acknowledgements(){
-            for antenna_ack in [false,true] {
-                let(mut runtime,shared)=fixture();to_init_complete(&mut runtime,&shared);
+        #[test] fn legacy_dqa_is_sent_only_when_capability_is_advertised(){
+            let(mut runtime,shared)=fixture_with_legacy_dqa(true);to_init_complete(&mut runtime,&shared);
+            complete(&shared);assert!(!runtime.poll().unwrap());let command=latest(&shared);
+            let mut data=nvm();
+            data[24..28].copy_from_slice(&110u32.to_le_bytes());
+            data[28..32].copy_from_slice(&1u32.to_le_bytes());
+            data[32..36].copy_from_slice(&1u32.to_le_bytes());
+            inject(&shared,command.group,command.id,command.sequence,data);
+            assert!(!runtime.poll().unwrap());
+            let antenna=latest(&shared);assert_eq!((antenna.group,antenna.id,antenna.version),(1,0x98,0));
+            ack(&shared);assert!(!runtime.poll().unwrap());
+            let dqa=latest(&shared);assert_eq!((dqa.group,dqa.id,dqa.version),(5,0,0));
+            assert_eq!(dqa.payload,[0;4]);assert!(runtime.begin_scan([2,1,2,3,4,5]).is_err());
+            ack(&shared);assert!(runtime.poll().unwrap());
+            assert!(runtime.begin_scan([2,1,2,3,4,5]).is_ok());
+        }
+        #[test] fn radio_bootstrap_times_out_until_each_required_command_is_acknowledged(){
+            // The real image requires TX antenna only; a legacy-DQA image
+            // additionally requires the DQA acknowledgement before readiness.
+            for (legacy_dqa,antenna_ack) in [(false,false),(true,false),(true,true)] {
+                let(mut runtime,shared)=fixture_with_legacy_dqa(legacy_dqa);to_init_complete(&mut runtime,&shared);
                 complete(&shared);assert!(!runtime.poll().unwrap());let command=latest(&shared);
                 inject(&shared,command.group,command.id,command.sequence,nvm());
                 assert!(!runtime.poll().unwrap());

@@ -40,6 +40,7 @@ pub struct Ax201Driver {
     runtime: Option<mvm::Runtime>,
     mac: Option<[u8; 6]>,
     start_attempted: bool,
+    firmware_error: Option<&'static str>,
     scan_requested: bool,
     status: DriverStatus,
     wifi_state: WifiState,
@@ -155,6 +156,7 @@ pub fn probe(pci_dev: &PciDevice) -> Option<Box<dyn WifiDriver>> {
         runtime: None,
         mac: None,
         start_attempted: false,
+        firmware_error: None,
         scan_requested: false,
         status: DriverStatus::Loading,
         wifi_state: WifiState::Disconnected,
@@ -171,6 +173,9 @@ impl Driver for Ax201Driver {
     }
 
     fn start(&mut self) -> Result<(), &'static str> {
+        if let Some(reason) = self.firmware_error {
+            return Err(reason);
+        }
         if self.runtime.is_some() {
             return Ok(());
         }
@@ -180,19 +185,31 @@ impl Driver for Ax201Driver {
             return Err("AX201 firmware start already attempted; reset required");
         }
         self.start_attempted = true;
-        let firmware = super::iwl_ax201_fw::parse(super::iwl_ax201_fw::EMBEDDED)?;
-        crate::log_warn!(target: "net";
-            "iwl-ax201: stage=firmware-parsed api={}.{:08x}.{} bytes={} sections={} target_ssid=easyeasy\n",
-            firmware.version.major, firmware.version.minor, firmware.version.local,
-            super::iwl_ax201_fw::EMBEDDED.len(), firmware.runtime.len());
-        let transport = super::iwl_ax201_transport::Transport::new(
-            self.mmio,
-            self.bar0_size,
-            (self.pci_bus, self.pci_device, self.pci_function),
-            &firmware,
-        )?;
-        self.runtime = Some(mvm::Runtime::start(transport, firmware)?);
-        Ok(())
+        let result = (|| {
+            let firmware = super::iwl_ax201_fw::parse(super::iwl_ax201_fw::EMBEDDED)?;
+            crate::log_warn!(target: "net";
+                "iwl-ax201: stage=firmware-parsed api={}.{:08x}.{} bytes={} sections={} target_ssid=easyeasy\n",
+                firmware.version.major, firmware.version.minor, firmware.version.local,
+                super::iwl_ax201_fw::EMBEDDED.len(), firmware.runtime.len());
+            let transport = super::iwl_ax201_transport::Transport::new(
+                self.mmio,
+                self.bar0_size,
+                (self.pci_bus, self.pci_device, self.pci_function),
+                &firmware,
+            )?;
+            mvm::Runtime::start(transport, firmware)
+        })();
+        match result {
+            Ok(runtime) => {
+                self.runtime = Some(runtime);
+                Ok(())
+            }
+            Err(reason) => {
+                self.firmware_error = Some(reason);
+                self.wifi_state = WifiState::Failed;
+                Err(reason)
+            }
+        }
     }
 
     fn status(&self) -> DriverStatus {
@@ -251,6 +268,7 @@ impl NetworkDriver for Ax201Driver {
             }
             Ok(false) => {}
             Err(reason) => {
+                self.firmware_error = Some(reason);
                 self.status = DriverStatus::Loading;
                 self.wifi_state = WifiState::Failed;
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=firmware-error reason={}\n", reason);
@@ -271,9 +289,13 @@ impl WifiDriver for Ax201Driver {
     }
 
     fn last_error(&self) -> Option<&'static str> {
-        self.runtime
-            .as_ref()
-            .and_then(|runtime| runtime.connection_error())
+        // A failed bootstrap may never publish a MAC or connection object.
+        // Keep its cause visible instead of replacing it with those symptoms.
+        self.firmware_error.or_else(|| {
+            self.runtime
+                .as_ref()
+                .and_then(|runtime| runtime.connection_error())
+        })
     }
 
     fn wifi_state(&self) -> WifiState {
@@ -294,6 +316,9 @@ impl WifiDriver for Ax201Driver {
     }
 
     fn connect(&mut self, ssid: &str, password: &str) -> Result<(), &'static str> {
+        if let Some(reason) = self.firmware_error {
+            return Err(reason);
+        }
         let mac = self.mac.ok_or("AX201 hardware MAC not ready")?;
         self.runtime
             .as_mut()

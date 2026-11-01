@@ -58,6 +58,9 @@ create `TrueOS.tar.lz4` from the prepared native boot files. They publish the
 complete generation via `tgt/pxe-current` and invoke `tools/rig-reset.sh` once.
 Build, archive, or staging failure prevents the reset. Concurrent rig commands
 are rejected.
+Keep `TRUEOS-Blueprints` checked out beside `TRUEOS` and `TRUEOS-Buildins`;
+the editor's `trueos-ide` path dependency requires its manifests even when
+the optional IDE feature is disabled. The release workflow checks out all three.
 Ordinary `cargo build` does not reset the rig. These commands do not start,
 stop, or restart PXE and do not require sudo.
 The dev kernel uses optimization level 1, generates no debug information, and

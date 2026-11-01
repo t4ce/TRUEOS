@@ -24,6 +24,7 @@ mod scan;
 
 const SYSTEM: u8 = 2;
 const NVM: u8 = 12;
+const CAPA_DQA_SUPPORT: u32 = 12;
 const COMMAND_TIMEOUT_MS: u64 = 2000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -265,8 +266,9 @@ impl Runtime {
                     "iwl-ax201: stage=nvm-ready version=0x{:x} reserved_macs={} tx_chains=0x{:x} rx_chains=0x{:x} sku=0x{:x} channels={} association=not-started\n",
                     info.version, info.reserved_macs, info.tx_chains, info.rx_chains,
                     info.sku, info.channels.len());
-                // Match iwl_mvm_up(): configure the antenna and enable the
-                // firmware's DQA queue mode before any scan/PHY/station work.
+                // Match iwl_mvm_up(): configure the antenna before scanning.
+                // The legacy DQA enable command is conditional on CAPA12;
+                // QuZ API77 does not advertise it (its queues use gen2).
                 // TX_ANT's layout is v1, but Linux sends the legacy command
                 // constant with wire-header version 0 (the two are distinct).
                 if self.firmware.command_version(1, 0x98) != Some(1) {
@@ -279,9 +281,14 @@ impl Runtime {
                 self.submit_version(1, 0x98, 0, &chains)?;
             }
             Stage::TxAntenna => {
-                self.stage = Stage::DqaEnable;
-                crate::log_warn!(target: "net"; "iwl-ax201: stage=radio-bootstrap command=dqa-enable group=5 id=0 wire_version=0\n");
-                self.submit_version(5, 0, 0, &0u32.to_le_bytes())?;
+                if self.firmware.has_capability(CAPA_DQA_SUPPORT) {
+                    self.stage = Stage::DqaEnable;
+                    crate::log_warn!(target: "net"; "iwl-ax201: stage=radio-bootstrap command=dqa-enable group=5 id=0 wire_version=0\n");
+                    self.submit_version(5, 0, 0, &0u32.to_le_bytes())?;
+                } else {
+                    self.stage = Stage::Ready;
+                    crate::log_warn!(target: "net"; "iwl-ax201: stage=radio-ready antenna=confirmed legacy_dqa=not-advertised queue_api=gen2\n");
+                }
             }
             Stage::DqaEnable => {
                 self.stage = Stage::Ready;

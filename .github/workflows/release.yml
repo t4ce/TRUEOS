@@ -54,6 +54,13 @@ jobs:
           ref: master
           path: TRUEOS-Buildins
 
+      - name: Check out Blueprint dependencies
+        uses: actions/checkout@v7
+        with:
+          repository: t4ce/TRUEOS-Blueprints
+          ref: main
+          path: TRUEOS-Blueprints
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
