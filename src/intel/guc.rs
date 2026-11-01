@@ -26,6 +26,14 @@ const DMA_GUC_WOPCM_OFFSET: usize = 0x0000_C340;
 const GUC_WOPCM_SIZE: usize = 0x0000_C050;
 const UOS_RSA_SCRATCH_BASE: usize = 0x0000_C200;
 const GUC_MODULE_STRING: &[u8] = b"trueos.fw.guc";
+// Laptop validation, 2026-11-01: Linux i915 7.0.0-38-generic on physical
+// 8086:9A49 rev01 (i7-1185G7) loaded this firmware as GuC 70.49.4 with
+// status RUNNING, CT enabled, submission enabled, and submission API 1.24.4.
+// Tested with enable_guc=1 guc_firmware_path=i915/tgl_guc_70.bin; decompressed
+// SHA-256 matched our shipped firmware:
+// 2f1f57a1b23d186f2592318d1e07a1365968932841ccb3e7177c516ba006e2f6.
+// This verifies firmware execution on the laptop under Linux, not TRUEOS's
+// bootstrap, transport, mapping or engine-submission implementation.
 const GUC_MODULE_PATH_SUFFIX: &[u8] = b"/EFI/BOOT/tgl_guc_70.bin";
 
 const GUC_DISABLE_SRAM_INIT_TO_ZEROES: u32 = 1 << 0;

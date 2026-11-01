@@ -12,6 +12,11 @@ pub use pci::*;
 // EXPERIMENTAL TGL bring-up lane.
 //
 // The i7-1185G7 test laptop exposes Tiger Lake-LP GT2 as 8086:9A49 rev01.
+// Confirmed 2026-11-01 under Linux i915 7.0.0-38-generic: this physical
+// VID:DID/revision runs our exact shipped GuC 70.49.4 firmware with CT and
+// GuC submission enabled (API 1.24.4). Firmware hash and test settings are
+// recorded beside GUC_MODULE_PATH_SUFFIX in intel/guc.rs. This establishes
+// firmware compatibility under Linux; TRUEOS bring-up remains a separate test.
 // TRUEOS's current vertically validated Xe-LP path is sealed to ADL-S 8086:4680
 // rev0C all the way through device claim, render admission, and the generated
 // IGC/Zebin artifact contracts. For this branch only, deliberately present that
