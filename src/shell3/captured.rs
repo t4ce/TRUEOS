@@ -283,7 +283,6 @@ impl Captured {
                         | "vid"
                         | "aud"
                         | "vaud"
-                        | "cam"
                 ) =>
             {
                 return self.terminal_required(name);

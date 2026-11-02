@@ -120,7 +120,7 @@ mod tests {
         let lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         now(start);
         protocol::stop_after_boundary();
-        protocol::set_lumen_speech_playing(false);
+        protocol::set_speech_playing(false);
         ai::ai_activity::ACTIVE.store(false, Ordering::Relaxed);
         *ai::ai_activity::EVENT.lock() = None;
         *shell3::tui::STATUS.lock() = None;
@@ -205,9 +205,9 @@ mod tests {
         ai::ai_activity::ACTIVE.store(true, Ordering::Relaxed);
         assert_ne!(next().animation.key, "angry.fists_clenched");
         ai::ai_activity::ACTIVE.store(false, Ordering::Relaxed);
-        protocol::set_lumen_speech_playing(true);
+        protocol::set_speech_playing(true);
         assert_eq!(next().animation.key, "talk.calm.uncrossed");
-        protocol::set_lumen_speech_playing(false);
+        protocol::set_speech_playing(false);
         assert_eq!(next().animation.key, "angry.fists_clenched");
     }
 
@@ -240,9 +240,9 @@ mod tests {
         status(Some(program_status::ProgramStatus::Working));
         assert!(!failure(next().animation.key));
         now(14999);
-        protocol::set_lumen_speech_playing(true);
+        protocol::set_speech_playing(true);
         assert_eq!(next().animation.key, "talk.calm.uncrossed");
-        protocol::set_lumen_speech_playing(false);
+        protocol::set_speech_playing(false);
         now(15000);
         let prep = next();
         assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
@@ -261,10 +261,10 @@ mod tests {
         next();
         // Keep higher-priority speech live so autonomous arm transitions do not
         // accidentally become the same preparation clip under test.
-        protocol::set_lumen_speech_playing(true);
+        protocol::set_speech_playing(true);
         now(15000); next();
         tyche::GATE.store(0, Ordering::Relaxed);
-        protocol::set_lumen_speech_playing(false);
+        protocol::set_speech_playing(false);
         now(15001);
         assert_ne!(next().animation.key, "idea.finger_up");
         now(29999);
@@ -294,8 +294,8 @@ mod tests {
         tyche::RUNNING_OFFSET.store(10000, Ordering::Relaxed);
         status(Some(program_status::ProgramStatus::Working)); next();
         now(30999);
-        protocol::set_lumen_speech_playing(true); next();
-        protocol::set_lumen_speech_playing(false);
+        protocol::set_speech_playing(true); next();
+        protocol::set_speech_playing(false);
         now(31000);
         assert_eq!(next().animation.key, "idea.finger_up");
     }
@@ -313,10 +313,10 @@ mod tests {
         status(Some(program_status::ProgramStatus::Blocked(program_status::ProgramStatusKind::Question)));
         assert_eq!(next().animation.key, "confused.question");
         status(None); next();
-        protocol::set_lumen_speech_playing(true);
+        protocol::set_speech_playing(true);
         status(Some(program_status::ProgramStatus::Done)); next();
         status(None);
-        protocol::set_lumen_speech_playing(false);
+        protocol::set_speech_playing(false);
         assert_ne!(next().animation.key, "gesture.finger_guns");
     }
 
@@ -359,9 +359,9 @@ mod tests {
     fn speech_and_reasoning_can_expire_low_priority_suggestion() {
         let _lock = reset(0);
         status(Some(program_status::ProgramStatus::Done));
-        protocol::set_lumen_speech_playing(true);
+        protocol::set_speech_playing(true);
         assert_eq!(next().animation.key, "talk.calm.uncrossed");
-        protocol::set_lumen_speech_playing(false);
+        protocol::set_speech_playing(false);
         ai::ai_activity::ACTIVE.store(true, Ordering::Relaxed);
         now(3000);
         assert_ne!(next().animation.key, "gesture.finger_guns");

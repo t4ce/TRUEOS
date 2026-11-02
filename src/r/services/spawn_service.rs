@@ -1,4 +1,4 @@
-use alloc::{string::String, vec::Vec};
+use alloc::string::String;
 use core::{
     fmt::Write,
     sync::atomic::{AtomicBool, Ordering},
@@ -958,7 +958,13 @@ fn executor_realm_smoke_delay_ms(hop: usize) -> u64 {
 
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-static TASKS: &[TaskSpec] = &[
+// Own the AtomicBool fields in a static array; an interior-mutable temporary
+// cannot be promoted behind a shared slice reference.
+const TASK_COUNT: usize = 62
+    + cfg!(feature = "trueos_h264_encode_stream") as usize
+    + 2 * cfg!(feature = "trueos_ttstt") as usize
+    + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
+static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "codex-progress-observer",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,

@@ -1,10 +1,10 @@
 // Gen12 GT cache-policy ownership and frequency-state diagnostics.
 //
-// Firmware owns the lower half of the shared MOCS table. Lumen owns only the
-// upper half and uses one entry from that range; display/compositor clients
-// retain their firmware-supplied lower-half entries unchanged.
+// Firmware owns the lower half of the shared MOCS table. The historical
+// Lumen-named upper-half policy remains a GPU cache partition, independent
+// of local inference. Display/compositor clients retain their firmware entries.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::Ordering;
 use spin::Mutex;
 
 const GEN12_GLOBAL_MOCS_BASE: usize = 0x4000;
