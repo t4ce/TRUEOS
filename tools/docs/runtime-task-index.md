@@ -70,7 +70,7 @@ Pool sizes are task storage capacities, not CPU/thread counts. Caller candidates
 | [`worker_task`](../../src/r/services/media_service.rs#L645) (src/r/services/media_service.rs:645) | `4` | source | [trace](runtime-kernel.md) |
 | [`mouse_motion_service_task`](../../src/r/services/mouse_motion_service.rs#L791) (src/r/services/mouse_motion_service.rs:791) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`microfont_warm_task`](../../src/r/services/shell3_font_service.rs#L267) (src/r/services/shell3_font_service.rs:267) | `1` | source | [trace](runtime-kernel.md) |
-| [`spawn_service_task`](../../src/r/services/spawn_service.rs#L1440) (src/r/services/spawn_service.rs:1440) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
+| [`spawn_service_task`](../../src/r/services/spawn_service.rs#L1436) (src/r/services/spawn_service.rs:1436) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`playback_task`](../../src/r/services/video_open_service.rs#L45) (src/r/services/video_open_service.rs:45) | `3` | source | [trace](runtime-kernel.md) |
 | [`worker_task`](../../src/r/services/video_service.rs#L425) (src/r/services/video_service.rs:425) | `3` | source | [trace](runtime-kernel.md) |
 | [`watcher_task`](../../src/r/startup_config.rs#L70) (src/r/startup_config.rs:70) | `1` | source | [trace](runtime-kernel.md) |

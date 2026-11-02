@@ -1599,7 +1599,7 @@
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1440,
+      "line": 1436,
       "symbol": "spawn_service_task",
       "pool_size": "1 (macro default)",
       "context": "source",
@@ -3279,462 +3279,462 @@
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 962,
+      "line": 958,
       "name": "codex-progress-observer",
       "constructor": "enabled_gated",
       "arguments": "\"codex-progress-observer\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, codex_progress_gate, &CODEX_PROGRESS_STARTED, spawn_codex_progress,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 970,
+      "line": 966,
       "name": "job-runner",
       "constructor": "enabled",
       "arguments": "\"job-runner\", 0, &JOB_RUNNER_STARTED, spawn_job_runner"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 971,
+      "line": 967,
       "name": "blueprint-async-fs-service",
       "constructor": "enabled",
       "arguments": "\"blueprint-async-fs-service\", 0, &BLUEPRINT_ASYNC_FS_SERVICE_STARTED, spawn_blueprint_async_fs_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 979,
+      "line": 975,
       "name": "trueosfs-request-broker",
       "constructor": "enabled",
       "arguments": "\"trueosfs-request-broker\", 0, &TRUEOSFS_REQUEST_BROKER_STARTED, spawn_trueosfs_request_broker,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 987,
+      "line": 983,
       "name": "dns-request-broker",
       "constructor": "enabled",
       "arguments": "\"dns-request-broker\", 0, &DNS_REQUEST_BROKER_STARTED, spawn_dns_request_broker,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 993,
+      "line": 989,
       "name": "blocking-service-lanes",
       "constructor": "enabled",
       "arguments": "\"blocking-service-lanes\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &BLOCKING_JOB_DISPATCHER_STARTED, spawn_blocking_service_lanes,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 999,
+      "line": 995,
       "name": "microfont-warm",
       "constructor": "enabled_gated",
       "arguments": "\"microfont-warm\", crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, microfont_warm_gate, &MICROFONT_WARM_STARTED, spawn_microfont_warm,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1007,
+      "line": 1003,
       "name": "ttstt-cpu-service",
       "constructor": "configured_gated",
       "arguments": "crate::allcaps::ttstt::BOOT_RESIDENT_WARM_ENABLED, \"ttstt-cpu-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ttstt_cpu_service_gate, &TTSTT_CPU_SERVICE_STARTED, spawn_ttstt_cpu_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1016,
+      "line": 1012,
       "name": "ttstt-capture-writer",
       "constructor": "enabled",
       "arguments": "\"ttstt-capture-writer\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED, &TTSTT_CAPTURE_WRITER_STARTED, spawn_ttstt_capture_writer,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1022,
+      "line": 1018,
       "name": "smp-hlt-history",
       "constructor": "enabled",
       "arguments": "\"smp-hlt-history\", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1023,
+      "line": 1019,
       "name": "ram-usage-history",
       "constructor": "enabled",
       "arguments": "\"ram-usage-history\", 0, &RAM_USAGE_HISTORY_STARTED, spawn_ram_usage_history"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1025,
+      "line": 1021,
       "name": "codec-service",
       "constructor": "enabled",
       "arguments": "\"codec-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &CODEC_SERVICE_STARTED, spawn_codec_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1031,
+      "line": 1027,
       "name": "vmedia-service",
       "constructor": "enabled",
       "arguments": "\"vmedia-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &VMEDIA_SERVICE_STARTED, spawn_vmedia_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1037,
+      "line": 1033,
       "name": "factory-ram-probe",
       "constructor": "enabled",
       "arguments": "\"factory-ram-probe\", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1038,
+      "line": 1034,
       "name": "trueosfs-mount-service",
       "constructor": "enabled",
       "arguments": "\"trueosfs-mount-service\", 0, &TRUEOSFS_MOUNT_SERVICE_STARTED, spawn_trueosfs_mount_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1044,
+      "line": 1040,
       "name": "trueosfs-index-service",
       "constructor": "enabled",
       "arguments": "\"trueosfs-index-service\", 0, &TRUEOSFS_INDEX_SERVICE_STARTED, spawn_trueosfs_index_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1051,
+      "line": 1047,
       "name": "hv-vm-store",
       "constructor": "enabled",
       "arguments": "\"hv-vm-store\", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1053,
+      "line": 1049,
       "name": "hv-vm-store-net",
       "constructor": "enabled",
       "arguments": "\"hv-vm-store-net\", crate::r::readiness::NET_ANY_CONFIGURED, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1059,
+      "line": 1055,
       "name": "wifi-service",
       "constructor": "enabled_gated",
       "arguments": "\"wifi-service\", 0, wifi_service_gate, &WIFI_SERVICE_STARTED, spawn_wifi_service"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1060,
+      "line": 1056,
       "name": "net-poll-tasks",
       "constructor": "enabled",
       "arguments": "\"net-poll-tasks\", 0, &NET_POLL_STARTED, spawn_net_poll_tasks"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1061,
+      "line": 1057,
       "name": "net-service",
       "constructor": "enabled",
       "arguments": "\"net-service\", 0, &NET_SERVICE_STARTED, spawn_net_service"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1063,
+      "line": 1059,
       "name": "tls-socket-service",
       "constructor": "enabled",
       "arguments": "\"tls-socket-service\", crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &TLS_SOCKET_SERVICE_STARTED, spawn_tls_socket_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1069,
+      "line": 1065,
       "name": "clock-signals",
       "constructor": "enabled",
       "arguments": "\"clock-signals\", 0, &CLOCK_SIGNALS_STARTED, spawn_clock_signals"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1070,
+      "line": 1066,
       "name": "ntp-sync",
       "constructor": "enabled",
       "arguments": "\"ntp-sync\", crate::r::readiness::NET_ANY_CONFIGURED, &NTP_SYNC_STARTED, spawn_ntp_sync,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1076,
+      "line": 1072,
       "name": "sntp-service",
       "constructor": "enabled",
       "arguments": "\"sntp-service\", crate::r::readiness::NET_V4_CONFIGURED, &SNTP_SERVICE_STARTED, spawn_sntp_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1082,
+      "line": 1078,
       "name": "shell3-tcp",
       "constructor": "enabled",
       "arguments": "\"shell3-tcp\", crate::r::readiness::NET_ANY_CONFIGURED, &SHELL3_TCP_STARTED, spawn_shell3_tcp,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1088,
+      "line": 1084,
       "name": "sh3srv",
       "constructor": "enabled_gated",
       "arguments": "\"sh3srv\", 0, shell3_pool_gate, &SH3SRV_STARTED, spawn_sh3srv,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1095,
+      "line": 1091,
       "name": "hid-udp-srv",
       "constructor": "enabled",
       "arguments": "\"hid-udp-srv\", crate::r::readiness::NET_ANY_CONFIGURED, &HID_UDP_SRV_STARTED, spawn_hid_udp_srv,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1101,
+      "line": 1097,
       "name": "logtotcp",
       "constructor": "enabled",
       "arguments": "\"logtotcp\", crate::r::readiness::NET_ANY_CONFIGURED, &LOGTOTCP_STARTED, spawn_logtotcp,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1107,
+      "line": 1103,
       "name": "http-trueosfs",
       "constructor": "enabled_gated",
       "arguments": "\"http-trueosfs\", crate::r::readiness::NET_ANY_CONFIGURED, http_trueosfs_gate, &HTTP_TRUEOSFS_STARTED, spawn_http_trueosfs,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1116,
+      "line": 1112,
       "name": "bp-autostart",
       "constructor": "enabled",
       "arguments": "\"bp-autostart\", BP_AUTOSTART_READY, &BP_AUTOSTART_STARTED, spawn_bp_autostart,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1122,
+      "line": 1118,
       "name": "ws-time",
       "constructor": "enabled",
       "arguments": "\"ws-time\", crate::r::readiness::NET_ANY_CONFIGURED, &WS_TIME_STARTED, spawn_ws_time,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1128,
+      "line": 1124,
       "name": "usb-controller-tasks",
       "constructor": "enabled",
       "arguments": "\"usb-controller-tasks\", 0, &USB_CONTROLLER_TASKS_STARTED, spawn_usb_controller_tasks,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1134,
+      "line": 1130,
       "name": "lan-discovery",
       "constructor": "enabled",
       "arguments": "\"lan-discovery\", crate::r::readiness::NET_ANY_CONFIGURED, &LAN_DISCOVERY_STARTED, spawn_lan_discovery,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1140,
+      "line": 1136,
       "name": "midi-piano-udp",
       "constructor": "enabled",
       "arguments": "\"midi-piano-udp\", crate::r::readiness::NET_ANY_CONFIGURED, &MIDI_PIANO_UDP_STARTED, spawn_midi_piano_udp,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1146,
+      "line": 1142,
       "name": "printer-discovery",
       "constructor": "enabled",
       "arguments": "\"printer-discovery\", crate::r::readiness::NET_ANY_CONFIGURED, &PRINTER_DISCOVERY_STARTED, spawn_printer_discovery,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1152,
+      "line": 1148,
       "name": "printer-spooler",
       "constructor": "enabled",
       "arguments": "\"printer-spooler\", crate::r::readiness::NET_ANY_CONFIGURED, &PRINTER_SPOOLER_STARTED, spawn_printer_spooler,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1159,
+      "line": 1155,
       "name": "gpu-completion-reaper",
       "constructor": "enabled_gated",
       "arguments": "\"gpu-completion-reaper\", 0, intel_device_gate, &GPU_COMPLETION_REAPER_STARTED, spawn_gpu_completion_reaper,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1166,
+      "line": 1162,
       "name": "gpu-fault-containment",
       "constructor": "enabled_gated",
       "arguments": "\"gpu-fault-containment\", 0, gpu_fault_containment_gate, &GPU_FAULT_CONTAINMENT_STARTED, spawn_gpu_fault_containment,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1180,
+      "line": 1176,
       "name": "trueos-spirit",
       "constructor": "enabled_gated",
       "arguments": "\"trueos-spirit\", 0, trueos_spirit_gate, &TRUEOS_SPIRIT_STARTED, spawn_trueos_spirit_workers,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1188,
+      "line": 1184,
       "name": "mouse-motion-service",
       "constructor": "enabled_gated",
       "arguments": "\"mouse-motion-service\", 0, ui_core_ready_gate, &MOUSE_MOTION_SERVICE_STARTED, spawn_mouse_motion_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1195,
+      "line": 1191,
       "name": "keyboard-control-service",
       "constructor": "enabled_gated",
       "arguments": "\"keyboard-control-service\", 0, ui_core_ready_gate, &KEYBOARD_CONTROL_SERVICE_STARTED, spawn_keyboard_control_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1202,
+      "line": 1198,
       "name": "gamepad-control-service",
       "constructor": "enabled_gated",
       "arguments": "\"gamepad-control-service\", 0, ui_core_ready_gate, &GAMEPAD_CONTROL_SERVICE_STARTED, spawn_gamepad_control_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1209,
+      "line": 1205,
       "name": "ui4-input-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-input-service\", 0, ui4_input_gate, &UI4_INPUT_SERVICE_STARTED, spawn_ui4_input_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1216,
+      "line": 1212,
       "name": "ui4-slot4-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-slot4-service\", 0, ui4_slot4_service_gate, &UI4_SLOT4_SERVICE_STARTED, spawn_ui4_slot4_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1223,
+      "line": 1219,
       "name": "ui4-start-button",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-start-button\", 0, ui4_input_gate, &UI4_START_BUTTON_SERVICE_STARTED, spawn_ui4_start_button_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1230,
+      "line": 1226,
       "name": "ui4-screenshot-service",
       "constructor": "enabled",
       "arguments": "\"ui4-screenshot-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &UI4_SCREENSHOT_SERVICE_STARTED, spawn_ui4_screenshot_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1237,
+      "line": 1233,
       "name": "ui4-h264-encode-stream",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-h264-encode-stream\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, h264_stream_service_gate, &UI4_H264_ENCODE_STREAM_STARTED, spawn_ui4_h264_encode_stream_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1244,
+      "line": 1240,
       "name": "ui4-compositor-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-compositor-service\", 0, ui4_compositor_gate, &UI4_COMPOSITOR_STARTED, spawn_ui4_compositor_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1251,
+      "line": 1247,
       "name": "ui4-color-picker",
       "constructor": "enabled",
       "arguments": "\"ui4-color-picker\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_COLOR_PICKER_STARTED, spawn_ui4_color_picker_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1257,
+      "line": 1253,
       "name": "ui4-link-service",
       "constructor": "enabled",
       "arguments": "\"ui4-link-service\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_LINK_SERVICE_STARTED, spawn_ui4_link_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1263,
+      "line": 1259,
       "name": "ui4-codex-prompt-service",
       "constructor": "enabled",
       "arguments": "\"ui4-codex-prompt-service\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_CODEX_PROMPT_SERVICE_STARTED, spawn_ui4_codex_prompt_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1270,
+      "line": 1266,
       "name": "ui4-window-broker-snapshot",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-window-broker-snapshot\", 0, ui4_input_gate, &UI4_WINDOW_BROKER_SNAPSHOT_STARTED, spawn_ui4_window_broker_snapshot_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1277,
+      "line": 1273,
       "name": "ui4-video-conversion-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-video-conversion-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &UI4_VIDEO_CONVERSION_STARTED, spawn_ui4_video_conversion_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1287,
+      "line": 1283,
       "name": "gpgpu-ui4-preview-consumer-service",
       "constructor": "enabled_gated",
       "arguments": "\"gpgpu-ui4-preview-consumer-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &GPGPU_UI4_PREVIEW_CONSUMER_STARTED, spawn_gpgpu_ui4_preview_consumer_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1296,
+      "line": 1292,
       "name": "gpgpu-ui4-svg-probe-consumer-service",
       "constructor": "enabled_gated",
       "arguments": "\"gpgpu-ui4-svg-probe-consumer-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED, spawn_gpgpu_ui4_svg_probe_consumer_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1303,
+      "line": 1299,
       "name": "hw_pic_service",
       "constructor": "enabled_gated",
       "arguments": "\"hw_pic_service\", 0, intel_media_engine_gate, &HW_PIC_SERVICE_STARTED, spawn_hw_pic_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1310,
+      "line": 1306,
       "name": "fallback-logo-ui",
       "constructor": "enabled_gated",
       "arguments": "\"fallback-logo-ui\", 0, fallback_logo_ui_gate, &FALLBACK_LOGO_UI_STARTED, spawn_fallback_logo_ui_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1317,
+      "line": 1313,
       "name": "intel-hda-audio-demo",
       "constructor": "disabled",
       "arguments": "\"intel-hda-audio-demo\", 0, &INTEL_HDA_AUDIO_DEMO_STARTED, spawn_intel_hda_audio_demo_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1323,
+      "line": 1319,
       "name": "raple-service",
       "constructor": "disabled",
       "arguments": "\"raple-service\", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1324,
+      "line": 1320,
       "name": "thermal-service",
       "constructor": "enabled",
       "arguments": "\"thermal-service\", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1325,
+      "line": 1321,
       "name": "html_fetch_service",
       "constructor": "enabled_gated",
       "arguments": "\"html_fetch_service\", crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY, html_shack_gate, &HTML_SHACK_SERVICE_STARTED, html_fetch_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1332,
+      "line": 1328,
       "name": "gna-audio-front-end",
       "constructor": "enabled",
       "arguments": "\"gna-audio-front-end\", crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &GNA_AUDIO_FRONTEND_SERVICE_STARTED, spawn_gna_audio_frontend_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1338,
+      "line": 1334,
       "name": "tinyaudio_service",
       "constructor": "enabled",
       "arguments": "\"tinyaudio_service\", crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &TINYAUDIO_SERVICE_STARTED, spawn_tinyaudio_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1344,
+      "line": 1340,
       "name": "tinyaudio-live-http",
       "constructor": "enabled",
       "arguments": "\"tinyaudio-live-http\", crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::INTEL_HDA_READY, &TINYAUDIO_LIVE_HTTP_STARTED, spawn_tinyaudio_live_http,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1350,
+      "line": 1346,
       "name": "user-input-record-writer",
       "constructor": "enabled_gated",
       "arguments": "\"user-input-record-writer\", 0, user_input_writer_gate, &USER_INPUT_RECORD_WRITER_STARTED, spawn_user_input_record_writer,"
