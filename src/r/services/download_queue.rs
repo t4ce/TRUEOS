@@ -4,10 +4,14 @@ use alloc::{collections::VecDeque, vec::Vec};
 
 pub const CAPACITY: usize = 128;
 pub const MAX_FRAME: usize = 4096 + 1 + 512;
+pub const MAX_RECEIVED_BODY: usize = 4 * 1024 * 1024;
+pub const MAX_RECEIVED_FRAME: usize = MAX_FRAME + 1 + MAX_RECEIVED_BODY;
+const MAX_QUEUED_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct Job {
     pub id: u64,
     pub payload: Vec<u8>,
+    received: bool,
 }
 #[derive(Debug, PartialEq)]
 pub enum Next {
@@ -35,7 +39,27 @@ impl Queue {
         }
     }
     pub fn submit(&mut self, payload: &[u8]) -> Result<u64, ()> {
-        if !valid_submission(payload) || self.pending.len() + self.active.len() >= CAPACITY {
+        self.admit(payload, false)
+    }
+    pub fn submit_received(&mut self, payload: &[u8]) -> Result<u64, ()> {
+        self.admit(payload, true)
+    }
+    fn admit(&mut self, payload: &[u8], received: bool) -> Result<u64, ()> {
+        let valid = if received {
+            valid_received(payload)
+        } else {
+            valid_submission(payload)
+        };
+        let held: usize = self
+            .pending
+            .iter()
+            .chain(&self.active)
+            .map(|job| job.payload.len())
+            .sum();
+        if !valid
+            || self.pending.len() + self.active.len() >= CAPACITY
+            || payload.len() > MAX_QUEUED_BYTES.saturating_sub(held)
+        {
             return Err(());
         }
         self.sequence = self.sequence.checked_add(1).ok_or(())?;
@@ -43,6 +67,7 @@ impl Queue {
         self.pending.push_back(Job {
             id,
             payload: payload.to_vec(),
+            received,
         });
         Ok(id)
     }
@@ -93,7 +118,7 @@ impl Queue {
         }
         if let Some(job) = self.pending.pop_front() {
             let mut bytes = Vec::with_capacity(9 + job.payload.len());
-            bytes.push(b'J');
+            bytes.push(if job.received { b'P' } else { b'J' });
             bytes.extend_from_slice(&job.id.to_le_bytes());
             bytes.extend_from_slice(&job.payload);
             self.active.push_back(job);
@@ -116,6 +141,23 @@ impl Queue {
         self.active.remove(index);
         Ok(())
     }
+}
+pub fn valid_received(bytes: &[u8]) -> bool {
+    if bytes.len() > MAX_RECEIVED_FRAME {
+        return false;
+    }
+    let mut parts = bytes.splitn(3, |byte| *byte == 0);
+    let (Some(url), Some(hint), Some(body)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    if body.len() > MAX_RECEIVED_BODY {
+        return false;
+    }
+    let mut metadata = Vec::with_capacity(url.len() + 1 + hint.len());
+    metadata.extend_from_slice(url);
+    metadata.push(0);
+    metadata.extend_from_slice(hint);
+    valid_submission(&metadata)
 }
 pub fn valid_submission(bytes: &[u8]) -> bool {
     if bytes.len() > MAX_FRAME {
@@ -259,6 +301,32 @@ mod tests {
         }
         producer.join().unwrap();
         assert_eq!(completed.len(), 1000);
+    }
+    #[test]
+    fn received_bytes_survive_crash_and_have_a_total_memory_bound() {
+        let mut q = Queue::new();
+        let mut payload = payload(1);
+        payload.push(0);
+        payload.extend_from_slice(&alloc::vec![0u8;MAX_RECEIVED_BODY]);
+        let id = q.submit_received(&payload).unwrap();
+        let g = worker(&mut q);
+        let Next::Job(frame) = q.next(g, 7, 9).unwrap() else {
+            panic!()
+        };
+        assert_eq!(frame[0], b'P');
+        assert_eq!(&frame[9..], payload);
+        assert!(q.failed(g));
+        let g = worker(&mut q);
+        let Next::Job(frame) = q.next(g, 7, 9).unwrap() else {
+            panic!()
+        };
+        assert_eq!(&frame[9..], payload);
+        q.submit_received(&payload).unwrap();
+        q.submit_received(&payload).unwrap();
+        assert!(q.submit_received(&payload).is_err());
+        q.done(g, 7, 9, id).unwrap();
+        q.submit_received(&payload).unwrap();
+        assert!(q.submit(&payload).is_err());
     }
     #[test]
     fn rejects_bad_frames_and_startup_claim_is_not_lost() {

@@ -57,7 +57,6 @@ pub mod cpu_task_pool {
 
 pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
-    pub const UNIX_FD_PROBE: bool = false;
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     /// One small, non-display Collapse5/merge arithmetic probe is started by

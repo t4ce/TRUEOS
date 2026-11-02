@@ -48,7 +48,7 @@ Pool sizes are task storage capacities, not CPU/thread counts. Caller candidates
 | [`service_task`](../../src/r/fs/request_broker.rs#L1093) (src/r/fs/request_broker.rs:1093) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`mount_service_task`](../../src/r/fs/trueosfs.rs#L278) (src/r/fs/trueosfs.rs:278) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`index_service_task`](../../src/r/fs/trueosfs.rs#L327) (src/r/fs/trueosfs.rs:327) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
-| [`service_task`](../../src/r/io/async_fs_cabi.rs#L1470) (src/r/io/async_fs_cabi.rs:1470) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
+| [`service_task`](../../src/r/io/async_fs_cabi.rs#L1504) (src/r/io/async_fs_cabi.rs:1504) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`launch_archive_task`](../../src/r/io/fs_cabi.rs#L2622) (src/r/io/fs_cabi.rs:2622) | `4` | source | [trace](runtime-kernel.md) |
 | [`ntp_sync_task`](../../src/r/net/cli/ntp.rs#L214) (src/r/net/cli/ntp.rs:214) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`ws_time_task`](../../src/r/net/cli/ws_time.rs#L339) (src/r/net/cli/ws_time.rs:339) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
@@ -64,13 +64,14 @@ Pool sizes are task storage capacities, not CPU/thread counts. Caller candidates
 | [`gna_audio_frontend_service_task`](../../src/r/services/gna_audio_frontend_service.rs#L278) (src/r/services/gna_audio_frontend_service.rs:278) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`hda_capture_task`](../../src/r/services/hda_capture_lane.rs#L1314) (src/r/services/hda_capture_lane.rs:1314) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`hid_udp_srv_task`](../../src/r/services/hid_udp_service.rs#L257) (src/r/services/hid_udp_service.rs:257) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
+| [`launch_worker`](../../src/r/services/hull_download_service.rs#L134) (src/r/services/hull_download_service.rs:134) | `16` | source | [trace](runtime-kernel.md) |
 | [`worker_task`](../../src/r/services/hull_image_service.rs#L396) (src/r/services/hull_image_service.rs:396) | `2` | source | [trace](runtime-kernel.md) |
 | [`launch_task`](../../src/r/services/image_open_service.rs#L33) (src/r/services/image_open_service.rs:33) | `4` | source | [trace](runtime-kernel.md) |
 | [`keyboard_control_service_task`](../../src/r/services/keyboard_control_service.rs#L530) (src/r/services/keyboard_control_service.rs:530) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`worker_task`](../../src/r/services/media_service.rs#L645) (src/r/services/media_service.rs:645) | `4` | source | [trace](runtime-kernel.md) |
 | [`mouse_motion_service_task`](../../src/r/services/mouse_motion_service.rs#L791) (src/r/services/mouse_motion_service.rs:791) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`microfont_warm_task`](../../src/r/services/shell3_font_service.rs#L267) (src/r/services/shell3_font_service.rs:267) | `1` | source | [trace](runtime-kernel.md) |
-| [`spawn_service_task`](../../src/r/services/spawn_service.rs#L1436) (src/r/services/spawn_service.rs:1436) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
+| [`spawn_service_task`](../../src/r/services/spawn_service.rs#L1412) (src/r/services/spawn_service.rs:1412) | `1 (macro default)` | source | [trace](runtime-kernel.md) |
 | [`playback_task`](../../src/r/services/video_open_service.rs#L45) (src/r/services/video_open_service.rs:45) | `3` | source | [trace](runtime-kernel.md) |
 | [`worker_task`](../../src/r/services/video_service.rs#L425) (src/r/services/video_service.rs:425) | `3` | source | [trace](runtime-kernel.md) |
 | [`watcher_task`](../../src/r/startup_config.rs#L70) (src/r/startup_config.rs:70) | `1` | source | [trace](runtime-kernel.md) |
@@ -103,7 +104,7 @@ Pool sizes are task storage capacities, not CPU/thread counts. Caller candidates
 | [`spirit_worker_task`](../../src/spirit/mod.rs#L1179) (src/spirit/mod.rs:1179) | `1` | source | [trace](runtime-kernel.md) |
 | [`spirit_thoughts_task`](../../src/spirit/spirit_thoughts.rs#L894) (src/spirit/spirit_thoughts.rs:894) | `1` | source | [trace](runtime-kernel.md) |
 | [`spirit_window_selection_task`](../../src/spirit/window_selection.rs#L30) (src/spirit/window_selection.rs:30) | `1` | source | [trace](runtime-kernel.md) |
-| [`html_fetch_worker_task`](../../src/surfer/html_shack.rs#L1311) (src/surfer/html_shack.rs:1311) | `10` | source | [trace](runtime-services.md) |
+| [`html_fetch_worker_task`](../../src/surfer/html_shack.rs#L1491) (src/surfer/html_shack.rs:1491) | `10` | source | [trace](runtime-services.md) |
 | [`bf16_helper_boot_exercise_task`](../../src/turbo/avx2_fma_sse2_help.rs#L220) (src/turbo/avx2_fma_sse2_help.rs:220) | `1 (macro default)` | source | [trace](runtime-services.md) |
 | [`service_task`](../../src/turbo/trueos-lumen-cpu-vnni/reference/lfm25_boot_warm.cpu_vnni.rs#L14) (src/turbo/trueos-lumen-cpu-vnni/reference/lfm25_boot_warm.cpu_vnni.rs:14) | `1` | overlay reference | [trace](runtime-services.md) |
 | [`ui4_codex_prompt_service_task`](../../src/ui4/codex_prompt.rs#L71) (src/ui4/codex_prompt.rs:71) | `1` | source | [trace](runtime-services.md) |
@@ -122,7 +123,6 @@ Pool sizes are task storage capacities, not CPU/thread counts. Caller candidates
 | [`ui4_start_button_service_task`](../../src/ui4/start_button.rs#L102) (src/ui4/start_button.rs:102) | `1` | source | [trace](runtime-services.md) |
 | [`ui4_video_conversion_service_task`](../../src/ui4/video_frame.rs#L1054) (src/ui4/video_frame.rs:1054) | `2` | source | [trace](runtime-services.md) |
 | [`ui4_window_broker_snapshot_service_task`](../../src/ui4/window_broker.rs#L1692) (src/ui4/window_broker.rs:1692) | `1` | source | [trace](runtime-services.md) |
-| [`unix_fd_probe_task`](../../src/unix_fd_probe.rs#L749) (src/unix_fd_probe.rs:749) | `1 (macro default)` | source | [trace](runtime-services.md) |
 | [`usb_device_pool_worker_task`](../../src/usb3/dev_gears.rs#L148) (src/usb3/dev_gears.rs:148) | `1 (macro default)` | source | [trace](runtime-services.md) |
 | [`usb_boot_mouse_worker_task`](../../src/usb3/dev_gears.rs#L186) (src/usb3/dev_gears.rs:186) | `1 (macro default)` | source | [trace](runtime-services.md) |
 | [`hid_boot_stream_task`](../../src/usb3/hid/boot.rs#L394) (src/usb3/hid/boot.rs:394) | `8` | source | [trace](runtime-services.md) |

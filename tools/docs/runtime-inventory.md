@@ -20,14 +20,14 @@ Updated 2 November 2026 after [runtime retirement](runtime-retirement.md). Scope
 
 | Measure | Count | Meaning |
 | --- | ---: | --- |
-| Rust files scanned | 796 | All owned Rust under src/crates, across cfg variants. |
+| Rust files scanned | 797 | All owned Rust under src/crates, across cfg variants. |
 | Task declarations | 130 | 128 normal src declarations, one uncompiled turbo reference, and one graphics declaration. A declaration is not a running instance. |
 | Macro task template | 1 | Kept separate; documentation examples are excluded. |
-| Default registry entries | 63 | Includes three explicitly disabled entries and readiness/hardware gates. |
-| All-feature registry entries | 67 | 62 base + one H264 + two TTSTT + two legacy checkpoint entries. |
+| Default registry entries | 62 | Includes two explicitly disabled entries and readiness/hardware gates. |
+| All-feature registry entries | 66 | 61 base + one H264 + two TTSTT + two legacy checkpoint entries. |
 | Workspace packages under crates | 34 | Graphics and shader source directories are additional non-package directories. |
 
-Default features enable H264 streaming, task profiling, and native GPGPU. TTSTT and legacy checkpoints are opt-in; the old Lumen feature has been removed. Three registry entries remain explicitly disabled: Unix FD probe, Intel HDA audio demo, and RAPL service. TTSTT residency also remains blocked by its false warm policy, with no lazy-start caller found.
+Default features enable H264 streaming, task profiling, and native GPGPU. TTSTT and legacy checkpoints are opt-in; the old Lumen feature has been removed. Two registry entries remain explicitly disabled: Intel HDA audio demo and RAPL service. TTSTT residency also remains blocked by its false warm policy, with no lazy-start caller found.
 
 ## Ownership and use
 

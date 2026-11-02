@@ -9,7 +9,7 @@ use crate::r::cabi_codes::*;
 use queue::{Next, Queue};
 
 pub const PREFIX: &str = "vFile:hulldownloads/";
-pub const MAX_FRAME: usize = queue::MAX_FRAME;
+pub const MAX_FRAME: usize = queue::MAX_RECEIVED_FRAME;
 static QUEUE: Mutex<Queue> = Mutex::new(Queue::new());
 
 fn worker_identity(owner: u32) -> Result<u64, i32> {
@@ -42,13 +42,26 @@ pub fn read_for_owner(owner: u32, path: &str) -> Result<Vec<u8>, i32> {
     }
 }
 pub fn write_for_owner(owner: u32, path: &str, bytes: &[u8]) -> Result<(), i32> {
-    if path == "vFile:hulldownloads/submit" {
-        if !queue::valid_submission(bytes) {
+    if matches!(
+        path,
+        "vFile:hulldownloads/submit" | "vFile:hulldownloads/received"
+    ) {
+        let received = path.ends_with("/received");
+        if !(if received {
+            queue::valid_received(bytes)
+        } else {
+            queue::valid_submission(bytes)
+        }) {
             return Err(FS_ERR_BAD_PARAM);
         }
         let spawner = crate::workers::pick_background_spawner().ok_or(FS_ERR_IO)?;
         let mut queue = QUEUE.lock();
-        let id = queue.submit(bytes).map_err(|_| FS_ERR_NO_SPACE)?;
+        let id = (if received {
+            queue.submit_received(bytes)
+        } else {
+            queue.submit(bytes)
+        })
+        .map_err(|_| FS_ERR_NO_SPACE)?;
         if let Some(generation) = queue.begin() {
             let task = match launch_worker(generation, None) {
                 Ok(task) => task,

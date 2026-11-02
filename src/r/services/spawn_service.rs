@@ -96,8 +96,7 @@ define_started_flags!(
     FACTORY_RAM_PROBE_STARTED,
     LOGTOTCP_STARTED,
     TINYAUDIO_SERVICE_STARTED,
-    TINYAUDIO_LIVE_HTTP_STARTED,
-    UNIX_FD_PROBE_STARTED
+    TINYAUDIO_LIVE_HTTP_STARTED
 );
 
 #[cfg(feature = "trueos_ttstt")]
@@ -918,28 +917,6 @@ fn spawn_user_input_record_writer(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::user_input_record::writer_task())
 }
 
-fn spawn_unix_fd_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::unix_fd_probe::unix_fd_probe_task())
-}
-
-const fn unix_fd_probe_task_spec() -> TaskSpec {
-    if crate::allcaps::probes::UNIX_FD_PROBE {
-        TaskSpec::disabled(
-            "unix-fd-probe",
-            crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
-            &UNIX_FD_PROBE_STARTED,
-            spawn_unix_fd_probe,
-        )
-    } else {
-        TaskSpec::disabled(
-            "unix-fd-probe",
-            crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
-            &UNIX_FD_PROBE_STARTED,
-            spawn_unix_fd_probe,
-        )
-    }
-}
-
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::r::restart::restart_apps_task(spawner))
 }
@@ -950,7 +927,7 @@ const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 // Own the AtomicBool fields in a static array; an interior-mutable temporary
 // cannot be promoted behind a shared slice reference.
-const TASK_COUNT: usize = 62
+const TASK_COUNT: usize = 61
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
@@ -1108,7 +1085,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_http_trueosfs,
     ),
 
-    unix_fd_probe_task_spec(),
     TaskSpec::enabled(
         "bp-autostart",
         BP_AUTOSTART_READY,

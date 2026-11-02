@@ -7,7 +7,7 @@
     "Named pool symbols are an index, not a count of live pool instances.",
     "Shader host C/C++ command pools are covered in the reviewed report."
   ],
-  "rust_files_scanned": 796,
+  "rust_files_scanned": 797,
   "task_declarations": [
     {
       "file": "crates/trueos-graphics/decoder/png_decode_pool.rs",
@@ -34,12 +34,12 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 322,
+          "line": 321,
           "spelling": "crate::ai::ttstt_capture::writer_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 918,
+          "line": 917,
           "spelling": "crate::user_input_record::writer_task"
         }
       ],
@@ -70,12 +70,12 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 392,
+          "line": 391,
           "spelling": "crate::r::services::video_service::worker_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 401,
+          "line": 400,
           "spelling": "crate::r::services::media_service::worker_task"
         }
       ],
@@ -96,22 +96,22 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 279,
+          "line": 278,
           "spelling": "crate::r::io::async_fs_cabi::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 283,
+          "line": 282,
           "spelling": "crate::r::fs::request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 287,
+          "line": 286,
           "spelling": "crate::r::net::dns_request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 526,
+          "line": 525,
           "spelling": "crate::chronos::signals::service_task"
         }
       ],
@@ -127,7 +127,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 827,
+          "line": 826,
           "spelling": "crate::aud::audio_live_http::tinyaudio_live_http_task"
         }
       ],
@@ -143,7 +143,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 823,
+          "line": 822,
           "spelling": "crate::aud::esynth::tinyaudio_service_task"
         }
       ],
@@ -164,22 +164,22 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 279,
+          "line": 278,
           "spelling": "crate::r::io::async_fs_cabi::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 283,
+          "line": 282,
           "spelling": "crate::r::fs::request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 287,
+          "line": 286,
           "spelling": "crate::r::net::dns_request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 526,
+          "line": 525,
           "spelling": "crate::chronos::signals::service_task"
         }
       ],
@@ -312,7 +312,7 @@
       "call_candidates": [
         {
           "file": "src/main.rs",
-          "line": 302,
+          "line": 301,
           "spelling": "crate::executor_task_profile::bsp_task_profile_reporter_task"
         }
       ],
@@ -328,7 +328,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 596,
+          "line": 595,
           "spelling": "crate::gpu::vgpu::gpu_fault_containment_task"
         }
       ],
@@ -397,7 +397,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 445,
+          "line": 444,
           "spelling": "crate::hv::store::vm_store_task"
         }
       ],
@@ -413,7 +413,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 450,
+          "line": 449,
           "spelling": "crate::hv::store::vm_store_replication_task"
         }
       ],
@@ -429,7 +429,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 592,
+          "line": 591,
           "spelling": "crate::intel::gpgpu::gpu_completion_reaper_task"
         }
       ],
@@ -450,7 +450,7 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 789,
+          "line": 788,
           "spelling": "crate::intel::hw_pic_service"
         }
       ],
@@ -591,6 +591,11 @@
           "spelling": "trueos_executor::task"
         },
         {
+          "file": "src/r/services/hull_download_service.rs",
+          "line": 134,
+          "spelling": "trueos_executor::task"
+        },
+        {
           "file": "src/r/services/hull_image_service.rs",
           "line": 396,
           "spelling": "trueos_executor::task"
@@ -612,27 +617,27 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 198,
+          "line": 197,
           "spelling": "task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 216,
+          "line": 215,
           "spelling": "task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 235,
+          "line": 234,
           "spelling": "task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 256,
+          "line": 255,
           "spelling": "task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 799,
+          "line": 798,
           "spelling": "crate::intel_hda_audio_demo::task"
         },
         {
@@ -762,7 +767,7 @@
         },
         {
           "file": "src/surfer/html_shack.rs",
-          "line": 1311,
+          "line": 1491,
           "spelling": "trueos_executor::task"
         },
         {
@@ -878,7 +883,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 564,
+          "line": 563,
           "spelling": "crate::log_os::logtotcp::logtotcp_task"
         }
       ],
@@ -931,7 +936,7 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 469,
+          "line": 468,
           "spelling": "crate::net::adapter::net_poll_task"
         }
       ],
@@ -952,7 +957,7 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 493,
+          "line": 492,
           "spelling": "crate::net::adapter::net_service_task"
         },
         {
@@ -973,7 +978,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 521,
+          "line": 520,
           "spelling": "crate::net::tls_socket::tls_socket_service_task"
         }
       ],
@@ -989,7 +994,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 458,
+          "line": 457,
           "spelling": "crate::net::wifi::wifi_service_task"
         }
       ],
@@ -1005,7 +1010,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 804,
+          "line": 803,
           "spelling": "crate::power::rapl::raple_service"
         }
       ],
@@ -1021,7 +1026,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 808,
+          "line": 807,
           "spelling": "crate::power::thermal::thermal_service"
         }
       ],
@@ -1053,7 +1058,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 291,
+          "line": 290,
           "spelling": "crate::r::blocking::blocking_job_dispatcher_task"
         }
       ],
@@ -1069,7 +1074,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 348,
+          "line": 347,
           "spelling": "crate::r::codec::codec_worker_task"
         }
       ],
@@ -1085,7 +1090,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 568,
+          "line": 567,
           "spelling": "crate::r::fs::http_trueosfs::http_trueosfs_task"
         }
       ],
@@ -1106,22 +1111,22 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 279,
+          "line": 278,
           "spelling": "crate::r::io::async_fs_cabi::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 283,
+          "line": 282,
           "spelling": "crate::r::fs::request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 287,
+          "line": 286,
           "spelling": "crate::r::net::dns_request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 526,
+          "line": 525,
           "spelling": "crate::chronos::signals::service_task"
         }
       ],
@@ -1137,7 +1142,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 436,
+          "line": 435,
           "spelling": "crate::r::fs::trueosfs::mount_service_task"
         }
       ],
@@ -1153,7 +1158,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 440,
+          "line": 439,
           "spelling": "crate::r::fs::trueosfs::index_service_task"
         }
       ],
@@ -1162,7 +1167,7 @@
     },
     {
       "file": "src/r/io/async_fs_cabi.rs",
-      "line": 1470,
+      "line": 1504,
       "symbol": "service_task",
       "pool_size": "1 (macro default)",
       "context": "source",
@@ -1174,22 +1179,22 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 279,
+          "line": 278,
           "spelling": "crate::r::io::async_fs_cabi::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 283,
+          "line": 282,
           "spelling": "crate::r::fs::request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 287,
+          "line": 286,
           "spelling": "crate::r::net::dns_request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 526,
+          "line": 525,
           "spelling": "crate::chronos::signals::service_task"
         }
       ],
@@ -1221,7 +1226,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 530,
+          "line": 529,
           "spelling": "crate::r::net::ntp::ntp_sync_task"
         }
       ],
@@ -1237,7 +1242,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 572,
+          "line": 571,
           "spelling": "crate::r::net::cli::ws_time::ws_time_task"
         }
       ],
@@ -1253,7 +1258,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 576,
+          "line": 575,
           "spelling": "crate::r::net::discovery::lan_discovery_task"
         }
       ],
@@ -1274,22 +1279,22 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 279,
+          "line": 278,
           "spelling": "crate::r::io::async_fs_cabi::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 283,
+          "line": 282,
           "spelling": "crate::r::fs::request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 287,
+          "line": 286,
           "spelling": "crate::r::net::dns_request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 526,
+          "line": 525,
           "spelling": "crate::chronos::signals::service_task"
         }
       ],
@@ -1305,7 +1310,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 588,
+          "line": 587,
           "spelling": "crate::r::net::midi_udp::midi_piano_udp_task"
         }
       ],
@@ -1321,7 +1326,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 580,
+          "line": 579,
           "spelling": "crate::r::net::printer::printer_discovery_task"
         }
       ],
@@ -1337,7 +1342,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 584,
+          "line": 583,
           "spelling": "crate::r::net::printer::printer_spooler_task"
         }
       ],
@@ -1353,7 +1358,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 534,
+          "line": 533,
           "spelling": "crate::r::net::sntp::sntp_service_task"
         }
       ],
@@ -1369,7 +1374,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 944,
+          "line": 921,
           "spelling": "crate::r::restart::restart_apps_task"
         }
       ],
@@ -1385,7 +1390,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 555,
+          "line": 554,
           "spelling": "super::codex_progress_service::codex_progress_task"
         }
       ],
@@ -1401,7 +1406,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 679,
+          "line": 678,
           "spelling": "crate::r::services::gamepad_control_service::gamepad_control_service_task"
         }
       ],
@@ -1417,7 +1422,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 818,
+          "line": 817,
           "spelling": "crate::r::services::gna_audio_frontend_service::gna_audio_frontend_service_task"
         }
       ],
@@ -1449,8 +1454,29 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 547,
+          "line": 546,
           "spelling": "crate::r::services::hid_udp_service::hid_udp_srv_task"
+        }
+      ],
+      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
+      "trace_report": "runtime-kernel.md"
+    },
+    {
+      "file": "src/r/services/hull_download_service.rs",
+      "line": 134,
+      "symbol": "launch_worker",
+      "pool_size": "16",
+      "context": "source",
+      "call_candidates": [
+        {
+          "file": "src/r/services/hull_download_service.rs",
+          "line": 66,
+          "spelling": "launch_worker"
+        },
+        {
+          "file": "src/r/services/hull_download_service.rs",
+          "line": 119,
+          "spelling": "launch_worker"
         }
       ],
       "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
@@ -1480,12 +1506,12 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 392,
+          "line": 391,
           "spelling": "crate::r::services::video_service::worker_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 401,
+          "line": 400,
           "spelling": "crate::r::services::media_service::worker_task"
         }
       ],
@@ -1522,7 +1548,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 673,
+          "line": 672,
           "spelling": "crate::r::services::keyboard_control_service::keyboard_control_service_task"
         }
       ],
@@ -1553,12 +1579,12 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 392,
+          "line": 391,
           "spelling": "crate::r::services::video_service::worker_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 401,
+          "line": 400,
           "spelling": "crate::r::services::media_service::worker_task"
         }
       ],
@@ -1574,7 +1600,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 667,
+          "line": 666,
           "spelling": "crate::r::services::mouse_motion_service::mouse_motion_service_task"
         }
       ],
@@ -1590,7 +1616,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 303,
+          "line": 302,
           "spelling": "super::shell3_font_service::microfont_warm_task"
         }
       ],
@@ -1599,14 +1625,14 @@
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1436,
+      "line": 1412,
       "symbol": "spawn_service_task",
       "pool_size": "1 (macro default)",
       "context": "source",
       "call_candidates": [
         {
           "file": "src/main.rs",
-          "line": 307,
+          "line": 306,
           "spelling": "crate::r::services::spawn_service::spawn_service_task"
         }
       ],
@@ -1653,12 +1679,12 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 392,
+          "line": 391,
           "spelling": "crate::r::services::video_service::worker_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 401,
+          "line": 400,
           "spelling": "crate::r::services::media_service::worker_task"
         }
       ],
@@ -1722,7 +1748,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 432,
+          "line": 431,
           "spelling": "crate::ram_probe::boot_factory_ram_probe_task"
         }
       ],
@@ -1738,7 +1764,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 330,
+          "line": 329,
           "spelling": "crate::ram_usage::history_sampler_task"
         }
       ],
@@ -2054,17 +2080,17 @@
         },
         {
           "file": "src/r/net/https.rs",
-          "line": 1332,
+          "line": 1445,
           "spelling": "drain"
         },
         {
           "file": "src/r/net/https.rs",
-          "line": 1370,
+          "line": 1483,
           "spelling": "drain"
         },
         {
           "file": "src/r/net/https.rs",
-          "line": 2721,
+          "line": 3059,
           "spelling": "drain"
         },
         {
@@ -2206,7 +2232,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 543,
+          "line": 542,
           "spelling": "crate::shell3::net::terminal_task"
         }
       ],
@@ -2624,7 +2650,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 326,
+          "line": 325,
           "spelling": "crate::smp::hlt_history_sampler_task"
         }
       ],
@@ -2640,7 +2666,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 620,
+          "line": 619,
           "spelling": "crate::spirit::spirit_cursor_task"
         }
       ],
@@ -2656,7 +2682,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 607,
+          "line": 606,
           "spelling": "crate::spirit::spirit_worker_task"
         }
       ],
@@ -2672,7 +2698,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 651,
+          "line": 650,
           "spelling": "crate::spirit::spirit_thoughts::spirit_thoughts_task"
         }
       ],
@@ -2688,7 +2714,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 641,
+          "line": 640,
           "spelling": "crate::spirit::spirit_window_selection_task"
         }
       ],
@@ -2697,7 +2723,7 @@
     },
     {
       "file": "src/surfer/html_shack.rs",
-      "line": 1311,
+      "line": 1491,
       "symbol": "html_fetch_worker_task",
       "pool_size": "10",
       "context": "source",
@@ -2735,22 +2761,22 @@
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 279,
+          "line": 278,
           "spelling": "crate::r::io::async_fs_cabi::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 283,
+          "line": 282,
           "spelling": "crate::r::fs::request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 287,
+          "line": 286,
           "spelling": "crate::r::net::dns_request_broker::service_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 526,
+          "line": 525,
           "spelling": "crate::chronos::signals::service_task"
         }
       ],
@@ -2766,7 +2792,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 739,
+          "line": 738,
           "spelling": "crate::ui4::ui4_codex_prompt_service_task"
         }
       ],
@@ -2782,7 +2808,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 729,
+          "line": 728,
           "spelling": "crate::ui4::ui4_color_picker_service_task"
         }
       ],
@@ -2798,7 +2824,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 725,
+          "line": 724,
           "spelling": "crate::ui4::ui4_compositor_service_task"
         }
       ],
@@ -2814,7 +2840,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 778,
+          "line": 777,
           "spelling": "crate::ui4::gpgpu_preview_consumer_service_task"
         }
       ],
@@ -2830,7 +2856,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 784,
+          "line": 783,
           "spelling": "crate::ui4::gpgpu_svg_probe_consumer_service_task"
         }
       ],
@@ -2846,7 +2872,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 703,
+          "line": 702,
           "spelling": "crate::ui4::ui4_h264_encode_prepare_task"
         }
       ],
@@ -2862,7 +2888,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 707,
+          "line": 706,
           "spelling": "crate::ui4::ui4_h264_encode_stream_task"
         }
       ],
@@ -2878,7 +2904,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 711,
+          "line": 710,
           "spelling": "crate::ui4::ui4_h264_encode_udp_egress_task"
         }
       ],
@@ -2894,7 +2920,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 684,
+          "line": 683,
           "spelling": "crate::ui4::ui4_input_service_task"
         }
       ],
@@ -2926,7 +2952,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 735,
+          "line": 734,
           "spelling": "crate::ui4::ui4_link_service_task"
         }
       ],
@@ -2942,7 +2968,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 696,
+          "line": 695,
           "spelling": "crate::ui4::ui4_screenshot_service_task"
         }
       ],
@@ -2958,7 +2984,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 688,
+          "line": 687,
           "spelling": "crate::ui4::ui4_slot4_service_task"
         }
       ],
@@ -2974,7 +3000,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 692,
+          "line": 691,
           "spelling": "crate::ui4::ui4_start_button_service_task"
         }
       ],
@@ -2990,7 +3016,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 754,
+          "line": 753,
           "spelling": "crate::ui4::ui4_video_conversion_service_task"
         }
       ],
@@ -3006,24 +3032,8 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 743,
+          "line": 742,
           "spelling": "crate::ui4::ui4_window_broker_snapshot_service_task"
-        }
-      ],
-      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
-      "trace_report": "runtime-services.md"
-    },
-    {
-      "file": "src/unix_fd_probe.rs",
-      "line": 749,
-      "symbol": "unix_fd_probe_task",
-      "pool_size": "1 (macro default)",
-      "context": "source",
-      "call_candidates": [
-        {
-          "file": "src/r/services/spawn_service.rs",
-          "line": 922,
-          "spelling": "crate::unix_fd_probe::unix_fd_probe_task"
         }
       ],
       "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
@@ -3128,7 +3138,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 914,
+          "line": 913,
           "spelling": "crate::usb2::usb_controller_service_task"
         }
       ],
@@ -3208,12 +3218,12 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 322,
+          "line": 321,
           "spelling": "crate::ai::ttstt_capture::writer_task"
         },
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 918,
+          "line": 917,
           "spelling": "crate::user_input_record::writer_task"
         }
       ],
@@ -3245,7 +3255,7 @@
       "call_candidates": [
         {
           "file": "src/r/services/spawn_service.rs",
-          "line": 275,
+          "line": 274,
           "spelling": "crate::wait::job_runner_task"
         }
       ],
@@ -3265,476 +3275,462 @@
   "registry_constructors": [
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 927,
-      "name": "unix-fd-probe",
-      "constructor": "disabled",
-      "arguments": "\"unix-fd-probe\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY, &UNIX_FD_PROBE_STARTED, spawn_unix_fd_probe,"
-    },
-    {
-      "file": "src/r/services/spawn_service.rs",
-      "line": 934,
-      "name": "unix-fd-probe",
-      "constructor": "disabled",
-      "arguments": "\"unix-fd-probe\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY, &UNIX_FD_PROBE_STARTED, spawn_unix_fd_probe,"
-    },
-    {
-      "file": "src/r/services/spawn_service.rs",
-      "line": 958,
+      "line": 935,
       "name": "codex-progress-observer",
       "constructor": "enabled_gated",
       "arguments": "\"codex-progress-observer\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, codex_progress_gate, &CODEX_PROGRESS_STARTED, spawn_codex_progress,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 966,
+      "line": 943,
       "name": "job-runner",
       "constructor": "enabled",
       "arguments": "\"job-runner\", 0, &JOB_RUNNER_STARTED, spawn_job_runner"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 967,
+      "line": 944,
       "name": "blueprint-async-fs-service",
       "constructor": "enabled",
       "arguments": "\"blueprint-async-fs-service\", 0, &BLUEPRINT_ASYNC_FS_SERVICE_STARTED, spawn_blueprint_async_fs_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 975,
+      "line": 952,
       "name": "trueosfs-request-broker",
       "constructor": "enabled",
       "arguments": "\"trueosfs-request-broker\", 0, &TRUEOSFS_REQUEST_BROKER_STARTED, spawn_trueosfs_request_broker,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 983,
+      "line": 960,
       "name": "dns-request-broker",
       "constructor": "enabled",
       "arguments": "\"dns-request-broker\", 0, &DNS_REQUEST_BROKER_STARTED, spawn_dns_request_broker,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 989,
+      "line": 966,
       "name": "blocking-service-lanes",
       "constructor": "enabled",
       "arguments": "\"blocking-service-lanes\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &BLOCKING_JOB_DISPATCHER_STARTED, spawn_blocking_service_lanes,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 995,
+      "line": 972,
       "name": "microfont-warm",
       "constructor": "enabled_gated",
       "arguments": "\"microfont-warm\", crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, microfont_warm_gate, &MICROFONT_WARM_STARTED, spawn_microfont_warm,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1003,
+      "line": 980,
       "name": "ttstt-cpu-service",
       "constructor": "configured_gated",
       "arguments": "crate::allcaps::ttstt::BOOT_RESIDENT_WARM_ENABLED, \"ttstt-cpu-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ttstt_cpu_service_gate, &TTSTT_CPU_SERVICE_STARTED, spawn_ttstt_cpu_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1012,
+      "line": 989,
       "name": "ttstt-capture-writer",
       "constructor": "enabled",
       "arguments": "\"ttstt-capture-writer\", crate::r::readiness::TRUEOSFS_ROOT_MOUNTED, &TTSTT_CAPTURE_WRITER_STARTED, spawn_ttstt_capture_writer,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1018,
+      "line": 995,
       "name": "smp-hlt-history",
       "constructor": "enabled",
       "arguments": "\"smp-hlt-history\", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1019,
+      "line": 996,
       "name": "ram-usage-history",
       "constructor": "enabled",
       "arguments": "\"ram-usage-history\", 0, &RAM_USAGE_HISTORY_STARTED, spawn_ram_usage_history"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1021,
+      "line": 998,
       "name": "codec-service",
       "constructor": "enabled",
       "arguments": "\"codec-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &CODEC_SERVICE_STARTED, spawn_codec_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1027,
+      "line": 1004,
       "name": "vmedia-service",
       "constructor": "enabled",
       "arguments": "\"vmedia-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &VMEDIA_SERVICE_STARTED, spawn_vmedia_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1033,
+      "line": 1010,
       "name": "factory-ram-probe",
       "constructor": "enabled",
       "arguments": "\"factory-ram-probe\", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1034,
+      "line": 1011,
       "name": "trueosfs-mount-service",
       "constructor": "enabled",
       "arguments": "\"trueosfs-mount-service\", 0, &TRUEOSFS_MOUNT_SERVICE_STARTED, spawn_trueosfs_mount_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1040,
+      "line": 1017,
       "name": "trueosfs-index-service",
       "constructor": "enabled",
       "arguments": "\"trueosfs-index-service\", 0, &TRUEOSFS_INDEX_SERVICE_STARTED, spawn_trueosfs_index_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1047,
+      "line": 1024,
       "name": "hv-vm-store",
       "constructor": "enabled",
       "arguments": "\"hv-vm-store\", 0, &HV_VM_STORE_STARTED, spawn_hv_vm_store"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1049,
+      "line": 1026,
       "name": "hv-vm-store-net",
       "constructor": "enabled",
       "arguments": "\"hv-vm-store-net\", crate::r::readiness::NET_ANY_CONFIGURED, &HV_VM_STORE_NET_STARTED, spawn_hv_vm_store_net,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1055,
+      "line": 1032,
       "name": "wifi-service",
       "constructor": "enabled_gated",
       "arguments": "\"wifi-service\", 0, wifi_service_gate, &WIFI_SERVICE_STARTED, spawn_wifi_service"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1056,
+      "line": 1033,
       "name": "net-poll-tasks",
       "constructor": "enabled",
       "arguments": "\"net-poll-tasks\", 0, &NET_POLL_STARTED, spawn_net_poll_tasks"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1057,
+      "line": 1034,
       "name": "net-service",
       "constructor": "enabled",
       "arguments": "\"net-service\", 0, &NET_SERVICE_STARTED, spawn_net_service"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1059,
+      "line": 1036,
       "name": "tls-socket-service",
       "constructor": "enabled",
       "arguments": "\"tls-socket-service\", crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &TLS_SOCKET_SERVICE_STARTED, spawn_tls_socket_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1065,
+      "line": 1042,
       "name": "clock-signals",
       "constructor": "enabled",
       "arguments": "\"clock-signals\", 0, &CLOCK_SIGNALS_STARTED, spawn_clock_signals"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1066,
+      "line": 1043,
       "name": "ntp-sync",
       "constructor": "enabled",
       "arguments": "\"ntp-sync\", crate::r::readiness::NET_ANY_CONFIGURED, &NTP_SYNC_STARTED, spawn_ntp_sync,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1072,
+      "line": 1049,
       "name": "sntp-service",
       "constructor": "enabled",
       "arguments": "\"sntp-service\", crate::r::readiness::NET_V4_CONFIGURED, &SNTP_SERVICE_STARTED, spawn_sntp_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1078,
+      "line": 1055,
       "name": "shell3-tcp",
       "constructor": "enabled",
       "arguments": "\"shell3-tcp\", crate::r::readiness::NET_ANY_CONFIGURED, &SHELL3_TCP_STARTED, spawn_shell3_tcp,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1084,
+      "line": 1061,
       "name": "sh3srv",
       "constructor": "enabled_gated",
       "arguments": "\"sh3srv\", 0, shell3_pool_gate, &SH3SRV_STARTED, spawn_sh3srv,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1091,
+      "line": 1068,
       "name": "hid-udp-srv",
       "constructor": "enabled",
       "arguments": "\"hid-udp-srv\", crate::r::readiness::NET_ANY_CONFIGURED, &HID_UDP_SRV_STARTED, spawn_hid_udp_srv,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1097,
+      "line": 1074,
       "name": "logtotcp",
       "constructor": "enabled",
       "arguments": "\"logtotcp\", crate::r::readiness::NET_ANY_CONFIGURED, &LOGTOTCP_STARTED, spawn_logtotcp,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1103,
+      "line": 1080,
       "name": "http-trueosfs",
       "constructor": "enabled_gated",
       "arguments": "\"http-trueosfs\", crate::r::readiness::NET_ANY_CONFIGURED, http_trueosfs_gate, &HTTP_TRUEOSFS_STARTED, spawn_http_trueosfs,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1112,
+      "line": 1088,
       "name": "bp-autostart",
       "constructor": "enabled",
       "arguments": "\"bp-autostart\", BP_AUTOSTART_READY, &BP_AUTOSTART_STARTED, spawn_bp_autostart,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1118,
+      "line": 1094,
       "name": "ws-time",
       "constructor": "enabled",
       "arguments": "\"ws-time\", crate::r::readiness::NET_ANY_CONFIGURED, &WS_TIME_STARTED, spawn_ws_time,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1124,
+      "line": 1100,
       "name": "usb-controller-tasks",
       "constructor": "enabled",
       "arguments": "\"usb-controller-tasks\", 0, &USB_CONTROLLER_TASKS_STARTED, spawn_usb_controller_tasks,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1130,
+      "line": 1106,
       "name": "lan-discovery",
       "constructor": "enabled",
       "arguments": "\"lan-discovery\", crate::r::readiness::NET_ANY_CONFIGURED, &LAN_DISCOVERY_STARTED, spawn_lan_discovery,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1136,
+      "line": 1112,
       "name": "midi-piano-udp",
       "constructor": "enabled",
       "arguments": "\"midi-piano-udp\", crate::r::readiness::NET_ANY_CONFIGURED, &MIDI_PIANO_UDP_STARTED, spawn_midi_piano_udp,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1142,
+      "line": 1118,
       "name": "printer-discovery",
       "constructor": "enabled",
       "arguments": "\"printer-discovery\", crate::r::readiness::NET_ANY_CONFIGURED, &PRINTER_DISCOVERY_STARTED, spawn_printer_discovery,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1148,
+      "line": 1124,
       "name": "printer-spooler",
       "constructor": "enabled",
       "arguments": "\"printer-spooler\", crate::r::readiness::NET_ANY_CONFIGURED, &PRINTER_SPOOLER_STARTED, spawn_printer_spooler,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1155,
+      "line": 1131,
       "name": "gpu-completion-reaper",
       "constructor": "enabled_gated",
       "arguments": "\"gpu-completion-reaper\", 0, intel_device_gate, &GPU_COMPLETION_REAPER_STARTED, spawn_gpu_completion_reaper,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1162,
+      "line": 1138,
       "name": "gpu-fault-containment",
       "constructor": "enabled_gated",
       "arguments": "\"gpu-fault-containment\", 0, gpu_fault_containment_gate, &GPU_FAULT_CONTAINMENT_STARTED, spawn_gpu_fault_containment,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1176,
+      "line": 1152,
       "name": "trueos-spirit",
       "constructor": "enabled_gated",
       "arguments": "\"trueos-spirit\", 0, trueos_spirit_gate, &TRUEOS_SPIRIT_STARTED, spawn_trueos_spirit_workers,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1184,
+      "line": 1160,
       "name": "mouse-motion-service",
       "constructor": "enabled_gated",
       "arguments": "\"mouse-motion-service\", 0, ui_core_ready_gate, &MOUSE_MOTION_SERVICE_STARTED, spawn_mouse_motion_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1191,
+      "line": 1167,
       "name": "keyboard-control-service",
       "constructor": "enabled_gated",
       "arguments": "\"keyboard-control-service\", 0, ui_core_ready_gate, &KEYBOARD_CONTROL_SERVICE_STARTED, spawn_keyboard_control_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1198,
+      "line": 1174,
       "name": "gamepad-control-service",
       "constructor": "enabled_gated",
       "arguments": "\"gamepad-control-service\", 0, ui_core_ready_gate, &GAMEPAD_CONTROL_SERVICE_STARTED, spawn_gamepad_control_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1205,
+      "line": 1181,
       "name": "ui4-input-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-input-service\", 0, ui4_input_gate, &UI4_INPUT_SERVICE_STARTED, spawn_ui4_input_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1212,
+      "line": 1188,
       "name": "ui4-slot4-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-slot4-service\", 0, ui4_slot4_service_gate, &UI4_SLOT4_SERVICE_STARTED, spawn_ui4_slot4_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1219,
+      "line": 1195,
       "name": "ui4-start-button",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-start-button\", 0, ui4_input_gate, &UI4_START_BUTTON_SERVICE_STARTED, spawn_ui4_start_button_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1226,
+      "line": 1202,
       "name": "ui4-screenshot-service",
       "constructor": "enabled",
       "arguments": "\"ui4-screenshot-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, &UI4_SCREENSHOT_SERVICE_STARTED, spawn_ui4_screenshot_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1233,
+      "line": 1209,
       "name": "ui4-h264-encode-stream",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-h264-encode-stream\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, h264_stream_service_gate, &UI4_H264_ENCODE_STREAM_STARTED, spawn_ui4_h264_encode_stream_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1240,
+      "line": 1216,
       "name": "ui4-compositor-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-compositor-service\", 0, ui4_compositor_gate, &UI4_COMPOSITOR_STARTED, spawn_ui4_compositor_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1247,
+      "line": 1223,
       "name": "ui4-color-picker",
       "constructor": "enabled",
       "arguments": "\"ui4-color-picker\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_COLOR_PICKER_STARTED, spawn_ui4_color_picker_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1253,
+      "line": 1229,
       "name": "ui4-link-service",
       "constructor": "enabled",
       "arguments": "\"ui4-link-service\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_LINK_SERVICE_STARTED, spawn_ui4_link_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1259,
+      "line": 1235,
       "name": "ui4-codex-prompt-service",
       "constructor": "enabled",
       "arguments": "\"ui4-codex-prompt-service\", crate::r::readiness::UI4_COMPOSITOR_READY, &UI4_CODEX_PROMPT_SERVICE_STARTED, spawn_ui4_codex_prompt_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1266,
+      "line": 1242,
       "name": "ui4-window-broker-snapshot",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-window-broker-snapshot\", 0, ui4_input_gate, &UI4_WINDOW_BROKER_SNAPSHOT_STARTED, spawn_ui4_window_broker_snapshot_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1273,
+      "line": 1249,
       "name": "ui4-video-conversion-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-video-conversion-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &UI4_VIDEO_CONVERSION_STARTED, spawn_ui4_video_conversion_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1283,
+      "line": 1259,
       "name": "gpgpu-ui4-preview-consumer-service",
       "constructor": "enabled_gated",
       "arguments": "\"gpgpu-ui4-preview-consumer-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &GPGPU_UI4_PREVIEW_CONSUMER_STARTED, spawn_gpgpu_ui4_preview_consumer_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1292,
+      "line": 1268,
       "name": "gpgpu-ui4-svg-probe-consumer-service",
       "constructor": "enabled_gated",
       "arguments": "\"gpgpu-ui4-svg-probe-consumer-service\", crate::r::readiness::BACKGROUND_AP_WORKER_READY, ui4_compositor_gate, &GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED, spawn_gpgpu_ui4_svg_probe_consumer_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1299,
+      "line": 1275,
       "name": "hw_pic_service",
       "constructor": "enabled_gated",
       "arguments": "\"hw_pic_service\", 0, intel_media_engine_gate, &HW_PIC_SERVICE_STARTED, spawn_hw_pic_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1306,
+      "line": 1282,
       "name": "fallback-logo-ui",
       "constructor": "enabled_gated",
       "arguments": "\"fallback-logo-ui\", 0, fallback_logo_ui_gate, &FALLBACK_LOGO_UI_STARTED, spawn_fallback_logo_ui_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1313,
+      "line": 1289,
       "name": "intel-hda-audio-demo",
       "constructor": "disabled",
       "arguments": "\"intel-hda-audio-demo\", 0, &INTEL_HDA_AUDIO_DEMO_STARTED, spawn_intel_hda_audio_demo_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1319,
+      "line": 1295,
       "name": "raple-service",
       "constructor": "disabled",
       "arguments": "\"raple-service\", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1320,
+      "line": 1296,
       "name": "thermal-service",
       "constructor": "enabled",
       "arguments": "\"thermal-service\", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1321,
+      "line": 1297,
       "name": "html_fetch_service",
       "constructor": "enabled_gated",
       "arguments": "\"html_fetch_service\", crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY, html_shack_gate, &HTML_SHACK_SERVICE_STARTED, html_fetch_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1328,
+      "line": 1304,
       "name": "gna-audio-front-end",
       "constructor": "enabled",
       "arguments": "\"gna-audio-front-end\", crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &GNA_AUDIO_FRONTEND_SERVICE_STARTED, spawn_gna_audio_frontend_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1334,
+      "line": 1310,
       "name": "tinyaudio_service",
       "constructor": "enabled",
       "arguments": "\"tinyaudio_service\", crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY, &TINYAUDIO_SERVICE_STARTED, spawn_tinyaudio_service,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1340,
+      "line": 1316,
       "name": "tinyaudio-live-http",
       "constructor": "enabled",
       "arguments": "\"tinyaudio-live-http\", crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::INTEL_HDA_READY, &TINYAUDIO_LIVE_HTTP_STARTED, spawn_tinyaudio_live_http,"
     },
     {
       "file": "src/r/services/spawn_service.rs",
-      "line": 1346,
+      "line": 1322,
       "name": "user-input-record-writer",
       "constructor": "enabled_gated",
       "arguments": "\"user-input-record-writer\", 0, user_input_writer_gate, &USER_INPUT_RECORD_WRITER_STARTED, spawn_user_input_record_writer,"
@@ -3855,6 +3851,7 @@
     "src/r/services/gamepad_control_service.rs",
     "src/r/services/gna_audio_frontend_service.rs",
     "src/r/services/hid_udp_service.rs",
+    "src/r/services/hull_download_service.rs",
     "src/r/services/hull_font_service.rs",
     "src/r/services/hull_image_service.rs",
     "src/r/services/ide_source_service.rs",

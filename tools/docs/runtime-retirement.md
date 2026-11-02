@@ -12,12 +12,13 @@ Updated 2 November 2026. TRUEOS has no wired local LLM inference service for gen
 | Network throughput tasks | Removed both benchmark tasks, boot wrapper, timing/buffer settings, and reserved benchmark port. The benchmark was policy-disabled; normal networking and its workers remain. |
 | USB LED probe | Removed its disconnected start helpers/task and HID module declaration. No active device-discovery caller was found. |
 | Filesystem read/write probe | Removed the disabled 500 KiB create/write/read/compare/delete task and its helpers. Normal filesystem services and their tests remain. |
+| Unix FD probe | Removed the disabled one-shot POSIX/Unix compatibility smoke test, its boot wrapper/spec, started flag, and ineffective configuration switch. It tested file I/O, descriptor flags, polling, socket/terminal operations, and persistence by calling the real compatibility layer. Both switch branches disabled it; no other caller was found. The actual Unix FD/socket implementation remains. |
 | Panic test | Removed `atomic_bomb_task`, which deliberately panicked after a delay, together with its disabled boot entry. |
 | Post-restart logger | Removed `atomic_bomb_after_restart_task`, which did not panic: it waited two seconds and printed post-restart messages. This was a diagnostic attached to AP startup retry. The guarded startup-retry mechanism remains and still refuses replacement of an already-published executor or a VM-owned continuation. |
 | Executor migration smoke test | Removed the disabled BSP/AP migration probe and its diagnostic helpers. It exercised migration; it did not provide recovery or instantiate a nested Realm. The general executor migration API remains library infrastructure. |
 | Network cache service | Removed its boot task and module. It was a RAM byte store with SHA-256 verification: 64 cache entries, a 32-request queue, and a 32-completion table. No callers of store/load/verify submission or direct storage APIs were found outside the module. The task otherwise woke every millisecond with no producer. It was unrelated to DNS caching, HTTP connection reuse, packet-buffer recycling, or hardware caches. |
 
-Seventeen concrete task declarations were removed from the November working tree, including the two dependent FPGA camera tasks. The [current index](runtime-task-index.md) contains 130 declarations across all cfg variants, including one uncompiled reference overlay. The registry has 63 entries with default features and 67 across optional features.
+Eighteen concrete task declarations were removed from the November working tree, including the two dependent FPGA camera tasks. The [current index](runtime-task-index.md) contains 130 declarations across all cfg variants, including one uncompiled reference overlay. The registry has 62 entries with default features and 66 across optional features.
 
 ## Spirit capabilities retained
 
@@ -36,3 +37,5 @@ Those are real consumers, so the visible panel and allocation ownership remain. 
 ## Validation
 
 Kernel type checks passed for default features and `trueos_ttstt` using the verified 12-application builtin set. A final repeat was blocked after the separate builtin configuration began referencing the missing `TRUEOS-Buildins/hyper/Cargo.toml`; that configuration was not changed for this cleanup. Behavioral tests cover unavailable inference endpoints, unchanged output buffers, preserved Spirit direct/guest presentation, Spirit agent transport and sequencer behavior, and retained Wi-Fi status painting. This cleanup does not claim a physical hardware boot or runtime liveness measurement.
+
+The Unix FD probe follow-up passed the production socket-registry ownership/retirement host test. A kernel check was attempted but stopped in the builtin verification step because the prepared builtins are stale; it did not reach kernel compilation.

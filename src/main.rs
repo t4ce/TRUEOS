@@ -81,7 +81,6 @@ mod ui4;
 mod unix_abi_shim;
 mod unix_compat;
 mod update_bundle;
-mod unix_fd_probe;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
 mod user_input_record;

@@ -32,6 +32,8 @@ const HTTPS_EVENT_DRAIN_MAX: usize = 512;
 const HTTPS_COMMAND_QUEUE_DEPTH: usize = 128;
 const HTTPS_EVENT_QUEUE_DEPTH: usize = 1024;
 const HTTPS_RESPONSE_OVERHEAD_MAX: usize = 4096;
+// Redirects from GitHub carry CSP and signed Location headers exceeding 4 KiB.
+const HTTPS_PROBE_HEADER_MAX: usize = 32 * 1024;
 const HTTPS_RESOLVED_HOST_CACHE_MAX: usize = 8;
 const HTTPS_IDLE_SLEEP_MS: u64 = 100;
 const HTTPS_CLIENT_WAIT_MS: u64 = 10;
@@ -992,7 +994,7 @@ fn append_head_response_headers(
     response: &mut Vec<u8>,
     data: &[u8],
 ) -> Result<Option<HttpsJsonResponse>, String> {
-    let room = HTTPS_RESPONSE_OVERHEAD_MAX.saturating_sub(response.len());
+    let room = HTTPS_PROBE_HEADER_MAX.saturating_sub(response.len());
     let take = data.len().min(room);
     response.extend_from_slice(&data[..take]);
     if let Some(parsed) = complete_http_head_response(response.as_slice())? {
@@ -1003,7 +1005,7 @@ fn append_head_response_headers(
         response.truncate(prefix_len + header_end);
         return Ok(Some(parsed));
     }
-    if take != data.len() || response.len() >= HTTPS_RESPONSE_OVERHEAD_MAX {
+    if take != data.len() || response.len() >= HTTPS_PROBE_HEADER_MAX {
         return Err(String::from("too large response headers"));
     }
     Ok(None)
@@ -2803,6 +2805,40 @@ mod tests {
         let response = complete_http_head_response(complete).unwrap().unwrap();
         assert_eq!(response.content_type.as_deref(), Some("text/html"));
         assert!(response.body.is_empty());
+    }
+
+    #[test]
+    fn navigation_probe_accepts_large_github_style_redirect_headers() {
+        let headers = format!(
+            "HTTP/1.1 302 Found\r\nLocation: https://release-assets.githubusercontent.com/file.exe?sig={}\r\nContent-Security-Policy: {}\r\nContent-Length: 0\r\n\r\n",
+            "s".repeat(1200),
+            "c".repeat(4400)
+        );
+        assert!(headers.len() > 4096);
+        let mut collected = Vec::new();
+        for chunk in headers.as_bytes().chunks(800) {
+            let result = append_head_response_headers(&mut collected, chunk).unwrap();
+            if collected.len() == headers.len() {
+                let response = result.unwrap();
+                assert_eq!(response.status, 302);
+                assert!(
+                    response
+                        .location
+                        .unwrap()
+                        .starts_with("https://release-assets.githubusercontent.com/")
+                );
+            } else {
+                assert!(result.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn navigation_probe_rejects_unbounded_headers() {
+        let mut collected = Vec::new();
+        let bytes = vec![b'x'; HTTPS_PROBE_HEADER_MAX + 1];
+        assert!(append_head_response_headers(&mut collected, &bytes).is_err());
+        assert_eq!(collected.len(), HTTPS_PROBE_HEADER_MAX);
     }
 
     #[test]

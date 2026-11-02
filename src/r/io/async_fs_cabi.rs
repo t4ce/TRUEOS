@@ -37,6 +37,8 @@ const VMX_LAUNCH_SCRIPT_VFILE: &str = "vFile:launch";
 const STARTUP_MANIFEST_VFILE: &str = "vFile:startup";
 /// Repeatable live terminal presentation, independent of the app's renderer.
 const TERMINAL_FRONTEND_VFILE: &str = "vFile:terminal-frontend";
+// Virtual read identifiers may carry a 4096-byte URL, unlike disk paths.
+const ASYNC_FS_MAX_VIRTUAL_READ_PATH: usize = "vFile:hull-navigation/".len() + 4096;
 /// Write a downloaded archive pathname here to import it into volatile AppDB.
 /// Completion acknowledges the import; this operation never launches a VM.
 pub(crate) fn is_virtual_write(path: &str) -> bool {
@@ -1047,7 +1049,11 @@ async fn process(request: &Request) -> OperationState {
                 return OperationState::Failed(FS_ERR_BAD_PARAM);
             }
             return match crate::surfer::html_shack::probe_navigation_via_pool(url).await {
-                Ok(bytes) => OperationState::Read(bytes), Err(_) => OperationState::Failed(FS_ERR_IO),
+                Ok(bytes) => OperationState::Read(bytes),
+                Err(error) => {
+                    crate::log!("hull-navigation: probe failed: {}: {}\n", url, error);
+                    OperationState::Failed(FS_ERR_IO)
+                },
             };
         }
     }
@@ -1625,7 +1631,7 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_read_start(
 ) -> i32 {
     // Virtual files are VM-local host streams, not members of the app's
     // TrueOSFS root. Preserve the namespace before normal path resolution.
-    if !path_ptr.is_null() && path_len <= 64 {
+    if !path_ptr.is_null() && path_len <= ASYNC_FS_MAX_VIRTUAL_READ_PATH {
         let raw_path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
         if let Ok(path) = core::str::from_utf8(raw_path)
             && is_virtual_read(path)

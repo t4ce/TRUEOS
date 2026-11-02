@@ -413,7 +413,7 @@ pub async fn fetch_bytes_via_pool(
 
 /// Probe a navigation URL without fetching its body. The result is exactly
 /// one byte: `b'D'` for a known download response, or `b'N'` for navigation
-/// and every uncertain/error case.
+/// and uncertain headers. Transport failures remain errors.
 pub async fn probe_navigation_via_pool(url: &str) -> Result<Vec<u8>, String> {
     if url.trim().is_empty() {
         return Ok(vec![NAVIGATION]);
@@ -432,7 +432,8 @@ pub async fn probe_navigation_via_pool(url: &str) -> Result<Vec<u8>, String> {
     .await;
     match result {
         Ok(fetch) if fetch.bytes.as_slice() == b"D" => Ok(vec![DOWNLOAD]),
-        Ok(_) | Err(_) => Ok(vec![NAVIGATION]),
+        Ok(_) => Ok(vec![NAVIGATION]),
+        Err(error) => Err(error),
     }
 }
 
@@ -1370,7 +1371,7 @@ async fn fetch_http_body_hyper(
                             response.content_disposition.as_deref(),
                             response.content_type.as_deref(),
                         )],
-                        Err(_) => vec![NAVIGATION],
+                        Err(error) => return Err(HttpFetchError::Https(error)),
                     }
                 }
                 ByteFetchMethod::Get => crate::r::net::https::get_bytes_shared(
