@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def item(source, name, indent=""):
-    match = re.search(r"(?m)^" + indent + r'(?:pub(?:\([^)]*\))? )?(?:unsafe extern "C" )?(?:struct|fn) '
+    match = re.search(r"(?m)^" + indent + r'(?:pub(?:\([^)]*\))? )?(?:unsafe extern "C" )?(?:async )?(?:struct|fn) '
                       + re.escape(name) + r"(?=[<( {])", source)
     if not match:
         raise AssertionError(f"missing production item {name}")
@@ -33,7 +33,7 @@ def main():
     for name in ["find_http_header_end", "parse_http_status", "trim_ascii", "header_value",
                  "header_value_has_token", "decode_chunked", "final_response_bytes",
                  "bad_response_message", "complete_http_response", "complete_http_head_response",
-                 "http_response_from_bytes", "success_body", "append_head_response_headers"]:
+                 "http_response_from_bytes", "success_body", "append_head_response_headers", "probe_head_or_get"]:
         harness += item(https, name)
     for name in ["HTTPS_PROBE_HEADER_MAX"]:
         harness += re.search(r"(?m)^const " + name + r":.*;$", https).group(0) + "\n"
@@ -47,6 +47,7 @@ def main():
                  "headers_only_get_ignores_body_in_the_same_data_event",
                  "navigation_probe_accepts_large_github_style_redirect_headers",
                  "navigation_probe_rejects_unbounded_headers",
+                 "navigation_probe_retries_head_transport_failure_once_without_reading_body",
                  "response_body_limit_is_enforced_from_content_length",
                  "closed_truncated_response_is_rejected", "chunked_response_is_decoded",
                  "response_preserves_non_success_status_and_body"]),

@@ -1549,6 +1549,10 @@ async fn request_https_response_preconnected(
                 }
                 TlsEvent::Closed { handle } => {
                     if tls_handle == Some(handle) {
+                        if (request.headers_only || request.method == "HEAD") && response.is_empty() {
+                            return Err(format!("{} {}: connection closed {}; no HTTP headers", request.method, target.host,
+                                if sent_request { "after submitting request" } else { "before TLS handshake completed" }));
+                        }
                         if request.headers_only || request.method == "HEAD" {
                             return complete_http_head_response(response.as_slice())?
                                 .ok_or_else(|| bad_response_message(response.as_slice()));
@@ -1625,6 +1629,25 @@ pub async fn get_bytes_shared(
     }
 }
 
+// A server can close HEAD without sending any status. One GET-headers attempt
+// is safe for this read-only probe; both attempts share the caller's deadline.
+async fn probe_head_or_get<F, Fut>(mut send: F) -> Result<HttpsJsonResponse, String>
+where
+    F: FnMut(bool) -> Fut,
+    Fut: core::future::Future<Output = Result<HttpsJsonResponse, String>>,
+{
+    match send(false).await {
+        Ok(response) if !matches!(response.status, 405 | 501) => Ok(response),
+        head => send(true).await.map_err(|get_error| {
+            let head_error = match head {
+                Err(error) => error,
+                Ok(response) => format!("http status {}", response.status),
+            };
+            format!("HEAD: {head_error}; GET headers: {get_error}")
+        }),
+    }
+}
+
 /// Fetch only HTTPS response headers for a browser navigation probe. The
 /// request follows the same bounded redirect policy as the pooled byte fetch
 /// and returns without waiting for or reading any response body.
@@ -1665,34 +1688,30 @@ pub(crate) async fn probe_navigation_headers_shared(
         if target.scheme != "https" {
             return Err(String::from("unsupported scheme"));
         }
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis();
-        if remaining == 0 {
-            return Err(String::from("timeout"));
-        }
-        let mut response = request_https_response_once(
-            &target,
-            &head_request,
-            remaining.min(u32::MAX as u64) as u32,
-            0,
-        )
-        .await?;
-        if matches!(response.status, 405 | 501) {
-            let remaining = deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis();
-            if remaining == 0 {
-                return Err(String::from("timeout"));
+        let response = probe_head_or_get(|use_get| {
+            let target = &target;
+            let head_request = &head_request;
+            let get_request = &get_request;
+            async move {
+                let remaining = deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis();
+                if remaining == 0 {
+                    return Err(String::from("timeout"));
+                }
+                if use_get {
+                    crate::log_info!(target: "net"; "hull-navigation: retry with GET headers host={}\n", target.host);
+                }
+                request_https_happy_eyeballs(
+                    target,
+                    if use_get { get_request } else { head_request },
+                    remaining.min(u32::MAX as u64) as u32,
+                    0,
+                )
+                .await
             }
-            response = request_https_response_once(
-                &target,
-                &get_request,
-                remaining.min(u32::MAX as u64) as u32,
-                0,
-            )
-            .await?;
-        }
+        })
+        .await?;
         if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
             if hop == 10 {
                 return Err(String::from("too many redirects"));
@@ -2782,6 +2801,66 @@ mod tests {
         assert_eq!(response.status, 401);
         assert_eq!(response.body.as_slice(), b"denied");
         assert_eq!(success_body(response).unwrap_err(), "http status 401");
+    }
+
+    #[test]
+    fn navigation_probe_retries_head_transport_failure_once_without_reading_body() {
+        use alloc::collections::VecDeque;
+        use core::{
+            future::{Future, ready},
+            task::{Context, Poll, Waker},
+        };
+        let scenarios = [
+            (Err(String::from("bad response len=0 first=<empty>")), true),
+            (
+                complete_http_head_response(b"HTTP/1.1 405 Not Allowed\r\n\r\n")
+                    .unwrap()
+                    .ok_or_else(|| String::from("missing headers")),
+                true,
+            ),
+            (
+                complete_http_head_response(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n")
+                    .unwrap()
+                    .ok_or_else(|| String::from("missing headers")),
+                false,
+            ),
+        ];
+        for (head, fallback) in scenarios {
+            let mut replies=VecDeque::from([head,complete_http_head_response(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment\r\nContent-Length: 1000000000\r\n\r\n").unwrap().ok_or_else(||String::from("missing headers"))]);
+            let calls = core::cell::RefCell::new(Vec::new());
+            let mut probe = core::pin::pin!(probe_head_or_get(|get| {
+                calls.borrow_mut().push(get);
+                ready(replies.pop_front().unwrap())
+            }));
+            let Poll::Ready(result) = probe.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+            else {
+                panic!("unexpected wait")
+            };
+            let response = result.unwrap();
+            assert!(response.body.is_empty());
+            drop(probe);
+            assert_eq!(
+                *calls.borrow(),
+                if fallback {
+                    vec![false, true]
+                } else {
+                    vec![false]
+                }
+            );
+        }
+        let calls = core::cell::RefCell::new(Vec::new());
+        let mut probe = core::pin::pin!(probe_head_or_get(|get| {
+            calls.borrow_mut().push(get);
+            ready(Err(String::from("closed")))
+        }));
+        let Poll::Ready(result) = probe.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+        else {
+            panic!()
+        };
+        let error = result.unwrap_err();
+        assert!(error.contains("HEAD: closed; GET headers: closed"));
+        drop(probe);
+        assert_eq!(*calls.borrow(), vec![false, true]);
     }
 
     #[test]
