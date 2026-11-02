@@ -179,16 +179,16 @@ impl Driver for Ax201Driver {
         if self.runtime.is_some() {
             return Ok(());
         }
-        // Repeated UI scan requests must not reuse unretired DMA queues after
-        // an uncertain firmware boot. A fresh device reset/probe is required.
+        // Keep the runtime before starting firmware so a failed bootstrap
+        // retains its published DMA and can be reset in place.
         if self.start_attempted {
-            return Err("AX201 firmware start already attempted; reset required");
+            return Err("AX201 firmware start already attempted; recovery required");
         }
         self.start_attempted = true;
         let result = (|| {
             let firmware = super::iwl_ax201_fw::parse(super::iwl_ax201_fw::EMBEDDED)?;
             crate::log_warn!(target: "net";
-                "iwl-ax201: stage=firmware-parsed api={}.{:08x}.{} bytes={} sections={} target_ssid=easyeasy\n",
+                "iwl-ax201: stage=firmware-parsed api={}.{:08x}.{} bytes={} sections={}\n",
                 firmware.version.major, firmware.version.minor, firmware.version.local,
                 super::iwl_ax201_fw::EMBEDDED.len(), firmware.runtime.len());
             let transport = super::iwl_ax201_transport::Transport::new(
@@ -197,13 +197,11 @@ impl Driver for Ax201Driver {
                 (self.pci_bus, self.pci_device, self.pci_function),
                 &firmware,
             )?;
-            mvm::Runtime::start(transport, firmware)
+            self.runtime = Some(mvm::Runtime::new(transport, firmware));
+            self.runtime.as_mut().unwrap().initialize()
         })();
         match result {
-            Ok(runtime) => {
-                self.runtime = Some(runtime);
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(reason) => {
                 self.firmware_error = Some(reason);
                 self.wifi_state = WifiState::Failed;
@@ -256,8 +254,10 @@ impl NetworkDriver for Ax201Driver {
                         .ok_or("AX201 hardware MAC unavailable")
                         .and_then(|mac| runtime.begin_scan(mac));
                     if let Err(reason) = result {
+                        self.firmware_error = Some(reason);
                         self.wifi_state = WifiState::Failed;
                         crate::log_warn!(target: "net"; "iwl-ax201: stage=scan-error reason={}\n", reason);
+                        return;
                     }
                 }
                 if let Some(state) = runtime.connection_state() {
@@ -300,6 +300,43 @@ impl WifiDriver for Ax201Driver {
 
     fn wifi_state(&self) -> WifiState {
         self.wifi_state
+    }
+
+    fn recover(&mut self) -> Result<(), &'static str> {
+        if matches!(self.wifi_state, WifiState::Connected | WifiState::Connecting
+            | WifiState::Authenticating | WifiState::Scanning)
+        {
+            return Err("AX201 recovery requires an idle or failed station");
+        }
+        let previous = self.last_error();
+        crate::log_warn!(target: "net";
+            "iwl-ax201: stage=recovery-start state={:?} previous_error={:?}\n",
+            self.wifi_state, previous);
+        self.status = DriverStatus::Loading;
+        self.wifi_state = WifiState::Failed;
+        self.scan_requested = false;
+        let result = if let Some(runtime) = self.runtime.as_mut() {
+            runtime.restart()
+        } else {
+            // Construction failed before DMA publication; retry construction.
+            self.firmware_error = None;
+            self.start_attempted = false;
+            self.start()
+        };
+        match result {
+            Ok(()) => {
+                self.firmware_error = None;
+                self.scan_requested = true;
+                self.wifi_state = WifiState::Scanning;
+                crate::log_warn!(target: "net"; "iwl-ax201: stage=recovery-firmware-restarted scan=pending\n");
+                Ok(())
+            }
+            Err(reason) => {
+                self.firmware_error = Some(reason);
+                crate::log_warn!(target: "net"; "iwl-ax201: stage=recovery-failed reason={}\n", reason);
+                Err(reason)
+            }
+        }
     }
 
     fn scan(&mut self) -> Result<(), &'static str> {

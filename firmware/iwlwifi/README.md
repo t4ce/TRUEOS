@@ -25,3 +25,36 @@ Firmware container definitions are documented in the upstream Linux driver:
 
 - <https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/fw/file.h>
 - <https://github.com/torvalds/linux/blob/v6.12/drivers/net/wireless/intel/iwlwifi/iwl-drv.c>
+
+## AX201 recovery and diagnosis
+
+Private boot profiles retry a failed or previously disconnected station after
+five seconds. The AX201 driver keeps the same PCI claim, shared driver and
+registered network interface. Recovery stops the DMA master and requires
+`MASTER_DISABLED`, verifies PCI bus mastering is off, performs a software reset,
+and then restarts firmware initialization, NVM, scanning and association.
+RX/command/context/firmware allocations are reused. Station queues are freed
+only after the checked stop/reset; an unconfirmed stop retains their DMA and
+fails recovery. Initial firmware-start failures retain the runtime too.
+
+Session-protection lifetime is independent of carrier. A valid protection
+failure/end after association must not tear down the established station;
+before association, failure still closes it. This follows Linux v6.14
+[`iwl_mvm_te_check_disconnect`](https://github.com/torvalds/linux/blob/v6.14/drivers/net/wireless/intel/iwlwifi/mvm/time-event.c).
+The stop/reset ordering follows
+[`iwl_pcie_gen2_apm_stop`](https://github.com/torvalds/linux/blob/v6.14/drivers/net/wireless/intel/iwlwifi/pcie/trans-gen2.c)
+and
+[`iwl_pcie_apm_stop_master`](https://github.com/torvalds/linux/blob/v6.14/drivers/net/wireless/intel/iwlwifi/pcie/trans.c).
+
+Failure logs record runtime stage, pending command, station lifetime, TX/RX and
+drop counts, AP disconnection reason codes, and throttled EAPOL/CCMP rejection
+causes. Capture the first failure and `recovery-start previous_error` before
+attributing a real AP disconnect to the session-protection bug. Never log a
+profile password. Live pairwise/group WPA2 rekey remains unsupported; a rejected
+rekey is diagnostic evidence, not proof of a failed transport.
+
+The host harnesses in `tools/testpy/test_ax201_{transport,mvm,station}.py` and
+`test_wifi_autoconnect.py` cover reset failures, repeated cycles, queue wraps,
+carrier gating, and firmware/station state transitions. They use scripted MMIO
+or notifications. They do not establish sustained radio/AP stability: verify
+that separately on the laptop, including traffic through disconnect/recovery.

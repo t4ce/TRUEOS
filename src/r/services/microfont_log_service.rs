@@ -8,6 +8,14 @@ const SCALE: usize = 4;
 const PERIOD_MS: u64 = 25;
 const BG: u32 = 0xFFFF_FFFF;
 static SURFACE: Once<Surface> = Once::new();
+// Protected by STATUS together with all surface writes.
+static WIFI_COLOR: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0xff00_00ff);
+static WIFI_ATTEMPT_MS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(u64::MAX);
+// 256 means no current Wi-Fi IPv4 address; 0..255 is its last octet.
+static WIFI_IP_OCTET: core::sync::atomic::AtomicU16 =
+    core::sync::atomic::AtomicU16::new(256);
 // Synchronous publication works even before the background executor runs.
 static STATUS: spin::Mutex<(&'static str, Option<bool>, bool)> =
     spin::Mutex::new(("USB service not started", None, false));
@@ -110,6 +118,95 @@ pub(crate) fn font_ready() {
     if let Some(surface) = surface() { repaint(surface, *status); }
 }
 
+/// Radio status uses the same retained CPU surface, independent of fonts/UI.
+pub(crate) fn wifi_retry_started() {
+    WIFI_ATTEMPT_MS.store(trueos_time::Instant::now().as_millis(), core::sync::atomic::Ordering::Relaxed);
+    wifi_color_changed(0xff00_00ff);
+}
+
+pub(crate) fn wifi_color_changed(color: u32) {
+    let attempted = WIFI_ATTEMPT_MS.load(core::sync::atomic::Ordering::Relaxed);
+    // Make even a promptly rejected retry visible for half a second.
+    let color = if color == 0xffff_0000 && attempted != u64::MAX
+        && trueos_time::Instant::now().as_millis().saturating_sub(attempted) < 500
+    { 0xff00_00ff } else { color };
+    let _status = STATUS.lock();
+    if WIFI_COLOR.swap(color, core::sync::atomic::Ordering::Relaxed) != color {
+        if let Some(surface) = surface() {
+            paint_wifi_square(surface);
+        }
+    }
+}
+
+pub(crate) fn wifi_ipv4_changed(address: Option<[u8; 4]>) {
+    let octet = address.map_or(256, |ip| u16::from(ip[3]));
+    let _status = STATUS.lock();
+    if WIFI_IP_OCTET.swap(octet, core::sync::atomic::Ordering::Relaxed) != octet {
+        if let Some(surface) = surface() {
+            paint_wifi_ip(surface);
+        }
+    }
+}
+
+/// Eight 16px cells, MSB first: a dot is zero, a vertical line is one.
+/// Independent of the font atlas so this works during early boot.
+fn paint_wifi_ip(surface: Surface) {
+    let octet = WIFI_IP_OCTET.load(core::sync::atomic::Ordering::Relaxed);
+    let left = (surface.width as usize).saturating_sub(8 * 16);
+    let top = 72;
+    for y in top..88usize.min(surface.height as usize) {
+        for x in left..(left + 128).min(surface.width as usize) {
+            let cell = (x - left) / 16;
+            let dx = (x - left) % 16;
+            let dy = y - top;
+            let ink = octet < 256 && if octet & (1 << (7 - cell)) != 0 {
+                (7..10).contains(&dx) && (2..14).contains(&dy)
+            } else {
+                (7..10).contains(&dx) && (11..14).contains(&dy)
+            };
+            let color = if ink { 0xff00_0000 } else { 0xffff_ffff };
+            unsafe {
+                core::ptr::write_volatile(
+                    (surface.virt + y * surface.pitch_bytes as usize + x * 4) as *mut u32,
+                    color,
+                );
+            }
+        }
+    }
+    if surface.height as usize > top {
+        let _ = crate::intel::dma_flush_strided_rows(
+            (surface.virt + top * surface.pitch_bytes as usize + left * 4) as *mut u8,
+            128usize.min(surface.width as usize) * 4,
+            surface.pitch_bytes as usize,
+            (surface.height as usize - top).min(16),
+        );
+    }
+}
+
+fn paint_wifi_square(surface: Surface) {
+    let color = WIFI_COLOR.load(core::sync::atomic::Ordering::Relaxed);
+    let width = 64usize.min(surface.width as usize);
+    let height = 64usize.min(surface.height as usize);
+    // Top-right corner; clip for small surfaces and preserve pitch padding.
+    let left = surface.width as usize - width;
+    for y in 0..height {
+        for x in left..surface.width as usize {
+            unsafe {
+                core::ptr::write_volatile(
+                    (surface.virt + y * surface.pitch_bytes as usize + x * 4) as *mut u32,
+                    color,
+                );
+            }
+        }
+    }
+    let _ = crate::intel::dma_flush_strided_rows(
+        (surface.virt + left * 4) as *mut u8,
+        width * 4,
+        surface.pitch_bytes as usize,
+        height,
+    );
+}
+
 fn repaint(surface: Surface, status: (&str, Option<bool>, bool)) {
     unsafe {
         clear_surface(surface);
@@ -123,6 +220,8 @@ fn repaint(surface: Surface, status: (&str, Option<bool>, bool)) {
     if scale > 0 {
         paint_text(surface, status.0.as_bytes(), scale, top);
     }
+    paint_wifi_square(surface);
+    paint_wifi_ip(surface);
     crate::intel::dma_cache_flush_range(surface.virt as *const u8, surface.byte_len);
 }
 

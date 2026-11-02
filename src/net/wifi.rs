@@ -83,6 +83,11 @@ pub enum WifiState {
 }
 
 pub trait WifiDriver: NetworkDriver + Send {
+    /// Reboot firmware on the existing device/NIC after a proven DMA stop.
+    /// Unsupported drivers keep their current ownership and return an error.
+    fn recover(&mut self) -> Result<(), &'static str> {
+        Err("Wi-Fi driver recovery unavailable")
+    }
     fn last_error(&self) -> Option<&'static str> { None }
     /// Real NVM/firmware station address, available only after hardware reads it.
     fn mac_address(&self) -> Option<[u8; 6]> {
@@ -184,7 +189,16 @@ pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
     loop {
         ticks = ticks.saturating_add(1);
         poll();
-        connect_boot_profile_once(&mut boot_connect_attempted, &mut next_boot_scan_ms);
+        connect_boot_profile(&mut boot_connect_attempted, &mut next_boot_scan_ms);
+        let wifi_state = state();
+        let color = match wifi_state {
+            WifiState::Connected => 0xff00_ff00,
+            WifiState::Scanning | WifiState::Connecting | WifiState::Authenticating => 0xff00_00ff,
+            WifiState::NoHardware | WifiState::Disabled | WifiState::Failed => 0xffff_0000,
+            WifiState::Disconnected if last_operation_error().is_some() => 0xffff_0000,
+            WifiState::Disconnected => 0xff00_00ff,
+        };
+        crate::r::services::microfont_log_service::wifi_color_changed(color);
         match register_network_interface(spawner) {
             Ok(_) => last_registration_error = None,
             Err(error) => {
@@ -195,6 +209,9 @@ pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
                 }
             }
         }
+        let wifi_index = NETWORK_REGISTRATION.lock().index;
+        let address = wifi_index.and_then(super::adapter::ipv4_at);
+        crate::r::services::microfont_log_service::wifi_ipv4_changed(address);
         let now_ms = trueos_time::Instant::now().as_millis();
         if state() != WifiState::Connected
             && now_ms.saturating_sub(last_heartbeat_ms) >= 5_000
@@ -208,10 +225,12 @@ pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
     }
 }
 /// The local build profile is optional and requires no runtime filesystem or
-/// keyboard. Submit once, only after the initial passive scan has completed;
-/// uncertain station setup must never be retried over live firmware queues.
-fn connect_boot_profile_once(attempted: &mut bool, next_scan_ms: &mut u64) {
-    if *attempted {
+/// keyboard. Retry idle scans/connections at five-second intervals. The driver
+/// performs a checked device reset before retrying a failed/previous station;
+/// never interrupt a scan, association, or authentication already in progress.
+fn connect_boot_profile(attempted: &mut bool, next_scan_ms: &mut u64) {
+    let now_ms = trueos_time::Instant::now().as_millis();
+    if *attempted && now_ms < *next_scan_ms {
         return;
     }
     let Some((ssid, password)) = boot::credentials() else {
@@ -229,18 +248,44 @@ fn connect_boot_profile_once(attempted: &mut bool, next_scan_ms: &mut u64) {
     };
     let mut guard = shared.lock();
     let driver = guard.as_mut();
-    if driver.status() != DriverStatus::Running
-        || driver.wifi_state() != WifiState::Disconnected
-    {
+    let state = driver.wifi_state();
+    if !matches!(state, WifiState::Disconnected | WifiState::Failed) {
+        return;
+    }
+    if state == WifiState::Failed || *attempted {
+        if now_ms < *next_scan_ms {
+            return;
+        }
+        *next_scan_ms = now_ms.saturating_add(5_000);
+        #[cfg(not(test))]
+        crate::r::services::microfont_log_service::wifi_retry_started();
+        match driver.recover() {
+            Ok(()) => {
+                *attempted = false;
+                *CONNECTION_STATE.lock() = driver.wifi_state();
+                *LAST_OPERATION_ERROR.lock() = None;
+                crate::log_warn!(target: "net"; "wifi-boot: state=recovering reset=confirmed scan=pending\n");
+            }
+            Err(reason) => {
+                *attempted = true;
+                *LAST_OPERATION_ERROR.lock() = Some(reason);
+                crate::log_warn!(target: "net"; "wifi-boot: state=recovery-failed reason={}\n", reason);
+            }
+        }
+        return;
+    }
+    if driver.status() != DriverStatus::Running {
         return;
     }
     if !driver.scan_results().iter().any(|network| network.ssid == ssid) {
-        let now_ms = trueos_time::Instant::now().as_millis();
         if now_ms >= *next_scan_ms {
             *next_scan_ms = now_ms.saturating_add(5_000);
+            #[cfg(not(test))]
+            crate::r::services::microfont_log_service::wifi_retry_started();
             match driver.scan() {
                 Ok(()) => {
                     *CONNECTION_STATE.lock() = driver.wifi_state();
+                    *LAST_OPERATION_ERROR.lock() = None;
                     crate::log_warn!(target: "net"; "wifi-boot: state=waiting-for-network scan=retry\n");
                 }
                 Err(reason) => {
@@ -253,6 +298,9 @@ fn connect_boot_profile_once(attempted: &mut bool, next_scan_ms: &mut u64) {
         return;
     }
     *attempted = true;
+    *next_scan_ms = now_ms.saturating_add(5_000);
+    #[cfg(not(test))]
+    crate::r::services::microfont_log_service::wifi_retry_started();
     crate::log_warn!(target: "net"; "wifi-boot: state=connecting\n");
     match driver.connect(ssid, password) {
         Ok(()) => {

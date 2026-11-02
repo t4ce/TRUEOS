@@ -48,6 +48,9 @@ pub(crate) struct Connection {
     dropped: u64,
     tx_packets: u64,
     rx_packets: u64,
+    created_ms: u64,
+    eapol_rejected: u64,
+    ccmp_rejected: u64,
 }
 fn now() -> u64 {
     trueos_time::Instant::now().as_millis()
@@ -105,6 +108,9 @@ impl Connection {
             dropped: 0,
             tx_packets: 0,
             rx_packets: 0,
+            created_ms: now(),
+            eapol_rejected: 0,
+            ccmp_rejected: 0,
         })
     }
     pub(super) fn transport_failed(&mut self, reason: &'static str) {
@@ -141,6 +147,9 @@ impl Connection {
             crate::log_warn!(target: "net"; "iwl-ax201: stage=station-error waiting={:?} command={:?} queue_pending={} reason={}\n",
                 self.state, self.pending.as_ref().map(|(_, command)| (command.group, command.id)),
                 self.queue_request.is_some(), reason);
+            crate::log_warn!(target: "net"; "iwl-ax201: stage=station-failure-counters lifetime_ms={} tx={} rx={} dropped={} eapol_rejected={} ccmp_rejected={} signal_dbm={}\n",
+                now().saturating_sub(self.created_ms), self.tx_packets, self.rx_packets,
+                self.dropped, self.eapol_rejected, self.ccmp_rejected, self.signal_dbm);
         }
         self.state = State::Failed;
         self.last_error = Some(reason);
@@ -238,8 +247,13 @@ impl Connection {
         // A forged/replayed EAPOL frame must never install keys or open a port.
         let action = match handshake.handle_eapol(bytes) {
             Ok(action) => action,
-            Err(_) => {
+            Err(reason) => {
                 self.dropped += 1;
+                self.eapol_rejected = self.eapol_rejected.saturating_add(1);
+                if self.eapol_rejected.is_power_of_two() {
+                    crate::log_warn!(target: "net"; "iwl-ax201: stage=eapol-rejected state={:?} count={} reason={}\n",
+                        self.state, self.eapol_rejected, reason);
+                }
                 return Ok(());
             }
         };
@@ -292,7 +306,15 @@ impl Connection {
                 self.deadline = now() + 2000;
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=associated aid={} port=closed\n", aid);
             }
-            (0xc0 | 0xa0, _) => return Err("AX201 AP disconnected station"),
+            (0xc0 | 0xa0, _) => {
+                let Ok(reason) = station::disconnection_reason(frame, &self.config) else {
+                    self.dropped += 1;
+                    return Ok(());
+                };
+                crate::log_warn!(target: "net"; "iwl-ax201: stage=ap-disconnect subtype=0x{:02x} reason_code={} state={:?}\n",
+                    frame[0] & 0xfc, reason, self.state);
+                return Err("AX201 AP disconnected station");
+            }
             _ => {}
         }
         Ok(())
@@ -339,8 +361,13 @@ impl Connection {
             };
             match key.decrypt(&raw.frame) {
                 Ok(frame) => frame,
-                Err(_) => {
+                Err(reason) => {
                     self.dropped += 1;
+                    self.ccmp_rejected = self.ccmp_rejected.saturating_add(1);
+                    if self.ccmp_rejected.is_power_of_two() {
+                        crate::log_warn!(target: "net"; "iwl-ax201: stage=ccmp-rejected count={} reason={}\n",
+                            self.ccmp_rejected, reason);
+                    }
                     return Ok(());
                 }
             }
@@ -398,7 +425,18 @@ impl Connection {
         if notification.group == station::SESSION_GROUP
             && notification.id == station::SESSION_NOTIFICATION
         {
-            self.session_started = station::session_started(&notification.payload)?;
+            let (success, started) = station::session_event(&notification.payload)?;
+            self.session_started = success && started;
+            crate::log_warn!(target: "net"; "iwl-ax201: stage=session-protection-event success={} started={} state={:?}\n",
+                success, started, self.state);
+            // Linux's time-event path only disconnects for protection failures
+            // before association/DTIM readiness. Protection expires normally;
+            // its lifetime must never be mistaken for the data link lifetime.
+            if !success && !matches!(self.state,
+                State::AssociatedConfig | State::Keys | State::Connected)
+            {
+                return Err("AX201 session protection failed");
+            }
         }
         if let Some((sequence, command)) = self.pending.as_ref() {
             if notification.sequence == *sequence {

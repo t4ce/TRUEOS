@@ -28,6 +28,9 @@ const CSR_INT_MASK: usize = 0x00c;
 const CSR_RESET: usize = 0x020;
 const CSR_GP: usize = 0x024;
 const CSR_CTXT: usize = 0x040;
+const RESET_SW: u32 = 1 << 7;
+const RESET_MASTER_DISABLED: u32 = 1 << 8;
+const RESET_STOP_MASTER: u32 = 1 << 9;
 const ALIVE_IRQ: u32 = 1;
 const FW_ERROR: u32 = (1 << 25) | (1 << 29);
 const GP_CLOCK_READY: u32 = 1;
@@ -366,6 +369,96 @@ impl Transport {
                 error, self.read(0), self.read(CSR_GP), self.read(CSR_INT));
         }
         result
+    }
+
+    /// Restart only after the device acknowledges that its DMA master stopped.
+    /// Reuse the base RX/command/firmware allocations; replacing a pinned
+    /// transport after every error would leak them and leave live DMA behind.
+    pub(crate) fn restart(&mut self) -> Result<Notification, &'static str> {
+        self.quiesce_and_reset()?;
+        self.clear_after_reset();
+        self.start()
+    }
+
+    fn quiesce_and_reset(&mut self) -> Result<(), &'static str> {
+        self.failed = true;
+        if self.read(CSR_RESET) == u32::MAX {
+            return Err("AX201 reset MMIO unavailable");
+        }
+        self.write(CSR_INT_MASK, 0);
+        // Linux 22000 gen2 APM stop: STOP_MASTER, MASTER_DISABLED, then
+        // SW_RESET and 5-6ms settling. A PCI command write alone does not
+        // acknowledge outstanding device DMA transactions.
+        self.bits(CSR_RESET, RESET_STOP_MASTER);
+        let stopped = crate::wait::spin_until_timeout_no_exec(25, || {
+            let value = self.read(CSR_RESET);
+            value != u32::MAX && value & RESET_MASTER_DISABLED != 0
+        });
+        let (bus, slot, function) = self.pci;
+        let command = crate::pci::config_read_u16(bus, slot, function, 4);
+        if command == u16::MAX {
+            return Err("AX201 reset PCI unavailable");
+        }
+        crate::pci::config_write_u16(bus, slot, function, 4, command & !4);
+        let disabled = crate::pci::config_read_u16(bus, slot, function, 4);
+        if disabled == u16::MAX || disabled & 4 != 0 {
+            return Err("AX201 reset PCI DMA disable failed");
+        }
+        if !stopped {
+            return Err("AX201 DMA master stop timeout");
+        }
+        self.bits(CSR_RESET, RESET_SW);
+        crate::wait::spin_until_timeout_no_exec(6, || false);
+        let gp = self.read(CSR_GP);
+        if gp == u32::MAX {
+            return Err("AX201 reset MMIO unavailable");
+        }
+        self.write(CSR_GP, gp & !(GP_INIT_DONE | GP_ACCESS));
+        self.bits(0, 0x0040_0000);
+        if !crate::wait::spin_until_timeout_no_exec(50, || {
+            let value = self.read(0);
+            value != u32::MAX && value & 0x0040_0000 != 0
+        }) {
+            return Err("AX201 recovery ownership timeout");
+        }
+        self.bits(0x088, 1 << 5);
+        fence(Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// All device queues have been invalidated by the acknowledged reset.
+    fn clear_after_reset(&mut self) {
+        for dma in [
+            &mut self.free, &mut self.used, &mut self.status,
+            &mut self.tfd, &mut self.commands,
+        ] {
+            dma.bytes_mut().fill(0);
+        }
+        for dma in &mut self.rx {
+            dma.bytes_mut().fill(0);
+        }
+        // Context pointers and firmware section contents remain valid; only
+        // the hardware revision is republished during start_inner().
+        self.context.put16(0, 0);
+        for queue in self.pending_data_queue.iter_mut().chain(self.data_queues.iter_mut()) {
+            for dma in [&mut queue.tfd, &mut queue.byte_count, &mut queue.packets] {
+                dma.pinned = false;
+            }
+        }
+        self.pending_data_queue = None;
+        self.data_queues.clear();
+        self.rx_read = 0;
+        self.rx_write = 0;
+        self.tx_write = 0;
+        self.tx_busy.fill(false);
+        self.pending.clear();
+        self.restocked = false;
+        self.started = false;
+        self.failed = false;
+        self.last_command = None;
+        self.error_tables = [0; 3];
+        self.last_tx_completion = None;
+        self.tx_completion_logs = 0;
     }
 
     fn start_inner(&mut self, phy_config: u32) -> Result<Notification, &'static str> {

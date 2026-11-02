@@ -486,19 +486,24 @@ pub(crate) fn session_protection(
     command(fw, SESSION_GROUP, 5, 1, payload, Response::Transport)
 }
 
-/// SESSION_PROTECTION_NOTIFICATION v2. Do not send auth before a matching start.
-pub(crate) fn session_started(data: &[u8]) -> Result<bool, &'static str> {
+/// Session protection grants temporary scheduling priority, not carrier.
+/// A failed/end notification after association must not tear down that station.
+/// Decode SESSION_PROTECTION_NOTIFICATION v2; auth needs a successful start.
+pub(crate) fn session_event(data: &[u8]) -> Result<(bool, bool), &'static str> {
     if data.len() != 16 || u32_at(data, 0)? != MAC_ID || u32_at(data, 12)? != 0 {
         return Err("AX201 invalid session protection notification");
     }
-    if u32_at(data, 4)? != 1 {
-        return Err("AX201 session protection failed");
-    }
-    match u32_at(data, 8)? {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err("AX201 invalid session protection start flag"),
-    }
+    let success = match u32_at(data, 4)? {
+        0 => false,
+        1 => true,
+        _ => return Err("AX201 invalid session protection status"),
+    };
+    let started = match u32_at(data, 8)? {
+        0 => false,
+        1 => true,
+        _ => return Err("AX201 invalid session protection start flag"),
+    };
+    Ok((success, started))
 }
 
 fn management_header(subtype: u8, config: &StationConfig, sequence: u16) -> Vec<u8> {
@@ -566,6 +571,23 @@ pub(crate) fn association_id(frame: &[u8], config: &StationConfig) -> Result<u16
         return Err("AX201 invalid AP association ID");
     }
     Ok(aid)
+}
+
+/// Validate the full AP disassociation/deauthentication header and reason.
+pub(crate) fn disconnection_reason(
+    frame: &[u8],
+    config: &StationConfig,
+) -> Result<u16, &'static str> {
+    let subtype = u16_at(frame, 0)? & 0x00fc;
+    if !matches!(subtype, 0xa0 | 0xc0) {
+        return Err("AX201 unrelated disconnection frame");
+    }
+    response_header(frame, config, subtype)?;
+    let reason = u16_at(frame, 24)?;
+    if reason == 0 {
+        return Err("AX201 reserved AP disconnection reason");
+    }
+    Ok(reason)
 }
 
 pub(crate) fn session_stop(fw: &Firmware<'_>) -> Result<Command, &'static str> {
@@ -744,11 +766,13 @@ mod tests {
         let mut n = vec![0; 16];
         put32(&mut n, 4, 1);
         put32(&mut n, 8, 1);
-        assert!(session_started(&n).unwrap());
+        assert_eq!(session_event(&n).unwrap(), (true, true));
         put32(&mut n, 8, 0);
-        assert!(!session_started(&n).unwrap());
+        assert_eq!(session_event(&n).unwrap(), (true, false));
         put32(&mut n, 4, 0);
-        assert!(session_started(&n).is_err());
+        assert_eq!(session_event(&n).unwrap(), (false, false));
+        put32(&mut n, 4, 2);
+        assert!(session_event(&n).is_err());
         let update = associated(&fw, &cfg, 42).unwrap();
         assert_eq!(update[0].payload.len(), 148);
         assert_eq!(u32_at(&update[0].payload, 4).unwrap(), 2);
@@ -767,5 +791,26 @@ mod tests {
         for cmd in [&remove[0], &remove[2], &remove[3], &remove[4]] {
             assert_eq!(u32_at(&cmd.payload, 4).unwrap(), 3);
         }
+    }
+    #[test]
+    fn ap_disconnection_requires_a_complete_matching_frame_and_reason() {
+        let cfg = config();
+        let mut frame = vec![0; 26];
+        frame[0] = 0xc0;
+        frame[4..10].copy_from_slice(&cfg.mac);
+        frame[10..16].copy_from_slice(&cfg.bss.bssid);
+        frame[16..22].copy_from_slice(&cfg.bss.bssid);
+        put16(&mut frame, 24, 4); // AP inactivity reason, preserved for diagnostics.
+        assert_eq!(disconnection_reason(&frame, &cfg).unwrap(), 4);
+        frame[0] = 0xa0;
+        assert_eq!(disconnection_reason(&frame, &cfg).unwrap(), 4);
+        for len in 0..26 {
+            assert!(disconnection_reason(&frame[..len], &cfg).is_err());
+        }
+        frame[4] ^= 2;
+        assert!(disconnection_reason(&frame, &cfg).is_err());
+        frame[4] ^= 2;
+        put16(&mut frame, 24, 0);
+        assert!(disconnection_reason(&frame, &cfg).is_err());
     }
 }

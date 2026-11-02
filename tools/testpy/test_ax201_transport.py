@@ -31,6 +31,7 @@ mod dma {
         layouts().lock().unwrap().insert(pointer as usize,layout);
         Some((pointer as u64,pointer))
     }
+    pub fn is_live(pointer:usize)->bool {layouts().lock().unwrap().contains_key(&pointer)}
     pub fn dealloc(pointer:*mut u8,_:usize) {
         let layout=layouts().lock().unwrap().remove(&(pointer as usize)).expect("DMA freed exactly once");
         unsafe{free(pointer,layout)};
@@ -38,8 +39,14 @@ mod dma {
 }
 mod intel { pub fn dma_cache_flush_range(_: *const u8,_:usize){} }
 mod pci {
-    pub fn config_read_u16(_:u8,_:u8,_:u8,_:u16)->u16{0}
-    pub fn config_write_u16(_:u8,_:u8,_:u8,_:u16,_:u16){}
+    use std::cell::Cell;
+    thread_local! {
+        static COMMAND:Cell<u16>=const {Cell::new(0)};
+        static STUCK:Cell<bool>=const {Cell::new(false)};
+    }
+    pub fn setup(command:u16,stuck:bool){COMMAND.set(command);STUCK.set(stuck);}
+    pub fn config_read_u16(_:u8,_:u8,_:u8,_:u16)->u16{COMMAND.get()}
+    pub fn config_write_u16(_:u8,_:u8,_:u8,_:u16,value:u16){if !STUCK.get(){COMMAND.set(value);}}
 }
 mod wait { pub fn spin_until_timeout_no_exec(_:u64,mut f:impl FnMut()->bool)->bool {f()} }
 mod net {
@@ -354,6 +361,100 @@ TRANSPORT
                     assert_eq!((reply.group,reply.id,reply.sequence),(2,3,sequence));
                     assert!(!tr.tx_busy[slot]);
                     assert!(tr.tx_busy.iter().all(|busy|!*busy));
+                }
+            }
+            #[test]
+            fn failed_master_stop_preserves_every_queue_and_dma_contents() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let _qid=allocate_data(&mut tr);tr.pin_and_flush();
+                tr.commands.bytes_mut()[0]=0xa5;
+                let queue_dma=tr.data_queues[0].packets.virt;
+                assert_eq!(tr.quiesce_and_reset().unwrap_err(),"AX201 DMA master stop timeout");
+                assert!(tr.failed);assert!(tr.started==false);
+                assert_eq!(tr.commands.bytes()[0],0xa5);
+                assert_eq!(tr.data_queues.len(),1);assert!(crate::dma::is_live(queue_dma));
+                assert_eq!(mmio[CSR_RESET/4]&RESET_SW,0);
+                assert_ne!(mmio[CSR_RESET/4]&RESET_STOP_MASTER,0);
+            }
+            #[test]
+            fn unavailable_mmio_is_never_accepted_as_master_disabled() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                mmio[CSR_RESET/4]=u32::MAX;
+                assert_eq!(tr.quiesce_and_reset().unwrap_err(),"AX201 reset MMIO unavailable");
+                assert!(tr.failed);assert_eq!(mmio[CSR_RESET/4],u32::MAX);
+            }
+            #[test]
+            fn rejected_pci_disable_never_releases_station_dma() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let _qid=allocate_data(&mut tr);
+                let queue_dma=tr.data_queues[0].packets.virt;
+                mmio[CSR_RESET/4]=RESET_MASTER_DISABLED;
+                crate::pci::setup(4,true);
+                assert_eq!(tr.quiesce_and_reset().unwrap_err(),"AX201 reset PCI DMA disable failed");
+                crate::pci::setup(0,false);
+                assert_eq!(tr.data_queues.len(),1);assert!(crate::dma::is_live(queue_dma));
+                assert_eq!(mmio[CSR_RESET/4]&RESET_SW,0);
+            }
+            #[test]
+            fn failed_firmware_restart_keeps_same_base_buffers_for_another_reset() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                tr.pin_and_flush();let base=tr.commands.phys;
+                for _ in 0..3 {
+                    mmio[CSR_RESET/4]=RESET_MASTER_DISABLED;
+                    mmio[CSR_GP/4]=0; // Never acknowledge clock readiness.
+                    assert_eq!(tr.restart().unwrap_err(),"AX201 MAC clock timeout");
+                    assert!(tr.failed);assert!(tr.started);
+                    assert_eq!(tr.commands.phys,base);assert!(tr.commands.pinned);
+                    assert!(crate::dma::is_live(tr.commands.virt));
+                }
+            }
+            #[test]
+            fn repeated_proven_resets_reuse_base_dma_and_release_station_queues() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let base=[tr.context.phys,tr.free.phys,tr.used.phys,tr.status.phys,tr.tfd.phys,tr.commands.phys,tr.rx[0].phys];
+                let firmware:Vec<_>=tr.sections.iter().map(|d|(d.phys,d.bytes().to_vec())).collect();
+                for _ in 0..20 {
+                    let _qid=allocate_data(&mut tr);tr.pin_and_flush();
+                    tr.pending_data_queue=Some(DataQueue::new(2,0).unwrap());
+                    tr.pending_data_queue.as_mut().unwrap().config(tr.queue_alloc_cmd_version).unwrap();
+                    let queue_dma:Vec<_>=tr.data_queues.iter().chain(tr.pending_data_queue.iter())
+                        .flat_map(|q|[q.tfd.virt,q.byte_count.virt,q.packets.virt]).collect();
+                    tr.commands.bytes_mut()[0]=0xa5;tr.rx[0].bytes_mut()[0]=0x5a;
+                    tr.rx_read=99;tr.rx_write=15;tr.tx_write=7;tr.tx_busy.fill(true);
+                    tr.pending.push_back(Notification{group:1,id:2,sequence:3,payload:vec![1]});
+                    mmio[CSR_RESET/4]=RESET_MASTER_DISABLED;
+                    mmio[CSR_GP/4]=GP_INIT_DONE|GP_ACCESS|GP_CLOCK_READY;
+                    tr.quiesce_and_reset().unwrap();
+                    assert_ne!(mmio[CSR_RESET/4]&RESET_SW,0);
+                    assert_eq!(mmio[CSR_GP/4]&(GP_INIT_DONE|GP_ACCESS),0);
+                    tr.clear_after_reset();
+                    assert_eq!([tr.context.phys,tr.free.phys,tr.used.phys,tr.status.phys,tr.tfd.phys,tr.commands.phys,tr.rx[0].phys],base);
+                    for (dma,(phys,bytes)) in tr.sections.iter().zip(&firmware) {
+                        assert_eq!(dma.phys,*phys);assert_eq!(dma.bytes(),bytes);
+                    }
+                    assert!(queue_dma.into_iter().all(|p|!crate::dma::is_live(p)));
+                    assert!(tr.data_queues.is_empty());assert!(tr.pending_data_queue.is_none());
+                    assert!(tr.commands.bytes().iter().all(|&b|b==0));assert!(tr.rx[0].bytes().iter().all(|&b|b==0));
+                    assert_eq!((tr.rx_read,tr.rx_write,tr.tx_write),(0,0,0));
+                    assert!(tr.tx_busy.iter().all(|b|!*b));assert!(tr.pending.is_empty());
+                    assert!(!tr.failed);assert!(!tr.started);assert!(!tr.restocked);
+                    assert_eq!(qword(tr.context.bytes(),24),tr.free.phys);
+                }
+            }
+            #[test]
+            fn sustained_transmit_retires_over_multiple_physical_and_hardware_wraps() {
+                let mut mmio=vec![0u32;0x2000/4];let mut tr=transport(&mut mmio);
+                let qid=allocate_data(&mut tr);let frame=authentication();
+                let options=TxOptions{band_2ghz:false,antenna:2,encrypt:false,high_priority:true};
+                for sent in 0..1024u16 {
+                    let token=tr.send_raw80211(qid,&frame,options).unwrap();
+                    let index=usize::from(sent)&31;
+                    assert_eq!(token,((qid&31)<<8)|index as u16);
+                    assert_eq!(tr.data_queues[0].byte_count.read16(index*2),frame.len().div_ceil(4) as u16);
+                    let next=(sent as u8).wrapping_add(1);
+                    assert_eq!(mmio[TX_WPTR/4],u32::from(next)|(u32::from(qid)<<16));
+                    tr.retire_tx_notification(&tx_notification(token,next)).unwrap();
+                    assert_eq!(tr.data_queues[0].outstanding,0);
                 }
             }
             #[test]

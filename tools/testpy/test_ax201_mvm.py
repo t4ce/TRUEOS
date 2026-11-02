@@ -53,12 +53,19 @@ mod net {
             pub group:u8,pub id:u8,pub version:u8,pub sequence:u16,pub payload:Vec<u8>,
         }
         pub struct State {
-            pub alive:Option<Notification>, pub incoming:VecDeque<Notification>,pub sent:Vec<Command>,pub sequence:u16,pub raw:Vec<RawTx>,pub queue_prepared:Vec<(u8,u8)>,pub active_queues:Vec<u16>,pub tx_completion:Option<(u16,u16,u16)>,
+            pub alive:Option<Notification>, pub incoming:VecDeque<Notification>,pub sent:Vec<Command>,pub sequence:u16,pub raw:Vec<RawTx>,pub queue_prepared:Vec<(u8,u8)>,pub active_queues:Vec<u16>,pub tx_completion:Option<(u16,u16,u16)>,pub restarts:usize,pub reset_error:Option<&'static str>,
         }
         pub type Shared=Arc<Mutex<State>>;
         pub struct Transport(pub Shared);
         impl Transport {
             pub fn start(&mut self)->Result<Notification,&'static str>{self.0.lock().unwrap().alive.take().ok_or("no alive")}
+            pub fn restart(&mut self)->Result<Notification,&'static str>{
+                let mut state=self.0.lock().unwrap();state.restarts+=1;
+                if let Some(reason)=state.reset_error{return Err(reason);}
+                state.incoming.clear();state.sent.clear();state.sequence=0;state.raw.clear();
+                state.queue_prepared.clear();state.active_queues.clear();state.tx_completion=None;
+                Ok(Notification{group:0,id:1,sequence:0x8000,payload:vec![0xfe,0xca,0,0]})
+            }
             pub fn send_command(&mut self,group:u8,id:u8,version:u8,payload:&[u8])->Result<u16,&'static str>{
                 let mut state=self.0.lock().unwrap();let sequence=state.sequence;state.sequence+=1;
                 state.sent.push(Command{group:if group==0{1}else{group},id,version,sequence,payload:payload.to_vec()});Ok(sequence)
@@ -91,7 +98,7 @@ mod net {
             crate::NOW.with(|value|value.set(0));
             let shared=Arc::new(Mutex::new(State{
                 alive:Some(Notification{group:0,id:1,sequence:0x8000,payload:vec![0xfe,0xca,0,0]}),
-                incoming:VecDeque::new(),sent:Vec::new(),sequence:0,raw:Vec::new(),queue_prepared:Vec::new(),active_queues:Vec::new(),tx_completion:None,
+                incoming:VecDeque::new(),sent:Vec::new(),sequence:0,raw:Vec::new(),queue_prepared:Vec::new(),active_queues:Vec::new(),tx_completion:None,restarts:0,reset_error:None,
             }));
             let image=if legacy_dqa {
                 // A synthetic capability on the otherwise real image exercises
@@ -247,6 +254,128 @@ mod net {
             let mut data=vec![0;16];data[..4].copy_from_slice(&uid.to_le_bytes());data[6]=status;
             inject(shared,0,0x0f,0x8000,data);
         }
+        fn reinitialize(runtime:&mut Runtime,shared:&Shared){
+            to_init_complete(runtime,shared);complete(shared);assert!(!runtime.poll().unwrap());
+            let command=latest(shared);inject(shared,command.group,command.id,command.sequence,nvm());
+            assert!(!runtime.poll().unwrap());finish_radio_bootstrap(runtime,shared);
+        }
+        #[test] fn reset_reinitializes_and_discards_previous_scan_or_station(){
+            let(mut runtime,shared)=connectable_scan();
+            candidate_beacon(&shared,[2,3,4,5,6,7],1,1,35,1);scan_complete(&shared,1,1);
+            runtime.poll().unwrap();runtime.connect("easyeasy",b"",[2,1,2,3,4,5]).unwrap();
+            assert!(runtime.connection_state().is_some());
+            for count in 1..=20 {
+                runtime.restart().unwrap();
+                assert_eq!(shared.lock().unwrap().restarts,count);
+                assert!(runtime.connection_state().is_none());assert!(!runtime.link_up());
+                assert!(runtime.scan_results().is_empty());assert!(runtime.nvm.is_none());
+                assert_eq!((latest(&shared).group,latest(&shared).id),(2,3));
+                reinitialize(&mut runtime,&shared);
+                assert!(runtime.poll().unwrap());
+            }
+        }
+        #[test] fn failed_reset_keeps_carrier_closed_and_is_retryable(){
+            let(mut runtime,shared)=connectable_scan();
+            candidate_beacon(&shared,[2,3,4,5,6,7],1,1,35,1);scan_complete(&shared,1,1);
+            runtime.poll().unwrap();runtime.connect("easyeasy",b"",[2,1,2,3,4,5]).unwrap();
+            assert!(runtime.connection_state().is_some());assert!(!runtime.scan_results().is_empty());
+            shared.lock().unwrap().reset_error=Some("master stop timeout");
+            assert_eq!(runtime.restart().unwrap_err(),"master stop timeout");
+            assert!(!runtime.link_up());assert!(!runtime.poll().unwrap());
+            assert!(runtime.connection_state().is_none());assert!(runtime.connected_ssid().is_none());
+            assert!(runtime.receive().is_none());assert!(runtime.scan_results().is_empty());
+            shared.lock().unwrap().reset_error=None;runtime.restart().unwrap();
+            reinitialize(&mut runtime,&shared);assert!(runtime.poll().unwrap());
+        }
+        #[test] fn failed_initial_alive_retains_runtime_for_reset(){
+            let(runtime,shared)=fixture();let transport=Transport(shared.clone());
+            let mut runtime=Runtime::new(transport,fw::parse(fw::EMBEDDED).unwrap());
+            assert!(runtime.initialize().is_err());runtime.restart().unwrap();
+            reinitialize(&mut runtime,&shared);assert!(runtime.poll().unwrap());
+        }
+        fn station_rx(shared:&Shared,frame:&[u8]){
+            let mut packet=vec![0;48];packet[..2].copy_from_slice(&(frame.len()as u16).to_le_bytes());
+            packet[12]=3;packet[32]=40;packet[34]=1;packet.extend_from_slice(frame);
+            inject(shared,0,0xc1,0x8000,packet);
+        }
+        fn ap_management(shared:&Shared,subtype:u8,body:&[u8]){
+            let mut frame=vec![0;24];frame[0]=subtype;
+            frame[4..10].copy_from_slice(&[2,1,2,3,4,5]);
+            frame[10..16].copy_from_slice(&[2,3,4,5,6,7]);
+            frame[16..22].copy_from_slice(&[2,3,4,5,6,7]);
+            frame.extend_from_slice(body);station_rx(shared,&frame);
+        }
+        fn associate_open_runtime(runtime:&mut Runtime,shared:&Shared){
+            runtime.connect("easyeasy",b"",[2,1,2,3,4,5]).unwrap();
+            assert!(!runtime.link_up());assert!(runtime.poll().unwrap());
+            // Acknowledge the real serializer's entire station setup, not just
+            // the final carrier state. Runtime dispatch drives every stage.
+            for (group,id,response) in [(1,8,None),(5,8,None),(1,0x28,None),
+                (1,0x2b,Some(0u32)),(1,0x18,Some(1)),(3,5,None)] {
+                let command=latest(shared);assert_eq!((command.group,command.id),(group,id));
+                let payload=response.map_or_else(Vec::new,|value|value.to_le_bytes().to_vec());
+                inject(shared,command.group,command.id,command.sequence,payload);
+                assert!(runtime.poll().unwrap());assert!(!runtime.link_up());
+            }
+            for queue in [1u16,2] {
+                let command=latest(shared);assert_eq!((command.group,command.id),(5,0x17));
+                let mut response=vec![0;8];response[..2].copy_from_slice(&queue.to_le_bytes());
+                inject(shared,command.group,command.id,command.sequence,response);
+                assert!(runtime.poll().unwrap());assert!(!runtime.link_up());
+            }
+            let mut event=vec![0;16];event[4]=1;event[8]=1;inject(shared,3,0xfb,0x8000,event);
+            assert!(runtime.poll().unwrap());assert_eq!(shared.lock().unwrap().raw.last().unwrap().frame[0],0xb0);
+            ap_management(shared,0xb0,&[0,0,2,0,0,0]);assert!(runtime.poll().unwrap());
+            assert_eq!(shared.lock().unwrap().raw.last().unwrap().frame[0],0);
+            ap_management(shared,0x10,&[1,0,0,0,1,0xc0]);assert!(runtime.poll().unwrap());
+            for (id,response) in [(0x28,None),(0x18,Some(1u32))] {
+                let command=latest(shared);assert_eq!((command.group,command.id),(1,id));
+                inject(shared,1,id,command.sequence,response.map_or_else(Vec::new,|value|value.to_le_bytes().to_vec()));
+                assert!(runtime.poll().unwrap());
+            }
+            assert_eq!(runtime.connection_state(),Some(super::wifi::WifiState::Connected));
+            assert!(runtime.link_up());assert_eq!(runtime.connected_ssid().as_deref(),Some("easyeasy"));
+        }
+        #[test] fn reset_recovers_carrier_and_ethernet_after_ap_and_firmware_failures(){
+            let(mut runtime,shared)=connectable_scan();
+            for cycle in 0..6 {
+                if cycle!=0 {
+                    runtime.restart().unwrap();assert_eq!(shared.lock().unwrap().restarts,cycle);
+                    assert!(!runtime.link_up());assert!(runtime.connection_state().is_none());
+                    assert!(runtime.connected_ssid().is_none());assert!(runtime.receive().is_none());
+                    to_init_complete(&mut runtime,&shared);complete(&shared);assert!(!runtime.poll().unwrap());
+                    let command=latest(&shared);let mut data=nvm();data[24..28].copy_from_slice(&110u32.to_le_bytes());
+                    data[28..].fill(0);data[28..32].copy_from_slice(&9u32.to_le_bytes());
+                    inject(&shared,command.group,command.id,command.sequence,data);assert!(!runtime.poll().unwrap());
+                    finish_radio_bootstrap(&mut runtime,&shared);begin_scan(&mut runtime,&shared);
+                }
+                candidate_beacon(&shared,[2,3,4,5,6,7],1,1,35,1);
+                scan_complete(&shared,1,(cycle+1)as u32);assert!(runtime.poll().unwrap());
+                associate_open_runtime(&mut runtime,&shared);
+                let mut ethernet=vec![0;60];ethernet[..6].copy_from_slice(&[2,3,4,5,6,7]);
+                ethernet[6..12].copy_from_slice(&[2,1,2,3,4,5]);ethernet[12..14].copy_from_slice(&[8,0]);
+                ethernet[14..].fill(cycle as u8);runtime.send(&ethernet).unwrap();
+                let tx=shared.lock().unwrap().raw.last().unwrap().clone();assert_eq!(tx.queue,2);
+                assert_eq!(&tx.frame[32..],&ethernet[14..]);
+                let mut downlink=tx.frame;downlink[1]=2;
+                downlink[4..10].copy_from_slice(&[2,1,2,3,4,5]);
+                downlink[10..16].copy_from_slice(&[2,3,4,5,6,7]);
+                downlink[16..22].copy_from_slice(&[2,3,4,5,6,7]);
+                station_rx(&shared,&downlink);assert!(runtime.poll().unwrap());
+                let received=runtime.receive().unwrap();assert_eq!(&received[14..],&ethernet[14..]);
+                assert!(runtime.receive().is_none());
+                crate::NOW.with(|value|value.set(value.get()+120_000));
+                assert!(runtime.poll().unwrap());assert!(runtime.link_up());
+                if cycle%2==0 {
+                    ap_management(&shared,0xc0,&[4,0]);assert!(runtime.poll().unwrap());
+                    assert_eq!(runtime.connection_error(),Some("AX201 AP disconnected station"));
+                } else {
+                    inject(&shared,0,2,0x8000,vec![0;8]);
+                    assert_eq!(runtime.poll().unwrap_err(),"AX201 firmware REPLY_ERROR");
+                }
+                assert!(!runtime.link_up());assert!(runtime.send(&ethernet).is_err());
+            }
+        }
         #[test] fn passive_scan_completes_and_collects_beacon(){
             let(mut runtime,shared)=scan_ready();begin_scan(&mut runtime,&shared);
             let mut frame=vec![0;36];frame[0]=0x80;frame[16..22].copy_from_slice(&[2,3,4,5,6,7]);
@@ -370,7 +499,7 @@ mod link_lifecycle_tests {
         },tx_chains:3,rx_chains:3,device_timestamp:0,host_decrypt:true};
         let connection=Connection::new(&firmware,config.clone(),if protected{PSK}else{b""},if protected{&RSN}else{&[]},-42).unwrap();
         let shared=Arc::new(Mutex::new(State{alive:None,incoming:VecDeque::new(),sent:vec![],sequence:0,
-            raw:vec![],queue_prepared:vec![],active_queues:vec![],tx_completion:None}));
+            raw:vec![],queue_prepared:vec![],active_queues:vec![],tx_completion:None,restarts:0,reset_error:None}));
         Fixture{fw:firmware,config,connection,transport:Transport(shared.clone()),shared}
     }
     impl Fixture {
@@ -476,6 +605,26 @@ mod link_lifecycle_tests {
         assert!(f.shared.lock().unwrap().active_queues.is_empty());
         assert!(f.shared.lock().unwrap().raw.is_empty());
         assert!(!f.connection.connected());
+    }
+    #[test]fn session_protection_end_or_failure_after_association_does_not_drop_link(){
+        let mut f=fixture(false);f.associate();assert_eq!(f.connection.state(),WifiState::Connected);
+        f.notify(3,0xfb,0x8000,vec![0;16]);
+        assert_eq!(f.connection.state(),WifiState::Connected);
+        let mut end=vec![0;16];end[4]=1;f.notify(3,0xfb,0x8000,end);
+        crate::NOW.with(|clock|clock.set(120_000));f.poll();
+        assert_eq!(f.connection.state(),WifiState::Connected);
+        assert!(f.connection.send(&mut f.transport,&ethernet()).is_ok());
+    }
+    #[test]fn session_protection_failure_before_authentication_closes_station(){
+        let mut f=fixture(false);f.configure(false);
+        f.notify(3,0xfb,0x8000,vec![0;16]);
+        assert_eq!(f.connection.state(),WifiState::Failed);
+        assert_eq!(f.connection.last_error(),Some("AX201 session protection failed"));
+    }
+    #[test]fn malformed_deauthentication_is_dropped_but_valid_ap_reason_closes_link(){
+        let mut f=fixture(false);f.associate();
+        f.management(0xc0,&[]);assert_eq!(f.connection.state(),WifiState::Connected);
+        f.management(0xc0,&[4,0]);assert_eq!(f.connection.state(),WifiState::Failed);
     }
     #[test]fn open_association_routes_ethernet_and_disconnect_closes_port(){
         let mut f=fixture(false);f.associate();assert!(f.connection.connected());

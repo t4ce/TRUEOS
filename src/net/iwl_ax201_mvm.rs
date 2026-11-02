@@ -117,22 +117,12 @@ fn decode_nvm(data: &[u8]) -> Result<NvmInfo, &'static str> {
 }
 
 impl Runtime {
-    pub fn start(
-        mut transport: Transport,
-        firmware: Firmware<'static>,
-    ) -> Result<Self, &'static str> {
-        let alive = transport.start()?;
-        if alive.group != 0
-            || alive.id != 1
-            || alive.payload.len() < 4
-            || u16::from_le_bytes([alive.payload[0], alive.payload[1]]) != 0xcafe
-        {
-            return Err("AX201 invalid firmware ALIVE notification");
-        }
-        let mut runtime = Self {
+    /// Retain transport/DMA ownership even if initial firmware boot fails.
+    pub fn new(transport: Transport, firmware: Firmware<'static>) -> Self {
+        Self {
             transport,
             firmware,
-            stage: Stage::InitConfig,
+            stage: Stage::Failed,
             pending: None,
             pending_command: None,
             deadline_ms: 0,
@@ -143,11 +133,55 @@ impl Runtime {
             networks: Vec::new(),
             beacons: Vec::new(),
             connection: None,
-        };
-        // IWL_INIT_NVM is bit 1; NVM remains onboard rather than being overwritten.
-        runtime.submit(SYSTEM, 3, &2u32.to_le_bytes())?;
-        crate::log_warn!(target: "net"; "iwl-ax201: stage=unified-init firmware_alive=1\n");
+        }
+    }
+
+    #[cfg(test)]
+    pub fn start(transport: Transport, firmware: Firmware<'static>) -> Result<Self, &'static str> {
+        let mut runtime = Self::new(transport, firmware);
+        runtime.initialize()?;
         Ok(runtime)
+    }
+
+    pub fn initialize(&mut self) -> Result<(), &'static str> {
+        let alive = self.transport.start()?;
+        self.initialize_alive(alive)
+    }
+
+    pub fn restart(&mut self) -> Result<(), &'static str> {
+        // Close carrier and discard stale station keys/software frames even if
+        // firmware cannot reboot. DMA belongs to Transport and remains pinned
+        // until its checked stop/reset permits reclaiming the hardware queues.
+        self.stage = Stage::Failed;
+        self.connection = None;
+        self.nvm = None;
+        self.pending = None;
+        self.pending_command = None;
+        self.deadline_ms = 0;
+        self.init_complete = false;
+        self.scan_request.clear();
+        self.networks.clear();
+        self.beacons.clear();
+        let alive = self.transport.restart()?;
+        self.initialize_alive(alive)
+    }
+
+    fn initialize_alive(&mut self, alive: Notification) -> Result<(), &'static str> {
+        if alive.group != 0
+            || alive.id != 1
+            || alive.payload.len() < 4
+            || u16::from_le_bytes([alive.payload[0], alive.payload[1]]) != 0xcafe
+        {
+            return Err("AX201 invalid firmware ALIVE notification");
+        }
+        self.stage = Stage::InitConfig;
+        // IWL_INIT_NVM is bit 1; NVM remains onboard rather than overwritten.
+        if let Err(reason) = self.submit(SYSTEM, 3, &2u32.to_le_bytes()) {
+            self.stage = Stage::Failed;
+            return Err(reason);
+        }
+        crate::log_warn!(target: "net"; "iwl-ax201: stage=unified-init firmware_alive=1\n");
+        Ok(())
     }
 
     fn submit(&mut self, group: u8, id: u8, payload: &[u8]) -> Result<(), &'static str> {
@@ -469,7 +503,13 @@ impl Runtime {
             return Ok(false);
         }
         let result = self.poll_inner();
-        if result.is_err() {
+        if let Err(reason) = result.as_ref() {
+            crate::log_warn!(target: "net";
+                "iwl-ax201: stage=runtime-error waiting={:?} pending={:?} reason={}\n",
+                self.stage, self.pending_command, reason);
+            if let Some(connection) = self.connection.as_mut() {
+                connection.transport_failed(reason);
+            }
             self.stage = Stage::Failed;
         }
         result
