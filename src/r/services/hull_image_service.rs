@@ -1,8 +1,8 @@
-//! Bounded, owner-scoped URL -> cache -> decode -> UI4 raster service.
+//! Bounded, owner-scoped URL -> decode -> UI4 raster service.
 //!
-//! Two workers may fetch/cache; one may decode/resize. The ABI admits work and
-//! polls tickets only. All encoded/decoded bytes remain in the kernel. Cache
-//! writes happen after ready publication and cannot fail an already drawn image.
+//! Two workers may fetch; one may decode/resize. The ABI admits work and
+//! polls tickets only. All encoded/decoded bytes remain in the kernel. Existing
+//! cache entries may be read, but this service creates no directories or files.
 use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use spin::Mutex;
@@ -417,7 +417,6 @@ async fn process(job: &Job) -> Result<(), i32> {
     if !job.life.live() {
         return Err(ERR_NOT_FOUND);
     }
-    let cache_hit = cached.is_some();
     let encoded = match cached {
         Some(bytes) => bytes,
         None => crate::r::net::https::get_image_bytes_shared(
@@ -434,7 +433,6 @@ async fn process(job: &Job) -> Result<(), i32> {
     }
     let permit = decode_permit(&job.life).await?;
     let decoded = super::media_service::decode_ui4_bounded(&encoded)?;
-    let format = decoded.info.source_format;
     let (width, height) = policy::contained_extent(
         decoded.info.width,
         decoded.info.height,
@@ -453,7 +451,7 @@ async fn process(job: &Job) -> Result<(), i32> {
     if !job.life.live() {
         return Err(ERR_NOT_FOUND);
     }
-    // Allocation, pixel copy, and cache flush occur before taking the registry
+    // Allocation, pixel copy, and GPU cache flush occur before taking the registry
     // lock. Installation only validates/switches the prepared retained source.
     let mut prepared = ui::prepare_rgba(width, height, &pixels)?;
     drop(pixels);
@@ -500,13 +498,6 @@ async fn process(job: &Job) -> Result<(), i32> {
     }
     if !published {
         return Err(ERR_BUSY);
-    }
-    // Publication is independent of persistence: a full/offline filesystem
-    // cannot turn a ready image into an error or hold initial layout hostage.
-    if !cache_hit && job.life.live() {
-        if let Some(cache) = &job.cache {
-            let _ = write_cache(cache, &job.url, format, &encoded, &job.life);
-        }
     }
     Ok(())
 }
@@ -558,50 +549,4 @@ fn read_cache(cache: &Cache, url: &str) -> Option<Vec<u8>> {
         return None;
     }
     Some(bytes)
-}
-
-fn write_file(cache: &Cache, name: &str, bytes: &[u8], life: &Life) -> Option<()> {
-    if !life.live() {
-        return None;
-    }
-    let path = alloc::format!("{}/{name}", cache.directory);
-    let handle = fs::write_file_begin(cache.disk, path, bytes.len() as u64)
-        .ok()?
-        .ok()?;
-    for chunk in bytes.chunks(64 * 1024) {
-        if !life.live() || !matches!(fs::write_file_chunk(handle, chunk.to_vec()), Ok(Ok(()))) {
-            let _ = fs::write_file_abort(handle);
-            return None;
-        }
-    }
-    if !life.live() {
-        let _ = fs::write_file_abort(handle);
-        return None;
-    }
-    if !matches!(fs::write_file_finish(handle), Ok(Ok(()))) {
-        let _ = fs::write_file_abort(handle);
-        return None;
-    }
-    Some(())
-}
-
-fn write_cache(cache: &Cache, url: &str, format: u32, bytes: &[u8], life: &Life) -> Option<()> {
-    fs::create_dir_all(cache.disk, cache.directory.clone())
-        .ok()?
-        .ok()?;
-    write_file(
-        cache,
-        &alloc::format!("source.{}", policy::extension(format)?),
-        bytes,
-        life,
-    )?;
-    // No rename assumptions: metadata is the final commit marker and includes
-    // the full URL, format, exact length, and source digest. Torn replacements
-    // and concurrent writers can only produce a rejected cache entry.
-    write_file(
-        cache,
-        "metadata",
-        policy::metadata(url, format, bytes).as_bytes(),
-        life,
-    )
 }
