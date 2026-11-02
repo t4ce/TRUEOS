@@ -28,20 +28,6 @@ static HTML_FETCH_IDLE_LOGS: AtomicU32 = AtomicU32::new(0);
 static HTML_FETCH_WORKER_SEQ: AtomicU32 = AtomicU32::new(0);
 static HTML_BYTE_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 struct ByteFetchRequest {
     id: u32,
     url: String,
@@ -53,6 +39,8 @@ struct ByteFetchRequest {
 #[derive(Clone)]
 enum ByteFetchMethod {
     Get,
+    Head,
+    ProbeGet,
     Post {
         content_type: String,
         headers: Vec<(String, String)>,
@@ -62,7 +50,7 @@ enum ByteFetchMethod {
 
 impl ByteFetchMethod {
     fn follows_redirects(&self) -> bool {
-        matches!(self, Self::Get)
+        matches!(self, Self::Get | Self::Head | Self::ProbeGet)
     }
 }
 
@@ -72,11 +60,86 @@ pub struct ByteFetch {
     pub bytes: Vec<u8>,
 }
 
+const NAVIGATION: u8 = b'N';
+const DOWNLOAD: u8 = b'D';
+
+fn navigation_header_decision(content_disposition: Option<&str>, content_type: Option<&str>) -> u8 {
+    if content_disposition
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("attachment"))
+    {
+        return DOWNLOAD;
+    }
+    let Some(media_type) = content_type
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| value.contains('/') && value.is_ascii())
+    else {
+        return NAVIGATION;
+    };
+    let media_type = media_type.to_ascii_lowercase();
+    if media_type == "text/html" || media_type == "application/xhtml+xml" {
+        return NAVIGATION;
+    }
+    if matches!(
+        media_type.as_str(),
+        "application/octet-stream"
+            | "application/pdf"
+            | "application/zip"
+            | "application/x-zip-compressed"
+            | "application/x-rar-compressed"
+            | "application/vnd.rar"
+            | "application/x-7z-compressed"
+            | "application/x-tar"
+            | "application/gzip"
+            | "application/x-gzip"
+            | "application/x-bzip2"
+            | "application/x-xz"
+            | "application/java-archive"
+            | "application/epub+zip"
+            | "application/json"
+            | "application/xml"
+            | "application/msword"
+            | "application/vnd.ms-excel"
+            | "application/vnd.ms-powerpoint"
+            | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            | "application/x-msdownload"
+            | "application/x-executable"
+            | "text/xml"
+            | "text/plain"
+            | "text/csv"
+    ) || media_type.starts_with("image/")
+        || media_type.starts_with("audio/")
+        || media_type.starts_with("video/")
+    {
+        DOWNLOAD
+    } else {
+        NAVIGATION
+    }
+}
+
+fn navigation_response_decision(
+    status: u16,
+    content_disposition: Option<&str>,
+    content_type: Option<&str>,
+) -> u8 {
+    if status == 405 || status == 501 || !(200..300).contains(&status) {
+        NAVIGATION
+    } else {
+        navigation_header_decision(content_disposition, content_type)
+    }
+}
+
+fn head_requires_get_fallback(status: u16) -> bool {
+    matches!(status, 405 | 501)
+}
+
 struct ByteFetchCompletion {
     id: u32,
     result: Result<ByteFetch, String>,
 }
-
 
 /// Queue-like holding box for HTML work.
 ///
@@ -95,9 +158,6 @@ impl HtmlShack {
     pub fn new() -> Self {
         Self::default()
     }
-
-
-
 
     fn push_byte_fetch(&mut self, request: ByteFetchRequest) -> usize {
         if crate::log_os::flags::HTML_SHACK_VERBOSE {
@@ -166,12 +226,6 @@ impl HtmlShack {
             self.abandoned_byte_fetches.insert(id);
         }
     }
-
-
-
-
-
-
 }
 
 #[cfg(test)]
@@ -241,6 +295,7 @@ mod byte_fetch_lifecycle_tests {
     #[test]
     fn redirects_are_get_only() {
         assert!(ByteFetchMethod::Get.follows_redirects());
+        assert!(ByteFetchMethod::Head.follows_redirects());
         assert!(
             !ByteFetchMethod::Post {
                 content_type: String::from("application/json"),
@@ -248,6 +303,54 @@ mod byte_fetch_lifecycle_tests {
                 body: vec![b'{', b'}'],
             }
             .follows_redirects()
+        );
+    }
+
+    #[test]
+    fn navigation_header_probe_download_classification_is_conservative() {
+        assert_eq!(
+            navigation_header_decision(Some("attachment; filename=report.pdf"), Some("text/html")),
+            DOWNLOAD
+        );
+        assert_eq!(
+            navigation_header_decision(None, Some("application/octet-stream")),
+            DOWNLOAD
+        );
+        assert_eq!(
+            navigation_header_decision(None, Some("application/zip; name=x.zip")),
+            DOWNLOAD
+        );
+        assert_eq!(
+            navigation_header_decision(None, Some("application/pdf")),
+            DOWNLOAD
+        );
+        assert_eq!(
+            navigation_header_decision(None, Some("text/html; charset=utf-8")),
+            NAVIGATION
+        );
+        assert_eq!(
+            navigation_header_decision(None, Some("application/xhtml+xml")),
+            NAVIGATION
+        );
+        assert_eq!(navigation_header_decision(None, None), NAVIGATION);
+        assert_eq!(
+            navigation_header_decision(None, Some("x-unknown")),
+            NAVIGATION
+        );
+        assert_eq!(
+            navigation_response_decision(
+                405,
+                Some("attachment; filename=x.zip"),
+                Some("application/zip"),
+            ),
+            NAVIGATION
+        );
+        assert!(head_requires_get_fallback(405));
+        assert!(head_requires_get_fallback(501));
+        assert!(!head_requires_get_fallback(404));
+        assert_eq!(
+            navigation_response_decision(501, Some("attachment"), Some("application/octet-stream"),),
+            NAVIGATION
         );
     }
 }
@@ -259,16 +362,6 @@ pub fn with_html_shack<R>(f: impl FnOnce(&mut HtmlShack) -> R) -> R {
     let shack = guard.get_or_insert_with(HtmlShack::new);
     f(shack)
 }
-
-
-
-
-
-
-
-
-
-
 
 fn pop_byte_fetch_request() -> Option<ByteFetchRequest> {
     with_html_shack(HtmlShack::pop_byte_fetch)
@@ -316,6 +409,31 @@ pub async fn fetch_bytes_via_pool(
 
     let id = HTML_BYTE_FETCH_SEQ.fetch_add(1, Ordering::AcqRel);
     fetch_bytes_via_pool_method(id, url, timeout_ms, max_bytes, ByteFetchMethod::Get).await
+}
+
+/// Probe a navigation URL without fetching its body. The result is exactly
+/// one byte: `b'D'` for a known download response, or `b'N'` for navigation
+/// and every uncertain/error case.
+pub async fn probe_navigation_via_pool(url: &str) -> Result<Vec<u8>, String> {
+    if url.trim().is_empty() {
+        return Ok(vec![NAVIGATION]);
+    }
+    if url.len() > 4096 {
+        return Ok(vec![NAVIGATION]);
+    }
+    let id = HTML_BYTE_FETCH_SEQ.fetch_add(1, Ordering::AcqRel);
+    let result = fetch_bytes_via_pool_method(
+        id,
+        String::from(url),
+        HTML_FETCH_CONNECT_TIMEOUT_MS,
+        1,
+        ByteFetchMethod::Head,
+    )
+    .await;
+    match result {
+        Ok(fetch) if fetch.bytes.as_slice() == b"D" => Ok(vec![DOWNLOAD]),
+        Ok(_) | Err(_) => Ok(vec![NAVIGATION]),
+    }
 }
 
 pub async fn post_bytes_via_pool(
@@ -391,7 +509,6 @@ async fn fetch_bytes_via_pool_method(
     }
 }
 
-
 fn strip_url_prefix_ignore_ascii_case<'a>(url: &'a str, prefix: &str) -> Option<&'a str> {
     url.get(..prefix.len())
         .filter(|head| head.eq_ignore_ascii_case(prefix))
@@ -408,10 +525,6 @@ fn normalize_http_url_scheme(url: &str) -> Option<String> {
     }
     None
 }
-
-
-
-
 
 struct RequestBody {
     data: Option<Bytes>,
@@ -736,7 +849,6 @@ struct HttpTarget {
     path_and_query: String,
 }
 
-
 enum HttpFetchError {
     BadUrl,
     UnsupportedScheme,
@@ -748,6 +860,7 @@ enum HttpFetchError {
     Body,
     TooLarge,
     Redirect(String),
+    HeadUnsupported,
 }
 
 impl HttpFetchError {
@@ -763,10 +876,10 @@ impl HttpFetchError {
             Self::Body => "body",
             Self::TooLarge => "too-large",
             Self::Redirect(_) => "redirect",
+            Self::HeadUnsupported => "head-unsupported",
         }
     }
 }
-
 
 fn parse_http_url(url: &str) -> Result<HttpTarget, HttpFetchError> {
     let trimmed = url.trim();
@@ -822,7 +935,6 @@ fn parse_http_url(url: &str) -> Result<HttpTarget, HttpFetchError> {
     })
 }
 
-
 fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
     let mut out = [0u8; 4];
     let mut count = 0usize;
@@ -859,13 +971,6 @@ fn build_dns_a_query(host: &str, id: u16) -> Result<Vec<u8>, HttpFetchError> {
     out.extend_from_slice(&1u16.to_be_bytes());
     Ok(out)
 }
-
-
-
-
-
-
-
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn dns_skip_name(buf: &[u8], mut offset: usize) -> Option<usize> {
@@ -961,7 +1066,11 @@ async fn resolve_ipv4(host: &str) -> Result<[u8; 4], HttpFetchError> {
         Ok(ip) => Ok(ip),
         Err(crate::r::net::dns::DnsError::NoNic) => Err(HttpFetchError::NoDns),
         Err(err) => {
-            crate::log!("html_shack: dns resolve failed host={} err={:?}\n", host, err);
+            crate::log!(
+                "html_shack: dns resolve failed host={} err={:?}\n",
+                host,
+                err
+            );
             Err(HttpFetchError::Dns)
         }
     }
@@ -1055,7 +1164,20 @@ async fn fetch_http_body_once(
         .await
         .map_err(|_| HttpFetchError::Hyper)?;
     let (http_method, request_body, content_type, extra_headers, content_len) = match method {
-        ByteFetchMethod::Get => (hyper::Method::GET, RequestBody::empty(), None, &[][..], 0usize),
+        ByteFetchMethod::Get | ByteFetchMethod::ProbeGet => (
+            hyper::Method::GET,
+            RequestBody::empty(),
+            None,
+            &[][..],
+            0usize,
+        ),
+        ByteFetchMethod::Head => (
+            hyper::Method::HEAD,
+            RequestBody::empty(),
+            None,
+            &[][..],
+            0usize,
+        ),
         ByteFetchMethod::Post {
             content_type,
             headers,
@@ -1123,6 +1245,26 @@ async fn fetch_http_body_once(
             {
                 return Err(HttpFetchError::Redirect(String::from(location)));
             }
+        }
+        if matches!(method, ByteFetchMethod::Head | ByteFetchMethod::ProbeGet) {
+            if matches!(method, ByteFetchMethod::Head)
+                && head_requires_get_fallback(status.as_u16())
+            {
+                return Err(HttpFetchError::HeadUnsupported);
+            }
+            let content_disposition = response
+                .headers()
+                .get(hyper::header::CONTENT_DISPOSITION)
+                .and_then(|value| value.to_str().ok());
+            let content_type = response
+                .headers()
+                .get(hyper::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok());
+            return Ok(vec![navigation_response_decision(
+                status.as_u16(),
+                content_disposition,
+                content_type,
+            )]);
         }
         if !status.is_success() {
             return Err(HttpFetchError::Body);
@@ -1210,32 +1352,74 @@ async fn fetch_http_body_hyper(
             && strip_url_prefix_ignore_ascii_case(https_url.as_str(), "https://").is_some()
         {
             match method {
-                ByteFetchMethod::Get => {}
+                ByteFetchMethod::Get | ByteFetchMethod::Head | ByteFetchMethod::ProbeGet => {}
                 ByteFetchMethod::Post { .. } => return Err(HttpFetchError::UnsupportedScheme),
             }
 
             let timeout_ms = timeout_ms.min(u32::MAX as u64).max(1) as u32;
-            let bytes =
-                crate::r::net::https::get_bytes_shared(https_url.as_str(), timeout_ms, max_bytes)
+            let bytes = match method {
+                ByteFetchMethod::Head | ByteFetchMethod::ProbeGet => {
+                    match crate::r::net::https::probe_navigation_headers_shared(
+                        https_url.as_str(),
+                        timeout_ms,
+                    )
                     .await
-                    .map_err(|err| {
-                        crate::log_warn!(target: "net";
-                            "html_shack: https fetch failed url={} err={}\n",
-                            https_url,
-                            err
-                        );
-                        HttpFetchError::Https(err)
-                    })?;
+                    {
+                        Ok(response) => vec![navigation_response_decision(
+                            response.status,
+                            response.content_disposition.as_deref(),
+                            response.content_type.as_deref(),
+                        )],
+                        Err(_) => vec![NAVIGATION],
+                    }
+                }
+                ByteFetchMethod::Get => crate::r::net::https::get_bytes_shared(
+                    https_url.as_str(),
+                    timeout_ms,
+                    max_bytes,
+                )
+                .await
+                .map_err(|err| {
+                    crate::log_warn!(target: "net";
+                        "html_shack: https fetch failed url={} err={}\n",
+                        https_url,
+                        err
+                    );
+                    HttpFetchError::Https(err)
+                })?,
+                ByteFetchMethod::Post { .. } => return Err(HttpFetchError::UnsupportedScheme),
+            };
             return Ok((https_url, bytes));
         }
         let target = parse_http_url(current.as_str())?;
-        match fetch_http_body_once(worker_transport, &target, max_bytes, method).await {
+        let response = if matches!(method, ByteFetchMethod::Head) {
+            match fetch_http_body_once(worker_transport, &target, max_bytes, method).await {
+                Err(HttpFetchError::HeadUnsupported) => {
+                    fetch_http_body_once(
+                        worker_transport,
+                        &target,
+                        max_bytes,
+                        &ByteFetchMethod::ProbeGet,
+                    )
+                    .await
+                }
+                result => result,
+            }
+        } else {
+            fetch_http_body_once(worker_transport, &target, max_bytes, method).await
+        };
+        match response {
             Ok(body) => return Ok((target.url, body)),
             Err(HttpFetchError::Redirect(next))
                 if method.follows_redirects() && hop < HTML_FETCH_MAX_REDIRECTS =>
             {
                 let next = resolve_redirect(&target, next.as_str())?;
-                crate::log!("html_shack: redirect hop={} {} -> {}\n", hop + 1, target.url, next);
+                crate::log!(
+                    "html_shack: redirect hop={} {} -> {}\n",
+                    hop + 1,
+                    target.url,
+                    next
+                );
                 current = next;
             }
             Err(err) => return Err(err),
@@ -1243,9 +1427,6 @@ async fn fetch_http_body_hyper(
     }
     Err(HttpFetchError::Body)
 }
-
-
-
 
 async fn handle_byte_fetch_request(
     worker_id: u32,
@@ -1305,8 +1486,6 @@ async fn handle_byte_fetch_request(
 
     put_byte_fetch_result(request.id, result);
 }
-
-
 
 #[trueos_executor::task(pool_size = 10)]
 pub async fn html_fetch_worker_task() {

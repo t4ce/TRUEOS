@@ -319,6 +319,7 @@ struct FetchTarget {
 
 struct HttpsRequest<'a> {
     method: &'static str,
+    headers_only: bool,
     content_type: Option<&'static str>,
     headers: Vec<(String, String)>,
     body: &'a [u8],
@@ -331,6 +332,8 @@ pub struct HttpsJsonResponse {
     pub body: Vec<u8>,
     pub location: Option<String>,
     pub content_encoding: Option<String>,
+    pub content_type: Option<String>,
+    pub content_disposition: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -380,8 +383,14 @@ impl HttpsJsonClient {
         }
 
         let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
-        let owner = leak_str(format!("https-json-client-{}@{}", seq, requested_device_index));
-        let cmds = Queue::new_leaked(leak_str(format!("{}-cmd", owner)), HTTPS_COMMAND_QUEUE_DEPTH);
+        let owner = leak_str(format!(
+            "https-json-client-{}@{}",
+            seq, requested_device_index
+        ));
+        let cmds = Queue::new_leaked(
+            leak_str(format!("{}-cmd", owner)),
+            HTTPS_COMMAND_QUEUE_DEPTH,
+        );
         let events = Queue::new_leaked(leak_str(format!("{}-evt", owner)), HTTPS_EVENT_QUEUE_DEPTH);
         register_tls_app_queues(owner, cmds, events);
 
@@ -474,6 +483,7 @@ impl HttpsJsonClient {
         }
         let request = HttpsRequest {
             method: "POST",
+            headers_only: false,
             content_type: Some("application/json"),
             headers,
             body,
@@ -826,8 +836,10 @@ fn decode_chunked(body: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, Stri
         if size == 0 {
             // A zero chunk is followed by trailers and their final empty line.
             let tail = &body[offset..];
-            return Ok((tail.starts_with(b"\r\n") || tail.windows(4).any(|w| w == b"\r\n\r\n"))
-                .then_some(out));
+            return Ok(
+                (tail.starts_with(b"\r\n") || tail.windows(4).any(|w| w == b"\r\n\r\n"))
+                    .then_some(out),
+            );
         }
         if size > max_bytes.saturating_sub(out.len()) {
             return Err(String::from("too large chunked body"));
@@ -897,15 +909,25 @@ fn complete_http_response(
     let content_encoding = header_value(headers, b"content-encoding")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
+    let content_type = header_value(headers, b"content-type")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let content_disposition = header_value(headers, b"content-disposition")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
     if let Some(te) = header_value(headers, b"transfer-encoding")
         && header_value_has_token(te, b"chunked")
     {
-        return Ok(decode_chunked(body, max_bytes)?.map(|body| HttpsJsonResponse {
-            status,
-            body,
-            location,
-            content_encoding,
-        }));
+        return Ok(
+            decode_chunked(body, max_bytes)?.map(|body| HttpsJsonResponse {
+                status,
+                body,
+                location,
+                content_encoding,
+                content_type,
+                content_disposition,
+            }),
+        );
     }
 
     if let Some(len_text) = header_value(headers, b"content-length")
@@ -914,7 +936,10 @@ fn complete_http_response(
             .parse::<usize>()
     {
         if len > max_bytes {
-            return Err(format!("too large content_length={} max={}", len, max_bytes));
+            return Err(format!(
+                "too large content_length={} max={}",
+                len, max_bytes
+            ));
         }
         if body.len() < len {
             return Ok(None);
@@ -923,10 +948,64 @@ fn complete_http_response(
             status,
             location,
             content_encoding,
+            content_type,
+            content_disposition,
             body: body[..len].to_vec(),
         }));
     }
 
+    Ok(None)
+}
+
+fn complete_http_head_response(response: &[u8]) -> Result<Option<HttpsJsonResponse>, String> {
+    let response = final_response_bytes(response)?;
+    let Some(header_end) = find_http_header_end(response) else {
+        return Ok(None);
+    };
+    let status = parse_http_status(response).ok_or_else(|| String::from("bad status"))?;
+    let headers = &response[..header_end];
+    let location = header_value(headers, b"location")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let content_encoding = header_value(headers, b"content-encoding")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let content_type = header_value(headers, b"content-type")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let content_disposition = header_value(headers, b"content-disposition")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    // HEAD responses carry representation Content-Length metadata but never a
+    // body. Stop at the header terminator instead of waiting for that length.
+    Ok(Some(HttpsJsonResponse {
+        status,
+        body: Vec::new(),
+        location,
+        content_encoding,
+        content_type,
+        content_disposition,
+    }))
+}
+
+fn append_head_response_headers(
+    response: &mut Vec<u8>,
+    data: &[u8],
+) -> Result<Option<HttpsJsonResponse>, String> {
+    let room = HTTPS_RESPONSE_OVERHEAD_MAX.saturating_sub(response.len());
+    let take = data.len().min(room);
+    response.extend_from_slice(&data[..take]);
+    if let Some(parsed) = complete_http_head_response(response.as_slice())? {
+        let final_response = final_response_bytes(response.as_slice())?;
+        let header_end = find_http_header_end(final_response)
+            .ok_or_else(|| String::from("bad response headers"))?;
+        let prefix_len = response.len() - final_response.len();
+        response.truncate(prefix_len + header_end);
+        return Ok(Some(parsed));
+    }
+    if take != data.len() || response.len() >= HTTPS_RESPONSE_OVERHEAD_MAX {
+        return Err(String::from("too large response headers"));
+    }
     Ok(None)
 }
 
@@ -950,6 +1029,12 @@ fn http_response_from_bytes(
     let content_encoding = header_value(headers, b"content-encoding")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
+    let content_type = header_value(headers, b"content-type")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let content_disposition = header_value(headers, b"content-disposition")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
     if let Some(te) = header_value(headers, b"transfer-encoding")
         && header_value_has_token(te, b"chunked")
     {
@@ -960,6 +1045,8 @@ fn http_response_from_bytes(
             body,
             location,
             content_encoding,
+            content_type,
+            content_disposition,
         });
     }
 
@@ -969,15 +1056,24 @@ fn http_response_from_bytes(
             .parse::<usize>()
     {
         if len > max_bytes {
-            return Err(format!("too large content_length={} max={}", len, max_bytes));
+            return Err(format!(
+                "too large content_length={} max={}",
+                len, max_bytes
+            ));
         }
         if body.len() < len {
-            return Err(format!("incomplete body received={} expected={}", body.len(), len));
+            return Err(format!(
+                "incomplete body received={} expected={}",
+                body.len(),
+                len
+            ));
         }
         return Ok(HttpsJsonResponse {
             status,
             location,
             content_encoding,
+            content_type,
+            content_disposition,
             body: body[..len].to_vec(),
         });
     }
@@ -989,6 +1085,8 @@ fn http_response_from_bytes(
         status,
         location,
         content_encoding,
+        content_type,
+        content_disposition,
         body: body.to_vec(),
     })
 }
@@ -1029,6 +1127,7 @@ async fn fetch_https_bytes_with_policy(
 ) -> Result<Vec<u8>, String> {
     let request = HttpsRequest {
         method: "GET",
+        headers_only: false,
         content_type: None,
         headers: Vec::new(),
         body: &[],
@@ -1107,7 +1206,10 @@ async fn fetch_https_bytes_with_policy(
 }
 
 fn fetch_target_url(target: &FetchTarget) -> String {
-    format!("{}://{}:{}{}", target.scheme, target.host, target.port, target.path_and_query)
+    format!(
+        "{}://{}:{}{}",
+        target.scheme, target.host, target.port, target.path_and_query
+    )
 }
 
 pub(crate) fn resolve_http_location(url: &str, location: &str) -> Result<String, String> {
@@ -1163,7 +1265,10 @@ fn resolve_fetch_redirect(target: &FetchTarget, location: &str) -> Result<String
         normalized.push('?');
         normalized.push_str(query);
     }
-    Ok(format!("{}://{}:{}{}", target.scheme, target.host, target.port, normalized))
+    Ok(format!(
+        "{}://{}:{}{}",
+        target.scheme, target.host, target.port, normalized
+    ))
 }
 
 async fn request_https_bytes(
@@ -1216,7 +1321,10 @@ async fn request_https_response_once_cancellable(
 
     let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
     let owner = leak_str(format!("https-fetch-{}@{}", seq, device_index));
-    let cmds = Queue::new_leaked(leak_str(format!("{}-cmd", owner)), HTTPS_COMMAND_QUEUE_DEPTH);
+    let cmds = Queue::new_leaked(
+        leak_str(format!("{}-cmd", owner)),
+        HTTPS_COMMAND_QUEUE_DEPTH,
+    );
     let events = Queue::new_leaked(leak_str(format!("{}-evt", owner)), HTTPS_EVENT_QUEUE_DEPTH);
     register_tls_app_queues(owner, cmds, events);
     let tls_config = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
@@ -1258,22 +1366,25 @@ async fn resolve_https_host(
 }
 
 async fn fence_https_owner(cmds: &'static Queue<TlsCommand>) -> bool {
-    trueos_time::with_timeout(EmbassyDuration::from_millis(HTTPS_CLIENT_FENCE_TIMEOUT_MS), async {
-        let completion = Arc::new(TlsCancelCompletion::new());
-        let mut command = TlsCommand::CancelOwner {
-            completion: completion.clone(),
-        };
-        loop {
-            match cmds.try_push(command) {
-                Ok(()) => break,
-                Err(returned) => {
-                    command = returned;
-                    Timer::after(EmbassyDuration::from_millis(HTTPS_CLIENT_WAIT_MS)).await;
+    trueos_time::with_timeout(
+        EmbassyDuration::from_millis(HTTPS_CLIENT_FENCE_TIMEOUT_MS),
+        async {
+            let completion = Arc::new(TlsCancelCompletion::new());
+            let mut command = TlsCommand::CancelOwner {
+                completion: completion.clone(),
+            };
+            loop {
+                match cmds.try_push(command) {
+                    Ok(()) => break,
+                    Err(returned) => {
+                        command = returned;
+                        Timer::after(EmbassyDuration::from_millis(HTTPS_CLIENT_WAIT_MS)).await;
+                    }
                 }
             }
-        }
-        completion.wait().await;
-    })
+            completion.wait().await;
+        },
+    )
     .await
     .is_ok()
 }
@@ -1396,6 +1507,20 @@ async fn request_https_response_preconnected(
                     if tls_handle != Some(handle) {
                         continue;
                     }
+                    if request.headers_only || request.method == "HEAD" {
+                        match append_head_response_headers(&mut response, data.as_slice()) {
+                            Ok(Some(response)) => {
+                                let _ = cmds.push(TlsCommand::Close { handle });
+                                return Ok(response);
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                let _ = cmds.push(TlsCommand::Close { handle });
+                                return Err(err);
+                            }
+                        }
+                        continue;
+                    }
                     if response.len().saturating_add(data.len())
                         > max_bytes.saturating_add(HTTPS_RESPONSE_OVERHEAD_MAX)
                     {
@@ -1422,6 +1547,10 @@ async fn request_https_response_preconnected(
                 }
                 TlsEvent::Closed { handle } => {
                     if tls_handle == Some(handle) {
+                        if request.headers_only || request.method == "HEAD" {
+                            return complete_http_head_response(response.as_slice())?
+                                .ok_or_else(|| bad_response_message(response.as_slice()));
+                        }
                         return decode_response_content(
                             http_response_from_bytes(response.as_slice(), max_bytes)?,
                             max_bytes,
@@ -1494,6 +1623,89 @@ pub async fn get_bytes_shared(
     }
 }
 
+/// Fetch only HTTPS response headers for a browser navigation probe. The
+/// request follows the same bounded redirect policy as the pooled byte fetch
+/// and returns without waiting for or reading any response body.
+pub(crate) async fn probe_navigation_headers_shared(
+    url: &str,
+    timeout_ms: u32,
+) -> Result<HttpsJsonResponse, String> {
+    let headers = vec![
+        (String::from("Accept"), String::from("text/html,*/*;q=0.8")),
+        (String::from("Accept-Encoding"), String::from("identity")),
+        (
+            String::from("User-Agent"),
+            String::from("TRUEOS/html_shack"),
+        ),
+    ];
+    let head_request = HttpsRequest {
+        method: "HEAD",
+        headers_only: true,
+        content_type: None,
+        headers: headers.clone(),
+        body: &[],
+    };
+    let get_request = HttpsRequest {
+        method: "GET",
+        headers_only: true,
+        content_type: None,
+        headers,
+        body: &[],
+    };
+    let mut current = String::from(url);
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms.max(1) as u64);
+    let mut seen = alloc::collections::BTreeSet::new();
+    for hop in 0..=10 {
+        if !seen.insert(current.clone()) {
+            return Err(String::from("redirect loop"));
+        }
+        let target = parse_fetch_url(&current).map_err(String::from)?;
+        if target.scheme != "https" {
+            return Err(String::from("unsupported scheme"));
+        }
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis();
+        if remaining == 0 {
+            return Err(String::from("timeout"));
+        }
+        let mut response = request_https_response_once(
+            &target,
+            &head_request,
+            remaining.min(u32::MAX as u64) as u32,
+            0,
+        )
+        .await?;
+        if matches!(response.status, 405 | 501) {
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis();
+            if remaining == 0 {
+                return Err(String::from("timeout"));
+            }
+            response = request_https_response_once(
+                &target,
+                &get_request,
+                remaining.min(u32::MAX as u64) as u32,
+                0,
+            )
+            .await?;
+        }
+        if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+            if hop == 10 {
+                return Err(String::from("too many redirects"));
+            }
+            let location = response
+                .location
+                .ok_or_else(|| String::from("redirect missing location"))?;
+            current = resolve_fetch_redirect(&target, &location)?;
+            continue;
+        }
+        return Ok(response);
+    }
+    Err(String::from("too many redirects"))
+}
+
 /// A cancellable finite GET for background image assets. Redirects use the
 /// existing URI resolver and one total deadline; cancellation closes/fences the
 /// active TLS owner instead of abandoning a still-running socket future.
@@ -1505,11 +1717,18 @@ pub(crate) async fn get_image_bytes_shared(
 ) -> Result<Vec<u8>, String> {
     let request = HttpsRequest {
         method: "GET",
+        headers_only: false,
         content_type: None,
         headers: vec![
-            (String::from("Accept"), String::from("image/png,image/jpeg,image/bmp,image/webp,*/*;q=0.1")),
+            (
+                String::from("Accept"),
+                String::from("image/png,image/jpeg,image/bmp,image/webp,*/*;q=0.1"),
+            ),
             (String::from("Accept-Encoding"), String::from("identity")),
-            (String::from("User-Agent"), String::from("TRUEOS Hull raster/1")),
+            (
+                String::from("User-Agent"),
+                String::from("TRUEOS Hull raster/1"),
+            ),
         ],
         body: &[],
     };
@@ -1517,17 +1736,28 @@ pub(crate) async fn get_image_bytes_shared(
     let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms.max(1) as u64);
     let mut seen = alloc::collections::BTreeSet::new();
     for hop in 0..=5 {
-        if cancellation.0.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
+        if cancellation.0.is_cancelled() {
+            return Err(String::from(HTTPS_REQUEST_CANCELLED));
+        }
         // Share image admission's URL policy for every redirect, so credentials,
         // oversized URLs and non-HTTPS locations cannot bypass the first check.
         current = crate::r::services::hull_image_policy::canonical_url(&current)
             .map_err(|_| String::from("unsupported image redirect URL"))?;
-        if !seen.insert(current.clone()) { return Err(String::from("redirect loop")); }
+        if !seen.insert(current.clone()) {
+            return Err(String::from("redirect loop"));
+        }
         let target = parse_fetch_url(&current).map_err(String::from)?;
-        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
-        if remaining == 0 { return Err(String::from("timeout")); }
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis();
+        if remaining == 0 {
+            return Err(String::from("timeout"));
+        }
         let response = request_https_response_once_cancellable(
-            &target, &request, remaining.min(u32::MAX as u64) as u32, max_bytes,
+            &target,
+            &request,
+            remaining.min(u32::MAX as u64) as u32,
+            max_bytes,
             Some(&cancellation.0),
         );
         let mut response = core::pin::pin!(response);
@@ -1541,10 +1771,17 @@ pub(crate) async fn get_image_bytes_shared(
             // Keep polling after cancellation until the TLS owner fence retires;
             // dropping the response future here would leave live socket work.
             response.as_mut().poll(cx)
-        }).await?;
-        if !matches!(response.status, 301 | 302 | 303 | 307 | 308) { return success_body(response); }
-        if hop == 5 { return Err(String::from("too many redirects")); }
-        let location = response.location.ok_or_else(|| String::from("redirect missing location"))?;
+        })
+        .await?;
+        if !matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+            return success_body(response);
+        }
+        if hop == 5 {
+            return Err(String::from("too many redirects"));
+        }
+        let location = response
+            .location
+            .ok_or_else(|| String::from("redirect missing location"))?;
         current = resolve_fetch_redirect(&target, &location)?;
     }
     Err(String::from("too many redirects"))
@@ -1567,6 +1804,7 @@ pub async fn get_bytes_bearer_shared(
     }
     let request = HttpsRequest {
         method: "GET",
+        headers_only: false,
         content_type: None,
         headers,
         body: &[],
@@ -1595,6 +1833,7 @@ pub async fn get_range_bytes_shared(
         .ok_or_else(|| String::from("range overflow"))?;
     let request = HttpsRequest {
         method: "GET",
+        headers_only: false,
         content_type: None,
         headers: vec![(String::from("Range"), format!("bytes={}-{}", offset, end))],
         body: &[],
@@ -1632,7 +1871,10 @@ pub(crate) async fn get_media_bytes_profile_shared(
                 String::from("Accept"),
                 String::from("video/webm,video/mp4,video/*;q=0.9,*/*;q=0.8"),
             ));
-            headers.push((String::from("Accept-Language"), String::from("en-US,en;q=0.9")));
+            headers.push((
+                String::from("Accept-Language"),
+                String::from("en-US,en;q=0.9"),
+            ));
         }
     }
     if use_range {
@@ -1640,6 +1882,7 @@ pub(crate) async fn get_media_bytes_profile_shared(
     }
     let request = HttpsRequest {
         method: "GET",
+        headers_only: false,
         content_type: None,
         headers,
         body: &[],
@@ -1674,6 +1917,7 @@ pub async fn post_protobuf_shared(
     }
     let request = HttpsRequest {
         method: "POST",
+        headers_only: false,
         content_type: Some("application/x-protobuf"),
         headers,
         body,
@@ -1941,7 +2185,13 @@ pub(crate) fn cabi_net_fetch_bytes_start_with_policy_host(
     CABI_NET_FETCH_BYTES_RESULTS
         .lock()
         .insert(op_id, CabiNetFetchBytesResult::default());
-    spawn_fetch_bytes(op_id, String::from(url_s), timeout_ms.max(1), max_bytes, happy_eyeballs);
+    spawn_fetch_bytes(
+        op_id,
+        String::from(url_s),
+        timeout_ms.max(1),
+        max_bytes,
+        happy_eyeballs,
+    );
     op_id
 }
 
@@ -2126,8 +2376,11 @@ fn cabi_net_fetch_bytes_read_guest(op_id: u32, out: &mut [u8]) -> isize {
 }
 
 fn cabi_net_fetch_bytes_discard_guest(op_id: u32) -> i32 {
-    let (status, value) =
-        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_FETCH_BYTES_DISCARD, u64::from(op_id), 0);
+    let (status, value) = trueos_vm::vmcall::call(
+        trueos_vm::vmcall::OP_BP_FETCH_BYTES_DISCARD,
+        u64::from(op_id),
+        0,
+    );
     if status == trueos_vm::vmcall::STATUS_OK {
         (value as i64) as i32
     } else {
@@ -2432,7 +2685,10 @@ mod tests {
             pack_post_json_bytes_vm_request("u", oversized_body, None).unwrap_err(),
             FS_ERR_TOO_LARGE
         );
-        assert_eq!(pack_post_json_bytes_vm_request("u", "", None).unwrap_err(), FS_ERR_BAD_PARAM);
+        assert_eq!(
+            pack_post_json_bytes_vm_request("u", "", None).unwrap_err(),
+            FS_ERR_BAD_PARAM
+        );
 
         let over_cap = vec![b'x'; trueos_vm::vmcall::PAYLOAD_CAP + 1];
         assert!(decode_post_json_bytes_vm_request(over_cap.as_slice(), 1).is_none());
@@ -2450,7 +2706,10 @@ mod tests {
         assert_eq!(pack_fetch_bytes_vm_read(0, 0), None);
         assert_eq!(pack_fetch_bytes_vm_read(0, cap + 1), None);
         assert_eq!(decode_fetch_bytes_vm_read(0), None);
-        assert_eq!(decode_fetch_bytes_vm_read((cap as u64 + 1) & u64::from(u32::MAX)), None);
+        assert_eq!(
+            decode_fetch_bytes_vm_read((cap as u64 + 1) & u64::from(u32::MAX)),
+            None
+        );
         #[cfg(target_pointer_width = "64")]
         assert_eq!(pack_fetch_bytes_vm_read(u32::MAX as usize + 1, 1), None);
     }
@@ -2491,10 +2750,14 @@ mod tests {
         let body = br#"{"model":"chatjimmy"}"#;
         let request = HttpsRequest {
             method: "POST",
+            headers_only: false,
             content_type: Some("application/json"),
             headers: vec![
                 (String::from("Accept"), String::from("application/json")),
-                (String::from("Authorization"), String::from("Bearer test-token")),
+                (
+                    String::from("Authorization"),
+                    String::from("Bearer test-token"),
+                ),
             ],
             body,
         };
@@ -2517,6 +2780,44 @@ mod tests {
         assert_eq!(response.status, 401);
         assert_eq!(response.body.as_slice(), b"denied");
         assert_eq!(success_body(response).unwrap_err(), "http status 401");
+    }
+
+    #[test]
+    fn head_response_stops_at_headers_and_ignores_representation_length() {
+        let bytes = b"HTTP/1.1 200 OK\r\nContent-Length: 987654\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\n\r\n";
+        let response = complete_http_head_response(bytes).unwrap().unwrap();
+        assert_eq!(response.status, 200);
+        assert!(response.body.is_empty());
+        assert_eq!(response.content_type.as_deref(), Some("application/pdf"));
+        assert_eq!(
+            response.content_disposition.as_deref(),
+            Some("attachment; filename=report.pdf")
+        );
+    }
+
+    #[test]
+    fn head_response_waits_for_complete_headers_only() {
+        let partial = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nContent-Type: text/html";
+        assert!(complete_http_head_response(partial).unwrap().is_none());
+        let complete = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nContent-Type: text/html\r\n\r\n";
+        let response = complete_http_head_response(complete).unwrap().unwrap();
+        assert_eq!(response.content_type.as_deref(), Some("text/html"));
+        assert!(response.body.is_empty());
+    }
+
+    #[test]
+    fn headers_only_get_ignores_body_in_the_same_data_event() {
+        let headers =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nContent-Type: application/zip\r\n\r\n";
+        let mut data = headers.to_vec();
+        data.extend_from_slice(&vec![b'x'; 100_000]);
+        let mut response_bytes = Vec::new();
+        let response = append_head_response_headers(&mut response_bytes, &data)
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.content_type.as_deref(), Some("application/zip"));
+        assert!(response.body.is_empty());
+        assert_eq!(response_bytes.as_slice(), headers);
     }
 
     #[test]
@@ -2594,6 +2895,7 @@ mod http_fetch_tests {
         let target = parse_fetch_url("https://crates.io/crates/microfont").unwrap();
         let mut request = HttpsRequest {
             method: "GET",
+            headers_only: false,
             content_type: None,
             headers: Vec::new(),
             body: &[],
@@ -2751,7 +3053,10 @@ async fn request_https_happy_eyeballs(
     let queues = core::array::from_fn::<_, 2, _>(|family| {
         let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
         let owner = leak_str(format!("https-race-{}-{}@{}", seq, family, device));
-        let cmds = Queue::new_leaked(leak_str(format!("{}-cmd", owner)), HTTPS_COMMAND_QUEUE_DEPTH);
+        let cmds = Queue::new_leaked(
+            leak_str(format!("{}-cmd", owner)),
+            HTTPS_COMMAND_QUEUE_DEPTH,
+        );
         let events = Queue::new_leaked(leak_str(format!("{}-evt", owner)), HTTPS_EVENT_QUEUE_DEPTH);
         register_tls_app_queues(owner, cmds, events);
         (cmds, events)
@@ -2762,9 +3067,16 @@ async fn request_https_happy_eyeballs(
         .min(u32::MAX as u64) as u32;
     let ipv6_failed = AtomicBool::new(false);
     let ipv6 = async {
-        let result =
-            happy_connect(target, device, true, queues[0].0, queues[0].1, remaining, &ipv6_failed)
-                .await;
+        let result = happy_connect(
+            target,
+            device,
+            true,
+            queues[0].0,
+            queues[0].1,
+            remaining,
+            &ipv6_failed,
+        )
+        .await;
         if result.is_err() {
             ipv6_failed.store(true, Ordering::Relaxed);
         }
@@ -2772,7 +3084,15 @@ async fn request_https_happy_eyeballs(
     };
     let race = happy_eyeballs::first_success(
         ipv6,
-        happy_connect(target, device, false, queues[1].0, queues[1].1, remaining, &ipv6_failed),
+        happy_connect(
+            target,
+            device,
+            false,
+            queues[1].0,
+            queues[1].1,
+            remaining,
+            &ipv6_failed,
+        ),
     );
     let winner =
         trueos_time::with_timeout(EmbassyDuration::from_millis(remaining as u64), race).await;

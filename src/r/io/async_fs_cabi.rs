@@ -40,13 +40,16 @@ const TERMINAL_FRONTEND_VFILE: &str = "vFile:terminal-frontend";
 /// Write a downloaded archive pathname here to import it into volatile AppDB.
 /// Completion acknowledges the import; this operation never launches a VM.
 pub(crate) fn is_virtual_write(path: &str) -> bool {
-    path == "vFile:appdb-install" || path == trueos_ide::store_protocol::REQUEST
+    path.starts_with(crate::r::services::hull_download_service::PREFIX)
+        || path == "vFile:appdb-install" || path == trueos_ide::store_protocol::REQUEST
         || crate::r::services::ide_workspace_service::is_write(path)
 }
 
 
 pub(crate) fn is_virtual_read(path: &str) -> bool {
     matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE | TERMINAL_FRONTEND_VFILE)
+        || path.starts_with(crate::r::services::hull_download_service::PREFIX)
+        || path.starts_with("vFile:hull-navigation/")
         || path.starts_with("vFile:microfont-grid/")
         || path.starts_with(crate::r::services::codex_input_service::VFILE_PREFIX)
         || crate::r::services::ide_workspace_service::is_read(path)
@@ -678,7 +681,9 @@ fn stage_write(
     legacy_blob: bool,
     checked: Option<CheckedWriteOptions>,
 ) -> i32 {
-    let max_bytes = if path == trueos_ide::store_protocol::REQUEST {
+    let max_bytes = if path.starts_with(crate::r::services::hull_download_service::PREFIX) {
+        crate::r::services::hull_download_service::MAX_FRAME as u64
+    } else if path == trueos_ide::store_protocol::REQUEST {
         trueos_ide::store_protocol::MAX_FRAME_BYTES as u64
     } else if path.starts_with(crate::r::services::ide_workspace_service::VFILE_PREFIX) {
         crate::r::services::ide_workspace_service::MAX_FRAME_BYTES as u64
@@ -1031,6 +1036,29 @@ fn mounted_roots_text() -> String {
 }
 
 async fn process(request: &Request) -> OperationState {
+    if let RequestKind::Read { path } = &request.kind {
+        if path.starts_with(crate::r::services::hull_download_service::PREFIX) {
+            return match crate::r::services::hull_download_service::read_for_owner(request.owner, path) {
+                Ok(bytes) => OperationState::Read(bytes), Err(code) => OperationState::Failed(code),
+            };
+        }
+        if let Some(url) = path.strip_prefix("vFile:hull-navigation/") {
+            if url.len() > 4096 || url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+                return OperationState::Failed(FS_ERR_BAD_PARAM);
+            }
+            return match crate::surfer::html_shack::probe_navigation_via_pool(url).await {
+                Ok(bytes) => OperationState::Read(bytes), Err(_) => OperationState::Failed(FS_ERR_IO),
+            };
+        }
+    }
+    if let RequestKind::Write { path, bytes, .. } = &request.kind {
+        if path.starts_with(crate::r::services::hull_download_service::PREFIX) {
+            return match crate::r::services::hull_download_service::write_for_owner(request.owner, path, bytes) {
+                Ok(()) => OperationState::Unit, Err(code) => OperationState::Failed(code),
+            };
+        }
+    }
+
     // Bounded native Microfont raster service, consumed before a UI4 write lease.
     // Payload: little-endian width/height followed by opaque RGBA8 pixels.
     if let RequestKind::Read { path } = &request.kind
