@@ -656,6 +656,7 @@ pub(super) fn frame_opened(
 }
 
 pub(super) fn frame_closed(owner: WindowOwner, window: WindowId) {
+    super::button_outline::remove_window(owner, window);
     super::drag_drop::frame_closed(CursorFrameKey::new(owner, window));
     if CURSOR_FRAME_RIG
         .lock()
@@ -671,13 +672,14 @@ pub(super) fn session_closed(owner: WindowOwner, session: WindowSessionId) {
         let frames: AllocVec<_> = rig.frames.iter().filter(|frame| frame.key.owner == owner && frame.session == session).map(|frame| frame.key).collect();
         (frames, rig.session_closed(owner, session))
     };
-    for frame in frames { super::drag_drop::frame_closed(frame); }
+    for frame in frames { super::button_outline::remove_window(frame.owner, frame.window); super::drag_drop::frame_closed(frame); }
     if changed {
         signal_visual_change();
     }
 }
 
 pub(super) fn owner_closed(owner: WindowOwner) {
+    super::button_outline::remove_owner(owner);
     super::drag_drop::release_owner(owner);
     if CURSOR_FRAME_RIG.lock().owner_closed(owner) {
         signal_visual_change();

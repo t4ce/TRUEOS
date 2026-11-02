@@ -70,7 +70,8 @@ def main() -> None:
         render += item(slot_path, name)
     for name in ("glyph_cursor_centers_and_clips_prepared_runs_on_slot_four",
                  "glyph_recolor_only_changes_coverage_modulated_tint",
-                 "text_cursor_recolor_keeps_nickname_rects_and_damage_outside_it_unchanged"):
+                 "text_cursor_recolor_keeps_nickname_rects_and_damage_outside_it_unchanged",
+                 "creeping_dash_damages_only_its_removed_and_added_pixel_strips"):
         render += "#[test]\n" + block(slot, f"fn {name}()") + "\n"
 
     broker_path = "src/ui4/input_broker.rs"
@@ -105,7 +106,8 @@ microfont = { path = ''' + json.dumps(str(ROOT / "vendor/microfont")) + ''', def
         hid += item("src/usb3/hid/mod.rs", "inject_virtual_cursor_event")
         (work / "src/hid_injection.rs").write_text(hid)
         (work / "src/damage.rs").write_bytes((ROOT / "src/ui4/damage.rs").read_bytes())
-        (work / "src/lib.rs").write_bytes((FIXTURES / "harness.rs").read_bytes())
+        (work / "src/button_outline_geometry.rs").write_bytes((ROOT / "src/ui4/button_outline_geometry.rs").read_bytes())
+        (work / "src/lib.rs").write_text((FIXTURES / "harness.rs").read_text() + '\n#[path="button_outline_geometry.rs"] mod button_outline_geometry;\n')
         build = subprocess.run([
             "cargo", "+" + channel.group(1), "test", "--offline", "--locked",
             "--target", HOST, "--no-run", "--message-format=json",

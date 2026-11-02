@@ -7,6 +7,8 @@
 pub(crate) mod clipboard_api;
 pub(crate) mod collapse_api;
 pub(crate) mod cursor_image_api;
+pub(crate) mod button_outline_api;
+pub use button_outline_api::trueos_cabi_ui4_scene_button_regions_v1;
 pub(crate) mod display_api;
 pub(crate) mod drag_drop_api;
 pub(crate) mod hull_image_api;

@@ -2,9 +2,10 @@
 //!
 //! Slot 4 contains the kernel color picker, fixed-shape colored crosshairs,
 //! one-pixel selection and dock outlines, translucent elliptic dock fields,
-//! selected-frame strips, and context menus. It deliberately does not
+//! selected-frame strips, button hover/press outlines, and context menus. It deliberately does not
 //! participate in application-plane composition or its atomic SURF batch.
-//! Cursor input is coalesced to the display cadence. Virgl reuses the shape
+//! Cursor input is coalesced to the display cadence; hovered button dashes
+//! add a 15 Hz wake only while present. Virgl reuses the shape
 //! builder in its final composition pass instead of queuing an Intel flip.
 
 use alloc::vec::Vec;
@@ -68,6 +69,7 @@ pub(crate) async fn ui4_slot4_service_task() {
 
     loop {
         let now = Instant::now();
+        visual_dirty |= super::button_outline::due(now);
         if let Some(pending) = state.pending.take() {
             match crate::intel::poll_ui4_live_overlay_flip(pending.flip) {
                 crate::intel::Ui4LiveOverlayFlipPoll::Pending => {
@@ -108,7 +110,7 @@ pub(crate) async fn ui4_slot4_service_task() {
         }
 
         let now = Instant::now();
-        if state.pending.is_none() && !visual_dirty {
+        if state.pending.is_none() && !visual_dirty && super::button_outline::wait(now).is_none() {
             super::input_broker::wait_slot4_visual_change().await;
             visual_dirty = true;
             continue;
@@ -125,7 +127,9 @@ pub(crate) async fn ui4_slot4_service_task() {
         } else {
             Duration::MAX
         };
-        let wait = present_wait.min(flip_wait).max(Duration::from_ticks(1));
+        let wait = present_wait.min(flip_wait)
+            .min(super::button_outline::wait(now).unwrap_or(Duration::MAX))
+            .max(Duration::from_ticks(1));
         if with_timeout(wait, super::input_broker::wait_slot4_visual_change())
             .await
             .is_ok()
@@ -267,8 +271,36 @@ fn changed_rect_damage(
     let common = previous.len().min(current.len());
     for index in 0..common {
         if !overlay_rect_eq(&previous[index], &current[index]) {
-            add_overlay_rect_damage(&mut damage, &previous[index]);
-            add_overlay_rect_damage(&mut damage, &current[index]);
+            let old = &previous[index];
+            let new = &current[index];
+            if old.color == new.color {
+                // A creeping dash preserves its overlapping pixels: only the
+                // removed and added end strips need damage, usually one pixel.
+                use super::button_outline_geometry::{Rect, subtract};
+                let a = Rect {
+                    x: old.x as i32,
+                    y: old.y as i32,
+                    width: old.width,
+                    height: old.height,
+                };
+                let b = Rect {
+                    x: new.x as i32,
+                    y: new.y as i32,
+                    width: new.width,
+                    height: new.height,
+                };
+                for rect in subtract(a, b).into_iter().chain(subtract(b, a)) {
+                    damage.add(crate::intel::CompositionDamageRect::new(
+                        rect.x as u32,
+                        rect.y as u32,
+                        rect.width,
+                        rect.height,
+                    ));
+                }
+            } else {
+                add_overlay_rect_damage(&mut damage, old);
+                add_overlay_rect_damage(&mut damage, new);
+            }
         }
     }
     for rect in &previous[common..] {
@@ -493,6 +525,8 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
             }
         }
     }
+
+    super::button_outline::append(&mut rects, screen_w, screen_h);
 
     if let Some(menu) = super::context_menu::visual() {
         push_requested_context_menu(&mut rects, &menu, screen_w, screen_h);
@@ -1181,6 +1215,17 @@ mod tests {
             push_overlay_rect(&mut rects, x, 0, 1, 1, color);
         }
         assert_eq!(rects.len(), 4_096);
+    }
+
+    #[test]
+    fn creeping_dash_damages_only_its_removed_and_added_pixel_strips() {
+        let color=Rgba8::new(255,255,255,128);
+        let old=crate::intel::LiveOverlayRect::new(10,20,8,3,color);
+        let new=crate::intel::LiveOverlayRect::new(11,20,8,3,color);
+        let damage=changed_rect_damage(&[old],&[new]);
+        assert_eq!(damage.rects().len(),2);
+        assert_eq!(damage.rects().iter().map(|r|r.width*r.height).sum::<u32>(),6);
+        assert!(damage.rects().iter().all(|r|r.width==1 && (r.x==10 || r.x==18)));
     }
 
     #[test]

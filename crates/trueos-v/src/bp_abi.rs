@@ -342,6 +342,18 @@ pub struct TrueosUi4CursorImageV1 {
 }
 const _: () = assert!(core::mem::size_of::<TrueosUi4CursorImageV1>() == 20);
 
+/// Window-local rectangular button outline and its independent content clip.
+/// Registration replaces the frame's list; count zero clears it. UI4 derives
+/// one hover/press association per cursor, never accepting a caller's HID state.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ButtonRegionV1 {
+    pub x:i32, pub y:i32, pub width:u32, pub height:u32,
+    pub clip_x:i32, pub clip_y:i32, pub clip_width:u32, pub clip_height:u32,
+    pub border_rgba:u32,
+}
+const _: ()=assert!(core::mem::size_of::<TrueosUi4ButtonRegionV1>()==36);
+
 /// Frame-local presentation spacing for a UI4 software cursor. Advances use
 /// 1/1024 pixel units so fractional glyph widths stay aligned.
 #[repr(C)]
@@ -846,6 +858,7 @@ unsafe extern "C" {
         rgba: *const u8,
         bytes: usize,
     ) -> i32;
+    pub fn trueos_cabi_ui4_scene_button_regions_v1(window_id:u32, regions:*const TrueosUi4ButtonRegionV1, count:usize)->i32;
     pub fn trueos_cabi_ui4_scene_select_cursor_image_v1(window_id: u32, id: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_custom_cursor(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_cursor_icon(

@@ -31,6 +31,8 @@ mod link_service;
 mod screenshot;
 pub(crate) use screenshot::writable_capture_root_handle;
 mod slot4_service;
+mod button_outline;
+mod button_outline_geometry;
 mod start_button;
 pub(crate) mod text_area;
 pub(crate) mod text_area_raster;

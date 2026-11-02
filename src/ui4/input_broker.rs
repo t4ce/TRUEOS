@@ -2147,6 +2147,18 @@ pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
     (routes, queued_events)
 }
 
+/// Snapshot only live routed cursors; visual-only devices never own feedback.
+pub(super) fn button_outline_cursors() -> alloc::vec::Vec<super::button_outline::Cursor> {
+    INPUT_BROKER.lock().cursors.iter().filter(|r| r.visible_after_motion && !r.visual_only
+        && !r.absorb_select && !r.context_menu_owns_gesture && !r.secondary_dragged
+        && r.requested_context_menu_gesture.is_none() && r.context_menu.is_none())
+        .filter(|r| r.source.hid_kind != crate::r::cursor::HID_KIND_VIRTUAL_CURSOR
+            || crate::r::services::mouse_motion_service::cursor_visual_metadata(r.source.slot_id)
+                .is_some_and(|metadata|metadata.visible))
+        .map(|r|super::button_outline::Cursor{source:r.source,x:r.x,y:r.y,pressed:r.buttons_down & PRIMARY_BUTTON_MASK != 0})
+        .collect()
+}
+
 pub(crate) fn software_cursor_visuals() -> Vec<Ui4SoftwareCursorVisual, MAX_CURSOR_ROUTES> {
     INPUT_BROKER.lock().software_cursor_visuals()
 }
@@ -3183,7 +3195,7 @@ fn translated_frame_placement(
     Some(placement)
 }
 
-fn placement_contains(placement: WindowPlacement, arc: u16, x: u32, y: u32) -> bool {
+pub(super) fn placement_contains(placement: WindowPlacement, arc: u16, x: u32, y: u32) -> bool {
     if !placement.visible {
         return false;
     }
