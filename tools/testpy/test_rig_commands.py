@@ -181,6 +181,16 @@ printf '%s\\0' "$CARGO_BUILD_JOBS" "$RAYON_NUM_THREADS" "$TRUEOS_BUILD_SCOPE" "$
         firmware.parent.mkdir(parents=True)
         firmware.write_bytes(b'firmware')
         self.script(self.bin / 'python3', '''
+if [[ $1 == */build_api_prm.py ]]; then
+    echo api-reference >> "$TEST_ROOT/trace"
+    test -f "$TEST_ROOT/Cargo.lock"
+    test "$TRUEOS_API_SOURCE_ROOT" = "$TEST_ROOT"
+    test "$2" = --output
+    test "$3" = "$TEST_ROOT/../TRUEOS-Blueprints/crates/trueos-ide/api-prm"
+    if [[ ${API_STATUS:-0} != 0 ]]; then exit "$API_STATUS"; fi
+    touch "$TEST_ROOT/api-ready"
+    exit 0
+fi
 if [[ $1 == */bundle.py ]]; then
     echo bundle >> "$TEST_ROOT/trace"
     test "$(cat "$2/TRUEOS.elf")" = runtime
@@ -190,6 +200,7 @@ if [[ $1 == */bundle.py ]]; then
     exit "${BUNDLE_STATUS:-0}"
 fi
 echo buildins >> "$TEST_ROOT/trace"
+test -f "$TEST_ROOT/api-ready"
 test -f "$TEST_ROOT/Cargo.lock"
 exit "${BUILDINS_STATUS:-0}"
 ''')
@@ -228,8 +239,20 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['cargo generate-lockfile', 'buildins', 'cargo build --release',
+                         ['cargo generate-lockfile', 'api-reference', 'buildins', 'cargo build --release',
                           'cargo boot', 'strip-debug', 'bundle'])
+
+    def test_failed_api_generation_stops_before_apps_and_preserves_publication(self):
+        script = self.prepare_fixture('release')
+        current = self.root / 'tgt/pxe-current'
+        current.mkdir(parents=True)
+        (current / 'TRUEOS.elf').write_bytes(b'previous')
+        result = subprocess.run(['bash', str(script), '--release'],
+                                env=dict(self.env, API_STATUS='26'),
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 26, result.stderr)
+        self.assertEqual((self.root / 'trace').read_text().splitlines(), ['api-reference'])
+        self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
 
     def test_failed_lock_generation_stops_before_building_apps(self):
         script = self.prepare_fixture('release')
@@ -248,7 +271,7 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
+                         ['api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
         self.assertEqual((self.root / 'Cargo.lock').read_text(), 'existing lock\n')
         self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'tgt/usb-debug/TRUEOS.elf').read_text(), 'runtime\n')
@@ -275,8 +298,8 @@ echo runtime > "$3"
         self.assertEqual((self.root / 'tgt/TrueOS.tar.lz4').resolve(), release.resolve())
         self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle',
-                          'buildins', 'cargo build --release', 'cargo boot', 'strip-debug', 'bundle'])
+                         ['api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle',
+                          'api-reference', 'buildins', 'cargo build --release', 'cargo boot', 'strip-debug', 'bundle'])
 
     def test_failed_app_build_leaves_the_previous_publication_intact(self):
         script = self.prepare_fixture()
@@ -287,7 +310,7 @@ echo runtime > "$3"
                                 env=dict(self.env, BUILDINS_STATUS='1'),
                                 capture_output=True, text=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual((self.root / 'trace').read_text().splitlines(), ['buildins'])
+        self.assertEqual((self.root / 'trace').read_text().splitlines(), ['api-reference', 'buildins'])
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
 
     def test_failed_debug_stripping_preserves_publication_and_prevents_reset(self):
@@ -302,7 +325,7 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug'])
+                         ['api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug'])
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
         self.assertFalse((self.root / 'tgt/usb-debug').exists())
 
@@ -328,7 +351,7 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 24, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
+                         ['api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
         self.assertEqual(current.resolve(), previous)
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous kernel')
         self.assertEqual(profile.read_bytes(), b'previous archive')

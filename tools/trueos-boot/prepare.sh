@@ -16,11 +16,15 @@ export TRUEOS_BUILDINS_SOURCE=${TRUEOS_BUILDINS_SOURCE:-"$root/../TRUEOS-Buildin
 app_profile=release
 if [ "$profile" = debug ]; then app_profile=dev; fi
 export TRUEOS_BUILDINS_DIR="$root/tgt/buildins/$app_profile"
-# The edit builtin generates its API reference from the kernel sources and
-# fingerprints Cargo.lock before invoking Cargo. Fresh checkouts have no lock.
+# The IDE API reference fingerprints Cargo.lock before invoking Cargo.
+# Fresh checkouts have no lock.
 if [ ! -f Cargo.lock ]; then
     cargo generate-lockfile
 fi
+# edit's build script consumes this reference from the sibling Blueprint crate.
+# Generate it before buildins fingerprints its inputs, outside app Cargo's env.
+export TRUEOS_API_SOURCE_ROOT="$root"
+python3 "$root/tools/build_api_prm.py" --output "$root/../TRUEOS-Blueprints/crates/trueos-ide/api-prm"
 python3 "$TRUEOS_BUILDINS_SOURCE/tools/build.py" --kernel "$root" --profile "$app_profile" --output "$TRUEOS_BUILDINS_DIR"
 cargo build "${args[@]}"
 cargo boot
