@@ -1,4 +1,3 @@
-pub mod ftp;
 pub mod irc;
 pub mod ntp;
 pub mod pop3;

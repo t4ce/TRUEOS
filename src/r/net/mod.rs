@@ -15,12 +15,11 @@ pub mod pwg_raster;
 pub mod smtp_cabi;
 pub mod socket_cabi;
 pub mod srv;
-pub mod throughput_bench;
 pub mod trueos_peer;
 pub mod udp;
 pub mod vlayer;
 
-pub use cli::{ftp, ntp};
+pub use cli::ntp;
 pub use srv::sntp;
 
 use v::vnet as api;

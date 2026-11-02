@@ -389,7 +389,7 @@ impl PcmOverlaySource {
             return;
         }
         self.spirit_talk_active = active;
-        crate::spirit::lilly_protocol::set_lumen_speech_playing(active);
+        crate::spirit::lilly_protocol::set_speech_playing(active);
     }
 
     fn active_or_pending(&self) -> bool {

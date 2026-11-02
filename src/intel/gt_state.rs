@@ -29,9 +29,6 @@ const GEN9_SW_REQ_UNSLICE_RATIO_SHIFT: u32 = 23;
 const GEN9_SW_REQ_UNSLICE_RATIO_MASK: u32 = GEN12_CAGF_MASK << GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
 const GEN12_RP0_CAP_MASK: u32 = 0xFF;
 const GEN12_GT0_PERF_LIMIT_REASONS_MASK: u32 = 0x0DE3;
-static GEN12_LUMEN_GT_BOOST_ACTIVE: AtomicBool = AtomicBool::new(false);
-static GEN12_LUMEN_GT_PREVIOUS_REQUEST: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(0);
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Gen12GlobalGtPowerMarker {
@@ -409,19 +406,11 @@ fn transition_global_gt_power_mode_locked(
     let observed_before_ratio =
         (observed_before & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
     let next_active = !state.active;
-    let lumen_active = GEN12_LUMEN_GT_BOOST_ACTIVE.load(Ordering::Acquire);
     let restore_owned_request =
-        !next_active && !lumen_active && observed_before_ratio == state.boost_ratio;
+        !next_active && observed_before_ratio == state.boost_ratio;
 
     if next_active {
-        // If Lumen already owns the temporary RP0 request, remember the
-        // request below it. The global mode then survives Lumen's scope and
-        // can still restore the true predecessor when F12 turns it off.
-        state.saved_request = if lumen_active {
-            GEN12_LUMEN_GT_PREVIOUS_REQUEST.load(Ordering::Acquire)
-        } else {
-            observed_before
-        };
+        state.saved_request = observed_before;
         state.boost_ratio = rp0_ratio;
         let boost_request = (observed_before & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
             | (rp0_ratio << GEN9_SW_REQ_UNSLICE_RATIO_SHIFT);
@@ -465,14 +454,13 @@ fn transition_global_gt_power_mode_locked(
     let marker = state.marker;
     crate::log_info!(
         target: "render";
-        "intel/gt-power-mode: marker={} active={} accepted=1 requested_mhz={} actual_mhz={} rp0_mhz={} previous_mhz={} lumen_active={} ownership=global-ui4-f12 pcoded-safety=retained spirit_signal=published-after-request-readback\n",
+        "intel/gt-power-mode: marker={} active={} accepted=1 requested_mhz={} actual_mhz={} rp0_mhz={} previous_mhz={} ownership=global-ui4-f12 pcoded-safety=retained spirit_signal=published-after-request-readback\n",
         marker.generation,
         marker.active as u8,
         marker.requested_mhz,
         marker.actual_mhz,
         marker.rp0_mhz,
         ratio_to_mhz(observed_before_ratio),
-        lumen_active as u8,
     );
     Ok(marker)
 }
@@ -588,130 +576,5 @@ mod tests {
     }
 }
 
-#[cfg(feature = "trueos_lumen")]
-pub(super) fn begin_lumen_gt_boost(dev: super::Dev) -> Option<Gen12LumenGtBoost> {
-    let global_power_state = GEN12_GLOBAL_GT_POWER_STATE.lock();
-    if global_power_state.active {
-        return None;
-    }
-    if !gt_state_registers_available(dev)
-        || GEN12_LUMEN_GT_BOOST_ACTIVE
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-    {
-        return None;
-    }
 
-    let previous_request = super::mmio_read(dev, GEN12_RPNSWREQ);
-    GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(previous_request, Ordering::Release);
-    let previous_ratio =
-        (previous_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
-    let state_cap = super::mmio_read(dev, GEN12_RP_STATE_CAP);
-    let rp0_ratio = rp_cap_50mhz_to_request_ratio(state_cap & GEN12_RP0_CAP_MASK);
-    if rp0_ratio == 0 || rp0_ratio > GEN12_CAGF_MASK {
-        GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(0, Ordering::Release);
-        GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
-        return None;
-    }
-    let boost_ratio = core::cmp::max(previous_ratio, rp0_ratio);
-    let boost_request = (previous_request & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
-        | (boost_ratio << GEN9_SW_REQ_UNSLICE_RATIO_SHIFT);
-    super::mmio_write(dev, GEN12_RPNSWREQ, boost_request);
-    core::sync::atomic::compiler_fence(Ordering::SeqCst);
-    let observed_request = super::mmio_read(dev, GEN12_RPNSWREQ);
-    let observed_ratio =
-        (observed_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
-    if observed_ratio != boost_ratio {
-        GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(0, Ordering::Release);
-        GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/lumen-gt-boost: stage=begin accepted=0 previous_ratio={} requested_ratio={} observed_ratio={} ownership=turn-scoped action=continue-at-firmware-frequency\n",
-            previous_ratio,
-            boost_ratio,
-            observed_ratio,
-        );
-        return None;
-    }
-    drop(global_power_state);
-    crate::log_info!(
-        target: "gpgpu";
-        "intel/lumen-gt-boost: stage=begin accepted=1 previous_ratio={} previous_mhz={} requested_ratio={} requested_mhz={} actual_ratio={} actual_mhz={} rp0_policy=turn-scoped restore=on-drop\n",
-        previous_ratio,
-        ratio_to_mhz(previous_ratio),
-        boost_ratio,
-        ratio_to_mhz(boost_ratio),
-        actual_ratio(dev),
-        ratio_to_mhz(actual_ratio(dev)),
-    );
-    Some(Gen12LumenGtBoost {
-        dev,
-        previous_request,
-        previous_ratio,
-        boost_ratio,
-        active: true,
-    })
-}
 
-#[cfg(feature = "trueos_lumen")]
-/// Turn-scoped ownership of the Gen9+ unslice frequency request.
-///
-/// Lumen restores the exact request bits it observed on entry. If another
-/// owner changes the request while the turn is active, drop deliberately
-/// leaves that newer request untouched.
-#[must_use = "keep the guard alive for the complete Lumen inference turn"]
-pub(crate) struct Gen12LumenGtBoost {
-    dev: super::Dev,
-    previous_request: u32,
-    previous_ratio: u32,
-    boost_ratio: u32,
-    active: bool,
-}
-
-#[cfg(feature = "trueos_lumen")]
-impl Drop for Gen12LumenGtBoost {
-    fn drop(&mut self) {
-        if !self.active {
-            return;
-        }
-        let observed = super::mmio_read(self.dev, GEN12_RPNSWREQ);
-        let observed_ratio =
-            (observed & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
-        // Serialize the restore against an F12 transition. A global enable
-        // that arrives here either observes the restored predecessor or wins
-        // first and prevents this lower-priority scope from restoring it.
-        let global_power_state = GEN12_GLOBAL_GT_POWER_STATE.lock();
-        let global_power_active = global_power_state.active;
-        let restored = !global_power_active && observed_ratio == self.boost_ratio;
-        let final_request = if restored {
-            (observed & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
-                | (self.previous_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK)
-        } else {
-            observed
-        };
-        if restored {
-            super::mmio_write(self.dev, GEN12_RPNSWREQ, final_request);
-            core::sync::atomic::compiler_fence(Ordering::SeqCst);
-        }
-        let final_ratio = (super::mmio_read(self.dev, GEN12_RPNSWREQ)
-            & GEN9_SW_REQ_UNSLICE_RATIO_MASK)
-            >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/lumen-gt-boost: stage=end restored={} previous_ratio={} previous_mhz={} boost_ratio={} boost_mhz={} observed_ratio={} final_ratio={} final_mhz={} global_power_active={} ownership=turn-scoped conflict_policy=preserve-newer-request+defer-to-global-power\n",
-            restored as u8,
-            self.previous_ratio,
-            ratio_to_mhz(self.previous_ratio),
-            self.boost_ratio,
-            ratio_to_mhz(self.boost_ratio),
-            observed_ratio,
-            final_ratio,
-            ratio_to_mhz(final_ratio),
-            global_power_active as u8,
-        );
-        drop(global_power_state);
-        self.active = false;
-        GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(0, Ordering::Release);
-        GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
-    }
-}

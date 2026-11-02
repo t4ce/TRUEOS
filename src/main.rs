@@ -50,8 +50,6 @@ mod limine;
 mod live_update;
 mod locale;
 mod log_os;
-#[cfg(feature = "trueos_lumen")]
-mod lumen;
 mod microcode;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;
@@ -75,7 +73,6 @@ mod smp;
 mod spirit;
 mod std_abi_shim;
 mod surfer;
-mod tga;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;

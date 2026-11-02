@@ -2770,7 +2770,6 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     }
     clear_blueprint_lifecycle_capability(vm_id);
     clear_blueprint_replication_checkpoint(vm_id);
-    let _ = crate::ai::lumen_service::close(vm_id);
     
     let _ = crate::r::services::media_service::release_vm(vm_id);
     let _ = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));

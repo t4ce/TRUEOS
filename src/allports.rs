@@ -41,9 +41,6 @@ pub mod services {
     pub const NET_SHELL_TCP_PORT: u16 = 4245;
     /// Shell3 plaintext TTY bring-up; reserved for the future SSH transport.
     pub const SHELL3_TCP_PORT: u16 = well_known::SSH;
-    pub const FTP_SERVER_PORT: u16 = 21;
-    pub const FTP_SERVER_PASV_MIN: u16 = 40_000;
-    pub const FTP_SERVER_PASV_MAX: u16 = 40_127;
     pub const VM_STORE_REPL_PORT: u16 = 32_123;
     pub const TRUEOS_DISCOVERY_UDP_PORT: u16 = 32_343;
     /// Loopback handoff from the shared LAN listener to the Swarm Blueprint.
@@ -53,7 +50,6 @@ pub mod services {
     /// Subscriber-driven UI4 H.264 access-unit stream for the Linux receiver.
     pub const MEDIA_ENCODE_UDP_PORT: u16 = 9_650;
     /// Development-only paired TCP throughput peer on the local asset host.
-    pub const NET_THROUGHPUT_BENCH_TCP_PORT: u16 = 9_651;
     pub const HTTP_TRUEOSFS_TCP_PORT: u16 = well_known::HTTP;
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
     pub const TINYAUDIO_LIVE_HTTP_TCP_PORT: u16 = 82;

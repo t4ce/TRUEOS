@@ -572,10 +572,7 @@ fn validate_gen12_lumen_mocs_for_dev(dev: Dev, checkpoint: &str) -> bool {
 }
 
 
-#[cfg(feature = "trueos_lumen")]
-pub(crate) fn gen12_lumen_mocs_ready() -> bool {
-    GEN12_LUMEN_MOCS_READY.load(Ordering::Acquire)
-}
+
 
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1538,14 +1535,5 @@ pub(crate) fn dma_flush_strided_rows(
     dma_flush_strided_row_spans(&[DmaFlushRows::new(ptr, row_bytes, row_stride, rows)])
 }
 
-#[cfg(feature = "trueos_lumen")]
-pub(crate) fn begin_lumen_gt_boost() -> Option<self::gt_state::Gen12LumenGtBoost> {
-    let dev = claimed_device()?;
-    if !device_uses_gen12_integrated_pat(dev.device_id)
-        || !gen12_lumen_mocs_ready()
-        || !physical_gt_ready(dev)
-    {
-        return None;
-    }
-    self::gt_state::begin_lumen_gt_boost(dev)
-}
+
+

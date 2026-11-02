@@ -1,1416 +1,175 @@
-//! VM-scoped Lumen inference capability for replicatable Blueprints.
+//! Retired Lumen ABI compatibility boundary.
 //!
-//! The Blueprint owns chat/tool policy and stores the portable mutable session
-//! image in its private memory. The kernel owns immutable model assets and the
-//! CPU+AVX-VNNI execution lane. No model pointer or host allocation crosses
-//! this boundary.
+//! Local inference is unavailable until its replacement is implemented. Keep
+//! existing Blueprint imports resolvable, without queues, model allocations,
+//! session state, workers, or boot warmup. Spirit presentation lives separately.
 
-extern crate alloc;
-
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-use spin::Mutex;
-#[cfg(feature = "trueos_lumen")]
-use trueos_time::{Duration, Timer};
-
-#[cfg(feature = "trueos_lumen")]
-use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_cpu_vnni, restore_cpu_vnni};
-
-const MAX_SYSTEM_BYTES: usize = 8 * 1024;
-const MAX_PROMPT_BYTES: usize = 4 * 1024;
-const MAX_TOOL_NAME_BYTES: usize = 32;
-const MAX_TOOL_RESULT_BYTES: usize = 256;
-const MAX_SPIRIT_RESPONSE_BYTES: usize = 4 * 1024;
-#[cfg(feature = "trueos_lumen")]
-const MAX_REPLY_TOKENS: usize = 48;
-// A mature 16K-token session is roughly 192 MiB (KV dominates), while the
-// prefilled tool/personality template is only a small fraction of that. Keep
-// the transport ceiling large enough for the model's full context instead of
-// making the prototype silently stop being migratable after ~2.6K tokens.
-const MAX_SESSION_IMAGE_BYTES: usize = 256 * 1024 * 1024;
-#[cfg(feature = "trueos_lumen")]
-const WORKER_POLL_MS: u64 = 5;
-#[cfg(feature = "trueos_lumen")]
-const TASK_POOL_SIZE: usize = 4;
-
-const ERROR_BAD_OWNER: i32 = -1;
-const ERROR_BAD_STATE: i32 = -2;
-const ERROR_BAD_INPUT: i32 = -3;
-const ERROR_BUSY: i32 = -4;
 const ERROR_UNAVAILABLE: i32 = -5;
-#[cfg(feature = "trueos_lumen")]
-const ERROR_INFERENCE: i32 = -6;
-const ERROR_TRANSPORT: i32 = -7;
 
-#[cfg(feature = "trueos_lumen")]
-type LfmModule =
-    crate::lumen::decode::Lfm25Decode<crate::ai::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>;
-
-enum LumenRequest {
-    #[cfg(feature = "trueos_lumen")]
-    TemplateOpen(String),
-    #[cfg(feature = "trueos_lumen")]
-    Prompt {
-        turn: u64,
-        tail: [u32; 2],
-        tail_len: usize,
-        prompt: String,
-        no_argument_tool: Option<String>,
-    },
-    #[cfg(feature = "trueos_lumen")]
-    ToolResult {
-        turn: u64,
-        tail: [u32; 2],
-        tail_len: usize,
-        result: String,
-    },
-    Checkpoint,
-    #[cfg(feature = "trueos_lumen")]
-    Restore(Vec<u8>),
-    Close,
+pub(crate) fn template_open(_owner: u8, _system: &[u8]) -> i32 {
+    ERROR_UNAVAILABLE
 }
 
-#[cfg(feature = "trueos_lumen")]
-fn template_request(system: String) -> Option<LumenRequest> {
-    Some(LumenRequest::TemplateOpen(system))
-}
-#[cfg(not(feature = "trueos_lumen"))]
-fn template_request(_: String) -> Option<LumenRequest> { None }
-
-#[cfg(feature = "trueos_lumen")]
-fn prompt_request(turn: u64, tail: [u32; 2], tail_len: usize, prompt: String, no_argument_tool: Option<String>) -> Option<LumenRequest> {
-    Some(LumenRequest::Prompt { turn, tail, tail_len, prompt, no_argument_tool })
-}
-#[cfg(not(feature = "trueos_lumen"))]
-fn prompt_request(_: u64, _: [u32; 2], _: usize, _: String, _: Option<String>) -> Option<LumenRequest> { None }
-
-#[cfg(feature = "trueos_lumen")]
-fn tool_result_request(turn: u64, tail: [u32; 2], tail_len: usize, result: String) -> Option<LumenRequest> {
-    Some(LumenRequest::ToolResult { turn, tail, tail_len, result })
-}
-#[cfg(not(feature = "trueos_lumen"))]
-fn tool_result_request(_: u64, _: [u32; 2], _: usize, _: String) -> Option<LumenRequest> { None }
-
-#[cfg(feature = "trueos_lumen")]
-fn restore_request(image: Vec<u8>) -> Option<LumenRequest> { Some(LumenRequest::Restore(image)) }
-#[cfg(not(feature = "trueos_lumen"))]
-fn restore_request(_: Vec<u8>) -> Option<LumenRequest> { None }
-
-struct LumenSlot {
-    phase: u32,
-    error: i32,
-    position: u32,
-    request: Option<LumenRequest>,
-    worker_active: bool,
-    active_turn: Option<u64>,
-    tool_result_used: bool,
-    reply: Vec<u8>,
-    reply_tail: [u32; 2],
-    reply_tail_len: usize,
-    checkpoint: Vec<u8>,
-    restore: Vec<u8>,
-    restore_written: usize,
-}
-
-impl LumenSlot {
-    const fn new() -> Self {
-        Self {
-            phase: v::bp_abi::LUMEN_PHASE_IDLE,
-            error: 0,
-            position: 0,
-            request: None,
-            worker_active: false,
-            active_turn: None,
-            tool_result_used: false,
-            reply: Vec::new(),
-            reply_tail: [0; 2],
-            reply_tail_len: 0,
-            checkpoint: Vec::new(),
-            restore: Vec::new(),
-            restore_written: 0,
-        }
-    }
-
-    fn status(&self) -> v::bp_abi::TrueosLumenStatus {
-        v::bp_abi::TrueosLumenStatus {
-            phase: self.phase,
-            error: self.error,
-            position: self.position,
-            reply_len: self.reply.len().min(u32::MAX as usize) as u32,
-            checkpoint_len: self.checkpoint.len() as u64,
-            reply_tail: self.reply_tail,
-            reply_tail_len: self.reply_tail_len as u32,
-            reserved: 0,
-        }
-    }
-
-    fn fail(&mut self, error: i32) {
-        self.phase = v::bp_abi::LUMEN_PHASE_ERROR;
-        self.error = error;
-        self.worker_active = false;
-        self.request = None;
-    }
-
-    fn reset(&mut self) {
-        self.phase = v::bp_abi::LUMEN_PHASE_IDLE;
-        self.error = 0;
-        self.position = 0;
-        self.request = None;
-        self.worker_active = false;
-        self.active_turn = None;
-        self.tool_result_used = false;
-        self.reply.clear();
-        self.reply_tail = [0; 2];
-        self.reply_tail_len = 0;
-        self.checkpoint.clear();
-        self.restore.clear();
-        self.restore_written = 0;
-    }
-}
-
-static LUMEN_SLOTS: [Mutex<LumenSlot>; crate::allcaps::hv::VM_ID_LIMIT] =
-    [const { Mutex::new(LumenSlot::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
-
-fn slot(owner: u8) -> Option<&'static Mutex<LumenSlot>> {
-    LUMEN_SLOTS.get(owner as usize)
-}
-
-#[cfg(feature = "trueos_lumen")]
-fn spawn_worker(owner: u8) -> bool {
-    let Some((_worker_slot, _core_kind, spawner)) =
-        crate::workers::pick_perf_background_spawner_with_slot()
-    else {
-        return false;
-    };
-    match lumen_blueprint_worker(owner) {
-        Ok(task) => {
-            spawner.spawn(task);
-            true
-        }
-        Err(_) => false,
-    }
-}
-
-// Keep the Blueprint ABI and Spirit presentation available without local inference.
-#[cfg(not(feature = "trueos_lumen"))]
-fn spawn_worker(_owner: u8) -> bool {
-    false
-}
-
-pub(crate) fn template_open(owner: u8, system: &[u8]) -> i32 {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    if system.len() > MAX_SYSTEM_BYTES {
-        return ERROR_BAD_INPUT;
-    }
-    let Ok(system) = core::str::from_utf8(system) else {
-        return ERROR_BAD_INPUT;
-    };
-    let mut state = slot.lock();
-    if state.worker_active
-        || !matches!(state.phase, v::bp_abi::LUMEN_PHASE_IDLE | v::bp_abi::LUMEN_PHASE_ERROR)
-    {
-        return ERROR_BUSY;
-    }
-    state.reset();
-    state.phase = v::bp_abi::LUMEN_PHASE_OPENING;
-    state.worker_active = true;
-    state.request = template_request(system.to_string());
-    drop(state);
-    if spawn_worker(owner) {
-        0
-    } else {
-        slot.lock().fail(ERROR_UNAVAILABLE);
-        ERROR_UNAVAILABLE
-    }
-}
-
-pub(crate) fn prompt_submit(owner: u8, turn: u64, tail: &[u32], prompt: &[u8]) -> i32 {
-    prompt_submit_inner(owner, turn, tail, prompt, None)
+pub(crate) fn prompt_submit(_owner: u8, _turn: u64, _tail: &[u32], _prompt: &[u8]) -> i32 {
+    ERROR_UNAVAILABLE
 }
 
 pub(crate) fn prompt_submit_with_no_argument_tool(
-    owner: u8,
-    turn: u64,
-    tail: &[u32],
-    prompt: &[u8],
-    tool_name: &[u8],
+    _owner: u8,
+    _turn: u64,
+    _tail: &[u32],
+    _prompt: &[u8],
+    _tool_name: &[u8],
 ) -> i32 {
-    let Ok(tool_name) = core::str::from_utf8(tool_name) else {
-        return ERROR_BAD_INPUT;
-    };
-    if tool_name.is_empty()
-        || tool_name.len() > MAX_TOOL_NAME_BYTES
-        || !tool_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        return ERROR_BAD_INPUT;
-    }
-    prompt_submit_inner(owner, turn, tail, prompt, Some(tool_name))
+    ERROR_UNAVAILABLE
 }
 
-fn prompt_submit_inner(
-    owner: u8,
-    turn: u64,
-    tail: &[u32],
-    prompt: &[u8],
-    no_argument_tool: Option<&str>,
-) -> i32 {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    if prompt.is_empty() || prompt.len() > MAX_PROMPT_BYTES || tail.len() > 2 {
-        return ERROR_BAD_INPUT;
-    }
-    let Ok(prompt) = core::str::from_utf8(prompt) else {
-        return ERROR_BAD_INPUT;
-    };
-    if (turn == 0 && !tail.is_empty()) || (turn != 0 && tail.is_empty()) {
-        return ERROR_BAD_INPUT;
-    }
-    let mut state = slot.lock();
-    if !state.worker_active || state.phase != v::bp_abi::LUMEN_PHASE_READY {
-        return ERROR_BUSY;
-    }
-    let mut stored_tail = [0u32; 2];
-    stored_tail[..tail.len()].copy_from_slice(tail);
-    state.reply.clear();
-    state.reply_tail = [0; 2];
-    state.reply_tail_len = 0;
-    state.active_turn = Some(turn);
-    state.tool_result_used = false;
-    state.phase = v::bp_abi::LUMEN_PHASE_RUNNING;
-    state.request = prompt_request(
-        turn,
-        stored_tail,
-        tail.len(),
-        prompt.to_string(),
-        no_argument_tool.map(ToString::to_string),
-    );
+pub(crate) fn tool_result_submit(_owner: u8, _turn: u64, _tail: &[u32], _result: &[u8]) -> i32 {
+    ERROR_UNAVAILABLE
+}
+
+pub(crate) fn status(_owner: u8) -> Option<v::bp_abi::TrueosLumenStatus> {
+    Some(v::bp_abi::TrueosLumenStatus {
+        phase: v::bp_abi::LUMEN_PHASE_ERROR,
+        error: ERROR_UNAVAILABLE,
+        position: 0,
+        reply_len: 0,
+        checkpoint_len: 0,
+        reply_tail: [0; 2],
+        reply_tail_len: 0,
+        reserved: 0,
+    })
+}
+
+pub(crate) fn reply_read(_owner: u8, _out: &mut [u8]) -> isize {
+    ERROR_UNAVAILABLE as isize
+}
+
+pub(crate) fn checkpoint_request(_owner: u8) -> i32 {
+    ERROR_UNAVAILABLE
+}
+
+pub(crate) fn checkpoint_read(_owner: u8, _offset: usize, _out: &mut [u8]) -> isize {
+    ERROR_UNAVAILABLE as isize
+}
+
+pub(crate) fn restore_begin(_owner: u8, _total_len: usize) -> i32 {
+    ERROR_UNAVAILABLE
+}
+
+pub(crate) fn restore_write(_owner: u8, _offset: usize, _data: &[u8]) -> i32 {
+    ERROR_UNAVAILABLE
+}
+
+pub(crate) fn restore_commit(_owner: u8) -> i32 {
+    ERROR_UNAVAILABLE
+}
+
+pub(crate) fn close(_owner: u8) -> i32 {
     0
 }
 
-/// Append one tool-role result to the current assistant response and begin
-/// exactly one assistant continuation. Tool policy remains Blueprint-owned;
-/// this role-aware transport only preserves the pinned chat template.
-pub(crate) fn tool_result_submit(owner: u8, turn: u64, tail: &[u32], result: &[u8]) -> i32 {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    if result.is_empty()
-        || result.len() > MAX_TOOL_RESULT_BYTES
-        || tail.is_empty()
-        || tail.len() > 2
-    {
-        return ERROR_BAD_INPUT;
-    }
-    let Ok(result) = core::str::from_utf8(result) else {
-        return ERROR_BAD_INPUT;
-    };
-    let mut state = slot.lock();
-    if !state.worker_active
-        || state.phase != v::bp_abi::LUMEN_PHASE_READY
-        || !tool_continuation_allowed(state.active_turn, state.tool_result_used, turn)
-    {
-        return ERROR_BUSY;
-    }
-    let mut stored_tail = [0u32; 2];
-    stored_tail[..tail.len()].copy_from_slice(tail);
-    state.reply.clear();
-    state.reply_tail = [0; 2];
-    state.reply_tail_len = 0;
-    state.tool_result_used = true;
-    state.phase = v::bp_abi::LUMEN_PHASE_RUNNING;
-    state.request = tool_result_request(turn, stored_tail, tail.len(), result.to_string());
-    0
-}
-
-pub(crate) fn status(owner: u8) -> Option<v::bp_abi::TrueosLumenStatus> {
-    Some(slot(owner)?.lock().status())
-}
-
-pub(crate) fn reply_read(owner: u8, out: &mut [u8]) -> isize {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER as isize;
-    };
-    let mut state = slot.lock();
-    if state.phase != v::bp_abi::LUMEN_PHASE_REPLY_READY || out.len() < state.reply.len() {
-        return ERROR_BAD_STATE as isize;
-    }
-    let len = state.reply.len();
-    out[..len].copy_from_slice(&state.reply);
-    state.reply.clear();
-    state.phase = v::bp_abi::LUMEN_PHASE_READY;
-    len as isize
-}
-
-pub(crate) fn checkpoint_request(owner: u8) -> i32 {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    let mut state = slot.lock();
-    if !state.worker_active || state.phase != v::bp_abi::LUMEN_PHASE_READY {
-        return ERROR_BUSY;
-    }
-    state.checkpoint.clear();
-    state.phase = v::bp_abi::LUMEN_PHASE_CHECKPOINTING;
-    state.request = Some(LumenRequest::Checkpoint);
-    0
-}
-
-pub(crate) fn checkpoint_read(owner: u8, offset: usize, out: &mut [u8]) -> isize {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER as isize;
-    };
-    let state = slot.lock();
-    if state.phase != v::bp_abi::LUMEN_PHASE_CHECKPOINT_READY {
-        return ERROR_BAD_STATE as isize;
-    }
-    let Some(bytes) = state.checkpoint.get(offset..) else {
-        return ERROR_BAD_INPUT as isize;
-    };
-    let len = bytes.len().min(out.len());
-    out[..len].copy_from_slice(&bytes[..len]);
-    len as isize
-}
-
-pub(crate) fn restore_begin(owner: u8, total_len: usize) -> i32 {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    if total_len == 0 || total_len > MAX_SESSION_IMAGE_BYTES {
-        return ERROR_BAD_INPUT;
-    }
-    let mut state = slot.lock();
-    if state.worker_active
-        || !matches!(
-            state.phase,
-            v::bp_abi::LUMEN_PHASE_IDLE
-                | v::bp_abi::LUMEN_PHASE_CHECKPOINT_READY
-                | v::bp_abi::LUMEN_PHASE_ERROR
-        )
-    {
-        return ERROR_BUSY;
-    }
-    state.reset();
-    if state.restore.try_reserve_exact(total_len).is_err() {
-        state.fail(ERROR_UNAVAILABLE);
-        return ERROR_UNAVAILABLE;
-    }
-    state.restore.resize(total_len, 0);
-    state.restore_written = 0;
-    state.phase = v::bp_abi::LUMEN_PHASE_RESTORE_UPLOAD;
-    0
-}
-
-pub(crate) fn restore_write(owner: u8, offset: usize, data: &[u8]) -> i32 {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    let mut state = slot.lock();
-    if state.phase != v::bp_abi::LUMEN_PHASE_RESTORE_UPLOAD
-        || offset != state.restore_written
-        || offset
-            .checked_add(data.len())
-            .is_none_or(|end| end > state.restore.len())
-    {
-        return ERROR_BAD_INPUT;
-    }
-    let end = offset + data.len();
-    state.restore[offset..end].copy_from_slice(data);
-    state.restore_written = end;
-    0
-}
-
-pub(crate) fn restore_commit(owner: u8) -> i32 {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    let mut state = slot.lock();
-    if state.phase != v::bp_abi::LUMEN_PHASE_RESTORE_UPLOAD
-        || state.restore_written != state.restore.len()
-    {
-        return ERROR_BAD_STATE;
-    }
-    let image = core::mem::take(&mut state.restore);
-    state.restore_written = 0;
-    state.phase = v::bp_abi::LUMEN_PHASE_RESTORING;
-    state.worker_active = true;
-    state.request = restore_request(image);
-    drop(state);
-    if spawn_worker(owner) {
-        0
-    } else {
-        slot.lock().fail(ERROR_UNAVAILABLE);
-        ERROR_UNAVAILABLE
-    }
-}
-
-pub(crate) fn close(owner: u8) -> i32 {
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    let mut state = slot.lock();
-    if state.worker_active {
-        if matches!(
-            state.phase,
-            v::bp_abi::LUMEN_PHASE_RUNNING
-                | v::bp_abi::LUMEN_PHASE_OPENING
-                | v::bp_abi::LUMEN_PHASE_RESTORING
-                | v::bp_abi::LUMEN_PHASE_CHECKPOINTING
-        ) {
-            return ERROR_BUSY;
-        }
-        state.request = Some(LumenRequest::Close);
-        return 0;
-    }
-    state.reset();
-    0
-}
-
-pub(crate) fn spirit_response_present(owner: u8, turn: u64, text: &[u8]) -> i32 {
-    if turn == 0 || text.is_empty() || text.len() > MAX_SPIRIT_RESPONSE_BYTES {
-        return ERROR_BAD_INPUT;
-    }
-    let Some(slot) = slot(owner) else {
-        return ERROR_BAD_OWNER;
-    };
-    let state = slot.lock();
-    if !state.worker_active || state.phase != v::bp_abi::LUMEN_PHASE_READY {
-        return ERROR_BAD_STATE;
-    }
-    drop(state);
-    let Ok(text) = core::str::from_utf8(text) else {
-        return ERROR_BAD_INPUT;
-    };
-    if text.trim().is_empty() {
-        return ERROR_BAD_INPUT;
-    }
-    if !crate::spirit::enqueue_reasoning_response(turn, text) {
-        return ERROR_UNAVAILABLE;
-    }
-
-    #[cfg(not(feature = "trueos_ttstt"))]
-    crate::log_info!(
-        target: "r";
-        "lumen-bp: voice unavailable reason=ttstt-feature-disabled text_presentation=retained\n"
-    );
-    0
-}
-
-fn validate_silent_spirit_text(turn: u64, text: &[u8]) -> Result<&str, i32> {
-    if turn == 0 || text.is_empty() || text.len() > MAX_SPIRIT_RESPONSE_BYTES {
-        return Err(ERROR_BAD_INPUT);
-    }
-    let text = core::str::from_utf8(text).map_err(|_| ERROR_BAD_INPUT)?;
-    if text.trim().is_empty() {
-        return Err(ERROR_BAD_INPUT);
-    }
-    Ok(text)
-}
-
-/// Present remote or otherwise externally generated text through Spirit's
-/// bounded visual ingress.
-pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
-    let text = match validate_silent_spirit_text(turn, text) {
-        Ok(text) => text,
-        Err(error) => return error,
-    };
-    if !crate::spirit::enqueue_reasoning_response(turn, text) {
-        return ERROR_UNAVAILABLE;
-    }
-
-    #[cfg(not(feature = "trueos_ttstt"))]
-    crate::log_info!(
-        target: "r";
-        "lumen-bp: voice unavailable reason=ttstt-feature-disabled text_presentation=retained\n"
-    );
-    0
-}
-
-#[cfg(feature = "trueos_lumen")]
-#[trueos_executor::task(pool_size = TASK_POOL_SIZE)]
-async fn lumen_blueprint_worker(owner: u8) {
-    let initial = slot(owner).and_then(|slot| slot.lock().request.take());
-    let Some(initial) = initial else {
-        if let Some(slot) = slot(owner) {
-            slot.lock().fail(ERROR_BAD_STATE);
-        }
-        return;
-    };
-
-    let tokenizer = match crate::ai::lfm25_tokenizer::load().await {
-        Ok(tokenizer) => tokenizer,
-        Err(error) => {
-            crate::log_warn!(
-                target: "r";
-                "lumen-bp: tokenizer open failed owner={} error={error:?}\n",
-                owner,
-            );
-            slot(owner).unwrap().lock().fail(ERROR_INFERENCE);
-            return;
-        }
-    };
-
-    let module = match initial {
-        LumenRequest::TemplateOpen(system) => {
-            let module = match crate::lumen::decode::open_cpu_vnni().await {
-                Ok(module) => module,
-                Err(error) => {
-                    crate::log_warn!(
-                        target: "r";
-                        "lumen-bp: model open failed owner={} error={error:?}\n",
-                        owner,
-                    );
-                    slot(owner).unwrap().lock().fail(ERROR_INFERENCE);
-                    return;
-                }
-            };
-            if !system.is_empty() {
-                let tokens = match tokenizer.encode_system_prefix(&system) {
-                    Ok(tokens) => tokens,
-                    Err(error) => {
-                        crate::log_warn!(
-                            target: "r";
-                            "lumen-bp: system tokenize failed owner={} error={error:?}\n",
-                            owner,
-                        );
-                        slot(owner).unwrap().lock().fail(ERROR_BAD_INPUT);
-                        return;
-                    }
-                };
-                for token in tokens {
-                    if let Err(error) = module.prefill_token(Lfm25DecodeInput::new(token)).await {
-                        crate::log_warn!(
-                            target: "r";
-                            "lumen-bp: template prefill failed owner={} error={error:?}\n",
-                            owner,
-                        );
-                        slot(owner).unwrap().lock().fail(ERROR_INFERENCE);
-                        return;
-                    }
-                }
-            }
-            module
-        }
-        LumenRequest::Restore(image) => match restore_cpu_vnni(&image).await {
-            Ok(module) => module,
-            Err(error) => {
-                crate::log_warn!(
-                    target: "r";
-                    "lumen-bp: restore failed owner={} error={error:?}\n",
-                    owner,
-                );
-                slot(owner).unwrap().lock().fail(ERROR_INFERENCE);
-                return;
-            }
-        },
-        _ => {
-            slot(owner).unwrap().lock().fail(ERROR_BAD_STATE);
-            return;
-        }
-    };
-
-    {
-        let mut state = slot(owner).unwrap().lock();
-        state.position = module.try_state().map_or(0, |state| state.position);
-        state.phase = v::bp_abi::LUMEN_PHASE_READY;
-        state.error = 0;
-    }
-    crate::log_info!(
-        target: "r";
-        "lumen-bp: capability ready owner={} position={} assets=kernel-shared state=blueprint-checkpointable\n",
-        owner,
-        module.try_state().map_or(0, |state| state.position),
-    );
-
-    loop {
-        let request = slot(owner).and_then(|slot| slot.lock().request.take());
-        match request {
-            Some(LumenRequest::Prompt {
-                turn,
-                tail,
-                tail_len,
-                prompt,
-                no_argument_tool,
-            }) => match run_prompt(
-                &tokenizer,
-                &module,
-                turn,
-                &tail[..tail_len],
-                &prompt,
-                no_argument_tool.as_deref(),
-            )
-            .await
-            {
-                Ok(reply) => {
-                    let mut state = slot(owner).unwrap().lock();
-                    state.reply = reply.text;
-                    state.reply_tail = reply.tail;
-                    state.reply_tail_len = reply.tail_len;
-                    state.position = module.try_state().map_or(0, |state| state.position);
-                    state.phase = v::bp_abi::LUMEN_PHASE_REPLY_READY;
-                }
-                Err(()) => {
-                    slot(owner).unwrap().lock().fail(ERROR_INFERENCE);
-                    return;
-                }
-            },
-            Some(LumenRequest::ToolResult {
-                turn,
-                tail,
-                tail_len,
-                result,
-            }) => {
-                match run_tool_result(&tokenizer, &module, turn, &tail[..tail_len], &result).await {
-                    Ok(reply) => {
-                        let mut state = slot(owner).unwrap().lock();
-                        state.reply = reply.text;
-                        state.reply_tail = reply.tail;
-                        state.reply_tail_len = reply.tail_len;
-                        state.position = module.try_state().map_or(0, |state| state.position);
-                        state.phase = v::bp_abi::LUMEN_PHASE_REPLY_READY;
-                    }
-                    Err(()) => {
-                        slot(owner).unwrap().lock().fail(ERROR_INFERENCE);
-                        return;
-                    }
-                }
-            }
-            Some(LumenRequest::Checkpoint) => {
-                let position = module.try_state().map_or(0, |state| state.position);
-                match checkpoint_cpu_vnni(module) {
-                    Ok(image) => {
-                        let bytes = image.len();
-                        let mut state = slot(owner).unwrap().lock();
-                        state.position = position;
-                        state.checkpoint = image;
-                        state.worker_active = false;
-                        state.phase = v::bp_abi::LUMEN_PHASE_CHECKPOINT_READY;
-                        crate::log_info!(
-                            target: "r";
-                            "lumen-bp: capability checkpointed owner={} position={} bytes={} action=release-cpu-session\n",
-                            owner,
-                            position,
-                            bytes,
-                        );
-                    }
-                    Err(error) => {
-                        crate::log_warn!(
-                            target: "r";
-                            "lumen-bp: checkpoint failed owner={} error={error:?}\n",
-                            owner,
-                        );
-                        slot(owner).unwrap().lock().fail(ERROR_INFERENCE);
-                    }
-                }
-                return;
-            }
-            Some(LumenRequest::Close) => {
-                slot(owner).unwrap().lock().reset();
-                return;
-            }
-            Some(LumenRequest::TemplateOpen(_) | LumenRequest::Restore(_)) => {
-                slot(owner).unwrap().lock().fail(ERROR_BAD_STATE);
-                return;
-            }
-            None => Timer::after(Duration::from_millis(WORKER_POLL_MS)).await,
-        }
-    }
-}
-
-#[cfg(feature = "trueos_lumen")]
-struct PromptReply {
-    text: Vec<u8>,
-    tail: [u32; 2],
-    tail_len: usize,
-}
-
-#[cfg(feature = "trueos_lumen")]
-async fn run_prompt(
-    tokenizer: &trueos_lfm25_cpu::Lfm25Tokenizer,
-    module: &LfmModule,
-    turn: u64,
-    tail: &[u32],
-    prompt: &str,
-    no_argument_tool: Option<&str>,
-) -> Result<PromptReply, ()> {
-    let prompt_tokens = if turn == 0 {
-        if module.try_state().is_some_and(|state| state.position == 0) {
-            tokenizer.encode_user_turn(prompt).map_err(|_| ())?
-        } else {
-            tokenizer
-                .encode_user_after_system_prefix(prompt)
-                .map_err(|_| ())?
-        }
-    } else {
-        let suffix = tokenizer
-            .encode_followup_user_turn(prompt)
-            .map_err(|_| ())?;
-        append_tail(tail, suffix)?
-    };
-    run_generation(tokenizer, module, turn, prompt_tokens, no_argument_tool).await
-}
-
-#[cfg(feature = "trueos_lumen")]
-async fn run_tool_result(
-    tokenizer: &trueos_lfm25_cpu::Lfm25Tokenizer,
-    module: &LfmModule,
-    turn: u64,
-    tail: &[u32],
-    result: &str,
-) -> Result<PromptReply, ()> {
-    let suffix = tokenizer
-        .encode_tool_result_after_assistant(result)
-        .map_err(|_| ())?;
-    run_generation(tokenizer, module, turn, append_tail(tail, suffix)?, None).await
-}
-
-#[cfg(any(feature = "trueos_lumen", test))]
-fn append_tail(tail: &[u32], suffix: Vec<u32>) -> Result<Vec<u32>, ()> {
-    if tail.is_empty() || tail.len() > 2 {
-        return Err(());
-    }
-    let mut tokens = Vec::new();
-    tokens
-        .try_reserve_exact(tail.len() + suffix.len())
-        .map_err(|_| ())?;
-    tokens.extend_from_slice(tail);
-    tokens.extend(suffix);
-    Ok(tokens)
-}
-
-fn tool_continuation_allowed(active_turn: Option<u64>, tool_result_used: bool, turn: u64) -> bool {
-    active_turn == Some(turn) && !tool_result_used
-}
-
-#[cfg(feature = "trueos_lumen")]
-async fn run_generation(
-    tokenizer: &trueos_lfm25_cpu::Lfm25Tokenizer,
-    module: &LfmModule,
-    turn: u64,
-    mut prompt_tokens: Vec<u32>,
-    no_argument_tool: Option<&str>,
-) -> Result<PromptReply, ()> {
-    let reasoning = crate::ai::ai_activity::begin_reasoning(
-        crate::ai::ai_activity::AiActivitySource::Lumen,
-        turn.saturating_add(1),
-    );
-    let _lumen_gt_boost = crate::intel::begin_lumen_gt_boost();
-    if prompt_tokens.is_empty() {
-        return Err(());
-    }
-    let mut next_token = None;
-    for (index, token) in prompt_tokens.iter().copied().enumerate() {
-        if index + 1 == prompt_tokens.len() {
-            next_token = Some(
-                module
-                    .decode_token(Lfm25DecodeInput::new(token))
-                    .await
-                    .map_err(|_| ())?
-                    .token,
-            );
-        } else {
-            module
-                .prefill_token(Lfm25DecodeInput::new(token))
-                .await
-                .map_err(|_| ())?;
-        }
-    }
-    prompt_tokens.clear();
-
-    let constrained_call = no_argument_tool
-        .map(|name| tokenizer.encode_no_argument_tool_call(name))
-        .transpose()
-        .map_err(|_| ())?;
-    let mut constrained_call_index = 0usize;
-    let mut constraining_call = false;
-    let mut generated = Vec::new();
-    let mut stopped = false;
-    for index in 0..MAX_REPLY_TOKENS {
-        let token = next_token.ok_or(())?;
-        if tokenizer.is_stop(token) {
-            stopped = true;
-            break;
-        }
-        if index == 0
-            && constrained_call
-                .as_ref()
-                .and_then(|call| call.first())
-                .is_some_and(|start| *start == token)
-        {
-            constraining_call = true;
-            constrained_call_index = 1;
-        }
-        generated.push(token);
-        if index + 1 == MAX_REPLY_TOKENS {
-            break;
-        }
-        let predicted = module
-            .decode_token(Lfm25DecodeInput::new(token))
-            .await
-            .map_err(|_| ())?
-            .token;
-        next_token = Some(if constraining_call {
-            let call = constrained_call.as_ref().ok_or(())?;
-            if let Some(forced) = call.get(constrained_call_index) {
-                constrained_call_index += 1;
-                *forced
-            } else {
-                tokenizer.im_end_id()
-            }
-        } else {
-            predicted
-        });
-    }
-    let text = tokenizer.decode(&generated, false).map_err(|_| ())?;
-    let mut result_tail = [0u32; 2];
-    let tail_len = if stopped {
-        result_tail[0] = next_token.ok_or(())?;
-        1
-    } else {
-        result_tail[0] = *generated.last().ok_or(())?;
-        result_tail[1] = tokenizer.im_end_id();
-        2
-    };
-    let reply = PromptReply {
-        text,
-        tail: result_tail,
-        tail_len,
-    };
-    reasoning.finish();
-    Ok(reply)
-}
-
-fn current_direct_owner() -> Option<u8> {
-    crate::hv::current_guest_execution_context_vm_id()
+pub(crate) fn spirit_response_present(_owner: u8, _turn: u64, _text: &[u8]) -> i32 {
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_lumen_template_open(
-    system_ptr: *const u8,
-    system_len: usize,
+    _system_ptr: *const u8,
+    _system_len: usize,
 ) -> i32 {
-    if system_len > MAX_SYSTEM_BYTES || (system_len != 0 && system_ptr.is_null()) {
-        return ERROR_BAD_INPUT;
-    }
-    let system = if system_len == 0 {
-        &[]
-    } else {
-        unsafe { core::slice::from_raw_parts(system_ptr, system_len) }
-    };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_LUMEN_TEMPLATE_OPEN,
-            0,
-            0,
-            system,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(|owner| template_open(owner, system))
-        .unwrap_or(ERROR_BAD_OWNER)
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_lumen_prompt_submit(
-    turn: u64,
-    tail_ptr: *const u32,
-    tail_len: usize,
-    prompt_ptr: *const u8,
-    prompt_len: usize,
+    _turn: u64,
+    _tail_ptr: *const u32,
+    _tail_len: usize,
+    _prompt_ptr: *const u8,
+    _prompt_len: usize,
 ) -> i32 {
-    if prompt_ptr.is_null()
-        || prompt_len == 0
-        || prompt_len > MAX_PROMPT_BYTES
-        || tail_len > 2
-        || (tail_len != 0 && tail_ptr.is_null())
-    {
-        return ERROR_BAD_INPUT;
-    }
-    let tail = if tail_len == 0 {
-        &[]
-    } else {
-        unsafe { core::slice::from_raw_parts(tail_ptr, tail_len) }
-    };
-    let prompt = unsafe { core::slice::from_raw_parts(prompt_ptr, prompt_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let mut payload = Vec::new();
-        if payload
-            .try_reserve_exact(4 + tail_len * 4 + prompt_len)
-            .is_err()
-        {
-            return ERROR_UNAVAILABLE;
-        }
-        payload.extend_from_slice(&(tail_len as u32).to_le_bytes());
-        for token in tail {
-            payload.extend_from_slice(&token.to_le_bytes());
-        }
-        payload.extend_from_slice(prompt);
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_LUMEN_PROMPT_SUBMIT,
-            turn,
-            0,
-            &payload,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(|owner| prompt_submit(owner, turn, tail, prompt))
-        .unwrap_or(ERROR_BAD_OWNER)
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_lumen_prompt_submit_with_no_argument_tool_v1(
-    turn: u64,
-    tail_ptr: *const u32,
-    tail_len: usize,
-    prompt_ptr: *const u8,
-    prompt_len: usize,
-    tool_name_ptr: *const u8,
-    tool_name_len: usize,
+    _turn: u64,
+    _tail_ptr: *const u32,
+    _tail_len: usize,
+    _prompt_ptr: *const u8,
+    _prompt_len: usize,
+    _tool_name_ptr: *const u8,
+    _tool_name_len: usize,
 ) -> i32 {
-    if prompt_ptr.is_null()
-        || prompt_len == 0
-        || prompt_len > MAX_PROMPT_BYTES
-        || tool_name_ptr.is_null()
-        || tool_name_len == 0
-        || tool_name_len > MAX_TOOL_NAME_BYTES
-        || tail_len > 2
-        || (tail_len != 0 && tail_ptr.is_null())
-    {
-        return ERROR_BAD_INPUT;
-    }
-    let tail = if tail_len == 0 {
-        &[]
-    } else {
-        unsafe { core::slice::from_raw_parts(tail_ptr, tail_len) }
-    };
-    let prompt = unsafe { core::slice::from_raw_parts(prompt_ptr, prompt_len) };
-    let tool_name = unsafe { core::slice::from_raw_parts(tool_name_ptr, tool_name_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let mut payload = Vec::new();
-        if payload
-            .try_reserve_exact(8 + tail_len * 4 + tool_name_len + prompt_len)
-            .is_err()
-        {
-            return ERROR_UNAVAILABLE;
-        }
-        payload.extend_from_slice(&(tail_len as u32).to_le_bytes());
-        payload.extend_from_slice(&(tool_name_len as u32).to_le_bytes());
-        for token in tail {
-            payload.extend_from_slice(&token.to_le_bytes());
-        }
-        payload.extend_from_slice(tool_name);
-        payload.extend_from_slice(prompt);
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_LUMEN_PROMPT_SUBMIT_WITH_NO_ARGUMENT_TOOL_V1,
-            turn,
-            0,
-            &payload,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(|owner| prompt_submit_with_no_argument_tool(owner, turn, tail, prompt, tool_name))
-        .unwrap_or(ERROR_BAD_OWNER)
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_lumen_tool_result_submit(
-    turn: u64,
-    tail_ptr: *const u32,
-    tail_len: usize,
-    result_ptr: *const u8,
-    result_len: usize,
+    _turn: u64,
+    _tail_ptr: *const u32,
+    _tail_len: usize,
+    _result_ptr: *const u8,
+    _result_len: usize,
 ) -> i32 {
-    if result_ptr.is_null()
-        || result_len == 0
-        || result_len > MAX_TOOL_RESULT_BYTES
-        || tail_len == 0
-        || tail_len > 2
-        || tail_ptr.is_null()
-    {
-        return ERROR_BAD_INPUT;
-    }
-    let tail = unsafe { core::slice::from_raw_parts(tail_ptr, tail_len) };
-    let result = unsafe { core::slice::from_raw_parts(result_ptr, result_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let mut payload = Vec::new();
-        if payload
-            .try_reserve_exact(4 + tail_len * 4 + result_len)
-            .is_err()
-        {
-            return ERROR_UNAVAILABLE;
-        }
-        payload.extend_from_slice(&(tail_len as u32).to_le_bytes());
-        for token in tail {
-            payload.extend_from_slice(&token.to_le_bytes());
-        }
-        payload.extend_from_slice(result);
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_LUMEN_TOOL_RESULT_SUBMIT,
-            turn,
-            0,
-            &payload,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(|owner| tool_result_submit(owner, turn, tail, result))
-        .unwrap_or(ERROR_BAD_OWNER)
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_lumen_status(out: *mut v::bp_abi::TrueosLumenStatus) -> i32 {
-    if out.is_null() {
-        return ERROR_BAD_INPUT;
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut(
-                out.cast::<u8>(),
-                core::mem::size_of::<v::bp_abi::TrueosLumenStatus>(),
-            )
-        };
-        let (status, _) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_LUMEN_STATUS,
-            0,
-            0,
-            &[],
-            bytes,
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            0
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    let Some(status) = current_direct_owner().and_then(self::status) else {
-        return ERROR_BAD_OWNER;
-    };
-    unsafe { out.write(status) };
-    0
+pub unsafe extern "C" fn trueos_cabi_lumen_status(_out: *mut v::bp_abi::TrueosLumenStatus) -> i32 {
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_lumen_reply_read(out_ptr: *mut u8, out_cap: usize) -> isize {
-    if out_ptr.is_null() {
-        return ERROR_BAD_INPUT as isize;
-    }
-    let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_LUMEN_REPLY_READ,
-            out_cap as u64,
-            0,
-            &[],
-            out,
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as isize
-        } else {
-            ERROR_TRANSPORT as isize
-        };
-    }
-    current_direct_owner()
-        .map(|owner| reply_read(owner, out))
-        .unwrap_or(ERROR_BAD_OWNER as isize)
+pub unsafe extern "C" fn trueos_cabi_lumen_reply_read(_out_ptr: *mut u8, _out_cap: usize) -> isize {
+    ERROR_UNAVAILABLE as isize
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_lumen_checkpoint_request() -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_LUMEN_CHECKPOINT_REQUEST, 0, 0);
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(checkpoint_request)
-        .unwrap_or(ERROR_BAD_OWNER)
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_lumen_checkpoint_read(
-    offset: usize,
-    out_ptr: *mut u8,
-    out_cap: usize,
+    _offset: usize,
+    _out_ptr: *mut u8,
+    _out_cap: usize,
 ) -> isize {
-    if out_ptr.is_null() {
-        return ERROR_BAD_INPUT as isize;
-    }
-    let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_LUMEN_CHECKPOINT_READ,
-            offset as u64,
-            out_cap as u64,
-            &[],
-            out,
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as isize
-        } else {
-            ERROR_TRANSPORT as isize
-        };
-    }
-    current_direct_owner()
-        .map(|owner| checkpoint_read(owner, offset, out))
-        .unwrap_or(ERROR_BAD_OWNER as isize)
+    ERROR_UNAVAILABLE as isize
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_lumen_restore_begin(total_len: usize) -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_LUMEN_RESTORE_BEGIN,
-            total_len as u64,
-            0,
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(|owner| restore_begin(owner, total_len))
-        .unwrap_or(ERROR_BAD_OWNER)
+pub extern "C" fn trueos_cabi_lumen_restore_begin(_total_len: usize) -> i32 {
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_lumen_restore_write(
-    offset: usize,
-    data_ptr: *const u8,
-    data_len: usize,
+    _offset: usize,
+    _data_ptr: *const u8,
+    _data_len: usize,
 ) -> i32 {
-    if data_ptr.is_null() && data_len != 0 {
-        return ERROR_BAD_INPUT;
-    }
-    let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, result) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_LUMEN_RESTORE_WRITE,
-            offset as u64,
-            0,
-            data,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            result as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(|owner| restore_write(owner, offset, data))
-        .unwrap_or(ERROR_BAD_OWNER)
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_lumen_restore_commit() -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_LUMEN_RESTORE_COMMIT, 0, 0);
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(restore_commit)
-        .unwrap_or(ERROR_BAD_OWNER)
+    ERROR_UNAVAILABLE
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_lumen_close() -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_LUMEN_CLOSE, 0, 0);
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner().map(close).unwrap_or(ERROR_BAD_OWNER)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_spirit_emotion_play(
-    idea_ptr: *const u8,
-    idea_len: usize,
-) -> i32 {
-    if idea_ptr.is_null() || idea_len == 0 || idea_len > 16 {
-        return ERROR_BAD_INPUT;
-    }
-    let idea = unsafe { core::slice::from_raw_parts(idea_ptr, idea_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_SPIRIT_EMOTION_PLAY,
-            0,
-            0,
-            idea,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    let Ok(idea) = core::str::from_utf8(idea) else {
-        return ERROR_BAD_INPUT;
-    };
-    crate::spirit::enqueue_emotion_words(&[idea])
-        .map(|_| 0)
-        .unwrap_or(ERROR_UNAVAILABLE)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_spirit_text_present_silent(
-    turn: u64,
-    text_ptr: *const u8,
-    text_len: usize,
-) -> i32 {
-    if text_ptr.is_null() || text_len == 0 || text_len > MAX_SPIRIT_RESPONSE_BYTES {
-        return ERROR_BAD_INPUT;
-    }
-    let text = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_SPIRIT_TEXT_PRESENT_SILENT,
-            turn,
-            0,
-            text,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    spirit_text_present_silent(turn, text)
+    0
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_spirit_response_present(
-    turn: u64,
-    text_ptr: *const u8,
-    text_len: usize,
+    _turn: u64,
+    _text_ptr: *const u8,
+    _text_len: usize,
 ) -> i32 {
-    if text_ptr.is_null() || text_len == 0 || text_len > MAX_SPIRIT_RESPONSE_BYTES {
-        return ERROR_BAD_INPUT;
-    }
-    let text = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_SPIRIT_RESPONSE_PRESENT,
-            turn,
-            0,
-            text,
-            &mut [],
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    current_direct_owner()
-        .map(|owner| spirit_response_present(owner, turn, text))
-        .unwrap_or(ERROR_BAD_OWNER)
+    ERROR_UNAVAILABLE
 }
 
-pub(crate) fn spirit_move(x_normalized: f32, y_normalized: f32) -> i32 {
-    if !x_normalized.is_finite()
-        || !y_normalized.is_finite()
-        || !(0.0..=1.0).contains(&x_normalized)
-        || !(0.0..=1.0).contains(&y_normalized)
-    {
-        return ERROR_BAD_INPUT;
-    }
-    crate::spirit::move_spirit_to(x_normalized as f64, y_normalized as f64)
-        .map(|_| 0)
-        .unwrap_or(ERROR_UNAVAILABLE)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_spirit_move(x_normalized: f32, y_normalized: f32) -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_SPIRIT_MOVE,
-            x_normalized.to_bits() as u64,
-            y_normalized.to_bits() as u64,
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            data as i64 as i32
-        } else {
-            ERROR_TRANSPORT
-        };
-    }
-    spirit_move(x_normalized, y_normalized)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        ERROR_BAD_INPUT, MAX_SPIRIT_RESPONSE_BYTES, append_tail, tool_continuation_allowed,
-        validate_silent_spirit_text,
-    };
-
-    #[test]
-    fn role_aware_continuation_requires_and_preserves_the_assistant_tail() {
-        assert!(append_tail(&[], alloc::vec![3]).is_err());
-        assert_eq!(append_tail(&[7], alloc::vec![8, 9]), Ok(alloc::vec![7, 8, 9]));
-        assert_eq!(append_tail(&[4, 7], alloc::vec![8]), Ok(alloc::vec![4, 7, 8]));
-        assert!(append_tail(&[1, 2, 3], alloc::vec![4]).is_err());
-    }
-
-    #[test]
-    fn only_one_tool_continuation_is_admitted_per_active_turn() {
-        assert!(tool_continuation_allowed(Some(4), false, 4));
-        assert!(!tool_continuation_allowed(Some(4), true, 4));
-        assert!(!tool_continuation_allowed(Some(4), false, 5));
-        assert!(!tool_continuation_allowed(None, false, 4));
-    }
-
-    #[test]
-    fn silent_spirit_text_validation_is_bounded_and_displayable() {
-        assert_eq!(validate_silent_spirit_text(0, b"hello"), Err(ERROR_BAD_INPUT));
-        assert_eq!(validate_silent_spirit_text(1, b""), Err(ERROR_BAD_INPUT));
-        assert_eq!(validate_silent_spirit_text(1, b" \n\t"), Err(ERROR_BAD_INPUT));
-        assert_eq!(validate_silent_spirit_text(1, &[0xff]), Err(ERROR_BAD_INPUT));
-        let oversized = [b'x'; MAX_SPIRIT_RESPONSE_BYTES + 1];
-        assert_eq!(validate_silent_spirit_text(1, &oversized), Err(ERROR_BAD_INPUT));
-        assert_eq!(validate_silent_spirit_text(7, b"hello"), Ok("hello"));
-    }
-}

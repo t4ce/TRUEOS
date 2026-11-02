@@ -1,137 +1,25 @@
-//! Decoupled publication of AI turn activity.
-//!
-//! Model services publish generic lifecycle edges here. Presentation systems
-//! may consume those edges without either side depending on the other.
-
-use core::sync::atomic::{AtomicU32, Ordering};
-
-use heapless::Deque;
-use spin::Mutex;
-
-const AI_ACTIVITY_EVENT_CAPACITY: usize = 64;
+//! Passive reasoning observer contract while local inference is unavailable.
+//! Speech activity continues through the audio/TTSTT presentation path.
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AiActivitySource {
-    #[cfg(feature = "trueos_lumen")]
-    Lumen,
-}
-
-impl AiActivitySource {
-    #[cfg(feature = "trueos_lumen")]
-    const fn name(self) -> &'static str {
-        match self {
-            #[cfg(feature = "trueos_lumen")]
-            Self::Lumen => "lumen",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(not(any(feature = "trueos_lumen", feature = "trueos_ttstt")), expect(dead_code, reason = "Spirit consumes phases produced by optional AI features"))]
+#[expect(dead_code, reason = "local reasoning producers are retired")]
 pub(crate) enum AiReasoningPhase {
     Started,
     Finished,
 }
 
-impl AiReasoningPhase {
-    #[cfg(feature = "trueos_lumen")]
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Started => "started",
-            Self::Finished => "finished",
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AiReasoningEvent {
-    pub(crate) source: AiActivitySource,
+    pub(crate) source: &'static str,
     pub(crate) turn: u64,
     pub(crate) phase: AiReasoningPhase,
 }
 
-static ACTIVE_REASONING_COUNT: AtomicU32 = AtomicU32::new(0);
-static AI_ACTIVITY_EVENTS: Mutex<Deque<AiReasoningEvent, AI_ACTIVITY_EVENT_CAPACITY>> =
-    Mutex::new(Deque::new());
-
-#[cfg(feature = "trueos_lumen")]
-#[must_use = "keep the guard alive for the whole AI turn"]
-pub(crate) struct AiReasoningGuard {
-    source: AiActivitySource,
-    turn: u64,
-    active: bool,
-}
-
-#[cfg(feature = "trueos_lumen")]
-impl AiReasoningGuard {
-    pub(crate) fn finish(mut self) {
-        self.publish_finished();
-    }
-
-    fn publish_finished(&mut self) {
-        if !self.active {
-            return;
-        }
-        self.active = false;
-        publish(AiReasoningEvent {
-            source: self.source,
-            turn: self.turn,
-            phase: AiReasoningPhase::Finished,
-        });
-        ACTIVE_REASONING_COUNT.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-#[cfg(feature = "trueos_lumen")]
-impl Drop for AiReasoningGuard {
-    fn drop(&mut self) {
-        self.publish_finished();
-    }
-}
-
-#[cfg(feature = "trueos_lumen")]
-pub(crate) fn begin_reasoning(source: AiActivitySource, turn: u64) -> AiReasoningGuard {
-    ACTIVE_REASONING_COUNT.fetch_add(1, Ordering::AcqRel);
-    publish(AiReasoningEvent {
-        source,
-        turn,
-        phase: AiReasoningPhase::Started,
-    });
-    AiReasoningGuard {
-        source,
-        turn,
-        active: true,
-    }
-}
-
 #[inline]
 pub(crate) fn reasoning_active() -> bool {
-    ACTIVE_REASONING_COUNT.load(Ordering::Acquire) != 0
+    false
 }
 
 pub(crate) fn try_take_reasoning_event() -> Option<AiReasoningEvent> {
-    AI_ACTIVITY_EVENTS.lock().pop_front()
-}
-
-#[cfg(feature = "trueos_lumen")]
-fn publish(event: AiReasoningEvent) {
-    let queued = AI_ACTIVITY_EVENTS.lock().push_back(event).is_ok();
-    crate::log_info!(
-        target: "service";
-        "ai-activity: source={} turn={} phase={} queued={}\n",
-        event.source.name(),
-        event.turn,
-        event.phase.name(),
-        queued,
-    );
-    if !queued {
-        crate::log_warn!(
-            target: "service";
-            "ai-activity: event queue full capacity={} source={} turn={} phase={} action=drop\n",
-            AI_ACTIVITY_EVENT_CAPACITY,
-            event.source.name(),
-            event.turn,
-            event.phase.name(),
-        );
-    }
+    None
 }

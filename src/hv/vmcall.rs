@@ -1137,7 +1137,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_SPIRIT_TEXT_PRESENT_SILENT => {
             let rc = request_payload(vm_id, req_len)
-                .map(|text| crate::ai::lumen_service::spirit_text_present_silent(arg0, text))
+                .map(|text| crate::ai::spirit_abi::spirit_text_present_silent(arg0, text))
                 .unwrap_or(-3);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
@@ -1145,7 +1145,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_SPIRIT_MOVE => {
             let x = f32::from_bits(arg0 as u32);
             let y = f32::from_bits(arg1 as u32);
-            let rc = crate::ai::lumen_service::spirit_move(x, y);
+            let rc = crate::ai::spirit_abi::spirit_move(x, y);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

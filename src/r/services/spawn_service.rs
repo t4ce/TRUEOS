@@ -11,10 +11,6 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for task startup.
 
-
-
-
-
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
 const SPAWN_SERVICE_PENDING_MS: u64 = 150;
 const SPAWN_SERVICE_IDLE_MS: u64 = 250;
@@ -55,8 +51,6 @@ define_started_flags!(
     NET_POLL_STARTED,
     NET_SERVICE_STARTED,
     WIFI_SERVICE_STARTED,
-    NET_CACHE_SERVICE_STARTED,
-    NET_THROUGHPUT_BENCH_STARTED,
     TLS_SOCKET_SERVICE_STARTED,
     CLOCK_SIGNALS_STARTED,
     NTP_SYNC_STARTED,
@@ -70,10 +64,6 @@ define_started_flags!(
     MIDI_PIANO_UDP_STARTED,
     PRINTER_DISCOVERY_STARTED,
     PRINTER_SPOOLER_STARTED,
-    FTP_SERVER_STARTED,
-    TGA_TASK_STARTED,
-    TGA_RPC_SERVICE_STARTED,
-    TGA_RPC_HEARTBEAT_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
     GPU_FAULT_CONTAINMENT_STARTED,
     TRUEOS_SPIRIT_STARTED,
@@ -102,23 +92,16 @@ define_started_flags!(
     HTML_SHACK_SERVICE_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
     USER_INPUT_RECORD_WRITER_STARTED,
-    TRUEOSFS_RW_PROBE_STARTED,
     BP_AUTOSTART_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     LOGTOTCP_STARTED,
-    MICROFONT_LOG_STARTED,
-    ATOMIC_BOMB_STARTED,
     TINYAUDIO_SERVICE_STARTED,
     TINYAUDIO_LIVE_HTTP_STARTED,
-    EXECUTOR_REALM_MIGRATION_SMOKE_STARTED,
     UNIX_FD_PROBE_STARTED
 );
 
 #[cfg(feature = "trueos_ttstt")]
 define_started_flags!(TTSTT_CPU_SERVICE_STARTED, TTSTT_CAPTURE_WRITER_STARTED);
-
-#[cfg(feature = "trueos_lumen")]
-define_started_flags!(LUMEN_BOOT_WARM_STARTED);
 
 #[cfg(feature = "legacy_vm_checkpoint")]
 define_started_flags!(HV_VM_STORE_STARTED, HV_VM_STORE_NET_STARTED);
@@ -339,28 +322,6 @@ fn spawn_ttstt_capture_writer(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::ai::ttstt_capture::writer_task())
 }
 
-#[cfg(feature = "trueos_lumen")]
-fn spawn_lumen_boot_warm(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    let Some((worker_slot, core_kind, worker_spawner)) =
-        crate::workers::pick_perf_background_spawner_with_slot()
-    else {
-        return SpawnAttempt::Skipped;
-    };
-    let token = match crate::ai::lfm25_boot_warm::service_task(worker_slot) {
-        Ok(token) => token,
-        Err(error) => return SpawnAttempt::Failed(error),
-    };
-    worker_spawner.spawn(token);
-    crate::log_info!(
-        target: "service";
-        "lfm25: boot-warm stage=scheduled executor=background-ap{} core_kind={} core=perf policy_switch=allcaps::lumen::BOOT_RESIDENT_WARM_ENABLED\n",
-        worker_slot,
-        core_kind,
-    );
-    SpawnAttempt::Spawned
-}
-
 fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::smp::hlt_history_sampler_task())
 }
@@ -555,28 +516,6 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_net_throughput_bench(spawner: Spawner) -> SpawnAttempt {
-    if !crate::allcaps::net::THROUGHPUT_BENCH_AUTOSTART {
-        return SpawnAttempt::Skipped;
-    }
-
-    let rx = match crate::r::net::throughput_bench::throughput_rx_task() {
-        Ok(token) => token,
-        Err(err) => return SpawnAttempt::Failed(err),
-    };
-    let tx = match crate::r::net::throughput_bench::throughput_tx_task() {
-        Ok(token) => token,
-        Err(err) => return SpawnAttempt::Failed(err),
-    };
-    spawner.spawn(rx);
-    spawner.spawn(tx);
-    SpawnAttempt::Spawned
-}
-
-fn spawn_net_cache_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_bool_result_to_attempt(crate::net::cache_service::ensure_service_started(spawner))
-}
-
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_eff_worker(spawner, |_worker_spawner| {
         crate::net::tls_socket::tls_socket_service_task()
@@ -595,8 +534,6 @@ fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::sntp::sntp_service_task())
 }
 
-
-
 fn spawn_sh3srv(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     spawn_bool_result_to_attempt(crate::shell3::service::start_pool().map(|count| count != 0))
@@ -610,22 +547,12 @@ fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::services::hid_udp_service::hid_udp_srv_task())
 }
 
-fn microfont_log_gate() -> bool {
-    super::microfont_log_service::enabled()
-}
-
 fn codex_progress_gate() -> bool {
     crate::allcaps::hv::CODEX_PROGRESS_PROBES_ENABLED
 }
 
 fn spawn_codex_progress(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_| super::codex_progress_service::codex_progress_task())
-}
-
-fn spawn_microfont_log(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_eff_worker(spawner, |worker| {
-        super::microfont_log_service::microfont_log_task(worker.cpu_slot())
-    })
 }
 
 fn ui4_slot4_service_gate() -> bool {
@@ -661,20 +588,6 @@ fn spawn_midi_piano_udp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::midi_udp::midi_piano_udp_task())
 }
 
-fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::net::ftp::ftp_server_task())
-}
-
-fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_| crate::tga::tga_task())
-}
-fn spawn_tga_rpc_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_| crate::r::tga_rpc::service_task())
-}
-fn spawn_tga_rpc_heartbeat(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_| crate::r::tga_rpc::heartbeat_task())
-}
-
 fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::intel::gpgpu::gpu_completion_reaper_task())
 }
@@ -682,7 +595,6 @@ fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
 fn spawn_gpu_fault_containment(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::gpu::vgpu::gpu_fault_containment_task())
 }
-
 
 fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
@@ -749,8 +661,6 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
         SpawnAttempt::Spawned
     }
 }
-
-
 
 fn spawn_mouse_motion_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ui_core(spawner, |_ap1_spawner| {
@@ -991,15 +901,6 @@ fn ttstt_cpu_service_gate() -> bool {
     )
 }
 
-#[cfg(feature = "trueos_lumen")]
-fn lumen_boot_warm_gate() -> bool {
-    crate::intel::guc_submission_ready()
-        && crate::intel::gen12_integrated_pat_ready()
-        && crate::gpu::physical::physical_device().is_some_and(|device| device.ready())
-        && crate::intel::gpgpu::lfm25_q8_packed_project_supported()
-        && crate::workers::has_perf_background_worker_slot()
-}
-
 #[inline]
 fn user_input_writer_gate() -> bool {
     crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
@@ -1015,175 +916,6 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_user_input_record_writer(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::user_input_record::writer_task())
-}
-
-const TRUEOSFS_RW_PROBE_PATH: &str = "trueos/probe/rw-500k.bin";
-const TRUEOSFS_RW_PROBE_BYTES: usize = 500 * 1024;
-const TRUEOSFS_RW_PROBE_CHUNK_BYTES: usize = 64 * 1024;
-const TRUEOSFS_RW_PROBE_BEGIN_RETRIES: usize = 100;
-
-fn trueosfs_rw_probe_now_ms() -> u64 {
-    let ticks = embassy_time_driver::now();
-    let hz = embassy_time_driver::TICK_HZ;
-    if hz == 0 {
-        0
-    } else {
-        ticks.saturating_mul(1000) / hz
-    }
-}
-
-fn trueosfs_rw_probe_fill(buf: &mut Vec<u8>, len: usize) {
-    buf.clear();
-    for i in 0..len {
-        let b = ((i as u32)
-            .wrapping_mul(37)
-            .wrapping_add((i as u32 >> 3) ^ 0x5a)) as u8;
-        buf.push(b);
-    }
-}
-
-#[trueos_executor::task]
-async fn trueosfs_rw_probe_task() {
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::log!("trueosfs-rw-probe: result=failed phase=root err=missing\n");
-        return;
-    };
-
-    let start_ms = trueosfs_rw_probe_now_ms();
-    crate::log!(
-        "trueosfs-rw-probe: start disk={} path={} bytes={}\n",
-        disk.id().raw(),
-        TRUEOSFS_RW_PROBE_PATH,
-        TRUEOSFS_RW_PROBE_BYTES
-    );
-
-    let _ = crate::r::fs::trueosfs::file_delete_async(disk, TRUEOSFS_RW_PROBE_PATH).await;
-
-    let mut expected = Vec::with_capacity(TRUEOSFS_RW_PROBE_BYTES);
-    trueosfs_rw_probe_fill(&mut expected, TRUEOSFS_RW_PROBE_BYTES);
-
-    let mut begin_attempt = 0usize;
-    let handle = loop {
-        match crate::r::fs::trueosfs::file_write_begin_async(
-            disk,
-            TRUEOSFS_RW_PROBE_PATH,
-            TRUEOSFS_RW_PROBE_BYTES as u64,
-        )
-        .await
-        {
-            Ok(Some(handle)) => break handle,
-            Ok(None) => {
-                crate::log!("trueosfs-rw-probe: result=failed phase=begin err=no-space-or-fs\n");
-                return;
-            }
-            Err(crate::disc::block::Error::NotReady)
-                if begin_attempt < TRUEOSFS_RW_PROBE_BEGIN_RETRIES =>
-            {
-                begin_attempt = begin_attempt.saturating_add(1);
-                Timer::after(EmbassyDuration::from_millis(25)).await;
-            }
-            Err(err) => {
-                crate::log!(
-                    "trueosfs-rw-probe: result=failed phase=begin attempts={} err={:?}\n",
-                    begin_attempt.saturating_add(1),
-                    err
-                );
-                return;
-            }
-        }
-    };
-
-    let mut offset = 0usize;
-    while offset < expected.len() {
-        let end = (offset + TRUEOSFS_RW_PROBE_CHUNK_BYTES).min(expected.len());
-        if let Err(err) =
-            crate::r::fs::trueosfs::file_write_chunk_async(handle, &expected[offset..end]).await
-        {
-            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
-            crate::log!(
-                "trueosfs-rw-probe: result=failed phase=write offset={} len={} err={:?}\n",
-                offset,
-                end - offset,
-                err
-            );
-            return;
-        }
-        offset = end;
-    }
-
-    if let Err(err) = crate::r::fs::trueosfs::file_write_finish_async(handle).await {
-        crate::log!("trueosfs-rw-probe: result=failed phase=finish err={:?}\n", err);
-        return;
-    }
-    let write_ms = trueosfs_rw_probe_now_ms();
-    crate::log!(
-        "trueosfs-rw-probe: phase=write-ok bytes={} elapsed_ms={}\n",
-        TRUEOSFS_RW_PROBE_BYTES,
-        write_ms.saturating_sub(start_ms)
-    );
-
-    let mut actual = Vec::new();
-    actual.resize(TRUEOSFS_RW_PROBE_BYTES, 0);
-    match crate::r::fs::trueosfs::file_read_range_async(
-        disk,
-        TRUEOSFS_RW_PROBE_PATH,
-        0,
-        actual.as_mut_slice(),
-    )
-    .await
-    {
-        Ok(Some(got)) if got == TRUEOSFS_RW_PROBE_BYTES => {}
-        Ok(Some(got)) => {
-            crate::log!(
-                "trueosfs-rw-probe: result=failed phase=read got={} expected={}\n",
-                got,
-                TRUEOSFS_RW_PROBE_BYTES
-            );
-            return;
-        }
-        Ok(None) => {
-            crate::log!("trueosfs-rw-probe: result=failed phase=read err=missing\n");
-            return;
-        }
-        Err(err) => {
-            crate::log!("trueosfs-rw-probe: result=failed phase=read err={:?}\n", err);
-            return;
-        }
-    }
-
-    if actual.as_slice() != expected.as_slice() {
-        let mismatch = actual
-            .iter()
-            .zip(expected.iter())
-            .position(|(got, want)| got != want)
-            .unwrap_or(usize::MAX);
-        crate::log!("trueosfs-rw-probe: result=failed phase=verify mismatch={}\n", mismatch);
-        return;
-    }
-    let read_ms = trueosfs_rw_probe_now_ms();
-    crate::log!(
-        "trueosfs-rw-probe: phase=verify-ok bytes={} read_elapsed_ms={}\n",
-        TRUEOSFS_RW_PROBE_BYTES,
-        read_ms.saturating_sub(write_ms)
-    );
-
-    match crate::r::fs::trueosfs::file_delete_async(disk, TRUEOSFS_RW_PROBE_PATH).await {
-        Ok(true) | Ok(false) => {
-            let done_ms = trueosfs_rw_probe_now_ms();
-            crate::log!(
-                "trueosfs-rw-probe: result=ok bytes={} total_elapsed_ms={}\n",
-                TRUEOSFS_RW_PROBE_BYTES,
-                done_ms.saturating_sub(start_ms)
-            );
-        }
-        Err(err) => {
-            crate::log!("trueosfs-rw-probe: result=failed phase=delete err={:?}\n", err);
-        }
-    }
-}
-
-fn spawn_trueosfs_rw_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| trueosfs_rw_probe_task())
 }
 
 fn spawn_unix_fd_probe(spawner: Spawner) -> SpawnAttempt {
@@ -1212,28 +944,6 @@ fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::r::restart::restart_apps_task(spawner))
 }
 
-#[trueos_executor::task]
-async fn atomic_bomb_task() {
-    Timer::after(EmbassyDuration::from_secs(5)).await;
-
-    if let Some(profile) = crate::cpu::CpuProfile::current() {
-        crate::log!(
-            "PANIC PANIC PANIC: atomic_bomb firing slot={} lapic={} kind={}\n",
-            profile.slot(),
-            profile.lapic_id(),
-            profile.core_kind_name()
-        );
-    } else {
-        crate::log!("PANIC PANIC PANIC: atomic_bomb firing on unknown cpu\n");
-    }
-
-    panic!("PANIC PANIC PANIC: delayed atomic_bomb");
-}
-
-fn spawn_atomic_bomb(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| atomic_bomb_task())
-}
-
 const EXECUTOR_REALM_SMOKE_HOPS: usize = 25;
 
 #[inline]
@@ -1244,145 +954,11 @@ fn executor_realm_smoke_delay_ms(hop: usize) -> u64 {
     3 + ((mixed >> 16) % 23)
 }
 
-#[trueos_executor::task]
-async fn executor_realm_migration_smoke_task(
-    bsp_target: trueos_executor::MigrationTarget,
-    ap_target: trueos_executor::MigrationTarget,
-    ap_slot: u32,
-    ap_kind: u8,
-    bsp_executor_id: usize,
-    ap_executor_id: usize,
-) {
-    let start_ms = boot_probe_ms();
-    crate::log_info!(
-        target: "executor-realm";
-        "executor-realm: migration-smoke start ms={} hops={} bsp_exec=0x{:X} ap_slot={} ap_kind={} ap_exec=0x{:X}\n",
-        start_ms,
-        EXECUTOR_REALM_SMOKE_HOPS,
-        bsp_executor_id,
-        ap_slot,
-        ap_kind,
-        ap_executor_id
-    );
-
-    let mut ok_hops = 0usize;
-    for hop in 0..EXECUTOR_REALM_SMOKE_HOPS {
-        let to_ap = hop % 2 == 0;
-        let target = if to_ap { ap_target } else { bsp_target };
-        let to_slot = if to_ap { ap_slot as usize } else { 0 };
-        let from_slot = crate::percpu::current_slot();
-        let arm_ms = boot_probe_ms();
-        let delay_ms = executor_realm_smoke_delay_ms(hop);
-
-        crate::log_trace!(
-            target: "executor-realm";
-            "executor-realm: migration-smoke arm hop={} ms={} delay_ms={} from_cpu={} to_cpu={} from_exec=0x{:X} to_exec=0x{:X}\n",
-            hop,
-            arm_ms,
-            delay_ms,
-            from_slot,
-            to_slot,
-            if to_ap { bsp_executor_id } else { ap_executor_id },
-            target.executor_id()
-        );
-
-        Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
-
-        let request_ms = boot_probe_ms();
-        // Safety: this smoke task is spawned through SendSpawner below, so the
-        // compiler verifies the whole future is Send before it may cross CPUs.
-        let result = unsafe { trueos_executor::migrate_current_task_to(target) }.await;
-        let done_ms = boot_probe_ms();
-        let current_slot = crate::percpu::current_slot();
-        let hop_ok = result.migrated && current_slot == to_slot;
-        if hop_ok {
-            ok_hops = ok_hops.saturating_add(1);
-        }
-
-        crate::log_trace!(
-            target: "executor-realm";
-            "executor-realm: migration-smoke hop={} task=0x{:X} request_ms={} done_ms={} wait_ms={} migrate_ms={} cpu_from={} cpu_to={} cpu_now={} spawner_from=0x{:X} spawner_to=0x{:X} spawner_now=0x{:X} ok={}\n",
-            hop,
-            result.task_id,
-            request_ms,
-            done_ms,
-            request_ms.saturating_sub(arm_ms),
-            done_ms.saturating_sub(request_ms),
-            from_slot,
-            to_slot,
-            current_slot,
-            result.from_executor_id,
-            result.to_executor_id,
-            result.current_executor_id,
-            hop_ok
-        );
-    }
-
-    crate::log_info!(
-        target: "executor-realm";
-        "executor-realm: migration-smoke done ms={} ok_hops={}/{} final_cpu={} bsp_exec=0x{:X} ap_slot={} ap_exec=0x{:X}\n",
-        boot_probe_ms(),
-        ok_hops,
-        EXECUTOR_REALM_SMOKE_HOPS,
-        crate::percpu::current_slot(),
-        bsp_executor_id,
-        ap_slot,
-        ap_executor_id
-    );
-}
-
-fn spawn_executor_realm_migration_smoke(spawner: Spawner) -> SpawnAttempt {
-    let Some((ap_slot, ap_kind, worker_spawner)) =
-        crate::workers::pick_background_spawner_with_slot()
-    else {
-        return SpawnAttempt::Skipped;
-    };
-
-    let bsp_spawner = spawner.make_send();
-    let ap_spawner = worker_spawner.raw();
-    let bsp_target = bsp_spawner.migration_target();
-    let ap_target = ap_spawner.migration_target();
-    let bsp_executor_id = bsp_spawner.executor_id();
-    let ap_executor_id = ap_spawner.executor_id();
-
-    match executor_realm_migration_smoke_task(
-        bsp_target,
-        ap_target,
-        ap_slot,
-        ap_kind,
-        bsp_executor_id,
-        ap_executor_id,
-    ) {
-        Ok(token) => {
-            let task_id = token.id();
-            crate::log_info!(
-                target: "executor-realm";
-                "executor-realm: migration-smoke spawn task=0x{:X} bsp_exec=0x{:X} ap_slot={} ap_kind={} ap_exec=0x{:X}\n",
-                task_id,
-                bsp_executor_id,
-                ap_slot,
-                ap_kind,
-                ap_executor_id
-            );
-            bsp_spawner.spawn(token);
-            SpawnAttempt::Spawned
-        }
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 // --- registry ---
 
-const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
-    crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 72
-    + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize
-    + cfg!(feature = "trueos_h264_encode_stream") as usize
-    + cfg!(feature = "trueos_lumen") as usize
-    + 2 * cfg!(feature = "trueos_ttstt") as usize;
-static TASKS: [TaskSpec; TASK_COUNT] = [
+static TASKS: &[TaskSpec] = &[
     TaskSpec::enabled_gated(
         "codex-progress-observer",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
@@ -1390,15 +966,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &CODEX_PROGRESS_STARTED,
         spawn_codex_progress,
     ),
-    // The retained surface uses the regular E-core-preferred service policy.
-    // In particular this has no NET, filesystem, GuC or UI4-ready dependency.
-    TaskSpec::enabled_gated(
-        "microfont-log",
-        0,
-        microfont_log_gate,
-        &MICROFONT_LOG_STARTED,
-        spawn_microfont_log,
-    ),
+    
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "blueprint-async-fs-service",
@@ -1453,12 +1021,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
     TaskSpec::enabled("ram-usage-history", 0, &RAM_USAGE_HISTORY_STARTED, spawn_ram_usage_history),
-    TaskSpec::disabled(
-        "executor-realm-migration-smoke",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        &EXECUTOR_REALM_MIGRATION_SMOKE_STARTED,
-        spawn_executor_realm_migration_smoke,
-    ),
+
     TaskSpec::enabled(
         "codec-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
@@ -1496,13 +1059,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated("wifi-service", 0, wifi_service_gate, &WIFI_SERVICE_STARTED, spawn_wifi_service),
     TaskSpec::enabled("net-poll-tasks", 0, &NET_POLL_STARTED, spawn_net_poll_tasks),
     TaskSpec::enabled("net-service", 0, &NET_SERVICE_STARTED, spawn_net_service),
-    TaskSpec::enabled("net-cache-service", 0, &NET_CACHE_SERVICE_STARTED, spawn_net_cache_service),
-    TaskSpec::enabled(
-        "net-throughput-bench",
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        &NET_THROUGHPUT_BENCH_STARTED,
-        spawn_net_throughput_bench,
-    ),
+
     TaskSpec::enabled(
         "tls-socket-service",
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
@@ -1554,12 +1111,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
     ),
-    TaskSpec::disabled(
-        "trueosfs-rw-probe",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
-        &TRUEOSFS_RW_PROBE_STARTED,
-        spawn_trueosfs_rw_probe,
-    ),
+
     unix_fd_probe_task_spec(),
     TaskSpec::enabled(
         "bp-autostart",
@@ -1603,15 +1155,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &PRINTER_SPOOLER_STARTED,
         spawn_printer_spooler,
     ),
-    TaskSpec::disabled(
-        "ftp-server",
-        NET_ANY_CONFIGURED_AND_ROOT_READY,
-        &FTP_SERVER_STARTED,
-        spawn_ftp_server,
-    ),
-    TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
-    TaskSpec::enabled("tga-rpc", 0, &TGA_RPC_SERVICE_STARTED, spawn_tga_rpc_service),
-    TaskSpec::enabled("tga-rpc-heartbeat", 0, &TGA_RPC_HEARTBEAT_STARTED, spawn_tga_rpc_heartbeat),
+
     TaskSpec::enabled_gated(
         "gpu-completion-reaper",
         0,
@@ -1722,18 +1266,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI4_CODEX_PROMPT_SERVICE_STARTED,
         spawn_ui4_codex_prompt_service_task,
     ),
-    #[cfg(feature = "trueos_lumen")]
-    TaskSpec::configured_gated(
-        crate::allcaps::lumen::BOOT_RESIDENT_WARM_ENABLED,
-        "lumen-boot-warm",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-            | crate::r::readiness::TRUEOSFS_INDEX_READY
-            | crate::r::readiness::BACKGROUND_AP_WORKER_READY
-            | crate::r::readiness::UI4_COMPOSITOR_READY,
-        lumen_boot_warm_gate,
-        &LUMEN_BOOT_WARM_STARTED,
-        spawn_lumen_boot_warm,
-    ),
+
     TaskSpec::enabled_gated(
         "ui4-window-broker-snapshot",
         0,
@@ -1821,7 +1354,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &USER_INPUT_RECORD_WRITER_STARTED,
         spawn_user_input_record_writer,
     ),
-    TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
+
 ];
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

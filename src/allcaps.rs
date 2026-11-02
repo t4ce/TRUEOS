@@ -56,7 +56,6 @@ pub mod cpu_task_pool {
 }
 
 pub mod probes {
-    pub const TGA_PCI_CLAIM_ENABLED: bool = true;
     pub const MIO_BOOT_PROBE: bool = false;
     pub const UNIX_FD_PROBE: bool = false;
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -90,16 +89,6 @@ pub mod gfx {
     pub const SCREENSHOT_CAPTURE_ENABLED: bool = false;
 }
 
-#[cfg(feature = "trueos_lumen")]
-pub mod lumen {
-    /// Current single-model intensive-test profile. Disable this one switch
-    /// when boot-resident inference assets are no longer the desired policy.
-    pub const BOOT_RESIDENT_WARM_ENABLED: bool = true;
-
-    /// Let the compositor enter its steady service loop before model I/O and
-    /// in-place Q8 packing begin on a background performance core.
-    pub const BOOT_RESIDENT_WARM_SETTLE_MS: u64 = 2_000;
-}
 
 #[cfg(feature = "trueos_ttstt")]
 pub mod ttstt {
@@ -188,11 +177,6 @@ pub mod net {
     pub const NET_POLL_IDLE_SOFTCAP_MS: u64 = 5;
     pub const NET_SERVICE_SLEEP_US: u64 = 100;
 
-    pub const THROUGHPUT_BENCH_AUTOSTART: bool = false;
-    pub const THROUGHPUT_BENCH_START_DELAY_MS: u64 = 15_000;
-    pub const THROUGHPUT_BENCH_DURATION_MS: u64 = 30_000;
-    pub const THROUGHPUT_BENCH_CONNECT_TIMEOUT_MS: u64 = 10_000;
-    pub const THROUGHPUT_BENCH_TX_INFLIGHT_BYTES: usize = 4 * 1024 * 1024;
 
     pub const DNS_SERVER_MAX: usize = 4;
     pub const IPV6_RS_RETRY_MS: i64 = 5_000;

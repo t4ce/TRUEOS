@@ -65,7 +65,7 @@ pub(super) const HV_GROUPS: [NameGroup; 2] = [
 
 const CMD_AKA_NAMES: [NameEntry; 0] = [];
 
-const CAPTURE_NAMES: [NameEntry; 5] = [
+const CAPTURE_NAMES: [NameEntry; 4] = [
     NameEntry {
         name: "pic",
         color: RgbaColor::White,
@@ -82,10 +82,6 @@ const CAPTURE_NAMES: [NameEntry; 5] = [
         name: "vaud",
         color: RgbaColor::White,
     },
-    NameEntry {
-        name: "cam",
-        color: RgbaColor::White,
-    }
 ];
 
 const CMD_APPDB_NAMES: [NameEntry; 0] = [];

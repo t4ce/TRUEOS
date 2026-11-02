@@ -7,12 +7,8 @@ use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use raw_cpuid::CpuId;
 use trueos_executor::Spawner;
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-const AP_HEARTBEAT_TASK_POOL: usize = 256;
-static ATOMIC_BOMB_RESTARTS: AtomicU32 = AtomicU32::new(0);
 
 #[repr(C, align(64))]
 struct CpuProfileRecord {
@@ -258,29 +254,7 @@ fn enter_ap_runtime(spawner: Spawner) -> ! {
     runtime::run_ap_forever()
 }
 
-#[trueos_executor::task]
-async fn atomic_bomb_after_restart_task(restart_count: u32) {
-    Timer::after(EmbassyDuration::from_secs(2)).await;
 
-    if let Some(profile) = CpuProfile::current() {
-        crate::log!(
-            "PANIC PANIC PANIC: atomic_bomb post-restart work slot={} lapic={} restart_count={}\n",
-            profile.slot(),
-            profile.lapic_id(),
-            restart_count
-        );
-    } else {
-        crate::log!(
-            "PANIC PANIC PANIC: atomic_bomb post-restart work on unknown cpu restart_count={}\n",
-            restart_count
-        );
-    }
-
-    crate::log!(
-        "PANIC PANIC PANIC: atomic_bomb stabilized after restart_count={}\n",
-        restart_count
-    );
-}
 
 pub fn can_restart_current_worker_ap_from_panic() -> bool {
     // Replacing the executor cannot retire a VM-owned continuation, restore
@@ -321,14 +295,6 @@ pub fn restart_current_worker_ap_from_panic() -> ! {
     }
     let ex = percpu::init_executor();
     let spawner = ex.spawner();
-    let restart_count = ATOMIC_BOMB_RESTARTS.fetch_add(1, Ordering::AcqRel) + 1;
-    match atomic_bomb_after_restart_task(restart_count) {
-        Ok(token) => spawner.spawn(token),
-        Err(e) => crate::log!(
-            "PANIC PANIC PANIC: failed to spawn atomic_bomb post-restart task: {:?}\n",
-            e
-        ),
-    }
     let _profile = register_current_worker_spawner(spawner);
     exceptions::load_this_cpu();
     exceptions::complete_worker_panic_restart();

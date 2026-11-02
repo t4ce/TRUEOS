@@ -1,11 +1,10 @@
 //! Live laptop IP verdict and USB bring-up stage on the retained text surface.
-//! CPU-only writer on the retained Slot4 surface; no TCP log consumption.
+//! Callback-driven CPU writer on the retained Slot4 surface; no polling task or TCP log consumption.
 
 use spin::Once;
 
 pub(crate) const PLANE_SLOT: usize = 4;
 const SCALE: usize = 4;
-const PERIOD_MS: u64 = 25;
 const BG: u32 = 0xFFFF_FFFF;
 static SURFACE: Once<Surface> = Once::new();
 // Protected by STATUS together with all surface writes.
@@ -283,20 +282,4 @@ fn paint_text(surface: Surface, text: &[u8], scale: usize, top: usize) {
     );
 }
 
-#[cfg(not(test))]
-#[trueos_executor::task(pool_size = 1)]
-pub(crate) async fn microfont_log_task(assigned_slot: u32) {
-    if crate::cpu::CpuProfile::current().map(|cpu| cpu.slot()) != Some(assigned_slot) {
-        return;
-    }
-    let Some(_surface) = surface() else {
-        return;
-    };
-    // Keep the IP result live: a slow discovery must never freeze a false No.
-    loop {
-        if let Some(assigned) = crate::net::laptop_profile::assignment_result() {
-            assignment_changed(assigned);
-        }
-        trueos_time::Timer::after(trueos_time::Duration::from_millis(PERIOD_MS)).await;
-    }
-}
+

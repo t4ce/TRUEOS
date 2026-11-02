@@ -84,7 +84,6 @@ bench = false
 
 [features]
 default = ["trueos_h264_encode_stream", "trueos_task_profile", "odin-native-gpgpu"]
-trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
@@ -178,8 +177,6 @@ smoltcp = { version = "0.13", default-features = false, features = ["alloc", "pr
 dma-api = { version = "=0.7.3", default-features = false }
 crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
-trueos-lfm25-model = { path = "crates/trueos-lfm25-model" }
-trueos-lfm25-cpu = { path = "crates/trueos-lfm25-cpu" }
 trueos-ttstt-cpu = { path = "crates/trueos-ttstt-cpu", optional = true }
 trueos-kokoro-aot = { path = "crates/trueos-kokoro/aot", optional = true }
 trueos-kokoro-audio = { path = "crates/trueos-kokoro/audio", optional = true }

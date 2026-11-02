@@ -1,6 +1,6 @@
 //! Foreign file-ingress content identity checks.
 //!
-//! Filenames have no semantic authority inside TRUEOSFS.  HTTP and FTP still
+//! Filenames have no semantic authority inside TRUEOSFS.  HTTP still
 //! need a narrow compatibility bridge for foreign clients, so they translate
 //! the final extension to a stable identity and require the byte detector to
 //! produce that exact identity before admitting the write.

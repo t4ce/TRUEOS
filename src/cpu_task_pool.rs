@@ -11,8 +11,6 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-#[cfg(feature = "trueos_lumen")]
-use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::r::kernel_task_domain::{self, KernelTaskDomain};
@@ -233,60 +231,11 @@ pub struct CpuTaskContext {
     pub core_kind: u8,
 }
 
-#[cfg(feature = "trueos_lumen")]
-impl CpuTaskContext {
-    /// Confirm that the executor did not lose the AP affinity selected at
-    /// admission. Current TRUEOS executors are per-CPU, but keeping this check
-    /// at the public boundary makes a future scheduler change fail closed.
-    pub fn is_running_on_assigned_worker(self) -> bool {
-        crate::percpu::current_slot() as u32 == self.cpu_slot
-    }
 
-    /// Recheck AVX2/FMA/YMM state and AVX-VNNI on this actual AP.
-    ///
-    /// The LFM projector performs its own admission as well; this early query
-    /// lets a row-shard owner avoid writing partial output on an unsupported
-    /// lane if a heterogeneous future CPU exposes feature differences.
-    pub fn vnni_status(self) -> CpuVnniStatus {
-        CpuVnniStatus::detect_current()
-    }
 
-    pub fn vnni_supported(self) -> bool {
-        self.is_running_on_assigned_worker() && self.vnni_status().supported
-    }
-}
 
-#[cfg(feature = "trueos_lumen")]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CpuVnniStatus {
-    pub ymm_state: bool,
-    pub avx2_fma: bool,
-    pub avx_vnni: bool,
-    pub supported: bool,
-}
 
-#[cfg(feature = "trueos_lumen")]
-impl CpuVnniStatus {
-    fn detect_current() -> Self {
-        let simd = crate::cpu::simd_status();
-        let max_basic_leaf = __cpuid(0).eax;
-        let avx_vnni = if max_basic_leaf < 7 {
-            false
-        } else {
-            // CPUID.(EAX=7, ECX=0):EAX reports the largest supported subleaf.
-            let max_subleaf = __cpuid_count(7, 0).eax;
-            max_subleaf >= 1 && (__cpuid_count(7, 1).eax & (1 << 4)) != 0
-        };
-        let ymm_state = simd.avx_state_enabled;
-        let avx2_fma = simd.avx2_fma_ready;
-        Self {
-            ymm_state,
-            avx2_fma,
-            avx_vnni,
-            supported: ymm_state && avx2_fma && avx_vnni,
-        }
-    }
-}
+
 
 
 
