@@ -944,16 +944,6 @@ fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::r::restart::restart_apps_task(spawner))
 }
 
-const EXECUTOR_REALM_SMOKE_HOPS: usize = 25;
-
-#[inline]
-fn executor_realm_smoke_delay_ms(hop: usize) -> u64 {
-    let mixed = (hop as u64)
-        .wrapping_mul(1_103_515_245)
-        .wrapping_add(12_345);
-    3 + ((mixed >> 16) % 23)
-}
-
 // --- registry ---
 
 const BP_AUTOSTART_READY: u32 =

@@ -132,7 +132,7 @@ remaining work is also deeper than adding polish to a finished product.
 | **Applications** | Blueprints with VM principals, terminal handoff, pause, warm snapshot, persistent store/load, preserve/restore, peer transfer, TRUEOSFS scopes, vGPU/UI/media/network ABIs, and crash/lifecycle control. |
 | **Rust ecosystem compatibility** | TRUEOS `std`/Unix ABI shims, file descriptors and sockets, `mio` readiness, Tokio carrier and blocking lanes, Hyper integration, async I/O, TLS, serde, redb, and a growing set of adapted crates and CLI tools. |
 | **Platform services** | NVMe and PCI infrastructure, USB/xHCI work, Ethernet and Wi-Fi bring-up paths, IPv4/IPv6, DHCP, DNS, TCP/UDP, TLS/HTTP, printing, mail, clipboard, fonts, gamepads, and network discovery. |
-| **Local AI** | Lumen LFM2.5 inference paths, CPU/VNNI and Intel GPGPU backends, Kokoro speech synthesis components, STT/TTS services, model packaging, parity tests, and bare-metal performance campaigns. |
+| **Speech and assistant integration** | Optional TTSTT/Kokoro speech components and Spirit/Codex integration. No local LLM inference service is wired into the kernel; the old Lumen backend is retired. CPU/model crates remain available for offline development. |
 
 Some rows combine production paths, physically validated experiments, and
 work-in-progress compatibility layers. The detailed documents linked below
@@ -210,7 +210,7 @@ contains:
 - the pinned Blueprint-specific Rust contract and application packaging tools.
 
 The current catalog spans graphical applications, terminal tools, games,
-rendering demos, web/network software, editors, viewers, local AI, printing,
+rendering demos, web/network software, editors, viewers, printing,
 shells, and system utilities. Representative ports and applications include
 Solara, Shadertoy, Lumen, Monaco, QuickJS, ripgrep, `fd`, SSH,
 webmail, image viewing, Gridpaper, GBOI, and multiple Tokio/network probes.

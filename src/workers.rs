@@ -150,10 +150,6 @@ impl WorkerSpawner {
         self.spawner.last_trueos_executor_task_name()
     }
 
-    #[inline]
-    pub const fn raw(self) -> SendSpawner {
-        self.spawner
-    }
 }
 
 #[inline]
