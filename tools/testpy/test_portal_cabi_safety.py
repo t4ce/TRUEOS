@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 ABI = ROOT / "crates/trueos-v/src/bp_abi.rs"
 BUILD_RS = ROOT / "build.rs"
 LOCK = ROOT / "abi/portal-cabi-v2.sha256"
@@ -42,17 +42,13 @@ def main() -> None:
         extract_function(build, "normalize_tokens", "aggregate_cabi_contract_digest"),
         extract_function(build, "render_portal_import_resolver", "parse_declared_cabi_contracts"),
     ]
-    old_source = subprocess.run(
-        ["git", "show", "HEAD:crates/trueos-v/src/bp_abi.rs"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
     current_source = ABI.read_text()
+    # Build the equivalent declarations without Rust safety annotations. This
+    # remains meaningful after commit and needs no particular Git history.
+    old_source = re.sub(r"\bpub\s+(?:safe|unsafe)\s+fn\s+", "pub fn ", current_source)
     with tempfile.TemporaryDirectory(prefix="trueos-cabi-parser-") as temporary:
         directory = Path(temporary)
-        old_path = directory / "head_bp_abi.rs"
+        old_path = directory / "unqualified_bp_abi.rs"
         current_path = directory / "current_bp_abi.rs"
         harness_path = directory / "harness.rs"
         binary_path = directory / "cabi_parser_test"
@@ -83,7 +79,7 @@ fn main() {{
 
     let exports = current
         .keys()
-        .map(|name| (name.clone(), format!("crate::mock::{name}")))
+        .map(|name| (name.clone(), format!("crate::mock::{{name}}")))
         .collect::<BTreeMap<_, _>>();
     let names = current.keys().cloned().collect::<Vec<_>>();
     let (resolver, unresolved) = render_portal_import_resolver(&names, &exports, true);
@@ -94,7 +90,7 @@ fn main() {{
         "trueos_cabi_ui4_solara_frame_begin",
         "trueos_cabi_vmedia_image_decode_commit",
     ] {{
-        assert!(resolver.contains(&format!("\\\"{name}\\\" => Some(")), "missing generated resolver arm: {{name}}");
+        assert!(resolver.contains(&format!("\\\"{{name}}\\\" => Some(")), "missing generated resolver arm: {{name}}");
     }}
     for (name, contract) in current {{
         println!("{{name}}\\t{{contract}}");
