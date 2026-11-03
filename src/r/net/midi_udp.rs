@@ -78,7 +78,6 @@ impl PianoUdpReceiver {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn handle(&self) -> Option<api::NetHandle> {
         self.udp_handle
     }

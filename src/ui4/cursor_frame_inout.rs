@@ -576,7 +576,6 @@ impl CursorFrameRig {
             .map(|frame| frame.key)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn cursor_icon(&self, key: CursorFrameKey, source: Ui4CursorSource) -> Ui4CursorIcon {
         if self.selected_frame_for_source(source) != Some(key) {
             return Ui4CursorIcon::Default;
@@ -741,7 +740,6 @@ pub(super) fn cursor_retired(source: Ui4CursorSource) {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn cursor_icon_for(key: CursorFrameKey, source: Ui4CursorSource) -> Ui4CursorIcon {
     CURSOR_FRAME_RIG.lock().cursor_icon(key, source)
 }

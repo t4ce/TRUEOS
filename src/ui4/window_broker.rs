@@ -49,7 +49,6 @@ pub(crate) const MAX_WINDOW_TITLE_BYTES: usize = 120;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowOwner {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Kernel,
     /// Temporary trusted-app identity used before Blueprint transport exists.
     KernelApp(u8),
@@ -107,7 +106,6 @@ impl WindowId {
 pub(crate) struct WindowSessionId(u32);
 
 impl WindowSessionId {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_raw(raw: u32) -> Option<Self> {
         if raw == 0 { None } else { Some(Self(raw)) }
     }
@@ -296,7 +294,6 @@ impl<'a> WindowSessionCloseRequest<'a> {
     }
 
     /// Persist the last published frame under an explicit stable identity.
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn persist_final_frame_as(mut self, name: &'a str) -> Self {
         self.persist_final_frame = true;
         self.final_frame_name = Some(name);
@@ -305,7 +302,6 @@ impl<'a> WindowSessionCloseRequest<'a> {
 
     /// Keep each published window alive as a compositor-owned exit visual.
     /// The producer retains ownership of the underlying frames.
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn animate(mut self) -> Self {
         self.animate = true;
         self.puff = true;
@@ -435,13 +431,11 @@ impl WindowBrokerSnapshot {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn has_data(&self) -> bool {
         self.update_count != 0
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) type WindowBrokerSnapshotReceiver<'a> = WatchReceiver<
     'a,
     crate::wait::EmbassySpinRawMutex,
@@ -1674,7 +1668,6 @@ pub(super) fn live_resource_counts() -> (usize, usize) {
 }
 
 /// Optionally subscribe to future diagnostic publications.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn subscribe_window_broker_snapshots() -> Option<WindowBrokerSnapshotReceiver<'static>> {
     WINDOW_BROKER_SNAPSHOT.receiver()
 }
@@ -3026,7 +3019,6 @@ pub(crate) async fn wait_for_window_composition_change() {
     WINDOW_COMPOSITION_CHANGED.wait().await;
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn visible_windows_for_output_with_revision(
     output: OutputId,
 ) -> (u64, Vec<WindowSnapshot>) {

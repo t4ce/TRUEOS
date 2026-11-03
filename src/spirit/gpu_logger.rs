@@ -210,7 +210,6 @@ impl GpuLoggerState {
         matches
     }
 
-    #[allow(dead_code)]
     fn stop_source_at(&mut self, source: GpuLoggerSource, now_ms: u64) -> bool {
         self.expire_at(now_ms);
         let matches = self.active.is_some_and(|active| active.source == source);
@@ -291,7 +290,6 @@ pub(crate) fn release(lease: GpuLoggerLease) -> bool {
 
 /// Administrative source-scoped stop used when the requester no longer has
 /// its most recent renewal token.
-#[allow(dead_code)]
 pub(crate) fn stop_source(source: GpuLoggerSource) -> bool {
     GPU_LOGGER.lock().stop_source_at(source, now_ms())
 }

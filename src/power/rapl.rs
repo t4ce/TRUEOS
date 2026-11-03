@@ -146,7 +146,6 @@ impl RaplSnapshot {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn has_data(self) -> bool {
         self.sample_valid
     }
@@ -156,7 +155,6 @@ static RAPL_WATCH: Watch<crate::wait::EmbassySpinRawMutex, RaplSnapshot, RAPL_WA
     Watch::new_with(RaplSnapshot::empty());
 static RAPL_HISTORY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub type RaplReceiver<'a> =
     WatchReceiver<'a, crate::wait::EmbassySpinRawMutex, RaplSnapshot, RAPL_WATCH_RECEIVERS>;
 
@@ -202,12 +200,10 @@ pub fn copy_history_slice(offset: usize, out: &mut [u8]) -> usize {
     n
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn subscribe() -> Option<RaplReceiver<'static>> {
     RAPL_WATCH.receiver()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn anon_snapshot() -> RaplSnapshot {
     let mut receiver = RAPL_WATCH.anon_receiver();
     receiver.try_get().unwrap_or(RaplSnapshot::empty())
@@ -283,7 +279,6 @@ pub unsafe fn probe_local() -> Option<RaplProbe> {
 ///
 /// # Safety
 /// Same requirements as [`probe_local`].
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub unsafe fn log_local_probe() -> bool {
     let Some(probe) = (unsafe { probe_local() }) else {
         return false;

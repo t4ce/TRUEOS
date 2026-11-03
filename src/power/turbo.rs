@@ -24,12 +24,10 @@ pub enum TurboStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurboSetError {
     Unsupported,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Disarmed,
 }
 
 #[derive(Clone, Copy, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct TurboApplyReport {
     pub requested_enable: bool,
     pub total_cpus: usize,
@@ -58,7 +56,6 @@ pub fn armed() -> bool {
     TURBO_ARMED.load(Ordering::Acquire) != 0
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_armed(v: bool) {
     TURBO_ARMED.store(if v { 1 } else { 0 }, Ordering::Release);
 }
@@ -84,7 +81,6 @@ pub fn local_status() -> TurboStatus {
     TurboStatus::State(local_state_raw())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn local_state() -> Result<TurboState, TurboSetError> {
     if !supported_cpuid() {
         return Err(TurboSetError::Unsupported);
@@ -114,7 +110,6 @@ fn smp_read_turbo(_arg: u64) -> u64 {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_enabled_local(enable: bool) -> Result<TurboState, TurboSetError> {
     if !supported_cpuid() {
         return Err(TurboSetError::Unsupported);
@@ -135,13 +130,10 @@ pub fn set_enabled_local(enable: bool) -> Result<TurboState, TurboSetError> {
     Ok(local_state_raw())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RET_OK: u64 = 0;
 const RET_UNSUPPORTED: u64 = 1;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RET_DISARMED: u64 = 2;
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn smp_apply_turbo(arg: u64) -> u64 {
     let enable = arg != 0;
     if !supported_cpuid() {
@@ -155,7 +147,6 @@ fn smp_apply_turbo(arg: u64) -> u64 {
     RET_OK
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_enabled_all(enable: bool) -> Result<TurboApplyReport, TurboSetError> {
     if !supported_cpuid() {
         return Err(TurboSetError::Unsupported);

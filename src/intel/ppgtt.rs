@@ -3,7 +3,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 const PAGE_BYTES: usize = 4096;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const ENTRIES: usize = 512;
 // Gen12 PPGTT entries encode the system physical page number in bits 51:12.
 // Keep the software table honest when a PPGTT-only allocation legitimately
@@ -98,7 +97,6 @@ impl SparsePpgtt {
         self.pml4.phys
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn table_page_count(&self) -> usize {
         self.pages.len()
     }

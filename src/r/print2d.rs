@@ -75,7 +75,6 @@ impl PrintJobState {
 
 pub(crate) struct PrintJob {
     pub id: u32,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub owner: PrintOwner,
     
     pub printer_uri: Option<String>,

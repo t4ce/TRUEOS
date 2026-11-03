@@ -10,34 +10,29 @@ use core::fmt;
 use embedded_io_async::{ErrorKind, ErrorType, Read, Seek, SeekFrom, Write};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct HvObjectDesc<'a> {
     pub key: &'a str,
     pub total_len_hint: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct HvObjectCommit {
     pub key_len: usize,
     pub bytes_written: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct HvObjectOpen {
     pub total_len: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum HvPull {
     Chunk { len: usize },
     End,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum HvStreamError {
     InvalidState,
     NotOpen,
@@ -50,7 +45,6 @@ pub enum HvStreamError {
 }
 
 impl HvStreamError {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn backend_code(err: crate::disc::block::Error) -> i32 {
         match err {
             crate::disc::block::Error::NotSupported => 1,
@@ -104,7 +98,6 @@ impl embedded_io_async::Error for HvStreamError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum HvWriteState<'a> {
     Idle,
     Writing {
@@ -114,7 +107,6 @@ pub enum HvWriteState<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum HvReadState {
     Idle,
     Reading {
@@ -123,32 +115,25 @@ pub enum HvReadState {
     },
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub type Error = HvStreamError;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub type ObjectDesc<'a> = HvObjectDesc<'a>;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub type ObjectCommit = HvObjectCommit;
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct ObjectOpen<R> {
     pub reader: R,
     pub total_len: Option<u64>,
 }
 
 impl<R> ObjectOpen<R> {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn new(reader: R, total_len: Option<u64>) -> Self {
         Self { reader, total_len }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn into_parts(self) -> (R, Option<u64>) {
         (self.reader, self.total_len)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn desc_for_key<'a>(&self, key: &'a str) -> ObjectDesc<'a> {
         ObjectDesc {
             key,
@@ -157,22 +142,18 @@ impl<R> ObjectOpen<R> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub trait ObjectReader: Read {}
 
 impl<T> ObjectReader for T where T: Read + ?Sized {}
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub trait SeekableObjectReader: ObjectReader + Seek {}
 
 impl<T> SeekableObjectReader for T where T: ObjectReader + Seek + ?Sized {}
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub trait ObjectWriter: Write {}
 
 impl<T> ObjectWriter for T where T: Write + ?Sized {}
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub trait HvObjectSink {
     fn write_state(&self) -> HvWriteState<'_>;
 
@@ -185,7 +166,6 @@ pub trait HvObjectSink {
     fn abort_object(&mut self) -> Result<(), HvStreamError>;
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub trait HvObjectSource {
     fn read_state(&self) -> HvReadState;
 
@@ -197,14 +177,12 @@ pub trait HvObjectSource {
 }
 
 #[allow(async_fn_in_trait)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub trait ObjectSource {
     type Reader: ObjectReader;
 
     async fn open(&mut self, key: &str) -> Result<ObjectOpen<Self::Reader>, Error>;
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub trait SeekableObjectSource: ObjectSource
 where
     Self::Reader: SeekableObjectReader,
@@ -219,7 +197,6 @@ where
 }
 
 #[allow(async_fn_in_trait)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub trait ObjectSink {
     type Writer: ObjectWriter;
 
@@ -230,13 +207,11 @@ pub trait ObjectSink {
     async fn abort(&mut self) -> Result<(), Error>;
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct TrueosFsWriteSession {
     handle: u32,
     bytes_written: u64,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct TrueosFsObjectReader {
     disk: crate::disc::block::DeviceHandle,
     key: String,
@@ -246,7 +221,6 @@ pub struct TrueosFsObjectReader {
 }
 
 impl TrueosFsObjectReader {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn open(
         disk: crate::disc::block::DeviceHandle,
         key: &str,
@@ -267,18 +241,15 @@ impl TrueosFsObjectReader {
     }
 
     #[inline]
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn total_len(&self) -> u64 {
         self.total_len
     }
 
     #[inline]
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn position(&self) -> u64 {
         self.offset
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn read_exact_at(
         &mut self,
         offset: u64,
@@ -315,7 +286,6 @@ impl TrueosFsObjectReader {
         Ok(true)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn close(&mut self) -> Result<(), HvStreamError> {
         if self.closed {
             return Err(HvStreamError::NotOpen);
@@ -324,7 +294,6 @@ impl TrueosFsObjectReader {
         Ok(())
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn seek_position(&self, pos: SeekFrom) -> Result<u64, HvStreamError> {
         let next = match pos {
             SeekFrom::Start(offset) => offset as i128,
@@ -385,13 +354,11 @@ impl Seek for TrueosFsObjectReader {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct TrueosFsObjectSource {
     disk: crate::disc::block::DeviceHandle,
 }
 
 impl TrueosFsObjectSource {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn new(disk: crate::disc::block::DeviceHandle) -> Self {
         Self { disk }
     }
@@ -412,7 +379,6 @@ impl ObjectSource for TrueosFsObjectSource {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct TrueosFsObjectWriter {
     session: Rc<RefCell<TrueosFsWriteSession>>,
 }
@@ -442,14 +408,12 @@ impl Write for TrueosFsObjectWriter {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct TrueosFsObjectSink {
     disk: crate::disc::block::DeviceHandle,
     active: Option<Rc<RefCell<TrueosFsWriteSession>>>,
 }
 
 impl TrueosFsObjectSink {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn new(disk: crate::disc::block::DeviceHandle) -> Self {
         Self { disk, active: None }
     }
@@ -504,7 +468,6 @@ impl ObjectSink for TrueosFsObjectSink {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn read_trueosfs_file_range_into_async(
     disk: crate::disc::block::DeviceHandle,
     key: &str,
@@ -525,7 +488,6 @@ pub async fn read_trueosfs_file_range_into_async(
     Ok(true)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn read_trueosfs_file_range_into_logged_async(
     disk: crate::disc::block::DeviceHandle,
     key: &str,
@@ -630,7 +592,6 @@ pub async fn read_trueosfs_file_range_into_logged_async(
     Ok(true)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn logged_read_now_ms() -> u64 {
     let ticks = embassy_time_driver::now();
     let hz = embassy_time_driver::TICK_HZ;
@@ -641,7 +602,6 @@ fn logged_read_now_ms() -> u64 {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn read_trueosfs_file_range_via_pipe_async(
     disk: crate::disc::block::DeviceHandle,
     key: &str,
@@ -659,7 +619,6 @@ pub async fn read_trueosfs_file_range_via_pipe_async(
     Ok(Some(out))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn load_trueosfs_file_via_pipe_async(
     disk: crate::disc::block::DeviceHandle,
     key: &str,

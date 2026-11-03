@@ -1763,7 +1763,6 @@ fn konsole_write_bytes(data: &[u8]) -> usize {
     crate::hv::current_guest_execution_context_vm_id().map(|vm| crate::hv::blueprint_console_raw_write(vm, data)).unwrap_or(0)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn konsole_write_fmt(args: fmt::Arguments<'_>) -> usize {
     let text = alloc::format!("{}", args);
     konsole_write_bytes(text.as_bytes())

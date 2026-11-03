@@ -10,7 +10,6 @@
 //! configured bit has arrived. Intel CUR_SURFLIVE is the separate downstream
 //! proof that completes the public Spirit fence.
 
-#![allow(dead_code)]
 
 use core::ops::BitOr;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -29,7 +28,6 @@ pub(crate) use paper_demo::{GREETING_GRID_HEIGHT_MM, GREETING_GRID_SCALE, GREETI
 pub(crate) mod lilly_protocol;
 pub(crate) mod spirit_thoughts;
 
-#[allow(dead_code)]
 #[path = "Spirit_VFX.rs"]
 pub(crate) mod spirit_vfx;
 mod window_selection;
@@ -161,7 +159,6 @@ impl SpiritFenceId {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SpiritColor(u32);
 
-#[allow(dead_code)]
 impl SpiritColor {
     pub(crate) const STARTUP: Self = Self::rgba(0x52, 0xD6, 0xFF, 0xFF);
 
@@ -186,7 +183,6 @@ pub(crate) struct SpiritCommandStream {
     pub(crate) y_normalized: f64,
 }
 
-#[allow(dead_code)]
 impl SpiritCommandStream {
     pub(crate) const fn centered(color: SpiritColor) -> Self {
         Self {
@@ -203,7 +199,6 @@ impl SpiritCommandStream {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SpiritBarrierSet(u8);
 
-#[allow(dead_code)]
 impl SpiritBarrierSet {
     const CPU_BIT: u8 = 1 << 0;
     const GPU_BIT: u8 = 1 << 1;
@@ -237,7 +232,6 @@ pub(crate) struct SpiritFence {
     pub(crate) sequence: u64,
 }
 
-#[allow(dead_code)]
 impl SpiritFence {
     pub(crate) fn is_complete(self) -> bool {
         COMPLETED[self.id.index()].load(Ordering::Acquire) >= self.sequence
@@ -264,7 +258,6 @@ pub(crate) struct SpiritFrameLease {
     surface: intel_cursor::SpiritCursorSurfaceAccess,
 }
 
-#[allow(dead_code)]
 impl SpiritFrameLease {
     pub(crate) const fn fence(self) -> SpiritFence {
         self.fence
@@ -348,7 +341,6 @@ pub(crate) struct SpiritMoveFence {
     pub(crate) sequence: u64,
 }
 
-#[allow(dead_code)]
 impl SpiritMoveFence {
     pub(crate) fn is_complete(self) -> bool {
         MOVE_APPLIED[self.id.index()].load(Ordering::Acquire) >= self.sequence
@@ -428,7 +420,6 @@ static WORKER_FENCE_BINDINGS: [AtomicU8; SPIRIT_FENCE_COUNT] = [
 /// touching the returned lease. If both producers touch overlapping memory,
 /// the caller must serialize them; this latch controls presentation readiness,
 /// not write ordering between engines.
-#[allow(dead_code)]
 pub(crate) fn acquire_frame(
     id: SpiritFenceId,
     required: SpiritBarrierSet,
@@ -470,7 +461,6 @@ fn acquire_frame_for(
 /// Borrow the exact CPU mapping while its CPU release bit is still locked.
 /// The pre-flush invalidates stale cache lines, making GPU-then-CPU stamping a
 /// valid ordered use when the caller waits for the GPU before entering here.
-#[allow(dead_code)]
 pub(crate) fn write_cpu<R>(
     lease: SpiritFrameLease,
     write: impl FnOnce(&mut [u8], SpiritSurfaceLayout) -> R,
@@ -509,7 +499,6 @@ fn gpgpu_bgra_target(
 }
 
 /// Publish all CPU writes and release the CPU producer bit.
-#[allow(dead_code)]
 pub(crate) fn release_cpu(lease: SpiritFrameLease) -> Result<(), SpiritSubmitError> {
     {
         let mailbox = MAILBOXES[lease.fence.id.index()].lock();
@@ -820,7 +809,6 @@ pub(crate) fn move_to(
 
 /// High-level single-pool helper: move the one active Spirit instance without
 /// exposing its current pipe/fence assignment to the caller.
-#[allow(dead_code)]
 pub(crate) fn move_spirit_to(
     x_normalized: f64,
     y_normalized: f64,
@@ -833,7 +821,6 @@ pub(crate) fn move_spirit_to(
 }
 
 /// Queue a movement relative to Spirit's latest requested position.
-#[allow(dead_code)]
 pub(crate) fn move_by(
     id: SpiritFenceId,
     delta_x_normalized: f64,
@@ -854,7 +841,6 @@ pub(crate) fn move_by(
     Ok(publish_move(id, request))
 }
 
-#[allow(dead_code)]
 pub(crate) fn move_spirit_by(
     delta_x_normalized: f64,
     delta_y_normalized: f64,
@@ -866,7 +852,6 @@ pub(crate) fn move_spirit_by(
     )
 }
 
-#[allow(dead_code)]
 pub(crate) fn set_position(
     id: SpiritFenceId,
     x_normalized: f64,
@@ -907,7 +892,6 @@ fn active_spirit_fence() -> Option<SpiritFenceId> {
 }
 
 /// Current naive convenience path: CPU-author a solid circle and release it.
-#[allow(dead_code)]
 pub(crate) fn submit(
     id: SpiritFenceId,
     stream: SpiritCommandStream,

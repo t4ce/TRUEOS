@@ -57,7 +57,6 @@ static SHOT_TARGETS: Mutex<
 pub(super) enum CaptureError {
     DimensionTooLarge,
     InvalidFrameLayout,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     WindowUnavailable(super::WindowId),
     Frame(FramePoolError),
 }
@@ -161,16 +160,13 @@ impl From<FramePoolError> for CaptureError {
 #[derive(Copy, Clone)]
 enum CaptureSelection {
     Window {
-        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         id: super::WindowId,
-        #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         plane_slot: usize,
     },
 }
 
 #[derive(Copy, Clone)]
 struct CaptureRequest {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     selection: CaptureSelection,
 }
 
@@ -356,7 +352,6 @@ fn enqueue_request(request: CaptureRequest) -> Option<usize> {
 /// Capture at most one request from this compositor frame.
 ///
 /// `windows` is the immutable broker snapshot used for the frame.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
     let request = {
         let mut requests = CAPTURE_REQUESTS.lock();
@@ -426,7 +421,6 @@ pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, usize) {
     match selection {
         CaptureSelection::Window { id, plane_slot } => ("window", id.raw(), plane_slot),

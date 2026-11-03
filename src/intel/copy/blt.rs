@@ -19,7 +19,6 @@ const RING_EIR: usize = 0xB0;
 const RING_MI_MODE: usize = 0x9C;
 const RING_MODE_GEN7: usize = 0x29C;
 const RING_CONTEXT_CONTROL: usize = 0x244;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RING_CONTEXT_CONTROL_REF: usize = 0x5A0;
 const RING_EXECLIST_CONTROL: usize = 0x550;
 const RING_EXECLIST_STATUS_LO: usize = 0x234;
@@ -31,17 +30,13 @@ const RING_VALID: u32 = 1;
 const EL_CTRL_LOAD: u32 = 1 << 0;
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
 const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CTX_DESC_FORCE_RESTORE: u32 = 1 << 2;
 const CTX_DESC_VALID: u32 = 1 << 0;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CTX_DESC_PPGTT_ENABLE: u32 = 1 << 5;
 const CTX_DESC_PRIVILEGE: u32 = 1 << 8;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const CTX_DESC_PRIORITY_NORMAL: u32 = 1 << 9;
 const CTX_DESC_ADDRESSING_MODE_SHIFT: u32 = 3;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GFX_RUN_LIST_ENABLE: u32 = 1 << 15;
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
 const STOP_RING: u32 = 1 << 8;
@@ -115,9 +110,7 @@ const XY_FAST_COPY_COLOR_DEPTH_32: u32 = 3 << 24;
 // Memory placement comes from the mappings; these bits are not memory flags.
 
 static DIRECT_BLT_STATE: Mutex<Option<DirectBltState>> = Mutex::new(None);
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DIRECT_BLT_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static DIRECT_BLT_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static DIRECT_BLT_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(1);
 static GUC_BLT_PROBE: Mutex<GucBltProbeRuntime> = Mutex::new(GucBltProbeRuntime::new());
@@ -1181,7 +1174,6 @@ fn guc_blt_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     (descriptor, (context_gpu_addr >> 32) as u32)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_bcs0_mi_smoke_once() -> bool {
     if DIRECT_BLT_SMOKE_RAN.swap(true, Ordering::AcqRel) {
         return false;
@@ -2341,7 +2333,6 @@ fn direct_blt_dst_poison_pixel(index: usize) -> u32 {
     DIRECT_BLT_DST_POISON_BASE | (index as u32)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_blt_submit_batch(dev: super::Dev, state: DirectBltState) -> bool {
     let Some(ring_tail_bytes) = direct_blt_build_ring_batch_start(state) else {
         return false;
@@ -2388,7 +2379,6 @@ fn direct_blt_submit_batch(dev: super::Dev, state: DirectBltState) -> bool {
     true
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_blt_build_ring_batch_start(state: DirectBltState) -> Option<usize> {
     unsafe {
         let dwords = core::slice::from_raw_parts_mut(state.ring_virt as *mut u32, 8);
@@ -2438,7 +2428,6 @@ fn guc_blt_append_ring_batch_start(state: DirectBltState, tail_bytes: usize) -> 
     (tail_bytes + ENTRY_DWORDS * core::mem::size_of::<u32>()) % DIRECT_BLT_RING_BYTES
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_blt_poll_result(state: DirectBltState, expected: u32) -> u32 {
     let mut observed = 0;
     for _ in 0..DIRECT_BLT_SMOKE_POLL_ITERS {
@@ -2599,7 +2588,6 @@ fn direct_blt_init_csb_pointers(dev: super::Dev, hwsp_virt: *mut u8) {
     let _ = super::mmio_read(dev, BCS0_RING_BASE + 0x3A0);
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_blt_wait_idleish(dev: super::Dev) {
     for _ in 0..200_000u32 {
         let el = super::mmio_read(dev, BCS0_RING_BASE + RING_EXECLIST_STATUS_LO);
@@ -2622,7 +2610,6 @@ fn direct_blt_wait_idleish(dev: super::Dev) {
     super::mmio_write(dev, BCS0_RING_BASE + RING_MI_MODE, STOP_RING << 16);
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_blt_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
     let desc = base
@@ -2679,7 +2666,6 @@ fn direct_blt_push_nops(state: &mut [u32], idx: &mut usize, count: usize) {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_blt_masked_bit_enable(bit: u32) -> u32 {
     bit | (bit << 16)
 }

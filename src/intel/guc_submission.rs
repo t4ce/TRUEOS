@@ -394,7 +394,6 @@ impl IntelGucScheduler {
         scheduler_status()
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn contexts(&self) -> Vec<GucContextStatus> {
         context_status()
     }

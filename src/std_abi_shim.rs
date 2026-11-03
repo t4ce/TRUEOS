@@ -144,7 +144,6 @@ const TRUEOS_FD_CLOEXEC: c_int = 1;
 // loads from malloc-backed storage.
 const TRUEOS_C_MALLOC_ALIGN: usize = 16;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
 const TRUEOS_SC_NPROCESSORS_CONF: c_int = 83;
 const TRUEOS_SC_NPROCESSORS_ONLN: c_int = 84;

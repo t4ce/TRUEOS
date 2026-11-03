@@ -598,7 +598,6 @@ fn stage_error(stage_name: &'static str, reason: &'static str) -> &'static str {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn prepare_triangle_draw_resources(
     warm: RenderWarmState,
     dst_gpu_addr: u64,
@@ -616,7 +615,6 @@ fn prepare_triangle_draw_resources(
     )
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn prepare_triangle_draw_resources_for_geometry(
     warm: RenderWarmState,
     dst_gpu_addr: u64,
@@ -669,7 +667,6 @@ fn prepare_triangle_draw_resources_for_geometry(
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn prepare_triangle_draw_resources_for_vertices(
     warm: RenderWarmState,
     dst_gpu_addr: u64,
@@ -886,7 +883,6 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn create_resident_font_mesh(
     vertices: &[[f32; 2]],
     indices: &[u32],
@@ -1249,7 +1245,6 @@ fn create_resident_triangle_mesh_typed<T: Copy>(
     Ok(resident)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn release_resident_font_mesh(mesh: &ResidentFontMesh) -> bool {
     release_resident_triangle_mesh(mesh)
 }
@@ -1257,7 +1252,6 @@ pub(crate) fn release_resident_font_mesh(mesh: &ResidentFontMesh) -> bool {
 /// Replace a resident job's vertex/index payload without changing its PPGTT
 /// mapping. Stable projected topology makes camera and transform updates cheap
 /// while color changes require no geometry write at all.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn update_resident_triangle_mesh(
     mesh: &ResidentTriangleMesh,
     vertices: &[[f32; 3]],
@@ -3336,12 +3330,10 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVertexUploadProof> {
     write_triangle_vertices_for_geometry(warm, VfPrimitiveGeometry::Canonical)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn write_triangle_vertices_for_geometry(
     warm: RenderWarmState,
     geometry: VfPrimitiveGeometry,
@@ -3349,7 +3341,6 @@ fn write_triangle_vertices_for_geometry(
     write_triangle_vertices(warm, geometry.label(), geometry.vertices())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn write_triangle_vertices(
     warm: RenderWarmState,
     label: &'static str,
@@ -3580,7 +3571,6 @@ fn write_vf_vue_vertex_slice(
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn prepare_vf_streamout_proof_resources(
     warm: RenderWarmState,
     dst_gpu_addr: u64,
@@ -3768,7 +3758,6 @@ fn prepare_vf_streamout_proof_resources(
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn write_vf_streamout_probe_state(warm: RenderWarmState) -> Result<u32, &'static str> {
     unsafe {
         core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
@@ -3803,7 +3792,6 @@ fn write_vf_streamout_probe_state(warm: RenderWarmState) -> Result<u32, &'static
     Ok(slice_hash_table_offset as u32)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_triangle_to_surface(
     dev: crate::intel::Dev,
     warm: RenderWarmState,

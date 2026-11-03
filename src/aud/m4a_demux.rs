@@ -9,19 +9,13 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const MAX_STSD_ENTRIES: usize = 16;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const MAX_STTS_ENTRIES: usize = 4096;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const MAX_STSC_ENTRIES: usize = 4096;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const MAX_CHUNK_OFFSETS: usize = 262_144;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const MAX_SAMPLE_COUNT: usize = 262_144;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct M4aFile {
     pub ftyp: FtypBox,
     pub codec: CodecConfig,
@@ -32,14 +26,12 @@ pub struct M4aFile {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct FtypBox {
     pub major_brand: [u8; 4],
     pub minor_version: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct CodecConfig {
     pub sample_entry_format: [u8; 4],
     pub object_type_indication: Option<u8>,
@@ -48,7 +40,6 @@ pub struct CodecConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct AacAudioSpecificConfig {
     pub audio_object_type: u8,
     pub sampling_frequency: Option<u32>,
@@ -56,7 +47,6 @@ pub struct AacAudioSpecificConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct PacketRange {
     pub offset: usize,
     pub len: usize,
@@ -65,14 +55,12 @@ pub struct PacketRange {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct ByteRange {
     pub offset: usize,
     pub len: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum M4aError {
     Truncated,
     InvalidBox,
@@ -91,7 +79,6 @@ pub enum M4aError {
 }
 
 #[derive(Clone, Copy)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct BoxHeader {
     typ: [u8; 4],
     data_start: usize,
@@ -99,7 +86,6 @@ struct BoxHeader {
 }
 
 #[derive(Clone, Debug, Default)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct TrackTables {
     handler: Option<[u8; 4]>,
     sample_description: Option<SampleDescription>,
@@ -110,7 +96,6 @@ struct TrackTables {
 }
 
 #[derive(Clone, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct SampleDescription {
     format: [u8; 4],
     object_type_indication: Option<u8>,
@@ -120,14 +105,12 @@ struct SampleDescription {
 }
 
 #[derive(Clone, Copy, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct TimeToSample {
     sample_count: u32,
     sample_delta: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct SampleToChunk {
     first_chunk: u32,
     samples_per_chunk: u32,
@@ -135,7 +118,6 @@ struct SampleToChunk {
 }
 
 #[derive(Clone, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct SampleSizes {
     default_size: u32,
     sample_count: usize,
@@ -143,7 +125,6 @@ struct SampleSizes {
 }
 
 /// Parse an M4A/MP4 byte slice and return AAC codec config plus packet ranges.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn parse_m4a(bytes: &[u8]) -> Result<M4aFile, M4aError> {
     let mut ftyp = None;
     let mut moov = None;
@@ -196,13 +177,11 @@ pub fn parse_m4a(bytes: &[u8]) -> Result<M4aFile, M4aError> {
 }
 
 impl M4aFile {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn packet_data<'a>(&self, source: &'a [u8], packet: PacketRange) -> Option<&'a [u8]> {
         source.get(packet.offset..packet.offset.checked_add(packet.len)?)
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_ftyp(bytes: &[u8], header: BoxHeader) -> Result<FtypBox, M4aError> {
     if header.end - header.data_start < 8 {
         return Err(M4aError::Truncated);
@@ -213,7 +192,6 @@ fn parse_ftyp(bytes: &[u8], header: BoxHeader) -> Result<FtypBox, M4aError> {
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_moov(bytes: &[u8], start: usize, end: usize) -> Result<TrackTables, M4aError> {
     let mut first_track = None;
     let mut first_audio_track = None;
@@ -239,7 +217,6 @@ fn parse_moov(bytes: &[u8], start: usize, end: usize) -> Result<TrackTables, M4a
         .ok_or(M4aError::MissingAudioTrack)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_trak(bytes: &[u8], start: usize, end: usize) -> Result<TrackTables, M4aError> {
     let mut tables = TrackTables::default();
     let mut off = start;
@@ -255,7 +232,6 @@ fn parse_trak(bytes: &[u8], start: usize, end: usize) -> Result<TrackTables, M4a
     Ok(tables)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_mdia(
     bytes: &[u8],
     start: usize,
@@ -277,7 +253,6 @@ fn parse_mdia(
     Ok(())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_minf(
     bytes: &[u8],
     start: usize,
@@ -297,7 +272,6 @@ fn parse_minf(
     Ok(())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_stbl(
     bytes: &[u8],
     start: usize,
@@ -327,7 +301,6 @@ fn parse_stbl(
     Ok(())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_hdlr(bytes: &[u8], start: usize, end: usize) -> Result<Option<[u8; 4]>, M4aError> {
     let payload = full_box_payload(bytes, start, end, "hdlr")?;
     if payload + 8 > end {
@@ -336,7 +309,6 @@ fn parse_hdlr(bytes: &[u8], start: usize, end: usize) -> Result<Option<[u8; 4]>,
     Ok(Some(fourcc(bytes, payload + 4)?))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_stsd(
     bytes: &[u8],
     start: usize,
@@ -370,7 +342,6 @@ fn parse_stsd(
     Ok(selected)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_audio_sample_entry(
     bytes: &[u8],
     start: usize,
@@ -406,13 +377,11 @@ fn parse_audio_sample_entry(
 }
 
 #[derive(Default)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct EsdsConfig {
     object_type_indication: Option<u8>,
     audio_specific_config: Vec<u8>,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_esds(bytes: &[u8], start: usize, end: usize) -> Result<EsdsConfig, M4aError> {
     let payload = full_box_payload(bytes, start, end, "esds")?;
     let mut config = EsdsConfig::default();
@@ -420,7 +389,6 @@ fn parse_esds(bytes: &[u8], start: usize, end: usize) -> Result<EsdsConfig, M4aE
     Ok(config)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_descriptors(
     bytes: &[u8],
     mut off: usize,
@@ -466,7 +434,6 @@ fn parse_descriptors(
     Ok(())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn es_descriptor_child_start(
     bytes: &[u8],
     payload_start: usize,
@@ -497,7 +464,6 @@ fn es_descriptor_child_start(
     Ok(off)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct Descriptor {
     tag: u8,
     payload_start: usize,
@@ -505,7 +471,6 @@ struct Descriptor {
     next: usize,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn read_descriptor(bytes: &[u8], off: usize, end: usize) -> Result<Descriptor, M4aError> {
     let tag = *bytes.get(off).ok_or(M4aError::Truncated)?;
     let mut len = 0usize;
@@ -532,7 +497,6 @@ fn read_descriptor(bytes: &[u8], off: usize, end: usize) -> Result<Descriptor, M
     Err(M4aError::InvalidDescriptor)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_stts(bytes: &[u8], start: usize, end: usize) -> Result<Vec<TimeToSample>, M4aError> {
     let payload = full_box_payload(bytes, start, end, "stts")?;
     let count = usize_from_u32(be_u32(bytes, payload)?)?;
@@ -557,7 +521,6 @@ fn parse_stts(bytes: &[u8], start: usize, end: usize) -> Result<Vec<TimeToSample
     Ok(entries)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_stsc(bytes: &[u8], start: usize, end: usize) -> Result<Vec<SampleToChunk>, M4aError> {
     let payload = full_box_payload(bytes, start, end, "stsc")?;
     let count = usize_from_u32(be_u32(bytes, payload)?)?;
@@ -581,7 +544,6 @@ fn parse_stsc(bytes: &[u8], start: usize, end: usize) -> Result<Vec<SampleToChun
     Ok(entries)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_stsz(bytes: &[u8], start: usize, end: usize) -> Result<SampleSizes, M4aError> {
     let payload = full_box_payload(bytes, start, end, "stsz")?;
     let default_size = be_u32(bytes, payload)?;
@@ -610,7 +572,6 @@ fn parse_stsz(bytes: &[u8], start: usize, end: usize) -> Result<SampleSizes, M4a
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_stco(bytes: &[u8], start: usize, end: usize) -> Result<Vec<u64>, M4aError> {
     let payload = full_box_payload(bytes, start, end, "stco")?;
     let count = usize_from_u32(be_u32(bytes, payload)?)?;
@@ -630,7 +591,6 @@ fn parse_stco(bytes: &[u8], start: usize, end: usize) -> Result<Vec<u64>, M4aErr
     Ok(offsets)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_co64(bytes: &[u8], start: usize, end: usize) -> Result<Vec<u64>, M4aError> {
     let payload = full_box_payload(bytes, start, end, "co64")?;
     let count = usize_from_u32(be_u32(bytes, payload)?)?;
@@ -650,7 +610,6 @@ fn parse_co64(bytes: &[u8], start: usize, end: usize) -> Result<Vec<u64>, M4aErr
     Ok(offsets)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn build_packets(bytes: &[u8], tables: &TrackTables) -> Result<Vec<PacketRange>, M4aError> {
     let sizes = tables
         .sample_sizes
@@ -718,7 +677,6 @@ fn build_packets(bytes: &[u8], tables: &TrackTables) -> Result<Vec<PacketRange>,
 }
 
 impl SampleSizes {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn size_at(&self, index: usize) -> Result<u32, M4aError> {
         if index >= self.sample_count {
             return Err(M4aError::InvalidData("sample index out of range"));
@@ -734,7 +692,6 @@ impl SampleSizes {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct TimeState<'a> {
     entries: &'a [TimeToSample],
     index: usize,
@@ -743,7 +700,6 @@ struct TimeState<'a> {
 }
 
 impl<'a> TimeState<'a> {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn new(entries: &'a [TimeToSample]) -> Self {
         let remaining = entries.first().map(|entry| entry.sample_count).unwrap_or(0);
         Self {
@@ -754,7 +710,6 @@ impl<'a> TimeState<'a> {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn next(&mut self) -> (Option<u64>, Option<u32>) {
         if self.entries.is_empty() {
             return (None, None);
@@ -780,7 +735,6 @@ impl<'a> TimeState<'a> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_aac_audio_specific_config(bytes: &[u8]) -> Option<AacAudioSpecificConfig> {
     let mut bits = BitReader::new(bytes);
     let mut audio_object_type = bits.read(5)? as u8;
@@ -803,7 +757,6 @@ fn parse_aac_audio_specific_config(bytes: &[u8]) -> Option<AacAudioSpecificConfi
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn aac_sampling_frequency(index: u8) -> Option<u32> {
     match index {
         0 => Some(96_000),
@@ -823,7 +776,6 @@ fn aac_sampling_frequency(index: u8) -> Option<u32> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn aac_channel_count(channel_config: u8) -> Option<u16> {
     match channel_config {
         1 => Some(1),
@@ -837,29 +789,24 @@ fn aac_channel_count(channel_config: u8) -> Option<u16> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn nonzero_u16(value: u16) -> Option<u16> {
     if value == 0 { None } else { Some(value) }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn nonzero_u32(value: u32) -> Option<u32> {
     if value == 0 { None } else { Some(value) }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct BitReader<'a> {
     bytes: &'a [u8],
     bit_pos: usize,
 }
 
 impl<'a> BitReader<'a> {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, bit_pos: 0 }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn read(&mut self, count: usize) -> Option<u32> {
         if count > 32 || self.bit_pos.checked_add(count)? > self.bytes.len() * 8 {
             return None;
@@ -876,7 +823,6 @@ impl<'a> BitReader<'a> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn full_box_payload(
     bytes: &[u8],
     start: usize,
@@ -893,7 +839,6 @@ fn full_box_payload(
     Ok(start + 4)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn read_box(bytes: &[u8], start: usize, parent_end: usize) -> Result<BoxHeader, M4aError> {
     if start + 8 > parent_end || parent_end > bytes.len() {
         return Err(M4aError::Truncated);
@@ -933,25 +878,21 @@ fn read_box(bytes: &[u8], start: usize, parent_end: usize) -> Result<BoxHeader, 
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn fourcc(bytes: &[u8], off: usize) -> Result<[u8; 4], M4aError> {
     let slice = bytes.get(off..off + 4).ok_or(M4aError::Truncated)?;
     Ok([slice[0], slice[1], slice[2], slice[3]])
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn be_u16(bytes: &[u8], off: usize) -> Result<u16, M4aError> {
     let slice = bytes.get(off..off + 2).ok_or(M4aError::Truncated)?;
     Ok(u16::from_be_bytes([slice[0], slice[1]]))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn be_u32(bytes: &[u8], off: usize) -> Result<u32, M4aError> {
     let slice = bytes.get(off..off + 4).ok_or(M4aError::Truncated)?;
     Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn be_u64(bytes: &[u8], off: usize) -> Result<u64, M4aError> {
     let slice = bytes.get(off..off + 8).ok_or(M4aError::Truncated)?;
     Ok(u64::from_be_bytes([
@@ -959,12 +900,10 @@ fn be_u64(bytes: &[u8], off: usize) -> Result<u64, M4aError> {
     ]))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn usize_from_u32(value: u32) -> Result<usize, M4aError> {
     usize::try_from(value).map_err(|_| M4aError::RangeOverflow)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn usize_from_u64(value: u64) -> Result<usize, M4aError> {
     usize::try_from(value).map_err(|_| M4aError::RangeOverflow)
 }

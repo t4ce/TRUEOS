@@ -1,5 +1,5 @@
 //! Clipboard delivery is unavailable in the kernel baseline.
-#![allow(dead_code, unused_variables)]
+#![allow(unused_variables)]
 
 use super::*;
 

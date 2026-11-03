@@ -277,12 +277,10 @@ pub(crate) struct Ui4OutputCapabilities {
 }
 
 impl Ui4OutputCapabilities {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn application_plane_count(self) -> usize {
         self.application_plane_mask.count_ones() as usize
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn supports_application_plane(self, slot: usize) -> bool {
         slot < u8::BITS as usize && self.application_plane_mask & (1u8 << slot) != 0
     }
@@ -335,7 +333,6 @@ pub(crate) fn ui4_output_capabilities(output: OutputId) -> Option<Ui4OutputCapab
 pub(crate) enum FrameContent {
     Video,
     Image,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     CpuBlit,
     CopyEngine,
     FontScene2d,
@@ -376,7 +373,6 @@ impl FrameBuffering {
 pub(crate) struct FrameHandle(u64);
 
 impl FrameHandle {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn from_raw(raw: u64) -> Option<Self> {
         if raw == 0 { None } else { Some(Self(raw)) }
     }
@@ -393,14 +389,12 @@ pub(crate) enum ScanoutFormat {
     /// Opaque 8:8:8:8 primary-plane storage in RGB order.
     Xrgb8888,
     /// Opaque 8:8:8:8 primary-plane storage in BGR order.
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Xbgr8888,
     /// Per-pixel alpha overlay storage; RGB is already multiplied by alpha.
     Rgba8888Premultiplied,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum Nv12Layout {
     Linear,
     YTiled,
@@ -410,7 +404,6 @@ pub(crate) enum Nv12Layout {
 /// assignment: the GuC conversion consumes it while rebuilding the primary
 /// XRGB swap surface.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct NativeNv12Surface {
     pub(crate) phys: u64,
     pub(crate) gpu: u64,

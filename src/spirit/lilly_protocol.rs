@@ -765,7 +765,6 @@ pub(crate) fn set_speech_playing(playing: bool) {
 
 /// Queue one owned API package. Validation happens before publication, so the
 /// reader never encounters an unsupported schema or a bad animation tag.
-#[allow(dead_code)]
 pub(crate) fn enqueue_package(package: SpiritPackage) -> Result<usize, LillyProtocolError> {
     if let Err(error) = validate_package(&package) {
         crate::log_warn!(
@@ -782,7 +781,6 @@ pub(crate) fn enqueue_package(package: SpiritPackage) -> Result<usize, LillyProt
 }
 
 /// JSON-facing ingress for an eventual service/API endpoint.
-#[allow(dead_code)]
 pub(crate) fn enqueue_json(json: &str) -> Result<usize, LillyProtocolError> {
     if json.len() > MAX_JSON_BYTES {
         return Err(LillyProtocolError::PackageTooLarge);
@@ -822,7 +820,6 @@ fn validate_package(package: &SpiritPackage) -> Result<(), LillyProtocolError> {
 }
 
 /// Convenience wrapper for an animation-only producer.
-#[allow(dead_code)]
 pub(crate) fn enqueue_animation(tag: &str, rgba: SpiritRgba8) -> Result<usize, LillyProtocolError> {
     enqueue_package(SpiritPackage::new(
         None,
@@ -835,7 +832,6 @@ pub(crate) fn enqueue_animation(tag: &str, rgba: SpiritRgba8) -> Result<usize, L
 
 /// Convenience wrapper for text-only packages. The reader currently logs and
 /// drains this text; the generic text presenter is not implemented.
-#[allow(dead_code)]
 pub(crate) fn enqueue_text(text: &str) -> Result<usize, LillyProtocolError> {
     enqueue_package(SpiritPackage::new(Some(String::from(text)), None))
 }
@@ -846,7 +842,6 @@ pub(crate) fn enqueue_text(text: &str) -> Result<usize, LillyProtocolError> {
 /// validated before the package ring changes. Variants are selected through
 /// Tyche's soft RNG and the same theme avoids an immediate repeat whenever it
 /// has more than one visual variant.
-#[allow(dead_code)]
 pub(crate) fn enqueue_emotion_words(words: &[&str]) -> Result<usize, LillyProtocolError> {
     if !(MIN_EMOTIONS_PER_SEQUENCE..=MAX_EMOTIONS_PER_SEQUENCE).contains(&words.len()) {
         crate::log_warn!(
@@ -877,7 +872,6 @@ pub(crate) fn enqueue_emotion_words(words: &[&str]) -> Result<usize, LillyProtoc
 /// Strongly typed ingress for in-kernel producers which already use
 /// [`LillyEmotion`]. Callers with model text should use
 /// [`enqueue_emotion_words`] so the vocabulary boundary remains explicit.
-#[allow(dead_code)]
 pub(crate) fn enqueue_emotions(emotions: &[LillyEmotion]) -> Result<usize, LillyProtocolError> {
     if !(MIN_EMOTIONS_PER_SEQUENCE..=MAX_EMOTIONS_PER_SEQUENCE).contains(&emotions.len()) {
         return Err(LillyProtocolError::EmotionCount);
@@ -931,7 +925,6 @@ pub(crate) fn enqueue_emotions(emotions: &[LillyEmotion]) -> Result<usize, Lilly
 /// Atomically discard queued work and install the next timeline. The active
 /// clip is already owned by the presentation worker, so it finishes normally;
 /// these packages become visible when that worker asks at the next boundary.
-#[allow(dead_code)]
 pub(crate) fn replace_timeline(packages: &[SpiritPackage]) -> Result<usize, LillyProtocolError> {
     for package in packages {
         validate_package(package)?;
@@ -941,7 +934,6 @@ pub(crate) fn replace_timeline(packages: &[SpiritPackage]) -> Result<usize, Lill
 
 /// Finish the active clip, then fall back to the default idle. This is an empty
 /// timeline replacement and never interrupts a frame set in progress.
-#[allow(dead_code)]
 pub(crate) fn stop_after_boundary() -> usize {
     PACKAGE_RING.lock().clear()
 }
@@ -953,7 +945,6 @@ pub(crate) fn stop_after_boundary() -> usize {
 /// boundaries before falling back to native idle. This is not a per-frame
 /// iterator: the renderer uses the returned schedule for that cheap inner
 /// loop, then asks here again at its next control or clip boundary.
-#[allow(dead_code)]
 pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolError> {
     // Snapshot terminal ownership before acquiring any Spirit lock. This is a
     // natural clip/control boundary, so the preceding posture transition has

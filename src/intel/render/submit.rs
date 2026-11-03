@@ -1993,7 +1993,6 @@ fn log_triangle_named_proofs(
     );
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn maybe_soft_accept_streamout_submit(
     submit_name: &'static str,
     warm: RenderWarmState,
@@ -2155,7 +2154,6 @@ fn log_triangle_stage_frontier(
     );
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_streamout_proof_result(
     submit_name: &str,
     warm: RenderWarmState,
@@ -2324,7 +2322,6 @@ fn record_render_engine_after_nonretired_submit(dev: crate::intel::Dev, submit_n
 /// Diagnostic spectra deliberately stop Render between completed variants so
 /// that one probe cannot carry live context state into the next experiment.
 /// Keep that policy explicit and separate from failed-submit containment.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn isolate_render_context_after_completed_probe(dev: crate::intel::Dev, submit_name: &'static str) {
     let el_pre = crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO);
     let mi_mode_pre = crate::intel::mmio_read(dev, RCS_RING_MI_MODE);
@@ -2477,7 +2474,6 @@ fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
     set_bits | (update << 16)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn build_execlist_context_descriptor(context_gpu_addr: u64, ppgtt_enable: bool) -> (u32, u32) {
     static RCS_SUBMIT_COUNTER: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
@@ -2521,7 +2517,6 @@ fn rcs_ctx_control_value(inhibit_restore: bool) -> u32 {
     ctl
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn execlist_submit_port_push(
     dev: crate::intel::Dev,
     context0_lo: u32,

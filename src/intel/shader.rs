@@ -2,7 +2,6 @@
 pub(crate) enum DispatchMode {
     Simd8,
     Simd16,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Simd32,
 }
 
@@ -187,12 +186,10 @@ pub(crate) fn triangle_pipeline_ps_eot() -> &'static TrianglePipeline {
     generated_triangle::triangle_pipeline_ps_eot()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn triangle_pipeline_push_color() -> &'static TrianglePipeline {
     generated_triangle::triangle_pipeline_push_color()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn triangle_pipeline_push_color_simd16() -> &'static TrianglePipeline {
     generated_triangle::triangle_pipeline_push_color_simd16()
 }
@@ -213,7 +210,6 @@ pub(crate) fn triangle_pipeline_ps_eot_note() -> &'static str {
     generated_triangle::TRIANGLE_PIPELINE_PS_EOT_NOTE
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn triangle_pipeline_push_color_note() -> &'static str {
     generated_triangle::TRIANGLE_PIPELINE_PUSH_COLOR_NOTE
 }
@@ -254,7 +250,6 @@ pub(crate) fn voxy_headless_supports_physical_device(vendor: u16, device: u16, r
 mod voxy_headless_tests;
 
 // Keep this exact figure pair separate from the headless float4 contract.
-#[expect(dead_code, reason = "captured push ranges retained for shader ABI verification")]
 #[path = "../../crates/trueos-shader/generated_voxy_figure_gen12.rs"]
 mod voxy_figure_gen12;
 const _: () = assert!(voxy_figure_gen12::PACKAGE_FNV1A64 == v::vgpu::SHADER_PACKAGE_VOXY_FIGURE_FNV1A64);

@@ -11,20 +11,17 @@ use super::{
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct KnownAotQueueProbe {
     pub(crate) known_kernels: usize,
     pub(crate) completed_commands: usize,
     pub(crate) compositor_uploaded: bool,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn alpha_compositor_runtime_example() -> ClResult<()> {
     let _ = alpha_compositor_queue_probe()?;
     Ok(())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn alpha_compositor_queue_probe() -> ClResult<KnownAotQueueProbe> {
     let device = DeviceId::from_raw(1);
     let backend = IntelOpenClBackend::new();

@@ -3,7 +3,6 @@ extern crate alloc;
 use alloc::{format, string::String, vec, vec::Vec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum SSmtpState {
     Greeting,
     Auth,
@@ -13,7 +12,6 @@ pub enum SSmtpState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 enum SSmtpAuthStage {
     None,
     Username,
@@ -21,14 +19,12 @@ enum SSmtpAuthStage {
 }
 
 #[derive(Debug, Clone)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SSmtpReply {
     pub code: u16,
     pub lines: Vec<String>,
 }
 
 impl SSmtpReply {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn single(code: u16, line: impl Into<String>) -> Self {
         Self {
             code,
@@ -36,12 +32,10 @@ impl SSmtpReply {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn multi(code: u16, lines: Vec<String>) -> Self {
         Self { code, lines }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn encode(&self) -> String {
         if self.code == 0 || self.lines.is_empty() {
             return String::new();
@@ -61,7 +55,6 @@ impl SSmtpReply {
 }
 
 #[derive(Debug, Clone)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SSmtpMessage {
     pub mail_from: String,
     pub rcpt_to: Vec<String>,
@@ -69,7 +62,6 @@ pub struct SSmtpMessage {
 }
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SSmtpSession {
     pub state: SSmtpState,
     pub tls_active: bool,
@@ -85,7 +77,6 @@ pub struct SSmtpSession {
 }
 
 impl SSmtpSession {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn new() -> Self {
         Self {
             state: SSmtpState::Greeting,
@@ -102,12 +93,10 @@ impl SSmtpSession {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn banner(&self) -> SSmtpReply {
         SSmtpReply::single(220, "trueos.local ESMTP ready")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn reset_transaction(&mut self) {
         self.mail_from = None;
         self.rcpt_to.clear();
@@ -115,7 +104,6 @@ impl SSmtpSession {
         self.state = SSmtpState::Greeting;
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn ehlo(&mut self, domain: &str) -> SSmtpReply {
         self.helo_name = Some(String::from(domain));
         self.state = SSmtpState::MailTransaction;
@@ -129,7 +117,6 @@ impl SSmtpSession {
         SSmtpReply::multi(250, lines)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn starttls(&mut self) -> SSmtpReply {
         if self.tls_active {
             return SSmtpReply::single(503, "Bad sequence of commands");
@@ -142,7 +129,6 @@ impl SSmtpSession {
         SSmtpReply::single(220, "Ready to start TLS")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn auth_login(&mut self) -> SSmtpReply {
         if !self.tls_active {
             return SSmtpReply::single(
@@ -156,7 +142,6 @@ impl SSmtpSession {
         SSmtpReply::single(334, "VXNlcm5hbWU6")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn auth_input(&mut self, line: &str) -> SSmtpReply {
         match self.auth_stage {
             SSmtpAuthStage::Username => {
@@ -188,7 +173,6 @@ impl SSmtpSession {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn mail_from(&mut self, addr: &str) -> SSmtpReply {
         if !self.authenticated {
             return SSmtpReply::single(530, "Authentication required");
@@ -201,7 +185,6 @@ impl SSmtpSession {
         SSmtpReply::single(250, "2.1.0 Ok")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn rcpt_to(&mut self, addr: &str) -> SSmtpReply {
         if self.mail_from.is_none() {
             return SSmtpReply::single(503, "Need MAIL FROM first");
@@ -211,7 +194,6 @@ impl SSmtpSession {
         SSmtpReply::single(250, "2.1.5 Ok")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn data_begin(&mut self) -> SSmtpReply {
         if self.mail_from.is_none() || self.rcpt_to.is_empty() {
             return SSmtpReply::single(503, "Need RCPT TO first");
@@ -222,7 +204,6 @@ impl SSmtpSession {
         SSmtpReply::single(354, "End data with <CR><LF>.<CR><LF>")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn data_line(&mut self, line: &str) -> SSmtpReply {
         if self.state != SSmtpState::Data {
             return SSmtpReply::single(503, "Bad sequence of commands");
@@ -244,24 +225,20 @@ impl SSmtpSession {
         SSmtpReply::single(0, "")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn noop(&self) -> SSmtpReply {
         SSmtpReply::single(250, "2.0.0 Ok")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn rset(&mut self) -> SSmtpReply {
         self.reset_transaction();
         SSmtpReply::single(250, "2.0.0 Ok")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn quit(&mut self) -> SSmtpReply {
         self.state = SSmtpState::Closing;
         SSmtpReply::single(221, "2.0.0 Bye")
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn handle_line(&mut self, line: &str) -> SSmtpReply {
         if self.state == SSmtpState::Data {
             return self.data_line(line);
@@ -307,12 +284,10 @@ impl SSmtpSession {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn strip_path(input: &str) -> &str {
     input.trim().trim_matches('<').trim_matches('>')
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn base64_decode(input: &str) -> Option<String> {
     let mut buf = Vec::new();
     let mut acc = 0u32;

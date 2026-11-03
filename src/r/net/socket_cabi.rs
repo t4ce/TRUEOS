@@ -58,9 +58,7 @@ enum RemoteAddr {
 struct SocketState {
     owner_vm: Option<u8>,
     domain: i32,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     socket_type: i32,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     protocol: i32,
     vnet: Option<VNetBridge>,
     handle: Option<api::NetHandle>,
@@ -328,7 +326,6 @@ fn pack_v4_port(addr_be: u32, port_be: u16) -> u64 {
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn unpack_v4_port(bits: u64) -> (u32, u16) {
     (bits as u32, ((bits >> 32) & 0xFFFF) as u16)
 }
@@ -339,7 +336,6 @@ fn pack_v4_port_nonblocking(addr_be: u32, port_be: u16, nonblocking: u32) -> u64
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn unpack_v4_port_nonblocking(bits: u64) -> (u32, u16, u32) {
     let (addr, port) = unpack_v4_port(bits);
     (addr, port, ((bits >> 48) & 1) as u32)
@@ -351,7 +347,6 @@ fn pack_port_nonblocking(port_be: u16, nonblocking: u32) -> u64 {
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn unpack_port_nonblocking(bits: u64) -> (u16, u32) {
     (bits as u16, ((bits >> 16) & 1) as u32)
 }

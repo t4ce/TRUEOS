@@ -55,7 +55,6 @@ impl ByteFetchMethod {
 }
 
 pub struct ByteFetch {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub url: String,
     pub bytes: Vec<u8>,
 }
@@ -950,7 +949,6 @@ fn parse_ipv4_literal(host: &str) -> Option<[u8; 4]> {
     if count == out.len() { Some(out) } else { None }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn build_dns_a_query(host: &str, id: u16) -> Result<Vec<u8>, HttpFetchError> {
     let mut out = Vec::new();
     out.extend_from_slice(&id.to_be_bytes());
@@ -973,7 +971,6 @@ fn build_dns_a_query(host: &str, id: u16) -> Result<Vec<u8>, HttpFetchError> {
     Ok(out)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn dns_skip_name(buf: &[u8], mut offset: usize) -> Option<usize> {
     loop {
         let len = *buf.get(offset)?;
@@ -995,7 +992,6 @@ fn dns_skip_name(buf: &[u8], mut offset: usize) -> Option<usize> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn parse_dns_a_response(buf: &[u8], id: u16) -> Option<[u8; 4]> {
     if buf.len() < 12 || u16::from_be_bytes([buf[0], buf[1]]) != id {
         return None;

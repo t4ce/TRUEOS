@@ -213,7 +213,6 @@ impl QGemmParams<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn validate_dequantized(
         self,
         lhs: &[f32],

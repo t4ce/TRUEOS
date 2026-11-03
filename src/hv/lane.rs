@@ -81,7 +81,6 @@ pub enum LanePickError {
 }
 
 impl LanePickError {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::MissingWorkerLane => "no AP2+ worker lanes are registered",
@@ -196,7 +195,6 @@ pub fn pick_carrier_lane(profile: LaneProfile) -> Result<LaneTarget, LanePickErr
     Err(LanePickError::Busy)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pick_tokio_blocking_lane() -> Result<LaneTarget, LanePickError> {
     pick_carrier_lane(LaneProfile {
         role: LaneRole::TokioBlocking,

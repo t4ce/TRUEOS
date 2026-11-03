@@ -36,7 +36,6 @@ pub(crate) struct LillyResidentFrame {
 }
 
 /// Default sequencing behavior described by the reviewed Lilly catalog.
-#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LillyPlayback {
     Loop,
@@ -44,7 +43,6 @@ pub(crate) enum LillyPlayback {
     OnceHold,
 }
 
-#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LillyResidentPart {
     /// Meaning within the animation, such as `mouth_wide` or `raise_fists`.
@@ -52,7 +50,6 @@ pub(crate) struct LillyResidentPart {
     pub(crate) surface: LillyResidentFrame,
 }
 
-#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LillyResidentAsset {
     /// Stable semantic identity, such as `talk.calm.crossed`.
@@ -62,7 +59,6 @@ pub(crate) struct LillyResidentAsset {
     pub(crate) parts: [LillyResidentPart; LILLY_FRAMES_PER_ASSET],
 }
 
-#[allow(dead_code)]
 impl LillyResidentAsset {
     pub(crate) fn part(self, semantic: &str) -> Option<LillyResidentFrame> {
         self.parts
@@ -74,7 +70,6 @@ impl LillyResidentAsset {
 /// Uniform view of one ordinary seven-frame animation. Callers do not need
 /// clip-specific code: the catalog supplies cadence, playback, and the semantic
 /// names of all seven frames.
-#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LillyResidentAnimation {
     pub(crate) key: &'static str,
@@ -83,7 +78,6 @@ pub(crate) struct LillyResidentAnimation {
     pub(crate) frames: [LillyResidentPart; LILLY_FRAMES_PER_ASSET],
 }
 
-#[allow(dead_code)]
 impl LillyResidentAnimation {
     pub(crate) const fn cycle_duration_ms(self) -> u64 {
         self.frame_period_ms as u64 * LILLY_FRAMES_PER_ASSET as u64
@@ -131,16 +125,12 @@ struct LillyCatalogEntry {
 
 #[derive(Debug)]
 enum LillyLoadError {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Archive(crate::r::tar::Error),
     ArchiveShape,
     PngHeader,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     PngDecode(i32),
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Catalog(&'static str),
     AddressOverflow,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Resident(&'static str),
     ResidentWrite,
 }
@@ -194,7 +184,6 @@ pub(super) fn prepare_resident_once() -> bool {
 
 /// Resolve one decoded frame without exposing the CPU mapping or allocation
 /// owner. Both archive-relative and `Lilly/`-prefixed names are accepted.
-#[allow(dead_code)]
 pub(crate) fn resident_frame(name: &str) -> Option<LillyResidentFrame> {
     let resident = LILLY_RESIDENT.lock();
     resident.as_ref()?.frames.iter().find_map(|frame| {
@@ -206,7 +195,6 @@ pub(crate) fn resident_frame(name: &str) -> Option<LillyResidentFrame> {
 /// Resolve a complete resident asset by semantic identity. This is the normal
 /// Spirit-facing API; archive paths and frame numbers remain an implementation
 /// detail of the warm loader.
-#[allow(dead_code)]
 pub(crate) fn resident_asset(key: &str) -> Option<LillyResidentAsset> {
     LILLY_RESIDENT
         .lock()
@@ -219,13 +207,11 @@ pub(crate) fn resident_asset(key: &str) -> Option<LillyResidentAsset> {
 
 /// Resolve one meaningful part directly, for example
 /// `resident_part("talk.calm.crossed", "mouth_wide")`.
-#[allow(dead_code)]
 pub(crate) fn resident_part(key: &str, semantic: &str) -> Option<LillyResidentFrame> {
     resident_asset(key)?.part(semantic)
 }
 
 /// Resolve an animation through one central path.
-#[allow(dead_code)]
 pub(crate) fn resident_animation(key: &str) -> Option<LillyResidentAnimation> {
     let asset = resident_asset(key)?;
     Some(LillyResidentAnimation {
@@ -236,7 +222,6 @@ pub(crate) fn resident_animation(key: &str) -> Option<LillyResidentAnimation> {
     })
 }
 
-#[allow(dead_code)]
 pub(crate) fn resident_frame_count() -> usize {
     LILLY_RESIDENT
         .lock()

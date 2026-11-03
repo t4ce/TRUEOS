@@ -337,7 +337,6 @@ pub(crate) fn commit_replicatable_resume(vm_id: u8) {
     hvlogf(format_args!("hv: vm{} lifecycle: resume committed at guest identity handshake", vm_id));
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn save_snapshot(vm_id: u8) -> Result<usize, SaveError> {
     if vm_slot(vm_id).is_none() {
         return Err(SaveError::UnsupportedVmId);
@@ -347,7 +346,6 @@ pub fn save_snapshot(vm_id: u8) -> Result<usize, SaveError> {
     crate::hv::store::save_bytes(vm_id, bytes).map_err(map_store_save_error)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn restore_snapshot(vm_id: u8) -> Result<usize, RestoreError> {
     if vm_slot(vm_id).is_none() {
         return Err(RestoreError::UnsupportedVmId);
@@ -454,7 +452,6 @@ pub fn finish_restore(vm_id: u8) {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn map_store_save_error(err: crate::hv::store::VmStoreError) -> SaveError {
     match err {
         crate::hv::store::VmStoreError::ServiceOffline => {
@@ -561,7 +558,6 @@ pub(super) fn snapshot_on_preserve_exit(vm_id: u8) {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn request_preserve_active_vm() -> bool {
     if let Some(vm_id) = current_vm_id() {
         return request_preserve(vm_id).unwrap_or(false);

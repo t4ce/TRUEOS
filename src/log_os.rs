@@ -725,7 +725,6 @@ pub fn log_with_area_purpose(
     log_os_core::log_with_area_purpose(&TRUEOS_LOG_ROUTER, area, level, purpose, args);
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn log_with_target_purpose(
     target: &str,
     level: LogLevel,

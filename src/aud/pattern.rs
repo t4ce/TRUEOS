@@ -23,7 +23,6 @@ pub const MAX_PATTERNS: usize = 16;
 /// Maximum steps per pattern
 pub const MAX_STEPS: usize = 64;
 /// Default BPM
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const DEFAULT_BPM: u16 = 120;
 /// Steps per beat (sixteenth notes = 4 steps per beat)
 pub const STEPS_PER_BEAT: u32 = 4;
@@ -54,7 +53,6 @@ impl Step {
     }
 
     /// Note step with default velocity
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn note(midi_note: u8) -> Self {
         Self {
             note: midi_note,
@@ -73,7 +71,6 @@ impl Step {
     }
 
     /// Note step with custom waveform
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn note_wf(midi_note: u8, velocity: u8, wf: Waveform) -> Self {
         Self {
             note: midi_note,
@@ -88,7 +85,6 @@ impl Step {
     }
 
     /// Display name for the note
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn display(&self) -> String {
         if self.is_rest() {
             String::from("--")
@@ -100,7 +96,6 @@ impl Step {
     }
 
     /// Waveform short name
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn wave_display(&self) -> &'static str {
         match self.waveform {
             Some(wf) => wf.short_name(),
@@ -160,7 +155,6 @@ impl Pattern {
     }
 
     /// Set a step by index
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn set_step(&mut self, idx: usize, step: Step) {
         if idx < self.steps.len() {
             self.steps[idx] = step;
@@ -168,7 +162,6 @@ impl Pattern {
     }
 
     /// Set a note at a step by name (e.g., "C4")
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn set_note(&mut self, idx: usize, note_name: &str) -> Result<(), &'static str> {
         if idx >= self.steps.len() {
             return Err("Step index out of range");
@@ -239,7 +232,6 @@ impl Pattern {
     }
 
     /// Display the pattern as a text grid
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn display(&self) -> String {
         let mut s = String::new();
         s.push_str(&format!(
@@ -331,7 +323,6 @@ impl PatternBank {
     }
 
     /// Get a mutable pattern by index
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn get_mut(&mut self, idx: usize) -> Option<&mut Pattern> {
         self.patterns.get_mut(idx)
     }
@@ -342,14 +333,12 @@ impl PatternBank {
     }
 
     /// Get a mutable pattern by name
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn get_by_name_mut(&mut self, name: &str) -> Option<&mut Pattern> {
         let idx = self.find(name)?;
         self.get_mut(idx)
     }
 
     /// Remove a pattern by name
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn remove(&mut self, name: &str) -> Result<(), &'static str> {
         let idx = self.find(name).ok_or("Pattern not found")?;
         self.patterns.remove(idx);
@@ -357,7 +346,6 @@ impl PatternBank {
     }
 
     /// List all patterns
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn list(&self) -> String {
         if self.patterns.is_empty() {
             return String::from("No patterns. Use 'synth pattern new <name>' to create one.\n");

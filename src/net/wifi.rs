@@ -17,7 +17,6 @@ pub enum WifiSecurity {
     WPA,
     WPA2,
     WPA3,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Unknown,
 }
 
@@ -41,12 +40,10 @@ pub struct WifiNetwork {
     pub channel: u8,
     pub signal_dbm: i8,
     pub security: WifiSecurity,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub frequency_mhz: u16,
 }
 
 impl WifiNetwork {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn signal_quality(&self) -> u8 {
         // Convert dBm to percentage: -30 dBm = 100%, -90 dBm = 0%
         if self.signal_dbm >= -30 {
@@ -58,7 +55,6 @@ impl WifiNetwork {
         ((self.signal_dbm as i16 + 90) * 100 / 60) as u8
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn signal_bars(&self) -> u8 {
         match self.signal_quality() {
             80..=100 => 4,
@@ -336,7 +332,6 @@ pub fn last_operation_error() -> Option<&'static str> {
     shared_driver().and_then(|driver| driver.lock().last_error()).or(*LAST_OPERATION_ERROR.lock())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn set_deferred_pci(bus: u8, device: u8, function: u8) {
     *DEFERRED_PCI.lock() = Some((bus, device, function));
     crate::log!(
@@ -347,7 +342,6 @@ pub fn set_deferred_pci(bus: u8, device: u8, function: u8) {
     );
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn has_wifi() -> bool {
     WIFI_ACTIVE.load(Ordering::Relaxed) || DEFERRED_PCI.lock().is_some()
 }
@@ -392,7 +386,6 @@ pub fn state() -> WifiState {
     shared_driver().map_or(WifiState::NoHardware, |driver| driver.lock().wifi_state())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn is_connected() -> bool {
     state() == WifiState::Connected
 }
@@ -497,7 +490,6 @@ pub fn poll() {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn request_connect(ssid: &str, password: &str) {
     if let Err(error) = try_request_connect(ssid, password) {
         crate::log_warn!(target: "net"; "wifi: connect request failed reason={}\n", error);

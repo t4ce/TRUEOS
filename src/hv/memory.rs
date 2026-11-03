@@ -281,7 +281,6 @@ fn guest_tables_arena() -> Option<HeapArena> {
     *GUEST_TABLES_ARENAS[current_vm_index()].lock()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn active_guest_hull_rw_backing() -> Option<GuestHullRwBacking> {
     active_guest_hull_rw_backing_for_vm(crate::hv::current_vm_id().unwrap_or(0))
 }
@@ -336,7 +335,6 @@ fn guest_pml4_page() -> Option<*const [u64; 512]> {
     guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).pml4.0) })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn guest_low_pdpt_page() -> Option<*const [u64; 512]> {
     guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).low_pdpt.0) })
 }
@@ -345,7 +343,6 @@ fn guest_low_pd_page() -> Option<*const [u64; 512]> {
     guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).low_pd.0) })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn guest_high_pdpt_page() -> Option<*const [u64; 512]> {
     guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).high_pdpt.0) })
 }
@@ -1229,7 +1226,6 @@ pub fn release_guest_hull_rw_for_vm(vm_id: u8) -> bool {
     old.is_some_and(|arena| crate::phys::free_phys_range(arena.phys_start, arena.length))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn guest_stack_top() -> u64 {
     guest_stack_top_for_vm(crate::hv::current_vm_id().unwrap_or(0))
 }
@@ -1252,12 +1248,10 @@ pub fn guest_kernel_elf_entry(bytes: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(raw))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> {
     build_guest_cr3_for_vm(crate::hv::current_vm_id().unwrap_or(0), guest_rip, guest_rsp)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn build_guest_cr3_with_mode(
     guest_rip: u64,
     guest_rsp: u64,
@@ -1549,7 +1543,6 @@ pub fn clear_snapshot_state_for_vm(vm_id: u8) {
 }
 
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn current_guest_cr3_pa() -> Result<u64, &'static str> {
     let Some(pml4) = guest_pml4_page() else {
         return Err("guest pml4 pa");
@@ -2710,7 +2703,6 @@ fn range_covered_by(start: u64, end: u64, cover_start: u64, cover_end: u64) -> b
     start >= cover_start && end <= cover_end
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn read_guest_high_pt_entry(guest_va: u64, pde: u64) -> u64 {
     let Some(pt_page) = guest_pt_page_from_pde(false, pde) else {
         return 0;
@@ -2755,7 +2747,6 @@ fn guest_pt_page_from_pde(low_half: bool, pde: u64) -> Option<*const [u64; 512]>
     None
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn read_guest_low_pt_entry(guest_va: u64, pde: u64) -> u64 {
     let Some(pt_page) = guest_pt_page_from_pde(true, pde) else {
         return 0;

@@ -557,7 +557,6 @@ pub(crate) fn handle_mouse_report_values(
     notify_cursor_event_ready();
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn inject_usb3_mouse_relative_event(
     slot_id: u32,
     ep_target: u32,

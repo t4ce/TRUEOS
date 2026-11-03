@@ -13,11 +13,9 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use super::super::api::{InterfaceEndpointError, claim_interface};
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const HID_INTERRUPT_TIMEOUT_MS: u64 = 1000;
 
 #[derive(Copy, Clone, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct MediaControlTarget {
     configuration_value: u8,
     interface_number: u8,
@@ -27,7 +25,6 @@ struct MediaControlTarget {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct ActiveMediaControlStream {
     // Composite USB devices expose both UAC and HID interfaces under one stable_id.
     // Keep that identity here so later media-button events can target this device's
@@ -39,11 +36,9 @@ struct ActiveMediaControlStream {
     interface_number: u8,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static MEDIA_CONTROL_STREAMS_ACTIVE: Mutex<Vec<ActiveMediaControlStream>> = Mutex::new(Vec::new());
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn endpoint_target_from_address(address: u8) -> u32 {
     let ep_num = u32::from(address & 0x0F);
     if ep_num == 0 {
@@ -55,7 +50,6 @@ fn endpoint_target_from_address(address: u8) -> u32 {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn pick_media_control_targets(
     configs: &[usb_if::descriptor::ConfigurationDescriptor],
 ) -> Vec<MediaControlTarget> {
@@ -89,7 +83,6 @@ fn pick_media_control_targets(
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn device_has_audio_interfaces(configs: &[usb_if::descriptor::ConfigurationDescriptor]) -> bool {
     configs.iter().any(|config| {
         config.interfaces.iter().any(|interface| {
@@ -104,7 +97,6 @@ fn device_has_audio_interfaces(configs: &[usb_if::descriptor::ConfigurationDescr
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn register_active_stream(stream: ActiveMediaControlStream) -> bool {
     let mut streams = MEDIA_CONTROL_STREAMS_ACTIVE.lock();
     if streams.iter().any(|active| *active == stream) {
@@ -114,7 +106,6 @@ fn register_active_stream(stream: ActiveMediaControlStream) -> bool {
     true
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn unregister_active_stream(stream: ActiveMediaControlStream) {
     let mut streams = MEDIA_CONTROL_STREAMS_ACTIVE.lock();
     if let Some(idx) = streams.iter().position(|active| *active == stream) {
@@ -122,7 +113,6 @@ fn unregister_active_stream(stream: ActiveMediaControlStream) {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
     let mut fut = core::pin::pin!(fut);
     let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(timeout_ms)));
@@ -139,7 +129,6 @@ async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::O
     .await
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn report_changed(prev: &[u8], next: &[u8]) -> bool {
     prev.len() != next.len() || prev.iter().zip(next.iter()).any(|(a, b)| a != b)
 }
@@ -295,7 +284,6 @@ async fn media_control_task(
     unregister_active_stream(active_stream);
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn maybe_start_media_control(
     host: &mut USBHost,
     dev_info: &crab_usb::DeviceInfo,

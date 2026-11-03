@@ -2,7 +2,6 @@
 //! Speech activity continues through the audio/TTSTT presentation path.
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "local reasoning producers are retired")]
 pub(crate) enum AiReasoningPhase {
     Started,
     Finished,

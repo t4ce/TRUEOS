@@ -23,7 +23,6 @@ pub enum SmtpError {
     Protocol,
     TlsFailed,
     AuthFailed,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ReplyError(u16, String),
 }
 

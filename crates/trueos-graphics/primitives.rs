@@ -8,10 +8,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Unsupported,
     Invalid,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     NotFound,
     OutOfMemory,
 }
@@ -24,7 +22,6 @@ pub enum UiSurfaceFormat {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum UiPlaneSlot {
     Primary,
     Overlay(u8),
@@ -40,7 +37,6 @@ pub struct UiSurface {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct UiRect {
     pub x: u32,
     pub y: u32,
@@ -50,20 +46,17 @@ pub struct UiRect {
 
 impl UiRect {
     #[inline]
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn new(x: u32, y: u32, w: u32, h: u32) -> Self {
         Self { x, y, w, h }
     }
 
     #[inline]
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn is_empty(self) -> bool {
         self.w == 0 || self.h == 0
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct UiPresent {
     pub src: UiRect,
     pub dst: UiRect,
@@ -71,14 +64,12 @@ pub struct UiPresent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum UiPresentPath {
     PlaneSourceOffset,
     CpuCopy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct ScissorRect {
     pub x: u32,
     pub y: u32,
@@ -87,7 +78,6 @@ pub struct ScissorRect {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum BlendFactor {
     Zero,
     One,
@@ -99,7 +89,6 @@ pub enum BlendFactor {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct BlendDesc {
     pub enabled: bool,
     pub src: BlendFactor,
@@ -107,7 +96,6 @@ pub struct BlendDesc {
 }
 
 impl BlendDesc {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn disabled() -> Self {
         Self {
             enabled: false,
@@ -116,7 +104,6 @@ impl BlendDesc {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn straight_alpha() -> Self {
         Self {
             enabled: true,
@@ -125,7 +112,6 @@ impl BlendDesc {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn premultiplied_alpha() -> Self {
         Self {
             enabled: true,
@@ -136,21 +122,18 @@ impl BlendDesc {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum SamplerWrap {
     ClampToEdge,
     Repeat,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum SamplerFilter {
     Nearest,
     Linear,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SamplerDesc {
     pub wrap_s: SamplerWrap,
     pub wrap_t: SamplerWrap,
@@ -159,7 +142,6 @@ pub struct SamplerDesc {
 }
 
 impl SamplerDesc {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const fn default_2d() -> Self {
         Self {
             wrap_s: SamplerWrap::ClampToEdge,
@@ -187,7 +169,6 @@ impl Rgba8 {
 
 
     #[inline]
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn scale_alpha(self, alpha: u8) -> Self {
         let a = ((self.a as u16) * (alpha as u16) + 127) / 255;
         Self { a: a as u8, ..self }
@@ -196,7 +177,6 @@ impl Rgba8 {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SolidRect {
     pub x: f32,
     pub y: f32,
@@ -207,7 +187,6 @@ pub struct SolidRect {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SpriteCorner {
     pub x: f32,
     pub y: f32,
@@ -217,7 +196,6 @@ pub struct SpriteCorner {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct SpriteQuad {
     pub c0: SpriteCorner,
     pub c1: SpriteCorner,
@@ -226,13 +204,10 @@ pub struct SpriteQuad {
     pub color: Rgba8,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const SOLID_RECT_SIZE: usize = core::mem::size_of::<SolidRect>();
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const SPRITE_QUAD_SIZE: usize = core::mem::size_of::<SpriteQuad>();
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn read_f32_le(bytes: &[u8], off: usize) -> Option<f32> {
     Some(f32::from_le_bytes([
         *bytes.get(off)?,
@@ -243,7 +218,6 @@ fn read_f32_le(bytes: &[u8], off: usize) -> Option<f32> {
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn read_solid_rect_bytes(bytes: &[u8], off: usize) -> Option<SolidRect> {
     if off + SOLID_RECT_SIZE > bytes.len() {
         return None;
@@ -258,7 +232,6 @@ pub fn read_solid_rect_bytes(bytes: &[u8], off: usize) -> Option<SolidRect> {
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn read_sprite_corner_bytes(bytes: &[u8], off: usize) -> Option<SpriteCorner> {
     Some(SpriteCorner {
         x: read_f32_le(bytes, off)?,
@@ -269,7 +242,6 @@ pub fn read_sprite_corner_bytes(bytes: &[u8], off: usize) -> Option<SpriteCorner
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn read_sprite_quad_bytes(bytes: &[u8], off: usize) -> Option<SpriteQuad> {
     if off + SPRITE_QUAD_SIZE > bytes.len() {
         return None;

@@ -116,7 +116,6 @@ impl UsbDescriptorSkipReason {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const fn endpoint_transfer_type_label(
     transfer_type: usb_if::descriptor::EndpointType,
 ) -> &'static str {
@@ -321,7 +320,6 @@ fn log_hid_report_decode(slot_id: u32, interface_number: u8, report_desc: &[u8])
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn log_hid_report_descriptors(
     host: &mut USBHost,
     dev_info: &crab_usb::DeviceInfo,

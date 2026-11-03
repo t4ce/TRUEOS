@@ -1,6 +1,5 @@
 //! The native loader's retained transcript, available after firmware exits.
 
-#[allow(dead_code)]
 #[path = "../tools/trueos-boot/src/bootlog.rs"]
 mod wire;
 

@@ -748,7 +748,6 @@ impl BlueprintInstanceRequest {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub fn from_peer(name: impl Into<AllocString>, peer: impl Into<AllocString>) -> Self {
         Self {
             name: Some(name.into()),
@@ -1033,7 +1032,6 @@ pub struct HvStatus {
 
 #[derive(Copy, Clone, Debug)]
 pub struct HvVmState {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub id: u8,
     pub supported: bool,
     pub running: bool,
@@ -4142,7 +4140,6 @@ pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
     blueprint_console_write(vm_id, output.as_bytes());
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessContext> {
     BLUEPRINT_PROCESS_CONTEXTS
         .get(vm_id as usize)?

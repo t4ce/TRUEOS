@@ -433,7 +433,6 @@ impl HttpsJsonClient {
     }
 
     /// POST a JSON body and preserve both the HTTP status and bounded body.
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn post_json(
         &mut self,
         url: &str,
@@ -544,7 +543,6 @@ impl HttpsJsonClient {
     }
 
     /// Convenience JSON POST that requires a successful (2xx) status.
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub async fn post_json_bearer(
         &mut self,
         url: &str,
@@ -1808,7 +1806,6 @@ pub(crate) async fn get_image_bytes_shared(
     Err(String::from("too many redirects"))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn get_bytes_bearer_shared(
     url: &str,
     bearer: Option<&str>,
@@ -1833,7 +1830,6 @@ pub async fn get_bytes_bearer_shared(
     request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn get_range_bytes_shared(
     url: &str,
     offset: usize,
@@ -1920,7 +1916,6 @@ pub(crate) async fn get_media_bytes_profile_shared(
     )
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn post_protobuf_shared(
     url: &str,
     body: &[u8],

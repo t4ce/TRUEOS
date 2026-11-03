@@ -368,7 +368,6 @@ fn is_rustc_runtime_import(name: &str) -> bool {
 
 
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn portal_logf(args: core::fmt::Arguments<'_>) {
     if crate::log_os::flags::PORTAL_LOGS {
         crate::log!("{}\n", args);

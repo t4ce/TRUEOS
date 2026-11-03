@@ -86,16 +86,13 @@ const UNIVERSAL_PLANE_SLOTS: usize = crate::ui4::UNIVERSAL_PLANE_COUNT;
 const UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY: usize = UNIVERSAL_PLANE_SLOTS;
 const UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS: u64 = 25_000_000;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VIDEO_NV12_BLACK_PROOF_LIFT: bool = false;
 const PRIMARY_GPGPU_EDGE_GUARD_PIXELS: u32 = 64;
 
 const fn pipe_bottom_color_u0_10(red: u32, green: u32, blue: u32) -> u32 {
     ((red & 0x3FF) << 20) | ((green & 0x3FF) << 10) | (blue & 0x3FF)
 }
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const JPG_CENTER_CROP: bool = true;
 // Universal plane role map for pipe-local planes.
 const UI_OVERLAY_PLANE_SLOT: usize = crate::ui4::ALPHA_OVERLAY_PLANE_SLOT;
@@ -104,41 +101,23 @@ const VIDEO_NV12_Y_PLANE_SLOT: usize = crate::ui4::NV12_Y_PLANE_SLOT;
 // The retired linked-NV12 experiment owns zero-based slots 2/3 (hardware
 // planes 3/4). Keep its ABI callable but inert while UI4 owns those slots as
 // ordinary RGB windows.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LEGACY_DIRECT_NV12_PLANE_ABI_ENABLED: bool = false;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const OVERLAY_PLANE_SLOT: usize = UI_OVERLAY_PLANE_SLOT;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DEFAULT_OVERLAY_MARKER_ENABLED: bool = false;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DEFAULT_OVERLAY_MARKER_SIZE: u32 = 50;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DEFAULT_OVERLAY_MARKER_COLOR: u32 = 0x0000_0000;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const OVERLAY_MARGIN_X: u32 = 0;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const OVERLAY_MARGIN_Y: u32 = 0;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const NATIVE_PLANE_SLOT_BARS_ENABLED: bool = false;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const NATIVE_PLANE_SLOT_BAR_MARGIN: u32 = 16;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const NATIVE_PLANE_SLOT_BAR_GAP: u32 = 8;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) const NATIVE_PLANE_SLOT_BAR_WIDTH: u32 = 64;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) const NATIVE_PLANE_SLOT_BAR_HEIGHT: u32 = 128;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const NATIVE_PLANE_SLOT_BAR_XRGB: u32 = 0x0000_0000;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const OVERLAY_COMPOSITION_PROOF_MARKER_ENABLED: bool = false;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const OVERLAY_COMPOSITION_PROOF_MARKER_SIZE: u32 = 96;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const OVERLAY_COMPOSITION_PROOF_MARKER_GAP: u32 = 16;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const OVERLAY_COMPOSITION_PROOF_MARKER_X: u32 = 48;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const OVERLAY_COMPOSITION_PROOF_MARKER_Y: u32 = 48;
 const OVERLAY_SWAP_BUFFER_COUNT: usize = crate::ui4::FrameBuffering::Double.count();
 pub(super) const DISPLAY_PIPELINE_COUNT: usize = PIPES.len();
@@ -219,12 +198,9 @@ const _: () = assert!(
         + UI4_DIRECT_SCANOUT_PLANE_COUNT as u64 * UI4_DIRECT_SCANOUT_PLANE_STRIDE
         <= (u32::MAX as u64) + 1
 );
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) const DISPLAY_FRAME_TARGET_CAPACITY: usize =
     DISPLAY_PIPELINE_COUNT * OVERLAY_UNIVERSAL_PLANE_COUNT * OVERLAY_SWAP_BUFFER_COUNT;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VIDEO_NV12_HIDE_PARK_BEFORE_DISABLE: bool = true;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const VIDEO_NV12_HIDE_PARK_SIZE: u32 = 64;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -323,13 +299,11 @@ const UI4_RGBA8_PLANE_STACK_READY: u32 = 2;
 const UI4_RGBA8_PLANE_STACK_FAILED: u32 = 3;
 static UI4_RGBA8_PLANE_STACK_STATE: AtomicU32 = AtomicU32::new(UI4_RGBA8_PLANE_STACK_UNINITIALIZED);
 static UI4_RGBA8_PLANE_STACK_PIPE_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SOURCE_PROGRAM_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI4_PLANE_SURFACE_FLIP_BATCH_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI4_PLANE_SURFACE_FLIP_BATCH: Mutex<PlaneSurfaceFlipBatch> =
     Mutex::new(PlaneSurfaceFlipBatch::new());
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static UI_SURFACE_PRIMARY_COPY_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACES: [Mutex<Option<PrimarySurface>>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(None),
@@ -401,7 +375,6 @@ static PRIMARY_SWAP_SURFACES: [Mutex<PrimarySwapSurfacePool>; DISPLAY_PIPELINE_C
     Mutex::new(PrimarySwapSurfacePool::new()),
     Mutex::new(PrimarySwapSurfacePool::new()),
 ];
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static VIDEO_NV12_PLANE_ALPHA: AtomicU32 = AtomicU32::new(0xFF);
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -416,7 +389,6 @@ pub(crate) struct PrimarySurfaceSampleSet {
 }
 
 #[derive(Clone, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct PrimarySurfaceBgra8Snapshot {
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -495,7 +467,6 @@ pub(crate) type CompositionDamageRect = crate::ui4::DamageRect;
 pub(crate) type CompositionDamageRegion = crate::ui4::DamageRegion;
 
 impl PrimarySurfaceSampleSet {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn any_changed_since(self, before: Self) -> bool {
         self.tl != before.tl
             || self.center != before.center
@@ -506,7 +477,6 @@ impl PrimarySurfaceSampleSet {
             || self.right != before.right
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn triangle_points_changed_since(self, before: Self) -> bool {
         self.apex != before.apex
             || self.centroid != before.centroid
@@ -519,9 +489,7 @@ impl PrimarySurfaceSampleSet {
 struct PrimarySurface {
     width: u32,
     height: u32,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     backing_width: u32,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     backing_height: u32,
     pitch_bytes: u32,
     byte_len: usize,
@@ -1014,7 +982,6 @@ struct PrimarySwapSurfacePool {
 }
 
 #[derive(Copy, Clone, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) struct DecodedNv12PlaneAlphaProgram {
     alpha: u8,
     uv_keymsk_before: u32,
@@ -1271,7 +1238,6 @@ pub(super) fn log_bsp_display_metrics_probe(dev: crate::intel::Dev) {
     display_metrics::log_bsp_display_metrics_probe(active_target);
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn native_plane_slot_bar_screen_position(
     slot: usize,
     scanout_width: u32,
@@ -1555,7 +1521,6 @@ pub(super) fn display_output_target(output: DisplayOutputId) -> Option<DisplayOu
 /// route so current single-monitor behavior remains unchanged. Additional
 /// complete scanout routes fill D02-D04 in stable pipeline order; incomplete
 /// secondary routes are intentionally not exposed as monitors.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn display_output_targets() -> [Option<DisplayOutputTarget>; DISPLAY_OUTPUT_COUNT] {
     let Some(dev) = crate::intel::claimed_device() else {
         return [None; DISPLAY_OUTPUT_COUNT];
@@ -1571,7 +1536,6 @@ pub(super) fn display_output_targets() -> [Option<DisplayOutputTarget>; DISPLAY_
 /// Returns the currently programmed target for a stable A-D pipeline slot.
 /// Connector discovery remains a separate layer; callers never need to infer
 /// ownership from whichever pipe happened to be discovered first.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn display_pipeline_target(
     pipeline: DisplayPipelineId,
 ) -> Option<DisplayPipelineTarget> {
@@ -1581,7 +1545,6 @@ pub(super) fn display_pipeline_target(
 
 /// Four-slot topology view for compositor policy. An empty entry means no
 /// usable mode is currently programmed on that hardware pipeline.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn display_pipeline_targets() -> [Option<DisplayPipelineTarget>; DISPLAY_PIPELINE_COUNT]
 {
     let Some(dev) = crate::intel::claimed_device() else {
@@ -1592,7 +1555,6 @@ pub(super) fn display_pipeline_targets() -> [Option<DisplayPipelineTarget>; DISP
 
 /// Full hardware topology view. Unlike `display_pipeline_targets`, inactive
 /// or partially programmed slots remain visible to routing policy.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn display_pipeline_snapshots()
 -> [Option<DisplayPipelineSnapshot>; DISPLAY_PIPELINE_COUNT] {
     let Some(dev) = crate::intel::claimed_device() else {
@@ -1716,7 +1678,6 @@ pub(crate) fn diagnostic_snapshot_text() -> String {
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn display_pipeline_target_for_pipe(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -1981,7 +1942,6 @@ fn primary_surface_gpu_addr() -> Option<u64> {
     active_primary_surface().map(|surface| surface.gpu)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_primary_surface_samples(label: &str) {
     let Some(surface) = active_primary_surface() else {
         return;
@@ -1994,7 +1954,6 @@ fn capture_primary_surface_samples() -> Option<PrimarySurfaceSampleSet> {
     capture_surface_samples(surface)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn capture_primary_surface_bgra8() -> Option<PrimarySurfaceBgra8Snapshot> {
     let surface = active_primary_surface()?;
     let width = surface.width as usize;
@@ -2033,13 +1992,11 @@ pub(crate) fn capture_primary_surface_bgra8() -> Option<PrimarySurfaceBgra8Snaps
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn sample_primary_surface_pixel(x: u32, y: u32) -> Option<u32> {
     let surface = active_primary_surface()?;
     sample_surface_pixel(surface, x as usize, y as usize)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_surface_samples(surface: PrimarySurface, label: &str) {
     let Some(samples) = capture_surface_samples(surface) else {
         return;
@@ -2514,7 +2471,6 @@ pub(crate) fn poll_ui4_live_overlay_flip(flip: Ui4LiveOverlayFlip) -> Ui4LiveOve
 /// Compose positioned RGBA tiles into one full-scanout transparent surface and
 /// commit one hardware universal plane. Each selected slot owns an independent
 /// double-buffered composition surface.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn primary_plane_contract_regs_match(dev: crate::intel::Dev, surface: PrimarySurface) -> bool {
     let Some(stride_reg) = plane_stride_reg_value(surface.pitch_bytes) else {
         return false;
@@ -2538,7 +2494,6 @@ fn primary_plane_contract_regs_match(dev: crate::intel::Dev, surface: PrimarySur
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn should_log_primary_present(seq: u32) -> bool {
     if crate::log_os::flags::INTEL_STAGE1_LOGS {
         return false;
@@ -2559,7 +2514,6 @@ fn wait_for_pipe_next_frame(dev: crate::intel::Dev, pipe: PipeInfo) -> (u32, u32
     (before, after, iter)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn wait_for_plane_live(
     dev: crate::intel::Dev,
     plane_base: usize,
@@ -2761,7 +2715,6 @@ fn disable_pipe_scaler(dev: crate::intel::Dev, regs: PipeScalerRegisters) {
     crate::intel::mmio_write(dev, regs.window_size, 0);
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn detach_pipe_scalers_from_plane(dev: crate::intel::Dev, pipe_slot: usize, plane_slot: usize) {
     for scaler_id in 0..2 {
         if pipe_scaler_bound_to_plane(dev, pipe_slot, scaler_id, plane_slot)
@@ -3030,7 +2983,6 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
 
 /// Compatibility wrapper for display clients not yet moved to a task-level
 /// state machine. UI4's compositor service uses submit+poll directly.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
     if !submit_ui4_plane_surface_flip_batch() {
         return false;
@@ -3136,12 +3088,10 @@ fn program_overlay_plane_constant_alpha(dev: crate::intel::Dev, plane_base: usiz
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMAX_OFF, plane_keymax_alpha(alpha));
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn decoded_nv12_overlay_plane_alpha() -> u8 {
     VIDEO_NV12_PLANE_ALPHA.load(Ordering::Acquire) as u8
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn program_decoded_nv12_overlay_plane_alpha(
     dev: crate::intel::Dev,
     uv_base: usize,
@@ -3173,7 +3123,6 @@ pub(super) fn program_decoded_nv12_overlay_plane_alpha(
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn set_decoded_nv12_overlay_plane_alpha(alpha: u8, reason: &str) -> bool {
     if !LEGACY_DIRECT_NV12_PLANE_ABI_ENABLED {
         return false;
@@ -3237,12 +3186,10 @@ fn plane_buf_cfg_value(start: u16, end_inclusive: u16) -> u32 {
     ((u32::from(end_inclusive) & 0x1FFF) << 16) | (u32::from(start) & 0x1FFF)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const fn plane_buf_cfg_start(raw: u32) -> u16 {
     (raw & 0x1FFF) as u16
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const fn plane_buf_cfg_end(raw: u32) -> u16 {
     ((raw >> 16) & 0x1FFF) as u16
 }
@@ -3617,7 +3564,6 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     true
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn park_decoded_nv12_overlay_plane_before_disable(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -3700,7 +3646,6 @@ fn park_decoded_nv12_overlay_plane_before_disable(
     ok
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn mute_decoded_nv12_overlay_plane_before_hide(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
@@ -3763,7 +3708,6 @@ fn mute_decoded_nv12_overlay_plane_before_hide(
     ok
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn hide_decoded_nv12_overlay_plane(reason: &str) -> bool {
     if !LEGACY_DIRECT_NV12_PLANE_ABI_ENABLED {
         return false;
@@ -3848,7 +3792,6 @@ pub(crate) fn hide_decoded_nv12_overlay_plane(reason: &str) -> bool {
     ok
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn log_pipe_live_scanout_state(label: &str) {
     let Some(dev) = crate::intel::claimed_device() else {
         return;
@@ -3947,7 +3890,6 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn log_display_power_well_snapshot(label: &str) {
     let Some(dev) = crate::intel::claimed_device() else {
         return;
@@ -3998,19 +3940,16 @@ fn log_display_power_well_snapshot(label: &str) {
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn power_well_state_bit(raw: u32, index: u32) -> u8 {
     ((raw >> index.saturating_mul(2)) & 0x1) as u8
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn power_well_request_bit(raw: u32, index: u32) -> u8 {
     ((raw >> index.saturating_mul(2).saturating_add(1)) & 0x1) as u8
 }
 
 #[inline]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn fuse_pg_distribution_done(raw: u32, pg: u32) -> u8 {
     if pg > 27 {
         return 0;
@@ -4261,7 +4200,6 @@ fn release_detached_overlay_surface(
     true
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn mark_primary_swap_surface_front(surface: PrimarySwapSurface) {
     let mut pool = primary_swap_surface_pool(surface.pipe).lock();
     if pool.matches(surface.width, surface.height, surface.pipe) {
@@ -4302,7 +4240,6 @@ fn mark_primary_composition_surface_front(
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn copy_overlay_front_into_back(back: OverlaySurface) -> bool {
     let front = {
         let Some(surface_pool) = overlay_surface_pool(back.pipe, back.plane_slot) else {
@@ -4336,7 +4273,6 @@ fn copy_overlay_front_into_back(back: OverlaySurface) -> bool {
     true
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn copy_primary_swap_front_into_back(back: PrimarySwapSurface) -> bool {
     let front = {
         let pool = primary_swap_surface_pool(back.pipe).lock();
@@ -4367,7 +4303,6 @@ fn copy_primary_swap_front_into_back(back: PrimarySwapSurface) -> bool {
     true
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) -> bool {
     if !DEFAULT_OVERLAY_MARKER_ENABLED {
         return false;
@@ -4423,7 +4358,6 @@ fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) 
     true
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn ensure_overlay_surface(
     dev: crate::intel::Dev,
     width: u32,
@@ -5537,7 +5471,6 @@ fn premul_u8(color: u8, alpha: u8) -> u8 {
     (((color as u16) * (alpha as u16) + 127) / 255) as u8
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn stamp_overlay_composition_proof_marker(
     surface: OverlaySurface,
     alpha: OverlayAlphaMode,
@@ -5629,7 +5562,6 @@ fn fill_overlay_rect(surface: OverlaySurface, x: u32, y: u32, width: u32, height
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn fill_overlay_rect_rgba(surface: OverlaySurface, rect: LiveOverlayRect) {
     if rect.width == 0 || rect.height == 0 || rect.color.a == 0 {
         return;
@@ -5774,7 +5706,6 @@ fn intersect_composition_damage(
     (right > x && bottom > y).then(|| CompositionDamageRect::new(x, y, right - x, bottom - y))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn sample_overlay_surface_pixel(surface: OverlaySurface, x: u32, y: u32) -> u32 {
     if surface.virt.is_null()
         || x >= surface.width
@@ -6033,7 +5964,6 @@ fn program_overlay_plane_geometry(
 /// Fast path for the stable RGBA plane contract. Format, pixel-alpha mode,
 /// DBUF and watermarks remain untouched; opaque plane alpha and geometry latch
 /// with SURF.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn flip_overlay_plane_surface(
     dev: crate::intel::Dev,
     surface: OverlaySurface,
@@ -6228,7 +6158,6 @@ fn stage_ui4_direct_overlay_flip(
     ) == PlaneSurfaceFlipQueueResult::Queued
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn present_overlay_surface_with_bootstrap_contract(
     dev: crate::intel::Dev,
     surface: OverlaySurface,
@@ -6292,7 +6221,6 @@ fn decode_plane_color_alpha(color_ctl: u32) -> &'static str {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn decode_plane_cus_phase(cus_ctl: u32, mask: u32, sign_bit: u32) -> i32 {
     let shift = mask.trailing_zeros();
     let magnitude = ((cus_ctl & mask) >> shift) as i32;

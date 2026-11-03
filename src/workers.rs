@@ -57,12 +57,9 @@ pub struct WorkerSpawner {
 /// a desktop core count or a fixed Intel SKU layout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ComputeWorkerPolicy {
-    #[expect(dead_code, reason = "public policy for strict P-core compute pools")]
     PerformanceOnly,
     PerformanceFirst,
-    #[expect(dead_code, reason = "public policy for E-core-affine compute pools")]
     EfficiencyOnly,
-    #[expect(dead_code, reason = "public policy for topology-wide compute pools")]
     AnyBackground,
 }
 

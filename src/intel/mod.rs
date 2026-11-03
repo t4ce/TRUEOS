@@ -56,7 +56,6 @@ pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0700_0000;
 pub(crate) const GPU_VA_GUC_CTB_BASE: u64 = 0x07F0_0000;
 pub(crate) const GPU_VA_GUC_RUNTIME_LIMIT: u64 = 0x0800_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
 // Shared high-GGTT ownership boundaries. Display scanout and VDBOX control
@@ -575,7 +574,6 @@ fn validate_gen12_lumen_mocs_for_dev(dev: Dev, checkpoint: &str) -> bool {
 
 
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn guc_boot_enabled() -> bool {
     claimed_device()
         .map(|dev| guc_boot_enabled_for_device(dev.device_id))
@@ -700,7 +698,6 @@ pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
     self::display::begin_ui4_plane_surface_flip_batch()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
     self::display::finish_ui4_plane_surface_flip_batch()
 }
@@ -795,13 +792,11 @@ pub fn dma_cache_flush_range(ptr: *const u8, len: usize) {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub enum TextureStoreSampleKind {
     Mask,
     Rgba,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ggtt_map_screen_rgba_surface(
     _rgba: &[u8],
     _width: u32,
@@ -811,7 +806,6 @@ pub fn ggtt_map_screen_rgba_surface(
     false
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn plane_rebind_present_surface(
     _surface_gpu_addr: u64,
     _width: u32,
@@ -821,7 +815,6 @@ pub fn plane_rebind_present_surface(
     false
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn rcs_clear_rgba_surface(
     _rgba: &[u8],
     _width: u32,
@@ -832,7 +825,6 @@ pub fn rcs_clear_rgba_surface(
     false
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn rcs_draw_rgba_solid_batch(
     _target_rgba: &[u8],
     _records: &[u8],
@@ -845,7 +837,6 @@ pub fn rcs_draw_rgba_solid_batch(
     false
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn rcs_draw_screen_sprite_batch(
     _target_rgba: &[u8],
     _source_rgba: &[u8],
@@ -863,12 +854,10 @@ pub fn rcs_draw_screen_sprite_batch(
     false
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn warm_state() -> Option<()> {
     None
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn capture_primary_surface_bgra8() -> Option<self::display::PrimarySurfaceBgra8Snapshot>
 {
     self::display::capture_primary_surface_bgra8()
@@ -890,12 +879,10 @@ pub(crate) fn poll_ui4_live_overlay_flip(flip: Ui4LiveOverlayFlip) -> Ui4LiveOve
     self::display::poll_ui4_live_overlay_flip(flip)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn log_display_plane_ladder_probe(label: &str) {
     self::display::log_display_plane_ladder_probe(label)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState>
 {
     self::xelp_media2_ngin::run_media2_first_frame_async().await
@@ -951,7 +938,6 @@ pub(crate) fn hw_pic_snapshot() -> self::hw_pic::HwPicQueueSnapshot {
     self::hw_pic::snapshot()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn run_media_source_warmup_async() {
     crate::log!("intel/media: source warmup skipped reason=media-decode-disabled\n");
 }

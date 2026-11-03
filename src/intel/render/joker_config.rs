@@ -7,7 +7,6 @@ use super::{
     VS_DRAW_FRONTIER_CONTRACTS, VS_DRAW_SBE_READ0_CONTRACT, VfPrimitiveGeometry,
 };
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RENDER_JOKER_VARIANTS: &[&str] = &[
     "canonical",
     "mesa",
@@ -164,12 +163,10 @@ const RENDER_JOKER_VARIANTS: &[&str] = &[
     "sync-cs-no-post",
 ];
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_joker_variant_names() -> &'static [&'static str] {
     RENDER_JOKER_VARIANTS
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn retired_render_joker_variant_reason(name: &str) -> Option<&'static str> {
     if name.eq_ignore_ascii_case("point-oa-w8")
         || name.eq_ignore_ascii_case("point-oa-w8-clipmax")
@@ -182,7 +179,6 @@ pub(super) fn retired_render_joker_variant_reason(name: &str) -> Option<&'static
 }
 
 #[derive(Copy, Clone)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) struct RenderJokerSpec {
     pub(super) variant: &'static str,
     pub(super) submit_name: &'static str,
@@ -194,12 +190,10 @@ pub(super) struct RenderJokerSpec {
 }
 
 #[derive(Copy, Clone)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) enum RenderJokerTarget {
     ScratchRt,
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
     let scratch = RenderJokerTarget::ScratchRt;
     // Historical variants that once targeted the live primary are retained as
@@ -1816,7 +1810,6 @@ pub(super) fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
     Some(spec)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn render_joker_real_vs_front_end_contract(
     variant: &str,
 ) -> Option<TriangleFrontEndContract> {
@@ -1837,7 +1830,6 @@ pub(super) fn render_joker_real_vs_front_end_contract(
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn render_joker_vf_experiment(variant: &str) -> StreamoutProofExperiment {
     match variant {
         "point-oa-pos0" => StreamoutProofExperiment::PositionSlot0,
@@ -1856,7 +1848,6 @@ pub(super) fn render_joker_vf_experiment(variant: &str) -> StreamoutProofExperim
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn render_joker_streamout_kind(variant: &str) -> Option<&'static str> {
     match variant {
         "so-vf" | "so-vf-header" => Some("vf"),

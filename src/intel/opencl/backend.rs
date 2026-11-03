@@ -13,7 +13,6 @@ use super::{
 use crate::intel::gpgpu;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct BackendCaps {
     pub(crate) aot_artifacts: bool,
     pub(crate) upload_status: bool,
@@ -27,7 +26,6 @@ pub(crate) struct BackendCaps {
 }
 
 impl BackendCaps {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const INTEL_OPENCL_BRIDGE: Self = Self {
         aot_artifacts: true,
         upload_status: true,
@@ -46,7 +44,6 @@ impl Default for BackendCaps {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct UploadedKernelRef {
     pub(crate) name: &'static str,
     pub(crate) target: &'static str,
@@ -60,7 +57,6 @@ pub(crate) struct UploadedKernelRef {
 }
 
 impl UploadedKernelRef {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn is_ready(self) -> bool {
         self.verified && self.bytes != 0
     }
@@ -83,7 +79,6 @@ impl From<gpgpu::UploadedKernelArtifact> for UploadedKernelRef {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct BackendExecutionStub {
     pub(crate) kernel_name: &'static str,
     pub(crate) upload: Option<UploadedKernelRef>,
@@ -92,7 +87,6 @@ pub(crate) struct BackendExecutionStub {
 }
 
 impl BackendExecutionStub {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn unknown(kernel_name: &'static str) -> Self {
         Self {
             kernel_name,
@@ -102,7 +96,6 @@ impl BackendExecutionStub {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn recognized(kernel_name: &'static str, upload: Option<UploadedKernelRef>) -> Self {
         Self {
             kernel_name,
@@ -114,7 +107,6 @@ impl BackendExecutionStub {
 }
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum BackendCommand<'a> {
     QueryUploadStatus {
         kernel_name: &'static str,
@@ -132,7 +124,6 @@ pub(crate) enum BackendCommand<'a> {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum BackendCommandResult {
     UploadStatus(Option<UploadedKernelRef>),
     UploadMany { attempted: usize, uploaded: usize },
@@ -140,39 +131,33 @@ pub(crate) enum BackendCommandResult {
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct IntelOpenClBackend {
     caps: BackendCaps,
 }
 
 impl IntelOpenClBackend {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn new() -> Self {
         Self {
             caps: BackendCaps::INTEL_OPENCL_BRIDGE,
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn caps(&self) -> BackendCaps {
         self.caps
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn upload_status(&self, kernel_name: &str) -> Option<UploadedKernelRef> {
         registry::known_aot_kernel(kernel_name)
             .and_then(|kernel| kernel.status())
             .map(UploadedKernelRef::from)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn upload_known_aot(&self, kernel_name: &str) -> Option<UploadedKernelRef> {
         registry::known_aot_kernel(kernel_name)
             .and_then(|kernel| kernel.upload())
             .map(UploadedKernelRef::from)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn require_known_aot_upload(
         &self,
         kernel_name: &str,
@@ -190,7 +175,6 @@ impl IntelOpenClBackend {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn reload_known_aot(&self, kernel_name: &str) -> ClResult<UploadedKernelRef> {
         match gpgpu::reload_known_kernel_artifact(kernel_name) {
             Ok(upload) => Ok(UploadedKernelRef::from(upload)),
@@ -200,12 +184,10 @@ impl IntelOpenClBackend {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn reload_all_known_aot(&self) -> gpgpu::GpgpuArtifactReloadSummary {
         gpgpu::reload_all_known_kernel_artifacts()
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn build_program_from_source(
         &self,
         source: &str,
@@ -226,7 +208,6 @@ impl IntelOpenClBackend {
         Err(ClError::BuildProgramFailure)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn upload_all_known_aot(
         &self,
         out: &mut [Option<UploadedKernelRef>],
@@ -246,7 +227,6 @@ impl IntelOpenClBackend {
         (attempted, uploaded)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn execute_known_kernel_stub(
         &self,
         kernel_name: &'static str,
@@ -258,7 +238,6 @@ impl IntelOpenClBackend {
         BackendExecutionStub::recognized(kernel_name, self.upload_status(kernel_name))
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn dispatch(&self, command: BackendCommand<'_>) -> BackendCommandResult {
         match command {
             BackendCommand::QueryUploadStatus { kernel_name } => {
@@ -283,7 +262,6 @@ impl IntelOpenClBackend {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn dispatch_checked(
         &self,
         command: BackendCommand<'_>,
@@ -307,7 +285,6 @@ impl IntelOpenClBackend {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn finish_known_queue(&self, queue: &mut CommandQueue) -> ClResult<usize> {
         queue.finish_with(|command| match &command.kind {
             CommandKind::WriteBuffer { .. } | CommandKind::ReadBuffer { .. } => Ok(()),
@@ -323,12 +300,10 @@ impl IntelOpenClBackend {
         })
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn known_kernel_count(&self) -> usize {
         registry::KNOWN_AOT_KERNELS.len()
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn known_kernel(
         &self,
         kernel_name: &str,
@@ -336,12 +311,10 @@ impl IntelOpenClBackend {
         registry::known_aot_kernel(kernel_name)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn validate_known_aot_registry(&self) -> KnownAotValidationReport {
         validate_known_aot_registry()
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn validate_known_aot_status(&self) -> KnownAotValidationReport {
         validate_known_aot_status()
     }

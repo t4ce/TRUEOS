@@ -116,7 +116,6 @@ pub fn slot_id_in_use(slot_id: u32) -> bool {
     guard.iter().any(|snapshot| snapshot.slot_id == slot_id)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn mouse_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     let guard = CURSOR_SNAPSHOTS.lock();
     let mut out = Vec::new();
@@ -129,7 +128,6 @@ pub fn mouse_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn mouse_cursor_snapshot_with_buttons() -> Vec<(f64, f64, u32), MAX_CURSOR_SNAPSHOTS> {
     let guard = CURSOR_SNAPSHOTS.lock();
     let mut out = Vec::new();
@@ -142,7 +140,6 @@ pub fn mouse_cursor_snapshot_with_buttons() -> Vec<(f64, f64, u32), MAX_CURSOR_S
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn tablet_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     let guard = CURSOR_SNAPSHOTS.lock();
     let mut out = Vec::new();
@@ -155,7 +152,6 @@ pub fn tablet_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn tablet_cursor_snapshot_with_buttons() -> Vec<(f64, f64, u32), MAX_CURSOR_SNAPSHOTS> {
     let guard = CURSOR_SNAPSHOTS.lock();
     let mut out = Vec::new();
@@ -168,7 +164,6 @@ pub fn tablet_cursor_snapshot_with_buttons() -> Vec<(f64, f64, u32), MAX_CURSOR_
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ordered_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     let guard = CURSOR_SNAPSHOTS.lock();
     let mut out = Vec::new();
@@ -183,7 +178,6 @@ pub fn ordered_cursor_snapshot() -> Vec<(f64, f64), MAX_CURSOR_SNAPSHOTS> {
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ordered_cursor_snapshot_with_slots() -> Vec<(u32, f64, f64), MAX_CURSOR_SNAPSHOTS> {
     let guard = CURSOR_SNAPSHOTS.lock();
     let mut out = Vec::new();
@@ -198,7 +192,6 @@ pub fn ordered_cursor_snapshot_with_slots() -> Vec<(u32, f64, f64), MAX_CURSOR_S
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ordered_cursor_snapshot_with_slot_buttons() -> Vec<(u32, f64, f64, u32), MAX_CURSOR_SNAPSHOTS>
 {
     let guard = CURSOR_SNAPSHOTS.lock();

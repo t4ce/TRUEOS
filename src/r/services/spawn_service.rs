@@ -126,7 +126,6 @@ define_stop_flags!(
     STOP_UI_SWARM_DEMO,
 );
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
     match name {
         "ui-text-input-demo" => Some(&STOP_UI_TEXT_INPUT_DEMO),
@@ -145,7 +144,6 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct TaskRunGuard {
     name: &'static str,
 }
@@ -156,7 +154,6 @@ impl Drop for TaskRunGuard {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn task_run_guard(name: &'static str) -> TaskRunGuard {
     if let Some(flag) = stop_flag_by_task_name(name) {
         flag.store(false, Ordering::Release);
@@ -164,14 +161,12 @@ pub fn task_run_guard(name: &'static str) -> TaskRunGuard {
     TaskRunGuard { name }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn task_stop_requested(name: &str) -> bool {
     stop_flag_by_task_name(name)
         .map(|flag| flag.load(Ordering::Acquire))
         .unwrap_or(false)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn task_exited(name: &str) {
     if let Some(flag) = stop_flag_by_task_name(name) {
         flag.store(false, Ordering::Release);
@@ -1329,7 +1324,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
 
 ];
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn task_index_by_name(name: &str) -> Option<usize> {
     TASKS.iter().position(|spec| spec.name == name)
 }

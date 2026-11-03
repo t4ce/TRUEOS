@@ -57,7 +57,6 @@ pub mod cpu_task_pool {
 
 pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     /// One small, non-display Collapse5/merge arithmetic probe is started by
     /// the boot task registry and verified word-for-word after RCS retirement.
@@ -84,7 +83,6 @@ pub mod blueprint {
 }
 
 pub mod gfx {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub const SCREENSHOT_CAPTURE_ENABLED: bool = false;
 }
 

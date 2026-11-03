@@ -4,7 +4,6 @@ use spin::Mutex;
 
 const MAX_KEYBOARD_SNAPSHOTS: usize = 32;
 const MAX_KEYBOARD_OUTPUT_EVENTS: usize = 256;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const KEYBOARD_TEXT_BURST_MAX_SCALARS: usize = MAX_KEYBOARD_OUTPUT_EVENTS;
 pub const KEYBOARD_OUTPUT_FLAG_PRESS: u32 = 1 << 0;
 pub const KEYBOARD_OUTPUT_FLAG_SYNTHETIC: u32 = 1 << 1;
@@ -55,9 +54,7 @@ struct KeyboardSnapshot {
     slot_id: u32,
     ep_target: u32,
     modifiers: u8,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     reserved0: u8,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     reserved1: u16,
     keys: [u8; 6],
     ascii: [u8; 6],
@@ -67,7 +64,6 @@ struct KeyboardSnapshot {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub struct TrueosKeyboardState {
     pub controller_id: u32,
     pub slot_id: u32,
@@ -163,7 +159,6 @@ static KEYBOARD_OUTPUT_RING: Mutex<KeyboardOutputRing> = Mutex::new(KeyboardOutp
 static KEYBOARD_PHYSICAL_OUTPUT_RING: Mutex<KeyboardOutputRing> =
     Mutex::new(KeyboardOutputRing::new());
 static KEYBOARD_OUTPUT_POP_SEQ: Mutex<u64> = Mutex::new(0);
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static NEXT_KEYBOARD_TEXT_BURST_ID: AtomicU32 = AtomicU32::new(1);
 
 
@@ -209,7 +204,6 @@ fn upsert_snapshot_locked(
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn remove_snapshots(controller_id: u32, slot_id: u32) -> bool {
     let mut guard = KEYBOARD_SNAPSHOTS.lock();
     let mut removed = false;
@@ -262,12 +256,10 @@ pub fn signal_device_lost(controller_id: u32, slot_id: u32) -> usize {
     removed.len()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn keyboard_count() -> u32 {
     KEYBOARD_SNAPSHOTS.lock().len() as u32
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn ordered_keyboard_snapshot() -> Vec<TrueosKeyboardState, MAX_KEYBOARD_SNAPSHOTS> {
     let guard = KEYBOARD_SNAPSHOTS.lock();
     let mut out = Vec::new();
@@ -277,7 +269,6 @@ pub fn ordered_keyboard_snapshot() -> Vec<TrueosKeyboardState, MAX_KEYBOARD_SNAP
     out
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn keyboard_state(keyboard_id: u32) -> Option<TrueosKeyboardState> {
     if keyboard_id == 0 {
         return None;
@@ -291,17 +282,14 @@ pub fn keyboard_state(keyboard_id: u32) -> Option<TrueosKeyboardState> {
     Some(guard[idx].into())
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn keyboard_modifiers(keyboard_id: u32) -> Option<u8> {
     keyboard_state(keyboard_id).map(|state| state.modifiers)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn keyboard_keys(keyboard_id: u32) -> Option<[u8; 6]> {
     keyboard_state(keyboard_id).map(|state| state.keys)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn keyboard_ascii(keyboard_id: u32) -> Option<[u8; 6]> {
     keyboard_state(keyboard_id).map(|state| state.ascii)
 }
@@ -885,7 +873,6 @@ pub fn pop_output_event() -> Option<TrueosKeyboardOutputEvent> {
     Some(one[0])
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn inject_text(slot_id: u32, text: &str, flags: u32) -> usize {
     if slot_id == 0 || text.is_empty() {
         return 0;
@@ -903,13 +890,11 @@ pub fn inject_text(slot_id: u32, text: &str, flags: u32) -> usize {
     push_text_burst(slot_id, text, scalar_count, burst_id, flags, t_ms)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn text_burst_scalar_count(text: &str) -> Option<usize> {
     let scalar_count = text.chars().count();
     (scalar_count <= KEYBOARD_TEXT_BURST_MAX_SCALARS).then_some(scalar_count)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn next_keyboard_text_burst_id() -> u32 {
     loop {
         let burst_id = NEXT_KEYBOARD_TEXT_BURST_ID.fetch_add(1, Ordering::Relaxed);
@@ -919,7 +904,6 @@ fn next_keyboard_text_burst_id() -> u32 {
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn push_text_burst(
     slot_id: u32,
     text: &str,
@@ -932,7 +916,6 @@ fn push_text_burst(
     push_text_burst_into(&mut ring, slot_id, text, scalar_count, burst_id, flags, t_ms)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn push_text_burst_into(
     ring: &mut KeyboardOutputRing,
     slot_id: u32,
@@ -961,7 +944,6 @@ fn push_text_burst_into(
     scalar_count
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn inject_key(slot_id: u32, codepoint: u32, key_code: u16, modifiers: u8, flags: u32) -> bool {
     if slot_id == 0 {
         return false;

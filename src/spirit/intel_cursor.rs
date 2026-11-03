@@ -111,7 +111,6 @@ pub(super) struct SpiritCursorFrame {
 /// CUR_POS programming. Keeping this beside the cursor-plane geometry avoids
 /// treating a global desktop coordinate as an always-valid 256x256 shader
 /// coordinate.
-#[allow(dead_code)]
 pub(super) fn spirit_cursor_local_point(
     channel: u8,
     frame: SpiritCursorFrame,

@@ -4,7 +4,6 @@
 // metadata so the table can be queried in code.
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum VfConvertedType {
     Float,
     Sint,
@@ -13,7 +12,6 @@ pub(crate) enum VfConvertedType {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum VfComponent {
     R,
     G,
@@ -22,7 +20,6 @@ pub(crate) enum VfComponent {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) enum VfFormat {
     R32G32B32A32Float,
     R32G32B32A32Sint,
@@ -135,14 +132,12 @@ pub(crate) enum VfFormat {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct VfFormatInfo {
     pub(crate) format: VfFormat,
     pub(crate) converted_type: VfConvertedType,
     pub(crate) components: [Option<VfComponent>; 4],
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const VF_FORMATS: &[VfFormat] = &[
     VfFormat::R32G32B32A32Float,
     VfFormat::R32G32B32A32Sint,
@@ -255,7 +250,6 @@ pub(crate) const VF_FORMATS: &[VfFormat] = &[
 ];
 
 impl VfFormat {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn symbol(self) -> &'static str {
         match self {
             Self::R32G32B32A32Float => "R32G32B32A32_FLOAT",
@@ -369,7 +363,6 @@ impl VfFormat {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) const fn info(self) -> VfFormatInfo {
         use VfComponent::{A, B, G, R};
         use VfConvertedType::{Float, Sint, Uint};

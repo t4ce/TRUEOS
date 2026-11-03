@@ -797,7 +797,6 @@ fn direct_rcs_ppgtt_cache_policy_compatible(
 
 /// Validate one exact-page map, including any already-installed cache policy,
 /// without changing a leaf.
-#[expect(dead_code, reason = "reserved for noncontiguous page-backed resources")]
 fn direct_rcs_preflight_ppgtt_kernel_pages(
     state: DirectRcsState,
     gpu: u64,
@@ -813,7 +812,6 @@ fn direct_rcs_preflight_ppgtt_kernel_pages(
 }
 
 /// Validate a contiguous ordinary-WB destination without changing a leaf.
-#[expect(dead_code, reason = "reserved for preflighted page-backed resources")]
 fn direct_rcs_preflight_ppgtt_kernel_region(
     state: DirectRcsState,
     gpu: u64,
@@ -897,7 +895,6 @@ fn direct_rcs_map_ppgtt_pages_and_publish(
 
 /// Map guest/kernel-owned data pages with the ordinary WB PPGTT policy.
 /// Callers cannot select arbitrary PTE flags or cache attributes.
-#[expect(dead_code, reason = "reserved for noncontiguous page-backed resources")]
 fn direct_rcs_map_ppgtt_kernel_pages_and_publish(
     state: DirectRcsState,
     gpu: u64,

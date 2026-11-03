@@ -49,9 +49,7 @@ static VM_STORE_REPLICATION_ONLINE: AtomicBool = AtomicBool::new(false);
 pub enum VmStoreError {
     ServiceOffline,
     QueueFull,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Create(block::Error),
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Format(block::Error),
     BeginWrite(block::Error),
     MissingSnapshot,
@@ -141,7 +139,6 @@ pub async fn save_bytes_async(vm_id: u8, bytes: Vec<u8>) -> Result<usize, VmStor
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn load_bytes(vm_id: u8) -> Result<Vec<u8>, VmStoreError> {
     if !vm_id_supported(vm_id) {
         return Err(VmStoreError::ServiceOffline);

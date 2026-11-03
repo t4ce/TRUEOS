@@ -53,7 +53,6 @@ pub static MIDI_FREQ: [u32; 128] = [
 
 /// Note name → MIDI note number lookup
 /// Returns the MIDI note number for a common note name.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn note_name_to_midi(name: &str) -> Option<u8> {
     let bytes = name.as_bytes();
     if bytes.is_empty() {
@@ -107,7 +106,6 @@ pub fn note_name_to_midi(name: &str) -> Option<u8> {
 }
 
 /// MIDI note number → pitch-class name (e.g., 69 → "A"); callers append the octave.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn midi_to_note_name(note: u8) -> &'static str {
     // Pitch-class names, indexed by the note's position within an octave.
     static NAMES: [&str; 12] = [
@@ -118,7 +116,6 @@ pub fn midi_to_note_name(note: u8) -> &'static str {
 }
 
 /// Get the octave of a MIDI note
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn midi_octave(note: u8) -> u8 {
     if note >= 12 { (note / 12) - 1 } else { 0 }
 }

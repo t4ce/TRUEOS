@@ -206,7 +206,6 @@ pub fn queued_blocking_jobs() -> usize {
         .sum()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn pop_blocking_job() -> Option<BlockingJobEntry> {
     for queue in SERVICE_LANE_QUEUES.iter() {
         if let Some(request) = queue.lock().pop_front() {
@@ -818,7 +817,6 @@ pub unsafe fn submit_guest_service_lane_job_from_raw(
     }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub unsafe fn spawn_vmx_thread_from_raw(
     vm_id: u8,
     data: usize,
@@ -828,7 +826,6 @@ pub unsafe fn spawn_vmx_thread_from_raw(
     unsafe { submit_guest_service_lane_job_from_raw(vm_id, data, vtable, purpose) }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub unsafe fn spawn_guest_blocking_job_from_raw(
     vm_id: u8,
     data: usize,
