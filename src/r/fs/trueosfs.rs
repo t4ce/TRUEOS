@@ -1,5 +1,6 @@
 use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
+use crate::disc::aligned_buf::AlignedBuf;
 use crate::disc::block;
 use crate::r::disc::partition;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -3742,35 +3743,6 @@ pub fn primary_root_is_read_only() -> Option<bool> {
 pub fn root_seq(disk_id: block::DiscId) -> Option<u32> {
     let roots = ROOTS.lock();
     roots.iter().find(|m| m.disk_id == disk_id).map(|m| m.seq)
-}
-
-struct AlignedBuf {
-    ptr: *mut u8,
-    len: usize,
-    layout: alloc::alloc::Layout,
-}
-
-impl AlignedBuf {
-    fn new(len: usize, align: usize) -> Option<Self> {
-        let layout = alloc::alloc::Layout::from_size_align(len, align).ok()?;
-        let ptr = unsafe { alloc::alloc::alloc(layout) };
-        if ptr.is_null() {
-            return None;
-        }
-        Some(Self { ptr, len, layout })
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
-}
-
-impl Drop for AlignedBuf {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe { alloc::alloc::dealloc(self.ptr, self.layout) };
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

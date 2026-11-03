@@ -5,6 +5,34 @@ use super::{
 };
 use v::bp_abi::TrueosUi4ButtonRegionV1 as Region;
 
+const REGION_WIRE_BYTES: usize = 36;
+const _: () = assert!(core::mem::size_of::<Region>() == REGION_WIRE_BYTES);
+const _: () = assert!(core::mem::offset_of!(Region, x) == 0);
+const _: () = assert!(core::mem::offset_of!(Region, y) == 4);
+const _: () = assert!(core::mem::offset_of!(Region, width) == 8);
+const _: () = assert!(core::mem::offset_of!(Region, height) == 12);
+const _: () = assert!(core::mem::offset_of!(Region, clip_x) == 16);
+const _: () = assert!(core::mem::offset_of!(Region, clip_y) == 20);
+const _: () = assert!(core::mem::offset_of!(Region, clip_width) == 24);
+const _: () = assert!(core::mem::offset_of!(Region, clip_height) == 28);
+const _: () = assert!(core::mem::offset_of!(Region, border_rgba) == 32);
+
+fn encode_regions(regions: &[Region]) -> alloc::vec::Vec<u8> {
+    let mut bytes = alloc::vec::Vec::with_capacity(regions.len() * REGION_WIRE_BYTES);
+    for region in regions {
+        bytes.extend_from_slice(&region.x.to_le_bytes());
+        bytes.extend_from_slice(&region.y.to_le_bytes());
+        bytes.extend_from_slice(&region.width.to_le_bytes());
+        bytes.extend_from_slice(&region.height.to_le_bytes());
+        bytes.extend_from_slice(&region.clip_x.to_le_bytes());
+        bytes.extend_from_slice(&region.clip_y.to_le_bytes());
+        bytes.extend_from_slice(&region.clip_width.to_le_bytes());
+        bytes.extend_from_slice(&region.clip_height.to_le_bytes());
+        bytes.extend_from_slice(&region.border_rgba.to_le_bytes());
+    }
+    bytes
+}
+
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_button_regions_v1(
     window_id: u32,
     regions: *const Region,
@@ -18,13 +46,12 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_button_regions_v1(
         copied.push(unsafe { regions.add(index).read_unaligned() });
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let bytes =
-            unsafe { core::slice::from_raw_parts(copied.as_ptr().cast::<u8>(), copied.len() * 36) };
+        let bytes = encode_regions(&copied);
         return guest_status(
             trueos_vm::vmcall::OP_BP_UI4_SCENE_BUTTON_REGIONS_V1,
             window_id as u64,
             count as u64,
-            bytes,
+            &bytes,
         );
     }
     let Some(owner) = blueprint_owner() else {

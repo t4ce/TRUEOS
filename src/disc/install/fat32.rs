@@ -1,37 +1,9 @@
 use alloc::vec;
 
+use crate::disc::aligned_buf::AlignedBuf;
 use crate::disc::block::{self, DeviceHandle};
 
 const FAT32_MIN_CLUSTERS: u32 = 65_525;
-
-struct AlignedBuf {
-    ptr: *mut u8,
-    len: usize,
-    layout: alloc::alloc::Layout,
-}
-
-impl AlignedBuf {
-    fn new(len: usize, align: usize) -> Option<Self> {
-        let layout = alloc::alloc::Layout::from_size_align(len, align).ok()?;
-        let ptr = unsafe { alloc::alloc::alloc(layout) };
-        if ptr.is_null() {
-            return None;
-        }
-        Some(Self { ptr, len, layout })
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
-}
-
-impl Drop for AlignedBuf {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe { alloc::alloc::dealloc(self.ptr, self.layout) };
-        }
-    }
-}
 
 struct DmaWriter {
     handle: DeviceHandle,

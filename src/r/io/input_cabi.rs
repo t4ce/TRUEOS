@@ -1,5 +1,8 @@
 extern crate alloc;
 
+#[path = "input_wire.rs"]
+mod input_wire;
+
 use crate::r::services::gamepad_control_service::{
     GamepadControlPrincipal, gamepad_is_idle, gamepad_snapshot, release_gamepad, request_gamepad,
     submit_command as submit_gamepad_command, submit_json as submit_gamepad_json,
@@ -94,7 +97,7 @@ pub fn host_input_cursor_events_since(
     payload: &mut [u8],
 ) -> (usize, usize) {
     const HEADER_LEN: usize = 12;
-    let event_size = core::mem::size_of::<crate::usb2::hid::TrueosHidCursorEvent>();
+    let event_size = input_wire::CURSOR_EVENT_LEN;
     if payload.len() < HEADER_LEN || event_size == 0 {
         return (0, 0);
     }
@@ -109,23 +112,23 @@ pub fn host_input_cursor_events_since(
     payload[0..8].copy_from_slice(&next_seq.to_le_bytes());
     payload[8..12].copy_from_slice(&dropped.to_le_bytes());
     let bytes_len = wrote.saturating_mul(event_size);
-    if bytes_len != 0 {
-        let bytes = unsafe { core::slice::from_raw_parts(events.as_ptr() as *const u8, bytes_len) };
-        payload[HEADER_LEN..HEADER_LEN + bytes_len].copy_from_slice(bytes);
+    for (event, out) in events[..wrote].iter().zip(
+        payload[HEADER_LEN..HEADER_LEN + bytes_len].chunks_exact_mut(event_size),
+    ) {
+        input_wire::cursor_event(out, event);
     }
     (wrote, HEADER_LEN + wrote.saturating_mul(event_size))
 }
 
 pub fn host_input_pop_keyboard_output(payload: &mut [u8]) -> (i32, usize) {
-    let event_size = core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>();
+    let event_size = input_wire::KEYBOARD_OUTPUT_LEN;
     if payload.len() < event_size {
         return (-1, 0);
     }
     let Some(event) = crate::r::keyboard::pop_output_event() else {
         return (1, 0);
     };
-    let bytes = unsafe { core::slice::from_raw_parts(&event as *const _ as *const u8, event_size) };
-    payload[..event_size].copy_from_slice(bytes);
+    input_wire::keyboard_output(&mut payload[..event_size], &event);
     (0, event_size)
 }
 
@@ -135,7 +138,7 @@ pub fn host_input_keyboard_output_since(
     payload: &mut [u8],
 ) -> (usize, usize) {
     const HEADER_LEN: usize = 12;
-    let event_size = core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>();
+    let event_size = input_wire::KEYBOARD_OUTPUT_LEN;
     if payload.len() < HEADER_LEN || event_size == 0 {
         return (0, 0);
     }
@@ -147,16 +150,17 @@ pub fn host_input_keyboard_output_since(
     payload[0..8].copy_from_slice(&next_seq.to_le_bytes());
     payload[8..12].copy_from_slice(&dropped.to_le_bytes());
     let bytes_len = wrote.saturating_mul(event_size);
-    if bytes_len != 0 {
-        let bytes = unsafe { core::slice::from_raw_parts(events.as_ptr() as *const u8, bytes_len) };
-        payload[HEADER_LEN..HEADER_LEN + bytes_len].copy_from_slice(bytes);
+    for (event, out) in events[..wrote].iter().zip(
+        payload[HEADER_LEN..HEADER_LEN + bytes_len].chunks_exact_mut(event_size),
+    ) {
+        input_wire::keyboard_output(out, event);
     }
     (wrote, HEADER_LEN + bytes_len)
 }
 
 pub fn host_input_midi_read_v1(read_seq: u64, out_cap: u32, payload: &mut [u8]) -> (usize, usize) {
     const HEADER_LEN: usize = 12;
-    let event_size = core::mem::size_of::<crate::usb3::hid::midi::MidiInputEventV1>();
+    let event_size = input_wire::MIDI_INPUT_V1_LEN;
     if payload.len() < HEADER_LEN || event_size == 0 {
         return (0, 0);
     }
@@ -167,9 +171,10 @@ pub fn host_input_midi_read_v1(read_seq: u64, out_cap: u32, payload: &mut [u8]) 
     payload[..8].copy_from_slice(&next_seq.to_le_bytes());
     payload[8..12].copy_from_slice(&dropped.to_le_bytes());
     let bytes_len = wrote.saturating_mul(event_size);
-    if bytes_len != 0 {
-        let bytes = unsafe { core::slice::from_raw_parts(events.as_ptr().cast::<u8>(), bytes_len) };
-        payload[HEADER_LEN..HEADER_LEN + bytes_len].copy_from_slice(bytes);
+    for (event, out) in events[..wrote].iter().zip(
+        payload[HEADER_LEN..HEADER_LEN + bytes_len].chunks_exact_mut(event_size),
+    ) {
+        input_wire::midi_input_v1(out, event);
     }
     (wrote, HEADER_LEN + bytes_len)
 }
@@ -542,12 +547,6 @@ unsafe fn guest_control_request<T>(op: u32, request: &[u8], out: *mut T) -> i32 
     }
 }
 
-fn record_bytes<T>(value: &T) -> &[u8] {
-    unsafe {
-        core::slice::from_raw_parts((value as *const T).cast::<u8>(), core::mem::size_of::<T>())
-    }
-}
-
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_input_cursor_pos(
     cursor_id: u32,
@@ -750,11 +749,14 @@ pub unsafe extern "C" fn trueos_cabi_mouse_motion_submit(
         return -1;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let command = unsafe { &*command };
+        let mut request = [0u8; input_wire::MOUSE_COMMAND_LEN];
+        input_wire::mouse_command(&mut request, command);
         return guest_control_call(
             trueos_vm::vmcall::OP_BP_MOUSE_MOTION_SUBMIT,
             handle,
             0,
-            record_bytes(unsafe { &*command }),
+            &request,
         );
     }
     submit_command(mouse_motion_principal(), handle, unsafe { *command }.into())
@@ -861,11 +863,14 @@ pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit(
         return -1;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let command = unsafe { &*command };
+        let mut request = [0u8; input_wire::KEYBOARD_COMMAND_LEN];
+        input_wire::keyboard_command(&mut request, command);
         return guest_control_call(
             trueos_vm::vmcall::OP_BP_KEYBOARD_CONTROL_SUBMIT,
             handle,
             0,
-            record_bytes(unsafe { &*command }),
+            &request,
         );
     }
     submit_keyboard_command(keyboard_control_principal(), handle, unsafe { *command }.into())

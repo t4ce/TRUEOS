@@ -1,4 +1,5 @@
 pub(crate) mod access;
+pub(crate) mod aligned_buf;
 pub mod block;
 pub mod install;
 pub mod layout;
