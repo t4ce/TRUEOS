@@ -500,6 +500,7 @@ pub mod env {
     }
 }
 
+pub(crate) mod abi_wire;
 pub mod async_fs_cabi;
 pub mod calculator_cabi;
 pub mod fs_cabi;

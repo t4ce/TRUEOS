@@ -160,7 +160,7 @@ impl Operation {
 
     async fn ready(&self) -> Result<(), i32> {
         poll_fn(|cx| {
-            let status = unsafe { vcabi::trueos_cabi_async_fs_status(self.id) };
+            let status = vcabi::trueos_cabi_async_fs_status(self.id);
             match status {
                 0 => {
                     cx.waker().wake_by_ref();
@@ -175,7 +175,7 @@ impl Operation {
 
     fn discard(&mut self) {
         if self.id != 0 {
-            let _ = unsafe { vcabi::trueos_cabi_async_fs_discard(self.id) };
+            let _ = vcabi::trueos_cabi_async_fs_discard(self.id);
             self.id = 0;
         }
     }
@@ -209,7 +209,7 @@ pub async fn read_file(path: &[u8]) -> Result<Vec<u8>, i32> {
     })?;
     operation.ready().await?;
 
-    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if len < 0 {
         return Err(len as i32);
     }
@@ -249,7 +249,7 @@ pub async fn list_dir(path: &[u8]) -> Result<DirListing, i32> {
     })?;
     operation.ready().await?;
 
-    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if len < 0 {
         return Err(len as i32);
     }
@@ -398,7 +398,7 @@ pub async fn list_mounts() -> Result<Vec<MountInfo>, i32> {
     let mut operation =
         Operation::from_start(unsafe { vcabi::trueos_cabi_async_fs_list_mounts_start() })?;
     operation.ready().await?;
-    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if len < 0 {
         return Err(len as i32);
     }
@@ -621,7 +621,7 @@ pub async fn metadata(path: &[u8]) -> Result<Metadata, i32> {
     })?;
     operation.ready().await?;
 
-    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if len < 0 {
         return Err(len as i32);
     }
@@ -653,7 +653,7 @@ pub async fn typed_metadata(path: &[u8]) -> Result<TypedMetadata, i32> {
         vcabi::trueos_cabi_async_fs_typed_stat_start(path.as_ptr(), path.len())
     })?;
     operation.ready().await?;
-    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if len != 16 {
         return Err(if len < 0 { len as i32 } else { ERR_IO });
     }
@@ -689,7 +689,7 @@ pub async fn list_dir_typed(path: &[u8]) -> Result<TypedDirListing, i32> {
         vcabi::trueos_cabi_async_fs_typed_list_dir_start(path.as_ptr(), path.len())
     })?;
     operation.ready().await?;
-    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if len < 0 {
         return Err(len as i32);
     }
@@ -715,7 +715,7 @@ pub async fn record_key(path: &[u8]) -> Result<RecordKey, i32> {
     })?;
     operation.ready().await?;
 
-    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if len < 0 {
         return Err(len as i32);
     }
@@ -804,7 +804,7 @@ pub async fn select_files(
         )
     })?;
     operation.ready().await?;
-    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if len < 0 {
         return Err(len as i32);
     }

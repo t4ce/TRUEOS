@@ -74,7 +74,7 @@ pub fn configure_account(user: &str, password: &str, from: &str) -> Result<(), i
 }
 
 pub fn password_configured() -> bool {
-    unsafe { vcabi::trueos_cabi_smtp_password_configured() != 0 }
+    vcabi::trueos_cabi_smtp_password_configured() != 0
 }
 
 pub fn send_text_start_with_timeout(

@@ -26,7 +26,7 @@ pub enum VarError {
 }
 
 pub fn args() -> Args {
-    let count = unsafe { vcabi::trueos_cabi_env_args_count() };
+    let count = vcabi::trueos_cabi_env_args_count();
     let mut values = Vec::with_capacity(count);
     for index in 0..count {
         let len = unsafe { vcabi::trueos_cabi_env_arg(index, core::ptr::null_mut(), 0) };

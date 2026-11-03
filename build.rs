@@ -89,25 +89,41 @@ fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
 
     let contracts = parse_declared_cabi_contracts(&bp_abi_path)?;
     verify_portal_cabi_lock(&lock_path, &contracts)?;
-    let import_names = contracts.keys().cloned().collect::<Vec<_>>();
     let defined_exports = collect_defined_cabi_exports(manifest_dir)?;
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
     let generated_path = Path::new(&out_dir).join("generated_portal_imports.rs");
+    let include_gridpaper = env::var_os("CARGO_FEATURE_GRIDPAPER").is_some();
+    let (generated, unresolved) = render_portal_import_resolver(
+        &contracts.keys().cloned().collect::<Vec<_>>(),
+        &defined_exports,
+        include_gridpaper,
+    );
+    for name in unresolved {
+        println!(
+            "cargo:warning=declared CABI symbol {name} has no kernel export and will stay unresolved"
+        );
+    }
 
+    fs::write(&generated_path, generated)
+        .map_err(|err| format!("failed to write {}: {err}", generated_path.display()))
+}
+
+fn render_portal_import_resolver(
+    import_names: &[String],
+    defined_exports: &BTreeMap<String, String>,
+    include_gridpaper: bool,
+) -> (String, Vec<String>) {
     let mut generated =
         String::from("fn resolve_cabi_import(name: &str) -> Option<usize> {\n    match name {\n");
+    let mut unresolved = Vec::new();
     for name in import_names {
         // Disabled Gridpaper has no kernel implementation to bind.
-        if name.starts_with("trueos_cabi_gridpaper_")
-            && env::var_os("CARGO_FEATURE_GRIDPAPER").is_none()
-        {
+        if name.starts_with("trueos_cabi_gridpaper_") && !include_gridpaper {
             continue;
         }
-        let Some(symbol_path) = defined_exports.get(&name) else {
-            println!(
-                "cargo:warning=declared CABI symbol {name} has no kernel export and will stay unresolved"
-            );
+        let Some(symbol_path) = defined_exports.get(name) else {
+            unresolved.push(name.clone());
             continue;
         };
         generated.push_str("        \"");
@@ -117,9 +133,7 @@ fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
         generated.push_str(" as *const () as usize),\n");
     }
     generated.push_str("        _ => None,\n    }\n}\n");
-
-    fs::write(&generated_path, generated)
-        .map_err(|err| format!("failed to write {}: {err}", generated_path.display()))
+    (generated, unresolved)
 }
 
 fn parse_declared_cabi_contracts(bp_abi_path: &Path) -> Result<BTreeMap<String, String>, String> {
@@ -157,12 +171,26 @@ fn verify_portal_cabi_lock(
 }
 
 fn parse_cabi_contracts(source: &str) -> Result<BTreeMap<String, String>, String> {
-    const PREFIX: &str = "pub fn trueos_cabi_";
+    const PREFIXES: &[&str] = &[
+        "pub fn trueos_cabi_",
+        "pub safe fn trueos_cabi_",
+        "pub unsafe fn trueos_cabi_",
+    ];
     let mut contracts = BTreeMap::new();
     let mut cursor = 0usize;
-    while let Some(relative_start) = source[cursor..].find(PREFIX) {
-        let start = cursor + relative_start;
-        let name_start = start + "pub fn ".len();
+    while cursor < source.len() {
+        let Some((start, prefix)) = PREFIXES
+            .iter()
+            .filter_map(|prefix| {
+                source[cursor..]
+                    .find(prefix)
+                    .map(|offset| (cursor + offset, *prefix))
+            })
+            .min_by_key(|(start, _)| *start)
+        else {
+            break;
+        };
+        let name_start = start + prefix.len() - "trueos_cabi_".len();
         let open = source[name_start..]
             .find('(')
             .map(|offset| name_start + offset)

@@ -58,7 +58,7 @@ impl Operation {
 
     async fn ready_with_progress(&mut self, mut progress: impl FnMut(u32)) -> Result<(), i32> {
         poll_fn(|cx| {
-            let status = unsafe { vcabi::trueos_cabi_archive_status(self.id) };
+            let status = vcabi::trueos_cabi_archive_status(self.id);
             match status {
                 0 => {
                     let mut raw = TrueosArchiveReport::default();
@@ -80,7 +80,7 @@ impl Operation {
 
     fn discard(&mut self) {
         if self.id != 0 {
-            let _ = unsafe { vcabi::trueos_cabi_archive_discard(self.id) };
+            let _ = vcabi::trueos_cabi_archive_discard(self.id);
             self.id = 0;
         }
     }

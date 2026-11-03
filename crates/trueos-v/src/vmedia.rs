@@ -178,7 +178,7 @@ impl Operation {
             operation.discard();
             return Err(write);
         }
-        let commit = unsafe { vcabi::trueos_cabi_vmedia_image_decode_commit(operation.id) };
+        let commit = vcabi::trueos_cabi_vmedia_image_decode_commit(operation.id);
         if commit != 0 {
             operation.discard();
             return Err(commit);
@@ -271,7 +271,7 @@ impl Operation {
 
     async fn wait(&self) -> Result<(), i32> {
         poll_fn(|context| {
-            let status = unsafe { vcabi::trueos_cabi_vmedia_image_decode_status(self.id) };
+            let status = vcabi::trueos_cabi_vmedia_image_decode_status(self.id);
             match status {
                 0 => {
                     context.waker().wake_by_ref();
@@ -286,7 +286,7 @@ impl Operation {
 
     fn discard(&mut self) {
         if self.id != 0 {
-            let _ = unsafe { vcabi::trueos_cabi_vmedia_image_decode_discard(self.id) };
+            let _ = vcabi::trueos_cabi_vmedia_image_decode_discard(self.id);
             self.id = 0;
         }
     }

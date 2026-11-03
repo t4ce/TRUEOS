@@ -38,12 +38,12 @@ impl ConsoleStream {
 
 #[inline]
 pub fn poll_once() {
-    unsafe { vcabi::trueos_cabi_poll_once() }
+    vcabi::trueos_cabi_poll_once()
 }
 
 #[inline]
 pub fn sleep_ms(ms: u64) {
-    unsafe { vcabi::trueos_cabi_sleep_ms(ms) }
+    vcabi::trueos_cabi_sleep_ms(ms)
 }
 
 #[inline]

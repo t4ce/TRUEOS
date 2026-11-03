@@ -120,7 +120,7 @@ impl fmt::Display for UtcDateTime {
 
 #[inline]
 pub fn monotonic_nanos() -> u64 {
-    unsafe { vcabi::trueos_time_monotonic_nanos() }
+    vcabi::trueos_time_monotonic_nanos()
 }
 
 #[inline]
@@ -130,7 +130,7 @@ pub fn monotonic_millis() -> u64 {
 
 #[inline]
 pub fn unix_seconds() -> Option<u64> {
-    match unsafe { vcabi::trueos_time_unix_seconds() } {
+    match vcabi::trueos_time_unix_seconds()  {
         0 => None,
         seconds => Some(seconds),
     }
@@ -138,7 +138,7 @@ pub fn unix_seconds() -> Option<u64> {
 
 #[inline]
 pub fn unix_nanos() -> Option<u64> {
-    match unsafe { vcabi::trueos_time_unix_nanos() } {
+    match vcabi::trueos_time_unix_nanos()  {
         0 => None,
         nanos => Some(nanos),
     }

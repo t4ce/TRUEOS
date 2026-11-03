@@ -114,22 +114,22 @@ pub fn fetch_post_json_bytes_with_timeout(
 
 #[inline]
 pub fn fetch_result(op_id: u32) -> i32 {
-    unsafe { vcabi::trueos_cabi_net_fetch_result(op_id) }
+    vcabi::trueos_cabi_net_fetch_result(op_id)
 }
 
 #[inline]
 pub fn fetch_wait(op_id: u32, timeout_ms: u64) -> i32 {
-    unsafe { vcabi::trueos_cabi_net_fetch_wait(op_id, timeout_ms) }
+    vcabi::trueos_cabi_net_fetch_wait(op_id, timeout_ms)
 }
 
 #[inline]
 pub fn fetch_discard(op_id: u32) -> i32 {
-    unsafe { vcabi::trueos_cabi_net_fetch_discard(op_id) }
+    vcabi::trueos_cabi_net_fetch_discard(op_id)
 }
 
 #[inline]
 pub fn fetch_bytes_wait(op_id: u32, timeout_ms: u64) -> i32 {
-    unsafe { vcabi::trueos_cabi_net_fetch_bytes_wait(op_id, timeout_ms) }
+    vcabi::trueos_cabi_net_fetch_bytes_wait(op_id, timeout_ms)
 }
 
 #[inline]
@@ -156,5 +156,5 @@ pub fn fetch_bytes_read(op_id: u32) -> Result<Vec<u8>, i32> {
 
 #[inline]
 pub fn fetch_bytes_discard(op_id: u32) -> i32 {
-    unsafe { vcabi::trueos_cabi_net_fetch_bytes_discard(op_id) }
+    vcabi::trueos_cabi_net_fetch_bytes_discard(op_id)
 }

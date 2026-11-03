@@ -3,36 +3,51 @@
 
 use alloc::vec::Vec;
 
+use crate::r::io::abi_wire::WireRecord;
+
 use super::{
-    BlueprintImageSourceInfo, CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES, CONTEXT_MENU_WIRE_HEADER_BYTES, ERROR_INVALID, ERROR_UI4, IMAGE_SOURCE_READ_CHUNK_BYTES,
-    MAX_CONTEXT_MENU_LABEL_BYTES, MAX_INPUT_ROUTES, TrueosUi4ContextMenuEntry,
-    TrueosUi4ContextMenuEvent, TrueosUi4InputRouteState, TrueosUi4KeyboardState, TrueosUi4PanEvent,
-    TrueosUi4PointerEvent, TrueosUi4ResizeEvent,
+    BlueprintImageSourceInfo, CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES, CONTEXT_MENU_WIRE_HEADER_BYTES,
+    ERROR_INVALID, ERROR_UI4, IMAGE_SOURCE_READ_CHUNK_BYTES, MAX_CONTEXT_MENU_LABEL_BYTES,
+    MAX_INPUT_ROUTES, TrueosUi4ContextMenuEntry, TrueosUi4ContextMenuEvent,
+    TrueosUi4InputRouteState, TrueosUi4KeyboardState, TrueosUi4PanEvent, TrueosUi4PointerEvent,
+    TrueosUi4ResizeEvent,
 };
 
-pub(super) unsafe fn guest_image_source_info(
-    name_ptr: *const u8,
-    name_len: usize,
-    out: *mut BlueprintImageSourceInfo,
-) -> i32 {
-    let name = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
-    let mut response = [0u8; core::mem::size_of::<BlueprintImageSourceInfo>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+/// Fetch and decode one fixed-layout value without exposing caller pointers.
+/// Raw output storage belongs only to the outer C ABI entry point.
+pub(super) fn guest_record<T: WireRecord, const N: usize>(
+    op: u32,
+    arg0: u64,
+    arg1: u64,
+    request: &[u8],
+) -> Result<T, i32> {
+    if N != T::WIRE_SIZE || request.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return Err(ERROR_INVALID);
+    }
+    let mut response = [0u8; N];
+    let (status, data, response_len) = trueos_vm::vmcall::call_with_payload_reported_len(
+        op, arg0, arg1, request, &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return Err(ERROR_UI4);
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return Err(result);
+    }
+    if response_len != T::WIRE_SIZE {
+        return Err(ERROR_UI4);
+    }
+    T::decode(&response).ok_or(ERROR_UI4)
+}
+
+pub(super) fn guest_image_source_info(name: &[u8]) -> Result<BlueprintImageSourceInfo, i32> {
+    guest_record::<BlueprintImageSourceInfo, { core::mem::size_of::<BlueprintImageSourceInfo>() }>(
         trueos_vm::vmcall::OP_BP_IMAGE_SOURCE_INFO,
         0,
         0,
         name,
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    unsafe { out.write(core::ptr::read_unaligned(response.as_ptr().cast())) };
-    0
+    )
 }
 
 pub(super) unsafe fn guest_image_source_read(
@@ -111,189 +126,93 @@ pub(super) unsafe fn guest_context_menu_register(
     )
 }
 
-pub(super) unsafe fn guest_context_menu_event_take(
+pub(super) fn guest_context_menu_event_take(
     window_id: u32,
-    out: *mut TrueosUi4ContextMenuEvent,
-) -> i32 {
-    let mut response = [0u8; core::mem::size_of::<TrueosUi4ContextMenuEvent>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+) -> Result<TrueosUi4ContextMenuEvent, i32> {
+    guest_record::<TrueosUi4ContextMenuEvent, { core::mem::size_of::<TrueosUi4ContextMenuEvent>() }>(
         trueos_vm::vmcall::OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE,
         window_id as u64,
         0,
         &[],
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
-    unsafe { out.write(event) };
-    0
+    )
 }
 
-pub(super) unsafe fn guest_context_menu_event_take_v2(
+pub(super) fn guest_context_menu_event_take_v2(
     window_id: u32,
-    out: *mut super::TrueosUi4ContextMenuEventV2,
-) -> i32 {
-    let mut response = [0u8; core::mem::size_of::<super::TrueosUi4ContextMenuEventV2>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+) -> Result<super::TrueosUi4ContextMenuEventV2, i32> {
+    guest_record::<
+        super::TrueosUi4ContextMenuEventV2,
+        { core::mem::size_of::<super::TrueosUi4ContextMenuEventV2>() },
+    >(
         trueos_vm::vmcall::OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE,
         window_id as u64,
         1,
         &[],
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    unsafe { out.write(core::ptr::read_unaligned(response.as_ptr().cast())) };
-    0
+    )
 }
 
-pub(super) unsafe fn guest_pointer_event_take(
-    window_id: u32,
-    out: *mut TrueosUi4PointerEvent,
-) -> i32 {
-    let mut response = [0u8; core::mem::size_of::<TrueosUi4PointerEvent>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+pub(super) fn guest_pointer_event_take(window_id: u32) -> Result<TrueosUi4PointerEvent, i32> {
+    guest_record::<TrueosUi4PointerEvent, { core::mem::size_of::<TrueosUi4PointerEvent>() }>(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_POINTER_EVENT_TAKE,
         window_id as u64,
         0,
         &[],
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
-    unsafe { out.write(event) };
-    0
+    )
 }
 
-pub(super) unsafe fn guest_keyboard_event_take(
+pub(super) fn guest_keyboard_event_take(
     window_id: u32,
-    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
-) -> i32 {
-    let mut response = [0u8; core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+) -> Result<crate::r::keyboard::TrueosKeyboardOutputEvent, i32> {
+    guest_record::<
+        crate::r::keyboard::TrueosKeyboardOutputEvent,
+        { core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>() },
+    >(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE,
         window_id as u64,
         0,
         &[],
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
-    unsafe { out.write(event) };
-    0
+    )
 }
 
-pub(super) unsafe fn guest_keyboard_event_take_v1(
+pub(super) fn guest_keyboard_event_take_v1(
     window_id: u32,
-    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
-) -> i32 {
-    let mut response = [0u8; core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+) -> Result<crate::r::keyboard::TrueosKeyboardOutputEvent, i32> {
+    guest_record::<
+        crate::r::keyboard::TrueosKeyboardOutputEvent,
+        { core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>() },
+    >(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE_V1,
         window_id as u64,
         0,
         &[],
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
-    unsafe { out.write(event) };
-    0
+    )
 }
 
-pub(super) unsafe fn guest_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent) -> i32 {
-    let mut response = [0u8; core::mem::size_of::<TrueosUi4PanEvent>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+pub(super) fn guest_pan_event_take(window_id: u32) -> Result<TrueosUi4PanEvent, i32> {
+    guest_record::<TrueosUi4PanEvent, { core::mem::size_of::<TrueosUi4PanEvent>() }>(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_PAN_EVENT_TAKE,
         window_id as u64,
         0,
         &[],
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
-    unsafe { out.write(event) };
-    0
+    )
 }
 
-pub(super) unsafe fn guest_resize_event_take(
-    window_id: u32,
-    out: *mut TrueosUi4ResizeEvent,
-) -> i32 {
-    let mut response = [0u8; core::mem::size_of::<TrueosUi4ResizeEvent>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+pub(super) fn guest_resize_event_take(window_id: u32) -> Result<TrueosUi4ResizeEvent, i32> {
+    guest_record::<TrueosUi4ResizeEvent, { core::mem::size_of::<TrueosUi4ResizeEvent>() }>(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE,
         window_id as u64,
         0,
         &[],
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
-    unsafe { out.write(event) };
-    0
+    )
 }
 
-pub(super) unsafe fn guest_keyboard_state(window_id: u32, out: *mut TrueosUi4KeyboardState) -> i32 {
-    let mut response = [0u8; core::mem::size_of::<TrueosUi4KeyboardState>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+pub(super) fn guest_keyboard_state(window_id: u32) -> Result<TrueosUi4KeyboardState, i32> {
+    guest_record::<TrueosUi4KeyboardState, { core::mem::size_of::<TrueosUi4KeyboardState>() }>(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_KEYBOARD_STATE,
         window_id as u64,
         0,
         &[],
-        &mut response,
-    );
-    if status != trueos_vm::vmcall::STATUS_OK {
-        return ERROR_UI4;
-    }
-    let result = data as i64 as i32;
-    if result != 0 {
-        return result;
-    }
-    let state = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
-    unsafe { out.write(state) };
-    0
+    )
 }
 
 pub(super) unsafe fn guest_input_routes(

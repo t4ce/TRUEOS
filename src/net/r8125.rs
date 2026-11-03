@@ -653,14 +653,14 @@ impl R8125Adapter {
         let nd = unsafe { read_volatile(self.tx_desc.add(n)) };
         let td = unsafe { read_volatile(self.tx_desc.add(t)) };
 
-        let hd_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hd.opts1)) };
-        let hd_opts2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hd.opts2)) };
-        let nd_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(nd.opts1)) };
-        let td_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(td.opts1)) };
+        let hd_opts1 = hd.opts1;
+        let hd_opts2 = hd.opts2;
+        let nd_opts1 = nd.opts1;
+        let td_opts1 = td.opts1;
 
-        let hd_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hd.addr)) };
-        let nd_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(nd.addr)) };
-        let td_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(td.addr)) };
+        let hd_addr = hd.addr;
+        let nd_addr = nd.addr;
+        let td_addr = td.addr;
 
         crate::log!(
             "net/r8125: tx-window reason={} head={} tail={} next={} head[o1=0x{:08x} o2=0x{:08x} a=0x{:016x}] next[o1=0x{:08x} a=0x{:016x}] tail[o1=0x{:08x} a=0x{:016x}]\n",
@@ -684,7 +684,7 @@ impl R8125Adapter {
         let mut zero_length = 0usize;
         for idx in 0..RX_DESC_COUNT {
             let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
-            let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+            let opts1 = desc.opts1;
             if (opts1 & DESC_OWN) != 0 {
                 nic_owned += 1;
             } else {
@@ -702,8 +702,8 @@ impl R8125Adapter {
         let next_idx = (idx + 1) % RX_DESC_COUNT;
         let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
         let next = unsafe { read_volatile(self.rx_desc.add(next_idx)) };
-        let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
-        let next_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(next.opts1)) };
+        let opts1 = desc.opts1;
+        let next_opts1 = next.opts1;
         let (nic_owned, host_ready, zero_length) = self.rx_ring_ownership();
         let (cmd, imr, phy, rcr, rds_lo, rds_hi) = unsafe {
             (
@@ -874,11 +874,9 @@ impl R8125Adapter {
         let tx_tail_desc = unsafe { read_volatile(self.tx_desc.add(tail_idx)) };
         let rx_desc = unsafe { read_volatile(self.rx_desc.add(rx_idx)) };
 
-        let tx_head_opts1 =
-            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_head_desc.opts1)) };
-        let tx_tail_opts1 =
-            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_tail_desc.opts1)) };
-        let rx_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(rx_desc.opts1)) };
+        let tx_head_opts1 = tx_head_desc.opts1;
+        let tx_tail_opts1 = tx_tail_desc.opts1;
+        let rx_opts1 = rx_desc.opts1;
 
         crate::log!(
             "net/r8125: state reason={} dumps={} poll={} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x} rxmax=0x{:04x} rdsar=0x{:08x}{:08x} tnpds=0x{:08x}{:08x} tx_desc_phys=0x{:016x} tx_head={} tx_tail={} tx_head_opts1=0x{:08x} tx_tail_opts1=0x{:08x} rx_idx={} rx_opts1=0x{:08x} tx_sub={} tx_rec={} tx_full={} tx_checks={} kicks={} resets={} rx_ok={} rx_drop={} rx_bad={} rx_errsum={} rx_rwt={} rx_runt={} rx_crc={} rx_len_bad={}\n",
@@ -1194,9 +1192,9 @@ impl R8125Adapter {
         if crate::log_os::flags::R8125_VERBOSE_LOGS {
             for idx in [0, 1, RX_DESC_COUNT - 2, RX_DESC_COUNT - 1] {
                 let desc = unsafe { read_volatile(rx_desc.add(idx)) };
-                let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
-                let opts2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts2)) };
-                let addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.addr)) };
+                let opts1 = desc.opts1;
+                let opts2 = desc.opts2;
+                let addr = desc.addr;
                 crate::log_trace!(
                     target: "net";
                     "net/r8125: phase=rx-ring-published desc={} own={} eor={} opts1=0x{:08x} opts2=0x{:08x} addr=0x{:016x}\n",
@@ -1666,7 +1664,7 @@ impl R8125Adapter {
             }
 
             let desc = unsafe { read_volatile(self.tx_desc.add(idx)) };
-            let desc_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+            let desc_opts1 = desc.opts1;
             if (desc_opts1 & DESC_OWN) != 0 {
                 // Seeing OWN set immediately after submission is normal; only treat it as a
                 // stall if it persists across many polls.
@@ -1859,7 +1857,7 @@ impl R8125Adapter {
             let idx = self.rx_idx;
             let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
 
-            let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+            let opts1 = desc.opts1;
 
             if (opts1 & DESC_OWN) != 0 {
                 break;
@@ -2053,7 +2051,7 @@ impl R8125Adapter {
         }
 
         let current = unsafe { read_volatile(self.tx_desc.add(self.tx_tail)) };
-        let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(current.opts1)) };
+        let opts1 = current.opts1;
         (opts1 & DESC_OWN) == 0
     }
 
@@ -2131,14 +2129,14 @@ impl R8125Adapter {
 
         let idx = self.tx_tail;
         let cur = unsafe { read_volatile(self.tx_desc.add(idx)) };
-        let cur_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(cur.opts1)) };
+        let cur_opts1 = cur.opts1;
         if (cur_opts1 & DESC_OWN) != 0 {
             self.dbg_tx_ring_full = self.dbg_tx_ring_full.saturating_add(1);
             self.kick_tx_engine();
             self.reclaim_tx();
 
             let cur2 = unsafe { read_volatile(self.tx_desc.add(idx)) };
-            let cur2_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(cur2.opts1)) };
+            let cur2_opts1 = cur2.opts1;
             if (cur2_opts1 & DESC_OWN) != 0 {
                 if self.dbg_tx_ring_full == 1
                     || self.dbg_tx_ring_full.is_multiple_of(TX_RING_FULL_LOG_EVERY)
@@ -2212,9 +2210,9 @@ impl R8125Adapter {
 
         if self.dbg_tx_submitted < TX_SUBMIT_DEBUG_FIRST {
             let post = unsafe { read_volatile(self.tx_desc.add(idx)) };
-            let post_o1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(post.opts1)) };
-            let post_o2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(post.opts2)) };
-            let post_a = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(post.addr)) };
+            let post_o1 = post.opts1;
+            let post_o2 = post.opts2;
+            let post_a = post.addr;
             let (cmd, isr, tnp_lo, tnp_hi) = unsafe {
                 (
                     self.mmio.read_u8(REG_CMD),

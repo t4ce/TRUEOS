@@ -171,7 +171,7 @@ impl Stream {
     }
 
     pub fn start(self) -> Result<(), i32> {
-        rc_unit(unsafe { vcabi::trueos_cabi_audio_start(self.handle) })
+        rc_unit(vcabi::trueos_cabi_audio_start(self.handle))
     }
 
     pub fn write_interleaved_i16(self, samples: &[i16]) -> Result<usize, i32> {
@@ -186,15 +186,15 @@ impl Stream {
     }
 
     pub fn queued_frames(self) -> Result<usize, i32> {
-        frames_result(unsafe { vcabi::trueos_cabi_audio_queued_frames(self.handle) })
+        frames_result(vcabi::trueos_cabi_audio_queued_frames(self.handle))
     }
 
     pub fn buffer_frames(self) -> Result<usize, i32> {
-        frames_result(unsafe { vcabi::trueos_cabi_audio_buffer_frames(self.handle) })
+        frames_result(vcabi::trueos_cabi_audio_buffer_frames(self.handle))
     }
 
     pub fn drain(self, timeout_ms: u64) -> Result<(), i32> {
-        rc_unit(unsafe { vcabi::trueos_cabi_audio_drain(self.handle, timeout_ms) })
+        rc_unit(vcabi::trueos_cabi_audio_drain(self.handle, timeout_ms))
     }
 
     pub fn pause(self) -> Result<(), i32> {
@@ -206,31 +206,31 @@ impl Stream {
     }
 
     pub fn set_paused(self, paused: bool) -> Result<(), i32> {
-        rc_unit(unsafe { vcabi::trueos_cabi_audio_set_paused(self.handle, u32::from(paused)) })
+        rc_unit(vcabi::trueos_cabi_audio_set_paused(self.handle, u32::from(paused)))
     }
 
     pub fn paused(self) -> Result<bool, i32> {
-        bool_result(unsafe { vcabi::trueos_cabi_audio_paused(self.handle) })
+        bool_result(vcabi::trueos_cabi_audio_paused(self.handle))
     }
 
     pub fn set_volume_percent(self, percent: u32) -> Result<u32, i32> {
-        u32_result(unsafe { vcabi::trueos_cabi_audio_set_volume_percent(self.handle, percent) })
+        u32_result(vcabi::trueos_cabi_audio_set_volume_percent(self.handle, percent))
     }
 
     pub fn volume_percent(self) -> Result<u32, i32> {
-        u32_result(unsafe { vcabi::trueos_cabi_audio_volume_percent(self.handle) })
+        u32_result(vcabi::trueos_cabi_audio_volume_percent(self.handle))
     }
 
     pub fn drop_stream(self) -> Result<(), i32> {
-        rc_unit(unsafe { vcabi::trueos_cabi_audio_drop(self.handle) })
+        rc_unit(vcabi::trueos_cabi_audio_drop(self.handle))
     }
 
     pub fn close(self) -> Result<(), i32> {
-        rc_unit(unsafe { vcabi::trueos_cabi_audio_close(self.handle) })
+        rc_unit(vcabi::trueos_cabi_audio_close(self.handle))
     }
 
     pub fn state(self) -> State {
-        State::from_raw(unsafe { vcabi::trueos_cabi_audio_state(self.handle) })
+        State::from_raw(vcabi::trueos_cabi_audio_state(self.handle))
     }
 }
 
@@ -265,7 +265,7 @@ pub struct Monitor {
 
 impl Monitor {
     pub fn open(preroll_samples: usize) -> Result<Self, i32> {
-        let cursor = unsafe { vcabi::trueos_cabi_audio_monitor_start_cursor(preroll_samples) };
+        let cursor = vcabi::trueos_cabi_audio_monitor_start_cursor(preroll_samples);
         if cursor == INVALID_CURSOR {
             Err(ERR_NO_DEVICE)
         } else {

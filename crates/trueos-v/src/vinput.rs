@@ -584,7 +584,7 @@ impl InputCombo {
     /// Remove the collection identity. Member devices remain alive and
     /// independent; only their shared routing/color association is removed.
     pub fn remove(self) -> Result<(), i32> {
-        combo_bind_result(unsafe { vcabi::trueos_cabi_input_combo_remove(self.info.combo_id) })
+        combo_bind_result(vcabi::trueos_cabi_input_combo_remove(self.info.combo_id))
     }
 }
 

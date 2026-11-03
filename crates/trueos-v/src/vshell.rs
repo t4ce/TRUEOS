@@ -434,12 +434,12 @@ pub fn leave_terminal_handoff() {
     {
         return;
     }
-    let _ = unsafe { vcabi::trueos_cabi_blueprint_return_to_cli() };
+    let _ = vcabi::trueos_cabi_blueprint_return_to_cli();
 }
 
 #[inline]
 pub fn attached_read_byte() -> Option<u8> {
-    let value = unsafe { vcabi::trueos_cabi_shell_attached_read_byte() };
+    let value = vcabi::trueos_cabi_shell_attached_read_byte();
     if (0..=255).contains(&value) {
         Some(value as u8)
     } else {

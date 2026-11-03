@@ -21,6 +21,7 @@ mod display_registry;
 mod window_api;
 pub use window_api::TrueosUi4WindowStateV1;
 
+use crate::r::io::abi_wire::WireRecord;
 use crate::intel::gpgpu::shadertoy_package::{
     ShaderToyPackageUpload, program_id as shadertoy_program_id,
 };
@@ -1912,7 +1913,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_pointer_event_take(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_pointer_event_take(window_id, out) };
+        return match guest_pointer_event_take(window_id) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
@@ -2033,7 +2041,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_event_take_v2(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_transport::guest_context_menu_event_take_v2(window_id, out) };
+        return match guest_transport::guest_context_menu_event_take_v2(window_id) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
@@ -2169,7 +2184,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_event_take(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_context_menu_event_take(window_id, out) };
+        return match guest_context_menu_event_take(window_id) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
@@ -2206,7 +2228,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_event_take(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_keyboard_event_take(window_id, out) };
+        return match guest_keyboard_event_take(window_id) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
@@ -2239,22 +2268,17 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_state_get_v1(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let mut bytes = [0u8; core::mem::size_of::<TrueosUi4WindowStateV1>()];
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_UI4_WINDOW_STATE_V1,
-            window_id as u64,
-            0,
-            &[],
-            &mut bytes,
-        );
-        if status != trueos_vm::vmcall::STATUS_OK {
-            return ERROR_UI4;
-        }
-        if rc != 0 {
-            return rc as i64 as i32;
-        }
-        unsafe { out.write(core::ptr::read_unaligned(bytes.as_ptr().cast())) };
-        return 0;
+        return match guest_transport::guest_record::<
+            TrueosUi4WindowStateV1,
+            { core::mem::size_of::<TrueosUi4WindowStateV1>() },
+        >(trueos_vm::vmcall::OP_BP_UI4_WINDOW_STATE_V1, window_id as u64, 0, &[]) {
+            Ok(state) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(state) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     unsafe { window_api::get_state(window_id, out) }
 }
@@ -2268,17 +2292,13 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_state_set_v1(
     }
     let state = unsafe { state.read() };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                (&state as *const TrueosUi4WindowStateV1).cast::<u8>(),
-                core::mem::size_of::<TrueosUi4WindowStateV1>(),
-            )
-        };
+        let mut bytes = [0u8; TrueosUi4WindowStateV1::WIRE_SIZE];
+        state.encode(&mut bytes);
         let (status, rc) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_UI4_WINDOW_STATE_V1,
             window_id as u64,
             1,
-            bytes,
+            &bytes,
             &mut [],
         );
         return if status == trueos_vm::vmcall::STATUS_OK {
@@ -2361,7 +2381,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_event_take_v1(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_transport::guest_keyboard_event_take_v1(window_id, out) };
+        return match guest_transport::guest_keyboard_event_take_v1(window_id) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
@@ -2395,7 +2422,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_pan_event_take(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_pan_event_take(window_id, out) };
+        return match guest_pan_event_take(window_id) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
@@ -2540,7 +2574,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_resize_event_take(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_resize_event_take(window_id, out) };
+        return match guest_resize_event_take(window_id) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
@@ -2586,7 +2627,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_state(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_keyboard_state(window_id, out) };
+        return match guest_keyboard_state(window_id) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
@@ -3405,12 +3453,13 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_icon(
             ep_target: source.ep_target,
             hid_kind: u32::from(source.hid_kind),
         });
-        let payload = payload.as_ref().map_or(&[][..], |source| unsafe {
-            core::slice::from_raw_parts(
-                (source as *const TrueosUi4CursorSource).cast::<u8>(),
-                core::mem::size_of::<TrueosUi4CursorSource>(),
-            )
-        });
+        let mut bytes = [0u8; TrueosUi4CursorSource::WIRE_SIZE];
+        let payload = if let Some(value) = payload {
+            value.encode(&mut bytes);
+            &bytes[..]
+        } else {
+            &[][..]
+        };
         return guest_status(
             trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_CURSOR_ICON,
             window_id as u64,
@@ -3464,12 +3513,13 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_step(
             cell_width_subpx: step.cell_width_subpx,
             cell_height_subpx: step.cell_height_subpx,
         });
-        let payload = payload.as_ref().map_or(&[][..], |step| unsafe {
-            core::slice::from_raw_parts(
-                (step as *const TrueosUi4CursorStep).cast::<u8>(),
-                core::mem::size_of::<TrueosUi4CursorStep>(),
-            )
-        });
+        let mut bytes = [0u8; TrueosUi4CursorStep::WIRE_SIZE];
+        let payload = if let Some(value) = payload {
+            value.encode(&mut bytes);
+            &bytes[..]
+        } else {
+            &[][..]
+        };
         return guest_status(
             trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_CURSOR_STEP,
             window_id as u64,
@@ -4824,7 +4874,14 @@ pub unsafe extern "C" fn trueos_cabi_image_source_info(
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_image_source_info(name_ptr, name_len, out) };
+        return match guest_image_source_info(unsafe { core::slice::from_raw_parts(name_ptr, name_len) }) {
+            Ok(value) => {
+                // SAFETY: the C ABI caller provides writable output storage.
+                unsafe { out.write(value) };
+                0
+            }
+            Err(error) => error,
+        };
     }
     let Ok(name) = core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) })
     else {

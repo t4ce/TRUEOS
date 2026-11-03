@@ -525,6 +525,22 @@ pub fn call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
 }
 
 pub fn call_with_payload(op: u32, arg0: u64, arg1: u64, req: &[u8], out: &mut [u8]) -> (u32, u64) {
+    let (status, data, _) = call_with_payload_reported_len(op, arg0, arg1, req, out);
+    (status, data)
+}
+
+/// Like `call_with_payload`, also returning the host's reported payload length.
+/// The length is reported before clamping to the output buffer or page capacity,
+/// so fixed-record callers can reject truncated and oversized responses.
+/// This reuses the response header read already required by the transport.
+#[inline(always)]
+pub fn call_with_payload_reported_len(
+    op: u32,
+    arg0: u64,
+    arg1: u64,
+    req: &[u8],
+    out: &mut [u8],
+) -> (u32, u64, usize) {
     let p = page();
     let _guard = CommPageGuard::acquire(p);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -543,8 +559,9 @@ pub fn call_with_payload(op: u32, arg0: u64, arg1: u64, req: &[u8], out: &mut [u
 
         let status = core::ptr::read_volatile(&(*p).response_status);
         let data = core::ptr::read_volatile(&(*p).response_data);
+        let reported_len = core::ptr::read_volatile(&(*p).response_len) as usize;
         let resp_n = core::cmp::min(
-            core::ptr::read_volatile(&(*p).response_len) as usize,
+            reported_len,
             core::cmp::min(out.len(), PAYLOAD_CAP),
         );
         if resp_n != 0 {
@@ -556,7 +573,7 @@ pub fn call_with_payload(op: u32, arg0: u64, arg1: u64, req: &[u8], out: &mut [u
                 core::ptr::write_volatile((*p).payload.as_mut_ptr().add(index), 0);
             }
         }
-        (status, data)
+        (status, data, reported_len)
     }
 }
 

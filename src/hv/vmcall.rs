@@ -9,6 +9,7 @@
 //! Host reads, executes, writes response, then vmresumes.
 //! The vmcall is synchronous from the guest's point of view.
 
+use crate::r::io::abi_wire::WireRecord;
 use crate::hv::memory::kernel_va_to_pa;
 use crate::hv::{hvlogf, hvwarnf};
 use alloc::vec::Vec;
@@ -571,6 +572,20 @@ fn release_guest_comm_page(vm_id: u8) {
     };
     let lock = unsafe { AtomicU32::from_ptr(core::ptr::addr_of_mut!((*p).request_pad)) };
     lock.store(0, Ordering::Release);
+}
+
+/// Control records use explicit fields, so padding is initialized before the
+/// existing byte transport copies it into the communication page.
+fn write_control_record_response<T: WireRecord>(vm_id: u8, seq: u32, data: u64, value: &T) {
+    // All current control records fit within 128 bytes. Larger future records
+    // fail explicitly instead of allocating on the VM-exit stack.
+    let mut bytes = [0u8; 128];
+    let len = T::WIRE_SIZE;
+    if len > bytes.len() || !value.encode(&mut bytes) {
+        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+        return;
+    }
+    write_record_slice_response(vm_id, seq, data, &bytes[..len]);
 }
 
 fn write_record_response<T: Copy>(vm_id: u8, seq: u32, data: u64, value: &T) {
@@ -2035,7 +2050,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     )
                 };
                 if rc == 0 {
-                    write_record_response(vm_id, seq, 0, &event);
+                    write_control_record_response(vm_id, seq, 0, &event);
                 } else {
                     write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
                 }
@@ -2053,7 +2068,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             if rc == 0 {
-                write_record_response(vm_id, seq, 0, &event);
+                write_control_record_response(vm_id, seq, 0, &event);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
@@ -2799,7 +2814,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             if rc == 0 {
-                write_record_response(vm_id, seq, 0, &event);
+                write_control_record_response(vm_id, seq, 0, &event);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
@@ -2814,7 +2829,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             if rc == 0 {
-                write_record_response(vm_id, seq, 0, &event);
+                write_control_record_response(vm_id, seq, 0, &event);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
@@ -2943,13 +2958,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                         return DispatchOutcome::Resume;
                     };
-                    Some(unsafe {
-                        core::ptr::read_unaligned(
-                            payload
-                                .as_ptr()
-                                .cast::<crate::ui4::blueprint_ui4::TrueosUi4CursorSource>(),
-                        )
-                    })
+                    crate::ui4::blueprint_ui4::TrueosUi4CursorSource::decode(payload)
                 }
                 _ => {
                     write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -2978,13 +2987,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                         return DispatchOutcome::Resume;
                     };
-                    Some(unsafe {
-                        core::ptr::read_unaligned(
-                            payload
-                                .as_ptr()
-                                .cast::<crate::ui4::blueprint_ui4::TrueosUi4CursorStep>(),
-                        )
-                    })
+                    crate::ui4::blueprint_ui4::TrueosUi4CursorStep::decode(payload)
                 }
                 _ => {
                     write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -3022,7 +3025,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             if rc == 0 {
-                write_record_response(vm_id, seq, 0, &event);
+                write_control_record_response(vm_id, seq, 0, &event);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
@@ -3037,7 +3040,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             if rc == 0 {
-                write_record_response(vm_id, seq, 0, &event);
+                write_control_record_response(vm_id, seq, 0, &event);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
@@ -3057,7 +3060,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 let rc =
                     unsafe { trueos_cabi_ui4_scene_window_state_get_v1(arg0 as u32, &mut state) };
                 if rc == 0 {
-                    write_record_response(vm_id, seq, 0, &state);
+                    write_control_record_response(vm_id, seq, 0, &state);
                 } else {
                     write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
                 }
@@ -3068,8 +3071,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                     return DispatchOutcome::Resume;
                 };
-                let state: TrueosUi4WindowStateV1 =
-                    unsafe { core::ptr::read_unaligned(payload.as_ptr().cast()) };
+                let Some(state) = TrueosUi4WindowStateV1::decode(payload) else {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    return DispatchOutcome::Resume;
+                };
                 let rc = unsafe { trueos_cabi_ui4_scene_window_state_set_v1(arg0 as u32, &state) };
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             } else {
@@ -3152,7 +3157,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             if rc == 0 {
-                write_record_response(vm_id, seq, 0, &event);
+                write_control_record_response(vm_id, seq, 0, &event);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
@@ -3183,7 +3188,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             if rc == 0 {
-                write_record_response(vm_id, seq, 0, &state);
+                write_control_record_response(vm_id, seq, 0, &state);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
@@ -3219,7 +3224,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             match crate::ui4::blueprint_ui4::blueprint_image_source_info(name) {
-                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Ok(info) => write_control_record_response(vm_id, seq, 0, &info),
                 Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }
             DispatchOutcome::Resume
@@ -3690,7 +3695,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     (rc, cursor)
                 });
             match rc {
-                Some((0, cursor)) => write_record_response(vm_id, seq, 0, &cursor),
+                Some((0, cursor)) => write_control_record_response(vm_id, seq, 0, &cursor),
                 Some((rc, _)) => {
                     write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
                 }
@@ -3708,11 +3713,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .filter(|payload| {
                     payload.len() == core::mem::size_of::<v::vinput::MouseMotionCommand>()
                 })
-                .map(|payload| unsafe {
-                    core::ptr::read_unaligned(
-                        payload.as_ptr().cast::<v::vinput::MouseMotionCommand>(),
-                    )
-                });
+                .and_then(v::vinput::MouseMotionCommand::decode);
             let rc = command
                 .map(|command| unsafe {
                     crate::r::io::cabi::trueos_cabi_mouse_motion_submit(arg0, &command)
@@ -3756,7 +3757,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     (rc, keyboard)
                 });
             match rc {
-                Some((0, keyboard)) => write_record_response(vm_id, seq, 0, &keyboard),
+                Some((0, keyboard)) => write_control_record_response(vm_id, seq, 0, &keyboard),
                 Some((rc, _)) => {
                     write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
                 }
@@ -3774,11 +3775,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .filter(|payload| {
                     payload.len() == core::mem::size_of::<v::vinput::KeyboardControlCommand>()
                 })
-                .map(|payload| unsafe {
-                    core::ptr::read_unaligned(
-                        payload.as_ptr().cast::<v::vinput::KeyboardControlCommand>(),
-                    )
-                });
+                .and_then(v::vinput::KeyboardControlCommand::decode);
             let rc = command
                 .map(|command| unsafe {
                     crate::r::io::cabi::trueos_cabi_keyboard_control_submit(arg0, &command)

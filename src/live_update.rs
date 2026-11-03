@@ -2333,8 +2333,8 @@ fn snapshot_transition_gdt(
             options(nostack, preserves_flags),
         );
     }
-    let current_limit = unsafe { ptr::read_unaligned(ptr::addr_of!(current.limit)) };
-    let current_base = unsafe { ptr::read_unaligned(ptr::addr_of!(current.base)) };
+    let current_limit = current.limit;
+    let current_base = current.base;
     let bytes = usize::from(current_limit).saturating_add(1);
     crate::log_important!(target: "global";
         "live-update: transition GDT cpu={} base=0x{:016X} limit=0x{:04X} bytes={} capacity={}\n",

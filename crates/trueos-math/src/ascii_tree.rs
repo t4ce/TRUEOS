@@ -20,8 +20,7 @@ pub struct ArrayStack<T, const N: usize> {
 
 impl<T, const N: usize> ArrayStack<T, N> {
     pub fn new() -> Self {
-        // SAFETY: An uninitialized [MaybeUninit<_>; N] is valid.
-        let buf: [MaybeUninit<T>; N] = unsafe { MaybeUninit::uninit().assume_init() };
+        let buf: [MaybeUninit<T>; N] = [const { MaybeUninit::uninit() }; N];
         Self { buf, len: 0 }
     }
 }

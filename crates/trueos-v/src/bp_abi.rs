@@ -549,6 +549,12 @@ pub struct TrueosUi4FontMetricsV1 {
     pub strikeout_thickness: f32,
 }
 
+// Scalar imports marked `safe` below accept every bit-pattern in their scalar
+// arguments. Host implementations validate operation/resource IDs and report
+// invalid state through return codes; callers do not supply memory, perform
+// ownership transfer, or establish privilege for Rust memory safety. Pointer,
+// allocation, callback, direct hardware, and GPU submission imports remain
+// unsafe because they still rely on caller-provided memory or lifecycle rules.
 unsafe extern "C" {
     pub fn trueos_cabi_lumen_template_open(system_ptr: *const u8, system_len: usize) -> i32;
     pub fn trueos_cabi_lumen_prompt_submit(
@@ -604,17 +610,17 @@ unsafe extern "C" {
     pub fn trueos_cabi_spirit_move(x_normalized: f32, y_normalized: f32) -> i32;
     pub fn trueos_cabi_spirit_agents_publish_v1(bytes: *const u8, len: usize) -> i32;
     pub fn trueos_cabi_dobby_ui4_windows(out_ptr: *mut u8, out_cap: usize) -> isize;
-    pub fn trueos_cabi_dobby_ui4_focus(window_id: u64) -> i32;
-    pub fn trueos_cabi_dobby_ui4_observe_prepare() -> isize;
+    pub safe fn trueos_cabi_dobby_ui4_focus(window_id: u64) -> i32;
+    pub safe fn trueos_cabi_dobby_ui4_observe_prepare() -> isize;
     pub fn trueos_cabi_dobby_ui4_observe_metadata(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_dobby_ui4_observe_read(
         offset: usize,
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
-    pub fn trueos_cabi_dobby_ui4_pointer(x: u16, y: u16, action: u32) -> i32;
+    pub safe fn trueos_cabi_dobby_ui4_pointer(x: u16, y: u16, action: u32) -> i32;
     pub fn trueos_cabi_dobby_ui4_type(text_ptr: *const u8, text_len: usize) -> i32;
-    pub fn trueos_cabi_dobby_ui4_key(key: u32) -> i32;
+    pub safe fn trueos_cabi_dobby_ui4_key(key: u32) -> i32;
 
     pub fn trueos_cabi_gridpaper_snapshot_submit(
         generation: u64,
@@ -725,8 +731,8 @@ unsafe extern "C" {
         bytes_ptr: *const u8,
         bytes_len: usize,
     ) -> i32;
-    pub fn trueos_cabi_vmedia_image_decode_commit(id: u32) -> i32;
-    pub fn trueos_cabi_vmedia_image_decode_status(id: u32) -> i32;
+    pub safe fn trueos_cabi_vmedia_image_decode_commit(id: u32) -> i32;
+    pub safe fn trueos_cabi_vmedia_image_decode_status(id: u32) -> i32;
     pub fn trueos_cabi_vmedia_image_decode_info(id: u32, out: *mut TrueosVmediaImageInfo) -> i32;
     pub fn trueos_cabi_vmedia_image_decode_read(
         id: u32,
@@ -734,7 +740,7 @@ unsafe extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
-    pub fn trueos_cabi_vmedia_image_decode_discard(id: u32) -> i32;
+    pub safe fn trueos_cabi_vmedia_image_decode_discard(id: u32) -> i32;
     pub fn trueos_cabi_vmedia_texture_decode_begin(
         device: u64,
         format: u32,
@@ -761,18 +767,18 @@ unsafe extern "C" {
         output_len: usize,
     ) -> i32;
 
-    pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent)
     -> i32;
     pub fn trueos_cabi_ui4_scene_resize_event_take(
         window_id: u32,
         out: *mut TrueosUi4ResizeEvent,
     ) -> i32;
-    pub fn trueos_cabi_ui4_scene_first_presentation_take(window_id: u32) -> i32;
-    pub fn trueos_cabi_ui4_scene_frame_was_presented_v1(window_id: u32, publish_serial: u64)
+    pub safe fn trueos_cabi_ui4_scene_first_presentation_take(window_id: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_frame_was_presented_v1(window_id: u32, publish_serial: u64)
     -> i32;
-    pub fn trueos_cabi_ui4_scene_output_dimensions() -> u64;
-    pub fn trueos_cabi_ui4_scene_physical_extent_v1(width_mm: u32, height_mm: u32) -> u64;
+    pub safe fn trueos_cabi_ui4_scene_output_dimensions() -> u64;
+    pub safe fn trueos_cabi_ui4_scene_physical_extent_v1(width_mm: u32, height_mm: u32) -> u64;
     pub fn trueos_cabi_clipboard_command_v1(
         window_id: u32,
         command: u32,
@@ -817,21 +823,21 @@ unsafe extern "C" {
         damage_width: u32,
         damage_height: u32,
     ) -> i32;
-    pub fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32;
-    pub fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32;
-    pub fn trueos_cabi_ui4_scene_frame_primary_activation(window_id: u32, enabled: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_frame_primary_activation(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_get_position(window_id: u32, out_xy: *mut i32) -> i32;
-    pub fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i32, y: i32) -> i32;
-    pub fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacity: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i32, y: i32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacity: u32) -> i32;
     /// Arc in per-mille of a full half-short-side radius; 0=rect, 1000=circle for square frames.
-    pub fn trueos_cabi_ui4_scene_frame_set_arc(window_id: u32, arc: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_frame_set_arc(window_id: u32, arc: u32) -> i32;
     /// Set the shared primary display bottom color (packed 0xRRGGBB), using an owned frame.
-    pub fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32, rgb: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32, rgb: u32) -> i32;
     /// Program the shared primary display gamma LUT from a 3×256 RGB u16 ramp.
     pub fn trueos_cabi_ui4_scene_set_display_gamma_ramp(window_id: u32, ramp: *const u16) -> i32;
-    pub fn trueos_cabi_ui4_scene_display_fade_v1(window_id: u32, amount: i32) -> i32;
-    pub fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;
-    pub fn trueos_cabi_ui4_scene_frame_set_escape_key_action(window_id: u32, action: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_display_fade_v1(window_id: u32, amount: i32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_frame_set_escape_key_action(window_id: u32, action: u32) -> i32;
     // Cursor-scoped drag buffers. Window zero is the caller's Shell3 lease.
     pub fn trueos_cabi_ui4_drag_begin_v1(
         window_id: u32,
@@ -927,7 +933,7 @@ unsafe extern "C" {
         window_id: u32,
         out: *mut TrueosKeyboardOutputEvent,
     ) -> i32;
-    pub fn trueos_cabi_ui4_scene_frame_resize(window_id: u32, width: u32, height: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_frame_resize(window_id: u32, width: u32, height: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(
         window_id: u32,
         rgba_ptr: *const u8,
@@ -941,7 +947,7 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
-    pub fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_sprite_frame_begin_region_v1(
         window_id: u32,
         x: u32,
@@ -949,7 +955,7 @@ unsafe extern "C" {
         width: u32,
         height: u32,
     ) -> i32;
-    pub fn trueos_cabi_ui4_scene_visual_frame_begin(window_id: u32) -> i32;
+    pub safe fn trueos_cabi_ui4_scene_visual_frame_begin(window_id: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_sprite_quads(
         window_id: u32,
         quads: *const TrueosUi4SpriteQuad,
@@ -1047,9 +1053,9 @@ unsafe extern "C" {
     /// The uploaded SIMD8 shader receives fields in r1..r6 and returns packed 24-bit RGB as f32.
     pub fn trueos_cabi_ui4_scene_native_compute_fields_render_v1(window_id: u32) -> i32;
 
-    pub fn trueos_cabi_poll_once();
-    pub fn trueos_cabi_sleep_ms(ms: u64);
-    pub fn trueos_cabi_thread_current_id() -> usize;
+    pub safe fn trueos_cabi_poll_once();
+    pub safe fn trueos_cabi_sleep_ms(ms: u64);
+    pub safe fn trueos_cabi_thread_current_id() -> usize;
     /// Create an independent stackful thread; zero reports successful admission.
     /// The returned handle must be consumed once by join or detach.
     pub fn trueos_cabi_thread_spawn(
@@ -1060,22 +1066,22 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_thread_join(handle: usize) -> i32;
     pub fn trueos_cabi_thread_detach(handle: usize) -> i32;
-    pub fn trueos_cabi_thread_available_parallelism() -> usize;
+    pub safe fn trueos_cabi_thread_available_parallelism() -> usize;
     /// Opt-in per-launch experiment: 0 single, 1 foreground isolated, 2 spread;
     /// background_cap is 1..=4. Configure before admission; positive errno on failure.
-    pub fn trueos_cabi_thread_configure_placement_v1(mode: u32, background_cap: u32) -> i32;
+    pub safe fn trueos_cabi_thread_configure_placement_v1(mode: u32, background_cap: u32) -> i32;
     /// Swap the current logical continuation's child-admission hint: 0 general,
     /// 1 foreground, 2 Tokio pool, 3 dedicated blocking. Returns old hint or MAX.
     /// Restore the returned hint in the same continuation; hints are not inherited.
-    pub fn trueos_cabi_thread_swap_child_role_v1(role: u32) -> u32;
+    pub safe fn trueos_cabi_thread_swap_child_role_v1(role: u32) -> u32;
     /// Swap diagnostic activity: 0 unknown, 1 foreground, 2 scheduler, 3 blocking.
     /// Returns the old activity or MAX. Does not affect thread placement.
-    pub fn trueos_cabi_thread_swap_activity_v1(activity: u32) -> u32;
+    pub safe fn trueos_cabi_thread_swap_activity_v1(activity: u32) -> u32;
     pub fn trueos_cabi_thread_set_name(name: *const core::ffi::c_char) -> i32;
-    pub fn trueos_cabi_wls_current_slot() -> u32;
-    pub fn trueos_time_monotonic_nanos() -> u64;
-    pub fn trueos_time_unix_seconds() -> u64;
-    pub fn trueos_time_unix_nanos() -> u64;
+    pub safe fn trueos_cabi_wls_current_slot() -> u32;
+    pub safe fn trueos_time_monotonic_nanos() -> u64;
+    pub safe fn trueos_time_unix_seconds() -> u64;
+    pub safe fn trueos_time_unix_nanos() -> u64;
     pub fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     pub fn trueos_cabi_log(
         level: u32,
@@ -1098,7 +1104,7 @@ unsafe extern "C" {
         argument_count: usize,
         out_value: *mut f64,
     ) -> i32;
-    pub fn trueos_cabi_boot_timestamp_secs() -> u64;
+    pub safe fn trueos_cabi_boot_timestamp_secs() -> u64;
     pub fn trueos_cabi_fs_read_file(
         path_ptr: *const u8,
         path_len: usize,
@@ -1184,15 +1190,15 @@ unsafe extern "C" {
         destination_ptr: *const u8,
         destination_len: usize,
     ) -> i32;
-    pub fn trueos_cabi_async_fs_status(id: u32) -> i32;
-    pub fn trueos_cabi_async_fs_result_len(id: u32) -> isize;
+    pub safe fn trueos_cabi_async_fs_status(id: u32) -> i32;
+    pub safe fn trueos_cabi_async_fs_result_len(id: u32) -> isize;
     pub fn trueos_cabi_async_fs_result_read(
         id: u32,
         offset: usize,
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
-    pub fn trueos_cabi_async_fs_discard(id: u32) -> i32;
+    pub safe fn trueos_cabi_async_fs_discard(id: u32) -> i32;
     pub fn trueos_cabi_archive_pack_start(
         source_ptr: *const u8,
         source_len: usize,
@@ -1219,9 +1225,9 @@ unsafe extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
-    pub fn trueos_cabi_archive_status(id: u32) -> i32;
+    pub safe fn trueos_cabi_archive_status(id: u32) -> i32;
     pub fn trueos_cabi_archive_report(id: u32, out: *mut TrueosArchiveReport) -> i32;
-    pub fn trueos_cabi_archive_discard(id: u32) -> i32;
+    pub safe fn trueos_cabi_archive_discard(id: u32) -> i32;
 
     pub fn trueos_cabi_net_fetch_start(
         url_ptr: *const u8,
@@ -1273,13 +1279,13 @@ unsafe extern "C" {
         bearer_len: usize,
         timeout_ms: u32,
     ) -> u32;
-    pub fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
+    pub safe fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_result_len(op_id: u32) -> isize;
     pub fn trueos_cabi_net_fetch_bytes_read(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
-    pub fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32;
-    pub fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32;
-    pub fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
-    pub fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) -> i32;
+    pub safe fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32;
+    pub safe fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32;
+    pub safe fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
+    pub safe fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) -> i32;
     pub fn trueos_cabi_dns_resolve_ipv4(
         host: *const u8,
         host_len: usize,
@@ -1358,7 +1364,7 @@ unsafe extern "C" {
         from_ptr: *const u8,
         from_len: usize,
     ) -> i32;
-    pub fn trueos_cabi_smtp_password_configured() -> i32;
+    pub safe fn trueos_cabi_smtp_password_configured() -> i32;
 
     pub fn trueos_cabi_audio_open_playback(
         format: u32,
@@ -1366,14 +1372,14 @@ unsafe extern "C" {
         rate_hz: u32,
         out_handle: *mut u32,
     ) -> i32;
-    pub fn trueos_cabi_audio_close(handle: u32) -> i32;
-    pub fn trueos_cabi_audio_start(handle: u32) -> i32;
-    pub fn trueos_cabi_audio_drop(handle: u32) -> i32;
-    pub fn trueos_cabi_audio_set_paused(handle: u32, paused: u32) -> i32;
-    pub fn trueos_cabi_audio_paused(handle: u32) -> i32;
-    pub fn trueos_cabi_audio_set_volume_percent(handle: u32, percent: u32) -> i32;
-    pub fn trueos_cabi_audio_volume_percent(handle: u32) -> i32;
-    pub fn trueos_cabi_audio_drain(handle: u32, timeout_ms: u64) -> i32;
+    pub safe fn trueos_cabi_audio_close(handle: u32) -> i32;
+    pub safe fn trueos_cabi_audio_start(handle: u32) -> i32;
+    pub safe fn trueos_cabi_audio_drop(handle: u32) -> i32;
+    pub safe fn trueos_cabi_audio_set_paused(handle: u32, paused: u32) -> i32;
+    pub safe fn trueos_cabi_audio_paused(handle: u32) -> i32;
+    pub safe fn trueos_cabi_audio_set_volume_percent(handle: u32, percent: u32) -> i32;
+    pub safe fn trueos_cabi_audio_volume_percent(handle: u32) -> i32;
+    pub safe fn trueos_cabi_audio_drain(handle: u32, timeout_ms: u64) -> i32;
     pub fn trueos_cabi_audio_write_i16_interleaved(
         handle: u32,
         samples_ptr: *const i16,
@@ -1383,14 +1389,14 @@ unsafe extern "C" {
         samples_ptr: *const i16,
         sample_count: usize,
     ) -> isize;
-    pub fn trueos_cabi_audio_queued_frames(handle: u32) -> isize;
-    pub fn trueos_cabi_audio_buffer_frames(handle: u32) -> isize;
-    pub fn trueos_cabi_audio_state(handle: u32) -> i32;
+    pub safe fn trueos_cabi_audio_queued_frames(handle: u32) -> isize;
+    pub safe fn trueos_cabi_audio_buffer_frames(handle: u32) -> isize;
+    pub safe fn trueos_cabi_audio_state(handle: u32) -> i32;
     pub fn trueos_cabi_audio_endpoint_caps_v1(
         out: *mut crate::vaudio::AudioEndpointCapabilitiesV1,
         out_size: usize,
     ) -> i32;
-    pub fn trueos_cabi_audio_monitor_start_cursor(preroll_samples: usize) -> u64;
+    pub safe fn trueos_cabi_audio_monitor_start_cursor(preroll_samples: usize) -> u64;
     pub fn trueos_cabi_audio_monitor_read_i16_since(
         cursor: u64,
         out_ptr: *mut i16,
@@ -1659,7 +1665,7 @@ unsafe extern "C" {
         slot_id: u32,
         ep_target: u32,
     ) -> i32;
-    pub fn trueos_cabi_input_combo_remove(combo_id: u32) -> i32;
+    pub safe fn trueos_cabi_input_combo_remove(combo_id: u32) -> i32;
     pub fn trueos_cabi_input_combo_read(out: *mut TrueosInputCombo, out_cap: u32) -> u32;
     pub fn trueos_cabi_hid_keyboard_read(
         controller_id: u32,
@@ -1710,7 +1716,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
     pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
 
-    pub fn trueos_cabi_env_args_count() -> usize;
+    pub safe fn trueos_cabi_env_args_count() -> usize;
     pub fn trueos_cabi_env_arg(index: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_env_var(
         key_ptr: *const u8,
@@ -1737,7 +1743,7 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_lifecycle_identity(out: *mut TrueosLifecycleIdentity) -> i32;
     pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;
-    pub fn trueos_cabi_shell_attached_read_byte() -> i32;
+    pub safe fn trueos_cabi_shell_attached_read_byte() -> i32;
     pub fn trueos_cabi_shell_attached_retarget_slot(slot_ptr: *const u8, slot_len: usize) -> i32;
 
     pub fn trueos_cabi_shell3_session_open_v1(
@@ -1796,7 +1802,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_blueprint_child_terminate_v1(handle: u64) -> i32;
     pub fn trueos_cabi_blueprint_exit_reason(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_shutdown(data_ptr: *const u8, data_len: usize) -> i32;
-    pub fn trueos_cabi_blueprint_return_to_cli() -> i32;
+    pub safe fn trueos_cabi_blueprint_return_to_cli() -> i32;
     pub fn trueos_cabi_blueprint_terminal_lease_current_v1(
         ready_epoch: u64,
         out_epoch: *mut u64,
@@ -2119,4 +2125,75 @@ pub struct TrueosUi4WindowStateV1 {
     pub opacity: u32,
     pub focused: u32,
     pub reserved: [u32; 3],
+}
+
+
+mod scalar_import_safety {
+    // Each safe import must coerce to a safe function pointer; pointer APIs
+    // continue to require an unsafe function pointer.
+    const _: extern "C" fn(u64) -> i32 = super::trueos_cabi_dobby_ui4_focus;
+    const _: extern "C" fn() -> isize = super::trueos_cabi_dobby_ui4_observe_prepare;
+    const _: extern "C" fn(u16, u16, u32) -> i32 = super::trueos_cabi_dobby_ui4_pointer;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_dobby_ui4_key;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_vmedia_image_decode_commit;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_vmedia_image_decode_status;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_vmedia_image_decode_discard;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_solara_frame_begin;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_ui4_scene_first_presentation_take;
+    const _: extern "C" fn(u32, u64) -> i32 = super::trueos_cabi_ui4_scene_frame_was_presented_v1;
+    const _: extern "C" fn() -> u64 = super::trueos_cabi_ui4_scene_output_dimensions;
+    const _: extern "C" fn(u32, u32) -> u64 = super::trueos_cabi_ui4_scene_physical_extent_v1;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_ui4_solara_frame_close;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_solara_frame_close_requested;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_primary_activation;
+    const _: extern "C" fn(u32, i32, i32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_position;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_opacity;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_arc;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_set_display_bottom_color;
+    const _: extern "C" fn(u32, i32) -> i32 = super::trueos_cabi_ui4_scene_display_fade_v1;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_hit_testable;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_escape_key_action;
+    const _: extern "C" fn(u32, u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_resize;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_sprite_frame_begin;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_ui4_scene_visual_frame_begin;
+    const _: extern "C" fn() = super::trueos_cabi_poll_once;
+    const _: extern "C" fn(u64) = super::trueos_cabi_sleep_ms;
+    const _: extern "C" fn() -> usize = super::trueos_cabi_thread_current_id;
+    const _: extern "C" fn() -> usize = super::trueos_cabi_thread_available_parallelism;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_thread_configure_placement_v1;
+    const _: extern "C" fn(u32) -> u32 = super::trueos_cabi_thread_swap_child_role_v1;
+    const _: extern "C" fn(u32) -> u32 = super::trueos_cabi_thread_swap_activity_v1;
+    const _: extern "C" fn() -> u32 = super::trueos_cabi_wls_current_slot;
+    const _: extern "C" fn() -> u64 = super::trueos_time_monotonic_nanos;
+    const _: extern "C" fn() -> u64 = super::trueos_time_unix_seconds;
+    const _: extern "C" fn() -> u64 = super::trueos_time_unix_nanos;
+    const _: extern "C" fn() -> u64 = super::trueos_cabi_boot_timestamp_secs;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_async_fs_status;
+    const _: extern "C" fn(u32) -> isize = super::trueos_cabi_async_fs_result_len;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_async_fs_discard;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_archive_status;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_archive_discard;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_net_fetch_result;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_net_fetch_discard;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_net_fetch_bytes_discard;
+    const _: extern "C" fn(u32, u64) -> i32 = super::trueos_cabi_net_fetch_wait;
+    const _: extern "C" fn(u32, u64) -> i32 = super::trueos_cabi_net_fetch_bytes_wait;
+    const _: extern "C" fn() -> i32 = super::trueos_cabi_smtp_password_configured;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_close;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_start;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_drop;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_audio_set_paused;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_paused;
+    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_audio_set_volume_percent;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_volume_percent;
+    const _: extern "C" fn(u32, u64) -> i32 = super::trueos_cabi_audio_drain;
+    const _: extern "C" fn(u32) -> isize = super::trueos_cabi_audio_queued_frames;
+    const _: extern "C" fn(u32) -> isize = super::trueos_cabi_audio_buffer_frames;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_state;
+    const _: extern "C" fn(usize) -> u64 = super::trueos_cabi_audio_monitor_start_cursor;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_input_combo_remove;
+    const _: extern "C" fn() -> usize = super::trueos_cabi_env_args_count;
+    const _: extern "C" fn() -> i32 = super::trueos_cabi_shell_attached_read_byte;
+    const _: extern "C" fn() -> i32 = super::trueos_cabi_blueprint_return_to_cli;
+    const _: unsafe extern "C" fn(u32, usize, *mut u8, usize) -> isize = super::trueos_cabi_async_fs_result_read;
 }

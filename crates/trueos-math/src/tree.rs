@@ -20,8 +20,7 @@ pub struct Tree<T, const N: usize> {
 
 impl<T, const N: usize> Tree<T, N> {
     pub fn new() -> Self {
-        // SAFETY: An uninitialized [MaybeUninit<_>; N] is valid.
-        let nodes: [MaybeUninit<Node<T>>; N] = unsafe { MaybeUninit::uninit().assume_init() };
+        let nodes: [MaybeUninit<Node<T>>; N] = [const { MaybeUninit::uninit() }; N];
         Self {
             nodes,
             used: [false; N],
