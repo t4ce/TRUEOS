@@ -1,0 +1,87 @@
+{
+  "date": "2026-11-03",
+  "implementation": "Standalone Axum folder server Blueprint, HTML project kind in Edit, startup-script control, TRUEOSFS folder publication, Hull loopback resources and F5 reload, existing Codex IDE bridge",
+  "builtin_preparation": {
+    "result": "PASS",
+    "apps": 13,
+    "sources": "92204a869d98d84bf8ae2c8672a5268bde6327bda11c5314a519780040c6bccf",
+    "ready_sha256": "82931c5aa0ab2cbd9fdbfc764a2a73ebee758371f7580faa38bfcadc6854276a",
+    "server_package_bytes": 2959621,
+    "server_package_sha256": "166dd47a42f00d8c66ae864c15ca4b49e6530dc810f58e3d6800c94481b346e5",
+    "abi_validation": "normal complete builtin build + prepared-set check"
+  },
+  "checks": [
+    {
+      "name": "axum_server",
+      "result": "PASS",
+      "passed": 2,
+      "log_sha256": "f821a489376890d2a6ad68ce7fd21cb71a814db888baf97b3c68ef671331399a"
+    },
+    {
+      "name": "shared_ide",
+      "result": "PASS",
+      "passed": 18,
+      "log_sha256": "d554f65ff399b29cfc4ea498d40c2e6b8282472d006083e409b772cfc86df0eb"
+    },
+    {
+      "name": "edit_ide_binary",
+      "result": "PASS",
+      "passed": 20,
+      "log_sha256": "58bd0ea8d718ab432259b12695f3330bea0a5324d4d37b87318011311b3f3fa1"
+    },
+    {
+      "name": "hull_javascript",
+      "result": "PASS",
+      "passed": 122,
+      "log_sha256": "1ff448057c0d4bbba67bc2cc2a4a8902554b86b6f7167c75208b491ca80003b3"
+    },
+    {
+      "name": "codex_ide_client",
+      "result": "PASS",
+      "passed": 10,
+      "log_sha256": "0c53b84e0601ab01beeab1ff2ccc1c169f50b39f19401e17940f2c7ae924de41"
+    },
+    {
+      "name": "native_image_policy",
+      "result": "PASS",
+      "passed": 41,
+      "log_sha256": "89ee2ee3374c9dc125f58b2cc0c600f5c00cff4b1041599ef2163df6585c1c8b"
+    },
+    {
+      "name": "image_bridge",
+      "result": "PASS",
+      "passed": 5,
+      "log_sha256": "a840c360c7b2f4029bb493e1e9abf87ca87065aa65e28663634e3c468976eb0e"
+    },
+    {
+      "name": "edit_codex_launch",
+      "result": "PASS",
+      "passed": 7,
+      "log_sha256": "d3598aa83e81bab50cb5b04fc57a555d7ba6b209e51891db2f9eb50795431d15"
+    }
+  ],
+  "kernel_check": "PASS",
+  "hull_sandbox_check": "PASS",
+  "real_http_smoke": {
+    "result": "PASS",
+    "server": "actual standalone Axum process",
+    "assets": [
+      "index.html",
+      "main.js",
+      "style.css"
+    ],
+    "save_then_fetch_same_process": true,
+    "head": true,
+    "parent_escape_rejected": true,
+    "protocol": "trueos-html-preview/v1",
+    "temporary_workspace_removed": true
+  },
+  "limits": {
+    "rig_deployed": false,
+    "full_codex_workspace_check": "Blocked by existing missing TRUEOS-Blueprints/apps/qjs/crates/trueos-qjs/Cargo.toml; actual IDE client tested independently. Full CLI/TUI repack not verified.",
+    "full_edit_library_suite": "43 passed, 2 zero-width search failures, 1 ignored; IDE binary suite passes.",
+    "full_hull_layout_suite": "131 passed; existing fixture expects duplicate classic script deduplication, while unchanged extractor retains separate executions.",
+    "publication_consistency": "Individual files are replaced atomically; requests overlapping a multi-file save are not a transactional snapshot.",
+    "preview_lifetime": "Edit owns the server child; Hull windows remain independent. Preview again opens another Hull window; F5 refreshes an existing one."
+  }
+}

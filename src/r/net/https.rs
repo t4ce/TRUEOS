@@ -1766,6 +1766,15 @@ pub(crate) async fn get_image_bytes_shared(
             return Err(String::from("redirect loop"));
         }
         let target = parse_fetch_url(&current).map_err(String::from)?;
+        if target.scheme == "http" {
+            // Admission above permits only an explicit loopback preview port.
+            let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+            let fetch = crate::surfer::html_shack::fetch_bytes_via_pool(current, remaining, max_bytes);
+            return await_json_post_or_cancel(fetch, &cancellation.0).await
+                .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?
+                .map(|response| response.bytes);
+        }
+
         let remaining = deadline
             .saturating_duration_since(Instant::now())
             .as_millis();

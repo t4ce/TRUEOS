@@ -189,7 +189,8 @@ fn request_inner(
     let run = crate::hv::vm_run_generation(owner as u8).ok_or(ERR_NOT_FOUND)?;
     let url = policy::canonical_url(url)?;
     let (width, height, reserved_bytes) = policy::target_extent(width, height)?;
-    let cache = cache_scope(cache_root, page_host, &url)?;
+    // Local project assets change at stable URLs on every Save.
+    let cache = if url.starts_with("http://127.0.0.1:") { None } else { cache_scope(cache_root, page_host, &url)? };
     ensure_workers()?;
     let mut registry = REGISTRY.lock();
     if let Some(current) = registry

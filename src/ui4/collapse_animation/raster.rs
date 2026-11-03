@@ -22,8 +22,7 @@ impl Geometry {
         let longest = width.max(height).max(1);
         let edge = u64::from(longest) * (ONE - eased) + u64::from(ICON_SIZE) * eased;
         let scale = |extent: u32| {
-            ((u64::from(extent) * edge + u64::from(longest) * ONE / 2)
-                / (u64::from(longest) * ONE))
+            ((u64::from(extent) * edge + u64::from(longest) * ONE / 2) / (u64::from(longest) * ONE))
                 .max(1) as u32
         };
         let snapshot_width = scale(width);
@@ -49,12 +48,24 @@ impl Geometry {
         let axis = |origin: i32, extent: u32, target: i64, current: u32, output: u32| {
             let initial = i64::from(origin) * 2 + i64::from(extent);
             let center = initial + (target - initial) * self.eased as i64 / ONE as i64;
-            ((center - i64::from(current)) / 2)
-                .clamp(0, i64::from(output.saturating_sub(current))) as i32
+            ((center - i64::from(current)) / 2).clamp(0, i64::from(output.saturating_sub(current)))
+                as i32
         };
         (
-            axis(initial.0, initial.2, target_center_twice.0, self.width, output.0),
-            axis(initial.1, initial.3, target_center_twice.1, self.height, output.1),
+            axis(
+                initial.0,
+                initial.2,
+                target_center_twice.0,
+                self.width,
+                output.0,
+            ),
+            axis(
+                initial.1,
+                initial.3,
+                target_center_twice.1,
+                self.height,
+                output.1,
+            ),
         )
     }
 }
@@ -69,10 +80,9 @@ pub(super) struct Image<'a> {
 
 impl Image<'_> {
     pub fn sample(self, x: u32, y: u32, width: u32, height: u32) -> [u8; 4] {
-        let sx = ((u64::from(x) * 2 + 1) * u64::from(self.width)
-            / (u64::from(width) * 2)) as usize;
-        let sy = ((u64::from(y) * 2 + 1) * u64::from(self.height)
-            / (u64::from(height) * 2)) as usize;
+        let sx = ((u64::from(x) * 2 + 1) * u64::from(self.width) / (u64::from(width) * 2)) as usize;
+        let sy =
+            ((u64::from(y) * 2 + 1) * u64::from(self.height) / (u64::from(height) * 2)) as usize;
         let offset = sy * self.pitch + sx * 4;
         self.pixels[offset..offset + 4].try_into().unwrap()
     }
@@ -101,9 +111,23 @@ pub(super) fn render(
     let source_top = (geometry.height - geometry.snapshot_height) / 2;
     let icon_left = (geometry.width - ICON_SIZE) / 2;
     let icon_top = (geometry.height - ICON_SIZE) / 2;
+    if geometry.icon_mix == 0
+        && geometry.snapshot_width == snapshot.width
+        && geometry.snapshot_height == snapshot.height
+    {
+        let row_bytes = snapshot.width as usize * 4;
+        for row in 0..snapshot.height as usize {
+            let start = (row + source_top as usize) * pitch + source_left as usize * 4;
+            destination[start..start + row_bytes].copy_from_slice(
+                &snapshot.pixels[row * snapshot.pitch..row * snapshot.pitch + row_bytes],
+            );
+        }
+        return;
+    }
     for y in 0..geometry.height {
         for x in 0..geometry.width {
-            let source = if x >= source_left && y >= source_top
+            let source = if x >= source_left
+                && y >= source_top
                 && x - source_left < geometry.snapshot_width
                 && y - source_top < geometry.snapshot_height
             {
@@ -116,15 +140,22 @@ pub(super) fn render(
             } else {
                 [0; 4]
             };
-            let compact = if geometry.icon_mix != 0 && x >= icon_left && y >= icon_top
-                && x - icon_left < ICON_SIZE && y - icon_top < ICON_SIZE
+            let compact = if geometry.icon_mix != 0
+                && x >= icon_left
+                && y >= icon_top
+                && x - icon_left < ICON_SIZE
+                && y - icon_top < ICON_SIZE
             {
                 icon.sample(x - icon_left, y - icon_top, ICON_SIZE, ICON_SIZE)
             } else {
                 [0; 4]
             };
             let offset = y as usize * pitch + x as usize * 4;
-            destination[offset..offset + 4].copy_from_slice(&blend(source, compact, geometry.icon_mix));
+            destination[offset..offset + 4].copy_from_slice(&blend(
+                source,
+                compact,
+                geometry.icon_mix,
+            ));
         }
     }
 }
@@ -142,7 +173,8 @@ mod tests {
                 assert!(geometry.snapshot_width.max(geometry.snapshot_height) <= previous);
                 previous = geometry.snapshot_width.max(geometry.snapshot_height);
                 let error = (i64::from(geometry.snapshot_width) * i64::from(height)
-                    - i64::from(geometry.snapshot_height) * i64::from(width)).abs();
+                    - i64::from(geometry.snapshot_height) * i64::from(width))
+                .abs();
                 assert!(error <= i64::from(width + height), "aspect ratio changed");
             }
             let end = Geometry::at(width, height, DURATION_MS);
@@ -155,16 +187,31 @@ mod tests {
     #[test]
     fn the_final_center_tracks_the_current_cursor_tile_and_clips_at_edges() {
         let initial = (100, 200, 960, 600);
-        assert_eq!(Geometry::at(960, 600, 0).position(initial, (1_000, 1_000), (1_920, 1_080)), (100, 200));
+        assert_eq!(
+            Geometry::at(960, 600, 0).position(initial, (1_000, 1_000), (1_920, 1_080)),
+            (100, 200)
+        );
         let end = Geometry::at(960, 600, DURATION_MS);
-        assert_eq!(end.position(initial, (1_000, 1_000), (1_920, 1_080)), (468, 468));
-        assert_eq!(end.position(initial, (1_400, 1_600), (1_920, 1_080)), (668, 768));
-        assert_eq!(end.position(initial, (0, 2_160), (1_920, 1_080)), (0, 1_016));
+        assert_eq!(
+            end.position(initial, (1_000, 1_000), (1_920, 1_080)),
+            (468, 468)
+        );
+        assert_eq!(
+            end.position(initial, (1_400, 1_600), (1_920, 1_080)),
+            (668, 768)
+        );
+        assert_eq!(
+            end.position(initial, (0, 2_160), (1_920, 1_080)),
+            (0, 1_016)
+        );
     }
 
     #[test]
     fn crossfade_preserves_premultiplied_alpha() {
-        assert_eq!(blend([100, 0, 0, 128], [0, 50, 0, 64], 128), [50, 25, 0, 96]);
+        assert_eq!(
+            blend([100, 0, 0, 128], [0, 50, 0, 64], 128),
+            [50, 25, 0, 96]
+        );
         for mix in 0..=255 {
             let pixel = blend([100, 0, 0, 128], [0, 50, 0, 64], mix);
             assert!(pixel[..3].iter().all(|channel| *channel <= pixel[3]));
@@ -179,13 +226,33 @@ mod tests {
         let pitch = 64 * 4 + 16;
         let mut output = vec![0xAA; pitch * 64];
         render(
-            Image { width: 1, height: 1, pitch: 4, pixels: &snapshot },
-            Image { width: 2, height: 1, pitch: 8, pixels: &icon },
-            geometry, &mut output, pitch,
+            Image {
+                width: 1,
+                height: 1,
+                pitch: 4,
+                pixels: &snapshot,
+            },
+            Image {
+                width: 2,
+                height: 1,
+                pitch: 8,
+                pixels: &icon,
+            },
+            geometry,
+            &mut output,
+            pitch,
         );
         for row in output.chunks_exact(pitch) {
-            assert!(row[..32 * 4].chunks_exact(4).all(|pixel| pixel == &icon[..4]));
-            assert!(row[32 * 4..64 * 4].chunks_exact(4).all(|pixel| pixel == &icon[4..]));
+            assert!(
+                row[..32 * 4]
+                    .chunks_exact(4)
+                    .all(|pixel| pixel == &icon[..4])
+            );
+            assert!(
+                row[32 * 4..64 * 4]
+                    .chunks_exact(4)
+                    .all(|pixel| pixel == &icon[4..])
+            );
             assert!(row[64 * 4..].iter().all(|byte| *byte == 0));
         }
     }

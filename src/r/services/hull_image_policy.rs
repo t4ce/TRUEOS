@@ -39,7 +39,7 @@ pub(super) fn digest(bytes: &[u8]) -> String {
     result
 }
 
-/// Fragmentless HTTPS URL; query bytes remain part of both fetch and cache key.
+/// Fragmentless HTTPS or local preview URL; query bytes remain part of the key.
 /// This finite transport accepts DNS/IPv4 authorities, matching the HTTPS client.
 pub(crate) fn canonical_url(raw: &str) -> Result<String, i32> {
     if raw.len() > MAX_URL_BYTES
@@ -50,7 +50,9 @@ pub(crate) fn canonical_url(raw: &str) -> Result<String, i32> {
         return Err(ERR_INVALID);
     }
     let raw = raw.split('#').next().ok_or(ERR_INVALID)?;
-    let rest = raw.strip_prefix("https://").ok_or(ERR_UNSUPPORTED)?;
+    let (scheme, rest) = if let Some(rest) = raw.strip_prefix("https://") { ("https", rest) }
+        else if let Some(rest) = raw.strip_prefix("http://") { ("http", rest) }
+        else { return Err(ERR_UNSUPPORTED) };
     let end = rest.find(['/', '?']).unwrap_or(rest.len());
     let authority = &rest[..end];
     if authority.is_empty() || authority.contains('@') {
@@ -71,15 +73,16 @@ pub(crate) fn canonical_url(raw: &str) -> Result<String, i32> {
     {
         return Err(ERR_INVALID);
     }
-    let authority = match port.filter(|p| *p != 443) {
+    if scheme == "http" && (host != "127.0.0.1" || port.is_none()) { return Err(ERR_UNSUPPORTED); }
+    let authority = match port.filter(|p| scheme == "http" || *p != 443) {
         Some(port) => format!("{}:{port}", host.to_ascii_lowercase()),
         None => host.to_ascii_lowercase(),
     };
     let suffix = &rest[end..];
     Ok(if suffix.starts_with('/') {
-        format!("https://{authority}{suffix}")
+        format!("{scheme}://{authority}{suffix}")
     } else {
-        format!("https://{authority}/{suffix}")
+        format!("{scheme}://{authority}/{suffix}")
     })
 }
 
@@ -307,6 +310,9 @@ mod tests {
     use alloc::vec;
     #[test]
     fn url_keys_keep_query_and_remove_fragments() {
+        assert_eq!(canonical_url("http://127.0.0.1:49180/a.png#x").unwrap(), "http://127.0.0.1:49180/a.png");
+        assert!(canonical_url("http://127.0.0.1/a.png").is_err());
+        assert!(canonical_url("http://127.0.0.1:0/a.png").is_err());
         let a = canonical_url("https://EXAMPLE.test:443/image.png?q=1#part").unwrap();
         assert_eq!(a, "https://example.test/image.png?q=1");
         assert_eq!(
