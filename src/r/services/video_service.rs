@@ -54,9 +54,14 @@ fn principal(owner: u32) -> Principal {
 }
 /// V1 commands 0..=5: begin/write/commit/acquire/release/close; 6 opens an
 /// HTTPS URL (a=device, b=looping, input=URL); 7 pauses (a=stream, b=paused).
+/// 8 queues a separate browser player (a=b=0, input=URL), returning a positive
+/// request ID; 9 polls that owner's request (a=ID, empty input/output):
+/// 0 pending, 1 first frame published, 2 ended, negative failed/superseded.
 /// All integers are little endian. Frame payload is texture:u64, sequence:u64, width:u32,
 /// height:u32. Acquire: 0 pending, 1 leased frame, 2 end, negative error.
 pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &mut [u8]) -> i32 {
+    if command==8{return if a==0&&b==0&&output.is_empty(){super::video_open_service::browser_request(owner,input)}else{INVALID};}
+    if command==9{return if a>0&&a<=i32::MAX as u64&&b==0&&input.is_empty()&&output.is_empty(){super::video_open_service::browser_status(owner,a as u32)}else{INVALID};}
     if command == 0 || command == 6 {
         let url = if command == 6 {
             let Ok(url) = core::str::from_utf8(input) else {

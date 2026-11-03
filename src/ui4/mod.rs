@@ -135,6 +135,7 @@ pub(crate) use video_frame::{
     VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession, begin_decoded_nv12_conversion_batch,
     begin_texture_video_player, enqueue_decoded_nv12_stream_frame, open_shell_decoded_video_player,
     reserve_shell_decoded_video_player, ui4_video_conversion_service_task,
+    stop_decoded_nv12_stream,
     wait_decoded_nv12_conversion_idle,
 };
 

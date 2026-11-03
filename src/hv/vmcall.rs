@@ -3379,7 +3379,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             // Commands 6 (URL stream) and 7 (pause) use the same bounded,
             // owner-scoped transport as uploaded video commands 0..=5.
-            if payload.len() < 8 || payload.len() > 3080 || arg0 > 7 {
+            // 8/9 reuse it for detached browser playback and first-frame status.
+            if payload.len() < 8 || payload.len() > 3080 || arg0 > 9 {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }

@@ -1561,9 +1561,10 @@ async fn convert_publish_decoded_nv12_stream_frame(
             return probe.finish(false);
         }
     };
-    let window_serial = match publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL) {
-        Ok(serial) => serial,
-        Err(error) => {
+    let window_serial = match crate::r::services::video_open_service::publish_browser_frame(session,||publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL)) {
+        Some(Ok(serial)) => serial,
+        None => return probe.finish(false),
+        Some(Err(error)) => {
             crate::log_warn!(target: "ui4";
                 "ui4 video-frame window publish failed frame={} window={} error={:?} reason={} action=close-stream source_already_released_at=guc-completion\n",
                 stream.frame.raw(), stream.window.raw(), error, reason,
