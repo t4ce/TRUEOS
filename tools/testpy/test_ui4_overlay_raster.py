@@ -46,7 +46,6 @@ mod raster_tests {
             pitch_bytes: (PITCH * 4) as u32,
             byte_len: pixels.len() * 4,
             virt: pixels.as_mut_ptr().cast(),
-            phys: 0,
             gpu: 0,
             pipe: PipeInfo,
             plane_slot: 0,

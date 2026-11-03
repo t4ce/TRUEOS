@@ -5,6 +5,7 @@
 
 pub(crate) mod blueprint_ui4;
 mod collapse;
+mod collapse_animation;
 mod color_picker;
 mod codex_prompt;
 pub(crate) use collapse::{CollapseError, MAX_COLLAPSE_IMAGE_SIZE, enable_window_collapse};

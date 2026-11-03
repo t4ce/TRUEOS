@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) const MENU_ACTION: u32 = u32::MAX;
 pub(crate) const MAX_COLLAPSE_IMAGE_SIZE: u32 = 256;
-const COLLAPSED_SIZE: u32 = 64;
+pub(super) const COLLAPSED_SIZE: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollapseError {
@@ -91,6 +91,61 @@ impl RestorePress {
     pub fn clicked(self, inside: bool) -> bool {
         inside && !self.moved
     }
+}
+
+/// Give frames without an application icon the same compact presentation as
+/// registered frames. Resolve names outside the broker lock, including the VM
+/// behind a leased Shell3 terminal.
+pub(super) fn ensure_window_collapse(
+    owner: WindowOwner,
+    window: WindowId,
+) -> Result<(), CollapseError> {
+    if window_broker::collapse_state(owner, window).is_some() {
+        return Ok(());
+    }
+    window_broker::window_snapshot(owner, window).ok_or(CollapseError::NotFound)?;
+    let vm = match owner {
+        WindowOwner::Vm(vm) => Some(vm),
+        WindowOwner::SHELL3_SERVICE => crate::shell3::tui::vm_for_window(window),
+        _ => None,
+    };
+    let mut title = [0u8; window_broker::MAX_WINDOW_TITLE_BYTES];
+    let initial = vm
+        .and_then(crate::hv::app_vm_display_label)
+        .as_deref()
+        .and_then(collapse_initial)
+        .or_else(|| {
+            let len = window_broker::window_title(owner, window, &mut title).ok()?;
+            collapse_initial(core::str::from_utf8(&title[..len]).ok()?)
+        })
+        .or_else(|| collapse_initial(owner.name()))
+        .unwrap_or('?');
+    let mut encoded = [0u8; 4];
+    let letter = initial.encode_utf8(&mut encoded);
+    let size = COLLAPSED_SIZE as usize;
+    let glyph_height = size * 3 / 4;
+    let glyph_width = glyph_height * microfont::FWIDTH / microfont::FHEIGHT;
+    let mut mask = alloc::vec![0u8; size * size];
+    crate::r::services::microfont_mask_service::copy_text_mask(
+        &mut mask,
+        size,
+        size,
+        (size - glyph_width) / 2,
+        (size - glyph_height) / 2,
+        letter,
+        glyph_width,
+        glyph_height,
+    )
+    .map_err(|_| CollapseError::Busy)?;
+    let mut rgba = alloc::vec![0u8; size * size * 4];
+    for (pixel, alpha) in rgba.chunks_exact_mut(4).zip(mask) {
+        pixel.copy_from_slice(&[255, 255, 255, alpha]);
+    }
+    enable_window_collapse(owner, window, COLLAPSED_SIZE, COLLAPSED_SIZE, size * 4, &rgba)
+}
+
+fn collapse_initial(label: &str) -> Option<char> {
+    label.chars().find(|ch| !ch.is_whitespace() && !ch.is_control())
 }
 
 /// Copies a pitched straight-alpha source into an owned premultiplied frame.

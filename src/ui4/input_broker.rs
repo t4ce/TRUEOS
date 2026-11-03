@@ -309,6 +309,8 @@ struct CursorRoute {
     requested_context_menu_gesture: Option<u64>,
     suppress_context_menu_open: bool,
     collapse_press: Option<(WindowTarget, super::collapse::RestorePress)>,
+    /// A dock-collapsed icon follows this source until the next placing click.
+    collapse_drag: Option<WindowTarget>,
     selection_anchor: Option<(u32, u32)>,
     absorb_select: bool,
     resize_latch: Option<(WindowTarget, u64)>,
@@ -340,6 +342,7 @@ impl CursorRoute {
             requested_context_menu_gesture: None,
             suppress_context_menu_open: false,
             collapse_press: None,
+            collapse_drag: None,
             selection_anchor: None,
             absorb_select: false,
             resize_latch: None,
@@ -359,6 +362,7 @@ impl CursorRoute {
         self.dock_fields_visible = false;
         self.dock_preview = None;
         self.collapse_press = None;
+        self.collapse_drag = None;
         self.selection_anchor = None;
     }
 
@@ -503,8 +507,11 @@ impl InputBroker {
             .retain(|(held_owner, _)| *held_owner != owner);
         let mut released = 0usize;
         for route in &mut self.cursors {
-            let owned_capture = route.capture.is_some_and(|target| target.owner == owner);
-            if !owned_capture {
+            let owned_interaction = [route.capture, route.collapse_drag]
+                .into_iter()
+                .flatten()
+                .any(|target| target.owner == owner);
+            if !owned_interaction {
                 continue;
             }
             route.clear_window_interaction();
@@ -610,6 +617,24 @@ impl InputBroker {
             self.cursors[index].y,
         );
         let hit = snapped_window.or_else(|| topmost_window_at(x, y));
+        if let Some(target) = self.cursors[index].collapse_drag {
+            let following = super::window_broker::follow_collapsed_cursor(
+                target.owner, target.window, x, y,
+            ).is_ok();
+            let route = &mut self.cursors[index];
+            route.x = x;
+            route.y = y;
+            route.buttons_down = buttons_down;
+            route.visible_after_motion = true;
+            if !following || pressed != 0 {
+                route.collapse_drag = None;
+                route.capture = None;
+                // Placement consumes the entire click, so it cannot also
+                // restore the icon or select an application underneath it.
+                route.absorb_select = buttons_down != 0;
+            }
+            return;
+        }
         if released & PRIMARY_BUTTON_MASK != 0 {
             let destination = hit.map(|window| {
                 let frame = WindowTarget::from(window).cursor_frame_key();
@@ -1014,13 +1039,24 @@ impl InputBroker {
             if docking_gesture && buttons_down & SECONDARY_BUTTON_MASK != 0 {
                 self.cursors[index].dock_fields_visible = true;
                 if let Some(dock_target) = dock_target {
-                    let preview = super::window_broker::docked_window_placement(
-                        target.interaction,
-                        target.placement,
-                        dock_target,
-                        width,
-                        height,
-                    );
+                    let preview = if dock_target == super::WindowDockTarget::Collapse {
+                        let size = super::collapse::COLLAPSED_SIZE;
+                        WindowPlacement {
+                            x: x.saturating_sub(size / 2).min(width.saturating_sub(size)) as i32,
+                            y: y.saturating_sub(size / 2).min(height.saturating_sub(size)) as i32,
+                            width: size,
+                            height: size,
+                            ..target.placement
+                        }
+                    } else {
+                        super::window_broker::docked_window_placement(
+                            target.interaction,
+                            target.placement,
+                            dock_target,
+                            width,
+                            height,
+                        )
+                    };
                     self.cursors[index].dock_preview = Some(Ui4DockPreview {
                         target: dock_target,
                         destination: Ui4VisualRect {
@@ -1030,6 +1066,30 @@ impl InputBroker {
                             height: preview.height,
                         },
                     });
+                }
+            }
+            if secondary_drop
+                && dock_target == Some(super::WindowDockTarget::Collapse)
+                && buttons_down == 0
+            {
+                match super::window_broker::collapse_at_cursor(target.owner, target.id, x, y) {
+                    Ok(()) => {
+                        let route = &mut self.cursors[index];
+                        route.collapse_drag = Some(WindowTarget::from(target));
+                        route.capture = None;
+                        route.secondary_start_placement = None;
+                        route.secondary_restore_origin = None;
+                        route.dock_fields_visible = false;
+                        route.dock_preview = None;
+                        route.selection_anchor = None;
+                        route.x = x;
+                        route.y = y;
+                        route.buttons_down = 0;
+                        return;
+                    }
+                    Err(error) => crate::log_warn!(target: "ui4";
+                        "ui4/input: collapse drop rejected owner={:?} window={} error={:?}\n",
+                        target.owner, target.id.raw(), error),
                 }
             }
             if secondary_drop
@@ -1051,7 +1111,8 @@ impl InputBroker {
             }
             if secondary_drop
                 && let Some(dock_target) = dock_target
-                && dock_target != super::WindowDockTarget::GenericResize
+                && !matches!(dock_target,
+                    super::WindowDockTarget::GenericResize | super::WindowDockTarget::Collapse)
             {
                 match super::dock_window(
                     target.owner,
@@ -1938,7 +1999,7 @@ pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSp
         ),
     }
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback start_key=reveal-menu-button cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only dock=top-center-maximize+center-sides-halves+corners-quadrants+bottom-center-resize-latch-10s/dpi-mm-first outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback start_key=reveal-menu-button cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only dock=top-center-maximize+center-sides-halves+corners-quadrants+bottom-third-collapse+bottom-two-thirds-resize-latch-10s/dpi-mm-first outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
     loop {
@@ -2834,7 +2895,7 @@ fn clamp_zone_metric(value: u32, limit: u32, screen_extent: u32) -> u32 {
     value.max(1).min(limit.max(1)).min(screen_extent)
 }
 
-pub(super) fn dock_zones(screen_width: u32, screen_height: u32) -> [Ui4DockZone; 8] {
+pub(super) fn dock_zones(screen_width: u32, screen_height: u32) -> [Ui4DockZone; 9] {
     let physical_reference =
         crate::intel::physical_extent_pixels(DOCK_REFERENCE_WIDTH_MM, DOCK_REFERENCE_HEIGHT_MM);
     dock_zones_with_reference(screen_width, screen_height, physical_reference)
@@ -2844,7 +2905,7 @@ fn dock_zones_with_reference(
     screen_width: u32,
     screen_height: u32,
     physical_reference: Option<(u32, u32)>,
-) -> [Ui4DockZone; 8] {
+) -> [Ui4DockZone; 9] {
     use super::WindowDockTarget;
 
     let metrics = dock_zone_metrics(screen_width, screen_height, physical_reference);
@@ -2852,6 +2913,12 @@ fn dock_zones_with_reference(
     let bottom_y = screen_height.saturating_sub(metrics.corner_height);
     let side_y = screen_height.saturating_sub(metrics.side_span) / 2;
     let top_x = screen_width.saturating_sub(metrics.top_span) / 2;
+    // Separate the bottom actions even when a monitor reports an unusually
+    // large physical pixel density. Their centers stay at one and two thirds.
+    let bottom_span = metrics.top_span.min(screen_width / 3);
+    let collapse_x = (screen_width / 3).saturating_sub(bottom_span / 2);
+    let resize_x = ((u64::from(screen_width) * 2 / 3) as u32)
+        .saturating_sub(bottom_span / 2);
     [
         Ui4DockZone {
             target: WindowDockTarget::TopLeft,
@@ -2917,11 +2984,20 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            target: WindowDockTarget::Collapse,
+            rect: Ui4VisualRect {
+                x: collapse_x,
+                y: screen_height.saturating_sub(metrics.top_depth),
+                width: bottom_span,
+                height: metrics.top_depth,
+            },
+        },
+        Ui4DockZone {
             target: WindowDockTarget::GenericResize,
             rect: Ui4VisualRect {
-                x: top_x,
+                x: resize_x,
                 y: screen_height.saturating_sub(metrics.top_depth),
-                width: metrics.top_span,
+                width: bottom_span,
                 height: metrics.top_depth,
             },
         },
@@ -2985,7 +3061,7 @@ pub(super) fn dock_zone_row_span(zone: Ui4DockZone, row: u32) -> Option<Ui4Visua
             let first = first_true_suffix(zone.rect.width, contains)?;
             (first, zone.rect.width.saturating_sub(1))
         }
-        WindowDockTarget::Maximize | WindowDockTarget::GenericResize => {
+        WindowDockTarget::Maximize | WindowDockTarget::Collapse | WindowDockTarget::GenericResize => {
             let left_half = zone.rect.width / 2 + zone.rect.width % 2;
             let first = first_true_suffix(left_half, contains)?;
             (first, zone.rect.width.saturating_sub(1).saturating_sub(first))
@@ -3018,6 +3094,7 @@ pub(super) fn dock_zone_column_span(zone: Ui4DockZone, column: u32) -> Option<Ui
         }
         WindowDockTarget::BottomLeft
         | WindowDockTarget::BottomRight
+        | WindowDockTarget::Collapse
         | WindowDockTarget::GenericResize => {
             let first = first_true_suffix(zone.rect.height, contains)?;
             (first, zone.rect.height.saturating_sub(1))
@@ -3118,7 +3195,7 @@ fn dock_zone_local_contains(
                 height,
             )
         }
-        WindowDockTarget::GenericResize => normalized_ellipse_contains(
+        WindowDockTarget::Collapse | WindowDockTarget::GenericResize => normalized_ellipse_contains(
             x.saturating_mul(2).saturating_add(1).abs_diff(width),
             width,
             height
@@ -3161,6 +3238,7 @@ fn normalized_ellipse_contains(nx: u64, dx: u64, ny: u64, dy: u64) -> bool {
 
 const fn dock_target_label(target: super::WindowDockTarget) -> &'static str {
     match target {
+        super::WindowDockTarget::Collapse => "collapse",
         super::WindowDockTarget::GenericResize => "generic-resize",
         super::WindowDockTarget::Maximize => "maximize",
         super::WindowDockTarget::LeftHalf => "left-half",
@@ -3485,6 +3563,14 @@ mod tests {
             (zones[6].rect.x, zones[6].rect.y, zones[6].rect.width, zones[6].rect.height,),
             (832, 0, 256, 48)
         );
+        assert_eq!(
+            (zones[7].rect.x, zones[7].rect.y, zones[7].rect.width, zones[7].rect.height,),
+            (512, 1_032, 256, 48)
+        );
+        assert_eq!(
+            (zones[8].rect.x, zones[8].rect.y, zones[8].rect.width, zones[8].rect.height,),
+            (1_152, 1_032, 256, 48)
+        );
     }
 
     #[test]
@@ -3503,6 +3589,41 @@ mod tests {
         assert_eq!(dock_target_at_in_zones(95, 95, &zones), None);
         assert_eq!(dock_target_at_in_zones(47, 460, &zones), None);
         assert_eq!(dock_target_at_in_zones(832, 47, &zones), None);
+    }
+
+    #[test]
+    fn bottom_dock_actions_have_separate_third_centers_and_a_gap() {
+        for reference in [None, Some((256, 160))] {
+            let zones = dock_zones_with_reference(1_920, 1_080, reference);
+            assert_eq!(dock_target_at_in_zones(640, 1_079, &zones), Some(WindowDockTarget::Collapse));
+            assert_eq!(
+                dock_target_at_in_zones(1_280, 1_079, &zones),
+                Some(WindowDockTarget::GenericResize)
+            );
+            assert_eq!(dock_target_at_in_zones(960, 1_079, &zones), None);
+            assert_eq!(zones[7].rect.width, zones[8].rect.width);
+            assert_eq!(zones[7].rect.height, zones[8].rect.height);
+        }
+    }
+
+    #[test]
+    fn bottom_dock_actions_stay_bounded_and_separate_on_small_dense_outputs() {
+        for width in [0, 1, 2, 3, 7, 32, 63, 320, 1_920] {
+            for height in [0, 1, 7, 180] {
+                let zones = dock_zones_with_reference(width, height, Some((8_000, 5_000)));
+                let collapse = zones[7].rect;
+                let resize = zones[8].rect;
+                for rect in [collapse, resize] {
+                    assert!(rect.x.saturating_add(rect.width) <= width);
+                    assert!(rect.y.saturating_add(rect.height) <= height);
+                }
+                assert!(collapse.x.saturating_add(collapse.width) <= resize.x);
+                if width >= 3 {
+                    assert_eq!(collapse.x + collapse.width / 2, width / 3);
+                    assert_eq!(resize.x + resize.width / 2, width * 2 / 3);
+                }
+            }
+        }
     }
 
     #[test]

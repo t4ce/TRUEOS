@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#f6f5f0">
+<meta name="description" content="A tiny generative pixel playground. Make seeded 32×32 flowers, snowflakes and mosaics, explore their parameters, and export your favorites. One HTML file, zero dependencies.">
+<title>Motif — a little pixel playground</title>
+<style>
+:root{--paper:#f6f5f0;--white:#fffefa;--ink:#24372e;--muted:#767b70;--line:#dedfd5;--wash:#eaece2;--accent:#e5ed79;--green:#365740;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;--sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;-webkit-font-smoothing:antialiased}button,input,select{font:inherit;color:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.5}button,input,select{touch-action:manipulation}button{background:none;border:0}button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #6f8a45;outline-offset:4px}button:hover{filter:brightness(.96)}[hidden]{display:none!important}h1,h2,h3,p{margin:0}svg{flex-shrink:0}canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}a{color:inherit}small{font-size:11px}.app{max-width:1536px;margin:auto;padding:0 38px}.topbar{height:86px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);gap:20px}.brand{display:flex;align-items:center;gap:12px;text-decoration:none}.brandmark{width:32px;height:32px}.wordmark{font-family:Georgia,"Times New Roman",serif;font-weight:bold;font-size:35px;letter-spacing:-2px;line-height:1}.brand-caption{padding-left:18px;margin-left:8px;border-left:1px solid var(--line);font:10px/1.5 var(--mono);letter-spacing:1.3px;color:var(--muted);text-transform:uppercase}.top-actions{display:flex;align-items:center;gap:24px}.text-button{font-size:12px;padding:10px 0}.outline-button,.dark-button,.soft-button{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:38px;padding:10px 15px;border:1px solid var(--line);border-radius:7px;font-size:12px;font-weight:600;white-space:nowrap}.dark-button{background:var(--ink);border-color:var(--ink);color:var(--white)}.soft-button{background:var(--wash);border-color:var(--wash)}.outline-button{background:var(--white)}.intro{padding:32px 0 29px;display:flex;align-items:center;justify-content:space-between;gap:24px}.eyebrow{font:10px/1.5 var(--mono);text-transform:uppercase;letter-spacing:1.5px;color:var(--muted)}.intro h1{font-size:32px;line-height:1.2;font-weight:600;letter-spacing:-1.2px;margin:7px 0 10px}.intro h1 em{font-family:Georgia,"Times New Roman",serif;font-weight:400}.intro p{font-size:13px;color:var(--muted);line-height:1.6}.intro-note{display:flex;align-items:center;gap:9px;border:1px solid var(--line);padding:9px 12px;border-radius:30px;font:10px var(--mono);white-space:nowrap}.status-dot{height:6px;width:6px;border-radius:100%;background:#648058;display:inline-block}.workspace{display:grid;grid-template-columns:272px minmax(0,1fr);gap:30px;align-items:start}.section-kicker{display:flex;justify-content:space-between;align-items:center;font:10px var(--mono);letter-spacing:1.15px;color:var(--muted);margin-bottom:14px;text-transform:uppercase}.section-kicker span:first-child{color:#838875}.controls{border:1px solid var(--line);border-radius:10px;background:var(--white);overflow:hidden}.control-section{padding:21px 19px;border-bottom:1px solid var(--line)}.control-section:last-child{border:0}.control-title{font-size:11px;font-weight:650;display:flex;justify-content:space-between;align-items:center;line-height:1.5;margin-bottom:12px}.family-buttons{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.family-button{border:1px solid var(--line);border-radius:6px;padding:10px 1px 8px;display:flex;flex-direction:column;align-items:center;gap:8px;font-size:9px;background:var(--white)}.family-button svg{height:22px;width:22px;stroke-width:1.4}.family-button[aria-pressed=true]{background:var(--accent);border-color:#d3de6a;color:#25392c}.help-line{color:var(--muted);font-size:10px;line-height:1.65;margin-top:11px;min-height:30px}.palette-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.palette-top .control-title{margin-bottom:0}.palette-top select{max-width:118px;font-size:10px;border:0;background:transparent;padding:4px 2px;cursor:pointer}.palette-options{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.palette-option{height:28px;padding:3px;display:flex;overflow:hidden;border-radius:50%;outline:1px solid transparent;outline-offset:3px;transform:rotate(-35deg)}.palette-option span{height:100%;flex:1}.palette-option[aria-pressed=true]{outline-color:var(--ink)}.palette-option:first-child{grid-column:auto}.palette-note{color:var(--muted);font-size:10px;line-height:1.6;margin-top:13px}.range-group+.range-group{margin-top:23px}.range-group label{display:flex;justify-content:space-between;align-items:baseline;font-size:11px;font-weight:600;margin-bottom:12px}.range-group output{font:10px var(--mono);background:var(--paper);padding:3px 5px;border-radius:3px;min-width:32px;text-align:center}.range-group input[type=range]{--pct:50%;appearance:none;-webkit-appearance:none;width:100%;height:3px;display:block;margin:0;background:linear-gradient(to right,var(--ink) var(--pct),var(--line) var(--pct));border-radius:2px;cursor:pointer}.range-group input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:12px;height:12px;border:3px solid var(--white);border-radius:50%;background:var(--ink);box-shadow:0 0 0 1px var(--ink)}.range-group input[type=range]::-moz-range-thumb{width:7px;height:7px;border:3px solid var(--white);border-radius:50%;background:var(--ink);box-shadow:0 0 0 1px var(--ink)}.range-ends{display:flex;justify-content:space-between;color:var(--muted);font-size:9px;margin-top:11px}.symmetry-row{display:flex;align-items:center;justify-content:space-between;margin-top:24px}.symmetry-row label{font-size:11px;font-weight:600}.segmented{display:inline-flex;padding:3px;background:var(--paper);border-radius:6px;gap:3px}.segmented button{padding:5px 11px;border-radius:4px;color:var(--muted);font:10px var(--mono)}.segmented button[aria-pressed=true]{background:var(--white);color:var(--ink);box-shadow:0 1px 3px #26352612}.balanced-row{display:flex;align-items:center;justify-content:space-between}.balanced-row label{font-size:11px;font-weight:600;cursor:pointer}.switch{appearance:none;-webkit-appearance:none;position:relative;height:18px;width:30px;min-width:30px;border:0;border-radius:10px;background:#b8bcb1;cursor:pointer;margin:0}.switch:before{content:"";position:absolute;height:12px;width:12px;border-radius:50%;top:3px;left:3px;background:var(--white);transition:transform .15s}.switch:checked{background:var(--green)}.switch:checked:before{transform:translateX(12px)}.balanced-note{font-size:10px;line-height:1.65;margin-top:8px;color:var(--muted)}.seed-field{display:flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;background:var(--paper)}.seed-field input{border:0;padding:10px 9px;width:100%;min-width:0;background:transparent;font:11px var(--mono)}.seed-field button{padding:6px 10px;border-left:1px solid var(--line);display:flex;align-items:center}.seed-field svg{height:15px;width:15px}.quick-starts{display:flex;gap:5px;flex-wrap:wrap;margin-top:12px}.quick-starts button{font-size:9px;padding:6px 8px;background:var(--paper);border-radius:4px;border:1px solid var(--line)}.aside-note{padding:15px 2px;color:var(--muted);font-size:10px;line-height:1.75;display:flex;gap:9px}.aside-note svg{margin-top:2px;flex-shrink:0}.collection-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:19px;gap:10px}.view-tabs{display:flex;align-items:center;border-bottom:1px solid var(--line);gap:23px;flex:1}.view-tabs button{font-size:12px;display:flex;align-items:center;gap:7px;padding:0 0 13px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}.view-tabs button[aria-selected=true]{border-bottom-color:var(--ink);color:var(--ink);font-weight:600}.view-tabs svg{width:14px;height:14px}.batch-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px}.batch-meta{display:flex;align-items:center;gap:9px;font:10px var(--mono);color:var(--muted)}.batch-meta select{font:10px var(--mono);padding:6px 22px 6px 8px;border:1px solid var(--line);border-radius:5px;background:transparent}.batch-buttons{display:flex;gap:8px}.batch-buttons button{font-size:10px;padding:8px 11px;min-height:33px}.gallery{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:13px}.motif-card{border:1px solid transparent;border-radius:7px;padding:5px;text-align:left;min-width:0;transition:background .15s,border-color .15s;position:relative}.motif-card:hover{background:#e9ebdf;filter:none}.motif-card[aria-pressed=true]{border-color:#627259;background:#e9ecdf}.motif-card canvas{width:100%;height:auto;aspect-ratio:1;border-radius:2px}.motif-label{display:flex;align-items:center;justify-content:space-between;gap:3px;padding:9px 0 3px;font:8px var(--mono);letter-spacing:.5px;color:var(--muted);text-transform:uppercase}.motif-card[aria-pressed=true] .motif-label{color:var(--ink)}.selected-dot{width:5px;height:5px;display:block;border-radius:50%;background:transparent}.motif-card[aria-pressed=true] .selected-dot{background:var(--ink)}.view-caption{display:flex;justify-content:space-between;align-items:center;gap:12px;font:9px/1.6 var(--mono);color:var(--muted);margin:15px 5px 21px}.view-caption .mini-link{font-size:10px;text-decoration:underline;text-underline-offset:3px}.inspector{margin-top:20px;border:1px solid var(--line);border-radius:9px;padding:17px;background:var(--white);display:flex;align-items:center;gap:19px}.specimen-wrap{width:96px;height:96px;flex-shrink:0;border-radius:3px;overflow:hidden;position:relative}.specimen-wrap canvas{height:96px;width:96px}.specimen-wrap.has-grid:after{content:"";position:absolute;inset:0;pointer-events:none;background-image:linear-gradient(#ffffff35 1px,transparent 1px),linear-gradient(90deg,#ffffff35 1px,transparent 1px);background-size:3px 3px}.specimen-info{min-width:0;flex:1}.specimen-info .eyebrow{font-size:8px;letter-spacing:1.1px}.specimen-info h2{font-size:17px;letter-spacing:-.4px;font-weight:600;margin:6px 0 8px}.specimen-seed{font:9px var(--mono);color:var(--muted);word-break:break-all;line-height:1.65}.specimen-palette{display:flex;align-items:center;gap:4px;margin-top:10px}.specimen-palette i{width:10px;height:10px;border-radius:50%;border:1px solid #24372e15}.specimen-palette span{font:9px var(--mono);margin-left:6px;color:var(--muted)}.specimen-actions{display:flex;flex-direction:column;gap:7px}.specimen-actions button{font-size:10px;min-height:33px}.selected-footer{display:flex;align-items:center;justify-content:space-between;margin:11px 2px 0;gap:14px;font-size:10px;color:var(--muted);line-height:1.6}.selected-footer label{display:flex;align-items:center;gap:6px;white-space:nowrap}.selected-footer input{accent-color:var(--green);margin:0}.repeat-toolbar,.compare-toolbar{display:flex;align-items:center;justify-content:space-between;gap:15px;margin-bottom:18px}.repeat-toolbar select{font-size:11px;padding:7px 8px;border:1px solid var(--line);border-radius:5px;background:transparent}.repeat-frame{background:#e3e7da;border:1px solid var(--line);border-radius:7px;padding:15px;overflow:hidden}.repeat-frame canvas{width:100%;height:auto;border-radius:3px}.repeat-hint{font-size:10px;line-height:1.7;color:var(--muted);margin-top:13px}.compare-toolbar p{font-size:11px;line-height:1.7;max-width:340px;color:var(--muted)}.raw-badge{padding:5px 8px;border:1px solid #d4d9b5;border-radius:4px;background:#f1f3df;white-space:nowrap;font:9px var(--mono);color:#667240}.compare-board{border:1px solid var(--line);padding:17px 20px 20px 15px;border-radius:8px;background:#efeee7}.axis-heading{text-align:center;font:9px var(--mono);letter-spacing:1.1px;color:var(--muted);margin:0 0 8px 24px}.compare-grid{display:grid;grid-template-columns:24px repeat(5,minmax(0,1fr));gap:8px;max-width:680px;margin:0 auto}.axis-label{font:9px var(--mono);color:var(--muted);display:flex;align-items:center;justify-content:center;min-height:15px}.row-axis{writing-mode:vertical-rl;transform:rotate(180deg);letter-spacing:1px}.compare-cell{padding:3px;background:transparent;border:1px solid transparent;border-radius:4px;min-width:0}.compare-cell canvas{width:100%;height:auto}.compare-cell[aria-pressed=true]{border-color:var(--ink);background:var(--accent)}.compare-footnote{display:flex;gap:12px;margin-top:14px;font-size:10px;line-height:1.7;color:var(--muted)}.compare-footnote strong{color:var(--ink);font-weight:600}.lab-tip{display:flex;gap:13px;background:#e9eddc;border:1px solid #dce2c9;border-radius:7px;padding:14px 17px;margin-top:23px}.lab-tip .tip-icon{background:#f6f8e9;border-radius:50%;height:27px;width:27px;display:flex;align-items:center;justify-content:center;flex-shrink:0}.lab-tip strong{font-size:11px;font-weight:600;display:block;margin-bottom:5px}.lab-tip p{font-size:10px;color:#747d65;line-height:1.75}.footer{margin-top:31px;border-top:1px solid var(--line);padding:21px 0 27px;display:flex;justify-content:space-between;gap:15px;font:9px/1.7 var(--mono);color:var(--muted)}.footer a{text-decoration:none}.footer span{display:flex;gap:7px;align-items:center}.keyboard{border:1px solid var(--line);border-radius:3px;padding:0 4px;font:9px var(--mono)}.toast{position:fixed;bottom:25px;left:50%;transform:translate(-50%,20px);padding:12px 19px;border-radius:7px;background:var(--ink);color:var(--white);font-size:12px;opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:20;box-shadow:0 5px 22px #24372e25}.toast.visible{opacity:1;transform:translate(-50%,0)}dialog{border:1px solid var(--line);border-radius:13px;max-width:540px;width:calc(100% - 36px);padding:28px;background:var(--white);color:var(--ink);box-shadow:0 20px 80px #17271b20}dialog::backdrop{background:#16281b50;backdrop-filter:blur(3px)}.dialog-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}.dialog-head h2{font-size:22px;letter-spacing:-.7px}.close-dialog{font-size:24px;padding:0 4px;color:var(--muted)}dialog p{font-size:12px;line-height:1.8;color:#70796d;margin-bottom:15px}dialog h3{font-size:12px;margin:22px 0 8px}dialog code{font:11px/1.75 var(--mono);background:var(--paper);padding:2px 4px}dialog ul{font-size:12px;line-height:1.9;color:#70796d;padding-left:18px}dialog textarea{display:block;width:100%;resize:vertical;min-height:245px;font:11px/1.6 var(--mono);padding:13px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);margin:14px 0}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:20px}.error-text{font-size:11px!important;color:#9d463d!important}.noscript{padding:30px;background:#f6e0c8;text-align:center}@media(min-width:1400px){.gallery{gap:14px}.app{padding:0 48px}.workspace{grid-template-columns:284px minmax(0,1fr);gap:36px}.control-section{padding:22px}}@media(max-width:1150px){.app{padding:0 25px}.workspace{grid-template-columns:248px minmax(0,1fr);gap:22px}.gallery{grid-template-columns:repeat(4,minmax(0,1fr));gap:11px}.intro h1{font-size:29px}.top-actions{gap:18px}.control-section{padding:19px 16px}.inspector{gap:12px;padding:14px}.specimen-wrap,.specimen-wrap canvas{width:80px;height:80px}.specimen-wrap.has-grid:after{background-size:2.5px 2.5px}.specimen-actions button{padding:8px 10px}.specimen-palette span{display:none}.view-tabs{gap:20px}.intro-note{font-size:9px}}@media(max-width:760px){.app{padding:0 18px}.topbar{height:72px}.brand-caption,.intro-note,.top-actions .text-button{display:none}.top-actions{gap:10px}.wordmark{font-size:31px}.intro{padding:24px 0}.intro h1{font-size:28px}.intro p{font-size:12px;max-width:290px}.workspace{display:flex;flex-direction:column;gap:23px}.sidebar,.main-panel{width:100%}.controls{display:grid;grid-template-columns:1fr 1fr}.control-section{border-bottom:1px solid var(--line);padding:18px 15px}.control-section:nth-child(odd){border-right:1px solid var(--line)}.control-section.tuning{grid-row:2/4;grid-column:1}.control-section.palette-section{grid-column:2;grid-row:1}.control-section.balance-section{grid-column:2;grid-row:2}.control-section.seed-section{grid-column:2;grid-row:3;border-bottom:0}.family-buttons{gap:3px}.family-button{font-size:8px;padding:8px 1px}.family-button svg{height:18px;width:18px}.help-line{font-size:9px;margin-top:8px}.palette-options{gap:6px;grid-template-columns:repeat(3,1fr);max-width:115px}.palette-option{height:22px;width:22px}.palette-top{display:block;margin-bottom:9px}.palette-top select{padding:5px 0;max-width:100%;margin-top:2px}.palette-note{display:none}.aside-note{display:none}.section-kicker{margin-bottom:11px}.gallery{grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.motif-card{padding:3px}.motif-label{font-size:7px;padding-top:7px}.inspector{margin-top:17px}.specimen-info h2{font-size:15px}.specimen-seed{font-size:8px}.specimen-actions button{font-size:9px;min-height:31px}.specimen-wrap,.specimen-wrap canvas{width:64px;height:64px}.specimen-wrap.has-grid:after{background-size:2px 2px}.specimen-palette{gap:3px;margin-top:6px}.specimen-palette i{width:8px;height:8px}.view-caption{font-size:8px;margin:11px 3px 17px}.footer{flex-direction:column;gap:8px;margin-top:24px;padding-bottom:20px}.compare-board{padding:12px 9px 12px 5px}.compare-grid{gap:4px;grid-template-columns:17px repeat(5,minmax(0,1fr))}.compare-cell{padding:1px}.compare-toolbar{gap:10px}.compare-toolbar p{font-size:10px}.compare-footnote{font-size:9px}.lab-tip{margin-top:19px}.batch-meta{font-size:9px;gap:5px}.batch-buttons{gap:6px}.batch-buttons button{padding:8px 9px;font-size:9px}.repeat-frame{padding:8px}.view-tabs{gap:25px}.view-tabs button{font-size:11px}.toast{max-width:calc(100% - 30px);width:max-content;text-align:center}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<noscript><p class="noscript">Turn on JavaScript to generate your pixel motifs. Everything runs locally in your browser.</p></noscript>
+<div class="app">
+<header class="topbar">
+<a class="brand" href="#" aria-label="Motif home"><svg class="brandmark" viewBox="0 0 32 32" aria-hidden="true"><path fill="#365740" d="M12 0h8v8h8v4h4v8h-8v8h-4v4h-8v-8H4v-4H0v-8h8V4h4z"/><path fill="#e5ed79" d="M12 8h8v4h4v8h-4v4h-8v-4H8v-8h4z"/><path fill="#365740" d="M12 12h8v8h-8z"/></svg><span class="wordmark">motif.</span><span class="brand-caption">A little pixel<br>playground</span></a>
+<div class="top-actions"><button class="text-button" id="about-open">How it works</button><button class="outline-button" id="download-html"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M10 2v11m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>Get the HTML</button></div>
+</header>
+<section class="intro"><div><div class="eyebrow">Generative by nature</div><h1>Small canvas. <em>Endless possibilities.</em></h1><p>A few simple rules, a little randomness, and 1,024 pixels to play with.</p></div><div class="intro-note"><span class="status-dot"></span>32 × 32 PX &nbsp;·&nbsp; MADE IN YOUR BROWSER</div></section>
+<div class="workspace">
+<aside class="sidebar" aria-label="Generator controls"><div class="section-kicker"><span>01 / The ingredients</span><button id="reset" title="Reset all settings" class="text-button" style="padding:0;font:9px var(--mono);text-transform:none">Reset ↺</button></div>
+<div class="controls">
+<section class="control-section"><h2 class="control-title">Pattern family</h2><div class="family-buttons" aria-label="Pattern family">
+<button class="family-button" data-mode="mix" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>Mix</button>
+<button class="family-button" data-mode="flower" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 7c-7-8-13 3-5 5-8 7 3 13 5 5 7 8 13-3 5-5 8-7-3-13-5-5Z"/><circle cx="12" cy="12" r="2.2"/></svg>Flower</button>
+<button class="family-button" data-mode="snowflake" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M12 1v22M2.5 6.5l19 11m-19 0 19-11M8 3l4 4 4-4M8 21l4-4 4 4M2 11l6-1-2-6m16 9-6 1 2 6M2 13l6 1-2 6m16-9-6-1 2-6"/></svg>Snowflake</button>
+<button class="family-button" data-mode="mosaic" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M3 3h18v18H3zM12 3l9 9-9 9-9-9zM8 8h8v8H8z"/></svg>Mosaic</button></div><p class="help-line" id="mode-help">A little of everything. Three families, one collection.</p></section>
+<section class="control-section palette-section"><div class="palette-top"><label for="palette" class="control-title">Color story</label><select id="palette" aria-label="Color palette"><option value="auto">Surprise me</option></select></div><div class="palette-options" id="palette-options" aria-label="Curated palettes"></div><p class="palette-note" id="palette-note">Six curated palettes, picked by seed.</p></section>
+<section class="control-section tuning"><div class="range-group"><label for="density">Density <output id="density-value" for="density">56</output></label><input type="range" id="density" min="0" max="100" value="56"><div class="range-ends"><span>Airy</span><span>Full</span></div></div><div class="range-group"><label for="detail">Detail <output id="detail-value" for="detail">48</output></label><input type="range" id="detail" min="0" max="100" value="48"><div class="range-ends"><span>Simple</span><span>Intricate</span></div></div><div class="range-group"><label for="contrast">Contrast <output id="contrast-value" for="contrast">66</output></label><input type="range" id="contrast" min="0" max="100" value="66"><div class="range-ends"><span>Soft</span><span>Punchy</span></div></div><div class="symmetry-row"><label>Symmetry</label><div class="segmented" aria-label="Rotational symmetry"><button data-symmetry="4" aria-pressed="false">4</button><button data-symmetry="6" aria-pressed="true">6</button><button data-symmetry="8" aria-pressed="false">8</button></div></div></section>
+<section class="control-section balance-section"><div class="balanced-row"><label for="safe">Keep it balanced</label><input type="checkbox" class="switch" id="safe" checked></div><p class="balanced-note" id="balance-note">Gentle limits keep the busiest and faintest settings in check.</p></section>
+<section class="control-section seed-section"><label for="seed" class="control-title">Starting seed <span style="font-weight:400;color:var(--muted)">Repeatable magic</span></label><div class="seed-field"><input id="seed" value="little-garden" maxlength="80" spellcheck="false" autocomplete="off" aria-label="Starting seed"><button id="reroll-seed" title="Randomize the starting seed" aria-label="Randomize the starting seed"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="16" height="16" rx="3"/><circle cx="6" cy="6" r=".8" fill="currentColor"/><circle cx="14" cy="6" r=".8" fill="currentColor"/><circle cx="10" cy="10" r=".8" fill="currentColor"/><circle cx="6" cy="14" r=".8" fill="currentColor"/><circle cx="14" cy="14" r=".8" fill="currentColor"/></svg></button></div><div class="quick-starts" aria-label="Quick presets"><button data-preset="quiet">Quiet</button><button data-preset="lush">Lush</button><button data-preset="crystal">Crystal</button><button data-preset="woven">Woven</button></div></section>
+</div><p class="aside-note"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="10" cy="10" r="8"/><path d="M10 9v6m0-10v1"/></svg>Keep the seed to keep the idea. Move a slider to see it grow.</p>
+</aside>
+<main class="main-panel"><div class="section-kicker"><span>02 / The possibilities</span><span id="perf">Ready to grow</span></div>
+<div class="collection-heading"><div class="view-tabs" role="tablist" aria-label="Preview view"><button id="tab-gallery" data-view="gallery" role="tab" aria-selected="true" aria-controls="view-gallery"><svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M2 2h5v5H2zm9 0h5v5h-5zM2 11h5v5H2zm9 0h5v5h-5z"/></svg>Collection</button><button id="tab-repeat" data-view="repeat" role="tab" aria-selected="false" aria-controls="view-repeat"><svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M2 2h14v14H2zM2 9h14M9 2v14"/></svg>Repeat</button><button id="tab-compare" data-view="compare" role="tab" aria-selected="false" aria-controls="view-compare"><svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M4 2v14m5-14v14m5-14v14"/><path d="M2 6h4m1 6h4m1-8h4" stroke-width="3"/></svg>Compare</button></div></div>
+<section id="view-gallery" role="tabpanel" aria-labelledby="tab-gallery"><div class="batch-toolbar"><div class="batch-meta"><select id="count" aria-label="Number of motifs"><option value="12">12</option><option value="24" selected>24</option><option value="48">48</option><option value="96">96</option></select><span>little possibilities</span></div><div class="batch-buttons"><button class="outline-button" id="save-sheet"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 2v11m-4-4 4 4 4-4M3 13v4h14v-4"/></svg>PNG sheet</button><button class="dark-button" id="new-batch"><svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 5h2c4 0 6 10 10 10h3m-4-4 4 4-4 4M3 15h2c1.5 0 3-1.5 4-3m2-4c1-1.5 2.5-3 4-3h3m-4-4 4 4-4 4"/></svg>New batch</button></div></div><div class="gallery" id="gallery" aria-label="Generated motifs"></div><div class="view-caption"><span>Every original is exactly 32 × 32 pixels.</span><span>Click one to look closer ↘</span></div></section>
+<section id="view-repeat" role="tabpanel" aria-labelledby="tab-repeat" hidden><div class="repeat-toolbar"><div class="segmented" aria-label="Repeat arrangement"><button data-repeat="single" aria-pressed="true">One motif</button><button data-repeat="patchwork" aria-pressed="false">Patchwork</button></div><div style="display:flex;gap:8px"><select id="tile-zoom" aria-label="Repeat magnification"><option value="1">1× pixels</option><option value="2" selected>2× pixels</option><option value="4">4× pixels</option><option value="8">8× pixels</option></select><button class="outline-button" id="save-repeat" style="font-size:10px;min-height:32px;padding:6px 10px">Save PNG ↓</button></div></div><div class="repeat-frame"><canvas id="repeat-canvas" width="768" height="512" aria-label="Tiled pattern preview"></canvas></div><p class="repeat-hint" id="repeat-hint">Your selected motif, repeated edge to edge. Choose another in Collection to change the pattern.</p></section>
+<section id="view-compare" role="tabpanel" aria-labelledby="tab-compare" hidden><div class="compare-toolbar"><p>One seed, 25 combinations.<br>Click a square to try its density and detail.</p><span class="raw-badge">Full range · limits off</span></div><div class="compare-board"><p class="axis-heading">DENSITY →</p><div class="compare-grid" id="compare-grid"></div></div><div class="compare-footnote"><span class="row-axis">DETAIL ↓</span><p><strong>Look for breathing room.</strong> More density fills the canvas; more detail adds structure. Pushing both up can make small shapes merge. The comparison shows raw settings so you can judge the extremes.</p></div></section>
+<section class="inspector" aria-label="Selected motif"><div class="specimen-wrap" id="specimen-wrap"><canvas id="specimen" width="32" height="32" aria-label="Enlarged selected motif"></canvas></div><div class="specimen-info"><div class="eyebrow">Under the magnifying glass</div><h2 id="selected-title">Flower No. 01</h2><div class="specimen-seed" id="selected-seed"></div><div class="specimen-palette" id="selected-colors"></div></div><div class="specimen-actions"><button class="dark-button" id="save-png">Save 32 × 32 PNG ↓</button><button class="outline-button" id="recipe-open">Recipe &amp; code ↗</button></div></section><div class="selected-footer"><span id="selected-stats"></span><label><input type="checkbox" id="show-grid"> Pixel grid</label></div>
+<div class="lab-tip"><div class="tip-icon"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M7 13c0-2-3-3-3-6a6 6 0 1 1 12 0c0 3-3 4-3 6H7zm0 3h6m-5 3h4M10 4v4"/></svg></div><div><strong id="tip-title">A good place to start</strong><p id="tip-text">Try density 40–70 and detail 25–60, then change one thing at a time. The Compare view makes the trade-offs easy to see.</p></div></div>
+</main>
+</div>
+<footer class="footer"><span>32 × 32 pixels. A whole lot of possibility.</span><span>Seeded JavaScript · 0 dependencies · CPU pixel generation</span><span><kbd class="keyboard">Space</kbd> new batch <span aria-hidden="true">/</span> <button class="text-button" id="footer-about" style="padding:0;font:inherit">About this little lab ↗</button></span></footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<dialog id="about-dialog" aria-labelledby="about-title"><div class="dialog-head"><h2 id="about-title">Small rules. Good surprises.</h2><button class="close-dialog" data-close="about-dialog" aria-label="Close about">×</button></div><p>Motif makes tiny, repeatable pixel patterns from a seed. A structured generator draws the shape, a curated palette supplies the color, and symmetry ties it all together.</p><h3>Three families</h3><ul><li><strong>Flowers:</strong> layered radial petals and little geometric centers.</li><li><strong>Snowflakes:</strong> branching arms and crystalline details. Six arms is the classic starting point.</li><li><strong>Mosaics:</strong> square-periodic ornaments with matching opposite edges. Symmetry changes the inner ornament; the outer tile stays square.</li></ul><h3>Find your sweet spot</h3><p>Use <strong>Collection</strong> to browse seeds, <strong>Repeat</strong> to test a pattern, and <strong>Compare</strong> to hold a single seed steady while changing density and detail. Click a comparison square to apply those raw settings.</p><p><strong>Keep it balanced</strong> limits density to 20–82, detail to 10–78, and contrast to 20–90. Switch it off to explore the extremes. Aesthetic quality is subjective; these are useful guardrails, not a promise that every combination will be your favorite.</p><h3>A small, portable tool</h3><p>All shapes are computed in JavaScript into a 32 × 32 RGBA array on the CPU. Canvas 2D displays and exports those pixels. No WebGL, remote requests, libraries, fonts, or image assets are used. Browser display compositing may still use its normal acceleration.</p><p>The HTML works offline. Download a native PNG, a sheet with no gaps, a tiled PNG, a reproducible recipe, or the standalone generator. <span id="size-info"></span></p><div class="dialog-actions"><button class="outline-button" id="download-engine">Get generator JS</button><button class="dark-button" id="about-download-html">Get the HTML</button></div></dialog>
+<dialog id="recipe-dialog" aria-labelledby="recipe-title"><div class="dialog-head"><h2 id="recipe-title">Keep a little recipe.</h2><button class="close-dialog" data-close="recipe-dialog" aria-label="Close recipe">×</button></div><p>These exact values reproduce the selected motif. Save them, or paste a recipe here and choose <strong>Load recipe</strong>.</p><textarea id="recipe-text" aria-label="Motif recipe JSON" spellcheck="false"></textarea><p id="recipe-error" class="error-text" role="alert" hidden></p><p>With the standalone generator loaded, use<br><code>const { pixels } = PixelEngine.generate(recipe);</code></p><div class="dialog-actions"><button class="outline-button" id="save-recipe">Save JSON</button><button class="outline-button" id="load-recipe">Load recipe</button><button class="dark-button" id="copy-recipe">Copy recipe</button></div></dialog>
+<script id="boot-state" type="application/json">{"mode":"mix","palette":"auto","density":56,"detail":48,"contrast":66,"symmetry":6,"safe":true,"seed":"little-garden","count":24,"selected":0,"exactSeed":false,"view":"gallery","repeat":"single","zoom":2}</script>
+<script id="pixel-engine">
+/* Pixel Garden · deterministic 32×32 CPU rasterizer · no dependencies */
+const PixelEngine = (() => {
+  'use strict';
+  const size = 32, tau = Math.PI * 2;
+  const palettes = [
+    { id: 'ember', name: 'Ember', colors: ['#202735','#864352','#E87565','#FFB072','#E6C86D','#FFF0C5'] },
+    { id: 'lagoon', name: 'Lagoon', colors: ['#163A38','#32675F','#5EA393','#91C5A6','#D3D09B','#FFF1CC'] },
+    { id: 'cobalt', name: 'Cobalt', colors: ['#1E2D49','#3D5988','#628DCA','#9DC7EA','#DED7A7','#FFF4DD'] },
+    { id: 'orchid', name: 'Orchid', colors: ['#30263D','#6C5184','#AA7ABC','#E5A0C1','#F0BC7A','#FFF0D0'] },
+    { id: 'saffron', name: 'Saffron', colors: ['#333A2D','#697750','#A1AD70','#D7CA7D','#E58D61','#FFF0C5'] },
+    { id: 'porcelain', name: 'Porcelain', colors: ['#EDE5D2','#304C58','#568394','#7AA5A4','#C56F54','#FFF9EA'] }
+  ];
+  const defaults = { mode: 'flower', seed: 'garden', density: 56, detail: 48, symmetry: 6, contrast: 66, palette: 'auto', safe: true };
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const number = (v, fallback) => Number.isFinite(Number(v)) ? Number(v) : fallback;
+  function hash(text) {
+    let h = 2166136261;
+    for (const c of String(text)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  function random(seed) {
+    let t = seed >>> 0;
+    return () => {
+      t += 0x6D2B79F5;
+      let a = Math.imul(t ^ t >>> 15, 1 | t);
+      a ^= a + Math.imul(a ^ a >>> 7, 61 | a);
+      return ((a ^ a >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const rgb = hex => [1,3,5].map(i => parseInt(hex.slice(i,i+2),16));
+  const hex = c => '#' + c.map(v => clamp(Math.round(v),0,255).toString(16).padStart(2,'0')).join('');
+  function generate(options = {}) {
+    const p = { ...defaults, ...options };
+    const mode = ['flower','snowflake','mosaic'].includes(p.mode) ? p.mode : 'flower';
+    const seed = String(p.seed);
+    const rng = random(hash(seed + ':' + mode));
+    // Draw all random decisions first: moving a slider preserves the seed's structure.
+    const r = Array.from({length:24}, rng);
+    const effective = {
+      density: clamp(number(p.density,56), p.safe ? 20 : 0, p.safe ? 82 : 100),
+      detail: clamp(number(p.detail,48), p.safe ? 10 : 0, p.safe ? 78 : 100),
+      contrast: clamp(number(p.contrast,66), p.safe ? 20 : 0, p.safe ? 90 : 100),
+      symmetry: [4,6,8].includes(Number(p.symmetry)) ? Number(p.symmetry) : 6
+    };
+    const d = effective.density / 100, detail = effective.detail / 100, n = effective.symmetry;
+    const swatch = palettes.find(v => v.id === p.palette) || palettes[Math.floor(r[0]*palettes.length)];
+    const base = swatch.colors.map(rgb), contrast = .48 + effective.contrast * .0079;
+    const palette = base.map((c,i) => i ? hex(c.map((v,k) => base[0][k]+(v-base[0][k])*contrast)) : swatch.colors[0]);
+    const colors = palette.map(rgb), map = new Uint8Array(size*size);
+
+    if (mode === 'flower') {
+      const rotation = -Math.PI/2 + (r[1] > .58 ? Math.PI/n : 0);
+      const petalCenter = (6.5 + d*1.9)*(.91+r[5]*.17), petalLength = (4 + d*1.6)*(.84+r[6]*.29);
+      const petalWidth = (2.25 + d*1.9) * (6/n)**.6*(.78+r[7]*.4);
+      const innerCenter = 3.9 + d*.7, innerLength = 2.6+d*.9;
+      const centerRadius = 1.8 + d*1.5 + (r[2]-.5)*.5;
+      const twist = (r[3] > .5 ? .5 : 0) * Math.PI/n;
+      const petals = Array.from({length:n}, (_,i) => {
+        const a = rotation + i*tau/n;
+        return [Math.cos(a),Math.sin(a),Math.cos(a+twist),Math.sin(a+twist)];
+      });
+      for (let y=0; y<size; y++) for (let x=0; x<size; x++) {
+        const dx=x-15.5, dy=y-15.5, radius=Math.hypot(dx,dy);
+        let color=0, best=Infinity, inner=Infinity, petalU=0, petalV=0;
+        for (const [c,s,ic,is] of petals) {
+          const u=dx*c+dy*s, v=-dx*s+dy*c;
+          const e=((u-petalCenter)/petalLength)**2+(v/petalWidth)**2;
+          if (e<best) {best=e;petalU=u;petalV=v;}
+          inner=Math.min(inner,((dx*ic+dy*is-innerCenter)/innerLength)**2+((-dx*is+dy*ic)/(petalWidth*.78))**2);
+        }
+        if (best<=1.14 && detail>.22) color=1;
+        if (best<=1) {
+          color=best>.76 ? 2 : 3;
+          if (r[4]>.5) color=best>.76 ? 1 : 2;
+          if (detail>.30 && Math.abs(petalV)<.7 && petalU>6.2 && petalU<petalCenter+petalLength-1) color=4;
+          if (detail>.58 && best<.53 && petalU>petalCenter+1.5) color=5;
+        }
+        if (detail>.18 && inner<1) color=inner>.68 ? 2 : 4;
+        if (detail>.60 && inner<.45) color=3;
+        if (radius<centerRadius+.8) color=1;
+        if (radius<centerRadius) color=4;
+        if (radius<centerRadius-1.15) color=5;
+        if (detail>.68 && radius<centerRadius-.3 && (x+y)%2===0) color=3;
+        map[y*size+x]=color;
+      }
+    } else if (mode === 'snowflake') {
+      const rotation=-Math.PI/2+(r[1]>.78 ? Math.PI/n : 0), length=10.6+d*3.9;
+      const width=.43+d*.37, branchCount=1+Math.floor(detail*4.99), segments=[];
+      const add=(ax,ay,bx,by,weight,ink)=>segments.push([ax,ay,bx,by,weight,ink]);
+      for (let i=0;i<n;i++) {
+        const a=rotation+i*tau/n, c=Math.cos(a), s=Math.sin(a);
+        add(0,0,c*length,s*length,1,4);
+        for (let j=0;j<branchCount;j++) {
+          const t=(j+1)/(branchCount+1), reach=length*(.30+t*.55);
+          const branch=(2.3+d*3.7)*(1-t*.5)*(n===8?.8:1)*(.9+r[4]*.2);
+          const angle=Math.PI*(r[2]>.5 ? 1/3 : 1/4);
+          for (const sign of [-1,1]) {
+            const b=a+sign*angle;
+            add(c*reach,s*reach,c*reach+Math.cos(b)*branch,s*reach+Math.sin(b)*branch,.8,j%2 ? 3 : 5);
+            if (detail>.76 && j===0) {
+              const k=a-sign*Math.PI/3, q=reach*.6;
+              add(c*q,s*q,c*q+Math.cos(k)*2,s*q+Math.sin(k)*2,.7,3);
+            }
+          }
+        }
+      }
+      for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
+        const dx=x-15.5,dy=y-15.5,rad=Math.hypot(dx,dy);
+        let color=0, nearest=Infinity;
+        for (const [ax,ay,bx,by,weight,ink] of segments) {
+          const vx=bx-ax,vy=by-ay,t=clamp(((dx-ax)*vx+(dy-ay)*vy)/(vx*vx+vy*vy),0,1);
+          const distance=Math.hypot(dx-ax-t*vx,dy-ay-t*vy)/weight;
+          if(distance<nearest) {
+            nearest=distance;
+            color=distance<=width ? ink : distance<=width+.48 && d>.40 ? 1 : 0;
+          }
+        }
+        if(rad<1.2+d*1.8) color=3;
+        if(rad<.8+d*.8) color=5;
+        if(detail>.38 && rad>2.3+d && rad<3.2+d && nearest<1.5) color=2;
+        map[y*size+x]=color;
+      }
+    } else {
+      // Square-periodic corner ornaments make all opposing edges meet exactly.
+      const family=Math.floor(r[1]*3), extent=8.8+d*5.6, ring=1.3+(1-detail)*2.5;
+      const cornerExtent=2.7+d*4.4, border=detail>.58;
+      for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
+        const dx=Math.abs(x-15.5),dy=Math.abs(y-15.5);
+        const a=Math.atan2(y-15.5,x-15.5),radius=Math.hypot(dx,dy);
+        const angular=Math.cos(n*a);
+        const sector=tau/n, folded=((a+Math.PI/n)%sector+sector)%sector-Math.PI/n;
+        const polygon=radius*Math.cos(folded)/Math.cos(Math.PI/n);
+        const shape=family===0 ? polygon : family===1 ? radius/(.85+.15*angular) : radius/(.74+.26*angular);
+        const edge=Math.min(x,31-x,y,31-y);
+        const corner=Math.hypot(Math.min(x+.5,31.5-x),Math.min(y+.5,31.5-y));
+        let color=0;
+        if(corner<cornerExtent+1.2) color=1;
+        if(corner<cornerExtent) color=4;
+        if(corner<cornerExtent-ring) color=2;
+        if(corner<cornerExtent-ring*1.8) color=5;
+        if(shape<extent+1) color=1;
+        if(shape<extent) {
+          const band=Math.floor((extent-shape)/ring);
+          color=[2,3,1,4,5,3,2,4][band%8];
+          if(family===1 && detail>.36 && Math.abs(dx-dy)<.55) color=5;
+          if(family===2 && detail>.36 && Math.abs(Math.sin(n*a))<.16 && shape<extent-1) color=4;
+        }
+        if(shape<2.1+d) color=5;
+        if(detail>.72 && shape>extent+2 && corner>cornerExtent+1 && (dx===.5 || dy===.5)) color=3;
+        if(border && edge===1 && shape>extent+1 && corner>cornerExtent+1.2) color=2;
+        map[y*size+x]=color;
+      }
+    }
+    const pixels=new Uint8ClampedArray(size*size*4), used=new Set();
+    let coverage=0;
+    for(let i=0;i<map.length;i++) {
+      const index=map[i], color=colors[index], offset=i*4;
+      pixels[offset]=color[0];pixels[offset+1]=color[1];pixels[offset+2]=color[2];pixels[offset+3]=255;
+      used.add(palette[index]);if(index) coverage++;
+    }
+    return {pixels,palette,seed,mode,stats:{coverage:Math.round(coverage/1024*1000)/10,colors:used.size,palette:swatch.id,effective}};
+  }
+  return {generate,palettes,defaults,version:'1.0.0'};
+})();
+if(typeof module!=='undefined'&&module.exports)module.exports=PixelEngine;
+
+</script>
+<script>
+(function(){
+'use strict';
+const originalHTML='<!doctype html>\n'+document.documentElement.outerHTML;
+const $=function(id){return document.getElementById(id);};
+const $$=function(selector){return Array.from(document.querySelectorAll(selector));};
+const names={flower:'Flower',snowflake:'Snowflake',mosaic:'Mosaic'};
+const descriptions={mix:'A little of everything. Three families, one collection.',flower:'Layered petals, bright centers, and happy little accidents.',snowflake:'Branching crystals with a beautifully ordered heart.',mosaic:'Geometric ornaments made to meet at the edges.'};
+const defaults={mode:'mix',palette:'auto',density:56,detail:48,contrast:66,symmetry:6,safe:true,seed:'little-garden',count:24,selected:0,exactSeed:false,view:'gallery',repeat:'single',zoom:2};
+let state=Object.assign({},defaults,JSON.parse($('boot-state').textContent));
+let batch=[],frame=0,toastTimer=0,compareSignature='';
+const palettes=PixelEngine.palettes;
+const escapeHTML=function(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+function paletteName(id){const p=palettes.find(function(p){return p.id===id;});return p?p.name:'Curated';}
+function safeName(s){return String(s).replace(/[^a-z0-9_-]/gi,'-').slice(0,70)||'motif';}
+function notify(message){$('toast').textContent=message;$('toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(function(){$('toast').classList.remove('visible');},2600);}
+function paint(canvas,pixels){canvas.width=32;canvas.height=32;const ctx=canvas.getContext('2d',{alpha:false,willReadFrequently:true});ctx.imageSmoothingEnabled=false;ctx.putImageData(new ImageData(pixels,32,32),0,0);}
+function settings(index){const mode=state.mode==='mix'?['flower','snowflake','mosaic'][index%3]:state.mode;return {mode:mode,seed:state.exactSeed&&index===0?state.seed:state.seed+'-'+String(index+1).padStart(2,'0'),density:state.density,detail:state.detail,contrast:state.contrast,symmetry:state.symmetry,palette:state.palette,safe:state.safe};}
+function current(){return batch[state.selected]||batch[0];}
+function makePaletteControls(){palettes.forEach(function(p){const option=document.createElement('option');option.value=p.id;option.textContent=p.name;$('palette').appendChild(option);const button=document.createElement('button');button.className='palette-option';button.dataset.palette=p.id;button.title=p.name;button.setAttribute('aria-label',p.name+' palette');button.setAttribute('aria-pressed','false');p.colors.slice(0,4).forEach(function(c){const swatch=document.createElement('span');swatch.style.background=c;button.appendChild(swatch);});$('palette-options').appendChild(button);});}
+function syncControls(){
+$$('[data-mode]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.mode===state.mode));});
+$$('[data-symmetry]').forEach(function(b){b.setAttribute('aria-pressed',String(+b.dataset.symmetry===state.symmetry));});
+$$('[data-palette]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.palette===state.palette));});
+['density','detail','contrast'].forEach(function(key){$(key).value=state[key];$(key+'-value').value=state[key];$(key).style.setProperty('--pct',state[key]+'%');});
+$('palette').value=state.palette;$('safe').checked=state.safe;$('seed').value=state.seed;$('count').value=state.count;$('tile-zoom').value=state.zoom;
+$('mode-help').textContent=descriptions[state.mode];$('palette-note').textContent=state.palette==='auto'?'Six curated palettes, picked by seed.':paletteName(state.palette)+' across the whole collection.';
+$('balance-note').textContent=state.safe?'Gentle limits keep the busiest and faintest settings in check.':'The full range is yours. Try Compare to spot the extremes.';
+$$('[data-repeat]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.repeat===state.repeat));});
+$$('[data-view]').forEach(function(b){const active=b.dataset.view===state.view;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;$('view-'+b.dataset.view).hidden=!active;});
+}
+function renderGallery(){const fragment=document.createDocumentFragment();batch.forEach(function(item,index){const b=document.createElement('button');b.className='motif-card';b.dataset.index=index;b.setAttribute('aria-pressed',String(index===state.selected));b.setAttribute('aria-label','Select '+names[item.mode]+' '+String(index+1)+', seed '+item.seed);const c=document.createElement('canvas');c.setAttribute('aria-hidden','true');paint(c,item.pixels);b.appendChild(c);const label=document.createElement('span');label.className='motif-label';label.innerHTML='<span>'+String(index+1).padStart(2,'0')+' / '+names[item.mode]+'</span><i class="selected-dot"></i>';b.appendChild(label);fragment.appendChild(b);});$('gallery').replaceChildren(fragment);}
+function renderInspector(){const item=current();if(!item)return;paint($('specimen'),item.pixels);$('selected-title').textContent=names[item.mode]+' No. '+String(state.selected+1).padStart(2,'0');$('selected-seed').textContent='seed / '+item.seed;
+$('selected-colors').innerHTML=item.palette.map(function(c){return '<i style="background:'+c+'" title="'+c+'"></i>';}).join('')+'<span>'+escapeHTML(paletteName(item.stats.palette))+'</span>';
+const eff=item.stats.effective||state;let clamped=[];['density','detail','contrast'].forEach(function(k){if(eff[k]!==state[k])clamped.push(k+' '+eff[k]);});
+$('selected-stats').textContent=item.stats.coverage+'% filled · '+item.stats.colors+' colors'+(clamped.length?' · balanced to '+clamped.join(', '):'');
+let tipTitle='A good place to start',tip='Try density 40–70 and detail 25–60, then change one thing at a time. The Compare view makes the trade-offs easy to see.';
+if(!state.safe&&(state.density>78&&state.detail>70)){tipTitle='A lot in a little space';tip='High density and high detail can merge small features at 32 × 32. Lower either one if the silhouette feels crowded.';}
+else if(!state.safe&&state.contrast<20){tipTitle='Soft, softer, almost hidden';tip='Very low contrast brings the colors closer to the background. Try contrast 35–70 if you want the pixel structure to read clearly.';}
+else if(item.mode==='snowflake'){tipTitle='Give a crystal some breathing room';tip='Six arms, moderate density, and a little extra contrast are a useful starting point. Turn detail up to grow the secondary branches.';}
+else if(item.mode==='mosaic'){tipTitle='Meet me at the edges';tip='Mosaic tiles match their opposite edges. Try Repeat to see a single ornament turn into a whole surface; Patchwork mixes the collection.';}
+else if(item.mode==='flower'){tipTitle='Let the petals do the talking';tip='Try density 40–70 for a clear flower silhouette. Lower detail for broad petals, or increase it for patterned centers and finer layers.';}
+$('tip-title').textContent=tipTitle;$('tip-text').textContent=tip;
+}
+function renderRepeat(){const c=$('repeat-canvas'),w=768,h=512,z=state.zoom,unit=32*z;const out=new Uint8ClampedArray(w*h*4);const tilesAcross=Math.ceil(w/unit);for(let y=0;y<h;y++){const py=Math.floor(y/z)%32,ty=Math.floor(y/unit);for(let x=0;x<w;x++){const tx=Math.floor(x/unit);const item=state.repeat==='single'?current():batch[(ty*tilesAcross+tx)%batch.length];const src=(py*32+Math.floor(x/z)%32)*4,dst=(y*w+x)*4;out[dst]=item.pixels[src];out[dst+1]=item.pixels[src+1];out[dst+2]=item.pixels[src+2];out[dst+3]=255;}}c.width=w;c.height=h;c.getContext('2d',{alpha:false,willReadFrequently:true}).putImageData(new ImageData(out,w,h),0,0);$('repeat-hint').textContent=state.repeat==='single'?'Your selected '+names[current().mode].toLowerCase()+', repeated edge to edge. '+(w/unit)+' × '+(h/unit)+' tiles at '+z+'×.':'Every motif in this collection, arranged in a patchwork. Different seeds and palettes may create visible joins.';}
+function renderCompare(){const item=current();const base=Object.assign({},settings(state.selected),{mode:item.mode,seed:item.seed,safe:false});const signature=JSON.stringify([base.mode,base.seed,base.palette,base.symmetry,base.contrast]);if(signature!==compareSignature){compareSignature=signature;const f=document.createDocumentFragment();let corner=document.createElement('span');corner.className='axis-label';corner.textContent='↓';corner.title='Detail increases down the rows';f.appendChild(corner);[0,25,50,75,100].forEach(function(n){let t=document.createElement('span');t.className='axis-label';t.textContent=n;f.appendChild(t);});[0,25,50,75,100].forEach(function(detail){let t=document.createElement('span');t.className='axis-label';t.textContent=detail;f.appendChild(t);[0,25,50,75,100].forEach(function(density){const b=document.createElement('button');b.className='compare-cell';b.dataset.density=density;b.dataset.detail=detail;b.setAttribute('aria-label','Try density '+density+' and detail '+detail);b.title='Density '+density+' · Detail '+detail;const c=document.createElement('canvas');c.setAttribute('aria-hidden','true');paint(c,PixelEngine.generate(Object.assign({},base,{density:density,detail:detail})).pixels);b.appendChild(c);f.appendChild(b);});});$('compare-grid').replaceChildren(f);}$$('.compare-cell').forEach(function(b){b.setAttribute('aria-pressed',String(+b.dataset.density===state.density&&+b.dataset.detail===state.detail&&!state.safe));});}
+function renderView(){if(state.view==='repeat')renderRepeat();if(state.view==='compare')renderCompare();}
+function generate(){const start=performance.now();state.selected=Math.max(0,Math.min(state.selected,state.count-1));batch=Array.from({length:state.count},function(_,i){return PixelEngine.generate(settings(i));});renderGallery();renderInspector();renderView();const ms=performance.now()-start;$('perf').textContent=state.count+' motifs / '+(ms<1?'<1':Math.round(ms))+' ms';}
+function schedule(){syncControls();cancelAnimationFrame(frame);frame=requestAnimationFrame(function(){frame=0;generate();});}
+function freshBatch(){const words=['little-garden','spring-studio','paper-petals','soft-signal','tiny-wonder','moon-garden'];let n;if(globalThis.crypto&&crypto.getRandomValues){const a=new Uint32Array(1);crypto.getRandomValues(a);n=a[0];}else n=(Date.now()+Math.floor(Math.random()*1e6))>>>0;state.seed=words[n%words.length]+'-'+n.toString(36).slice(-4);state.exactSeed=false;state.selected=0;schedule();notify('A fresh collection, with your settings.');}
+function saveBlob(blob,filename){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},5000);}
+function saveCanvas(c,filename){c.toBlob(function(blob){if(blob){saveBlob(blob,filename);notify('PNG ready — '+c.width+' × '+c.height+' pixels.');}else notify('Could not create the PNG. Please try again.');},'image/png');}
+function recipe(){return Object.assign({version:PixelEngine.version},settings(state.selected),{mode:current().mode,seed:current().seed});}
+function exportHTML(){const boot=JSON.stringify(state).replace(/</g,'\\u003c');const html=originalHTML.replace(/(<script id="boot-state" type="application\/json">)[\s\S]*?(<\/script>)/,function(_,open,close){return open+boot+close;});saveBlob(new Blob([html],{type:'text/html;charset=utf-8'}),'motif.html');notify('Your standalone HTML, with these settings.');}
+function exportEngine(){saveBlob(new Blob([$ ('pixel-engine').textContent],{type:'text/javascript;charset=utf-8'}),'motif-engine.js');notify('Standalone pixel generator ready.');}
+function openRecipe(){$('recipe-text').value=JSON.stringify(recipe(),null,2);$('recipe-error').hidden=true;$('recipe-dialog').showModal();}
+function loadRecipe(){try{const r=JSON.parse($('recipe-text').value);if(!r||!['flower','snowflake','mosaic'].includes(r.mode))throw Error('Choose a valid mode: flower, snowflake, or mosaic.');if(typeof r.seed!=='string'&&typeof r.seed!=='number')throw Error('The recipe needs a seed.');['density','detail','contrast'].forEach(function(k){if(typeof r[k]!=='number'||!Number.isFinite(r[k])||r[k]<0||r[k]>100)throw Error(k+' must be a number between 0 and 100.');});if(![4,6,8].includes(r.symmetry))throw Error('Symmetry must be 4, 6, or 8.');if(r.palette!=='auto'&&!palettes.some(function(p){return p.id===r.palette;}))throw Error('Choose one of the available palettes.');if(typeof r.safe!=='boolean')throw Error('The safe setting must be true or false.');state=Object.assign({},state,{mode:r.mode,seed:String(r.seed),density:r.density,detail:r.detail,contrast:r.contrast,symmetry:r.symmetry,palette:r.palette,safe:r.safe,selected:0,exactSeed:true});$('recipe-dialog').close();schedule();notify('Recipe loaded. The first motif is your exact original.');}catch(e){$('recipe-error').textContent=e.message;$('recipe-error').hidden=false;}}
+makePaletteControls();
+$$('[data-mode]').forEach(function(b){b.addEventListener('click',function(){state.mode=b.dataset.mode;state.selected=0;schedule();});});
+$$('[data-symmetry]').forEach(function(b){b.addEventListener('click',function(){state.symmetry=+b.dataset.symmetry;schedule();});});
+$$('[data-palette]').forEach(function(b){b.addEventListener('click',function(){state.palette=b.dataset.palette;schedule();});});
+['density','detail','contrast'].forEach(function(k){$(k).addEventListener('input',function(){state[k]=+this.value;schedule();});});
+$('palette').addEventListener('change',function(){state.palette=this.value;schedule();});
+$('safe').addEventListener('change',function(){state.safe=this.checked;schedule();});
+$('seed').addEventListener('input',function(){state.seed=this.value;state.exactSeed=false;schedule();});
+$('count').addEventListener('change',function(){state.count=+this.value;schedule();});
+$('new-batch').addEventListener('click',freshBatch);$('reroll-seed').addEventListener('click',freshBatch);
+$('reset').addEventListener('click',function(){state=Object.assign({},defaults);$('show-grid').checked=false;$('specimen-wrap').classList.remove('has-grid');schedule();notify('Back to the beginning.');});
+$('gallery').addEventListener('click',function(e){const b=e.target.closest('.motif-card');if(!b)return;state.selected=+b.dataset.index;$$('.motif-card').forEach(function(c){c.setAttribute('aria-pressed',String(+c.dataset.index===state.selected));});renderInspector();renderView();});
+$$('[data-view]').forEach(function(b){b.addEventListener('click',function(){state.view=b.dataset.view;syncControls();renderView();});b.addEventListener('keydown',function(e){if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const tabs=$$('[data-view]');const i=tabs.indexOf(b);const j=e.key==='Home'?0:e.key==='End'?2:(i+(e.key==='ArrowRight'?1:2))%3;tabs[j].click();tabs[j].focus();}});});
+$$('[data-repeat]').forEach(function(b){b.addEventListener('click',function(){state.repeat=b.dataset.repeat;syncControls();renderRepeat();});});
+$('tile-zoom').addEventListener('change',function(){state.zoom=+this.value;renderRepeat();});
+$('compare-grid').addEventListener('click',function(e){const b=e.target.closest('.compare-cell');if(!b)return;state.density=+b.dataset.density;state.detail=+b.dataset.detail;state.safe=false;schedule();notify('Density '+state.density+' · Detail '+state.detail+' · Full range enabled');});
+$('show-grid').addEventListener('change',function(){$('specimen-wrap').classList.toggle('has-grid',this.checked);});
+$$('[data-preset]').forEach(function(b){b.addEventListener('click',function(){const presets={quiet:{density:30,detail:20,contrast:58,symmetry:6,safe:true},lush:{mode:'flower',density:72,detail:66,contrast:75,symmetry:8,safe:true},crystal:{mode:'snowflake',density:44,detail:62,contrast:80,symmetry:6,palette:'cobalt',safe:true},woven:{mode:'mosaic',density:64,detail:55,contrast:67,symmetry:4,palette:'porcelain',safe:true}};Object.assign(state,presets[b.dataset.preset],{selected:0});schedule();notify('The '+b.textContent.toLowerCase()+' preset is ready to explore.');});});
+$('save-png').addEventListener('click',function(){const c=document.createElement('canvas');paint(c,current().pixels);saveCanvas(c,'motif-'+current().mode+'-'+safeName(current().seed)+'.png');});
+$('save-sheet').addEventListener('click',function(){const columns=state.count===12?4:8,rows=Math.ceil(batch.length/columns),c=document.createElement('canvas');c.width=columns*32;c.height=rows*32;const ctx=c.getContext('2d',{alpha:false,willReadFrequently:true});batch.forEach(function(item,i){ctx.putImageData(new ImageData(item.pixels,32,32),(i%columns)*32,Math.floor(i/columns)*32);});saveCanvas(c,'motif-sheet-'+safeName(state.seed)+'.png');});
+$('save-repeat').addEventListener('click',function(){saveCanvas($('repeat-canvas'),'motif-repeat-'+safeName(state.seed)+'.png');});
+$('download-html').addEventListener('click',exportHTML);$('about-download-html').addEventListener('click',exportHTML);$('download-engine').addEventListener('click',exportEngine);
+['about-open','footer-about'].forEach(function(id){$(id).addEventListener('click',function(){$('about-dialog').showModal();});});
+$$('[data-close]').forEach(function(b){b.addEventListener('click',function(){$(b.dataset.close).close();});});
+$$('dialog').forEach(function(d){d.addEventListener('click',function(e){if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close();}});});
+$('recipe-open').addEventListener('click',openRecipe);
+$('copy-recipe').addEventListener('click',async function(){try{await navigator.clipboard.writeText($('recipe-text').value);notify('Recipe copied.');}catch(e){$('recipe-text').focus();$('recipe-text').select();notify('Select and copy the recipe, or choose Save JSON.');}});
+$('save-recipe').addEventListener('click',function(){try{const r=JSON.parse($('recipe-text').value);saveBlob(new Blob([JSON.stringify(r,null,2)],{type:'application/json'}),'motif-recipe.json');notify('Recipe saved.');}catch(e){$('recipe-error').textContent='Please enter valid JSON before saving.';$('recipe-error').hidden=false;}});
+$('load-recipe').addEventListener('click',loadRecipe);
+document.addEventListener('keydown',function(e){if(e.code==='Space'&&!e.repeat&&!e.altKey&&!e.ctrlKey&&!e.metaKey&&!document.querySelector('dialog[open]')&&!['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(e.target.tagName)&&!e.target.isContentEditable){e.preventDefault();freshBatch();}});
+$('size-info').textContent='This file is '+(new Blob([originalHTML]).size/1024).toFixed(1)+' KB; the generator is '+(new Blob([$ ('pixel-engine').textContent]).size/1024).toFixed(1)+' KB uncompressed.';
+syncControls();generate();
+})();
+</script>
+</body>
+</html>

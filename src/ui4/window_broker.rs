@@ -454,8 +454,10 @@ pub(crate) struct WindowPlacementTransition {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowDockTarget {
     Maximize,
-    /// Bottom-center input latch; never committed as a dock placement.
+    /// Bottom-right-of-center input latch; never committed as a dock placement.
     GenericResize,
+    /// Bottom-left-of-center compact action; never a producer resize.
+    Collapse,
     LeftHalf,
     RightHalf,
     TopLeft,
@@ -1587,10 +1589,10 @@ impl WindowRecord {
             maximized: self.dock_target == Some(WindowDockTarget::Maximize),
             dock_target: self.dock_target,
         };
-        Some(
+        Some(super::collapse_animation::project(
             self.collapse
                 .map_or(snapshot, |collapse| collapse.project(snapshot)),
-        )
+        ))
     }
 
     /// Retained transition/resize placements must not restore an obsolete z.
@@ -2594,7 +2596,7 @@ pub(super) fn docked_window_placement(
     let split_x = output_width / 2;
     let split_y = output_height / 2;
     let (x, y, width, height) = match target {
-        WindowDockTarget::GenericResize => return previous,
+        WindowDockTarget::GenericResize | WindowDockTarget::Collapse => return previous,
         WindowDockTarget::Maximize => (0, 0, output_width, output_height),
         WindowDockTarget::LeftHalf => (0, 0, split_x, output_height),
         WindowDockTarget::RightHalf => {
@@ -2663,7 +2665,9 @@ fn change_window_dock_record(
     restore_placement: Option<WindowPlacement>,
     restore_center: Option<(u32, u32)>,
 ) -> Result<WindowDockChange, WindowBrokerError> {
-    if !window.interaction.maximizable {
+    if !window.interaction.maximizable
+        || matches!(target, Some(WindowDockTarget::GenericResize | WindowDockTarget::Collapse))
+    {
         return Err(WindowBrokerError::InteractionDenied);
     }
     let previous = window.placement;
@@ -2916,6 +2920,7 @@ pub(crate) fn publish_window_frame(
 }
 
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
+    super::collapse_animation::cancel(owner, id);
     let icon = {
         let mut broker = WINDOW_BROKER.lock();
         broker.checked_window_mut(owner, id)?.collapse.take()
@@ -3005,7 +3010,7 @@ pub(crate) fn window_composition_revision() -> u64 {
 }
 
 pub(crate) fn window_transitions_active() -> bool {
-    if !TRANSITION_RETIRED_FRAMES.lock().is_empty() {
+    if super::collapse_animation::active() || !TRANSITION_RETIRED_FRAMES.lock().is_empty() {
         return true;
     }
     WINDOW_BROKER
@@ -3445,6 +3450,7 @@ pub(super) fn install_collapse(
     id: WindowId,
     mut icon: super::collapse::Collapse,
 ) -> Result<(), WindowBrokerError> {
+    super::collapse_animation::cancel(owner, id);
     let old = {
         let mut broker = WINDOW_BROKER.lock();
         let window = broker.checked_window_mut(owner, id)?;
@@ -3469,6 +3475,7 @@ pub(super) fn install_collapse(
 }
 
 pub(super) fn clear_collapse(owner: WindowOwner, id: WindowId) {
+    super::collapse_animation::cancel(owner, id);
     let icon = {
         let mut broker = WINDOW_BROKER.lock();
         let Ok(window) = broker.checked_window_mut(owner, id) else { return; };
@@ -3493,13 +3500,101 @@ pub(super) fn collapse_state(owner: WindowOwner, id: WindowId) -> Option<bool> {
 }
 
 pub(super) fn toggle_collapse(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
+    change_collapse(owner, id, None, true)
+}
+
+/// The dock action uses the same compact presentation as the menu and ABI.
+/// Only its destination and cursor attachment differ; producer geometry stays intact.
+pub(super) fn collapse_at_cursor(
+    owner: WindowOwner,
+    id: WindowId,
+    x: u32,
+    y: u32,
+) -> Result<(), WindowBrokerError> {
+    if collapse_state(owner, id) == Some(true) {
+        return follow_collapsed_cursor(owner, id, x, y);
+    }
+    let window = window_snapshot(owner, id).ok_or(WindowBrokerError::InvalidHandle)?;
+    if !window.interaction.movable || !window.interaction.maximizable {
+        return Err(WindowBrokerError::InteractionDenied);
+    }
+    super::collapse::ensure_window_collapse(owner, id).map_err(|error| match error {
+        super::CollapseError::NotFound => WindowBrokerError::InvalidHandle,
+        super::CollapseError::Busy => WindowBrokerError::Capacity,
+        _ => WindowBrokerError::InteractionDenied,
+    })?;
+    change_collapse(owner, id, Some((x, y)), false)
+}
+
+fn change_collapse(
+    owner: WindowOwner,
+    id: WindowId,
+    cursor: Option<(u32, u32)>,
+    toggle: bool,
+) -> Result<(), WindowBrokerError> {
+    if !toggle && collapse_state(owner, id) == Some(true) {
+        return Ok(());
+    }
+    super::collapse_animation::cancel(owner, id);
+    let output_extent = super::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
+    let (slot, _) = unpack_handle(id.raw())?;
+    let source = window.snapshot(slot).ok_or(WindowBrokerError::InvalidHandle)?;
     let icon = window
         .collapse
         .as_mut()
         .ok_or(WindowBrokerError::InteractionDenied)?;
+    if !toggle && icon.tile.is_some() {
+        return Ok(());
+    }
     icon.toggle(window.placement);
+    if let Some(tile) = &mut icon.tile
+        && let Some((x, y)) = cursor
+    {
+        *tile = collapsed_cursor_placement(*tile, x, y, output_extent);
+    }
+    let collapsing = icon.tile.is_some();
+    window.open_transition = None;
+    window.revision = next_serial(window.revision);
+    window.damage = Some(DamageRegion::FULL);
+    let compact = window.snapshot(slot).ok_or(WindowBrokerError::InvalidHandle)?;
+    if collapsing {
+        // Install the snapshot effect before making the compact revision
+        // visible. This avoids an icon-only flash while capture is pending.
+        let _ = super::collapse_animation::begin(source, compact);
+    }
+    broker.mark_composition_changed();
+    drop(broker);
+    super::cursor_frame_inout::selection_strip_stack_changed();
+    Ok(())
+}
+
+fn collapsed_cursor_placement(
+    tile: WindowPlacement,
+    x: u32,
+    y: u32,
+    output_extent: Option<(u32, u32)>,
+) -> WindowPlacement {
+    let (width, height) = output_extent.unwrap_or((u32::MAX, u32::MAX));
+    center_restored_window_on_cursor(tile, x, y, width, height)
+}
+
+/// Move only the compact tile; never ask the application to resize or move.
+pub(super) fn follow_collapsed_cursor(
+    owner: WindowOwner,
+    id: WindowId,
+    x: u32,
+    y: u32,
+) -> Result<(), WindowBrokerError> {
+    let output_extent = super::output_dimensions();
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    let tile = window.collapse.as_mut().and_then(|icon| icon.tile.as_mut())
+        .ok_or(WindowBrokerError::InteractionDenied)?;
+    let placement = collapsed_cursor_placement(*tile, x, y, output_extent);
+    if placement == *tile { return Ok(()); }
+    *tile = placement;
     window.revision = next_serial(window.revision);
     window.damage = Some(DamageRegion::FULL);
     broker.mark_composition_changed();
@@ -3508,23 +3603,38 @@ pub(super) fn toggle_collapse(owner: WindowOwner, id: WindowId) -> Result<(), Wi
     Ok(())
 }
 
+pub(super) fn collapse_animation_changed(owner: WindowOwner, id: WindowId) {
+    let mut broker = WINDOW_BROKER.lock();
+    let Ok(window) = broker.checked_window_mut(owner, id) else { return; };
+    window.revision = next_serial(window.revision);
+    window.damage = Some(DamageRegion::FULL);
+    broker.mark_composition_changed();
+    drop(broker);
+    super::cursor_frame_inout::selection_strip_stack_changed();
+}
+
 fn release_collapse(owner: WindowOwner, session: Option<WindowSessionId>) {
-    let frames = {
+    let icons = {
         let mut broker = WINDOW_BROKER.lock();
-        let mut frames = Vec::new();
-        for window in &mut broker.windows {
+        let mut icons = Vec::new();
+        for (slot, window) in broker.windows.iter_mut().enumerate() {
             if window.owner == owner && session.is_none_or(|session| window.session == session) {
                 if let Some(icon) = window.collapse.take() {
-                    frames.push(icon.frame);
+                    if let Ok(id) = pack_handle(slot, window.generation) {
+                        icons.push((WindowId(id), icon.frame));
+                    }
                 }
             }
         }
-        if !frames.is_empty() {
+        if !icons.is_empty() {
             broker.mark_composition_changed();
         }
-        frames
+        icons
     };
-    retire_transferred_frames(frames);
+    for (id, frame) in icons {
+        super::collapse_animation::cancel(owner, id);
+        retire_frame_when_released(frame);
+    }
 }
 
 #[cfg(test)]

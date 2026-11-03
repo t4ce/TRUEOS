@@ -437,6 +437,7 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     let phase_started_ns = crate::chronos::monotonic_nanos();
     super::advance_window_close_transitions();
     super::advance_window_open_transitions();
+    super::collapse_animation::advance();
     runtime.profile.close_ns = runtime
         .profile
         .close_ns
@@ -1105,7 +1106,7 @@ const _: () = {
     ));
 };
 
-fn composition_source_uses_scanout_cache(window: &WindowSnapshot, view: FrameRgbaView) -> bool {
+pub(super) fn composition_source_uses_scanout_cache(window: &WindowSnapshot, view: FrameRgbaView) -> bool {
     if frame_snapshot(window.frame).is_ok_and(|snapshot| {
         source_requires_lifetime_scanout_cache(
             snapshot.plan.content,
