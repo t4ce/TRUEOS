@@ -61,7 +61,13 @@ pub(crate) fn enqueue(
     let (required, unpacked) = timing.measure("prebind", || super::blueprint::prebind_required_readiness(&request.bytes))?;
     crate::log_info!(target: "apps"; "launch phase=prebind elapsed_ms={} input_bytes={} output_bytes={} payload_reused=1\n",
         prebind_started.elapsed().as_millis(), request.bytes.len(), unpacked.len());
-    let worker = crate::workers::pick_background_spawner().ok_or("apps: no background worker")?;
+    // A resident native/Tokio job can occupy an executor carrier for its whole
+    // lifetime. Keep a lane lease until our task gets its first poll, rather
+    // than placing accepted work behind that job or racing its admission.
+    let worker = super::lane::pick_carrier_lane(super::lane::LaneProfile {
+        role: super::lane::LaneRole::Worker,
+        placement: crate::r::spawn_spec::SpawnPlacement::Worker,
+    }).map_err(|error| alloc::format!("apps: launch carrier unavailable: {}",error.as_str()))?;
     let (target, receipt) = timing.measure("matrix_reserve", || super::matrix::reserve(&request.archive, &request.bytes))?;
     if observer.is_some() {
         super::matrix::observe_completion(&target);
@@ -74,7 +80,7 @@ pub(crate) fn enqueue(
         }
     }
     let queue = timing.span("launch_queue");
-    let task = match launch_task(request, target.clone(), required, unpacked, observer, timing, queue) {
+    let task = match launch_task(request, target.clone(), required, unpacked, observer, timing, queue, worker.lease) {
         Ok(task) => task,
         Err(_) => {
             super::matrix::discard(&target);
@@ -87,7 +93,8 @@ pub(crate) fn enqueue(
     if let Some(frontend) = frontend {
         crate::shell3::tui::park_native_for_launch(frontend);
     }
-    worker.spawn(task);
+    crate::log_info!(target: "apps"; "launch phase=queued carrier={} reservation=until-first-poll\n",worker.slot);
+    worker.spawner.spawn(task);
     Ok(receipt)
 }
 
@@ -100,7 +107,11 @@ async fn launch_task(
     observer: Option<Box<dyn LaunchObserver>>,
     timing: super::launch_timing::Trace,
     mut queue: super::launch_timing::Span,
+    queue_carrier: super::lane::LaneLease,
 ) {
+    // We are now running on the reserved carrier. Lifecycle observation yields
+    // cooperatively; it must not retain a whole-carrier lease until VM exit.
+    drop(queue_carrier);
     queue.complete();
     let live = || {
         crate::shell3::matrix_target::matrix_slot_is_live(&crate::shell3::matrix_target_slot_lease(
