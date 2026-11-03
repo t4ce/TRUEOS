@@ -6,11 +6,21 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer};
 
+struct BrowserSource { url:String, referrer:Option<String> }
+fn valid_browser_url(url:&str)->bool {
+    url.starts_with("https://") && url.len()<=3072 && url[8..].split(['/', '?', '#']).next().is_some_and(|host|!host.is_empty()&&!host.contains('@')) && !url.bytes().any(|b|b.is_ascii_control()||b.is_ascii_whitespace())
+}
+fn browser_source(payload:&[u8])->Option<BrowserSource> {
+    let text=core::str::from_utf8(payload).ok()?;
+    let (url,referrer)=text.split_once('\0').map_or((text,None),|(u,r)|(u,Some(r)));
+    if !valid_browser_url(url)||referrer.is_some_and(|r|!valid_browser_url(r)||r.contains('#')) {return None;}
+    Some(BrowserSource{url:url.into(),referrer:referrer.map(String::from)})
+}
 struct BrowserPlayback {
     owner: u32,
     latest: u32,
     phase: i32,
-    queued: Option<String>,
+    queued: Option<BrowserSource>,
     pending: Option<VideoPlaybackSession>,
     active: Option<VideoPlaybackSession>,
     worker: bool,
@@ -21,21 +31,7 @@ static NEXT_REQUEST: AtomicU32 = AtomicU32::new(1);
 /// One active browser playback and one newest candidate per owner. The active
 /// session belongs to this service, not the requesting VM's lifetime.
 pub(crate) fn browser_request(owner: u32, payload: &[u8]) -> i32 {
-    let Ok(url) = core::str::from_utf8(payload) else {
-        return -3;
-    };
-    if !url.starts_with("https://")
-        || url.len() > 3072
-        || url[8..]
-            .split(['/', '?', '#'])
-            .next()
-            .is_none_or(|host| host.is_empty() || host.contains('@'))
-        || url
-            .bytes()
-            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
-    {
-        return -3;
-    }
+    let Some(source)=browser_source(payload) else {return -3;};
     let Some(worker) = crate::workers::pick_background_spawner() else {
         return -4;
     };
@@ -65,7 +61,7 @@ pub(crate) fn browser_request(owner: u32, payload: &[u8]) -> i32 {
     let state = &mut states[index];
     state.latest = id;
     state.phase = 0;
-    state.queued = Some(url.into());
+    state.queued = Some(source);
     if let Some(previous) = state.pending.take() {
         previous.cancel();
     }
@@ -181,7 +177,7 @@ async fn browser_prepare_task(owner: u32) {
                     None
                 };
                 if let Some(worker) = crate::workers::pick_background_spawner() {
-                    if let Ok(task) = playback_task(Source::Url(url), Session(session), target) {
+                    if let Ok(task) = playback_task(Source::Browser(url), Session(session), target) {
                         worker.spawn(task);
                     }
                 } else {
@@ -214,6 +210,7 @@ impl Drop for Session {
 enum Source {
     File(String),
     Url(String),
+    Browser(BrowserSource),
 }
 
 fn source(path: &str, qualified: bool) -> Result<Source, i32> {
@@ -308,7 +305,7 @@ async fn play(source: Source, session: VideoPlaybackSession) -> Result<(), &'sta
         Source::File(path) => {
             Some(crate::intel::media::hw_vid::prepare_trueosfs_ui4_video(session, path).await?)
         }
-        Source::Url(_) => None,
+        Source::Url(_) | Source::Browser(_) => None,
     };
     let extent = prepared.as_ref().map(|p| p.visible_extent()).unwrap_or((
         crate::ui4::DEFAULT_FRAME_WIDTH,
@@ -332,6 +329,10 @@ async fn play(source: Source, session: VideoPlaybackSession) -> Result<(), &'sta
                 }
                 crate::intel::media::hw_vid::run_prepared_trueosfs_ui4_video(session, path, asset)
                     .await?;
+            }
+            Source::Browser(source) => {
+                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback_with_referrer(session,&source.url,source.referrer.as_deref()).await?;
+                break;
             }
             Source::Url(url) => {
                 crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback(session, url)

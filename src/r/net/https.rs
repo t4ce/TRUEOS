@@ -1874,6 +1874,7 @@ pub(crate) async fn get_media_bytes_profile_shared(
     max_bytes: usize,
     cancellation: &MediaFetchCancellation,
     user_agent: Option<&str>,
+    referrer: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let target = parse_fetch_url(url).map_err(String::from)?;
     if target.scheme != "https" {
@@ -1906,23 +1907,52 @@ pub(crate) async fn get_media_bytes_profile_shared(
     if use_range {
         headers.push((String::from("Range"), String::from("bytes=0-")));
     }
-    let request = HttpsRequest {
+    let mut request = HttpsRequest {
         method: "GET",
         headers_only: false,
         content_type: None,
         headers,
         body: &[],
     };
-    success_body(
-        request_https_response_once_cancellable(
-            &target,
-            &request,
-            timeout_ms.max(1),
-            max_bytes,
-            Some(&cancellation.0),
-        )
-        .await?,
-    )
+    let deadline=Instant::now()+EmbassyDuration::from_millis(timeout_ms.max(1) as u64);
+    let mut current=String::from(url);
+    let mut seen=alloc::collections::BTreeSet::new();
+    for hop in 0..=5 {
+        if cancellation.0.is_cancelled(){return Err(String::from(HTTPS_REQUEST_CANCELLED));}
+        if !seen.insert(current.clone()){return Err(String::from("redirect loop"));}
+        let target=checked_media_target(&current)?;
+        request.headers.retain(|(name,_)|!name.eq_ignore_ascii_case("Referer"));
+        if let Some(value)=media_referrer_for_target(referrer,&target)? {request.headers.push((String::from("Referer"),value));}
+        let remaining=deadline.saturating_duration_since(Instant::now()).as_millis();
+        if remaining==0{return Err(String::from("timeout"));}
+        let response=request_https_response_once_cancellable(&target,&request,remaining.min(u32::MAX as u64) as u32,max_bytes,Some(&cancellation.0));
+        let mut response=core::pin::pin!(response);
+        let mut timer=core::pin::pin!(Timer::after(EmbassyDuration::from_millis(remaining)));
+        let mut expired=false;
+        let response=core::future::poll_fn(|cx|{
+            if !expired && timer.as_mut().poll(cx).is_ready(){expired=true;cancellation.cancel();}
+            // Keep the TLS ownership fence alive through cancellation.
+            response.as_mut().poll(cx)
+        }).await?;
+        if !matches!(response.status,301|302|303|307|308){return success_body(response);}
+        if hop==5{return Err(String::from("too many redirects"));}
+        let location=response.location.ok_or_else(||String::from("redirect missing location"))?;
+        current=resolve_fetch_redirect(&target,&location)?;
+    }
+    Err(String::from("too many redirects"))
+}
+
+fn checked_media_target(url:&str)->Result<FetchTarget,String>{
+    if url.len()>8192 || url.bytes().any(|b|b.is_ascii_control()||b.is_ascii_whitespace()) || !url.starts_with("https://") || url[8..].split(['/', '?', '#']).next().is_none_or(|host|host.is_empty()||host.contains('@')) {return Err(String::from("unsupported media URL"));}
+    parse_fetch_url(url).map_err(String::from)
+}
+fn media_referrer_for_target(referrer:Option<&str>,target:&FetchTarget)->Result<Option<String>,String>{
+    let Some(referrer)=referrer else{return Ok(None)};
+    let source=checked_media_target(referrer)?;
+    if source.host.eq_ignore_ascii_case(&target.host)&&source.port==target.port {
+        return Ok(Some(String::from(referrer.split('#').next().unwrap_or(referrer))));
+    }
+    Ok(Some(if source.port==443 {format!("https://{}/",source.host)} else {format!("https://{}:{}/",source.host,source.port)}))
 }
 
 pub async fn post_protobuf_shared(

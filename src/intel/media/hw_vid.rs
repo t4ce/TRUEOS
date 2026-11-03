@@ -7,7 +7,7 @@ use trueos_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer}
 
 const H264_DECODE_TIMEOUT_MS: u64 = 5_000;
 const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
-const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
+const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 512 * 1024 * 1024;
 const H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES: usize = 1024 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
 const H264_FS_INDEX_READ_AHEAD_BYTES: usize = 64 * 1024;
@@ -520,6 +520,12 @@ pub(crate) async fn run_resolved_ui4_framed_video_playback(
     session: crate::ui4::VideoPlaybackSession,
     url: &str,
 ) -> Result<H264PlaybackReport, &'static str> {
+    run_resolved_ui4_framed_video_playback_with_referrer(session,url,None).await
+}
+
+pub(crate) async fn run_resolved_ui4_framed_video_playback_with_referrer(
+    session: crate::ui4::VideoPlaybackSession, url: &str, referrer: Option<&str>,
+) -> Result<H264PlaybackReport, &'static str> {
     let report = run_media_url_playback(
         session,
         url,
@@ -529,6 +535,7 @@ pub(crate) async fn run_resolved_ui4_framed_video_playback(
         // Signed sources can bind the User-Agent used to resolve the player.
         // Match the browser's kernel GET identity rather than the demo profile.
         Some(crate::r::net::https::DEFAULT_USER_AGENT),
+        referrer,
     )
     .await?;
     if report.presented == 0 {
@@ -545,14 +552,15 @@ async fn run_media_url_playback(
     log_scope: &'static str,
     playback_path: &'static str,
     user_agent: Option<&str>,
+    referrer: Option<&str>,
 ) -> Result<H264PlaybackReport, &'static str> {
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
     if url.split('?').next().unwrap_or(url).ends_with(".m3u8") {
-        return run_hls_url_playback(session, url, options, playback_path, user_agent).await;
+        return run_hls_url_playback(session, url, options, playback_path, user_agent, referrer).await;
     }
-    let mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope, user_agent).await?;
+    let mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope, user_agent, referrer).await?;
     if session.is_cancelled() {
         return Err("playback cancelled");
     }
@@ -596,6 +604,7 @@ async fn h264_fetch_hls_bytes(
     url: &str,
     max_bytes: usize,
     user_agent: Option<&str>,
+    referrer: Option<&str>,
 ) -> Result<Vec<u8>, &'static str> {
     if !url.starts_with("https://") {
         return Err("HLS requires HTTPS");
@@ -608,6 +617,7 @@ async fn h264_fetch_hls_bytes(
         max_bytes,
         &cancellation,
         user_agent,
+        referrer,
     );
     let mut fetch = core::pin::pin!(fetch);
     let watch = async {
@@ -639,12 +649,13 @@ async fn run_hls_url_playback(
     options: H264PlaybackOptions,
     path: &'static str,
     user_agent: Option<&str>,
+    referrer: Option<&str>,
 ) -> Result<H264PlaybackReport, &'static str> {
     let mut current = String::from(url);
     let mut segments = None;
     for _ in 0..3 {
         let bytes =
-            h264_fetch_hls_bytes(session, &current, super::hls::PLAYLIST_CAP, user_agent).await?;
+            h264_fetch_hls_bytes(session, &current, super::hls::PLAYLIST_CAP, user_agent, referrer).await?;
         let text = core::str::from_utf8(&bytes).map_err(|_| "HLS playlist is not UTF-8")?;
         match super::hls::playlist(text)? {
             super::hls::Playlist::Variant(reference) => {
@@ -678,6 +689,7 @@ async fn run_hls_url_playback(
         offset: 0,
         failed: false,
         user_agent: user_agent.map(String::from),
+        referrer: referrer.map(String::from),
     };
     while reader.timing.is_empty() && reader.next_segment < reader.segments.len() {
         reader.load_segment().await?;
@@ -712,6 +724,7 @@ struct H264HlsNalReader {
     offset: u64,
     failed: bool,
     user_agent: Option<String>,
+    referrer: Option<String>,
 }
 impl H264HlsNalReader {
     async fn load_segment(&mut self) -> Result<(), &'static str> {
@@ -724,6 +737,7 @@ impl H264HlsNalReader {
             url,
             super::hls::SEGMENT_CAP,
             self.user_agent.as_deref(),
+            self.referrer.as_deref(),
         )
         .await?;
         let last = self.next_segment + 1 == self.segments.len();
@@ -811,6 +825,7 @@ async fn h264_fetch_media_url_bytes(
     url: &str,
     log_scope: &'static str,
     user_agent: Option<&str>,
+    referrer: Option<&str>,
 ) -> Result<Vec<u8>, &'static str> {
     let profiles = [
         "media-range",
@@ -839,6 +854,7 @@ async fn h264_fetch_media_url_bytes(
             H264_ONLINE_MEDIA_FETCH_MAX_BYTES,
             &cancellation,
             user_agent,
+            referrer,
         );
         let watch = async {
             while !session.is_cancelled() {

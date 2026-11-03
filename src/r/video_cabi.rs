@@ -12,7 +12,7 @@ pub unsafe extern "C" fn trueos_cabi_vmedia_video_command_v1(
 ) -> i32 {
     if (input_len != 0 && input.is_null())
         || (output_len != 0 && output.is_null())
-        || input_len > 3072
+        || input_len > if command == 8 { 6145 } else { 3072 }
         || output_len > 24
     {
         return -3;
@@ -28,7 +28,7 @@ pub unsafe extern "C" fn trueos_cabi_vmedia_video_command_v1(
         unsafe { core::slice::from_raw_parts_mut(output, output_len) }
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let mut payload = [0u8; 3080];
+        let mut payload = [0u8; 6153];
         payload[..8].copy_from_slice(&b.to_le_bytes());
         payload[8..8 + input.len()].copy_from_slice(input);
         let (status, value) = trueos_vm::vmcall::call_with_payload(
