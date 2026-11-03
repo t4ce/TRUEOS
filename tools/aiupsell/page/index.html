@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Read, build, repeat: a TRUEOS research desk for Hull, Edit, Codex and Lilly.">
+  <title>Read. Build. Repeat. — Y-Space / TRUEOS</title>
+  <style>
+/* Deliberately buildless: solid fills, explicit geometry and local image assets.
+   Hull's current renderer supports these properties without JS or web fonts. */
+* { box-sizing: border-box; }
+html { background: #10182f; color: #f1f4ff; }
+body { margin: 0; background: #10182f; color: #f1f4ff; font-family: Arial, sans-serif; }
+.desk { position: relative; width: 100%; height: 100vh; min-height: 540px; background: #10182f; }
+.brand { position: absolute; left: 3.5vw; top: 3vh; height: 5vh; display: flex; flex-direction: row; }
+.brand-mark { color: #26ebd2; font-size: 3.2vw; line-height: 1; width: 4.5vw; }
+.brand-name { border-left: 2px solid #b6c3dd; padding-left: 1.7vw; font-size: 1.9vw; line-height: 1.5; }
+.headline { position: absolute; left: 3.5vw; top: 10vh; margin: 0; font-size: 5.1vw; line-height: 1.2; font-weight: normal; white-space: nowrap; }
+.teal { color: #26ebd2; }
+.headline-rule { position: absolute; left: 3.7vw; top: 22vh; width: 6.5vw; height: 0.7vh; background: #26ebd2; }
+.window { position: absolute; background: #142338; border: 2px solid #78d9e1; border-radius: 18px; }
+.windowbar { position: relative; height: 6vh; border-bottom: 1px solid #60778e; padding: 1.2vh 1.2vw; display: flex; flex-direction: row; }
+.windowbar h2 { margin: 0; padding-left: 1.1vw; font-size: 1.8vw; font-weight: normal; line-height: 1.2; }
+.lights { display: flex; flex-direction: row; width: 4.1vw; height: 1.6vw; padding-top: 0.5vh; }
+.light { display: inline-block; width: 0.8vw; height: 0.8vw; margin-right: 0.45vw; background: #26ebd2; border-radius: 50%; }
+.muted-dot { background: #466780; }
+.editor { left: 1.8vw; top: 30vh; width: 19.4vw; height: 36vh; }
+.code { margin: 2.2vh 1.1vw; padding-left: 1vw; border-left: 1px solid #60778e; font-family: monospace; font-size: 1.05vw; line-height: 1.7; white-space: nowrap; }
+.code-space { height: 1.5vh; }
+.purple { color: #e47aff; }
+.indent { padding-left: 1.2vw; }
+.pane-caption { margin: 0 2.1vw; color: #8aa9bf; font-size: 0.7vw; }
+.hull { left: 22vw; top: 23vh; width: 52vw; height: 65vh; border-color: #89edf0; }
+.hullbar { height: 5.7vh; }
+.address { color: #a5bbce; font-size: 0.7vw; padding: 0.6vh 0 0 1.6vw; }
+.hull-title { margin: 0; height: 9vh; padding: 1.1vh 2.6vw; font-size: 3vw; line-height: 1.5; font-weight: normal; border-bottom: 0.65vh solid #26ebd2; }
+.reading-room { position: relative; height: 49.8vh; background: #eef4fc; border-radius: 0 0 16px 16px; color: #111a32; }
+.article { position: absolute; top: 2.2vh; width: 46%; height: 42.6vh; background: #e7edf8; border: 1px solid #afc0df; border-radius: 12px; }
+.ai-article { left: 2.5%; }
+.sam-article { left: 51.5%; }
+.article-inner { padding: 1.3vh 1vw; }
+.article h3 { margin: 0; height: 8vh; font-size: 2vw; line-height: 1.1; font-weight: normal; }
+.neural { display: block; width: 100%; height: 20vh; border-radius: 8px; }
+.bio-art { width: 100%; height: 20vh; padding: 1vh 1.5vw; background: #383960; border-radius: 8px; color: #eef0ff; }
+.bio-initials { font-size: 5.8vw; line-height: 1; color: #d9d3ff; }
+.bio-rule { width: 3.5vw; height: 0.35vh; margin: 1vh 0; background: #26ebd2; }
+.bio-label { font-size: 0.8vw; line-height: 1.5; color: #e0dff4; }
+.article p { margin: 1.5vh 0 1.3vh; font-size: 0.95vw; line-height: 1.35; color: #465675; }
+.article-link { display: block; padding-top: 0.5vh; color: #136a75; font-size: 0.78vw; line-height: 1.4; text-decoration: none; }
+.article-link:hover, .article-link:focus { color: #093f49; text-decoration: underline; }
+.reading-note { position: absolute; left: 2.5%; bottom: 1.1vh; margin: 0; font-size: 0.56vw; color: #62738f; }
+.codex { left: 75.5vw; top: 18vh; width: 23vw; height: 35vh; }
+.conversation { position: relative; padding: 2.2vh 1.5vw; }
+.message { width: 90%; height: 6.6vh; padding: 0.6vh 0.8vw; border: 1px solid #54bdc8; border-radius: 9px; background: #1a3548; }
+.speaker { display: block; color: #26ebd2; font-size: 0.64vw; line-height: 1.2; }
+.message p { margin: 0.55vh 0 0; font-size: 0.9vw; line-height: 1.3; color: #e3edf7; }
+.user-message { margin: 1.2vh 0 1.2vh 2vw; width: 80%; border-color: #ae77e8; background: #342d52; }
+.user-message .speaker { color: #dbb4ff; }
+.lilly { position: absolute; left: 76vw; top: 56vh; width: 22vw; height: 34vh; text-align: center; }
+.lilly img { display: block; width: 13vw; height: 13vw; margin: 0 auto; }
+.lilly-burst { position: absolute; left: 1vw; top: 3vh; font-size: 3.5vw; color: #26ebd2; }
+.lilly-label { margin-top: 1.2vh; color: #26ebd2; font-size: 0.82vw; line-height: 1.5; }
+.lilly-caption { margin-top: 0.6vh; color: #b8c8dc; font-size: 0.62vw; line-height: 1.5; }
+footer { position: absolute; left: 2.8vw; bottom: 3.5vh; height: 3.5vh; display: flex; flex-direction: row; }
+.footer-rule { width: 0.35vw; height: 3.5vh; background: #26ebd2; }
+.footer-text { padding: 0.25vh 0 0 1.7vw; font-size: 1.3vw; line-height: 1.4; color: #d2dcee; }
+@media (max-width: 800px) {
+  .desk { min-width: 640px; }
+}
+  </style>
+</head>
+<body>
+<main class="desk">
+  <div class="brand"><span class="brand-mark">Y</span><span class="brand-name">Y-SPACE / TRUEOS</span></div>
+  <h1 class="headline"><span>READ.</span> <span class="teal">BUILD.</span> <span>REPEAT.</span></h1>
+  <div class="headline-rule"></div>
+
+  <section class="window editor" aria-labelledby="edit-title">
+    <div class="windowbar"><span class="lights" aria-hidden="true"><span class="light"></span><span class="light muted-dot"></span><span class="light muted-dot"></span></span><h2 id="edit-title">EDIT</h2></div>
+    <div class="code">
+      <div><span class="purple">use</span> rust::prelude::*;</div>
+      <div class="code-space"></div>
+      <div><span class="purple">pub async fn</span></div>
+      <div><span class="teal">agent</span>() {</div>
+      <div class="indent"><span class="purple">let</span> plan = build();</div>
+      <div class="indent">execute(plan)</div>
+      <div class="indent">.await;</div>
+      <div>}</div>
+    </div>
+    <p class="pane-caption">IDEAS BECOME SOURCE.</p>
+  </section>
+
+  <section class="window hull" aria-labelledby="hull-title">
+    <div class="windowbar hullbar"><span class="lights" aria-hidden="true"><span class="light"></span><span class="light muted-dot"></span><span class="light muted-dot"></span></span><span class="address">TRUEOS / RESEARCH DESK</span></div>
+    <h2 id="hull-title" class="hull-title">HULL / WIKIPEDIA</h2>
+    <div class="reading-room">
+      <article class="article ai-article">
+        <div class="article-inner">
+          <h3>ARTIFICIAL<br>INTELLIGENCE</h3>
+          <img class="neural" src="assets/neural-network.png" width="600" height="300" alt="A teal neural network: connected nodes arranged in a brain-like shape">
+          <p>Machines that learn, reason<br>and solve problems.</p>
+          <a class="article-link" href="https://en.wikipedia.org/wiki/Artificial_intelligence">READ ON WIKIPEDIA →</a>
+        </div>
+      </article>
+      <article class="article sam-article">
+        <div class="article-inner">
+          <h3>SAM ALTMAN</h3>
+          <div class="bio-art" aria-label="Sam Altman biography overview">
+            <div class="bio-initials">SA</div>
+            <div class="bio-rule"></div>
+            <div class="bio-label">ENTREPRENEUR<br>INVESTOR / AI ERA</div>
+          </div>
+          <p>From Loopt and Y Combinator<br>to co-founding OpenAI.</p>
+          <a class="article-link" href="https://en.wikipedia.org/wiki/Sam_Altman">READ ON WIKIPEDIA →</a>
+        </div>
+      </article>
+      <p class="reading-note">LOCAL ARTICLE SUMMARIES · FOLLOW THE LINKS FOR THE FULL ARTICLES</p>
+    </div>
+  </section>
+
+  <section class="window codex" aria-labelledby="codex-title">
+    <div class="windowbar"><span class="lights" aria-hidden="true"><span class="light"></span><span class="light muted-dot"></span><span class="light muted-dot"></span></span><h2 id="codex-title">CODEX</h2></div>
+    <div class="conversation">
+      <div class="message agent-message"><span class="speaker">CODEX</span><p>What shall we build?</p></div>
+      <div class="message user-message"><span class="speaker">YOU</span><p>Start with an idea.</p></div>
+      <div class="message agent-message last-message"><span class="speaker">CODEX</span><p>Read. Build. Repeat.</p></div>
+    </div>
+  </section>
+
+  <aside class="lilly">
+    <div class="lilly-burst" aria-hidden="true">+</div>
+    <img src="assets/lilly.png" width="128" height="128" alt="Lilly, TRUEOS's purple-haired desktop companion">
+    <div class="lilly-label">LILLY IS ALREADY HERE.</div>
+    <div class="lilly-caption">Your next chapter is yours to build.</div>
+  </aside>
+  <footer><span class="footer-rule"></span><span class="footer-text">A REAL PAGE. A NATIVE BROWSER.</span></footer>
+</main>
+</body>
+</html>

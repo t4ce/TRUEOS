@@ -1,380 +1,120 @@
-<p align="center">
-  <img src="logo.jpg" width="720" alt="TRUEOS section-sign logo">
-</p>
+<p align="center"><img src="tools/aiupsell/assets/lilly.png" width="144" alt="Lilly, TRUEOS's animated desktop companion"></p>
 
-<h1 align="center">TRUEOS</h1>
+<h1 align="center">DOWNLOAD A &gt;25 MB PURE RUST KERNEL.</h1>
+<h1 align="center">SIGN IN WITH YOUR CODEX ACCOUNT.<br>VIBECODE YOUR DESKTOP.</h1>
 
-<p align="center">
-  <strong>A vertically integrated Rust desktop OS for modern Intel graphics.</strong><br>
-  Kernel, drivers, GPU runtime, compositor, media, services, application VMs, and developer tooling—built as one system.
-</p>
+<p align="center"><strong>TRUEOS · Y-SPACE · LILLY IS ALREADY HERE.</strong></p>
+<p align="center"><a href="https://github.com/t4ce/TRUEOS/releases/latest"><strong>DOWNLOAD TRUEOS</strong></a> · <a href="tools/trueos-boot/README.md">BOOT IT</a> · <a href="https://github.com/t4ce/TRUEOS-Blueprints">BUILD A BLUEPRINT</a></p>
 
-<p align="center">
-  <a href="https://github.com/t4ce/TRUEOS/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/t4ce/TRUEOS?display_name=tag&sort=semver"></a>
-  <img alt="Stage 4" src="https://img.shields.io/badge/status-Stage%204-8a2be2">
-  <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-b7410e?logo=rust&logoColor=white">
-  <img alt="Platform: Intel x86-64 and adaptive SMP" src="https://img.shields.io/badge/platform-Intel%20x86__64%20%2B%20adaptive%20SMP-30363d">
-  <img alt="Graphics target: Intel Gen12 to Gen12.5 Xe-LP" src="https://img.shields.io/badge/graphics-Intel%20Gen12%E2%80%9312.5%20Xe--LP-0071c5">
-  <img alt="Compute artifacts: SPIR-V to Intel Zebin" src="https://img.shields.io/badge/compute-SPIR--V%20%E2%86%92%20Intel%20Zebin-7c3aed">
-</p>
+A Rust kernel, a native desktop, a browser, an editor, and an agent that can work with them.
+Download the release, boot supported Intel hardware, launch Codex, and sign in with your account.
+Bring an account with Codex access; your account's usage limits still apply.
+**Meet Lilly**, the animated face of Spirit on your desktop. Tell the agent what you want to build.
 
-TRUEOS is a from-scratch, `no_std`/`no_main`, x86-64 operating system. It is
-not a Linux distribution, desktop theme, or userspace shell. It boots its own
-kernel and directly owns the path from paging, SMP, interrupts, storage, and
-networking through Intel display, render, copy, media, GPGPU, UI composition,
-and application execution.
+<p align="center"><img src="tools/aiupsell/assets/get-started.svg" width="100%" alt="Download the official release, boot supported hardware, sign in to Codex, and build with Lilly alongside you"></p>
 
-**The x86-64 target is a coordinated Intel machine, not a generic architecture
-checkbox.** TRUEOS discovers CPU topology and brings AP executors online as
-they register; services can reserve lanes, and compute work can select from the
-currently eligible workers with performance-first, efficiency-only, or broader
-policies. That makes SMP capacity responsive to the real processor topology and
-the work in flight instead of baking a particular “10-core” desktop into the OS.
+## MORE TOKENS. LESS BUSYWORK. LET IDLE CORES HALT.
 
-On the graphics side, the primary Intel Gen12/Gen12.5 Xe-LP-class target is a
-set of cooperating silicon blocks: display and planes, render/EUs, copy/BLT,
-media/VDBOX, shared GGTT/PPGTT address spaces, and the GuC controller and
-submission path. TRUEOS owns those paths together, so a decoded frame can move
-through media, GPU composition, and scanout without turning into a CPU-pixel
-copy. Its maintained compute artifacts follow an audited C++ for OpenCL →
-SPIR-V → Intel IGC/Zebin pipeline and dispatch through that same native runtime.
-This is deliberately a targeted, artifact-checked compatibility path—not a
-claim that arbitrary SPIR-V or every Intel GPU is supported.
+Agentic workflows belong next to the work: read the project, change the source, run it, inspect the UI, and iterate.
+Codex has native TRUEOS tools for the Edit workspace and desktop interaction.
+**Lilly gives that workflow a face**, with expressions for activity, waiting, and review.
+You set the direction; the agent handles the platform details so you can relax.
 
-The project is well past the toy-kernel phase. It is now a large experimental
-desktop/workstation stack with a Rust application compatibility effort, a
-Blueprint VM runtime, real graphics and media output, remote UI streaming, and
-repeatable QEMU and physical-hardware validation. The goal is a modern Rust
-system that can eventually replace a conventional desktop OS for its supported
-hardware—not a thin proof of concept around a boot screen.
+Token maxing is the mood. Useful work per watt is the engineering goal.
+TRUEOS's fully async kernel design uses native executors, with a Tokio runtime for application workloads.
+The aim: keep processors halted when there is nothing useful to do, then unleash them when work arrives.
+Native Intel **Xe-LP (XeLP)** graphics handles rendering and GPU work on the supported machines.
+Synchronous code has explicit blocking lanes; the agent still needs to understand which work belongs there.
+These are design goals, not a measured promise of minimum power consumption.
 
-> [!IMPORTANT]
-> TRUEOS is still a research and development OS. Stage 4 is the current
-> architectural generation, not a production-readiness label. The system has
-> substantial working vertical slices, but it does not yet claim general Linux
-> compatibility, production-secure multi-user isolation, broad hardware
-> support, or complete OpenCL/media conformance.
+*Please remain calm. Ideally, the processors already are.*
 
-## Start here
+## LESS SLIDE DECK. MORE DESKTOP.
 
-Prepare the built-in apps, kernel and native UEFI loader with
-`bash tools/trueos-boot/prepare.sh --release`.
-The kernel ELF is written to `tgt/x86_64-unknown-trueos/release/TRUEOS`.
-The download archive is `tgt/rigreal.tar.lz4`. Preparation uses normal Cargo
-parallelism and builds the sibling `TRUEOS-Buildins` into the kernel's AppDB.
-Use the archived [TRUEOS Rust toolchain](https://github.com/t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10)
-identified by `rust-toolchain.toml`; see the
-[build instructions](tools/trueos-boot/README.md) for dependencies and setup.
-An ordinary `cargo build --release` verifies the prepared app image.
+<p align="center"><img src="tools/aiupsell/screenshots/cubes-fullscreen.png" width="100%" alt="Cubes running fullscreen on the real TRUEOS desktop with Lilly"></p>
+<p align="center"><sub>Cubes on native TRUEOS. Fullscreen scene capture; no video.</sub></p>
 
-`cargo run` rejects host execution because the kernel ELF requires a bootloader.
-For a native Rust UEFI loader test on physical hardware, prepare the USB files
-with the preparation command above; see the
-[native UEFI boot instructions](tools/trueos-boot/README.md).
+<p align="center"><img src="tools/aiupsell/screenshots/codex-edit-lilly.png" width="100%" alt="A signed-in Codex session alongside Microsoft Edit on TRUEOS, with Lilly visible"></p>
+<p align="center"><sub>Codex, Edit, and Lilly on the actual desktop. The sign-in steps above are an illustrated guide; this is a running session.</sub></p>
 
-For experimental headless kernel bring-up without QEMU or an ISO, use
-`cargo kvm`. The [direct KVM launcher](tools/kvm/README.md) boots Cargo's exact
-kernel ELF with a limited boot handoff and stops after 10 seconds by default.
-It currently provides one CPU and UART output, with no GPU, storage or network.
+## HULL: YES, WE BROUGHT A BROWSER.
 
-| If you want to… | Start with… |
-| --- | --- |
-| **Use TRUEOS** | The [latest official cloud release](https://github.com/t4ce/TRUEOS/releases/latest): one archive containing the kernel, embedded builtin AppDB, native UEFI loader, and firmware. |
-| **Develop an application** | [TRUEOS-Blueprints](https://github.com/t4ce/TRUEOS-Blueprints), the primary application SDK, catalog, examples, compatibility ports, and Blueprint lifecycle repository. |
-| **Understand the OS** | This repository and the [technical references](#technical-references) below: kernel, drivers, UI4, GPU, media, VM lifecycle, and architecture contracts. |
-| **Extend the platform** | A Blueprint using mediated TRUEOS APIs. Kernel-source modification is not the normal application-development path. |
+<p align="center"><img src="tools/aiupsell/assets/hull-wikipedia-concept.png" width="100%" alt="Concept illustration of Hull researching artificial intelligence and Sam Altman alongside Edit, Codex, and Lilly"></p>
+<p align="center"><sub>AI-generated concept illustration.</sub></p>
 
-> [!TIP]
-> **Application developers should treat
-> [TRUEOS-Blueprints](https://github.com/t4ce/TRUEOS-Blueprints) as the main
-> entry point.** This repository explains and implements the platform beneath
-> it; platform implementation and maintainer deployment workflows are
-> intentionally out of scope here.
+<p align="center"><img src="tools/aiupsell/screenshots/hull-live-page.png" width="100%" alt="The concept rebuilt as real HTML and CSS, rendered fullscreen in native Hull on TRUEOS"></p>
+<p align="center"><sub>And the real thing: HTML/CSS rendered in Hull. <a href="tools/aiupsell/page/index.html">Page source</a> · <a href="tools/aiupsell/page/README.md">Open it yourself</a>.</sub></p>
 
-> [!NOTE]
-> **Looking for the source tree?** The workspace is organized into Rust crates
-> under [`crates/`](crates), kernel and platform code under [`src/`](src), and
-> maintainer utilities under [`tools/`](tools). The architecture and hardware
-> references linked below are the best starting point before changing a
-> platform subsystem.
->
-> The root [`Cargo.toml`](Cargo.toml) defines the repository-owned workspace;
-> individual crate manifests describe their local feature and dependency
-> boundaries.
+Start with Wikipedia's [Artificial intelligence](https://en.wikipedia.org/wiki/Artificial_intelligence) article.
+Then [Sam Altman](https://en.wikipedia.org/wiki/Sam_Altman). Research the AI era from inside the experiment.
+Hull is our native browser, with HTML/CSS rendering, JavaScript work, downloads, and local project previews.
+Web compatibility is still growing.
 
-## Scale of the current system
+The [bundled AI and Sam reading demos](tools/aiupsell/wiki/) are deliberately labeled local summaries,
+with links to the original articles. They are small, inspectable pages for browser and IDE preview experiments.
 
-The repository changes quickly; these numbers are an August 2026 snapshot and
-describe engineering surface area, not correctness:
+## MICROSOFT EDIT. Y-SPACE AMBITION.
 
-| Surface | Current snapshot |
-| --- | ---: |
-| Tracked non-vendor Rust | approximately 485,000 lines |
-| Repository-owned Cargo workspace | 33 members |
-| Registered sibling Blueprint catalog | 44 applications and tools |
-| Primary architecture | x86-64 UEFI bare metal |
-| Primary graphics target | Intel Gen12 / Xe-LP, especially UHD 770 |
-| Validation environments | physical Intel systems and QEMU/OVMF |
+Take [Microsoft Edit](https://github.com/microsoft/edit), give it a native TRUEOS project workflow,
+connect Codex, and put the preview beside the source.
+Projects, revision-aware agent edits, build/run controls, and an HTML preview path are the starting point.
+The ambition has early VS Code energy: a small editor growing into a place to build an entire world.
+**Lilly stays alongside you while the agent works.**
 
-Several full-stack rewrites led to this generation. That history matters:
-TRUEOS now spans the surface of a small desktop operating environment, but the
-remaining work is also deeper than adding polish to a finished product.
+Y-Space is the name for that AI hive ambition: people and agents building Blueprints in the same environment.
+Core Chat can keep a little mystery. The invitation is simple: **boot it and try it.**
+This is independent TRUEOS work; the name and ambition imply no Microsoft or OpenAI endorsement.
 
-## What exists today
+*The future may be inevitable. Your idle power bill shouldn't be.*
 
-| Area | Implemented system surface |
-| --- | --- |
-| **Kernel and execution** | Native Rust UEFI boot from FAT or IPv4 PXE, x86-64 paging and allocators, ACPI, exceptions, x2APIC, SMP and per-CPU state, asynchronous executors, worker domains, synchronization, profiling, and live-update machinery. |
-| **Intel graphics** | Direct display ownership plus GGTT/PPGTT, GuC bring-up and submission, render, copy/BLT, media, GPGPU, native shader artifacts, hardware cursor/planes, and device-specific validation. |
-| **Desktop and UI** | UI4 frame/window contracts, damage tracking, input routing, cursor and screenshot services, command/static/GPU/video surfaces, focus and layout state, remote display transport, and a four-display compositor model. |
-| **3D and compute** | Independent Picasso retained scenes, native Intel shader compilation, indexed and textured rendering, GPU work queues, OpenCL-shaped APIs, GPGPU operations, and CPU/GPU oracle tooling. |
-| **Media and audio** | PNG/JPEG/BMP paths, video-frame publication, H.264 streaming and encode experiments, M4A/AAC work, an audio engine, synthesis, visualization, and Intel HDA/ALSA compatibility work. |
-| **Applications** | Blueprints with VM principals, terminal handoff, pause, warm snapshot, persistent store/load, preserve/restore, peer transfer, TRUEOSFS scopes, vGPU/UI/media/network ABIs, and crash/lifecycle control. |
-| **Rust ecosystem compatibility** | TRUEOS `std`/Unix ABI shims, file descriptors and sockets, `mio` readiness, Tokio carrier and blocking lanes, Hyper integration, async I/O, TLS, serde, redb, and a growing set of adapted crates and CLI tools. |
-| **Platform services** | NVMe and PCI infrastructure, USB/xHCI work, Ethernet and Wi-Fi bring-up paths, IPv4/IPv6, DHCP, DNS, TCP/UDP, TLS/HTTP, printing, mail, clipboard, fonts, gamepads, and network discovery. |
-| **Speech and assistant integration** | Optional TTSTT/Kokoro speech components and Spirit/Codex integration. No local LLM inference service is wired into the kernel; the old Lumen backend is retired. CPU/model crates remain available for offline development. |
+## TEN BLUEPRINTS TO OPEN FIRST
 
-Some rows combine production paths, physically validated experiments, and
-work-in-progress compatibility layers. The detailed documents linked below
-mark those boundaries more precisely.
+Built-ins use the Blueprint format too. Availability depends on the release and installed catalog.
 
-Picasso is independent TRUEOS work. The former Helio capture examples and
-their launchers are retired; Picasso's retained material renderer is the
-supported graphics path. `trueos-picasso-example` remains the Picasso example,
-and the `picasso` selector remains reserved for the actual custom TRUEOS
-renderer.
+| # | Blueprint | Why open it? |
+| --- | --- | --- |
+| 1 | [Hull](https://github.com/t4ce/TRUEOS-Buildins/tree/main/hull) | Browse, research, download, and preview a local HTML project. |
+| 2 | [Edit](https://github.com/t4ce/TRUEOS-Buildins/tree/main/edit) | Microsoft Edit adapted into a native project and agent workspace. |
+| 3 | [Codex](https://github.com/t4ce/codex) | Sign in, describe the task, and use the native IDE and Spirit tools. |
+| 4 | [Cubes](https://github.com/t4ce/Cubes) | Go fullscreen: interactive cubes, worlds, and native rendering experiments. |
+| 5 | [Maxpix](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/maxpix) | 230,400 particles: tornadoes, knots, and quantum-weighted scenes. |
+| 6 | [Shadertoy](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/shadertoy) | Native shader visuals. Give the GPU something worth waking up for. |
+| 7 | [Player](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Player) | Explore the media and audio playback workflow. |
+| 8 | [OSM](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/osm) | OpenStreetMap on a desktop you can extend. |
+| 9 | [GBOI](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/gboi) | A Game Boy detour between agent runs. |
+| 10 | [PrismQ](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/prismq) | Explore quantum circuits; its simulator also powers Maxpix scenes. |
 
-## Current development captures
+## DOWNLOAD. BOOT. TRY IT.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/ui4-compositor-stream.png" alt="Physical TRUEOS display beside the live remote UI viewer"></td>
-    <td width="50%"><img src="docs/screenshots/picasso-gen12-model.png" alt="TRUEOS Intel Gen12 native 3D renderer output on a physical display"></td>
-  </tr>
-  <tr>
-    <td><sub>UI4 composition on the physical display beside the live host viewer during streaming validation.</sub></td>
-    <td><sub>Native Intel render output photographed on the target display during Stage 4 renderer work.</sub></td>
-  </tr>
-</table>
+1. Download the [latest official release](https://github.com/t4ce/TRUEOS/releases/latest).
+2. Extract the archive to a FAT-formatted UEFI boot partition using the [boot instructions](tools/trueos-boot/README.md).
+3. Boot supported Intel hardware, launch Codex, and complete its account sign-in flow.
+4. Open a Blueprint or start a project in Edit. Give the agent a concrete task.
 
-<p align="center">
-  <img src="docs/screenshots/picasso-textured-scene.png" width="820" alt="Textured retained-renderer development scene"><br>
-  <sub>Retained and textured renderer development capture; Picasso and Helio integration provenance remains separate.</sub>
-</p>
+The kernel ELF is over 25 MB; the compressed release archive has its own size.
+The current hardware focus is Intel x86-64 UEFI with Gen12/Gen12.5 Xe-LP graphics,
+especially the supported Alder Lake and Raptor Lake devices.
+TRUEOS is experimental: hardware coverage, browser compatibility, isolation, and recovery are still under development.
 
-## One vertically owned stack
+<details>
+<summary><strong>FOR THE PEOPLE WHO WANT TO READ THE KERNEL</strong></summary>
 
-```text
-Blueprints, ports, CLI tools, games, UI applications
-                  │
-        TRUEOS application and VM ABIs
-                  │
-      Blueprint lifecycle ── TRUEOSFS ── Shell2/Matrix
-                  │                         │
-          vGPU / media / input / network / terminal
-                  │
-      UI4 compositor, window graph, frames, video
-                  │
- Picasso + named Helio integrations ── render ── GPGPU ── copy ── media
-                  │
-       Intel Gen12 display, GuC, GGTT and PPGTT
-                  │
- SMP kernel, async runtime, memory, PCI, storage, USB, net
-                  │
-              x86-64 hardware
-```
+Prepare a release build with `bash tools/trueos-boot/prepare.sh --release`.
+Use the pinned [TRUEOS Rust toolchain](https://github.com/t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10)
+and the sibling TRUEOS-Buildins and TRUEOS-Blueprints repositories.
+The [boot/build guide](tools/trueos-boot/README.md) covers setup.
 
-That ownership graph is the central experiment. TRUEOS can change a frame
-contract, scheduler, VM ABI, shader package, and application runtime together
-instead of negotiating a chain of independently versioned kernel, driver,
-userspace, display-server, and toolkit interfaces. The advantage is speed and
-coherence. The cost is a narrower compatibility envelope and a larger amount
-of privileged code that still needs fault containment and adversarial review.
+- [Kernel and platform source](src/)
+- [Native executor](crates/trueos-executor/README.md)
+- [Blueprint application catalog and SDK](https://github.com/t4ce/TRUEOS-Blueprints)
+- [Runtime inventory](tools/docs/runtime-inventory.md)
+- [Screenshots, demo sources, and capture notes](tools/aiupsell/)
 
-## Applications are Blueprints
+</details>
 
-Blueprints are TRUEOS's native application and extension format. They are not
-kernel patches and do not require an application author to own the display,
-network device, filesystem, or physical GPU. Each Blueprint runs as a VM
-principal and reaches platform services through mediated Rust and C ABI
-surfaces.
-
-The dedicated [TRUEOS-Blueprints repository](https://github.com/t4ce/TRUEOS-Blueprints)
-contains:
-
-- the high-level [`trueos` application API](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/api);
-- the lower-level [`trueos-v` capability facade](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/crates/trueos-v);
-- the registered [`apps.json` catalog](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/apps.json);
-- applications, built-ins, compatibility probes, adapted ecosystem crates, and
-  concrete UI, network, storage, media, and lifecycle examples;
-- the pinned Blueprint-specific Rust contract and application packaging tools.
-
-The current catalog spans graphical applications, terminal tools, games,
-rendering demos, web/network software, editors, viewers, printing,
-shells, and system utilities. Representative ports and applications include
-Solara, Shadertoy, Lumen, Monaco, QuickJS, ripgrep, `fd`, SSH,
-webmail, image viewing, Gridpaper, GBOI, and multiple Tokio/network probes.
-
-### Application API surface
-
-| Capability | Blueprint-facing model |
-| --- | --- |
-| **UI and input** | UI4 frames and windows, damage publication, routed keyboard/pointer events, cursors, print2D, images, and retained scene content. |
-| **GPU and media** | Opaque vGPU resources, validated render packages, media playback/publication, audio, and host-owned presentation. Raw MMIO and physical addresses are not application APIs. |
-| **Files and data** | Async filesystem access, TRUEOSFS scopes, per-instance writable roots, archives, and network-backed file services. |
-| **Networking** | TCP/UDP-shaped services, HTTP/fetch, TLS-enabled ecosystem ports, mail and printing, plus Tokio/mio/socket compatibility where the selected Blueprint enables it. |
-| **Runtime** | Poll/sleep, clocks, logging, environment, worker-local identity, blocking lanes, synchronization, and optional Tokio runtime features. |
-| **Lifecycle** | Cooperative pause readiness, warm snapshots, persistent images, resume/replication identity, and explicit capability reacquisition. |
-| **Terminal** | Shell2 stream output, styled text, terminal leases, TUI input, and VM control handoff. |
-
-Start with the
-[`hello_world` UI4 application](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/hello_world),
-then use the
-[`hello_world_replicatable` example](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/hello_world_replicatable)
-for the cooperative lifecycle boundary. Larger examples include
-[`Solara`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/solara) and
-[`Player`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Player).
-
-Blueprint developer references live with the application platform:
-
-- [API crate and feature surface](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/api/Cargo.toml)
-- [Pinned Rust application contract](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/RUST_TOOLCHAIN.md)
-- [Replicatable Blueprint lifecycle](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/docs/replicatable-blueprints.md)
-- [Picasso/Helio renderer ownership boundary](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/docs/renderer-ownership.md)
-- [Async archive and filesystem model](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/docs/async-archive.md)
-- [Full application and built-in tree](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps)
-
-### Runtime lifecycle
-
-Installed or online Blueprints can be discovered, verified, launched, paused,
-snapshotted, stored, restored, preserved, stopped, or transferred between
-peers. Persistent TRUEOSFS state remains host-owned and separate from a VM's
-warm snapshot. Replicatable applications must release sockets, GPU queues, UI
-windows, audio streams, and other live capabilities before reporting ready;
-they reacquire those resources after resume or replication.
-
-Shell2 is the user-facing operating surface rather than a Unix shell clone. It
-has kernel-command and application modes. Matrix slots retain independent
-command, application, and VM contexts, while the `§` operator navigates those
-contexts. `§§<selector>` can fetch and launch an online Blueprint directly. A
-terminal application may lease Shell2 for its TUI and later return control
-without destroying its VM.
-
-Blueprint publication is currently an internal/local deployment workflow, not
-a claim of a stable general-purpose public package registry. The Blueprint
-repository remains the authoritative place for the current application
-toolchain and catalog contract.
-
-## Hardware scope
-
-TRUEOS deliberately targets a narrow Intel graphics family while the driver
-stack is being made coherent. The current source recognizes these principal
-display devices:
-
-- Alder Lake-S GT1 (`0x4680`)
-- Alder Lake-N / N100 UHD (`0x46D1`)
-- Raptor Lake-S UHD 770 (`0xA780`)
-
-Individual render, media, GPGPU, and shader paths may support only a subset or
-even a specific revision. The checked-in shader artifacts are admission-checked
-against their target rather than treated as portable binaries. QEMU is useful
-for boot, service, and application validation; it is not evidence that a native
-Intel acceleration path works on unrelated hardware.
-
-## Official cloud releases
-
-Download the [latest release](https://github.com/t4ce/TRUEOS/releases/latest).
-The **Release** GitHub Actions workflow builds the release profile with the
-archived TRUEOS compiler and `TRUEOS-Buildins`, using the same preparation
-command as local builds. It uploads one file, `TrueOS-0.0.<cnt>.lz4`, containing
-the kernel with its builtin AppDB, the native UEFI loader, and GuC firmware in
-a tar/LZ4 archive. Extract its contents to the USB boot partition as described
-in the [native UEFI boot instructions](tools/trueos-boot/README.md).
-
-Release notes provide the download link, its SHA256, and the source commit.
-This workflow does not attach signing files, provenance records, source
-bundles, or launch bundles, and it uses the checked-in shader artifacts.
-
-For a new release, commit an unused positive number in `tools/cnt`, push the
-workflow and sources, then select **Actions → Release → Run workflow**.
-The counter is embedded in the kernel and supplies the version, tag, and
-download name. Existing versions stop before building.
-
-## Honest current boundaries
-
-TRUEOS is ambitious, but its claims need to stay testable:
-
-- **Not yet a general desktop replacement.** Hardware and application coverage
-  are intentionally narrow compared with Linux, Windows, or macOS.
-- **Not yet a production security boundary.** VM/Hull hardening, default-deny
-  mappings, W^X policy, DMA/IOMMU isolation, speculation boundaries, and
-  adversarial testing remain incomplete.
-- **Not yet a conformant OpenCL platform.** The OpenCL-shaped surface and many
-  native kernels are useful, but parts of execution and compatibility are
-  still experimental or stubbed.
-- **Not every media path is hardware-native.** CPU fallbacks, host oracles, and
-  staged Intel media/SFC work coexist with direct hardware paths.
-- **The UI failure domain is still too privileged.** Important compositor and
-  service work currently runs as kernel tasks; restartable recovery and session
-  survival are not yet proven end to end.
-- **Interfaces still move quickly.** Stage 4 is consolidating contracts that
-  have already gone through several architectural rewrites.
-
-These limits do not make the demonstrated system “just a concept.” They define
-the engineering work between a deep experimental OS and a dependable product.
-
-## Stage 4 priorities
-
-1. Stabilize the UI4, Picasso, Blueprint, VM, and resource-lifecycle contracts.
-2. Move untrusted workloads behind a demonstrably hardened isolation boundary.
-3. Make display, GPU, and compositor recovery preserve application and session
-   identity across injected failures.
-4. Finish and measure native media/GPGPU paths while retaining deterministic
-   CPU and host-oracle comparisons.
-5. Expand hardware validation without pretending device-family similarity is
-   compatibility proof.
-6. Turn the porting work into repeatable compatibility suites and documented
-   application support levels.
-7. Productize installation, update, rollback, diagnostics, and recovery.
-
-## Technical references
-
-- [The Scanout Convention](tools/docs/trueos_linux_failure_boundary_whitepaper.md)
-  — an equal-footing audit of TRUEOS and a conventional Linux desktop,
-  including security and recovery gaps.
-- [Mosaic four-display compositor](tools/docs/CompositorUI.html) — UI4 surface,
-  focus, layout, overview, and multi-display ownership model.
-- [Hypervisor State Atlas](tools/docs/docs/HYPERVISOR_STATE_MACHINE.html) — VM
-  principal, Blueprint, pause, snapshot, restore, and teardown contracts; the
-  [VPID runtime validation](tools/docs/vpid_runtime_validation.md) records the
-  lane-local translation-tag and invalidation evidence expected from hardware.
-- [Execution model](tools/docs/execution.html) — CPU/AP slots, async tasks,
-  worker models, locks, barriers, and event ordering.
-- [Intel UHD 770 target reference](tools/docs/intel-uhd770-cpu-reference.html) —
-  target devices, shader assumptions, and primary-source trail.
-- [Picasso DOM/SceneDB contract](tools/docs/PICASSO_DOM_SCENEDB_CONTRACT.md) and
-  [renderer artifacts](picasso/README.md).
-- [UI4 video playback](tools/docs/UI4_VIDEO_PLAYBACK.md),
-  [H.264 stream contract](tools/docs/UI4_H264_UDP_STREAM.md), and
-  [Intel media/SFC roadmap](tools/docs/intel_media_sfc_roadmap.md).
-- [Dependency graph](tools/docs/depgraph/index.html) — repository and ecosystem
-  dependency depth.
-
-## Source and licensing
-
-TRUEOS is **source-available, not open source**. The first-party source may be
-viewed for personal review, security research, education, evaluation, and
-reference. The license does not grant the usual right to modify, redistribute,
-publish a fork, or ship a source-derived build without written permission.
-
-Official, unmodified TRUEOS binary releases may be used, evaluated, deployed,
-and commercially used. Blueprints are the supported runtime extension path,
-including for commercial work, and independent Blueprint authors retain their
-own rights subject to their dependencies.
-
-Read the [TRUEOS license](lic/TrueOS.LICENSE), [project notice](lic/NOTICE), and
-[third-party notices](lic/THIRD_PARTY_NOTICES.md) before using the source or
-redistributing any component. To propose source work, request permission from
-the copyright holder first; audits and actionable issue reports are welcome.
+TRUEOS is **source-available**. Official unmodified binaries may be used under the project license;
+source modification and redistribution require the permissions described there.
+Independent Blueprint authors retain their own rights subject to their dependencies.
+See the [license](lic/TrueOS.LICENSE), [notice](lic/NOTICE), and [third-party notices](lic/THIRD_PARTY_NOTICES.md).
 
 Copyright © 2026 Jonas Baethke. All rights reserved.

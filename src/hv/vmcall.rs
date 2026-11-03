@@ -279,6 +279,7 @@ pub const OP_BP_UI4_NATIVE_COMPUTE_RENDER_V2: u32 = 0x240;
 pub const OP_BP_UI4_NATIVE_COMPUTE_FIELDS_UPLOAD_V1: u32 = 0x241;
 pub const OP_BP_UI4_NATIVE_COMPUTE_FIELDS_RENDER_V1: u32 = 0x242;
 pub const OP_BP_UI4_NATIVE_COMPUTE_DISPATCH_V1: u32 = 0x238;
+pub const OP_BP_MATRIX_COMPUTE_V1: u32 = 0x245;
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
 pub const OP_BP_UI4_CONTEXT_MENU_REGISTER: u32 = 0x11F; // arg0 window,payload labelled entries -> rc
@@ -2272,6 +2273,27 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MATRIX_COMPUTE_V1 => {
+            if arg0 == 1 && arg1 == 0 && req_len == 0 {
+                write_response(vm_id, seq, STATUS_OK, u64::from(crate::r::matrix_cabi::capacity()), 0);
+                return DispatchOutcome::Resume;
+            }
+            let result = if arg0 != 0 || arg1 != 0 { Err(-22) } else {
+                request_payload(vm_id, req_len).ok_or(-22).and_then(crate::r::matrix_cabi::compute_wire)
+            };
+            match result {
+                Ok(output) => {
+                    let Some(page) = host_ptr(vm_id) else {
+                        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                        return DispatchOutcome::Resume;
+                    };
+                    unsafe { (&mut (*page).payload)[..output.len()].copy_from_slice(&output); }
+                    write_response(vm_id, seq, STATUS_OK, 0, output.len() as u32);
+                }
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_NATIVE_COMPUTE_UPLOAD_V1 => {

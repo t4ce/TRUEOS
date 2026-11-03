@@ -1,0 +1,111 @@
+{
+  "prepared_date": "2026-11-03",
+  "assets": [
+    {
+      "path": "assets/backdrop.png",
+      "bytes": 14103,
+      "sha256": "7d915da13528521b340c7cf4e82586aba3d6bd642f694337f6c47c02ab3c248b",
+      "width": 2560,
+      "height": 1440
+    },
+    {
+      "path": "assets/get-started.svg",
+      "bytes": 842,
+      "sha256": "b3cc3e2f3bed5b6552ab3c34c1060e3797ab0c10c2869c81e1ba0472cacad2ee"
+    },
+    {
+      "path": "assets/hull-wikipedia-concept.png",
+      "bytes": 1741107,
+      "sha256": "af8050fe2d5dc4242eb937ee4e3cd6ffbe8a4a1928fdc2298fa2efe20b12be6b",
+      "width": 1672,
+      "height": 941
+    },
+    {
+      "path": "assets/lilly.png",
+      "bytes": 6858,
+      "sha256": "0025be0fb4d67c44681f63ec775497f9932387349544c923786b7655d8a4d56f",
+      "width": 128,
+      "height": 128
+    },
+    {
+      "path": "capture-notes.md",
+      "bytes": 4688,
+      "sha256": "df81e549736033c2cc108a78c2d443e59973a0f5e693bed8839faec3cf1fd827"
+    },
+    {
+      "path": "page/README.md",
+      "bytes": 3381,
+      "sha256": "7c203f91b8190ea688cdbdf760691f3673df8dd97475328a2ff50626b6821b57"
+    },
+    {
+      "path": "page/assets/lilly.png",
+      "bytes": 6858,
+      "sha256": "0025be0fb4d67c44681f63ec775497f9932387349544c923786b7655d8a4d56f",
+      "width": 128,
+      "height": 128
+    },
+    {
+      "path": "page/assets/neural-network.png",
+      "bytes": 199907,
+      "sha256": "b576a23b89cb303aa783a3dc034eb7a562ce3e53b99369f794dc9a3745fe7ddf",
+      "width": 1200,
+      "height": 600
+    },
+    {
+      "path": "page/assets/neural-network.svg",
+      "bytes": 8023,
+      "sha256": "8552452c21e5a975b8b273e9c084a69a3a7f2e5eed830af642b53e5e82f63db2"
+    },
+    {
+      "path": "page/index.html",
+      "bytes": 9106,
+      "sha256": "21654eebd657bda4faf3e9053b39bc2b0b3f98e0c05f3ee57589d9b6c18ae110"
+    },
+    {
+      "path": "page/rig-location.json",
+      "bytes": 235,
+      "sha256": "c305d98446cdc7d77440e8d9ba4f7d365dc8ba76cc440eb6fa9976884a57fba6"
+    },
+    {
+      "path": "readme.md",
+      "bytes": 8306,
+      "sha256": "9e62e9ca5a8eb1ec5a690d659d746e465a7efa7a8eb5846f17929626db524f83"
+    },
+    {
+      "path": "screenshots/codex-edit-lilly.png",
+      "bytes": 215895,
+      "sha256": "2ef6ba595f198499e69f3b8ee092a7a6598ed6e93ad88258726774afdbab1f94",
+      "width": 2560,
+      "height": 1440
+    },
+    {
+      "path": "screenshots/cubes-fullscreen.png",
+      "bytes": 232915,
+      "sha256": "0000b3620a433f86ea00fb3158bd0b98179db9c5ce0140f771ee259240f75c1a",
+      "width": 2560,
+      "height": 1440
+    },
+    {
+      "path": "screenshots/hull-live-page.png",
+      "bytes": 609500,
+      "sha256": "d3e3a1596dfdea9a81164af9ef06ebcc90c270a1dad9aa65556c4f35010351bb",
+      "width": 2560,
+      "height": 1440
+    },
+    {
+      "path": "wiki/artificial-intelligence.html",
+      "bytes": 1348,
+      "sha256": "f8eb63795663a601c6ab6c6a1260bae6c071de43f91146861bd4ba5e0429623c"
+    },
+    {
+      "path": "wiki/reader.js",
+      "bytes": 1608,
+      "sha256": "afcae722d1be26f47f1b7baf546b026299dc5e4a580212a639719b8ca75ac784"
+    },
+    {
+      "path": "wiki/sam-altman.html",
+      "bytes": 1209,
+      "sha256": "ac9a58d86a254f60fc6f2d25bbac29ae5a7194022b6cb4c041c658e80da24ed9"
+    }
+  ]
+}

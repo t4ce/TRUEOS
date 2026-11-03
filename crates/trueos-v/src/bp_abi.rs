@@ -1069,6 +1069,17 @@ unsafe extern "C" {
     pub fn trueos_cabi_thread_join(handle: usize) -> i32;
     pub fn trueos_cabi_thread_detach(handle: usize) -> i32;
     pub safe fn trueos_cabi_thread_available_parallelism() -> usize;
+    /// Number of registered general application carriers eligible for matrix CPU workers (0..=64).
+    pub safe fn trueos_cabi_matrix_compute_capacity_v1() -> u32;
+    /// Headless unsigned dword A*A, N=1..=128, 1..=4 dependent squares.
+    /// saturate: 0 wraps each MAC modulo 2^32, 1 clamps each MAC to u32::MAX.
+    /// code is a complete Odin SIMD8 integer MAC kernel, 112..=2048 bytes.
+    /// input/output each hold N*N u32 words; output is copied only after GPU retirement.
+    /// Returns zero on completion or a negative errno; no CPU fallback.
+    pub fn trueos_cabi_matrix_compute_v1(
+        code: *const u8, code_len: usize, input: *const u32, n: u32,
+        saturate: u32, rounds: u32, output: *mut u32,
+    ) -> i32;
     /// Opt-in per-launch experiment: 0 single, 1 foreground isolated, 2 spread;
     /// background_cap is 1..=4. Configure before admission; positive errno on failure.
     pub safe fn trueos_cabi_thread_configure_placement_v1(mode: u32, background_cap: u32) -> i32;

@@ -1,0 +1,6 @@
+{
+  "filesystem": "/apps/common/ide/previews/1793689247000000000-1/public/aiupsell",
+  "url": "http://127.0.0.1:50000/aiupsell/index.html",
+  "transport": "existing standalone HTML preview Blueprint",
+  "isolated_subdirectory": true
+}

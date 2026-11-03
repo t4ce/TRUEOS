@@ -1,0 +1,129 @@
+{
+  "captured_utc": "2026-11-03T05:59:46.916533+00:00",
+  "scope": "Codex plugin feature family disabled on TRUEOS",
+  "feature_keys": [
+    "plugins",
+    "remote_plugin",
+    "recommended_plugins",
+    "plugin_sharing",
+    "plugin_hooks"
+  ],
+  "policy_source": "../codex/codex-rs/features/src/lib.rs",
+  "enforced_at": [
+    "Feature::default_enabled",
+    "Features::with_defaults",
+    "Features::enable (including config maps)",
+    "Features::enabled (including imported sets)"
+  ],
+  "regression_harness": "tools/testpy/test_codex_plugin_policy.py",
+  "tests": {
+    "host": {
+      "passed": 6,
+      "failed": 0
+    },
+    "trueos_cfg": {
+      "passed": 6,
+      "failed": 0
+    },
+    "scope": "Production feature registry, policy methods, config-map application, and catalog admission compiled unchanged; legacy aliases/notices, auth, tracing, and scheduler boundary are fixtures."
+  },
+  "full_host_workspace_test": {
+    "status": "blocked",
+    "reason": "Existing reqwest/hyper dependency resolution requests unsupported hyper std-compat feature."
+  },
+  "live_failure": {
+    "vm": 1,
+    "generation": 4,
+    "archive_sha256": "89b709c1cd14dba75b99cef20979f9322fc7b5694e997efbfb3c1ae1f8c80c2b",
+    "cache_path": "apps/codex/.codex/cache/remote_plugin_catalog/.tmpO5llmF",
+    "allocation_bytes": 56852447,
+    "arena_usable_bytes": 1073741824,
+    "arena_free_bytes": 160038144,
+    "largest_free_block_bytes": 56641760,
+    "reason": "memory allocation of 56852447 bytes failed",
+    "worker_carrier": 10,
+    "log": "bld/baremetal-logs/trueos-baremetal.0.log",
+    "range_start": 132146500,
+    "range_end_exclusive": 132150000,
+    "range_sha256": "be9dea3947831e7e180905015cae77b9a0c0c1cf9b10d8246391f4f00a755299"
+  },
+  "activation": {
+    "rig_config_plugin_feature_entries_before_change": {},
+    "upstream_defaults": {
+      "plugins": true,
+      "remote_plugin": true
+    },
+    "trigger": "In-process app server starts plugin startup tasks; when plugins are enabled, its background task forces catalog refresh for GLOBAL scope when remote_plugin is enabled.",
+    "startup_source": "../codex/codex-rs/core-plugins/src/manager.rs:2824",
+    "historical_capture": {
+      "file": "bld/baremetal-logs/trueos-baremetal.1.log",
+      "last_modified_utc": "2026-10-30T11:25:36.348919+00:00",
+      "write_begin_byte_offset": 3323884,
+      "catalog_bytes": 52438022,
+      "oom_reasons_found": 0
+    },
+    "conclusion": "Catalog write attempts predate the current run; no evidence that the recent IDE work enabled this path. Exact reason previous observed runs did not visibly stall is not established.",
+    "source_history": {
+      "plugins_enabled_by_default": {
+        "upstream_commit": "4b50446ffa",
+        "date": "2026-03-25"
+      },
+      "remote_plugin_enabled_by_default": {
+        "upstream_commit": "e428a12d22",
+        "date": "2026-06-28"
+      },
+      "in_process_startup_tasks_current_config": {
+        "upstream_commit": "68c9556cdf",
+        "date": "2026-09-01"
+      }
+    }
+  },
+  "live_config_update": {
+    "status": "unconfirmed",
+    "upload": "POST timed out; follow-up GET timed out and later connection was refused. Do not assume persisted.",
+    "original_backup": "/tmp/trueos-plugin-disable-20261103/config.before.toml",
+    "requested_config": "/tmp/trueos-plugin-disable-20261103/config.after.toml"
+  },
+  "package_build": {
+    "status": "PASS",
+    "command": "cargo bp codex-cli",
+    "cwd": "../TRUEOS-Blueprints",
+    "log": "/tmp/trueos-codex-disable-plugins-build.log",
+    "existing_compiler_flags": [
+      "opt-level=3",
+      "lto=fat",
+      "codegen-units=1"
+    ],
+    "compiler_settings_changed": false,
+    "exit_code": 0,
+    "blueprint": "/home/t4ce/Repositories/TRUEOS-Blueprints/dist/codex.bp",
+    "bytes": 75915998,
+    "sha256": "acd5a9b2407d4fcdaf56b41e0e8ab594a973d87051b7316f0c3d611ed92ab5cf",
+    "workload_receipt_sha_verified": true,
+    "receipt_sources_verified": 9,
+    "elf_sha256": "cb4bb326e15394a4f83b90f4f141d4fcee5cabf6de24f76d9c1bba4fb39030d2",
+    "published_name": "codex.bp\u00a7\u00a7acd5a9b2407d4fcdaf56b41e0e8ab594a973d87051b7316f0c3d611ed92ab5cf",
+    "published_apps_dir": "smb://t4ce@pdjb/home-share/TRUEOS_SITE/apps",
+    "inputs_changed_during_build": true,
+    "cache_note": "The packer requests a recheck on the next invocation. The production feature source was finalized before its target library compiled; dep-info names that exact source and its hash still matches the test record. Regression test source was edited during the build.",
+    "compiled_feature_policy": {
+      "source_sha256": "b8df96a2b89b8c3d5ad25592b60bfafd61e9c84a2274ea68bd61336d0594efd9",
+      "source_mtime_utc": "2026-11-03T05:53:56.261814+00:00",
+      "library": "/home/t4ce/Repositories/TRUEOS-Blueprints/target/trueos-blueprint/cargo-cache/x86_64-unknown-trueos/tokio-platform-v7-stackful-threads-3f9423ab138eadcd/x86_64-unknown-trueos/release/deps/libcodex_features-e0d99ff7267fe364.rlib",
+      "library_mtime_utc": "2026-11-03T05:54:31.729421+00:00",
+      "library_sha256": "cd777e06ec7bf7976dba6c59783dbaa57e195f12d99afc85c75add5eba7df104",
+      "dep_info_references_production_source": true,
+      "source_precedes_library": true
+    },
+    "published_size_verified": 75915998
+  },
+  "rig_rebooted": false,
+  "source_sha256": {
+    "../codex/codex-rs/features/src/lib.rs": "b8df96a2b89b8c3d5ad25592b60bfafd61e9c84a2274ea68bd61336d0594efd9",
+    "../codex/codex-rs/features/src/tests.rs": "5463aa0cb28d499977c3c2be9b8fa8285c3031795786783334c211b61e7ef283",
+    "tools/testpy/test_codex_plugin_policy.py": "4b7d3236731c3782846eef2557c8fc7a65589281c3280b784df91545ae817710"
+  },
+  "format_and_diff_checks": "PASS",
+  "completed_utc": "2026-11-03T06:17:49.373555+00:00",
+  "deployed_to_running_rig": false
+}

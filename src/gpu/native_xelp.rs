@@ -245,3 +245,63 @@ pub(crate) fn pixel_body_simd8(code: &[u8]) -> Option<&[u8]> {
     }
     Some(body)
 }
+
+/// Bounded integer MAC bodies have no memory messages or backward branches.
+/// Matrix addressing and the only loop are supplied by the driver envelope.
+pub(crate) fn matrix_body_simd8(code: &[u8]) -> Option<&[u8]> {
+    if !(112..=2048).contains(&code.len()) || code.len() % 16 != 0 {
+        return None;
+    }
+    let head = [
+        [0x00030061, 0x77050220, 0x00460005, 0],
+        [0x00010061, 0x77054220, 0, 0],
+        [0x00000061, 0x77454220, 0, 31],
+    ];
+    let tail = [
+        [0x00039031, 0, 0xc0007714, 0x02a00000],
+        [0x00030061, 0x76050220, 0x00460005, 0],
+        [0x00039131, 4, 0x7020760c, 0x10000000],
+    ];
+    if code[..48].chunks_exact(16).zip(head).any(|(a, b)| words(a) != b)
+        || code[code.len()-48..].chunks_exact(16).zip(tail).any(|(a, b)| words(a) != b)
+    { return None; }
+    let body = &code[48..code.len()-48];
+    let grf = |r: u32| (1..112).contains(&r) || r == 120;
+    let source = |w: u32| grf((w >> 8) & 255) && w & 0x00ff_00ff == 0x0046_0005;
+    for (index, bytes) in body.chunks_exact(16).enumerate() {
+        let w = words(bytes);
+        let op = w[0] & 0x7f;
+        if w[0] & !0x11c0_0000 != 0x00030100 | op || w[0] & 0x1100_0000 == 0x1000_0000 {
+            return None;
+        }
+        if matches!(op, 0x22 | 0x24 | 0x25) {
+            if !matches!(w[1], 0x4000 | 0xc000) || (w[1] == 0x4000 && w[2] != 0) { return None; }
+            for offset in [w[3], w[2]].into_iter().take(if w[1] == 0xc000 { 2 } else { 1 }) {
+                let target = index * 16 + offset as usize;
+                if (offset as i32) < 16 || target > body.len() || target % 16 != 0 { return None; }
+            }
+            continue;
+        }
+        let dst = w[1] >> 24;
+        let ty = (w[1] >> 4) & 15;
+        let null_cmp = op == 0x70 && dst == 0;
+        if (!null_cmp && !grf(dst)) || !matches!(ty, 2 | 6) { return None; }
+        let base = dst << 24 | if null_cmp { 0x10000 } else { 0x50000 } | ty << 4 | ty << 8;
+        if op == 0x61 {
+            if ty != 2 || !((w[1] == base | 0x4000 && w[2] == 0)
+                || (w[1] == base && w[2] >> 24 == 0 && source(w[2]) && w[3] == 0)) { return None; }
+        } else if op == 0x41 {
+            // mul (8|M0) rD:ud rA:ud rB.0/1<16;8,2>:uw {@1}
+            if ty != 2 || w[1] != base || w[2] >> 24 != 1 || !source(w[2])
+                || !grf((w[3] >> 8) & 255)
+                || !matches!(w[3] & 0xffff_00ff, 0x0056_0006 | 0x0056_0016) { return None; }
+        } else {
+            if !matches!(op, 0x40 | 0x65 | 0x66 | 0x67 | 0x68 | 0x69 | 0x70) { return None; }
+            let condition = if op == 0x70 { w[2] >> 28 } else { 0 };
+            if (op == 0x70 && !(1..=6).contains(&condition)) || (op != 0x70 && ty != 2)
+                || !source(w[2]) || w[2] >> 24 != condition << 4 | ty { return None; }
+            if w[1] != base | 0x8000 && (w[1] != base || w[3] >> 24 != 0 || !source(w[3])) { return None; }
+        }
+    }
+    Some(body)
+}

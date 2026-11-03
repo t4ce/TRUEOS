@@ -40,6 +40,7 @@ include!("operations/primitives.rs");
 include!("operations/native_scalar.rs");
 include!("operations/native_kernel.rs");
 include!("operations/generated_pixel.rs");
+include!("operations/native_matrix.rs");
 include!("operations/svg_outline.rs");
 include!("operations/solid_rects.rs");
 include!("operations/ui4.rs");
