@@ -865,6 +865,8 @@ unsafe extern "C" {
         bytes: usize,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_button_regions_v1(window_id:u32, regions:*const TrueosUi4ButtonRegionV1, count:usize)->i32;
+    /// Separate hover-only list; border_rgba supplies the ink color. Same geometry wire layout.
+    pub fn trueos_cabi_ui4_scene_hover_regions_v1(window_id:u32, regions:*const TrueosUi4ButtonRegionV1, count:usize)->i32;
     pub fn trueos_cabi_ui4_scene_select_cursor_image_v1(window_id: u32, id: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_custom_cursor(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_cursor_icon(

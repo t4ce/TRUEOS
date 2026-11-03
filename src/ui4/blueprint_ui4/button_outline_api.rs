@@ -38,6 +38,17 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_button_regions_v1(
     regions: *const Region,
     count: usize,
 ) -> i32 {
+    unsafe { set_regions(window_id, regions, count, false) }
+}
+
+/// Hover-only outlines use the supplied ink color and never become pressed.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_hover_regions_v1(
+    window_id: u32, regions: *const Region, count: usize,
+) -> i32 {
+    unsafe { set_regions(window_id, regions, count, true) }
+}
+
+unsafe fn set_regions(window_id:u32, regions:*const Region, count:usize, hover_only:bool)->i32 {
     if count > 256 || (count != 0 && regions.is_null()) {
         return ERROR_INVALID;
     }
@@ -48,7 +59,8 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_button_regions_v1(
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let bytes = encode_regions(&copied);
         return guest_status(
-            trueos_vm::vmcall::OP_BP_UI4_SCENE_BUTTON_REGIONS_V1,
+            if hover_only { trueos_vm::vmcall::OP_BP_UI4_SCENE_HOVER_REGIONS_V1 }
+            else { trueos_vm::vmcall::OP_BP_UI4_SCENE_BUTTON_REGIONS_V1 },
             window_id as u64,
             count as u64,
             &bytes,
@@ -67,5 +79,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_button_regions_v1(
     let Some(snapshot) = crate::ui4::window_broker::window_snapshot(owner, window) else {
         return ERROR_NOT_FOUND;
     };
-    crate::ui4::button_outline::register(snapshot, &copied).map_or_else(|e| e, |_| 0)
+    let result = if hover_only { crate::ui4::button_outline::register_hover(snapshot, &copied) }
+    else { crate::ui4::button_outline::register(snapshot, &copied) };
+    result.map_or_else(|e| e, |_| 0)
 }

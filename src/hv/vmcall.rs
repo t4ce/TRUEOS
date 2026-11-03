@@ -211,6 +211,7 @@ pub const OP_BP_UI4_DRAG_BEGIN_V1: u32 = 0x221;
 pub const OP_BP_UI4_DRAG_CANCEL_V1: u32 = 0x222;
 pub const OP_BP_UI4_DRAG_TAKE_V1: u32 = 0x223;
 pub const OP_BP_UI4_SCENE_BUTTON_REGIONS_V1: u32 = 0x243;
+pub const OP_BP_UI4_SCENE_HOVER_REGIONS_V1: u32 = 0x244;
 pub const OP_BP_UI4_SCENE_SELECT_CURSOR_IMAGE_V1: u32 = 0x214;
 pub const OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR: u32 = 0xE6; // arg0 window,arg1 enabled -> rc
 pub const OP_BP_UI4_SCENE_SET_CURSOR_ICON: u32 = 0xE7; // arg0 window,arg1 icon,optional cursor-source payload -> rc
@@ -2913,7 +2914,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
-        OP_BP_UI4_SCENE_BUTTON_REGIONS_V1 => {
+        OP_BP_UI4_SCENE_BUTTON_REGIONS_V1 | OP_BP_UI4_SCENE_HOVER_REGIONS_V1 => {
             let Some(payload)=request_payload(vm_id,req_len) else {
                 write_response(vm_id,seq,STATUS_BAD_ARG,0,0);
                 return DispatchOutcome::Resume;
@@ -2922,8 +2923,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id,seq,STATUS_BAD_ARG,0,0);
                 return DispatchOutcome::Resume;
             }
-            let rc=unsafe {crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_button_regions_v1(
-                arg0 as u32,payload.as_ptr().cast(),arg1 as usize)};
+            let rc=unsafe {if op == OP_BP_UI4_SCENE_HOVER_REGIONS_V1 {
+                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_hover_regions_v1(
+                    arg0 as u32,payload.as_ptr().cast(),arg1 as usize)
+            }else{crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_button_regions_v1(
+                arg0 as u32,payload.as_ptr().cast(),arg1 as usize)}};
             write_response(vm_id,seq,STATUS_OK,(rc as i64) as u64,0);
             DispatchOutcome::Resume
         }
