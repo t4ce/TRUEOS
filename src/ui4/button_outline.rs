@@ -34,12 +34,12 @@ struct Effect {
 }
 
 pub(super) fn register(window: WindowSnapshot, regions: &[Region]) -> Result<(), i32> {
-    register_kind(window,regions,false)
+    register_kind(window, regions, false)
 }
 pub(super) fn register_hover(window: WindowSnapshot, regions: &[Region]) -> Result<(), i32> {
-    register_kind(window,regions,true)
+    register_kind(window, regions, true)
 }
-fn register_kind(window: WindowSnapshot, regions: &[Region], hover_only:bool) -> Result<(), i32> {
+fn register_kind(window: WindowSnapshot, regions: &[Region], hover_only: bool) -> Result<(), i32> {
     if regions.len() > 256
         || regions.iter().any(|r| {
             r.width == 0
@@ -58,11 +58,16 @@ fn register_kind(window: WindowSnapshot, regions: &[Region], hover_only:bool) ->
     }
     let mut all = REGIONS.lock();
     if all.iter().any(|old| {
+        let previous = if hover_only {
+            &old.hover_regions
+        } else {
+            &old.regions
+        };
         old.owner == window.owner
             && old.window == window.id
             && old.session == window.session
-            && (if hover_only{&old.hover_regions}else{&old.regions}).len() == regions.len()
-            && (if hover_only{&old.hover_regions}else{&old.regions}).iter().zip(regions).all(|(a, b)| {
+            && previous.len() == regions.len()
+            && previous.iter().zip(regions).all(|(a, b)| {
                 a.x == b.x
                     && a.y == b.y
                     && a.width == b.width
@@ -76,12 +81,25 @@ fn register_kind(window: WindowSnapshot, regions: &[Region], hover_only:bool) ->
     }) {
         return Ok(());
     }
-    if let Some(index)=all.iter().position(|r|r.owner==window.owner&&r.window==window.id){
-        let registration=&mut all[index];
-        if registration.session!=window.session{registration.regions.clear();registration.hover_regions.clear();registration.session=window.session;}
-        if hover_only{registration.hover_regions=regions.to_vec();}else{registration.regions=regions.to_vec();}
-        if registration.regions.is_empty()&&registration.hover_regions.is_empty(){all.remove(index);}
-    }else if !regions.is_empty() {
+    if let Some(index) = all
+        .iter()
+        .position(|r| r.owner == window.owner && r.window == window.id)
+    {
+        let registration = &mut all[index];
+        if registration.session != window.session {
+            registration.regions.clear();
+            registration.hover_regions.clear();
+            registration.session = window.session;
+        }
+        if hover_only {
+            registration.hover_regions = regions.to_vec();
+        } else {
+            registration.regions = regions.to_vec();
+        }
+        if registration.regions.is_empty() && registration.hover_regions.is_empty() {
+            all.remove(index);
+        }
+    } else if !regions.is_empty() {
         if all.len() >= MAX_REGISTRATIONS {
             return Err(-7);
         }
@@ -89,8 +107,16 @@ fn register_kind(window: WindowSnapshot, regions: &[Region], hover_only:bool) ->
             owner: window.owner,
             window: window.id,
             session: window.session,
-            regions: if hover_only{Vec::new()}else{regions.to_vec()},
-            hover_regions: if hover_only{regions.to_vec()}else{Vec::new()},
+            regions: if hover_only {
+                Vec::new()
+            } else {
+                regions.to_vec()
+            },
+            hover_regions: if hover_only {
+                regions.to_vec()
+            } else {
+                Vec::new()
+            },
         });
     }
     drop(all);
@@ -198,23 +224,31 @@ pub(super) fn append(rects: &mut Vec<crate::intel::LiveOverlayRect>, screen_w: u
             .enumerate()
             .rev()
             .find(|(_, r)| rectangle(r).contains(x, y) && clip(r).contains(x, y))
-            .map(|(index,region)|(index,region,false))
-            .or_else(||reg.hover_regions.iter().enumerate().rev()
-                .find(|(_,r)|rectangle(r).contains(x,y)&&clip(r).contains(x,y))
-                .map(|(index,region)|(index,region,true)))
+            .map(|(index, region)| (index, region, false))
+            .or_else(|| {
+                reg.hover_regions
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, r)| rectangle(r).contains(x, y) && clip(r).contains(x, y))
+                    .map(|(index, region)| (index, region, true))
+            })
         else {
             continue;
         };
         if let Some(existing) = effects.iter_mut().find(|e| {
-            e.window.id == window.id && e.window.owner == window.owner && e.index == index&&e.hover_only==hover_only
+            e.window.id == window.id
+                && e.window.owner == window.owner
+                && e.index == index
+                && e.hover_only == hover_only
         }) {
-            existing.pressed |= cursor.pressed&&!hover_only;
+            existing.pressed |= cursor.pressed && !hover_only;
         } else {
             effects.push(Effect {
                 window: *window,
                 index,
                 region: *region,
-                pressed: cursor.pressed&&!hover_only,
+                pressed: cursor.pressed && !hover_only,
                 hover_only,
             });
         }
@@ -229,10 +263,13 @@ pub(super) fn append(rects: &mut Vec<crate::intel::LiveOverlayRect>, screen_w: u
     };
     for effect in effects {
         let p = effect.window.presentation_placement;
-        let color = if effect.hover_only{
-            let mut ink=effect.region.border_rgba.to_le_bytes();
-            ink[3]=(u16::from(ink[3])*128/255)as u8;ink
-        }else{geometry::contrast(effect.region.border_rgba.to_le_bytes())};
+        let color = if effect.hover_only {
+            let mut ink = effect.region.border_rgba.to_le_bytes();
+            ink[3] = (u16::from(ink[3]) * 128 / 255) as u8;
+            ink
+        } else {
+            geometry::contrast(effect.region.border_rgba.to_le_bytes())
+        };
         let window_clip = screen_rect(&effect.window);
         for segment in geometry::outline(rectangle(&effect.region), effect.pressed, phase as u32) {
             let Some(segment) = segment.intersection(clip(&effect.region)) else {

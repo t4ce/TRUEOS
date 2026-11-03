@@ -72,6 +72,41 @@ mod ui4 {
             assert!(!button_outline::due(crate::Instant(66)));assert!(button_outline::due(crate::Instant(67)));
             cursor(2,45,true);let full=draw();assert_eq!(button_outline::wait(crate::Instant(0)),None);assert_eq!(full.len(),4);
         }
+        #[test] fn link_hover_uses_ink_and_stays_dashed_when_pressed(){
+            let _guard=setup();let w=window(1,1,0);WINDOWS.lock().push(w);
+            let link=Region{border_rgba:u32::from_le_bytes([0,0,255,255]),..region(10)};
+            button_outline::register_hover(w,&[link]).unwrap();cursor(1,40,false);
+            let hover=draw();assert!(!hover.is_empty());
+            assert!(hover.iter().all(|r|(r.color.0,r.color.1,r.color.2,r.color.3)==(0,0,255,128)));
+            input_broker::CURSORS.lock()[0].pressed=true;
+            assert_eq!(pixels(&hover),pixels(&draw()));assert_eq!(hover.len(),draw().len());
+            assert_eq!(button_outline::wait(crate::Instant(0)),Some(crate::Duration(67)));
+            cursor(2,45,true);assert_eq!(hover.len(),draw().len());
+            crate::NOW.store(67,Ordering::Relaxed);assert_ne!(pixels(&hover),pixels(&draw()));
+            input_broker::CURSORS.lock().clear();assert!(draw().is_empty());assert_eq!(button_outline::wait(crate::Instant(67)),None);
+        }
+        #[test] fn buttons_take_priority_and_region_lists_update_independently(){
+            let _guard=setup();let w=window(1,1,0);WINDOWS.lock().push(w);
+            button_outline::register_hover(w,&[region(10)]).unwrap();
+            button_outline::register(w,&[region(10)]).unwrap();cursor(1,40,true);
+            assert_eq!(draw().len(),4);assert_eq!(button_outline::wait(crate::Instant(0)),None);
+            button_outline::register(w,&[]).unwrap();assert!(draw().len()>4);
+            assert_eq!(button_outline::wait(crate::Instant(0)),Some(crate::Duration(67)));
+            let original=pixels(&draw());assert!(button_outline::register_hover(w,&[Region{width:0,..region(10)}]).is_err());
+            assert_eq!(original,pixels(&draw()));
+            button_outline::register_hover(w,&[]).unwrap();assert!(draw().is_empty());
+            button_outline::register(w,&[region(10)]).unwrap();button_outline::register_hover(w,&[]).unwrap();assert_eq!(draw().len(),4);
+        }
+        #[test] fn link_hover_respects_clip_selection_and_session_lifetime(){
+            let _guard=setup();let w=window(1,1,0);WINDOWS.lock().push(w);
+            button_outline::register_hover(w,&[Region{clip_x:15,..region(10)}]).unwrap();cursor(1,40,false);
+            let rects=draw();assert!(!rects.is_empty());assert!(rects.iter().all(|r|r.x>=35));
+            SELECTED.lock().clear();assert!(draw().is_empty());SELECTED.lock().push((1,CursorFrameKey::new(1,1)));
+            WINDOWS.lock()[0].session=2;assert!(draw().is_empty());
+            let recycled=WINDOWS.lock()[0];button_outline::register(recycled,&[]).unwrap();assert!(draw().is_empty());
+            button_outline::register_hover(recycled,&[region(10)]).unwrap();assert!(!draw().is_empty());
+            button_outline::remove_window(1,1);assert!(draw().is_empty());
+        }
         #[test] fn top_window_occludes_outline_even_when_pointer_is_on_visible_half(){
             let _guard=setup();let w=window(1,1,0);let mut upper=window(2,2,-100);
             upper.presentation_placement.x=70;upper.presentation_placement.width=100;
